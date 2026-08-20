@@ -64,6 +64,12 @@ _health_circuit_breaker = CircuitBreaker(
 _DIAGNOSTICS_TTL_SECONDS = 60.0
 _diagnostics_cache: Optional[Dict[str, Any]] = None
 _diagnostics_cached_at: float = 0.0
+# Singleflight for cache population (#1762 codex MED): /api/graph/health is
+# public, so without this, concurrent requests hitting a cold/expired cache
+# would EACH run the three O(graph) count scans. Per-process only (each
+# uvicorn worker scans at most once per TTL window), which is the same
+# blast-radius bound the TTL itself provides.
+_diagnostics_scan_lock = asyncio.Lock()
 
 
 @retry(
@@ -240,42 +246,79 @@ async def falkordb_diagnostics(*, use_cache: bool = True) -> Dict[str, Any]:
     """
     global _diagnostics_cache, _diagnostics_cached_at
 
-    now = time.time()
-    if (
-        use_cache
-        and _diagnostics_cache is not None
-        and (now - _diagnostics_cached_at) < _DIAGNOSTICS_TTL_SECONDS
-    ):
-        return {**_diagnostics_cache, "cached": True}
+    def _fresh_cache() -> Optional[Dict[str, Any]]:
+        if (
+            use_cache
+            and _diagnostics_cache is not None
+            and (time.time() - _diagnostics_cached_at) < _DIAGNOSTICS_TTL_SECONDS
+        ):
+            return {**_diagnostics_cache, "cached": True}
+        return None
 
+    cached = _fresh_cache()
+    if cached is not None:
+        return cached
+
+    # Singleflight (#1762): the public health endpoint can see concurrent
+    # requests on a cold/expired cache; serialize population and re-check
+    # inside the lock so followers serve the leader's scan instead of
+    # re-running the O(graph) counts themselves.
+    async with _diagnostics_scan_lock:
+        cached = _fresh_cache()
+        if cached is not None:
+            return cached
+        return await _scan_diagnostics()
+
+
+async def _scan_diagnostics() -> Dict[str, Any]:
+    """Run the count scans and populate the cache. Callers hold the scan lock."""
+    global _diagnostics_cache, _diagnostics_cached_at
+
+    now = time.time()
     graph = await get_graph()
     if graph is None:
         return {"status": "unavailable", "error": "FalkorDB not configured"}
 
-    node_count = 0
-    edge_count = 0
-
-    def _scan_counts() -> tuple[int, int]:
+    def _scan_counts() -> tuple[int, int, int]:
         nodes = 0
         edges = 0
+        curated = 0
         result = graph.query("MATCH (n) RETURN count(n) as count")
         if result.result_set:
             nodes = result.result_set[0][0]
         result = graph.query("MATCH ()-[r]->() RETURN count(r) as count")
         if result.result_set:
             edges = result.result_set[0][0]
-        return nodes, edges
+        # Curated gold-standard layer: seed/sync nodes carry no ``agent``
+        # property, agent-written runtime nodes do (the same predicate as the
+        # page's ``curated_only``). This is the #1760 emptiness tripwire —
+        # after the #1758 wipe, agents repopulated runtime nodes within hours,
+        # so a TOTAL count reads non-empty while everything the
+        # /knowledge-graph page renders is gone.
+        result = graph.query("MATCH (n) WHERE n.agent IS NULL RETURN count(n) as count")
+        if result.result_set:
+            curated = result.result_set[0][0]
+        return nodes, edges, curated
 
     try:
-        node_count, edge_count = await asyncio.to_thread(_scan_counts)
-    except Exception:
-        pass  # Graph may be empty / transiently unavailable.
+        node_count, edge_count, curated_node_count = await asyncio.to_thread(_scan_counts)
+    except Exception as e:
+        # A failed scan is UNKNOWN, never zero: silent node_count=0 is a
+        # plausible-wrong value that reads exactly like the #1758 wipe to the
+        # graph-content sentinel (#1760). Not cached, so the next call within
+        # the TTL window rescans instead of replaying the failure.
+        return {
+            "status": "unknown",
+            "current_graph": FALKORDB_GRAPH_NAME,
+            "error": str(e),
+        }
 
     payload: Dict[str, Any] = {
         "status": "healthy",
         "current_graph": FALKORDB_GRAPH_NAME,
         "node_count": node_count,
         "edge_count": edge_count,
+        "curated_node_count": curated_node_count,
     }
     _diagnostics_cache = payload
     _diagnostics_cached_at = now

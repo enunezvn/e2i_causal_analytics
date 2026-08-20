@@ -1037,22 +1037,8 @@ class TestGetGraphStats:
 class TestGraphHealth:
     """Test GET /graph/health endpoint."""
 
-    def test_graph_health_success(self, client, mock_semantic_memory):
+    def test_graph_health_success(self, client):
         """Test successful health check."""
-        with patch(
-            "src.api.routes.graph._get_semantic_memory",
-            new_callable=AsyncMock,
-            return_value=mock_semantic_memory,
-        ):
-            response = client.get("/graph/health")
-
-            assert response.status_code == status.HTTP_200_OK
-            data = response.json()
-            assert "status" in data
-
-    def test_graph_health_service_down(self, client):
-        """Test health check when services are down."""
-        # Mock both services to return None to simulate services unavailable
         with (
             patch(
                 "src.api.routes.graph._get_graphiti_service",
@@ -1060,9 +1046,49 @@ class TestGraphHealth:
                 return_value=None,
             ),
             patch(
-                "src.api.routes.graph._get_semantic_memory",
+                "src.api.dependencies.falkordb_client.falkordb_health_check",
+                new_callable=AsyncMock,
+                return_value={"status": "healthy", "latency_ms": 1.0, "graphs": ["e2i_causal"]},
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={
+                    "status": "healthy",
+                    "current_graph": "e2i_causal",
+                    "node_count": 85,
+                    "edge_count": 233,
+                    "curated_node_count": 74,
+                    "cached": False,
+                },
+            ),
+        ):
+            response = client.get("/graph/health")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data.get("status") == "healthy"
+            assert data.get("falkordb") == "connected"
+
+    def test_graph_health_service_down(self, client):
+        """Test health check when services are down."""
+        # Mock both probes to report down: graphiti getter returns None and the
+        # falkordb reachability probe fails (real round-trip semantics, #1762).
+        with (
+            patch(
+                "src.api.routes.graph._get_graphiti_service",
                 new_callable=AsyncMock,
                 return_value=None,
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_health_check",
+                new_callable=AsyncMock,
+                return_value={"status": "unhealthy", "error": "connection refused"},
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={"status": "unavailable", "error": "FalkorDB not configured"},
             ),
         ):
             response = client.get("/graph/health")
@@ -1073,6 +1099,156 @@ class TestGraphHealth:
             assert data.get("status") == "degraded"
             assert data.get("graphiti") == "unavailable"
             assert data.get("falkordb") == "unavailable"
+
+    def test_graph_health_degrades_when_curated_layer_wiped_1760(self, client):
+        """The EXACT #1758 incident state must degrade (#1760).
+
+        FalkorDB reachable, 11 agent-written runtime nodes (agents repopulate
+        within hours of a wipe), zero CURATED nodes — everything the
+        /knowledge-graph page renders is gone. A total-count tripwire reads
+        non-empty here; the sentinel must trip on the curated count.
+        """
+        with (
+            patch(
+                "src.api.routes.graph._get_graphiti_service",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_health_check",
+                new_callable=AsyncMock,
+                return_value={"status": "healthy", "latency_ms": 1.0, "graphs": ["e2i_causal"]},
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={
+                    "status": "healthy",
+                    "current_graph": "e2i_causal",
+                    "node_count": 11,
+                    "edge_count": 0,
+                    "curated_node_count": 0,
+                    "cached": False,
+                },
+            ),
+        ):
+            response = client.get("/graph/health")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data.get("status") == "degraded"
+            content = data.get("graph_content")
+            assert content is not None, "health payload must carry graph_content (#1760)"
+            assert content.get("empty") is True
+            assert content.get("node_count") == 11
+            assert content.get("curated_node_count") == 0
+
+    def test_graph_health_healthy_with_content_1760(self, client):
+        """A populated graph stays healthy and surfaces its counts (#1760)."""
+        with (
+            patch(
+                "src.api.routes.graph._get_graphiti_service",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_health_check",
+                new_callable=AsyncMock,
+                return_value={"status": "healthy", "latency_ms": 1.0, "graphs": ["e2i_causal"]},
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={
+                    "status": "healthy",
+                    "current_graph": "e2i_causal",
+                    "node_count": 85,
+                    "edge_count": 233,
+                    "curated_node_count": 74,
+                    "cached": True,
+                },
+            ),
+        ):
+            response = client.get("/graph/health")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data.get("status") == "healthy"
+            content = data.get("graph_content")
+            assert content is not None
+            assert content.get("empty") is False
+            assert content.get("node_count") == 85
+            assert content.get("edge_count") == 233
+            assert content.get("curated_node_count") == 74
+
+    def test_graph_health_scan_failure_is_unknown_not_empty_1760(self, client):
+        """A failed count scan must read as UNKNOWN, never as empty (#1760).
+
+        A transient query failure yielding node_count=0 would be a
+        plausible-wrong value: it would flip status to degraded and mimic the
+        wipe signature. Unknown content must leave the connectivity verdict
+        alone.
+        """
+        with (
+            patch(
+                "src.api.routes.graph._get_graphiti_service",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_health_check",
+                new_callable=AsyncMock,
+                return_value={"status": "healthy", "latency_ms": 1.0, "graphs": ["e2i_causal"]},
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={"status": "unknown", "error": "scan failed"},
+            ),
+        ):
+            response = client.get("/graph/health")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data.get("status") == "healthy"
+            content = data.get("graph_content")
+            assert content is not None
+            assert content.get("status") == "unknown"
+            assert content.get("empty") is not True
+
+    def test_graph_health_falkordb_down_reads_unavailable_1762(self, client):
+        """A DOWN FalkorDB must read falkordb=unavailable and degrade (#1762).
+
+        The pre-#1762 route derived falkordb status from constructing the
+        semantic-memory wrapper (lazy, no round-trip), so a dead server still
+        reported connected+healthy — the same false-green family as #1758.
+        """
+        with (
+            patch(
+                "src.api.routes.graph._get_graphiti_service",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_health_check",
+                new_callable=AsyncMock,
+                return_value={"status": "unhealthy", "error": "connection refused"},
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={"status": "unavailable", "error": "FalkorDB not configured"},
+            ),
+        ):
+            response = client.get("/graph/health")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data.get("status") == "degraded"
+            assert data.get("falkordb") == "unavailable"
+            content = data.get("graph_content")
+            assert content is not None
+            assert content.get("status") == "unavailable"
 
 
 # =============================================================================

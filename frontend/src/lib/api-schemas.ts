@@ -1018,6 +1018,19 @@ export const GraphHealthResponseWireSchema = z.object({
   status: z.enum(['healthy', 'degraded']),
   graphiti: z.enum(['connected', 'unavailable']),
   falkordb: z.enum(['connected', 'unavailable']),
+  // Graph content telemetry (#1760). Optional: older backends omit it. Kept in
+  // the schema because wire schemas strip unknown keys — without this entry the
+  // sentinel field would silently vanish client-side.
+  graph_content: z
+    .object({
+      status: z.string(),
+      node_count: z.number().int().nonnegative().optional(),
+      edge_count: z.number().int().nonnegative().optional(),
+      curated_node_count: z.number().int().nonnegative().optional(),
+      empty: z.boolean().optional(),
+      cached: z.boolean().optional(),
+    })
+    .optional(),
   websocket_connections: z.number().int().nonnegative(),
   timestamp: z.string(),
 });

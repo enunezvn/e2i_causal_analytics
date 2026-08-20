@@ -1291,6 +1291,16 @@ async def graph_health() -> Dict[str, Any]:
     - Graphiti service
     - FalkorDB connection
     - WebSocket connections
+    - Graph content (node/edge counts + emptiness, #1760)
+
+    Connectivity alone is not health: during #1758 the knowledge graph was
+    completely wiped for four days while this endpoint reported "healthy",
+    because it only proved a client could be constructed. A reachable-but-EMPTY
+    graph now degrades the status. Counts come from ``falkordb_diagnostics()``
+    (60s-TTL cache, scans off the event loop), so this stays cheap enough for
+    the public probe path. A failed scan reports ``graph_content.status:
+    "unknown"`` and does NOT degrade — a transient query failure must not mimic
+    the wipe signature.
     """
     graphiti_status = "unavailable"
     falkordb_status = "unavailable"
@@ -1303,20 +1313,53 @@ async def graph_health() -> Dict[str, Any]:
         pass
 
     try:
-        semantic = await _get_semantic_memory()
-        if semantic:
+        # A real reachability probe (list_graphs round-trip, circuit-breaker
+        # guarded), NOT object construction: ``_get_semantic_memory()`` returns
+        # a lazily-connecting wrapper, so it reported "connected" with the
+        # server down — the same false-green family as #1758 (codex #1762).
+        from src.api.dependencies.falkordb_client import falkordb_health_check
+
+        probe = await falkordb_health_check()
+        if probe.get("status") == "healthy":
             falkordb_status = "connected"
     except Exception:
         pass
 
+    graph_content: Dict[str, Any] = {"status": "unknown"}
+    try:
+        # Lazy import, matching the service getters above: the routes module
+        # must stay importable when optional graph dependencies are absent.
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
+
+        diag = await falkordb_diagnostics()
+        if diag.get("status") == "healthy":
+            node_count = int(diag.get("node_count", 0))
+            edge_count = int(diag.get("edge_count", 0))
+            curated_node_count = int(diag.get("curated_node_count", 0))
+            graph_content = {
+                "status": "healthy",
+                "node_count": node_count,
+                "edge_count": edge_count,
+                "curated_node_count": curated_node_count,
+                # Emptiness trips on the CURATED count, not the total: after
+                # the #1758 wipe, agent runtime writes made the total non-zero
+                # within hours while everything the page renders stayed gone.
+                "empty": curated_node_count == 0,
+                "cached": bool(diag.get("cached", False)),
+            }
+        else:
+            graph_content = {"status": diag.get("status", "unknown")}
+    except Exception:
+        pass
+
+    connected = graphiti_status == "connected" or falkordb_status == "connected"
+    empty = graph_content.get("empty") is True
+
     return {
-        "status": (
-            "healthy"
-            if graphiti_status == "connected" or falkordb_status == "connected"
-            else "degraded"
-        ),
+        "status": "healthy" if connected and not empty else "degraded",
         "graphiti": graphiti_status,
         "falkordb": falkordb_status,
+        "graph_content": graph_content,
         "websocket_connections": len(manager.active_connections),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

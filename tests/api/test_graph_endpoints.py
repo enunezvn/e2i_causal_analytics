@@ -491,11 +491,25 @@ class TestGraphSearch:
 class TestGraphHealth:
     """Tests for GET /graph/health endpoint."""
 
-    def test_health_check_healthy(self, mock_semantic_memory, mock_graphiti_service):
+    def test_health_check_healthy(self, mock_graphiti_service):
         """Test health check when services are available."""
         with (
-            patch("src.api.routes.graph._get_semantic_memory", return_value=mock_semantic_memory),
             patch("src.api.routes.graph._get_graphiti_service", return_value=mock_graphiti_service),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_health_check",
+                return_value={"status": "healthy", "latency_ms": 1.0, "graphs": ["e2i_causal"]},
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                return_value={
+                    "status": "healthy",
+                    "current_graph": "e2i_causal",
+                    "node_count": 85,
+                    "edge_count": 233,
+                    "curated_node_count": 74,
+                    "cached": False,
+                },
+            ),
         ):
             response = client.get("/api/graph/health")
 
@@ -505,12 +519,21 @@ class TestGraphHealth:
             assert "graphiti" in data
             assert "falkordb" in data
             assert "timestamp" in data
+            # #1760: content telemetry rides along.
+            assert data["graph_content"]["curated_node_count"] == 74
 
     def test_health_check_degraded(self):
         """Test health check when services are unavailable."""
         with (
-            patch("src.api.routes.graph._get_semantic_memory", return_value=None),
             patch("src.api.routes.graph._get_graphiti_service", return_value=None),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_health_check",
+                return_value={"status": "unhealthy", "error": "connection refused"},
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                return_value={"status": "unavailable", "error": "FalkorDB not configured"},
+            ),
         ):
             response = client.get("/api/graph/health")
 

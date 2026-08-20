@@ -383,8 +383,15 @@ class TestFalkorDBClient:
             assert "Connection failed" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_falkordb_diagnostics_query_error_graceful(self):
-        """Diagnostics handles query errors gracefully (reports 0 counts)."""
+    async def test_falkordb_diagnostics_query_error_is_unknown_not_zero_1760(self):
+        """A failed count scan reports 'unknown', never node_count=0 (#1760).
+
+        Supersedes the "reports 0 counts" contract: silent zeros on a scan
+        failure are a plausible-wrong value that would make the graph-content
+        health sentinel mimic the #1758 wipe signature on any transient query
+        error. What the old test still catches is preserved: the failure must
+        surface as a return value, never as a raised exception.
+        """
         import src.api.dependencies.falkordb_client as falkordb_module
         from src.api.dependencies.falkordb_client import falkordb_diagnostics
 
@@ -399,9 +406,91 @@ class TestFalkorDBClient:
 
             result = await falkordb_diagnostics(use_cache=False)
 
-            assert result["status"] == "healthy"
-            assert result["node_count"] == 0
-            assert result["edge_count"] == 0
+            assert result["status"] == "unknown"
+            assert "error" in result
+            assert "node_count" not in result
+            assert "edge_count" not in result
+
+    @pytest.mark.asyncio
+    async def test_falkordb_diagnostics_query_error_not_cached_1760(self):
+        """A scan failure must not poison the 60s cache with an error result (#1760).
+
+        The next call (within what would be the TTL window) must scan again and
+        serve real counts, not replay the failure.
+        """
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
+
+        falkordb_module._diagnostics_cache = None
+
+        mock_node_result = MagicMock()
+        mock_node_result.result_set = [[42]]
+        mock_edge_result = MagicMock()
+        mock_edge_result.result_set = [[15]]
+        mock_curated_result = MagicMock()
+        mock_curated_result.result_set = [[40]]
+
+        mock_graph = MagicMock()
+        mock_graph.query.side_effect = [
+            Exception("transient failure"),
+            mock_node_result,
+            mock_edge_result,
+            mock_curated_result,
+        ]
+
+        with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+            mock_get_graph.return_value = mock_graph
+
+            failed = await falkordb_diagnostics(use_cache=True)
+            assert failed["status"] == "unknown"
+
+            recovered = await falkordb_diagnostics(use_cache=True)
+            assert recovered["status"] == "healthy"
+            assert recovered["node_count"] == 42
+            assert recovered["edge_count"] == 15
+            assert recovered["curated_node_count"] == 40
+
+    @pytest.mark.asyncio
+    async def test_falkordb_diagnostics_cold_cache_singleflight_1762(self):
+        """Concurrent cold-cache calls run the O(graph) scans ONCE (#1762).
+
+        The endpoint is public: without singleflight, N concurrent requests on
+        a cold/expired cache each ran all three count scans. The follower must
+        wait on the leader's scan and serve its cached result.
+        """
+        import asyncio
+
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
+
+        falkordb_module._diagnostics_cache = None
+
+        def _query(cypher: str):
+            result = MagicMock()
+            if "agent" in cypher:
+                result.result_set = [[40]]
+            elif "count(r)" in cypher:
+                result.result_set = [[15]]
+            else:
+                result.result_set = [[42]]
+            return result
+
+        mock_graph = MagicMock()
+        mock_graph.query.side_effect = _query
+
+        with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+            mock_get_graph.return_value = mock_graph
+
+            first, second = await asyncio.gather(
+                falkordb_diagnostics(use_cache=True),
+                falkordb_diagnostics(use_cache=True),
+            )
+
+            assert first["node_count"] == 42
+            assert second["node_count"] == 42
+            # Exactly one scan (3 count queries) for the pair.
+            assert mock_graph.query.call_count == 3
+            assert sorted([first["cached"], second["cached"]]) == [False, True]
 
     @pytest.mark.asyncio
     async def test_falkordb_diagnostics_empty_graph(self):
@@ -438,7 +527,9 @@ class TestFalkorDBClient:
         mock_node_result.result_set = [[42]]
         mock_edge_result = MagicMock()
         mock_edge_result.result_set = [[15]]
-        mock_graph.query.side_effect = [mock_node_result, mock_edge_result]
+        mock_curated_result = MagicMock()
+        mock_curated_result.result_set = [[40]]
+        mock_graph.query.side_effect = [mock_node_result, mock_edge_result, mock_curated_result]
 
         with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
             mock_get_graph.return_value = mock_graph
@@ -448,9 +539,10 @@ class TestFalkorDBClient:
             assert result["status"] == "healthy"
             assert result["node_count"] == 42
             assert result["edge_count"] == 15
+            assert result["curated_node_count"] == 40
             assert result["cached"] is False
-            # Two count() scans were issued (nodes + edges).
-            assert mock_graph.query.call_count == 2
+            # Three count() scans were issued (nodes + edges + curated, #1760).
+            assert mock_graph.query.call_count == 3
 
     @pytest.mark.asyncio
     async def test_falkordb_diagnostics_uses_cache(self):

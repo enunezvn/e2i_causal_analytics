@@ -468,15 +468,41 @@ export interface GraphSubscription {
 // =============================================================================
 
 /**
+ * Graph content telemetry inside the health payload (#1760).
+ *
+ * Connectivity alone proved worthless during #1758 (a fully wiped graph read
+ * "healthy" for four days); these counts are how the backend distinguishes a
+ * reachable graph from a populated one. `status: 'unknown'` means the count
+ * scan failed — NOT that the graph is empty.
+ */
+export interface GraphContentHealth {
+  /** 'healthy' (counts valid), 'unknown' (scan failed), 'unavailable' (no graph client) */
+  status: string;
+  /** Total nodes (present when status is 'healthy') */
+  node_count?: number;
+  /** Total relationships (present when status is 'healthy') */
+  edge_count?: number;
+  /** Curated (seed/sync) nodes — what the /knowledge-graph page renders */
+  curated_node_count?: number;
+  /** True when the CURATED layer holds zero nodes — the #1758 wipe signature
+   *  (agent runtime writes keep the total non-zero within hours of a wipe) */
+  empty?: boolean;
+  /** True when served from the backend's 60s diagnostics cache */
+  cached?: boolean;
+}
+
+/**
  * Graph service health check response
  */
 export interface GraphHealthResponse {
-  /** Overall status */
+  /** Overall status — degraded when unreachable OR reachable-but-empty (#1760) */
   status: 'healthy' | 'degraded';
   /** Graphiti service status */
   graphiti: 'connected' | 'unavailable';
   /** FalkorDB status */
   falkordb: 'connected' | 'unavailable';
+  /** Graph content telemetry (#1760); absent on older backends */
+  graph_content?: GraphContentHealth;
   /** Active WebSocket connections */
   websocket_connections: number;
   /** Timestamp (ISO 8601) */
