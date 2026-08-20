@@ -50,6 +50,7 @@ import type { E2IFilters } from '../../providers/E2ICopilotProvider';
 
 const FILTERS: E2IFilters = {
   brand: 'Remibrutinib',
+  region: 'West', // #1753: region rides the same CoAgent filters channel
   territory: 'west',
   dateRange: { start: '2026-05-21', end: '2026-08-19' },
   hcpSegment: null,

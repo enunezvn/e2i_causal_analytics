@@ -23,6 +23,8 @@ export interface UseE2IFiltersReturn {
   enabled: boolean;
   /** Set brand filter */
   setBrand: (brand: E2IFilters['brand']) => void;
+  /** Set region filter (#1753) */
+  setRegion: (region: E2IFilters['region']) => void;
   /** Set territory filter */
   setTerritory: (territory: string | null) => void;
   /** Set date range */
@@ -40,8 +42,10 @@ export interface UseE2IFiltersReturn {
 // =============================================================================
 
 // #1749: 'All' = no brand selected — never default to a specific brand.
+// #1753: 'All US' = no region selected — same honest-sentinel design.
 const DEFAULT_FILTERS: E2IFilters = {
   brand: 'All',
+  region: 'All US',
   territory: null,
   dateRange: {
     start: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -96,6 +100,13 @@ export function useE2IFilters(): UseE2IFiltersReturn {
     [setFilters]
   );
 
+  const setRegion = React.useCallback(
+    (region: E2IFilters['region']) => {
+      setFilters((prev) => ({ ...prev, region }));
+    },
+    [setFilters]
+  );
+
   const setTerritory = React.useCallback(
     (territory: string | null) => {
       setFilters((prev) => ({ ...prev, territory }));
@@ -128,6 +139,9 @@ export function useE2IFilters(): UseE2IFiltersReturn {
     // The 'All' sentinel is not a brand — render it as prose (#1749).
     const parts: string[] = [filters.brand === 'All' ? 'All brands' : filters.brand];
 
+    // Same for the region sentinel (#1753).
+    parts.push(filters.region === 'All US' ? 'All US regions' : filters.region);
+
     if (filters.territory) {
       parts.push(filters.territory);
     }
@@ -146,6 +160,7 @@ export function useE2IFilters(): UseE2IFiltersReturn {
     filters,
     enabled,
     setBrand,
+    setRegion,
     setTerritory,
     setDateRange,
     setHcpSegment,

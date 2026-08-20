@@ -461,6 +461,79 @@ describe('Home', () => {
   });
 
   // =========================================================================
+  // #1753 — REGION SELECTION IS SHARED WITH THE COPILOT CHAT
+  // =========================================================================
+  // Same seam as the #1749 brand block above, for the Region dropdown: it
+  // lived in page-local useState while E2IFilters carried no region at all,
+  // so agent runs were blind to the dashboard's region scope. The provider
+  // filter context is the single source of truth, flowing BOTH ways.
+
+  describe('Region selection ↔ copilot filter context (#1753)', () => {
+    /** Reads the copilot context region; the button simulates the chat's
+     *  setRegionFilter action (same setFilters seam the action handler uses). */
+    function CopilotRegionProbe() {
+      const context = useE2ICopilot();
+      return (
+        <div>
+          <span data-testid="copilot-region">{context.filters.region ?? 'missing'}</span>
+          <button
+            onClick={() => context.setFilters((prev) => ({ ...prev, region: 'West' }))}
+          >
+            chat-sets-west
+          </button>
+        </div>
+      );
+    }
+
+    function renderHomeWithCopilotRegion() {
+      return renderWithAllProviders(
+        <CopilotKitWrapper enabled={false}>
+          <E2ICopilotProvider>
+            <Home />
+            <CopilotRegionProbe />
+          </E2ICopilotProvider>
+        </CopilotKitWrapper>
+      );
+    }
+
+    it('writes the dropdown region selection through to the copilot filter context', async () => {
+      renderHomeWithCopilotRegion();
+
+      const regionSelector = screen.getAllByRole('combobox')[1];
+      fireEvent.click(regionSelector);
+      fireEvent.click(await screen.findByText('West'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('copilot-region')).toHaveTextContent('West')
+      );
+    });
+
+    it('reflects a chat-driven region change (setRegionFilter seam) in the page selector', async () => {
+      renderHomeWithCopilotRegion();
+
+      expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('All US');
+
+      fireEvent.click(screen.getByText('chat-sets-west'));
+
+      await waitFor(() =>
+        expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('West')
+      );
+    });
+
+    it('re-scopes the KPI summary from a chat-driven region change', async () => {
+      renderHomeWithCopilotRegion();
+
+      fireEvent.click(screen.getByText('chat-sets-west'));
+
+      // regionParam derives from the shared filter ('West' → 'west') — the
+      // functional dashboard re-scope, not just the dropdown label.
+      await waitFor(() =>
+        expect(useKpiSummary).toHaveBeenLastCalledWith('All', 'west')
+      );
+    });
+  });
+
+  // =========================================================================
   // REGION FILTER TESTS (Phase 3.1)
   // =========================================================================
 

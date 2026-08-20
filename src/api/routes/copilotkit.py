@@ -592,6 +592,12 @@ def _filters_context_note(filters: Any) -> str:
     brand = filters.get("brand")
     if isinstance(brand, str) and brand and brand.lower() != "all":
         parts.append(f"brand={brand}")
+    # #1753: the dashboard's Region selector rides the same CoAgent filters
+    # channel; "All US" is the no-selection sentinel (same semantics as
+    # brand="All"). Census-region synonyms/casing resolve downstream.
+    region = filters.get("region")
+    if isinstance(region, str) and region and region.lower() not in ("all us", "all"):
+        parts.append(f"region={region}")
     date_range = filters.get("dateRange") or filters.get("date_range")
     if isinstance(date_range, dict):
         start, end = date_range.get("start"), date_range.get("end")
@@ -607,8 +613,8 @@ def _filters_context_note(filters: Any) -> str:
     return (
         "\n\nACTIVE DASHBOARD FILTERS (set by the user in the UI): "
         + "; ".join(parts)
-        + ". When the user's message does not name a brand, period, territory, or "
-        "segment, resolve it from these filters instead of asking for "
+        + ". When the user's message does not name a brand, region, period, "
+        "territory, or segment, resolve it from these filters instead of asking for "
         "clarification — and say which filter value you used. If the user names "
         "one explicitly in their message, the user's wording wins over the filter."
     )
