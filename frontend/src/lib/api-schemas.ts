@@ -1026,6 +1026,7 @@ export const GraphHealthResponseWireSchema = z.object({
       status: z.string(),
       node_count: z.number().int().nonnegative().optional(),
       edge_count: z.number().int().nonnegative().optional(),
+      curated_node_count: z.number().int().nonnegative().optional(),
       empty: z.boolean().optional(),
       cached: z.boolean().optional(),
     })

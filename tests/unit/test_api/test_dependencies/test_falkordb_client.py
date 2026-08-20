@@ -427,12 +427,15 @@ class TestFalkorDBClient:
         mock_node_result.result_set = [[42]]
         mock_edge_result = MagicMock()
         mock_edge_result.result_set = [[15]]
+        mock_curated_result = MagicMock()
+        mock_curated_result.result_set = [[40]]
 
         mock_graph = MagicMock()
         mock_graph.query.side_effect = [
             Exception("transient failure"),
             mock_node_result,
             mock_edge_result,
+            mock_curated_result,
         ]
 
         with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
@@ -445,6 +448,7 @@ class TestFalkorDBClient:
             assert recovered["status"] == "healthy"
             assert recovered["node_count"] == 42
             assert recovered["edge_count"] == 15
+            assert recovered["curated_node_count"] == 40
 
     @pytest.mark.asyncio
     async def test_falkordb_diagnostics_empty_graph(self):
@@ -481,7 +485,9 @@ class TestFalkorDBClient:
         mock_node_result.result_set = [[42]]
         mock_edge_result = MagicMock()
         mock_edge_result.result_set = [[15]]
-        mock_graph.query.side_effect = [mock_node_result, mock_edge_result]
+        mock_curated_result = MagicMock()
+        mock_curated_result.result_set = [[40]]
+        mock_graph.query.side_effect = [mock_node_result, mock_edge_result, mock_curated_result]
 
         with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
             mock_get_graph.return_value = mock_graph
@@ -491,9 +497,10 @@ class TestFalkorDBClient:
             assert result["status"] == "healthy"
             assert result["node_count"] == 42
             assert result["edge_count"] == 15
+            assert result["curated_node_count"] == 40
             assert result["cached"] is False
-            # Two count() scans were issued (nodes + edges).
-            assert mock_graph.query.call_count == 2
+            # Three count() scans were issued (nodes + edges + curated, #1760).
+            assert mock_graph.query.call_count == 3
 
     @pytest.mark.asyncio
     async def test_falkordb_diagnostics_uses_cache(self):

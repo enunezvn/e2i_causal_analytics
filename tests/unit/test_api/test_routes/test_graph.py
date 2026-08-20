@@ -1074,12 +1074,15 @@ class TestGraphHealth:
             assert data.get("graphiti") == "unavailable"
             assert data.get("falkordb") == "unavailable"
 
-    def test_graph_health_degrades_when_graph_empty_1760(self, client, mock_semantic_memory):
-        """Connected-but-EMPTY graph must degrade, not report healthy (#1760).
+    def test_graph_health_degrades_when_curated_layer_wiped_1760(
+        self, client, mock_semantic_memory
+    ):
+        """The EXACT #1758 incident state must degrade (#1760).
 
-        The #1758 incident signature: FalkorDB reachable, every curated node
-        wiped — and this endpoint stayed green for four days because it only
-        checked connectivity.
+        FalkorDB reachable, 11 agent-written runtime nodes (agents repopulate
+        within hours of a wipe), zero CURATED nodes — everything the
+        /knowledge-graph page renders is gone. A total-count tripwire reads
+        non-empty here; the sentinel must trip on the curated count.
         """
         with (
             patch(
@@ -1093,8 +1096,9 @@ class TestGraphHealth:
                 return_value={
                     "status": "healthy",
                     "current_graph": "e2i_causal",
-                    "node_count": 0,
+                    "node_count": 11,
                     "edge_count": 0,
+                    "curated_node_count": 0,
                     "cached": False,
                 },
             ),
@@ -1107,7 +1111,8 @@ class TestGraphHealth:
             content = data.get("graph_content")
             assert content is not None, "health payload must carry graph_content (#1760)"
             assert content.get("empty") is True
-            assert content.get("node_count") == 0
+            assert content.get("node_count") == 11
+            assert content.get("curated_node_count") == 0
 
     def test_graph_health_healthy_with_content_1760(self, client, mock_semantic_memory):
         """A populated graph stays healthy and surfaces its counts (#1760)."""
@@ -1125,6 +1130,7 @@ class TestGraphHealth:
                     "current_graph": "e2i_causal",
                     "node_count": 85,
                     "edge_count": 233,
+                    "curated_node_count": 74,
                     "cached": True,
                 },
             ),
@@ -1139,6 +1145,7 @@ class TestGraphHealth:
             assert content.get("empty") is False
             assert content.get("node_count") == 85
             assert content.get("edge_count") == 233
+            assert content.get("curated_node_count") == 74
 
     def test_graph_health_scan_failure_is_unknown_not_empty_1760(
         self, client, mock_semantic_memory

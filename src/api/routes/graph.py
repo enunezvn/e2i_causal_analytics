@@ -1329,11 +1329,16 @@ async def graph_health() -> Dict[str, Any]:
         if diag.get("status") == "healthy":
             node_count = int(diag.get("node_count", 0))
             edge_count = int(diag.get("edge_count", 0))
+            curated_node_count = int(diag.get("curated_node_count", 0))
             graph_content = {
                 "status": "healthy",
                 "node_count": node_count,
                 "edge_count": edge_count,
-                "empty": node_count == 0,
+                "curated_node_count": curated_node_count,
+                # Emptiness trips on the CURATED count, not the total: after
+                # the #1758 wipe, agent runtime writes made the total non-zero
+                # within hours while everything the page renders stayed gone.
+                "empty": curated_node_count == 0,
                 "cached": bool(diag.get("cached", False)),
             }
         else:

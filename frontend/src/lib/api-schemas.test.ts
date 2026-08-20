@@ -710,8 +710,9 @@ describe('Wire Schemas (C31)', () => {
         timestamp: new Date().toISOString(),
         graph_content: {
           status: 'healthy',
-          node_count: 0,
+          node_count: 11,
           edge_count: 0,
+          curated_node_count: 0,
           empty: true,
           cached: false,
         },
@@ -721,7 +722,8 @@ describe('Wire Schemas (C31)', () => {
       if (result.success) {
         expect(result.data.graph_content).toBeDefined();
         expect(result.data.graph_content?.empty).toBe(true);
-        expect(result.data.graph_content?.node_count).toBe(0);
+        expect(result.data.graph_content?.curated_node_count).toBe(0);
+        expect(result.data.graph_content?.node_count).toBe(11);
       }
     });
 

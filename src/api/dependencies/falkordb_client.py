@@ -252,19 +252,29 @@ async def falkordb_diagnostics(*, use_cache: bool = True) -> Dict[str, Any]:
     if graph is None:
         return {"status": "unavailable", "error": "FalkorDB not configured"}
 
-    def _scan_counts() -> tuple[int, int]:
+    def _scan_counts() -> tuple[int, int, int]:
         nodes = 0
         edges = 0
+        curated = 0
         result = graph.query("MATCH (n) RETURN count(n) as count")
         if result.result_set:
             nodes = result.result_set[0][0]
         result = graph.query("MATCH ()-[r]->() RETURN count(r) as count")
         if result.result_set:
             edges = result.result_set[0][0]
-        return nodes, edges
+        # Curated gold-standard layer: seed/sync nodes carry no ``agent``
+        # property, agent-written runtime nodes do (the same predicate as the
+        # page's ``curated_only``). This is the #1760 emptiness tripwire —
+        # after the #1758 wipe, agents repopulated runtime nodes within hours,
+        # so a TOTAL count reads non-empty while everything the
+        # /knowledge-graph page renders is gone.
+        result = graph.query("MATCH (n) WHERE n.agent IS NULL RETURN count(n) as count")
+        if result.result_set:
+            curated = result.result_set[0][0]
+        return nodes, edges, curated
 
     try:
-        node_count, edge_count = await asyncio.to_thread(_scan_counts)
+        node_count, edge_count, curated_node_count = await asyncio.to_thread(_scan_counts)
     except Exception as e:
         # A failed scan is UNKNOWN, never zero: silent node_count=0 is a
         # plausible-wrong value that reads exactly like the #1758 wipe to the
@@ -281,6 +291,7 @@ async def falkordb_diagnostics(*, use_cache: bool = True) -> Dict[str, Any]:
         "current_graph": FALKORDB_GRAPH_NAME,
         "node_count": node_count,
         "edge_count": edge_count,
+        "curated_node_count": curated_node_count,
     }
     _diagnostics_cache = payload
     _diagnostics_cached_at = now

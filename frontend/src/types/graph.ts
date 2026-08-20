@@ -482,7 +482,10 @@ export interface GraphContentHealth {
   node_count?: number;
   /** Total relationships (present when status is 'healthy') */
   edge_count?: number;
-  /** True when the graph holds zero nodes — the #1758 wipe signature */
+  /** Curated (seed/sync) nodes — what the /knowledge-graph page renders */
+  curated_node_count?: number;
+  /** True when the CURATED layer holds zero nodes — the #1758 wipe signature
+   *  (agent runtime writes keep the total non-zero within hours of a wipe) */
   empty?: boolean;
   /** True when served from the backend's 60s diagnostics cache */
   cached?: boolean;

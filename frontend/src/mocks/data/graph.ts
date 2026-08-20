@@ -367,6 +367,7 @@ export function createGraphHealthResponse(): GraphHealthResponse {
       status: 'healthy',
       node_count: 85,
       edge_count: 233,
+      curated_node_count: 74,
       empty: false,
       cached: false,
     },
