@@ -306,18 +306,37 @@ async def test_execute_defaults_optional_fields_when_absent(stub_request):
 async def test_execute_passes_clinical_contract_as_tier0_initial_state(
     stub_request, rich_graph_result
 ):
-    """The route must pass the loaded frame as tier0_data and set the (Phase 2
-    brand-aware) clinical contract. stub_request has brand=None (all brands), so the
-    indication-specific clinical columns — NULL off-brand after gating — are excluded:
-    effect_modifiers collapse to the universals, and ecog drops out of segment_vars.
-    engagement_score stays the W confounder (no X/W overlap); data_source unchanged."""
+    """The route must hand the loaded frame to the graph via the frame-registry
+    handle (#1734 — the frame itself must never enter graph state: a nested
+    streamed run re-serializes state into every on_chain_* event, the 377.6 MB
+    eval-4.4 turn) and set the (Phase 2 brand-aware) clinical contract.
+    stub_request has brand=None (all brands), so the indication-specific
+    clinical columns — NULL off-brand after gating — are excluded:
+    effect_modifiers collapse to the universals, and ecog drops out of
+    segment_vars. engagement_score stays the W confounder (no X/W overlap);
+    data_source unchanged.
+
+    What the pre-#1734 ``captured["tier0_data"] is frame`` assertion protected
+    — the nodes consume EXACTLY the server-side loaded banded frame — is
+    preserved by resolving the handle INSIDE the (stubbed) graph run and
+    asserting identity."""
+    # Local import: this module must stay collectible on pre-#1734 checkouts
+    # (the registry ships with the fix).
+    from src.utils.frame_registry import resolve_frame
+
     frame = _make_stub_frame()
     captured = {}
+    in_run = {}
 
     mock_graph = MagicMock()
 
     async def _capture(initial_state):
         captured.update(initial_state)
+        # The handle must resolve to the SAME frame WHILE the graph runs
+        # (the route releases it when the run completes).
+        in_run["resolved_is_loaded_frame"] = (
+            resolve_frame(initial_state.get("tier0_frame_ref")) is frame
+        )
         return rich_graph_result
 
     mock_graph.ainvoke = AsyncMock(side_effect=_capture)
@@ -331,8 +350,13 @@ async def test_execute_passes_clinical_contract_as_tier0_initial_state(
     ):
         await _execute_segment_analysis(stub_request)
 
-    # tier0_data is the loaded frame.
-    assert captured["tier0_data"] is frame
+    # #1734: no DataFrame under ANY key of the state handed to the graph — the
+    # frame travels via the registry handle, which resolved to the exact
+    # server-side loaded frame during the run and is released afterwards.
+    assert "tier0_data" not in captured
+    assert [k for k, v in captured.items() if isinstance(v, pd.DataFrame)] == []
+    assert in_run["resolved_is_loaded_frame"] is True
+    assert resolve_frame(captured["tier0_frame_ref"]) is None  # released
     assert captured["data_source"] == "patient_journeys"
 
     # defaults applied when the request omits treatment/outcome.

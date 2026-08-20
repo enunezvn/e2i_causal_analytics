@@ -12,6 +12,8 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, Literal, Mapping, Optional, cast
 
+from src.utils.frame_registry import release_frame, stash_frame
+
 from .graph import create_heterogeneous_optimizer_graph
 from .memory_hooks import (
     contribute_to_memory,
@@ -192,9 +194,25 @@ class HeterogeneousOptimizerAgent:
             except Exception as e:
                 logger.warning(f"Failed to retrieve memory context: {e}")
 
-        # Build initial state with memory context
+        # Build initial state with memory context. #1734: _build_initial_state
+        # stashes any tier0 frame in the process-local frame registry and puts
+        # only the string handle into state; run() owns the release (below) so
+        # the frame's lifetime is exactly the graph run.
         initial_state = self._build_initial_state(input_data, session_id, memory_context)
+        try:
+            return await self._execute_workflow(input_data, initial_state, session_id)
+        finally:
+            release_frame(initial_state.get("tier0_frame_ref"))
 
+    async def _execute_workflow(
+        self,
+        input_data: Dict[str, Any],
+        initial_state: HeterogeneousOptimizerState,
+        session_id: str,
+    ) -> Dict[str, Any]:
+        """Run the graph with the configured tracking wrappers (split out of
+        ``run()`` so the #1734 frame-registry release can wrap it in one
+        ``try/finally``)."""
         # Get trackers
         tracker = self._get_mlflow_tracker()
         opik_tracer = self._get_opik_tracer()
@@ -386,7 +404,17 @@ class HeterogeneousOptimizerAgent:
                 "effect_modifiers": input_data["effect_modifiers"],
                 "data_source": input_data["data_source"],
                 "filters": input_data.get("filters"),
-                "tier0_data": input_data.get("tier0_data"),  # Passthrough for tier0 testing
+                # #1734: the tier0 passthrough frame goes into the process-local
+                # frame registry, NOT into state — the raw ainvoke input dict is
+                # streamed verbatim by the top-level on_chain_start event when
+                # this graph runs under a streaming callback context (chat path),
+                # and a frame channel would re-serialize into every node event.
+                # run() releases the ref in its finally.
+                "tier0_frame_ref": (
+                    stash_frame(input_data["tier0_data"], label="het-tier0")
+                    if input_data.get("tier0_data") is not None
+                    else None
+                ),
                 # Brand for the label-gater's indicated-population lookup (was dropped).
                 "brand": input_data.get("brand"),
                 # Label-gater opt-in + indication scope (default off => unchanged).
