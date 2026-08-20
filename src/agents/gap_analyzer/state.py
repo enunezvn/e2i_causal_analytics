@@ -112,11 +112,11 @@ class ROIEstimate(TypedDict):
 class InstrumentSpec(TypedDict):
     """#357 P-2 producer input: per-feature instrument specification for the IV first stage.
 
-    Maps to the columns needed to run a real first-stage regression against tier0_data
-    for a given opportunity feature (feature_name matches gap["metric"]).
+    Maps to the columns needed to run a real first-stage regression against the tier0
+    frame for a given opportunity feature (feature_name matches gap["metric"]).
     """
 
-    treatment_col: str  # D: endogenous treatment column in tier0_data
+    treatment_col: str  # D: endogenous treatment column in the tier0 frame
     instrument_cols: List[str]  # Z: one or more instrument columns (>= 1)
     outcome_col: NotRequired[str]  # Y: outcome; defaults to the feature's metric column
     covariate_cols: NotRequired[List[str]]  # X: exogenous controls (optional)
@@ -165,12 +165,22 @@ class GapAnalyzerState(TypedDict):
     brand: str  # Brand identifier (e.g., "kisqali")
     time_period: str  # Analysis period (e.g., "current_quarter", "2024-Q3")
     filters: Optional[Dict[str, Any]]  # Additional filters
-    tier0_data: Optional[Any]  # DataFrame passthrough from tier0 testing (patient-level data)
+    # #1743 (sibling of #1734): the tier0 passthrough frame itself must NEVER
+    # ride graph state. On the chat path this graph runs nested under the
+    # streamed chatbot graph, and every node's on_chain_start/on_chain_end
+    # event re-serializes the full state to the client (measured on het: one
+    # 377.6 MB chat turn, eval 4.4) — besides leaking patient-level rows past
+    # the aggregates-only frontend contract and making state unserializable for
+    # any checkpointer (#1351 class). Callers stash the frame in
+    # src.utils.frame_registry and pass this opaque handle; gap_detector and
+    # instrument_analyzer resolve it via resolve_state_frame().
+    tier0_frame_ref: NotRequired[Optional[str]]
 
     # #357: per-feature instrument specification for the IV first stage (producer input).
     # Maps feature_name (== gap["metric"]) -> InstrumentSpec describing the treatment,
-    # instrument, outcome, and covariate columns to slice out of tier0_data. Absent =>
-    # the IV step is a no-op and the instrument-availability bonus never fires.
+    # instrument, outcome, and covariate columns to slice out of the tier0 frame
+    # (resolved via tier0_frame_ref, #1743). Absent => the IV step is a no-op and the
+    # instrument-availability bonus never fires.
     instrument_specs: Optional[Dict[str, "InstrumentSpec"]]
 
     # === CONFIGURATION ===
@@ -323,7 +333,8 @@ class GapAnalyzerState(TypedDict):
 
     # Per-feature instrument strength from a REAL IV first-stage F-test
     # (src/causal_engine/iv), produced by InstrumentAnalyzerNode from instrument_specs
-    # + tier0_data. Maps feature_name -> IVDiagnostics.to_dict() output, i.e. keys:
+    # + the tier0 frame (resolved via tier0_frame_ref, #1743). Maps feature_name ->
+    # IVDiagnostics.to_dict() output, i.e. keys:
     #   "instrument_strength" (str: "strong"|"moderate"|"weak"|"very_weak"),
     #   "is_weak_instrument" (bool), "first_stage_f_stat" (float).
     # Absent/None => no instrument analysis available => no bonus (fail-closed, like V4.4).

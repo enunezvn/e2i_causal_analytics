@@ -5,10 +5,15 @@ per-feature instrument strength from a REAL IV first-stage F-test (Staiger-Stock
 using ``src.causal_engine.iv.TwoStageLSEstimator``.
 
 For each ``feature_name -> InstrumentSpec`` in ``state["instrument_specs"]`` whose
-referenced columns all exist in ``state["tier0_data"]`` and which has at least
+referenced columns all exist in the tier0 frame and which has at least
 ``MIN_FIRST_STAGE_N`` complete-case rows, it slices ``Y`` (outcome), ``D`` (treatment),
 ``Z`` (instruments) and optional ``X`` (covariates), runs the 2SLS estimator, and
 records ``result.diagnostics.to_dict()`` into ``instrument_strength_by_feature``.
+
+#1743 (sibling of #1734): the tier0 frame never rides graph state — state carries
+only the ``tier0_frame_ref`` registry handle, resolved via
+``src.utils.frame_registry.resolve_state_frame`` (direct node callers may still
+hand an in-dict ``tier0_data`` frame, which can never reach a compiled graph).
 
 Anti-mocking (AC2): the strength is the REAL ``IVDiagnostics`` output of a real
 first-stage F-test; there are NO hardcoded/placeholder strength values. Features
@@ -16,8 +21,8 @@ without a spec, with missing columns, below the n-floor, or whose estimation fai
 are simply ABSENT from the map -> the bonus does not fire (honest "no signal",
 fail-closed exactly like the V4.4 causal path).
 
-If ``instrument_specs`` or ``tier0_data`` is absent, the node is a no-op and returns
-an empty map (AC4b).
+If ``instrument_specs`` or the tier0 frame is absent, the node is a no-op and
+returns an empty map (AC4b).
 """
 
 import logging
@@ -48,16 +53,22 @@ class InstrumentAnalyzerNode:
         """Compute instrument strength per feature from real IV first stages.
 
         Args:
-            state: Gap analyzer state. Reads ``instrument_specs`` and ``tier0_data``.
+            state: Gap analyzer state. Reads ``instrument_specs`` and the tier0
+                frame (via the ``tier0_frame_ref`` registry handle, #1743; an
+                in-dict ``tier0_data`` frame is honored for direct node calls).
 
         Returns:
             ``{"instrument_strength_by_feature": {...}}`` mapping feature_name to the
             ``IVDiagnostics.to_dict()`` output. Preserves any precomputed map already on
             state (the P-1 passthrough path) and merges freshly-computed entries on top.
         """
+        from src.utils.frame_registry import resolve_state_frame
+
         start_time = time.time()
         instrument_specs = state.get("instrument_specs")
-        tier0_data = state.get("tier0_data")
+        # #1743: resolve the frame through the registry handle (state never
+        # carries the frame itself); legacy in-dict read serves direct callers.
+        tier0_data = resolve_state_frame(state)
 
         # Preserve any precomputed strengths already on state (e.g. supplied via
         # GapAnalyzerAgent input / a future orchestrator P-1 passthrough). The IV step

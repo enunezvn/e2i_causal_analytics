@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from src.agents.base import SkillsMixin
 from src.repositories.provenance import coerce_provenance_flag
+from src.utils.frame_registry import release_frame, stash_frame
 
 from .graph import create_gap_analyzer_graph
 from .state import GapAnalyzerState
@@ -131,67 +132,46 @@ class GapAnalyzerAgent(SkillsMixin):
 
         start_time = time.time()
 
+        try:
+            # Initialize state. #1743: _initialize_state stashes any tier0 frame
+            # in the process-local frame registry and puts only the string handle
+            # into state; run() owns the release (below) so the frame's lifetime
+            # is exactly the graph run.
+            state = self._initialize_state(input_data)
+            try:
+                return await self._execute_workflow(input_data, state)
+            finally:
+                release_frame(state.get("tier0_frame_ref"))
+
+        except Exception as e:
+            # Build error output for workflow errors (not validation errors)
+            return self._build_error_output(
+                error=str(e),
+                query_id=input_data.get("query_id", str(uuid.uuid4())),
+                total_latency_ms=int((time.time() - start_time) * 1000),
+            )
+
+    async def _execute_workflow(
+        self, input_data: Dict[str, Any], state: GapAnalyzerState
+    ) -> Dict[str, Any]:
+        """Run the graph with the configured tracking wrappers (split out of
+        ``run()`` so the #1743 frame-registry release can wrap it in one
+        ``try/finally``)."""
         # Get trackers
         tracker = self._get_mlflow_tracker()
         opik_tracer = self._get_opik_tracer()
 
-        try:
-            # Initialize state
-            state = self._initialize_state(input_data)
-
-            # Execute with Opik tracing if available
-            if opik_tracer:
-                async with opik_tracer.trace_analysis(
-                    query=input_data["query"],
-                    brand=input_data["brand"],
-                    metrics=input_data.get("metrics"),
-                    segments=input_data.get("segments"),
-                    gap_type=input_data.get("gap_type", "vs_potential"),
-                    query_id=input_data.get("query_id"),
-                ) as trace_ctx:
-                    # Run with MLflow tracking if available
-                    if tracker:
-                        async with tracker.start_analysis_run(
-                            experiment_name=input_data.get("experiment_name", "default"),
-                            brand=input_data.get("brand"),
-                            region=input_data.get("region"),
-                            gap_type=input_data.get("gap_type"),
-                            query_id=input_data.get("query_id"),
-                        ):
-                            # Execute workflow
-                            final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
-
-                            # Build output
-                            output = self._build_output(final_state)
-
-                            # Log to MLflow
-                            await tracker.log_analysis_result(output, final_state)
-                    else:
-                        # Execute workflow without MLflow
-                        final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
-                        output = self._build_output(final_state)
-
-                    # Log analysis results to Opik with the REAL status — never
-                    # hardcode success. A failed graph (e.g. a fail-closed connector
-                    # raise) must be observable as a failure, not laundered into a
-                    # success trace (#845/#851 fail-OPEN family).
-                    _failed = output.get("status") == "failed" or bool(output.get("errors"))
-                    trace_ctx.log_analysis_complete(
-                        status="failed" if _failed else "success",
-                        success=not _failed,
-                        total_duration_ms=output.get("total_latency_ms", 0),
-                        gaps_detected=len(final_state.get("gaps_detected") or []),
-                        opportunities_count=len(output.get("prioritized_opportunities", [])),
-                        quick_wins_count=len(output.get("quick_wins", [])),
-                        strategic_bets_count=len(output.get("strategic_bets", [])),
-                        total_addressable_value=output.get("total_addressable_value", 0.0),
-                        confidence=output.get("confidence", 0.0),
-                        suggested_next_agent=output.get("suggested_next_agent"),
-                    )
-
-                    return output
-            else:
-                # Run without Opik tracing
+        # Execute with Opik tracing if available
+        if opik_tracer:
+            async with opik_tracer.trace_analysis(
+                query=input_data["query"],
+                brand=input_data["brand"],
+                metrics=input_data.get("metrics"),
+                segments=input_data.get("segments"),
+                gap_type=input_data.get("gap_type", "vs_potential"),
+                query_id=input_data.get("query_id"),
+            ) as trace_ctx:
+                # Run with MLflow tracking if available
                 if tracker:
                     async with tracker.start_analysis_run(
                         experiment_name=input_data.get("experiment_name", "default"),
@@ -208,24 +188,58 @@ class GapAnalyzerAgent(SkillsMixin):
 
                         # Log to MLflow
                         await tracker.log_analysis_result(output, final_state)
-
-                        return output
                 else:
-                    # Execute workflow without any tracking
+                    # Execute workflow without MLflow
+                    final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
+                    output = self._build_output(final_state)
+
+                # Log analysis results to Opik with the REAL status — never
+                # hardcode success. A failed graph (e.g. a fail-closed connector
+                # raise) must be observable as a failure, not laundered into a
+                # success trace (#845/#851 fail-OPEN family).
+                _failed = output.get("status") == "failed" or bool(output.get("errors"))
+                trace_ctx.log_analysis_complete(
+                    status="failed" if _failed else "success",
+                    success=not _failed,
+                    total_duration_ms=output.get("total_latency_ms", 0),
+                    gaps_detected=len(final_state.get("gaps_detected") or []),
+                    opportunities_count=len(output.get("prioritized_opportunities", [])),
+                    quick_wins_count=len(output.get("quick_wins", [])),
+                    strategic_bets_count=len(output.get("strategic_bets", [])),
+                    total_addressable_value=output.get("total_addressable_value", 0.0),
+                    confidence=output.get("confidence", 0.0),
+                    suggested_next_agent=output.get("suggested_next_agent"),
+                )
+
+                return output
+        else:
+            # Run without Opik tracing
+            if tracker:
+                async with tracker.start_analysis_run(
+                    experiment_name=input_data.get("experiment_name", "default"),
+                    brand=input_data.get("brand"),
+                    region=input_data.get("region"),
+                    gap_type=input_data.get("gap_type"),
+                    query_id=input_data.get("query_id"),
+                ):
+                    # Execute workflow
                     final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
 
                     # Build output
                     output = self._build_output(final_state)
 
-                    return output
+                    # Log to MLflow
+                    await tracker.log_analysis_result(output, final_state)
 
-        except Exception as e:
-            # Build error output for workflow errors (not validation errors)
-            return self._build_error_output(
-                error=str(e),
-                query_id=input_data.get("query_id", str(uuid.uuid4())),
-                total_latency_ms=int((time.time() - start_time) * 1000),
-            )
+                    return output
+            else:
+                # Execute workflow without any tracking
+                final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
+
+                # Build output
+                output = self._build_output(final_state)
+
+                return output
 
     async def _load_analysis_skills(self, input_data: Dict[str, Any]) -> None:
         """Load relevant skills for gap analysis.
@@ -312,7 +326,18 @@ class GapAnalyzerAgent(SkillsMixin):
             "brand": input_data["brand"],
             "time_period": input_data.get("time_period", "current_quarter"),
             "filters": input_data.get("filters"),
-            "tier0_data": input_data.get("tier0_data"),  # Passthrough from tier0 testing
+            # #1743 (sibling of #1734): the tier0 passthrough frame goes into the
+            # process-local frame registry, NOT into state — the raw ainvoke input
+            # dict is streamed verbatim by the top-level on_chain_start event when
+            # this graph runs under a streaming callback context (chat path), and
+            # a frame channel would re-serialize into every node event. run()
+            # releases the ref in its finally. The PUBLIC input surface still
+            # accepts ``tier0_data`` (scripts / dispatcher callers unchanged).
+            "tier0_frame_ref": (
+                stash_frame(input_data["tier0_data"], label="gap-tier0")
+                if input_data.get("tier0_data") is not None
+                else None
+            ),
             # #357: per-feature instrument specs (producer input) + any pre-computed
             # instrument strength (P-1 future passthrough). Both default to None so the
             # IV step is a no-op and the bonus stays fail-closed when absent.

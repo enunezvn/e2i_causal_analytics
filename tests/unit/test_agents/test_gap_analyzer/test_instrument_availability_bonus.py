@@ -36,6 +36,7 @@ from src.agents.gap_analyzer.state import (
     PerformanceGap,
     ROIEstimate,
 )
+from src.utils.frame_registry import stashed_frame
 
 # =============================================================================
 # Shared fixtures / builders
@@ -629,38 +630,44 @@ class TestInstrumentRoutingWire:
         roi_trx = _make_roi(gap_trx["gap_id"], roi=3.0)
         roi_ms = _make_roi(gap_ms["gap_id"], roi=3.0)
 
-        state = {
-            "query": "test",
-            "metrics": ["trx", "market_share"],
-            "segments": ["region"],
-            "brand": "kisqali",
-            "time_period": "current_quarter",
-            "filters": None,
-            "tier0_data": df,
-            "gap_type": "vs_target",
-            "min_gap_threshold": 5.0,
-            "max_opportunities": 10,
-            # Pre-populate detection + ROI so the graph nodes flow into prioritizer.
-            "gaps_detected": [gap_trx, gap_ms],
-            "roi_estimates": [roi_trx, roi_ms],
-            "instrument_specs": {
-                "trx": {
-                    "treatment_col": "rep_calls",
-                    "instrument_cols": ["weather_shock"],
-                    "outcome_col": "trx",
-                }
-            },
-            "detection_latency_ms": 0,
-            "roi_latency_ms": 0,
-            "total_latency_ms": 0,
-            "segments_analyzed": 1,
-            "errors": [],
-            "warnings": [],
-            "status": "pending",
-        }
+        # #1743: a compiled-graph invoker must pass the registry HANDLE, never the
+        # frame — the state schema no longer declares tier0_data (LangGraph would
+        # silently drop an in-dict frame at the graph boundary) and the raw
+        # ainvoke input dict is streamed verbatim by on_chain_start on the chat
+        # path. stashed_frame releases in its finally.
+        with stashed_frame(df, label="test-357-wire") as tier0_ref:
+            state = {
+                "query": "test",
+                "metrics": ["trx", "market_share"],
+                "segments": ["region"],
+                "brand": "kisqali",
+                "time_period": "current_quarter",
+                "filters": None,
+                "tier0_frame_ref": tier0_ref,
+                "gap_type": "vs_target",
+                "min_gap_threshold": 5.0,
+                "max_opportunities": 10,
+                # Pre-populate detection + ROI so the graph nodes flow into prioritizer.
+                "gaps_detected": [gap_trx, gap_ms],
+                "roi_estimates": [roi_trx, roi_ms],
+                "instrument_specs": {
+                    "trx": {
+                        "treatment_col": "rep_calls",
+                        "instrument_cols": ["weather_shock"],
+                        "outcome_col": "trx",
+                    }
+                },
+                "detection_latency_ms": 0,
+                "roi_latency_ms": 0,
+                "total_latency_ms": 0,
+                "segments_analyzed": 1,
+                "errors": [],
+                "warnings": [],
+                "status": "pending",
+            }
 
-        graph = create_gap_analyzer_graph()
-        final = await graph.ainvoke(state)
+            graph = create_gap_analyzer_graph()
+            final = await graph.ainvoke(state)
 
         # (1) The IV producer ran in the compiled graph and emitted the strong signal.
         by_feature = final.get("instrument_strength_by_feature") or {}
