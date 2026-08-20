@@ -291,6 +291,39 @@ def test_merge_carries_volume_tiers_from_raw_user_query():
     assert merged.brand == "Remibrutinib"
 
 
+def test_parse_recognizes_router_gold_prescribing_tier_phrasings():
+    """The intent-classifier gold rows (#1449 tiering lexicon) route these to
+    cohort_profiler — the parser must recognize the SAME phrasings as volume
+    tiers on the HCP entity, or the router and the agent disagree about what
+    was asked (codex iter-1 MED finding)."""
+    for query in (
+        "Segment healthcare providers into high, medium, and low prescribing tiers",
+        "Segment health care providers into high, medium, and low prescribing tiers",
+        "Segment health-care providers into high, medium, and low prescribing tiers",
+        "Segment primary care providers into high, medium, and low volume tiers",
+    ):
+        ask = parse_cohort_ask(query)
+        assert ask.entity_type == "hcp", query
+        assert ask.volume_tiers is True, query
+
+
+def test_merge_rescues_tier_ask_from_generic_rewrite():
+    """#1698's exact failure shape applied to tiers (codex iter-1 HIGH): the
+    chat rewrite is generic ('profile the Remibrutinib cohort' — no entity
+    word), the user's raw ask is the 4.3 tier ask. The merged ask must land on
+    the HCP tier path, not the patient path that declares tiers unservable."""
+    primary = parse_cohort_ask("profile the Remibrutinib cohort")
+    merged = merge_cohort_asks(primary, parse_cohort_ask(_Q43))
+    assert merged.volume_tiers is True
+    assert merged.entity_type == "hcp"
+    # ... but an EXPLICIT patient rewrite keeps the patient path (honest
+    # accounting there), because primary wins on an explicit entity.
+    primary_p = parse_cohort_ask("profile Remibrutinib patients")
+    merged_p = merge_cohort_asks(primary_p, parse_cohort_ask(_Q43))
+    assert merged_p.entity_type == "patient"
+    assert merged_p.volume_tiers is True
+
+
 # ------------------------------------------------------------- HCP tier path
 
 
@@ -314,6 +347,7 @@ async def test_43_ask_serves_counts_per_tier_all_brands():
     bounds = profile["tier_boundaries"]
     assert bounds["low_max_trx"] == 7
     assert bounds["medium_max_trx"] == 12
+    assert bounds["collapsed_cuts"] is False
     assert "tercile" in bounds["method"]
     # Specialty rides along ("plus specialty where available").
     assert profile["specialty"]["oncology"] == 343 + 411 + 380
@@ -445,6 +479,29 @@ async def test_tier_zero_match_with_threshold_probes_base():
     assert db.calls[0][1]["params"][3] == 100
     assert db.calls[1][1]["params"][3] == 0
     assert "545" in out["narrative"]
+
+
+@pytest.mark.asyncio
+async def test_degenerate_cuts_disclosed_honestly():
+    """When the tercile cut points coincide (concentrated distribution), the
+    value-based bucketing puts every tied HCP in 'low' — the narrative must
+    say the cuts collapsed instead of implying three meaningful tiers with the
+    strict low<medium<high formula (codex iter-1 HIGH finding)."""
+    rows = _rows([("low", "oncology", 1, 1, 3, 3, 1, 1)])
+    agent, db = _agent(db_rows=[rows], today=date(2026, 7, 30))
+    out = await agent.analyze({"query": _Q43 + " last quarter"})
+    assert out["status"] == "completed"
+    profile = out["cohort_profile"]
+    assert profile["cohort_size"] == 3
+    assert profile["volume_tiers"]["low"]["n_hcps"] == 3
+    assert profile["volume_tiers"]["medium"]["n_hcps"] == 0
+    assert profile["volume_tiers"]["high"]["n_hcps"] == 0
+    bounds = profile["tier_boundaries"]
+    assert bounds["low_max_trx"] == 1 and bounds["medium_max_trx"] == 1
+    assert bounds["collapsed_cuts"] is True
+    narrative = out["narrative"]
+    assert "coincide" in narrative
+    assert "< medium ≤" not in narrative
 
 
 # ----------------------------------------------------------- patient honesty

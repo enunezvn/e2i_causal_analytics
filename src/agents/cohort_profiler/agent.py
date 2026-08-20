@@ -889,6 +889,12 @@ class CohortProfilerAgent:
                     ),
                     "low_max_trx": cut_low,
                     "medium_max_trx": cut_medium,
+                    # True when the measured tercile cuts coincide: the
+                    # distribution is too concentrated for three distinct
+                    # tiers, and the value-based bucketing collapses (medium —
+                    # and possibly high — is empty BY MEASUREMENT). Synthesis
+                    # must not present three meaningful tiers when this is set.
+                    "collapsed_cuts": cut_low is not None and cut_low == cut_medium,
                 },
                 "specialty": specialty,
                 "trx_total": total_trx,
@@ -956,15 +962,30 @@ class CohortProfilerAgent:
                 parts.append(
                     f"| {label} | {rng} | {bucket['n_hcps']:,} | {self._fmt(bucket['trx_total'])} |"
                 )
-            parts.append(
-                "\n_Tier boundaries are value-based terciles of THIS cohort's "
-                f"per-HCP TRx distribution — measured cut points: low ≤ {cut_low} "
-                f"< medium ≤ {cut_medium} < high. They are scope-relative "
-                "measurements, not fixed global constants; HCPs with equal TRx "
-                "always share a tier. This axis is computed from prescribing "
-                "volume and is distinct from the static priority-tier targeting "
-                "attribute._"
-            )
+            if cut_low is not None and cut_low == cut_medium:
+                # Degenerate distribution (codex iter-1): the measured cuts
+                # coincide, so the strict three-tier formula would be false —
+                # say what actually happened instead.
+                parts.append(
+                    f"\n_The measured tercile cut points coincide at {cut_low} "
+                    "TRx — this cohort's per-HCP TRx distribution is too "
+                    "concentrated to support three distinct tiers: every HCP "
+                    f"at or below {cut_low} TRx is 'low' and anything above is "
+                    "'high'; an empty tier here is empty by measurement, not "
+                    "missing data. Cut points are scope-relative measurements, "
+                    "not fixed global constants; HCPs with equal TRx always "
+                    "share a tier._"
+                )
+            else:
+                parts.append(
+                    "\n_Tier boundaries are value-based terciles of THIS cohort's "
+                    f"per-HCP TRx distribution — measured cut points: low ≤ {cut_low} "
+                    f"< medium ≤ {cut_medium} < high. They are scope-relative "
+                    "measurements, not fixed global constants; HCPs with equal TRx "
+                    "always share a tier. This axis is computed from prescribing "
+                    "volume and is distinct from the static priority-tier targeting "
+                    "attribute._"
+                )
             parts.append("\n_By specialty (all tiers combined):_\n")
             parts.append("| Specialty | HCPs |\n|---|---|")
             for spec, n in sorted(specialty.items(), key=lambda kv: -kv[1]):
