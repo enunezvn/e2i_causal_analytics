@@ -105,8 +105,16 @@ class DriftMonitorState(TypedDict):
     features_to_monitor: NotRequired[list[str]]
     time_window: NotRequired[str]
     brand: NotRequired[str]
-    # Tier0 data passthrough for testing with real synthetic data
-    tier0_data: NotRequired[Any]  # pandas DataFrame
+    # #1744 (sibling of #1734): the tier0 passthrough frame itself must NEVER
+    # ride graph state. Under a streaming callback context every node's
+    # on_chain_start/on_chain_end event re-serializes the full state (and the
+    # top-level on_chain_start carries the caller's raw ainvoke input dict
+    # before schema filtering) — measured on het as one 377.6 MB chat turn
+    # (eval 4.4) — besides making state unserializable for any checkpointer
+    # (ormsgpack, #1351 class). Callers stash the frame in
+    # src.utils.frame_registry and pass this opaque handle; the drift nodes
+    # resolve it via resolve_state_frame().
+    tier0_frame_ref: NotRequired[Optional[str]]
 
     # ===== Configuration (NotRequired - has defaults) =====
     significance_level: NotRequired[float]  # Default: 0.05

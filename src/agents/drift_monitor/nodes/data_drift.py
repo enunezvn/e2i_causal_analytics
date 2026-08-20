@@ -122,8 +122,15 @@ class DataDriftNode:
         Returns:
             (baseline_data, current_data) tuple
         """
-        # Check for tier0_data passthrough (testing mode)
-        tier0_data = state.get("tier0_data")
+        # Priority 1: tier0 passthrough (testing mode). #1744 (sibling of
+        # #1734): the frame rides the process-local frame registry (state
+        # carries only the tier0_frame_ref handle — a frame in state would
+        # re-stream to the client via every on_chain_* event); direct node
+        # callers may still hand an in-dict frame, which can never reach a
+        # compiled graph.
+        from src.utils.frame_registry import resolve_state_frame
+
+        tier0_data = resolve_state_frame(state)
         if tier0_data is not None:
             return self._create_drift_splits_from_tier0(tier0_data, state["features_to_monitor"])
 

@@ -81,11 +81,13 @@ def create_drift_monitor_graph() -> CompiledStateGraph:
     workflow.add_edge("structural_drift", "alert_aggregator")  # V4.4
     workflow.add_edge("alert_aggregator", END)
 
-    # Compile graph. checkpointer=False: this graph is chat-dispatchable and
-    # its state allows a tier0_data DataFrame passthrough — a bare compile()
-    # inherits the checkpointed chatbot graph's Redis checkpointer as a
-    # subgraph, whose ormsgpack serde cannot serialize DataFrames (#1351
-    # live-unmasked, same class as causal_impact).
+    # Compile graph. checkpointer=False: this graph is chat-dispatchable — a
+    # bare compile() inherits the checkpointed chatbot graph's Redis
+    # checkpointer as a subgraph (#1351 live-unmasked, same class as
+    # causal_impact). Post-#1744 the tier0 frame no longer rides state (only
+    # the tier0_frame_ref registry handle does), but persisting every node's
+    # full run-internal state per chat turn would be pure checkpoint bloat —
+    # so this stays False.
     return workflow.compile(checkpointer=False)
 
 
