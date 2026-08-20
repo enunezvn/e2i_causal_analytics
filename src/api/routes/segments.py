@@ -1354,9 +1354,11 @@ async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
 # The route loads the frame SERVER-SIDE (provenance-aware: ``apply_provenance_filter``
 # INCLUDES the is_synthetic=true gold-standard rows on this synthetic-showcase
 # deployment), bands the continuous clinical columns, and passes the prepared
-# frame as ``tier0_data`` so the CATE / hierarchical / uplift nodes all consume
-# ONE banded frame (no connector fetch, no double-read). The clinical contract
-# below is FIXED server-side; only treatment/outcome are selectable (curated).
+# frame via the ``tier0_frame_ref`` frame-registry handle (#1734 — the frame
+# itself never enters graph state) so the CATE / hierarchical / uplift nodes
+# all consume ONE banded frame (no connector fetch, no double-read). The
+# clinical contract below is FIXED server-side; only treatment/outcome are
+# selectable (curated).
 
 # Dataset the Segment Analysis page reads (gold-standard patient cohort).
 _SEGMENT_HTE_DATASET = "patient_journeys"
@@ -1727,58 +1729,70 @@ async def _execute_segment_analysis(
             )
             from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
 
+            # #1734: stash the prepared frame in the process-local frame registry
+            # for exactly the duration of the graph run — only the string handle
+            # enters graph state. The raw ainvoke input dict is streamed verbatim
+            # by the top-level on_chain_start event whenever this graph runs
+            # under a streaming callback context, and a frame in state would
+            # re-serialize into every node event (the 377.6 MB eval-4.4 turn),
+            # so the frame itself must never be part of the state dict.
+            from src.utils.frame_registry import stashed_frame
+
             # Initialize state (cast partial state - remaining fields populated by graph nodes).
             # The clinical contract is FIXED server-side (the prepared frame is passed
-            # as tier0_data so cate/hierarchical/uplift all consume ONE banded frame):
+            # via the tier0 frame-registry handle so cate/hierarchical/uplift all
+            # consume ONE banded frame):
             #   - effect_modifiers (X): numeric clinical covariates (drives feature
             #     importance), NO region.
             #   - confounders (W): engagement_score pure control — NOT in X (no overlap).
             #   - segment_vars: banded / raw categoricals present in the frame.
-            initial_state = cast(
-                HeterogeneousOptimizerState,
-                {
-                    "query": request.query,
-                    "treatment_var": treatment_var,
-                    "outcome_var": outcome_var,
-                    "segment_vars": list(segment_vars),
-                    "effect_modifiers": list(effect_modifiers),
-                    # Explicit confounders take precedence-1 in cate_estimator's
-                    # _resolve_confounders and are residualized as the DML W (issue
-                    # #237).
-                    "confounders": list(_SEGMENT_HTE_CONFOUNDERS),
-                    # The prepared, banded gold-standard frame — consumed as tier0
-                    # priority-1 by cate_estimator / hierarchical / uplift.
-                    "tier0_data": tier0_frame,
-                    "data_source": _SEGMENT_HTE_DATASET,
-                    "filters": request.filters,
-                    "n_estimators": request.n_estimators,
-                    "min_samples_leaf": request.min_samples_leaf,
-                    "significance_level": request.significance_level,
-                    "top_segments_count": request.top_segments_count,
-                    # Label-gater (opt-in): brand + indication + flag thread through to
-                    # cate_estimator (segment augmentation) and policy_learner (the gate).
-                    "brand": request.brand,
-                    "indication": request.indication,
-                    "label_segmentation": request.label_segmentation,
-                    "status": "pending",
-                    "errors": [],
-                    "warnings": [],
-                    "estimation_latency_ms": 0,
-                    "analysis_latency_ms": 0,
-                    "total_latency_ms": 0,
-                },
-            )
+            with stashed_frame(tier0_frame, label="segments-hte") as tier0_ref:
+                initial_state = cast(
+                    HeterogeneousOptimizerState,
+                    {
+                        "query": request.query,
+                        "treatment_var": treatment_var,
+                        "outcome_var": outcome_var,
+                        "segment_vars": list(segment_vars),
+                        "effect_modifiers": list(effect_modifiers),
+                        # Explicit confounders take precedence-1 in cate_estimator's
+                        # _resolve_confounders and are residualized as the DML W (issue
+                        # #237).
+                        "confounders": list(_SEGMENT_HTE_CONFOUNDERS),
+                        # Handle to the prepared, banded gold-standard frame —
+                        # resolved as tier0 priority-1 by cate_estimator /
+                        # hierarchical / uplift via resolve_state_frame().
+                        "tier0_frame_ref": tier0_ref,
+                        "data_source": _SEGMENT_HTE_DATASET,
+                        "filters": request.filters,
+                        "n_estimators": request.n_estimators,
+                        "min_samples_leaf": request.min_samples_leaf,
+                        "significance_level": request.significance_level,
+                        "top_segments_count": request.top_segments_count,
+                        # Label-gater (opt-in): brand + indication + flag thread through to
+                        # cate_estimator (segment augmentation) and policy_learner (the gate).
+                        "brand": request.brand,
+                        "indication": request.indication,
+                        "label_segmentation": request.label_segmentation,
+                        "status": "pending",
+                        "errors": [],
+                        "warnings": [],
+                        "estimation_latency_ms": 0,
+                        "analysis_latency_ms": 0,
+                        "total_latency_ms": 0,
+                    },
+                )
 
-            # Create and run graph. The factory resolves a SINGLE shared data
-            # connector (when none is supplied) and passes it to BOTH data-fetching
-            # nodes (cate_estimator + hierarchical_analyzer) so they read the same
-            # live substrate; hierarchical_analyzer previously had no source and
-            # raised RuntimeError mid-graph in production (#30). The resolution lives
-            # in the factory (not here) so this function's import-guard / mock-
-            # fallback contract — and the unit tests that patch the factory — stay
-            # intact.
-            graph = create_heterogeneous_optimizer_graph()
-            result = await graph.ainvoke(initial_state)
+                # Create and run graph. The factory resolves a SINGLE shared data
+                # connector (when none is supplied) and passes it to BOTH data-fetching
+                # nodes (cate_estimator + hierarchical_analyzer) so they read the same
+                # live substrate; hierarchical_analyzer previously had no source and
+                # raised RuntimeError mid-graph in production (#30). The resolution lives
+                # in the factory (not here) so this function's import-guard / mock-
+                # fallback contract — and the unit tests that patch the factory — stay
+                # intact.
+                graph = create_heterogeneous_optimizer_graph()
+                result = await graph.ainvoke(initial_state)
 
             # Convert agent output to API response
             total_latency = int((time.time() - start_time) * 1000)

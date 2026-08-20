@@ -557,8 +557,14 @@ class CATEEstimatorNode:
 
         required_columns = [c for c in required_columns if c not in PROVENANCE_DROP_COLS]
 
-        # Priority 1: Use tier0 passthrough data if available
-        tier0_data = state.get("tier0_data")
+        # Priority 1: Use tier0 passthrough data if available. #1734: the frame
+        # rides the process-local frame registry (state carries only the
+        # tier0_frame_ref handle — a frame in state would re-stream to the chat
+        # client via every on_chain_* event); direct node callers may still hand
+        # an in-dict frame, which can never reach a compiled graph.
+        from src.utils.frame_registry import resolve_state_frame
+
+        tier0_data = resolve_state_frame(state)
         if tier0_data is not None and len(tier0_data) >= 100:
             # Validate required columns exist in tier0 data
             missing_cols = [c for c in required_columns if c not in tier0_data.columns]
