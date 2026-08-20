@@ -259,8 +259,12 @@ class HierarchicalAnalyzerNode:
 
         required_columns = [c for c in required_columns if c not in PROVENANCE_DROP_COLS]
 
-        # Priority 1: Use tier0 passthrough data if available
-        tier0_data = state.get("tier0_data")
+        # Priority 1: Use tier0 passthrough data if available. #1734: resolved
+        # via the frame-registry handle (state carries only tier0_frame_ref);
+        # a direct in-dict frame is honored for non-graph callers only.
+        from src.utils.frame_registry import resolve_state_frame
+
+        tier0_data = resolve_state_frame(state)
         if tier0_data is not None and len(tier0_data) >= self.min_segment_size * 2:
             missing_cols = [c for c in required_columns if c not in tier0_data.columns]
             if not missing_cols:

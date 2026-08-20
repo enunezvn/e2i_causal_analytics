@@ -89,9 +89,15 @@ class HeterogeneousOptimizerState(TypedDict):
     effect_modifiers: List[str]  # Variables that modify treatment effect
     data_source: str
     filters: Optional[Dict[str, Any]]
-    tier0_data: Optional[
-        Any
-    ]  # DataFrame passthrough from tier0 testing (use Any to avoid pd import)
+    # #1734: the tier0 passthrough frame itself must NEVER ride graph state.
+    # On the chat path this graph runs nested under the streamed chatbot graph,
+    # and every node's on_chain_start/on_chain_end event re-serializes the full
+    # state to the client (measured: one 377.6 MB chat turn, eval 4.4) — besides
+    # leaking patient-level rows past the aggregates-only frontend contract and
+    # making state unserializable for any checkpointer (#1351 class). Callers
+    # stash the frame in src.utils.frame_registry and pass this opaque handle;
+    # the data-fetching nodes resolve it via resolve_state_frame().
+    tier0_frame_ref: NotRequired[Optional[str]]
 
     # Phase 3 (Issue #237 causal-role propagation):
     # Optional caller-provided confounder list. When present and non-empty,

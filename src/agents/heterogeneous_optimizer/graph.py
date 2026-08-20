@@ -236,9 +236,12 @@ def create_heterogeneous_optimizer_graph(
     workflow.add_edge("generate_profiles", END)
     workflow.add_edge("error_handler", END)
 
-    # checkpointer=False: state carries a DataFrame passthrough (tier0 data)
-    # and this graph runs as a subgraph of the checkpointed chatbot graph on
-    # the chat path — a bare compile() inherits the parent's Redis
-    # checkpointer whose ormsgpack serde cannot serialize DataFrames (#1351
-    # live-unmasked, same class as causal_impact).
+    # checkpointer=False: this graph runs as a subgraph of the checkpointed
+    # chatbot graph on the chat path — a bare compile() inherits the parent's
+    # Redis checkpointer (#1351 live-unmasked, same class as causal_impact).
+    # Post-#1734 the tier0 frame no longer rides state (only the
+    # tier0_frame_ref registry handle does), but intermediate node outputs
+    # still carry numpy scalars ormsgpack cannot serialize, and persisting
+    # every node's full run-internal state per chat turn would be pure
+    # checkpoint bloat — so this stays False.
     return workflow.compile(checkpointer=False)

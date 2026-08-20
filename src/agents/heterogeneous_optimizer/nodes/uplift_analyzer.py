@@ -293,12 +293,16 @@ class UpliftAnalyzerNode:
         Uses mock data if data connector not available AND mock fallback is
         explicitly enabled (see ``_mock_connector_allowed``).
         """
-        # Priority 1: tier0_data passthrough — the route's server-side gold-standard
+        # Priority 1: tier0 passthrough — the route's server-side gold-standard
         # frame (loaded include_synthetic=True + brand filter + continuous banding).
         # When present and carrying treatment+outcome, use it directly: no connector
         # fetch (so we don't double-read the substrate, codex MED-1), no fabrication,
         # and uplift sees the SAME banded frame the CATE/hierarchical nodes consume.
-        tier0 = state.get("tier0_data")
+        # #1734: resolved via the frame-registry handle (state carries only
+        # tier0_frame_ref); a direct in-dict frame is honored for non-graph callers.
+        from src.utils.frame_registry import resolve_state_frame
+
+        tier0 = resolve_state_frame(state)
         if isinstance(tier0, pd.DataFrame) and not tier0.empty:
             needed = {state["treatment_var"], state["outcome_var"]}
             if needed.issubset(set(tier0.columns)):
