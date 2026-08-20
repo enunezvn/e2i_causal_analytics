@@ -1074,6 +1074,104 @@ class TestGraphHealth:
             assert data.get("graphiti") == "unavailable"
             assert data.get("falkordb") == "unavailable"
 
+    def test_graph_health_degrades_when_graph_empty_1760(self, client, mock_semantic_memory):
+        """Connected-but-EMPTY graph must degrade, not report healthy (#1760).
+
+        The #1758 incident signature: FalkorDB reachable, every curated node
+        wiped — and this endpoint stayed green for four days because it only
+        checked connectivity.
+        """
+        with (
+            patch(
+                "src.api.routes.graph._get_semantic_memory",
+                new_callable=AsyncMock,
+                return_value=mock_semantic_memory,
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={
+                    "status": "healthy",
+                    "current_graph": "e2i_causal",
+                    "node_count": 0,
+                    "edge_count": 0,
+                    "cached": False,
+                },
+            ),
+        ):
+            response = client.get("/graph/health")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data.get("status") == "degraded"
+            content = data.get("graph_content")
+            assert content is not None, "health payload must carry graph_content (#1760)"
+            assert content.get("empty") is True
+            assert content.get("node_count") == 0
+
+    def test_graph_health_healthy_with_content_1760(self, client, mock_semantic_memory):
+        """A populated graph stays healthy and surfaces its counts (#1760)."""
+        with (
+            patch(
+                "src.api.routes.graph._get_semantic_memory",
+                new_callable=AsyncMock,
+                return_value=mock_semantic_memory,
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={
+                    "status": "healthy",
+                    "current_graph": "e2i_causal",
+                    "node_count": 85,
+                    "edge_count": 233,
+                    "cached": True,
+                },
+            ),
+        ):
+            response = client.get("/graph/health")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data.get("status") == "healthy"
+            content = data.get("graph_content")
+            assert content is not None
+            assert content.get("empty") is False
+            assert content.get("node_count") == 85
+            assert content.get("edge_count") == 233
+
+    def test_graph_health_scan_failure_is_unknown_not_empty_1760(
+        self, client, mock_semantic_memory
+    ):
+        """A failed count scan must read as UNKNOWN, never as empty (#1760).
+
+        A transient query failure yielding node_count=0 would be a
+        plausible-wrong value: it would flip status to degraded and mimic the
+        wipe signature. Unknown content must leave the connectivity verdict
+        alone.
+        """
+        with (
+            patch(
+                "src.api.routes.graph._get_semantic_memory",
+                new_callable=AsyncMock,
+                return_value=mock_semantic_memory,
+            ),
+            patch(
+                "src.api.dependencies.falkordb_client.falkordb_diagnostics",
+                new_callable=AsyncMock,
+                return_value={"status": "unknown", "error": "scan failed"},
+            ),
+        ):
+            response = client.get("/graph/health")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data.get("status") == "healthy"
+            content = data.get("graph_content")
+            assert content is not None
+            assert content.get("status") == "unknown"
+            assert content.get("empty") is not True
+
 
 # =============================================================================
 # WebSocket Stream Tests

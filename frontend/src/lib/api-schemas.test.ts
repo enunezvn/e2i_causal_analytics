@@ -699,7 +699,33 @@ describe('Wire Schemas (C31)', () => {
   });
 
   describe('GraphHealthResponseWireSchema', () => {
-    it('accepts the real /graph/health payload', () => {
+    it('accepts the real /graph/health payload and retains graph_content (#1760)', () => {
+      // Wire schemas strip unknown keys, so graph_content must be IN the
+      // schema or the sentinel field silently vanishes client-side.
+      const payload = {
+        status: 'degraded',
+        graphiti: 'connected',
+        falkordb: 'connected',
+        websocket_connections: 3,
+        timestamp: new Date().toISOString(),
+        graph_content: {
+          status: 'healthy',
+          node_count: 0,
+          edge_count: 0,
+          empty: true,
+          cached: false,
+        },
+      };
+      const result = GraphHealthResponseWireSchema.safeParse(payload);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.graph_content).toBeDefined();
+        expect(result.data.graph_content?.empty).toBe(true);
+        expect(result.data.graph_content?.node_count).toBe(0);
+      }
+    });
+
+    it('accepts a payload without graph_content (older backend)', () => {
       const payload = {
         status: 'healthy',
         graphiti: 'connected',
