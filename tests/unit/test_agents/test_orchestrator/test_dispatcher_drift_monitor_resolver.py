@@ -458,21 +458,25 @@ def test_valid_model_id_param_survives_sweep_mode(
         ("features_to_monitor", []),
         ("features_to_monitor", "trx_total"),
         ("features_to_monitor", [42]),
-        ("features_to_monitor", ["trx_total", ""]),
         ("time_window", "last week"),
         ("time_window", "0d"),
         ("time_window", "500d"),
         ("time_window", 14),
         ("model_id", 42),
+        # "" / whitespace-only strings ARE accepted by the model but carry no
+        # analyst intent (a blank name can never match a registered feature or
+        # brand) — dropping them is deliberate, documented strictness, not the
+        # iter-2 over-rejection defect.
         ("model_id", ""),
         ("brand", ""),
         ("brand", 7),
+        # True coerces to 1.0 under lax mode and then fails the [0.01, 0.10]
+        # range — dropped by the model contract itself, not a type special-case.
         ("significance_level", 0.75),
         ("significance_level", "high"),
         ("significance_level", True),
         ("psi_threshold", 2.0),
         ("psi_threshold", -0.1),
-        ("check_data_drift", "yes"),
         ("dag_nodes", "not-a-list"),
         ("baseline_dag_edge_types", ["not-a-dict"]),
     ],
@@ -500,3 +504,75 @@ def test_sanitizer_drops_malformed_param(key: str, bad_value: Any) -> None:
 def test_sanitizer_keeps_valid_param(key: str, good_value: Any) -> None:
     out = disp._sanitize_drift_params({key: good_value})  # type: ignore[attr-defined]
     assert out[key] == good_value
+
+
+# ---------------------------------------------------------------------------
+# (7) the sanitizer must be exactly as lax as the model (codex iter-2 MED):
+# DriftMonitorInput runs in Pydantic lax mode, so it ACCEPTS numeric strings
+# ("0.01" -> 0.01) and bool tokens ("false" -> False, "yes" -> True, 1 -> True).
+# A hand-rolled sanitizer stricter than the model dropped those values, and —
+# because RESOLVER_OWNED_PARAM_KEYS excludes the raw copies from the coercion
+# overlay — the valid value could never recover: analyst intent silently fell
+# to model defaults (sig 0.05, check_* True), changing drift conclusions.
+# The sanitizer therefore DELEGATES per-key validation to the model itself
+# (validate_assignment) and forwards the coerced value, so it is structurally
+# incapable of diverging from the model contract again.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("key", "raw", "expected"),
+    [
+        ("significance_level", "0.01", 0.01),
+        ("psi_threshold", "0.3", 0.3),
+        ("check_model_drift", "false", False),
+        ("check_data_drift", "yes", True),
+        ("check_concept_drift", 1, True),
+        ("check_structural_drift", "0", False),
+    ],
+)
+def test_sanitizer_coerces_lax_value(key: str, raw: Any, expected: Any) -> None:
+    out = disp._sanitize_drift_params({key: raw})  # type: ignore[attr-defined]
+    assert key in out, f"model-accepted value {raw!r} must not be dropped"
+    assert out[key] == expected
+    assert type(out[key]) is type(expected), "forward the COERCED value, not the raw one"
+
+
+def test_sanitizer_filters_blank_feature_names() -> None:
+    # The model accepts "" elements, but a blank name can never match a
+    # registered feature — filter blanks and KEEP the real names rather than
+    # dropping the whole param (which would discard genuine analyst intent).
+    out = disp._sanitize_drift_params(  # type: ignore[attr-defined]
+        {"features_to_monitor": ["trx_total", "", "   "]}
+    )
+    assert out["features_to_monitor"] == ["trx_total"]
+
+
+def test_sanitizer_drops_all_blank_feature_list() -> None:
+    # Nothing real left after filtering -> drop the key so the resolver falls
+    # through to entity/sweep GROUNDING instead of binding phantom names.
+    out = disp._sanitize_drift_params({"features_to_monitor": ["", "   "]})  # type: ignore[attr-defined]
+    assert "features_to_monitor" not in out
+
+
+def test_lax_string_params_carry_analyst_intent_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The codex iter-2 concrete scenario, run through the full
+    # resolver -> merge -> coercion seam: string-typed but model-valid values
+    # must land on the built model, not fall to defaults.
+    model = _coerce_end_to_end(
+        monkeypatch,
+        _payload(),
+        _dispatch(
+            {
+                "features_to_monitor": ["trx_total"],
+                "significance_level": "0.01",
+                "check_model_drift": "false",
+            }
+        ),
+        {7: ["f_a"]},
+    )
+    assert model.features_to_monitor == ["trx_total"]
+    assert model.significance_level == 0.01
+    assert model.check_model_drift is False
