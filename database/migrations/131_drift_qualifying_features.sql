@@ -19,8 +19,14 @@
 -- dispatch time is not viable (~26k rows/60d at 1k rows/page). One RPC call
 -- per candidate window keeps the dispatch-path probe bounded and exact.
 --
--- Windows mirror DataDriftNode._fetch_data exactly: current = [now()-Nd, now()],
--- baseline = [now()-2Nd, now()-Nd). Provenance mirrors apply_provenance_filter
+-- Windows mirror DataDriftNode._fetch_data + the supabase connector's
+-- .gte(start).lte(end) CLOSED intervals exactly (codex iter-1 MED):
+-- current = [now()-Nd, now()], baseline = [now()-2Nd, now()-Nd]. Two
+-- consequences of that fidelity: a row at the exact now()-Nd instant counts in
+-- BOTH windows (the connector genuinely does this), and future-dated rows
+-- (clock skew, scheduled loads) are EXCLUDED — the connector would never fetch
+-- them, so counting them would qualify features on support the detectors can't
+-- see. Provenance mirrors apply_provenance_filter
 -- default-exclude (is_synthetic IS NOT TRUE ... NULL counts as real) on BOTH
 -- the features registry (#894: the registry is is_synthetic-tagged) and the
 -- feature_values rows; p_include_synthetic=true lifts both, matching the
@@ -57,13 +63,15 @@ AS $$
             fv.feature_id,
             count(*) FILTER (
                 WHERE fv.event_timestamp >= now() - make_interval(days => p_window_days)
+                  AND fv.event_timestamp <= now()
             ) AS current_n,
             count(*) FILTER (
                 WHERE fv.event_timestamp >= now() - make_interval(days => 2 * p_window_days)
-                  AND fv.event_timestamp <  now() - make_interval(days => p_window_days)
+                  AND fv.event_timestamp <= now() - make_interval(days => p_window_days)
             ) AS baseline_n
         FROM public.feature_values fv
         WHERE fv.event_timestamp >= now() - make_interval(days => 2 * p_window_days)
+          AND fv.event_timestamp <= now()
           AND (p_include_synthetic OR fv.is_synthetic IS NOT TRUE)
         GROUP BY fv.feature_id
     )
@@ -81,8 +89,9 @@ $$;
 
 COMMENT ON FUNCTION public.drift_qualifying_features(integer, integer, boolean) IS
     '#1747: features with >= p_min_samples feature_values in BOTH drift windows '
-    '(baseline [now-2N, now-N), current [now-N, now]) under the provenance '
-    'predicate — the dispatcher''s drift_monitor substrate probe. Ordered by '
+    '(closed intervals mirroring the connector''s gte/lte: baseline '
+    '[now-2N, now-N], current [now-N, now]) under the provenance predicate — '
+    'the dispatcher''s drift_monitor substrate probe. Ordered by '
     'current-window support (best-supported first).';
 
 GRANT EXECUTE ON FUNCTION public.drift_qualifying_features(integer, integer, boolean)

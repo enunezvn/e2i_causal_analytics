@@ -135,7 +135,9 @@ class TestDriftQualifyingFeaturesRpc:
                 f"{row['feature_name']}: RPC current_n diverges from the "
                 "connector's gte/lte window count"
             )
-            assert _connector_count(feature_id, baseline_start, current_start) == row["baseline_n"], (
+            assert (
+                _connector_count(feature_id, baseline_start, current_start) == row["baseline_n"]
+            ), (
                 f"{row['feature_name']}: RPC baseline_n diverges from the "
                 "connector's gte/lte window count"
             )

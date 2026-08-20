@@ -150,7 +150,12 @@ def _coerce_to_input_model(
 
     1. Merge ``dispatch.parameters`` (router-supplied per-agent kwargs)
        over the generic payload. ``parameters`` wins because the router put
-       them there specifically for this agent.
+       them there specifically for this agent — EXCEPT keys the agent's input
+       resolver owns (``RESOLVER_OWNED_PARAM_KEYS``): the resolver ran before
+       this coercion, re-validated those raw values, and merged the valid ones
+       into ``payload``; overlaying the raw copies again would let a malformed
+       router param clobber the grounded value and crash the model build
+       (codex iter-1 HIGH on #1747).
     2. Apply per-agent ACs-#3 defaults via ``_wrapped_input_defaults``;
        defaults only fill values that are not already present in the merge.
     3. Project to the union of the model's declared field names. Models
@@ -159,6 +164,9 @@ def _coerce_to_input_model(
        splat path — to preserve backward compatibility.
     """
     parameters = dispatch.get("parameters") or {}
+    owned = RESOLVER_OWNED_PARAM_KEYS.get(agent_name)
+    if owned:
+        parameters = {k: v for k, v in parameters.items() if k not in owned}
     merged: Dict[str, Any] = {**payload, **parameters}
 
     declared = _declared_field_names(input_cls)
@@ -1120,8 +1128,15 @@ _DRIFT_MAX_FEATURES = 20
 # sweep binds the SMALLEST window the store actually supports instead of
 # letting every dispatch die on an unsupportable default.
 _DRIFT_WINDOW_CANDIDATES: Tuple[str, ...] = ("7d", "14d", "30d", "90d")
-# Analyst-config keys forwarded verbatim on the explicit-params path (the
-# DriftMonitorInput surface minus the resolver-owned include_synthetic).
+# The router-facing DriftMonitorInput parameter surface (minus include_synthetic,
+# which the resolver derives from the #872/#880 opt-in channels). The resolver
+# OWNS these keys: it re-validates the raw router values once
+# (``_sanitize_drift_params``) and forwards the valid ones on every successful
+# branch, and ``_coerce_to_input_model`` excludes the raw copies from its
+# parameters overlay (``RESOLVER_OWNED_PARAM_KEYS``) — otherwise a malformed
+# router param (features_to_monitor=[], time_window='last week') would clobber
+# the grounded values and resurrect the exact #1747 coercion crash
+# (codex iter-1 HIGH).
 _DRIFT_PASSTHROUGH: Tuple[str, ...] = (
     "features_to_monitor",
     "model_id",
@@ -1142,13 +1157,93 @@ _DRIFT_PASSTHROUGH: Tuple[str, ...] = (
 )
 
 
+def _sanitize_drift_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Shape/range-validate the router-supplied drift params against the
+    ``DriftMonitorInput`` contract, DROPPING (with a warning) any value that
+    would fail the model's validators.
+
+    The router is an LLM: it can and does emit ``features_to_monitor: []``, a
+    prose ``time_window``, or an out-of-range threshold. Those raw values used
+    to ride ``_coerce_to_input_model``'s parameters overlay straight into the
+    Pydantic build and crash it — the exact failure #1747 exists to remove
+    (codex iter-1 HIGH). Validation here mirrors the model's declared
+    constraints (min_length=1 list of names, ``'\\d+d'`` in 1..365,
+    significance in [0.01, 0.10], psi in [0, 1], strict bools); a dropped key
+    falls back to the resolver's grounded value or the model default.
+    ``tier0_data`` is ``Any`` on the model — nothing to validate.
+    """
+
+    def _named(value: Any) -> bool:
+        return isinstance(value, str) and bool(value.strip())
+
+    def _valid(key: str, value: Any) -> bool:
+        if key == "features_to_monitor":
+            return (
+                isinstance(value, (list, tuple))
+                and len(value) > 0
+                and all(_named(f) for f in value)
+            )
+        if key == "time_window":
+            return (
+                isinstance(value, str)
+                and re.fullmatch(r"\d+d", value.strip()) is not None
+                and 1 <= int(value.strip()[:-1]) <= 365
+            )
+        if key in ("model_id", "brand"):
+            return _named(value)
+        if key == "significance_level":
+            return (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and 0.01 <= value <= 0.10
+            )
+        if key == "psi_threshold":
+            return (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and 0.0 <= value <= 1.0
+            )
+        if key.startswith("check_"):
+            return isinstance(value, bool)
+        if key in ("baseline_dag_adjacency", "current_dag_adjacency"):
+            return isinstance(value, list)
+        if key == "dag_nodes":
+            return isinstance(value, list) and all(isinstance(n, str) for n in value)
+        if key in ("baseline_dag_edge_types", "current_dag_edge_types"):
+            return isinstance(value, dict)
+        return True
+
+    out: Dict[str, Any] = {}
+    for key in _DRIFT_PASSTHROUGH:
+        value = params.get(key)
+        if value is None:
+            continue
+        if not _valid(key, value):
+            logger.warning(
+                "drift_monitor dispatch: dropping malformed router parameter %s=%r "
+                "(fails the DriftMonitorInput contract; the resolver-grounded value "
+                "or model default applies instead).",
+                key,
+                value,
+            )
+            continue
+        if key == "features_to_monitor":
+            out[key] = list(value)
+        elif key == "time_window":
+            out[key] = value.strip()
+        else:
+            out[key] = value
+    return out
+
+
 def _probe_drift_substrate(window_days: int, include_synthetic: bool) -> List[str]:
     """Registered features with >= ``_DRIFT_MIN_SAMPLES`` feature_values in BOTH
-    drift windows (baseline [now-2N, now-N), current [now-N, now]) under the
-    provenance predicate — via the migration-131 ``drift_qualifying_features``
-    RPC (PostgREST aggregates are disabled on this deployment, and paging the
-    raw window rows at dispatch time is not viable). Ordered best-supported
-    first. Same sync anon-key client as the #874 gap probe.
+    drift windows (closed intervals mirroring the connector's ``.gte/.lte``:
+    baseline [now-2N, now-N], current [now-N, now]) under the provenance
+    predicate — via the migration-131 ``drift_qualifying_features`` RPC
+    (PostgREST aggregates are disabled on this deployment, and paging the raw
+    window rows at dispatch time is not viable). Ordered best-supported first.
+    Same sync anon-key client as the #874 gap probe.
     """
     from src.repositories import get_supabase_client
 
@@ -1198,30 +1293,34 @@ def _resolve_drift_monitor_input(
     """
     params = dispatch.get("parameters") or {}
     include_synthetic = _resolve_include_synthetic_opt_in(agent_input, params)
+    # Codex iter-1: the raw router params are re-validated ONCE here and the
+    # valid ones ride every successful branch below; the raw copies never reach
+    # the Pydantic build again (``RESOLVER_OWNED_PARAM_KEYS`` excludes them
+    # from the coercion overlay).
+    sanitized = _sanitize_drift_params(params)
 
     # (1) explicit analyst-supplied features pass through verbatim.
-    explicit = params.get("features_to_monitor")
-    if isinstance(explicit, (list, tuple)) and len(explicit) > 0:
-        out_explicit: Dict[str, Any] = {
-            k: params[k] for k in _DRIFT_PASSTHROUGH if params.get(k) is not None
-        }
-        out_explicit["features_to_monitor"] = list(explicit)
+    if sanitized.get("features_to_monitor"):
+        out_explicit: Dict[str, Any] = dict(sanitized)
         out_explicit["include_synthetic"] = include_synthetic
         return out_explicit
 
     # (2) user-named KPI/feature mentions bind verbatim (shared extraction
-    # with _wrapped_input_defaults so the two paths cannot drift, #260).
+    # with _wrapped_input_defaults so the two paths cannot drift, #260). Valid
+    # analyst config (time_window, model_id, brand, thresholds) still applies.
     named = _drift_entity_features(agent_input)
     if named:
-        return {
-            "features_to_monitor": named,
-            "include_synthetic": include_synthetic,
-        }
+        out_named: Dict[str, Any] = dict(sanitized)
+        out_named["features_to_monitor"] = named
+        out_named["include_synthetic"] = include_synthetic
+        return out_named
 
-    # (3) substrate sweep. An explicit analyst window restricts the sweep.
-    params_window = params.get("time_window")
-    if isinstance(params_window, str) and re.fullmatch(r"\d+d", params_window.strip()):
-        window_candidates: Tuple[str, ...] = (params_window.strip(),)
+    # (3) substrate sweep. An explicit (valid) analyst window restricts the
+    # sweep; a malformed one was dropped by the sanitizer and the full
+    # candidate ladder applies.
+    params_window = sanitized.get("time_window")
+    if params_window:
+        window_candidates: Tuple[str, ...] = (params_window,)
     else:
         window_candidates = _DRIFT_WINDOW_CANDIDATES
 
@@ -1239,11 +1338,21 @@ def _resolve_drift_monitor_input(
                     window,
                     include_synthetic,
                 )
-                return {
-                    "features_to_monitor": names[:_DRIFT_MAX_FEATURES],
-                    "time_window": window,
-                    "include_synthetic": include_synthetic,
-                }
+                # The sweep qualified these features WITHOUT a brand predicate
+                # (measured: only ~21% of recent feature_values carry a brand
+                # entity key) — binding a router-derived brand here would
+                # silently starve the very windows the probe just validated.
+                out_sweep: Dict[str, Any] = {k: v for k, v in sanitized.items() if k != "brand"}
+                if "brand" in sanitized:
+                    logger.info(
+                        "drift_monitor dispatch: ignoring router brand=%r in "
+                        "sweep mode (features were qualified brand-free).",
+                        sanitized["brand"],
+                    )
+                out_sweep["features_to_monitor"] = names[:_DRIFT_MAX_FEATURES]
+                out_sweep["time_window"] = window
+                out_sweep["include_synthetic"] = include_synthetic
+                return out_sweep
     except Exception as exc:  # noqa: BLE001 - best-effort; fail closed below
         logger.warning(
             "drift_monitor dispatch: feature-store substrate probe failed (%s); failing closed.",
@@ -2894,6 +3003,20 @@ def _resolve_cohort_profiler_input(
 
 # Single source of truth: agent_name -> input resolver. Add a resolver here, not
 # an ``if`` branch in ``_dispatch_agent`` (#F12/F13/F14).
+# Parameter keys a resolver CONSUMES and re-validates: ``_coerce_to_input_model``
+# excludes the raw ``dispatch.parameters`` copies of these keys from its overlay,
+# because the resolver already folded the valid values into its output and
+# deliberately rejected the rest (codex iter-1 HIGH on #1747: a malformed router
+# param — features_to_monitor=[], time_window='last week' — would otherwise
+# clobber the resolver-grounded value at the Pydantic build and resurrect the
+# coercion crash the resolver exists to prevent). Scope today: drift_monitor is
+# the only agent with BOTH a resolver and a wrapped input model; register any
+# future such agent here alongside its INPUT_RESOLVERS entry.
+RESOLVER_OWNED_PARAM_KEYS: Dict[str, frozenset] = {
+    "drift_monitor": frozenset(_DRIFT_PASSTHROUGH) | frozenset({"include_synthetic"}),
+}
+
+
 INPUT_RESOLVERS: Dict[str, InputResolver] = {
     "tool_composer": _resolve_tool_composer_input,
     # #1351 — the last resolver-less dispatched agent (its contract validation
