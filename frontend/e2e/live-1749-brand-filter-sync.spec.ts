@@ -11,8 +11,11 @@
  *     `brand: "Kisqali"` (pre-fix the dropdown wrote page-local useState only,
  *     so the payload stayed "Remibrutinib" — the reported defect).
  *
- * Run AFTER deploy:
- *   BASE_URL=https://eznomics.site E2I_ADMIN_PASSWORD=... \
+ * Run AFTER deploy (E2I_RUN_LIVE_CERTS is the explicit opt-in — without it
+ * the spec skips even when credentials resolve, so a plain `npx playwright
+ * test` on a box whose repo .env holds the password can never hit prod by
+ * accident):
+ *   E2I_RUN_LIVE_CERTS=1 BASE_URL=https://eznomics.site \
  *     npx playwright test --config playwright.noserver.config.ts \
  *     e2e/live-1749-brand-filter-sync.spec.ts --project=chromium --reporter=line
  *
@@ -22,6 +25,7 @@
 import { test, expect, type Page, type Request } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 
+const RUN_LIVE = process.env.E2I_RUN_LIVE_CERTS === '1'
 const BASE = process.env.BASE_URL || 'https://eznomics.site'
 const EMAIL = process.env.E2I_LOGIN_EMAIL || 'admin@e2i.local'
 
@@ -45,7 +49,10 @@ function resolvePassword(): string {
   }
   return ''
 }
-const PASSWORD = resolvePassword()
+// Resolve the password only for opted-in runs: on the droplet the repo .env
+// always resolves, and reading it during an ordinary CI/dev collection pass
+// would arm a prod-facing spec nobody asked for.
+const PASSWORD = RUN_LIVE ? resolvePassword() : ''
 
 interface SuggestionsPayload {
   messages: unknown[]
@@ -75,13 +82,19 @@ function collectSuggestionPayloads(page: Page, sink: SuggestionsPayload[]): void
 }
 
 async function openChat(page: Page): Promise<void> {
-  // The FAB is the round 14x14 gradient button fixed bottom-right.
+  // The FAB exposes no accessible name (icon-only button), so the class pair
+  // that gives it its distinctive round 14x14 shape is the most stable handle
+  // available today. If this breaks, prefer adding an aria-label app-side
+  // over chasing new classes here.
   await page.locator('button.rounded-full.h-14').first().click()
   await expect(page.getByText('E2I Assistant')).toBeVisible({ timeout: 15000 })
 }
 
 test.describe('LIVE #1749 brand filter sync', () => {
-  test.skip(!PASSWORD, 'E2I_ADMIN_PASSWORD not set')
+  test.skip(
+    !RUN_LIVE || !PASSWORD,
+    'live cert is opt-in: set E2I_RUN_LIVE_CERTS=1 (and have E2I_ADMIN_PASSWORD resolvable)'
+  )
 
   test('fresh Home load: opener /chat/suggestions omits brand (honest All default)', async ({
     page,
@@ -117,8 +130,15 @@ test.describe('LIVE #1749 brand filter sync', () => {
     await login(page)
     await page.goto(`${BASE}/`)
 
-    // Select Brand: Kisqali in the Home dropdown (Radix Select, 180px trigger).
-    await page.locator('button.w-\\[180px\\]').first().click()
+    // Select Brand: Kisqali in the Home dropdown. Semantic locator: the Radix
+    // trigger has role=combobox and renders the selected brand label ('All
+    // Brands' at the honest default), which distinguishes it from the Region
+    // combobox next to it.
+    await page
+      .getByRole('combobox')
+      .filter({ hasText: /^(All Brands|Remibrutinib|Fabhalta|Kisqali)/ })
+      .first()
+      .click()
     // Option a11y name includes the indication: "Kisqali (HR+/HER2- BC)".
     await page.getByRole('option', { name: /^Kisqali/ }).click()
 
