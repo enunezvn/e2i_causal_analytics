@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.agents.drift_monitor.graph import drift_monitor_graph
 from src.agents.drift_monitor.state import DriftMonitorState
+from src.utils.frame_registry import release_frame, stash_frame
 
 if TYPE_CHECKING:
     from src.agents.drift_monitor.mlflow_tracker import DriftMonitorMLflowTracker
@@ -240,14 +241,18 @@ class DriftMonitorAgent:
             f"model_id={input_data.model_id}"
         )
 
-        # Create initial state from input
-        initial_state = self._create_initial_state(input_data)
-
         # Get MLflow tracker
         mlflow_tracker = self._get_mlflow_tracker()
 
         # Execute LangGraph workflow with optional Opik tracing and MLflow tracking
         opik = _get_opik_connector()
+
+        # Create initial state from input. #1744: _create_initial_state stashes
+        # any tier0 frame in the process-local frame registry and puts only the
+        # string handle into state; the try/finally below owns the release so
+        # the frame's lifetime is exactly the graph run (created after the
+        # tracker fetches so no code between stash and try can raise past it).
+        initial_state = self._create_initial_state(input_data)
 
         async def execute_workflow():
             """Execute the drift detection workflow."""
@@ -326,6 +331,11 @@ class DriftMonitorAgent:
         except Exception as e:
             logger.exception(f"Drift detection failed: {e}")
             raise RuntimeError(f"Drift detection workflow failed: {str(e)}") from e
+        finally:
+            # #1744: release the registry handle on every path (success,
+            # detection failure, raise) — a leaked handle would pin the frame
+            # in process memory for the worker's lifetime.
+            release_frame(initial_state.get("tier0_frame_ref"))
 
         # Log execution time and SLA check
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -358,8 +368,17 @@ class DriftMonitorAgent:
             "features_to_monitor": input_data.features_to_monitor,
             "time_window": input_data.time_window,
             "brand": input_data.brand or "",
-            # Tier0 data passthrough for testing
-            "tier0_data": input_data.tier0_data,
+            # #1744 (sibling of #1734): the tier0 passthrough frame goes into
+            # the process-local frame registry, NOT into state — the raw
+            # ainvoke input dict is streamed verbatim by the top-level
+            # on_chain_start event when this graph runs under a streaming
+            # callback context, and a frame channel would re-serialize into
+            # every node event. run() releases the ref in its finally.
+            "tier0_frame_ref": (
+                stash_frame(input_data.tier0_data, label="drift-tier0")
+                if input_data.tier0_data is not None
+                else None
+            ),
             # Configuration
             "significance_level": input_data.significance_level,
             "psi_threshold": input_data.psi_threshold,

@@ -87,8 +87,13 @@ class ConceptDriftNode:
             state["concept_drift_results"] = []
             return state
 
-        # Priority 1: Use tier0_data passthrough if available
-        tier0_data = state.get("tier0_data")
+        # Priority 1: tier0 passthrough. #1744 (sibling of #1734): the frame
+        # rides the process-local frame registry (state carries only the
+        # tier0_frame_ref handle); a direct in-dict frame is honored for
+        # non-graph callers only.
+        from src.utils.frame_registry import resolve_state_frame
+
+        tier0_data = resolve_state_frame(state)
         if tier0_data is not None:
             try:
                 drift_results = self._create_concept_drift_from_tier0(
