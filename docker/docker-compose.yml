@@ -457,6 +457,14 @@ services:
     volumes:
       - falkordb_data:/data
     environment:
+      # The image's run.sh starts redis with --dir "${FALKORDB_DATA_PATH}" and
+      # DEFAULTS it to /var/lib/falkordb/data — a container-local path, NOT the
+      # /data volume mount above (the image declares VOLUME /data but its
+      # entrypoint ignores it). Without this override RDB persistence is a
+      # no-op and every container recreation starts an empty graph — the
+      # 2026-08-16 deploy wiped the knowledge graph exactly this way (#1758).
+      # Guarded by tests/unit/test_docker/test_compose_falkordb_data_volume_1758.py.
+      - FALKORDB_DATA_PATH=/data
       - FALKORDB_ARGS=--maxmemory 1gb --requirepass ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "6379", "-a", "${FALKORDB_PASSWORD}", "ping"]
