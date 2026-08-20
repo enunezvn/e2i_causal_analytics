@@ -82,6 +82,64 @@ class TestDriftQualifyingFeaturesRpc:
         # The store is 100% synthetic-tagged — real-mode must see nothing.
         assert disp._probe_drift_substrate(30, False) == []  # type: ignore[attr-defined]
 
+    def test_rpc_counts_match_connector_window_semantics(self) -> None:
+        """Codex iter-1 MED: the RPC's window predicates must mirror the
+        connector's ``.gte(start).lte(end)`` closed intervals exactly
+        (current [now-N, now], baseline [now-2N, now-N]) — the original SQL
+        left the current window unbounded above (counting future-dated rows
+        the connector would never fetch) and excluded the baseline's now-N
+        edge.
+
+        INVARIANT pin, not a red/green discriminator on this store: parity
+        only diverges when boundary-instant or future-dated rows exist, and
+        the live store has none — the discriminating before/after evidence
+        is the transactional psql experiment (future-dated row counted by the
+        old SQL, excluded by the new; recorded in the #1747 PR). This pin
+        holds the parity contract against future regressions.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from src.repositories import get_supabase_client
+
+        client = get_supabase_client()
+        window_days = 30
+        rows = client.rpc(
+            "drift_qualifying_features",
+            {"p_window_days": window_days, "p_min_samples": 30, "p_include_synthetic": True},
+        ).execute()
+        assert rows.data, "30d/synthetic measured 15 qualifying features; got none"
+
+        now = datetime.now(UTC)
+        current_start = now - timedelta(days=window_days)
+        baseline_start = now - timedelta(days=2 * window_days)
+
+        def _connector_count(feature_id: str, start: datetime, end: datetime) -> int:
+            resp = (
+                client.table("feature_values")
+                .select("id", count="exact", head=True)
+                .eq("feature_id", feature_id)
+                .gte("event_timestamp", start.isoformat())
+                .lte("event_timestamp", end.isoformat())
+                .execute()
+            )
+            assert resp.count is not None
+            return int(resp.count)
+
+        for row in rows.data[:3]:
+            feature = (
+                client.table("features").select("id").eq("name", row["feature_name"]).execute()
+            )
+            assert feature.data, f"RPC returned unregistered feature {row['feature_name']!r}"
+            feature_id = feature.data[0]["id"]
+            assert _connector_count(feature_id, current_start, now) == row["current_n"], (
+                f"{row['feature_name']}: RPC current_n diverges from the "
+                "connector's gte/lte window count"
+            )
+            assert _connector_count(feature_id, baseline_start, current_start) == row["baseline_n"], (
+                f"{row['feature_name']}: RPC baseline_n diverges from the "
+                "connector's gte/lte window count"
+            )
+
 
 class TestResolverAgainstRealSubstrate:
     def test_synthetic_opt_in_binds_real_features_and_window(self) -> None:

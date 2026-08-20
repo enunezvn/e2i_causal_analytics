@@ -307,3 +307,196 @@ def test_resolved_output_coerces_into_drift_monitor_input(
     model = disp._coerce_to_input_model(DriftMonitorInput, merged, dispatch, "drift_monitor")
     assert model.features_to_monitor == ["f_a", "f_b"]
     assert model.time_window == "7d"
+
+
+# ---------------------------------------------------------------------------
+# (6) router-parameter garbage must not clobber grounded resolver output
+# (codex iter-1 HIGH): ``_coerce_to_input_model`` overlays ``dispatch.parameters``
+# over the payload AFTER ``_dispatch_agent`` merged the resolver output into it,
+# so a malformed router param (empty features list, non-'\d+d' time_window,
+# out-of-range threshold) resurrected the exact #1747 crash the resolver fixes.
+# The resolver now SANITIZES the params (valid values pass through on every
+# branch) and OWNS the drift param keys — the raw copies are excluded from the
+# coercion overlay via RESOLVER_OWNED_PARAM_KEYS.
+# ---------------------------------------------------------------------------
+
+
+def _coerce_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: Dict[str, Any],
+    dispatch: Dict[str, Any],
+    probe_map: Dict[int, List[str]],
+):
+    """Mirror _dispatch_agent's resolver->merge->coercion seam exactly."""
+    from src.agents.drift_monitor.agent import DriftMonitorInput
+
+    probe, _ = _window_probe(probe_map)
+    monkeypatch.setattr(disp, "_probe_drift_substrate", probe)
+    resolved = _resolve(payload, dispatch)
+    assert isinstance(resolved, dict), f"expected bound inputs, got {resolved!r}"
+    merged = dict(payload)
+    merged.update(resolved)
+    return disp._coerce_to_input_model(DriftMonitorInput, merged, dispatch, "drift_monitor")
+
+
+def test_resolver_owned_keys_cover_the_drift_param_surface() -> None:
+    owned = disp.RESOLVER_OWNED_PARAM_KEYS["drift_monitor"]  # type: ignore[attr-defined]
+    expected = set(disp._DRIFT_PASSTHROUGH) | {"include_synthetic"}  # type: ignore[attr-defined]
+    assert expected <= set(owned), (
+        "every drift param key must be resolver-owned — any key left out is "
+        "re-applied raw by the coercion overlay and can clobber grounded values"
+    )
+
+
+def test_params_empty_features_list_does_not_resurrect_the_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The codex iter-1 concrete failure: router emits features_to_monitor=[]
+    # (fails min_length=1). The resolver correctly falls through to the sweep,
+    # but the raw [] then overlaid the sweep's grounded list at coercion.
+    model = _coerce_end_to_end(
+        monkeypatch,
+        _payload(),
+        _dispatch({"features_to_monitor": []}),
+        {7: ["f_a", "f_b"]},
+    )
+    assert model.features_to_monitor == ["f_a", "f_b"]
+
+
+def test_params_malformed_time_window_does_not_resurrect_the_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 'last week' fails DriftMonitorInput's must-end-with-'d' validator; the
+    # resolver ignores it for sweep restriction but the raw value overlaid the
+    # sweep's bound window at coercion.
+    model = _coerce_end_to_end(
+        monkeypatch,
+        _payload(),
+        _dispatch({"time_window": "last week"}),
+        {7: ["f_a"]},
+    )
+    assert model.time_window == "7d"
+
+
+def test_params_out_of_range_significance_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # significance_level is constrained to [0.01, 0.10]; a router 0.75 crashed
+    # the Pydantic build. Sanitization drops it -> model default.
+    model = _coerce_end_to_end(
+        monkeypatch,
+        _payload(),
+        _dispatch({"significance_level": 0.75}),
+        {7: ["f_a"]},
+    )
+    assert model.significance_level == 0.05
+
+
+def test_router_brand_param_is_not_bound_in_sweep_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The sweep qualified features WITHOUT a brand predicate (measured: only
+    # ~21% of recent feature_values carry a brand entity key) — re-binding a
+    # router-derived brand at coercion silently starves the windows the sweep
+    # just validated.
+    model = _coerce_end_to_end(
+        monkeypatch,
+        _payload(),
+        _dispatch({"brand": "Remibrutinib"}),
+        {7: ["f_a"]},
+    )
+    assert model.brand is None
+
+
+def test_router_brand_param_kept_on_explicit_features_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Overcorrection guard: when the analyst supplied the features themselves,
+    # a valid brand filter is their call — per-feature honesty about a starved
+    # window is the agent's job.
+    model = _coerce_end_to_end(
+        monkeypatch,
+        _payload(),
+        _dispatch({"features_to_monitor": ["trx_total"], "brand": "Kisqali"}),
+        {},
+    )
+    assert model.features_to_monitor == ["trx_total"]
+    assert model.brand == "Kisqali"
+
+
+def test_valid_time_window_param_reaches_model_on_entity_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Overcorrection guard: shielding the raw params must not LOSE valid ones —
+    # the sanitized passthrough has to carry them on every successful branch.
+    payload = _payload(
+        "Is trx_total drifting over the last month?",
+        entities=[{"type": "kpi", "value": "trx_total"}],
+    )
+    model = _coerce_end_to_end(monkeypatch, payload, _dispatch({"time_window": "30d"}), {})
+    assert model.features_to_monitor == ["trx_total"]
+    assert model.time_window == "30d"
+
+
+def test_valid_model_id_param_survives_sweep_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # model_id gates the model/concept drift detectors — dropping a valid one
+    # in sweep mode would silently skip two of the four detectors.
+    model = _coerce_end_to_end(
+        monkeypatch,
+        _payload(),
+        _dispatch({"model_id": "churn_model_v3"}),
+        {7: ["f_a"]},
+    )
+    assert model.model_id == "churn_model_v3"
+
+
+@pytest.mark.parametrize(
+    ("key", "bad_value"),
+    [
+        ("features_to_monitor", []),
+        ("features_to_monitor", "trx_total"),
+        ("features_to_monitor", [42]),
+        ("features_to_monitor", ["trx_total", ""]),
+        ("time_window", "last week"),
+        ("time_window", "0d"),
+        ("time_window", "500d"),
+        ("time_window", 14),
+        ("model_id", 42),
+        ("model_id", ""),
+        ("brand", ""),
+        ("brand", 7),
+        ("significance_level", 0.75),
+        ("significance_level", "high"),
+        ("significance_level", True),
+        ("psi_threshold", 2.0),
+        ("psi_threshold", -0.1),
+        ("check_data_drift", "yes"),
+        ("dag_nodes", "not-a-list"),
+        ("baseline_dag_edge_types", ["not-a-dict"]),
+    ],
+)
+def test_sanitizer_drops_malformed_param(key: str, bad_value: Any) -> None:
+    out = disp._sanitize_drift_params({key: bad_value})  # type: ignore[attr-defined]
+    assert key not in out
+
+
+@pytest.mark.parametrize(
+    ("key", "good_value"),
+    [
+        ("features_to_monitor", ["trx_total"]),
+        ("time_window", "30d"),
+        ("model_id", "churn_model_v3"),
+        ("brand", "Kisqali"),
+        ("significance_level", 0.05),
+        ("psi_threshold", 0.2),
+        ("check_data_drift", False),
+        ("check_structural_drift", True),
+        ("dag_nodes", ["a", "b"]),
+        ("baseline_dag_edge_types", {"a->b": "DIRECTED"}),
+    ],
+)
+def test_sanitizer_keeps_valid_param(key: str, good_value: Any) -> None:
+    out = disp._sanitize_drift_params({key: good_value})  # type: ignore[attr-defined]
+    assert out[key] == good_value
