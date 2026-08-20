@@ -83,3 +83,35 @@ describe('useE2IFilters', () => {
     expect(summary).toContain(' - '); // Date range separator
   });
 });
+
+// #1749: the old 'Remibrutinib' default leaked into chat pills and CoAgent
+// state whenever the user had NOT picked that brand — no selection must mean
+// 'All' (the value setBrandFilter and the backend filter note already speak).
+describe('useE2IFilters — honest default (#1749)', () => {
+  it("defaults the brand filter to 'All', not a hardcoded brand", () => {
+    const { result } = renderHook(() => useE2IFilters());
+
+    expect(result.current.filters.brand).toBe('All');
+  });
+
+  it("summarizes the 'All' sentinel as 'All brands', never as a pseudo-brand", () => {
+    const { result } = renderHook(() => useE2IFilters());
+
+    const summary = result.current.getFilterSummary();
+    expect(summary).toContain('All brands');
+    expect(summary).not.toContain('Remibrutinib');
+  });
+
+  it("resets back to the 'All' default", () => {
+    const { result } = renderHook(() => useE2IFilters());
+
+    act(() => {
+      result.current.setBrand('Kisqali');
+    });
+    act(() => {
+      result.current.resetFilters();
+    });
+
+    expect(result.current.filters.brand).toBe('All');
+  });
+});
