@@ -252,9 +252,6 @@ async def falkordb_diagnostics(*, use_cache: bool = True) -> Dict[str, Any]:
     if graph is None:
         return {"status": "unavailable", "error": "FalkorDB not configured"}
 
-    node_count = 0
-    edge_count = 0
-
     def _scan_counts() -> tuple[int, int]:
         nodes = 0
         edges = 0
@@ -268,8 +265,16 @@ async def falkordb_diagnostics(*, use_cache: bool = True) -> Dict[str, Any]:
 
     try:
         node_count, edge_count = await asyncio.to_thread(_scan_counts)
-    except Exception:
-        pass  # Graph may be empty / transiently unavailable.
+    except Exception as e:
+        # A failed scan is UNKNOWN, never zero: silent node_count=0 is a
+        # plausible-wrong value that reads exactly like the #1758 wipe to the
+        # graph-content sentinel (#1760). Not cached, so the next call within
+        # the TTL window rescans instead of replaying the failure.
+        return {
+            "status": "unknown",
+            "current_graph": FALKORDB_GRAPH_NAME,
+            "error": str(e),
+        }
 
     payload: Dict[str, Any] = {
         "status": "healthy",

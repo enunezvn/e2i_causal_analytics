@@ -1291,6 +1291,16 @@ async def graph_health() -> Dict[str, Any]:
     - Graphiti service
     - FalkorDB connection
     - WebSocket connections
+    - Graph content (node/edge counts + emptiness, #1760)
+
+    Connectivity alone is not health: during #1758 the knowledge graph was
+    completely wiped for four days while this endpoint reported "healthy",
+    because it only proved a client could be constructed. A reachable-but-EMPTY
+    graph now degrades the status. Counts come from ``falkordb_diagnostics()``
+    (60s-TTL cache, scans off the event loop), so this stays cheap enough for
+    the public probe path. A failed scan reports ``graph_content.status:
+    "unknown"`` and does NOT degrade — a transient query failure must not mimic
+    the wipe signature.
     """
     graphiti_status = "unavailable"
     falkordb_status = "unavailable"
@@ -1309,14 +1319,36 @@ async def graph_health() -> Dict[str, Any]:
     except Exception:
         pass
 
+    graph_content: Dict[str, Any] = {"status": "unknown"}
+    try:
+        # Lazy import, matching the service getters above: the routes module
+        # must stay importable when optional graph dependencies are absent.
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
+
+        diag = await falkordb_diagnostics()
+        if diag.get("status") == "healthy":
+            node_count = int(diag.get("node_count", 0))
+            edge_count = int(diag.get("edge_count", 0))
+            graph_content = {
+                "status": "healthy",
+                "node_count": node_count,
+                "edge_count": edge_count,
+                "empty": node_count == 0,
+                "cached": bool(diag.get("cached", False)),
+            }
+        else:
+            graph_content = {"status": diag.get("status", "unknown")}
+    except Exception:
+        pass
+
+    connected = graphiti_status == "connected" or falkordb_status == "connected"
+    empty = graph_content.get("empty") is True
+
     return {
-        "status": (
-            "healthy"
-            if graphiti_status == "connected" or falkordb_status == "connected"
-            else "degraded"
-        ),
+        "status": "healthy" if connected and not empty else "degraded",
         "graphiti": graphiti_status,
         "falkordb": falkordb_status,
+        "graph_content": graph_content,
         "websocket_connections": len(manager.active_connections),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

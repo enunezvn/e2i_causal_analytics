@@ -363,6 +363,13 @@ export function createGraphHealthResponse(): GraphHealthResponse {
     status: 'healthy',
     graphiti: 'connected',
     falkordb: 'connected',
+    graph_content: {
+      status: 'healthy',
+      node_count: 85,
+      edge_count: 233,
+      empty: false,
+      cached: false,
+    },
     websocket_connections: 3,
     timestamp: new Date().toISOString(),
   };
