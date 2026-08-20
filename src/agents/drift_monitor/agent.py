@@ -80,6 +80,18 @@ class DriftMonitorInput(BaseModel):
     check_structural_drift: bool = Field(
         True, description="Whether to check causal-DAG structural drift (V4.4)"
     )
+    # #1747: per-dispatch provenance opt-in (#872/#880 family). The connector
+    # layer already applies the default-exclude predicate; without this field
+    # the opt-in resolved by the dispatcher dies at the agent boundary and an
+    # opted-in dispatch still reads zero rows from the (100% synthetic-tagged)
+    # feature store.
+    include_synthetic: bool = Field(
+        False,
+        description=(
+            "Synthetic-provenance opt-in for the drift data reads. False = "
+            "strict real-mode default-exclude of synthetic-tagged rows."
+        ),
+    )
 
     # V4.4 causal-DAG structural drift inputs (optional; structural drift is
     # skipped when these are absent). F11 (audit): these MUST live on the Input
@@ -386,6 +398,9 @@ class DriftMonitorAgent:
             "check_model_drift": input_data.check_model_drift,
             "check_concept_drift": input_data.check_concept_drift,
             "check_structural_drift": input_data.check_structural_drift,
+            # #1747: provenance opt-in must ride state — LangGraph drops
+            # undeclared/unset keys, and the detector nodes read it per query.
+            "include_synthetic": input_data.include_synthetic,
             # Error handling
             "errors": [],
             "warnings": [],

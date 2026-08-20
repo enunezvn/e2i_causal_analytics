@@ -142,17 +142,22 @@ class ConceptDriftNode:
             if state.get("brand"):
                 filters["brand"] = state["brand"]
 
+            # #1747: thread the per-dispatch provenance opt-in (see data_drift).
+            include_synthetic = state.get("include_synthetic", False)
+
             # Fetch labeled predictions in parallel with features
             baseline_preds_task = self.data_connector.query_labeled_predictions(
                 model_id=state["model_id"],
                 time_window=baseline_window,
                 filters=filters if filters else None,
+                include_synthetic=include_synthetic,
             )
 
             current_preds_task = self.data_connector.query_labeled_predictions(
                 model_id=state["model_id"],
                 time_window=current_window,
                 filters=filters if filters else None,
+                include_synthetic=include_synthetic,
             )
 
             # Also fetch features for correlation analysis
@@ -165,11 +170,13 @@ class ConceptDriftNode:
                     feature_names=features_to_check,
                     time_window=baseline_window,
                     filters=filters if filters else None,
+                    include_synthetic=include_synthetic,
                 )
                 current_features_task = self.data_connector.query_features(
                     feature_names=features_to_check,
                     time_window=current_window,
                     filters=filters if filters else None,
+                    include_synthetic=include_synthetic,
                 )
 
             # Await predictions

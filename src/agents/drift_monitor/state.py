@@ -123,6 +123,10 @@ class DriftMonitorState(TypedDict):
     check_model_drift: NotRequired[bool]  # Default: True
     check_concept_drift: NotRequired[bool]  # Default: True
     check_structural_drift: NotRequired[bool]  # V4.4: Enable structural drift detection
+    # #1747: per-dispatch synthetic-provenance opt-in (#872/#880 family) — the
+    # detector nodes thread this into every connector query. Must be a declared
+    # channel: LangGraph silently drops undeclared state keys.
+    include_synthetic: NotRequired[bool]  # Default: False (strict real-mode)
 
     # ===== Detection Outputs (populated during execution) =====
     data_drift_results: NotRequired[list[DriftResult]]

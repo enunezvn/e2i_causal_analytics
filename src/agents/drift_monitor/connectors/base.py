@@ -113,6 +113,7 @@ class BaseDataConnector(ABC):
         feature_names: list[str],
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> dict[str, FeatureData]:
         """Query feature values for drift detection.
 
@@ -120,6 +121,9 @@ class BaseDataConnector(ABC):
             feature_names: List of feature names to retrieve
             time_window: Time window for the query
             filters: Optional filters (e.g., {"brand": "remibrutinib"})
+            include_synthetic: Provenance opt-in (#872/#880 family, threaded
+                per-dispatch by #1747). False = strict real-mode
+                default-exclude of synthetic-tagged rows.
 
         Returns:
             Dictionary mapping feature name to FeatureData
@@ -136,6 +140,7 @@ class BaseDataConnector(ABC):
         model_id: str,
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> PredictionData:
         """Query prediction data for model drift detection.
 
@@ -143,6 +148,7 @@ class BaseDataConnector(ABC):
             model_id: Identifier of the model
             time_window: Time window for the query
             filters: Optional filters (e.g., {"segment": "high_value"})
+            include_synthetic: Provenance opt-in (see ``query_features``).
 
         Returns:
             PredictionData containing predictions in the time window
@@ -159,6 +165,7 @@ class BaseDataConnector(ABC):
         model_id: str,
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> PredictionData:
         """Query predictions with actual labels for concept drift detection.
 
@@ -169,6 +176,7 @@ class BaseDataConnector(ABC):
             model_id: Identifier of the model
             time_window: Time window for the query
             filters: Optional filters
+            include_synthetic: Provenance opt-in (see ``query_features``).
 
         Returns:
             PredictionData with both predicted and actual labels
