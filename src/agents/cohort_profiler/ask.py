@@ -44,8 +44,13 @@ from src.services import query_entities
 _SUPPORTED_BRANDS: Tuple[str, ...] = query_entities.SUPPORTED_BRANDS
 
 _PATIENT_RE = re.compile(r"\bpatients?\b", re.I)
+# "healthcare/health care/health-care providers" and "primary care providers"
+# are the intent classifier's tiering-lexicon gold phrasings (#1449 bench-0207)
+# for the same clinical sense — the parser must agree with the router about
+# WHO is being segmented (#1736 codex iter-1).
 _HCP_RE = re.compile(
-    r"\b(?:hcps?|prescribers?|physicians?|doctors?|health\s*care\s+professionals?)\b",
+    r"\b(?:hcps?|prescribers?|physicians?|doctors?|health\s*care\s+professionals?"
+    r"|(?:health[\s-]?care|primary\s+care)\s+providers?)\b",
     re.I,
 )
 
@@ -108,6 +113,31 @@ _REGION_RE = re.compile(
     re.I,
 )
 
+# Volume-tier segmentation (#1736): "Segment HCPs by prescription volume into
+# high, medium, and low tiers" (eval 4.3, verbatim) / "high/medium/low
+# prescription-volume tiers" (the 4.3 clarification's promised follow-up).
+# Recognition is conservative per this module's design: it requires an explicit
+# VOLUME word ("prescription volume", "prescribing volume", "TRx volume",
+# "volume tiers") in tier context — a bare "tier" (e.g. "high priority tier")
+# can never trigger it, because hcp_profiles.priority_tier is a DISTINCT
+# targeting attribute (volume + brand affinity + accessibility per the
+# ontology), not a prescription-volume axis. Measured 2026-08-19: the data
+# model stores NO volume tier (prescribing_tier / prescribing_volume are NULL
+# on all 5,000 hcp_profiles rows), so tiers are COMPUTED from windowed per-HCP
+# TRx by the mig-130 statements.
+_VOLUME_WORD = r"(?:prescri(?:ption|bing)|rx|trx)[\s-]*volumes?"
+_VOLUME_TIER_RE = re.compile(
+    rf"\b{_VOLUME_WORD}\b[^.?!\n]*?\btier(?:s|ed|ing)?\b"
+    rf"|\btier(?:s|ed|ing)?\b[^.?!\n]*?\b{_VOLUME_WORD}\b"
+    r"|\bvolume[\s-]*tier(?:s|ed|ing)?\b"
+    # "prescribing tiers" / "prescriber tiers" / "prescription tiers": the
+    # #1449 tiering-lexicon gold phrasing — the tier word is directly
+    # volume-qualified by the prescribing word, so this stays conservative
+    # ("priority tier" still can never match).
+    r"|\bprescri(?:bing|ption|ber)[\s-]*tier(?:s|ed|ing)?\b",
+    re.I,
+)
+
 _DIAG_GUIDANCE = (
     "the data model carries no true diagnosis dates (treatment_events has zero "
     "'diagnosis' events; patient_journeys.journey_start_date is only a documented "
@@ -126,7 +156,7 @@ _LAST_N_DAYS_RE = re.compile(r"\b(?:last|past)\s+(\d{1,3})\s+days?\b", re.I)
 class Criterion:
     """One recognized inclusion criterion (servable or honestly not)."""
 
-    kind: str  # "age_min" | "age_max" | "diagnosis_year" | "region"
+    kind: str  # "age_min" | "age_max" | "diagnosis_year" | "region" | "volume_tiers"
     label: str  # human-readable echo of the ask, e.g. 'diagnosed in 2024'
     servable: bool
     value: Optional[int] = None  # bound value (exclusive for age bounds)
@@ -164,6 +194,14 @@ class CohortAsk:
     criteria: Tuple[Criterion, ...] = field(default_factory=tuple)
     threshold: Optional[Threshold] = None
     window: Optional[Window] = None
+    # "high/medium/low prescription-volume tiers" asked for (#1736) — served on
+    # the HCP path via the mig-130 tercile statements, accounted honestly on
+    # the patient path.
+    volume_tiers: bool = False
+    # True when an entity WORD matched (patient/HCP lexicon) rather than the
+    # default falling through — merge_cohort_asks uses it so a generic rewrite
+    # cannot clobber the raw ask's explicit entity (#1736 codex iter-1).
+    entity_explicit: bool = False
 
 
 # Delegations to the shared service (#1351). The names stay module-local so
@@ -173,14 +211,25 @@ _canonical_brand = query_entities.canonical_brand
 _brand_from_text = query_entities.brand_from_text
 
 
-def _entity_type(query: str) -> str:
-    # "patient" wins when both appear ("patients treated by physicians" is a
-    # patient cohort); default is patient (the pre-#1356 contract).
-    if _PATIENT_RE.search(query):
-        return "patient"
-    if _HCP_RE.search(query):
-        return "hcp"
-    return "patient"
+def _entity(query: str, volume_tiers: bool) -> Tuple[str, bool]:
+    """Resolve (entity_type, entity_explicit) for one query text.
+
+    "patient" wins when both words appear ("patients treated by physicians" is
+    a patient cohort); default is patient (the pre-#1356 contract) — EXCEPT a
+    volume-tier ask with no explicit patient word, which lands on the HCP path
+    (per-HCP TRx is a prescriber axis; the eval-4.3 follow-up often names only
+    the brand plus the tier phrasing). ``entity_explicit`` reports whether an
+    entity WORD matched, so merges can tell an explicit choice from a default.
+    """
+    explicit_patient = bool(_PATIENT_RE.search(query))
+    explicit_hcp = bool(_HCP_RE.search(query))
+    if explicit_patient:
+        return "patient", True
+    if explicit_hcp:
+        return "hcp", True
+    if volume_tiers:
+        return "hcp", False
+    return "patient", False
 
 
 def _parse_threshold(query: str) -> Optional[Threshold]:
@@ -320,12 +369,17 @@ def parse_cohort_ask(
             )
         )
 
+    volume_tiers = bool(_VOLUME_TIER_RE.search(query))
+    entity_type, entity_explicit = _entity(query, volume_tiers)
+
     return CohortAsk(
-        entity_type=_entity_type(query),
+        entity_type=entity_type,
         brand=_canonical_brand(brand_hint) or _brand_from_text(query),
         criteria=tuple(criteria),
         threshold=_parse_threshold(query),
         window=_parse_window(query, today),
+        volume_tiers=volume_tiers,
+        entity_explicit=entity_explicit,
     )
 
 
@@ -339,14 +393,30 @@ def merge_cohort_asks(primary: CohortAsk, supplement: CohortAsk) -> CohortAsk:
     the primary lacks are appended (primary's first); on kind collision the
     primary wins — the rewrite may have resolved anaphora the raw text leaves
     dangling. ``threshold``/``window`` fill in only when the primary has none;
-    ``entity_type`` and ``brand`` stay the primary's.
+    ``volume_tiers`` survives when either side asked for it (#1736);
+    ``brand`` stays the primary's.
+
+    ``entity_type`` (#1736 codex iter-1): an EXPLICIT entity word wins, primary
+    first — a generic rewrite ("profile the Remibrutinib cohort") must not
+    clobber the raw ask's explicit entity into the default. A merged tier ask
+    with no explicit patient word anywhere resolves to the HCP path, exactly
+    like a single-text parse.
     """
     have = {c.kind for c in primary.criteria}
     criteria = tuple(primary.criteria) + tuple(c for c in supplement.criteria if c.kind not in have)
+    volume_tiers = primary.volume_tiers or supplement.volume_tiers
+    if primary.entity_explicit:
+        entity_type = primary.entity_type
+    elif supplement.entity_explicit:
+        entity_type = supplement.entity_type
+    else:
+        entity_type = "hcp" if volume_tiers else primary.entity_type
     return CohortAsk(
-        entity_type=primary.entity_type,
+        entity_type=entity_type,
         brand=primary.brand,
         criteria=criteria,
         threshold=primary.threshold or supplement.threshold,
         window=primary.window or supplement.window,
+        volume_tiers=volume_tiers,
+        entity_explicit=primary.entity_explicit or supplement.entity_explicit,
     )
