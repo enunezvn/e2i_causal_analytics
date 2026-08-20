@@ -68,6 +68,8 @@ import { KPICard } from '@/components/visualizations';
 import { CausalAnalysisDetail } from '@/components/causal/CausalAnalysisDetail';
 import { StrategicInsightCard } from '@/components/insights';
 import { usePageChatContext } from '@/providers/E2ICopilotProvider';
+import type { E2IFilters } from '@/providers/E2ICopilotProvider';
+import { useE2IFilters } from '@/hooks/use-e2i-filters';
 import {
   useCausalHealth,
   useCausalAnalysisHistory,
@@ -221,7 +223,19 @@ export default function CausalAnalysis() {
   const [grain, setGrain] = useState<string>('patient');
   const activeGrain = GRAINS.find((g) => g.value === grain) ?? GRAINS[0];
   const dataset = activeGrain.dataset;
-  const [selectedBrand, setSelectedBrand] = useState<string>(ALL_BRANDS);
+  // #1752: the Brand filter IS the copilot provider's filter state — the
+  // single source of truth every chat surface reads (same seam as Home's
+  // #1749). The '__all__' sentinel exists only at the Radix Select boundary
+  // ('All' ↔ ALL_BRANDS); the cast covers API-supplied brand options, which
+  // downstream code treats as opaque strings beyond the 'All' check.
+  const { filters: chatFilters, setBrand: setChatBrand } = useE2IFilters();
+  const selectedBrand: string = chatFilters.brand === 'All' ? ALL_BRANDS : chatFilters.brand;
+  const setSelectedBrand = useCallback(
+    (value: string) => {
+      setChatBrand(value === ALL_BRANDS ? 'All' : (value as E2IFilters['brand']));
+    },
+    [setChatBrand]
+  );
   const brandArg = selectedBrand === ALL_BRANDS ? null : selectedBrand;
 
   // ── Leaderboard (landing): the agent's validated, ranked effects ───────────

@@ -18,6 +18,12 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
 import { ApiError } from '@/lib/api-client';
+import { renderWithAllProviders } from '@/test/utils';
+import {
+  CopilotKitWrapper,
+  E2ICopilotProvider,
+  useE2ICopilot,
+} from '@/providers/E2ICopilotProvider';
 
 // Stub the shared deep view — assert the page mounts it for the selected row /
 // manual result (its internals are covered by CausalAnalysisDetail.test.tsx).
@@ -739,4 +745,78 @@ describe('CausalAnalysis — unified agent-led page', () => {
     rerender(<CausalAnalysis />);
     expect(mutate).toHaveBeenCalledTimes(1);
   }, 20000);
+
+  // =========================================================================
+  // #1752 — BRAND SELECTION IS SHARED WITH THE COPILOT CHAT (same seam as
+  // Home's #1749): the page's Brand filter lived in page-local useState with
+  // the '__all__' sentinel while every chat surface (pills, /chat/suggestions,
+  // the AgentFiltersBridge CoAgent channel) read the copilot provider's filter
+  // state. The provider is the single source of truth; the sentinel exists
+  // only at the Radix Select boundary, and brandArg semantics ('All' → null
+  // API arg) are unchanged.
+  // =========================================================================
+
+  describe('Brand selection ↔ copilot filter context (#1752)', () => {
+    /** Reads the copilot context brand; the button simulates the chat's
+     *  setBrandFilter action (same setFilters seam the action handler uses). */
+    function CopilotBrandProbe() {
+      const context = useE2ICopilot();
+      return (
+        <div>
+          <span data-testid="copilot-brand">{context.filters.brand}</span>
+          <button
+            onClick={() => context.setFilters((prev) => ({ ...prev, brand: 'Kisqali' }))}
+          >
+            chat-sets-kisqali
+          </button>
+        </div>
+      );
+    }
+
+    function renderPageWithCopilot() {
+      return renderWithAllProviders(
+        <CopilotKitWrapper enabled={false}>
+          <E2ICopilotProvider>
+            <CausalAnalysis />
+            <CopilotBrandProbe />
+          </E2ICopilotProvider>
+        </CopilotKitWrapper>
+      );
+    }
+
+    it('writes the page brand selection through to the copilot filter context', async () => {
+      renderPageWithCopilot();
+
+      fireEvent.click(screen.getByRole('combobox', { name: 'Brand' }));
+      fireEvent.click(await screen.findByText('Kisqali'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('copilot-brand')).toHaveTextContent('Kisqali')
+      );
+    }, 20000);
+
+    it('reflects a chat-driven brand change (setBrandFilter seam) in the page selector', async () => {
+      renderPageWithCopilot();
+
+      expect(screen.getByRole('combobox', { name: 'Brand' })).toHaveTextContent('All brands');
+
+      fireEvent.click(screen.getByText('chat-sets-kisqali'));
+
+      await waitFor(() =>
+        expect(screen.getByRole('combobox', { name: 'Brand' })).toHaveTextContent('Kisqali')
+      );
+    }, 20000);
+
+    it('re-scopes the discover-effects leaderboard from a chat-driven brand change', async () => {
+      renderPageWithCopilot();
+
+      fireEvent.click(screen.getByText('chat-sets-kisqali'));
+
+      // brandArg derives from the shared filter: 'Kisqali', not the page-local
+      // default null — the functional re-scope, not just the dropdown label.
+      await waitFor(() =>
+        expect(useDiscoverEffects).toHaveBeenLastCalledWith('patient_journeys', 'Kisqali')
+      );
+    }, 20000);
+  });
 });
