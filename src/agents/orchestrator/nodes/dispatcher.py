@@ -54,6 +54,25 @@ def _declared_field_names(input_cls: Type[Any]) -> Set[str]:
 # so they only land for fields the input_model actually declares and only when
 # the merge did not already supply a value.
 #
+def _drift_entity_features(payload: Dict[str, Any]) -> List[str]:
+    """KPI/feature names the user actually named, from ``parsed_query.entities``.
+
+    Shared by ``_wrapped_input_defaults`` (#260) and
+    ``_resolve_drift_monitor_input`` (#1747) so the "user-named features win"
+    contract cannot drift between the two paths.
+    """
+    parsed_query = payload.get("parsed_query") or {}
+    entities = (parsed_query.get("entities") if isinstance(parsed_query, dict) else None) or []
+    return [
+        ent["value"]
+        for ent in entities
+        if isinstance(ent, dict)
+        and ent.get("type") in {"kpi", "feature_name"}
+        and isinstance(ent.get("value"), str)
+        and ent["value"]
+    ]
+
+
 # Issue #260 AC-3: required fields the wrapped input model declares but the
 # orchestrator payload does not naturally carry must get a reasonable default.
 def _wrapped_input_defaults(
@@ -74,20 +93,12 @@ def _wrapped_input_defaults(
         # ``dispatch.parameters['features_to_monitor']`` — when it doesn't,
         # derive a sensible default from ``parsed_query.entities`` (KPI/feature
         # mentions in the user's query) so the agent runs against the entities
-        # the user actually named. When neither source produces ≥1 entry,
-        # leave it absent so the pydantic min_length=1 validator surfaces a
-        # clear structured AgentResult.error — better than fabricating phantom
-        # feature names. (Codex MED-required on PR #275 issue #260.)
-        parsed_query = payload.get("parsed_query") or {}
-        entities = (parsed_query.get("entities") if isinstance(parsed_query, dict) else None) or []
-        kpi_features = [
-            ent["value"]
-            for ent in entities
-            if isinstance(ent, dict)
-            and ent.get("type") in {"kpi", "feature_name"}
-            and isinstance(ent.get("value"), str)
-            and ent["value"]
-        ]
+        # the user actually named. (Codex MED-required on PR #275 issue #260.)
+        # #1747: the extraction is shared with ``_resolve_drift_monitor_input``
+        # (which normally fires first and covers the no-entities case with the
+        # real-substrate sweep); this branch remains as the last-resort default
+        # for non-resolver invocation paths.
+        kpi_features = _drift_entity_features(payload)
         if kpi_features:
             defaults["features_to_monitor"] = kpi_features
     elif agent_name == "experiment_designer":
@@ -1091,6 +1102,173 @@ def _resolve_gap_analyzer_input(
         missing=_GAP_REQUIRED,
         reason=reason,
         rest_endpoint="POST /api/gaps/analyze",
+    )
+
+
+# Mirror of ``DataDriftNode._min_samples`` (data_drift.py) — keep in lock-step:
+# a dispatcher-SELECTED feature with fewer samples in either window can only
+# produce an honest per-feature "insufficient data" result, so binding it is
+# pointless. (User-NAMED features are bound verbatim regardless — per-feature
+# honesty about the user's own ask is the agent's job, not the dispatcher's.)
+_DRIFT_MIN_SAMPLES = 30
+# Cap on dispatcher-selected features per chat dispatch. The probe returns
+# names best-supported-first, so the cap keeps the strongest substrate; the
+# scheduled sweep (drift_monitoring_tasks) uses its own wider cap.
+_DRIFT_MAX_FEATURES = 20
+# Candidate comparison windows, ascending. Measured 2026-08-20: the agent's 7d
+# default had ZERO features with both-window support while 30d had 15 — the
+# sweep binds the SMALLEST window the store actually supports instead of
+# letting every dispatch die on an unsupportable default.
+_DRIFT_WINDOW_CANDIDATES: Tuple[str, ...] = ("7d", "14d", "30d", "90d")
+# Analyst-config keys forwarded verbatim on the explicit-params path (the
+# DriftMonitorInput surface minus the resolver-owned include_synthetic).
+_DRIFT_PASSTHROUGH: Tuple[str, ...] = (
+    "features_to_monitor",
+    "model_id",
+    "time_window",
+    "brand",
+    "significance_level",
+    "psi_threshold",
+    "check_data_drift",
+    "check_model_drift",
+    "check_concept_drift",
+    "check_structural_drift",
+    "baseline_dag_adjacency",
+    "current_dag_adjacency",
+    "dag_nodes",
+    "baseline_dag_edge_types",
+    "current_dag_edge_types",
+    "tier0_data",
+)
+
+
+def _probe_drift_substrate(window_days: int, include_synthetic: bool) -> List[str]:
+    """Registered features with >= ``_DRIFT_MIN_SAMPLES`` feature_values in BOTH
+    drift windows (baseline [now-2N, now-N), current [now-N, now]) under the
+    provenance predicate — via the migration-131 ``drift_qualifying_features``
+    RPC (PostgREST aggregates are disabled on this deployment, and paging the
+    raw window rows at dispatch time is not viable). Ordered best-supported
+    first. Same sync anon-key client as the #874 gap probe.
+    """
+    from src.repositories import get_supabase_client
+
+    client = get_supabase_client()
+    response = client.rpc(
+        "drift_qualifying_features",
+        {
+            "p_window_days": window_days,
+            "p_min_samples": _DRIFT_MIN_SAMPLES,
+            "p_include_synthetic": include_synthetic,
+        },
+    ).execute()
+    rows = getattr(response, "data", None) or []
+    return [str(r["feature_name"]) for r in rows if isinstance(r, dict) and r.get("feature_name")]
+
+
+def _resolve_drift_monitor_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Ground drift_monitor's required ``features_to_monitor`` in REAL data, or
+    fail closed.
+
+    ``DriftMonitorInput.features_to_monitor`` is required with ``min_length=1``
+    but the generic chat payload carries none, so every chat dispatch died at
+    input coercion ('Failed to build DriftMonitorInput', #1747 — measured live
+    2/2 on forced probes). Mirroring the #874/#1726 resolvers:
+
+    (1) Explicit analyst-supplied ``parameters.features_to_monitor`` passes
+        through verbatim (with the analyst's config keys).
+    (2) User-NAMED kpi/feature entities bind verbatim — the user's ask wins,
+        and per-feature honesty about it is the agent's job.
+    (3) Otherwise DERIVE from the real feature store: probe the candidate
+        comparison windows (smallest first; an analyst-supplied
+        ``parameters.time_window`` restricts the sweep to exactly that window —
+        never silently widened) for features with enough samples in BOTH drift
+        windows, and bind the best-supported ones plus the window that
+        supports them. The chat-derived brand is NEVER bound as a filter:
+        measured 2026-08-20, only ~21% of recent feature_values carry a brand
+        entity key, so a brand filter starves the windows below min-samples.
+    (4) When nothing qualifies (measured: always, in real-mode — the store is
+        100% synthetic-tagged) → fail closed with an actionable
+        ``NeedsStructuredInput``; nothing fabricated.
+
+    ``include_synthetic`` rides the shared #872/#880 opt-in channels (ambient
+    on the showcase deployment) and is FORWARDED into the agent input — the
+    #1747 threading carries it input → state → detector nodes → connectors.
+    """
+    params = dispatch.get("parameters") or {}
+    include_synthetic = _resolve_include_synthetic_opt_in(agent_input, params)
+
+    # (1) explicit analyst-supplied features pass through verbatim.
+    explicit = params.get("features_to_monitor")
+    if isinstance(explicit, (list, tuple)) and len(explicit) > 0:
+        out_explicit: Dict[str, Any] = {
+            k: params[k] for k in _DRIFT_PASSTHROUGH if params.get(k) is not None
+        }
+        out_explicit["features_to_monitor"] = list(explicit)
+        out_explicit["include_synthetic"] = include_synthetic
+        return out_explicit
+
+    # (2) user-named KPI/feature mentions bind verbatim (shared extraction
+    # with _wrapped_input_defaults so the two paths cannot drift, #260).
+    named = _drift_entity_features(agent_input)
+    if named:
+        return {
+            "features_to_monitor": named,
+            "include_synthetic": include_synthetic,
+        }
+
+    # (3) substrate sweep. An explicit analyst window restricts the sweep.
+    params_window = params.get("time_window")
+    if isinstance(params_window, str) and re.fullmatch(r"\d+d", params_window.strip()):
+        window_candidates: Tuple[str, ...] = (params_window.strip(),)
+    else:
+        window_candidates = _DRIFT_WINDOW_CANDIDATES
+
+    probed: List[str] = []
+    try:
+        for window in window_candidates:
+            probed.append(window)
+            names = _probe_drift_substrate(int(window[:-1]), include_synthetic)
+            if names:
+                logger.info(
+                    "drift_monitor dispatch: bound %d/%d qualifying feature-store "
+                    "features at window=%s (include_synthetic=%s).",
+                    min(len(names), _DRIFT_MAX_FEATURES),
+                    len(names),
+                    window,
+                    include_synthetic,
+                )
+                return {
+                    "features_to_monitor": names[:_DRIFT_MAX_FEATURES],
+                    "time_window": window,
+                    "include_synthetic": include_synthetic,
+                }
+    except Exception as exc:  # noqa: BLE001 - best-effort; fail closed below
+        logger.warning(
+            "drift_monitor dispatch: feature-store substrate probe failed (%s); failing closed.",
+            exc,
+        )
+
+    # (4) cannot ground in real data → fail closed (no fabricated features).
+    mode = "synthetic opted in" if include_synthetic else "real-mode default-exclude"
+    reason = (
+        f"no registered feature has >= {_DRIFT_MIN_SAMPLES} feature_values samples in "
+        "both the baseline and current drift windows for any probed comparison window "
+        f"({', '.join(probed)}) under the active provenance mode ({mode}), so "
+        "features_to_monitor cannot be grounded in real data"
+    )
+    return NeedsStructuredInput(
+        agent_name="drift_monitor",
+        missing=("features_to_monitor",),
+        reason=reason,
+        rest_endpoint="POST /api/monitoring/drift/detect",
+        user_action=(
+            "Name the specific features or KPIs you want checked for drift "
+            "(for example 'check trx_total for drift'), or supply "
+            "features_to_monitor explicitly — the monitored feature store has "
+            "no feature with enough recent data to select one for you."
+        ),
     )
 
 
@@ -2724,6 +2902,11 @@ INPUT_RESOLVERS: Dict[str, InputResolver] = {
     "causal_impact": _resolve_causal_impact_input,
     "gap_analyzer": _resolve_gap_analyzer_input,
     "heterogeneous_optimizer": _resolve_heterogeneous_optimizer_input,
+    # #1747 — the drift sibling of #874/#1726: features_to_monitor grounded in
+    # the real feature store (or user-named entities), include_synthetic opt-in
+    # threaded through; fails closed instead of the raw
+    # 'Failed to build DriftMonitorInput' coercion crash.
+    "drift_monitor": _resolve_drift_monitor_input,
     "resource_optimizer": _resolve_resource_optimizer_input,
     "prediction_synthesizer": _resolve_prediction_synthesizer_input,
     # Tier-0 pipeline agent reachable via chat routing (VALID_AGENTS) but not
@@ -2784,6 +2967,12 @@ _FAIL_CLOSED_ON_FAILED_STATUS = frozenset(
         # prescribing population, calculator unavailable) — must fail closed
         # rather than launder an empty profile into a success.
         "cohort_profiler",
+        # #1747: DriftMonitorOutput.status mirrors the graph's final status and
+        # run() today RAISES on status="failed" (agent.py) — dispatch already
+        # fails via the exception path. Membership pins the contract: should a
+        # future change return a failed output instead of raising, it must
+        # still fail the dispatch closed, never launder into a success.
+        "drift_monitor",
     }
 )
 
@@ -3004,7 +3193,7 @@ class DispatcherNode:
                 # concurrent request on the worker — and the resolver runs BEFORE
                 # the per-agent ``asyncio.wait_for`` below, so it is not even
                 # bounded by the agent SLA. Offload to a worker thread at this
-                # async boundary. Safe: all 11 INPUT_RESOLVERS (and their callees)
+                # async boundary. Safe: all 12 INPUT_RESOLVERS (and their callees)
                 # are pure-sync — none touch the event loop or write a contextvar
                 # the caller reads back — so the thread's copied context is
                 # sufficient (same rationale as the ``run_in_executor`` offload of

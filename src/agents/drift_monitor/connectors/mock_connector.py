@@ -62,6 +62,7 @@ class MockDataConnector(BaseDataConnector):
         feature_names: list[str],
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> dict[str, FeatureData]:
         """Generate synthetic feature data.
 
@@ -72,6 +73,9 @@ class MockDataConnector(BaseDataConnector):
             feature_names: List of feature names
             time_window: Time window (used to determine baseline vs current)
             filters: Optional filters (ignored in mock)
+            include_synthetic: Accepted for node call-compatibility (#1747);
+                ignored — everything this connector generates is synthetic by
+                construction.
 
         Returns:
             Dictionary mapping feature name to FeatureData
@@ -107,6 +111,7 @@ class MockDataConnector(BaseDataConnector):
         model_id: str,
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> PredictionData:
         """Generate synthetic prediction data.
 
@@ -114,6 +119,7 @@ class MockDataConnector(BaseDataConnector):
             model_id: Model identifier
             time_window: Time window
             filters: Optional filters (ignored)
+            include_synthetic: Accepted for node call-compatibility (#1747); ignored.
 
         Returns:
             PredictionData with synthetic predictions
@@ -148,6 +154,7 @@ class MockDataConnector(BaseDataConnector):
         model_id: str,
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> PredictionData:
         """Generate synthetic labeled prediction data for concept drift.
 

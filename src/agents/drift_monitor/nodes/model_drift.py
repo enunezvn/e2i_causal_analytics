@@ -137,17 +137,22 @@ class ModelDriftNode:
             if state.get("brand"):
                 filters["brand"] = state["brand"]
 
+            # #1747: thread the per-dispatch provenance opt-in (see data_drift).
+            include_synthetic = state.get("include_synthetic", False)
+
             # Fetch baseline and current predictions
             baseline_preds = await self.data_connector.query_predictions(
                 model_id=state["model_id"],
                 time_window=baseline_window,
                 filters=filters if filters else None,
+                include_synthetic=include_synthetic,
             )
 
             current_preds = await self.data_connector.query_predictions(
                 model_id=state["model_id"],
                 time_window=current_window,
                 filters=filters if filters else None,
+                include_synthetic=include_synthetic,
             )
 
             # Insufficient predictions (e.g. a freshly-served model with no

@@ -256,11 +256,13 @@ async def test_dispatcher_catches_pydantic_validation_error_on_input_wrapper() -
 
     from src.agents.orchestrator import _agent_method_map as mm
 
-    # Host the synthetic spec on a resolver-LESS agent (#883/#1351 resolvers
-    # fail closed BEFORE input-model construction; this test is about the
-    # ValidationError -> structured-error path — drift_monitor has no resolver).
-    original = mm.AGENT_METHOD_MAP.get("drift_monitor")
-    mm.AGENT_METHOD_MAP["drift_monitor"] = mm.AgentMethodSpec(
+    # Host the synthetic spec on a resolver-LESS agent (#883/#1351/#1747
+    # resolvers fail closed BEFORE input-model construction; this test is
+    # about the ValidationError -> structured-error path — experiment_monitor
+    # has no resolver, and its only _wrapped_input_defaults entry
+    # (experiment_ids) is not a StrictInput field).
+    original = mm.AGENT_METHOD_MAP.get("experiment_monitor")
+    mm.AGENT_METHOD_MAP["experiment_monitor"] = mm.AgentMethodSpec(
         method="explain",
         is_async=True,
         uses_kwargs=True,
@@ -271,26 +273,26 @@ async def test_dispatcher_catches_pydantic_validation_error_on_input_wrapper() -
     agent = MagicMock()
     agent.explain = AsyncMock(return_value={"narrative": "ok"})
 
-    dispatcher = DispatcherNode(agent_registry={"drift_monitor": agent})
+    dispatcher = DispatcherNode(agent_registry={"experiment_monitor": agent})
     state = {
         "query": "explain something",
         "dispatch_plan": [
             {
-                "agent_name": "drift_monitor",
+                "agent_name": "experiment_monitor",
                 "priority": "critical",
                 "parameters": {"required_field": ""},  # min_length=1 → ValidationError
                 "timeout_ms": 5000,
                 "fallback_agent": None,
             }
         ],
-        "parallel_groups": [["drift_monitor"]],
+        "parallel_groups": [["experiment_monitor"]],
     }
 
     try:
         result = await dispatcher.execute(state)
     finally:
         if original is not None:
-            mm.AGENT_METHOD_MAP["drift_monitor"] = original
+            mm.AGENT_METHOD_MAP["experiment_monitor"] = original
 
     agent_result = result["agent_results"][0]
     assert agent_result["success"] is False, agent_result

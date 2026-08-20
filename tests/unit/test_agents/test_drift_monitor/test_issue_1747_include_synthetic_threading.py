@@ -36,9 +36,12 @@ from src.agents.drift_monitor.state import DriftMonitorState
 
 class _CaptureConnector:
     """Signature-tolerant connector double that records every query call's
-    kwargs. Returns take the emptiest honest shape; the nodes' own error
-    handling absorbs the empty results — the assertions here are about WHAT
-    the nodes pass, not what they compute."""
+    kwargs. Returns are the emptiest shapes that keep each node's happy path
+    walking far enough to AWAIT every query coroutine (concept_drift creates
+    its feature coroutines eagerly but only awaits them when the labeled
+    predictions clear ``_min_samples`` — an un-awaited coroutine never runs
+    the capture). The assertions here are about WHAT the nodes pass, not what
+    they compute."""
 
     def __init__(self) -> None:
         self.calls: List[Dict[str, Any]] = []
@@ -48,12 +51,20 @@ class _CaptureConnector:
         return {}
 
     async def query_predictions(self, **kwargs: Any) -> Any:
+        import numpy as np
+
+        from src.agents.drift_monitor.connectors.base import PredictionData
+
         self.calls.append({"method": "query_predictions", **kwargs})
-        return None
+        return PredictionData(model_id="model-1747", scores=np.zeros(40))
 
     async def query_labeled_predictions(self, **kwargs: Any) -> Any:
+        import numpy as np
+
+        from src.agents.drift_monitor.connectors.base import PredictionData
+
         self.calls.append({"method": "query_labeled_predictions", **kwargs})
-        return None
+        return PredictionData(model_id="model-1747", scores=np.zeros(40))
 
 
 def _state(include_synthetic: bool = True) -> DriftMonitorState:
@@ -180,12 +191,8 @@ async def test_mock_connector_accepts_include_synthetic() -> None:
     )
     # Must not raise TypeError: the intentional dev/harness connector has to
     # stay call-compatible with the nodes.
-    await connector.query_features(
-        feature_names=["f"], time_window=window, include_synthetic=True
-    )
-    await connector.query_predictions(
-        model_id="m", time_window=window, include_synthetic=True
-    )
+    await connector.query_features(feature_names=["f"], time_window=window, include_synthetic=True)
+    await connector.query_predictions(model_id="m", time_window=window, include_synthetic=True)
     await connector.query_labeled_predictions(
         model_id="m", time_window=window, include_synthetic=True
     )

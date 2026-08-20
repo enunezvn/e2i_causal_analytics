@@ -157,17 +157,24 @@ class DataDriftNode:
         if state.get("brand"):
             filters["brand"] = state["brand"]
 
+        # #1747: per-dispatch provenance opt-in — without threading this, an
+        # opted-in dispatch still hits the connector's real-mode default and
+        # reads zero rows from the (100% synthetic-tagged) feature store.
+        include_synthetic = state.get("include_synthetic", False)
+
         # Fetch in parallel using new connector interface
         baseline_task = self.data_connector.query_features(
             feature_names=state["features_to_monitor"],
             time_window=baseline_window,
             filters=filters if filters else None,
+            include_synthetic=include_synthetic,
         )
 
         current_task = self.data_connector.query_features(
             feature_names=state["features_to_monitor"],
             time_window=current_window,
             filters=filters if filters else None,
+            include_synthetic=include_synthetic,
         )
 
         baseline_result, current_result = await asyncio.gather(baseline_task, current_task)
