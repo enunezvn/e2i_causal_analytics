@@ -1313,8 +1313,14 @@ async def graph_health() -> Dict[str, Any]:
         pass
 
     try:
-        semantic = await _get_semantic_memory()
-        if semantic:
+        # A real reachability probe (list_graphs round-trip, circuit-breaker
+        # guarded), NOT object construction: ``_get_semantic_memory()`` returns
+        # a lazily-connecting wrapper, so it reported "connected" with the
+        # server down — the same false-green family as #1758 (codex #1762).
+        from src.api.dependencies.falkordb_client import falkordb_health_check
+
+        probe = await falkordb_health_check()
+        if probe.get("status") == "healthy":
             falkordb_status = "connected"
     except Exception:
         pass

@@ -911,6 +911,16 @@ export interface paths {
          *     - Graphiti service
          *     - FalkorDB connection
          *     - WebSocket connections
+         *     - Graph content (node/edge counts + emptiness, #1760)
+         *
+         *     Connectivity alone is not health: during #1758 the knowledge graph was
+         *     completely wiped for four days while this endpoint reported "healthy",
+         *     because it only proved a client could be constructed. A reachable-but-EMPTY
+         *     graph now degrades the status. Counts come from ``falkordb_diagnostics()``
+         *     (60s-TTL cache, scans off the event loop), so this stays cheap enough for
+         *     the public probe path. A failed scan reports ``graph_content.status:
+         *     "unknown"`` and does NOT degrade — a transient query failure must not mimic
+         *     the wipe signature.
          */
         get: operations["graph_health_check"];
         put?: never;

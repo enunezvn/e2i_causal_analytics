@@ -451,6 +451,48 @@ class TestFalkorDBClient:
             assert recovered["curated_node_count"] == 40
 
     @pytest.mark.asyncio
+    async def test_falkordb_diagnostics_cold_cache_singleflight_1762(self):
+        """Concurrent cold-cache calls run the O(graph) scans ONCE (#1762).
+
+        The endpoint is public: without singleflight, N concurrent requests on
+        a cold/expired cache each ran all three count scans. The follower must
+        wait on the leader's scan and serve its cached result.
+        """
+        import asyncio
+
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
+
+        falkordb_module._diagnostics_cache = None
+
+        def _query(cypher: str):
+            result = MagicMock()
+            if "agent" in cypher:
+                result.result_set = [[40]]
+            elif "count(r)" in cypher:
+                result.result_set = [[15]]
+            else:
+                result.result_set = [[42]]
+            return result
+
+        mock_graph = MagicMock()
+        mock_graph.query.side_effect = _query
+
+        with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+            mock_get_graph.return_value = mock_graph
+
+            first, second = await asyncio.gather(
+                falkordb_diagnostics(use_cache=True),
+                falkordb_diagnostics(use_cache=True),
+            )
+
+            assert first["node_count"] == 42
+            assert second["node_count"] == 42
+            # Exactly one scan (3 count queries) for the pair.
+            assert mock_graph.query.call_count == 3
+            assert sorted([first["cached"], second["cached"]]) == [False, True]
+
+    @pytest.mark.asyncio
     async def test_falkordb_diagnostics_empty_graph(self):
         """Diagnostics handles an empty graph (0 counts)."""
         import src.api.dependencies.falkordb_client as falkordb_module

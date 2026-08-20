@@ -64,6 +64,12 @@ _health_circuit_breaker = CircuitBreaker(
 _DIAGNOSTICS_TTL_SECONDS = 60.0
 _diagnostics_cache: Optional[Dict[str, Any]] = None
 _diagnostics_cached_at: float = 0.0
+# Singleflight for cache population (#1762 codex MED): /api/graph/health is
+# public, so without this, concurrent requests hitting a cold/expired cache
+# would EACH run the three O(graph) count scans. Per-process only (each
+# uvicorn worker scans at most once per TTL window), which is the same
+# blast-radius bound the TTL itself provides.
+_diagnostics_scan_lock = asyncio.Lock()
 
 
 @retry(
@@ -240,14 +246,35 @@ async def falkordb_diagnostics(*, use_cache: bool = True) -> Dict[str, Any]:
     """
     global _diagnostics_cache, _diagnostics_cached_at
 
-    now = time.time()
-    if (
-        use_cache
-        and _diagnostics_cache is not None
-        and (now - _diagnostics_cached_at) < _DIAGNOSTICS_TTL_SECONDS
-    ):
-        return {**_diagnostics_cache, "cached": True}
+    def _fresh_cache() -> Optional[Dict[str, Any]]:
+        if (
+            use_cache
+            and _diagnostics_cache is not None
+            and (time.time() - _diagnostics_cached_at) < _DIAGNOSTICS_TTL_SECONDS
+        ):
+            return {**_diagnostics_cache, "cached": True}
+        return None
 
+    cached = _fresh_cache()
+    if cached is not None:
+        return cached
+
+    # Singleflight (#1762): the public health endpoint can see concurrent
+    # requests on a cold/expired cache; serialize population and re-check
+    # inside the lock so followers serve the leader's scan instead of
+    # re-running the O(graph) counts themselves.
+    async with _diagnostics_scan_lock:
+        cached = _fresh_cache()
+        if cached is not None:
+            return cached
+        return await _scan_diagnostics()
+
+
+async def _scan_diagnostics() -> Dict[str, Any]:
+    """Run the count scans and populate the cache. Callers hold the scan lock."""
+    global _diagnostics_cache, _diagnostics_cached_at
+
+    now = time.time()
     graph = await get_graph()
     if graph is None:
         return {"status": "unavailable", "error": "FalkorDB not configured"}
