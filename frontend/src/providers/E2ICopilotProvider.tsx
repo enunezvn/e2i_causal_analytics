@@ -304,6 +304,11 @@ export interface E2IFilters {
   /** 'All' = no brand selected — the setBrandFilter action and the backend's
    *  _filters_context_note already speak this value (#1749). */
   brand: 'All' | 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
+  /** 'All US' = no region selected (#1753). The four US-Census regions are
+   *  the only values present in the data (patient_journeys.geographic_region,
+   *  causal_paths.region, business_metrics.region all share this vocabulary);
+   *  the backend's _filters_context_note skips the sentinel like brand='All'. */
+  region: 'All US' | 'Northeast' | 'South' | 'Midwest' | 'West';
   territory: string | null;
   dateRange: {
     start: string;
@@ -589,6 +594,7 @@ interface E2IContextProviderProps {
 // actually picked that brand.
 const DEFAULT_FILTERS: E2IFilters = {
   brand: 'All',
+  region: 'All US', // #1753: no region selected — never default to a specific one
   territory: null,
   dateRange: {
     start: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -700,6 +706,10 @@ const E2IContextProvider: React.FC<E2IContextProviderProps> = ({
 // -----------------------------------------------------------------------------
 
 const VALID_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali', 'All'];
+// #1753: the dashboard's region vocabulary — display-cased; 'All US' = no
+// region selected. The backend resolves census-region synonyms/casing, so
+// these values are directly speakable in the filters note.
+const VALID_REGIONS = ['All US', 'Northeast', 'South', 'Midwest', 'West'];
 const VALID_DETAIL_LEVELS = ['summary', 'detailed', 'expert'];
 
 /**
@@ -799,6 +809,34 @@ const CopilotHooksInner: React.FC = () => {
         }));
       }
       return `Brand filter set to ${brand}`;
+    },
+  });
+
+  // 2b. Set region filter (#1753 — two-way parity with setBrandFilter)
+  useCopilotAction({
+    name: 'setRegionFilter',
+    description:
+      'Set the geographic region filter for the dashboard (US-Census regions). ' +
+      "'All US' clears the region scope.",
+    parameters: [
+      {
+        name: 'region',
+        type: 'string',
+        description: 'Region to filter: Northeast, South, Midwest, West, or All US',
+        required: true,
+      },
+    ],
+    handler: ({ region }: { region: string }) => {
+      if (!VALID_REGIONS.includes(region)) {
+        return `Invalid region. Choose from: ${VALID_REGIONS.join(', ')}`;
+      }
+      if (context) {
+        context.setFilters((prev) => ({
+          ...prev,
+          region: region as E2IFilters['region'],
+        }));
+      }
+      return `Region filter set to ${region}`;
     },
   });
 

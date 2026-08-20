@@ -643,6 +643,7 @@ export function E2IChatSidebar({
 
 Current context:
 - Brand filter: ${filters.brand === 'All' ? 'All brands (no brand filter)' : filters.brand}
+- Region filter: ${filters.region === 'All US' ? 'All US regions (no region filter)' : filters.region}
 - Date range: ${filters.dateRange.start} to ${filters.dateRange.end}
 ${filters.territory ? `- Territory: ${filters.territory}` : ''}
 ${filters.hcpSegment ? `- HCP Segment: ${filters.hcpSegment}` : ''}
@@ -652,6 +653,7 @@ Active agents: ${liveAgents.filter(a => a.status === 'active').map(a => a.name).
 Available actions:
 - navigateTo: Navigate to any page
 - setBrandFilter: Change brand filter
+- setRegionFilter: Change region filter (US-Census regions)
 - setDateRange: Set analytics date range
 - highlightCausalPaths: Highlight paths on visualizations
 - setDetailLevel: Adjust response complexity

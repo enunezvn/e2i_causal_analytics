@@ -479,13 +479,14 @@ describe('CopilotHooksConnector', () => {
       </CopilotKitWrapper>
     );
 
-    // Should register 8 actions
-    expect(mockUseCopilotAction).toHaveBeenCalledTimes(8);
+    // Should register 9 actions (#1753 added setRegionFilter)
+    expect(mockUseCopilotAction).toHaveBeenCalledTimes(9);
 
     // Check action names
     const actionNames = mockUseCopilotAction.mock.calls.map((call) => call[0]?.name);
     expect(actionNames).toContain('navigateTo');
     expect(actionNames).toContain('setBrandFilter');
+    expect(actionNames).toContain('setRegionFilter');
     expect(actionNames).toContain('setDateRange');
     expect(actionNames).toContain('highlightCausalPaths');
     expect(actionNames).toContain('setDetailLevel');
@@ -1215,6 +1216,7 @@ describe('Type Exports', () => {
   it('E2IFilters type is usable', () => {
     const filters: E2IFilters = {
       brand: 'Remibrutinib',
+      region: 'All US',
       territory: null,
       dateRange: { start: '2024-01-01', end: '2024-12-31' },
       hcpSegment: null,

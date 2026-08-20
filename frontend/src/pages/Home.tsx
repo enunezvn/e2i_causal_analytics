@@ -71,6 +71,7 @@ import { ExecutiveSummary } from '@/components/dashboard/ExecutiveSummary';
 import { CausalValueChains } from '@/components/dashboard/CausalValueChains';
 import { StrategicInsightCard } from '@/components/insights';
 import { usePageChatContext } from '@/providers/E2ICopilotProvider';
+import type { E2IFilters } from '@/providers/E2ICopilotProvider';
 import { useE2IFilters } from '@/hooks/use-e2i-filters';
 import { getNavigationRoutes } from '@/router/routes';
 
@@ -82,7 +83,9 @@ type Brand = 'All' | 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
 // US-Census regions — the ONLY values present in the data (patient_journeys
 // .geographic_region, causal_paths.region, business_metrics.region all share this
 // vocabulary). Southeast/Southwest were never in the data and always returned 0.
-type Region = 'All US' | 'Northeast' | 'South' | 'Midwest' | 'West';
+// #1753: aliased to the copilot filter vocabulary so the page and the chat
+// channel cannot drift apart.
+type Region = E2IFilters['region'];
 
 interface KPIMetric {
   id: string;
@@ -421,15 +424,20 @@ function QuickStatTile({
 function Home() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  // #1749: brand selection lives in the copilot filter context — the single
-  // source of truth the chat surfaces read (suggestion pills, the
-  // /chat/suggestions request, and the AgentFiltersBridge CoAgent channel) —
-  // so selection flows both ways: dropdown → chat, and the chat's
-  // setBrandFilter action → this selector. Outside the provider (isolated
-  // tests, storybook) the hook falls back to its own local state.
-  const { filters: chatFilters, setBrand: setSelectedBrand } = useE2IFilters();
+  // #1749/#1753: brand AND region selection live in the copilot filter
+  // context — the single source of truth the chat surfaces read (suggestion
+  // pills, the /chat/suggestions request, and the AgentFiltersBridge CoAgent
+  // channel) — so selection flows both ways: dropdown → chat, and the chat's
+  // setBrandFilter/setRegionFilter actions → these selectors. Outside the
+  // provider (isolated tests, storybook) the hook falls back to its own
+  // local state.
+  const {
+    filters: chatFilters,
+    setBrand: setSelectedBrand,
+    setRegion: setSelectedRegion,
+  } = useE2IFilters();
   const selectedBrand: Brand = chatFilters.brand;
-  const [selectedRegion, setSelectedRegion] = useState<Region>('All US');
+  const selectedRegion: Region = chatFilters.region;
   // Backend region param: undefined for 'All US' (portfolio view), else the
   // lowercase census region. Drives the KPI summary, Model Accuracy, and the
   // batch-calculate context so the KPIs re-scope when Region changes.
