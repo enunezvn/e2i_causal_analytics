@@ -35,7 +35,12 @@ import { logger } from '@/lib/logger';
 import { getValidated, post } from '@/lib/api-client';
 import { AgentStatusResponseSchema } from '@/lib/api-schemas';
 import { Button } from '@/components/ui/button';
-import { useE2ICopilot, useCopilotEnabled, type AgentInfo } from '@/providers/E2ICopilotProvider';
+import {
+  useE2ICopilot,
+  useCopilotEnabled,
+  type AgentInfo,
+  type E2IFilters,
+} from '@/providers/E2ICopilotProvider';
 import { useResizablePanel } from '@/hooks/use-resizable-panel';
 import { useUIStore } from '@/stores/ui-store';
 import { AgentStatusPanel } from './AgentStatusPanel';
@@ -138,13 +143,25 @@ const DEFAULT_PAGE_SUGGESTION: ChatSuggestion = {
   message: 'What are the top causal drivers of TRx right now?',
 };
 
-function buildChatSuggestions(pathname: string, brand: string): ChatSuggestion[] {
+// Exported for tests (#1749): the static pills are the guaranteed floor of
+// the suggestion surface, so they must respect the dashboard's brand
+// selection — and never render the 'All' sentinel as if it were a brand.
+export function buildChatSuggestions(
+  pathname: string,
+  brand: E2IFilters['brand']
+): ChatSuggestion[] {
   return [
     { title: '📈 Chart the TRx trend', message: 'Chart the TRx trend' },
-    {
-      title: `📊 ${brand} market share`,
-      message: `Chart the market share trend for ${brand}`,
-    },
+    brand === 'All'
+      ? {
+          title: '📊 Compare brand market share',
+          message:
+            'Compare the market share trend for Remibrutinib, Fabhalta, and Kisqali in a table.',
+        }
+      : {
+          title: `📊 ${brand} market share`,
+          message: `Chart the market share trend for ${brand}`,
+        },
     PAGE_SUGGESTIONS[pathname] ?? DEFAULT_PAGE_SUGGESTION,
     {
       title: 'Biggest KPI movers',
@@ -179,7 +196,7 @@ function ConversationSuggestions({
   onUpdate,
 }: {
   pathname: string;
-  brand: string;
+  brand: E2IFilters['brand'];
   /** Compact on-screen data summary published by the current page (or null). */
   pageContext: string | null;
   onUpdate: (state: { hasUserMessage: boolean; adaptive: ChatSuggestion[] | null }) => void;
@@ -214,10 +231,13 @@ function ConversationSuggestions({
   const hasUserMessage = transcript.some((t) => t.role === 'user');
 
   const fetchPills = React.useCallback(
+    // brand is omitted when 'All' (#1749): the sentinel is not a brand
+    // constraint, and sending it alongside a page_context that names the
+    // real selection fed the suggestions LLM contradictory signals.
     (body: {
       messages: Array<{ role: 'user' | 'assistant'; content: string }>;
       page: string;
-      brand: string;
+      brand?: string;
       page_context?: string;
     }) => {
       const seq = ++requestSeqRef.current;
@@ -253,7 +273,7 @@ function ConversationSuggestions({
       fetchPills({
         messages: [],
         page: pathname,
-        brand,
+        ...(brand === 'All' ? {} : { brand }),
         ...(pageContext ? { page_context: pageContext.slice(0, 4000) } : {}),
       });
     }, 800);
@@ -268,7 +288,11 @@ function ConversationSuggestions({
     const key = String(transcript.length);
     if (lastFetchKeyRef.current === key) return;
     lastFetchKeyRef.current = key;
-    fetchPills({ messages: transcript.slice(-12), page: pathname, brand });
+    fetchPills({
+      messages: transcript.slice(-12),
+      page: pathname,
+      ...(brand === 'All' ? {} : { brand }),
+    });
   }, [isLoading, hasUserMessage, transcript, pathname, brand, fetchPills]);
 
   React.useEffect(() => {
@@ -618,7 +642,7 @@ export function E2IChatSidebar({
                 instructions={`You are helping an analyst work with the E2I Causal Analytics platform.
 
 Current context:
-- Brand filter: ${filters.brand}
+- Brand filter: ${filters.brand === 'All' ? 'All brands (no brand filter)' : filters.brand}
 - Date range: ${filters.dateRange.start} to ${filters.dateRange.end}
 ${filters.territory ? `- Territory: ${filters.territory}` : ''}
 ${filters.hcpSegment ? `- HCP Segment: ${filters.hcpSegment}` : ''}

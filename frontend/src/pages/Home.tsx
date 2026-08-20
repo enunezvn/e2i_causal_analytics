@@ -71,6 +71,7 @@ import { ExecutiveSummary } from '@/components/dashboard/ExecutiveSummary';
 import { CausalValueChains } from '@/components/dashboard/CausalValueChains';
 import { StrategicInsightCard } from '@/components/insights';
 import { usePageChatContext } from '@/providers/E2ICopilotProvider';
+import { useE2IFilters } from '@/hooks/use-e2i-filters';
 import { getNavigationRoutes } from '@/router/routes';
 
 // =============================================================================
@@ -420,7 +421,14 @@ function QuickStatTile({
 function Home() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [selectedBrand, setSelectedBrand] = useState<Brand>('All');
+  // #1749: brand selection lives in the copilot filter context — the single
+  // source of truth the chat surfaces read (suggestion pills, the
+  // /chat/suggestions request, and the AgentFiltersBridge CoAgent channel) —
+  // so selection flows both ways: dropdown → chat, and the chat's
+  // setBrandFilter action → this selector. Outside the provider (isolated
+  // tests, storybook) the hook falls back to its own local state.
+  const { filters: chatFilters, setBrand: setSelectedBrand } = useE2IFilters();
+  const selectedBrand: Brand = chatFilters.brand;
   const [selectedRegion, setSelectedRegion] = useState<Region>('All US');
   // Backend region param: undefined for 'All US' (portfolio view), else the
   // lowercase census region. Drives the KPI summary, Model Accuracy, and the

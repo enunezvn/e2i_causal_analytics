@@ -13,9 +13,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, within } from '@testing-library/react';
+import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { renderWithAllProviders } from '@/test/utils';
 import Home from './Home';
+import {
+  CopilotKitWrapper,
+  E2ICopilotProvider,
+  useE2ICopilot,
+} from '@/providers/E2ICopilotProvider';
 
 // Mock the KPI hooks so we can exercise the API-connected branch
 // deterministically. The rest of the suite (no per-test override) leaves these
@@ -389,6 +394,69 @@ describe('Home', () => {
       expect(await screen.findByText('(CSU)')).toBeInTheDocument();
       // ...but the All option carries no parenthetical indication.
       expect(screen.queryAllByText('(Combined Portfolio)')).toHaveLength(0);
+    });
+  });
+
+  // =========================================================================
+  // #1749 — BRAND SELECTION IS SHARED WITH THE COPILOT CHAT
+  // =========================================================================
+  // The dropdown lived in page-local useState while every chat surface
+  // (suggestion pills, POST /chat/suggestions, the AgentFiltersBridge CoAgent
+  // channel) read the copilot provider's own filter state — stuck on its
+  // default. The provider filter context is the single source of truth, so
+  // selection flows BOTH ways: dropdown → chat, and chat setBrandFilter → page.
+
+  describe('Brand selection ↔ copilot filter context (#1749)', () => {
+    /** Reads the copilot context brand; the button simulates the chat's
+     *  setBrandFilter action (same setFilters seam the action handler uses). */
+    function CopilotBrandProbe() {
+      const context = useE2ICopilot();
+      return (
+        <div>
+          <span data-testid="copilot-brand">{context.filters.brand}</span>
+          <button
+            onClick={() => context.setFilters((prev) => ({ ...prev, brand: 'Kisqali' }))}
+          >
+            chat-sets-kisqali
+          </button>
+        </div>
+      );
+    }
+
+    function renderHomeWithCopilot() {
+      return renderWithAllProviders(
+        <CopilotKitWrapper enabled={false}>
+          <E2ICopilotProvider>
+            <Home />
+            <CopilotBrandProbe />
+          </E2ICopilotProvider>
+        </CopilotKitWrapper>
+      );
+    }
+
+    it('writes the dropdown brand selection through to the copilot filter context', async () => {
+      renderHomeWithCopilot();
+
+      const brandSelector = screen.getAllByRole('combobox')[0];
+      fireEvent.click(brandSelector);
+      fireEvent.click(await screen.findByText('Kisqali'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('copilot-brand')).toHaveTextContent('Kisqali')
+      );
+    });
+
+    it('reflects a chat-driven brand change (setBrandFilter seam) in the page selector', async () => {
+      renderHomeWithCopilot();
+
+      const brandSelector = screen.getAllByRole('combobox')[0];
+      expect(brandSelector).toHaveTextContent('All');
+
+      fireEvent.click(screen.getByText('chat-sets-kisqali'));
+
+      await waitFor(() =>
+        expect(screen.getAllByRole('combobox')[0]).toHaveTextContent('Kisqali')
+      );
     });
   });
 

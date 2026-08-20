@@ -48,7 +48,7 @@ import type { KPIHistoryResponse, KPISegmentedHistoryResponse } from '@/types/kp
 
 /** Filter context for dashboard */
 interface FilterContext {
-  brand?: 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
+  brand?: 'All' | 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
   region?: 'northeast' | 'south' | 'midwest' | 'west';
   timeRange?: { start: string; end: string };
   segment?: string;
@@ -301,7 +301,9 @@ type E2ICopilotAction =
 
 /** E2I dashboard filter state */
 export interface E2IFilters {
-  brand: 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
+  /** 'All' = no brand selected — the setBrandFilter action and the backend's
+   *  _filters_context_note already speak this value (#1749). */
+  brand: 'All' | 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
   territory: string | null;
   dateRange: {
     start: string;
@@ -581,8 +583,12 @@ interface E2IContextProviderProps {
 }
 
 // Default values for new state
+// #1749: brand defaults to 'All' (no selection). The old 'Remibrutinib'
+// default leaked into every chat surface — pills, POST /chat/suggestions,
+// and the AgentFiltersBridge CoAgent channel — whenever the user had not
+// actually picked that brand.
 const DEFAULT_FILTERS: E2IFilters = {
-  brand: 'Remibrutinib',
+  brand: 'All',
   territory: null,
   dateRange: {
     start: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],

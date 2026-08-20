@@ -256,7 +256,8 @@ describe('E2ICopilotProvider', () => {
         </CopilotKitWrapper>
       );
 
-      expect(screen.getByTestId('brand')).toHaveTextContent('Remibrutinib');
+      // #1749: no selection defaults to 'All', never a specific brand.
+      expect(screen.getByTestId('brand')).toHaveTextContent(/^All$/);
       expect(screen.getByTestId('territory')).toHaveTextContent('none');
     });
 
@@ -319,7 +320,7 @@ describe('E2ICopilotProvider', () => {
         </CopilotKitWrapper>
       );
 
-      expect(screen.getByTestId('brand')).toHaveTextContent('Remibrutinib');
+      expect(screen.getByTestId('brand')).toHaveTextContent(/^All$/);
 
       await act(async () => {
         screen.getByText('Change Brand').click();
@@ -523,10 +524,52 @@ describe('CopilotHooksConnector', () => {
 
     const bridgeCall = mockUseCoAgent.mock.calls.find((call) => call[0]?.name === 'default');
     expect(bridgeCall).toBeDefined();
-    expect(bridgeCall![0].initialState?.filters?.brand).toBe('Remibrutinib');
+    // #1749: the bridge seeds the honest 'All' default (no brand selected).
+    expect(bridgeCall![0].initialState?.filters?.brand).toBe('All');
     // And the filters are pushed into agent state (not just initialState,
     // which only seeds the very first run).
     expect(mockCoAgentSetState).toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// TESTS: #1749 — HONEST BRAND DEFAULT
+// =============================================================================
+// The hardcoded 'Remibrutinib' default leaked into every chat surface (pills,
+// CoAgent state, suggestions request) whenever the user had NOT selected that
+// brand. No selection must read as 'All' — the value the setBrandFilter action
+// already accepts and the backend's _filters_context_note already treats as
+// "not a brand constraint".
+
+describe('#1749 — brand filter defaults to All', () => {
+  beforeEach(() => {
+    mockUseCoAgent.mockClear();
+  });
+
+  it("provides 'All' as the default brand filter, not a hardcoded brand", () => {
+    render(
+      <CopilotKitWrapper enabled={false}>
+        <E2ICopilotProvider>
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    expect(screen.getByTestId('brand')).toHaveTextContent(/^All$/);
+  });
+
+  it("bridges the 'All' default into CoAgent state (backend reads it as no constraint)", () => {
+    render(
+      <CopilotKitWrapper enabled={true}>
+        <E2ICopilotProvider>
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    const bridgeCall = mockUseCoAgent.mock.calls.find((call) => call[0]?.name === 'default');
+    expect(bridgeCall).toBeDefined();
+    expect(bridgeCall![0].initialState?.filters?.brand).toBe('All');
   });
 });
 
