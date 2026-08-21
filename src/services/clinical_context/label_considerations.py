@@ -87,7 +87,25 @@ _CANDIDATE = re.compile(r"\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\
 # A candidate that ends the region, or is followed by the next bullet's capitalised
 # title, is SHAPED like a boundary. One followed by lowercase continuation is prose
 # inside a bullet ("Assess patients (2) weeks after dose").
-_BOUNDARY_AFTER = re.compile(r"\s+[A-Z]")
+#
+# `\s*`, not `\s+`: the comment above says POSITION decides and not spacing, and then
+# this pattern required the space. "(5.1)B:" was therefore read as prose, the cursor
+# never advanced, and both bullets came out as one under B's citation (codex iter-5
+# HIGH). The section-number invariant cannot catch that one — 5.1 does name section
+# 5, it simply does not own the words it was attached to.
+_BOUNDARY_AFTER = re.compile(r"\s*[A-Z]")
+
+# Fail-closed, and deliberately INDEPENDENT of the boundary heuristic above.
+#
+# Five rounds of findings were one defect wearing different spacing: some shape we
+# had not imagined went unrecognised as a boundary, so a bullet merged forward under
+# a citation it never carried. Rather than keep guessing spacings, assert the
+# invariant instead — a body that STILL CONTAINS a reference naming its own section
+# has swallowed a boundary by construction, whatever the spacing was, so it cannot be
+# attributed to the citation at its end. Measured against the live labels for all
+# three brands: no real Highlights bullet's prose cites its own section inline, so
+# this drops nothing real.
+_INTERNAL_REFERENCE = _CANDIDATE
 
 # `\s*`, not `\s+`: "(5.1)5.1 Full Text Begins" hid the boundary from a
 # whitespace-requiring pattern, and the prescribing text behind it was then pulled
@@ -180,10 +198,25 @@ def parse_label_considerations(text: Optional[str], section: str) -> Tuple[Label
             continue
         if not _references_name_this_section(references, section):
             continue
+        if _swallowed_a_boundary(body, section):
+            continue
         item = _consideration(body, references, section)
         if item is not None:
             out.append(item)
     return tuple(out)
+
+
+def _swallowed_a_boundary(body: str, section: str) -> bool:
+    """True when the pending body still carries a reference to its OWN section.
+
+    That reference ended an earlier bullet whose boundary we failed to see, so this
+    body is two bullets glued together. Drop it: under-reporting is honest, and
+    rendering one bullet's words under another's citation is not.
+    """
+    return any(
+        _references_name_this_section(" ".join(m.group("refs").split()), section)
+        for m in _INTERNAL_REFERENCE.finditer(body)
+    )
 
 
 def _consideration(body: str, references: str, section: str) -> Optional[LabelConsideration]:

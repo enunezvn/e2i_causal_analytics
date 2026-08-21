@@ -311,3 +311,39 @@ def test_a_bullet_whose_reference_names_another_section_is_dropped_not_merged():
     items = parse_label_considerations(text, WARNINGS_SECTION)
     assert [(i.title, i.references) for i in items] == [("Real", "5.5")]
     assert "Something happened" not in items[0].detail
+
+
+@pytest.mark.unit
+def test_a_terminal_reference_flush_against_the_next_title_does_not_merge():
+    """codex iter-5 HIGH. The comment above `_BOUNDARY_AFTER` said position decides,
+    not spacing — and then the pattern required whitespace. So '(5.1)B:' was read as
+    prose, the cursor never advanced, and BOTH bullets were emitted as one under
+    B's '5.2'. The section-number invariant cannot catch this one: 5.1 does name
+    section 5, it just does not belong to the text it was attached to.
+    """
+    text = "5 WARNINGS AND PRECAUTIONS A: Keep this. (5.1)B: Monitor next. ( 5.2 )"
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert [(i.title, i.references) for i in items] == [("A", "5.1"), ("B", "5.2")]
+    assert items[0].detail == "Keep this."
+    assert items[1].detail == "Monitor next."
+
+
+@pytest.mark.unit
+def test_a_body_that_swallowed_this_sections_own_reference_is_dropped():
+    """Fail-closed, independent of how good the boundary heuristic is.
+
+    Five rounds of findings were one defect wearing different spacing: some shape we
+    had not imagined was not recognised as a boundary, so a bullet merged forward
+    under a citation it never carried. Rather than keep guessing spacings, assert the
+    INVARIANT — a body that still contains a reference naming its own section has
+    swallowed a boundary by construction, whatever the spacing was, and cannot be
+    attributed to the citation at its end.
+
+    Here the flush-lowercase shape '(5.1)and' is not a bullet title, so no positional
+    rule sees a boundary; the invariant drops it anyway.
+    """
+    text = "5 WARNINGS AND PRECAUTIONS A: Keep this. (5.1)and monitor more. ( 5.2 )"
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    for item in items:
+        assert "Keep this." not in item.detail, (item.title, item.detail, item.references)
+        assert "5.1" not in item.detail
