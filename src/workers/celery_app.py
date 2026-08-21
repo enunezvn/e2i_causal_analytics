@@ -547,6 +547,28 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "analytics"},
     },
     # -------------------------------------------------------------------------
+    # Knowledge-graph emptiness sentinel (#1761, #1758 follow-up)
+    # -------------------------------------------------------------------------
+    # Probes the CURATED core of the FalkorDB graph
+    # (MATCH (n) WHERE n.agent IS NULL -- the same predicate /knowledge-graph
+    # sends as curated_only) and, when it is empty, reseeds it under a Redis
+    # lock from scripts/seed_falkordb.py + scripts/sync_causal_paths_to_falkordb.py.
+    #
+    # Interval, not crontab, and deliberately so: #1645 moved DAILY entries to a
+    # wall clock because an interval longer than container uptime never comes
+    # due. A 30-minute interval has the opposite property -- it is due within
+    # half an hour of every boot, which is exactly what a recovery sentinel
+    # wants. The 30 min is the outage window this bounds: #1758 ran four days.
+    #
+    # Queue `quick` is consumed by worker_light (--queues=default,quick,api),
+    # which is also where the memory budget for the reseed subprocess lives --
+    # see #1761's src.rag import shed in scripts/seed_falkordb.py.
+    "graph-emptiness-sentinel": {
+        "task": "src.tasks.graph_emptiness_sentinel",
+        "schedule": 1800.0,  # 30 minutes
+        "options": {"queue": "quick"},
+    },
+    # -------------------------------------------------------------------------
     # Insight Lifecycle subsystem (consolidation + sentinels)
     # -------------------------------------------------------------------------
     # Daily consolidator at 06:30 UTC: promotes confirmed causal_paths to

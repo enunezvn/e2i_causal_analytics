@@ -101,6 +101,14 @@ from src.tasks.heavy_offload_tasks import (
     simulate_population,
 )
 
+# Knowledge-graph emptiness sentinel (#1761): importing the module fires the
+# @celery_app.task decorator so the "graph-emptiness-sentinel" beat entry is
+# discoverable by the Celery worker + beat. Without this line the beat entry
+# would dead-letter (guarded by test_beat_schedule_registration.py). The module
+# imports nothing heavy at top level -- falkordb/redis load lazily inside the
+# task, and the seed scripts run as subprocesses, never imports.
+from src.tasks.graph_reseed_tasks import graph_emptiness_sentinel
+
 # Insight lifecycle (consolidator + sentinel dispatcher + #378 reanalysis)
 from src.tasks.insight_lifecycle_tasks import (
     consolidate_insights,
@@ -167,6 +175,8 @@ __all__ = [
     "sync_operational_corpus",
     # Chat-RAG chunk corpus sync (#1373)
     "sync_chunk_corpus",
+    # Knowledge-graph emptiness sentinel + self-heal reseed (#1761)
+    "graph_emptiness_sentinel",
     # Insight lifecycle subsystem
     "consolidate_insights",
     "sentinel_dispatcher",

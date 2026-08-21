@@ -36,18 +36,28 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SEED_SCRIPT = REPO_ROOT / "scripts" / "seed_falkordb.py"
 
-# Measured post-fix footprint is ~15-25 MB against a ~14 MB bare-interpreter
-# baseline. 200 MB leaves generous room for interpreter/CI variance while still
-# failing loudly on any re-introduction of the 721 MB dspy pull.
+# Measured post-fix footprint is ~20 MB resident against a ~12 MB bare-interpreter
+# baseline (in-container: 721.7 MB -> 21.7 MB child peak for the same --dry-run).
+# 200 MB leaves generous room for interpreter/CI variance while still failing
+# loudly on any re-introduction of the dspy pull.
 MAX_IMPORT_RSS_MB = 200.0
 
+# NOTE on the memory metric: this probe reports the child's CURRENT resident set
+# from /proc/self/statm, deliberately NOT resource.getrusage(...).ru_maxrss.
+# Measured on this kernel, a fork+exec child inherits the PARENT's high-water
+# mark: a child whose true RSS was 11.6 MB reported ru_maxrss=912.5 MB when its
+# parent held a 900 MB ballast. Under pytest (a ~1 GB process once conftest has
+# loaded) ru_maxrss would therefore "fail" this guard no matter what the seeder
+# imports — a metric that measures the harness instead of the subject. Current
+# RSS cannot be inherited, and for a pure-import probe it IS the peak.
 _PROBE = """
-import importlib.util, json, resource, sys
+import importlib.util, json, os, resource, sys
 
 spec = importlib.util.spec_from_file_location("_seed_falkordb_probe", {path!r})
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
+pages = int(open("/proc/self/statm").read().split()[1])
 heavy = sorted(
     name
     for name in sys.modules
@@ -57,7 +67,8 @@ print(
     json.dumps(
         {{
             "heavy": heavy,
-            "rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0,
+            "rss_mb": pages * os.sysconf("SC_PAGE_SIZE") / 1048576.0,
+            "inherited_maxrss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0,
             "has_config": hasattr(module, "FalkorDBSeeder"),
         }}
     )
@@ -109,7 +120,7 @@ def test_seed_script_import_footprint_stays_small(seed_import_probe: dict) -> No
     """Pin the actual RSS, not just the module names (catches a new heavy dep)."""
     result = seed_import_probe
     assert result["rss_mb"] < MAX_IMPORT_RSS_MB, (
-        f"importing scripts/seed_falkordb.py peaked at {result['rss_mb']:.1f} MB "
+        f"importing scripts/seed_falkordb.py left {result['rss_mb']:.1f} MB resident "
         f"(limit {MAX_IMPORT_RSS_MB} MB). worker_light has ~476 MiB of headroom "
         "under its 1.5 GiB cgroup limit; a heavy import here OOM-kills the "
         "self-heal reseed subprocess (#1761)."
