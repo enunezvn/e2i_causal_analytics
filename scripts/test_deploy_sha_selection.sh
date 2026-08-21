@@ -99,6 +99,9 @@ resolve_target() {
   echo "$_t"
 }
 
+# Cases (a)-(f) predate #1780 and exercise the floor with NO running-image signal
+# available, so the floor falls back to the checkout HEAD exactly as it always did.
+RUNNING_SHA=""
 # (a) PREV=c3 built, newer c4/c5 unbuilt -> returns PREV (c3); no local build.
 PREV_SHA="$C3"; BUILT_SET="$C3 $C1"
 check "a_prev_built_newer_unbuilt" "$C3" "$(resolve_target)"
@@ -117,6 +120,37 @@ check "e_none_built_fallback" "" "$(resolve_target)"
 # (f) newer built ancestor is NOT floored (PREV is its ancestor).
 PREV_SHA="$C2"; BUILT_SET="$C4 $C2"
 check "f_newer_not_floored" "$C4" "$(resolve_target)"
+
+echo
+echo "===== Part 3: #1780 — the floor must be anchored to the RUNNING image ====="
+# PROD == DEV == the same droplet: $PROJECT_DIR is ALSO a human working copy, so a
+# `git pull` there moves the checkout HEAD (PREV_SHA) without deploying anything.
+# The floor's stated purpose is "never deploy code strictly OLDER than what is
+# RUNNING", and the checkout HEAD is not a sound proxy for that — it can sit ahead
+# of the running containers (blocking a valid upgrade) or behind them (waving a
+# real downgrade through). Both directions are exercised below.
+#
+# (g) is the 2026-08-21 incident (deploy run 32507847667) in miniature: the checkout
+#     had been pulled to 32259eb while the containers were still on 9444237ae, so the
+#     floor read b1aba1c — a CHILD of the running sha, with published images — as a
+#     "downgrade", refused it, and left a ~26-min droplet local build as the only path
+#     (which then blew the 30m SSH timeout).
+PREV_SHA="$C5"; RUNNING_SHA="$C3"; BUILT_SET="$C4 $C3"
+check "g_running_anchor_allows_upgrade" "$C4" "$(resolve_target)"
+# (h) the mirror image, and the more dangerous one: the checkout is BEHIND the running
+#     containers (a human `git checkout` of an older commit). Anchored to the checkout
+#     HEAD the floor waves through a target that is strictly OLDER than what is running
+#     — the exact silent downgrade the floor exists to prevent.
+PREV_SHA="$C2"; RUNNING_SHA="$C4"; BUILT_SET="$C2"
+check "h_running_anchor_blocks_downgrade" "" "$(resolve_target)"
+# (i) degradation: with no usable running-image signal (first deploy, a locally-built
+#     image, a tag that is not a commit here) the floor falls back to the checkout HEAD
+#     — i.e. exactly the pre-#1780 behaviour, never worse.
+PREV_SHA="$C4"; RUNNING_SHA=""; BUILT_SET="$C2"
+check "i_floor_degrades_to_checkout" "" "$(resolve_target)"
+# (j) a same-sha redeploy of the RUNNING image is not a downgrade.
+PREV_SHA="$C2"; RUNNING_SHA="$C4"; BUILT_SET="$C4"
+check "j_running_sha_redeploy" "$C4" "$(resolve_target)"
 
 echo
 echo "===== $PASS passed, $FAIL failed ====="
