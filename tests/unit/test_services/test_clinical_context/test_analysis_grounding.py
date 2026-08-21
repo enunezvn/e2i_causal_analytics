@@ -52,12 +52,22 @@ _EMBRYO = LabelConsideration(
 _ALL = (_MONITORING, _SCHEDULE, _INTERRUPTION, _EMBRYO)
 
 
-def _ground(treatment, outcome="persistent_180d", considerations=_ALL, brand="Kisqali"):
+def _ground(
+    treatment,
+    outcome="persistent_180d",
+    considerations=_ALL,
+    brand="Kisqali",
+    label_source="openfda",
+):
+    """Defaults to a label that WAS read. Provenance is load-bearing: an empty
+    consideration list means "checked, none" under openfda and "could not check"
+    under static_fallback, and those must never share a sentence."""
     return ground_analysis(
         resolve_brand_profile(brand),
         outcome=outcome,
         treatment_context=treatment_context_for(brand, treatment),
         label_considerations=considerations,
+        label_source=label_source,
     )
 
 
@@ -135,7 +145,7 @@ def test_a_drug_therapy_analysis_is_grounded_too():
 def test_no_label_considerations_yields_an_honest_empty_grounding():
     """openFDA down, or a label with no parseable Highlights: say nothing rather
     than invent a clinical consideration."""
-    g = _ground("copay_support", considerations=())
+    g = _ground("copay_support", considerations=(), label_source="static_fallback")
     assert g.label_considerations == ()
     assert "could not" in g.note.lower() or "no label" in g.note.lower()
 
@@ -183,7 +193,7 @@ def test_a_label_that_read_fine_but_matched_nothing_is_not_reported_as_unreadabl
 @pytest.mark.unit
 def test_no_considerations_at_all_still_reads_as_could_not_check():
     """The other side of the same split: nothing came back from the label at all."""
-    g = _ground("copay_support", considerations=())
+    g = _ground("copay_support", considerations=(), label_source="static_fallback")
     assert "could not be read" in g.note.lower()
 
 
@@ -210,3 +220,84 @@ def test_a_boxed_warning_is_available_as_a_consideration():
     assert [c.section for c in g.label_considerations] == [BOXED_WARNING_SECTION]
     assert boxed_warning_consideration(None) is None
     assert boxed_warning_consideration("   ") is None
+
+
+# --- codex iter-1 -------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_every_curated_outcome_gets_a_theme():
+    """codex HIGH. `low_gap_180d` (gap-free refill adherence) and `adopted`
+    (prescriber adoption) were omitted, so an adherence analysis — the one most
+    directly about staying on therapy — was grounded on NOTHING while claiming the
+    label could not be read."""
+    from src.services.clinical_context.analysis_grounding import _theme_for
+
+    for outcome in ("persistent_180d", "discontinued_180d", "adherent_180d", "low_gap_180d"):
+        assert _theme_for(outcome) == "persistence", outcome
+    for outcome in ("treatment_initiated", "adopted"):
+        assert _theme_for(outcome) == "initiation", outcome
+
+
+@pytest.mark.unit
+def test_an_adherence_outcome_is_grounded_like_a_persistence_one():
+    g = _ground("copay_support", outcome="low_gap_180d")
+    assert [c.title for c in g.label_considerations]
+    assert "staying on therapy" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_an_unrecognised_outcome_does_not_get_the_starting_therapy_story():
+    """codex HIGH. The theme phrase was a two-way ternary, so an outcome we have no
+    theme for fell through to 'starting therapy' — asserting a story about the
+    analysis that we never established."""
+    g = _ground("copay_support", outcome="some_unmapped_outcome")
+    low = g.note.lower()
+    assert "starting therapy" not in low
+    assert "staying on therapy" not in low
+    # The commercial backdrop clause defaulted to the initiation wording too.
+    assert "requirements for starting" not in low
+    assert "reasons a patient stops" not in low
+
+
+@pytest.mark.unit
+def test_a_label_read_with_no_parseable_items_is_not_reported_as_unreadable():
+    """codex HIGH — the #1767 conflation surviving my own fix for it. An empty
+    consideration list meant 'could not be read', but the provider returns
+    source='openfda' with an empty tuple when the label WAS read and simply carried
+    no parseable Highlights."""
+    g = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(),
+        label_source="openfda",
+    )
+    assert "could not be read" not in g.note.lower()
+    assert "no highlighted" in g.note.lower() or "carries no" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_an_unreachable_label_still_reads_as_could_not_check():
+    g = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(),
+        label_source="static_fallback",
+    )
+    assert "could not be read" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_a_bare_clinical_reduction_does_not_count_as_a_persistence_factor():
+    """codex MEDIUM. The cue list contained bare 'reduction', which matches any
+    clinical reduction ('reduction in tumour size') rather than DOSE reduction."""
+    item = LabelConsideration(
+        title="Efficacy",
+        detail="A reduction in circulating tumour cells was observed.",
+        section=WARNINGS_SECTION,
+        references="5.9",
+    )
+    g = _ground("copay_support", considerations=(item,))
+    assert g.label_considerations == ()

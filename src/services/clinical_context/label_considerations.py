@@ -56,8 +56,17 @@ _SECTION_HEADERS = {
 
 # A Highlights bullet ends at its cross-reference marker. References are one or two
 # levels deep — "( 2 )" is as valid as "( 2.2 , 5.3 , 7.1 )".
+#
+# The INTERNAL WHITESPACE is load-bearing (codex iter-1 HIGH). Accepting any numeric
+# parenthetical made a bullet whose own prose contains one — "Assess patients (2)
+# weeks after dose" — split in half, with "2" misattributed as a label
+# cross-reference: truncated verbatim text plus an invented citation. Measured
+# across the live labels for all three brands, real Highlights references are always
+# spaced ("( 5.1 )") while inline and prose numbers are not ("(5.1)"). Losing a
+# bullet to a formatting change is honest under-reporting; truncating one and citing
+# a section it never named is not.
 _ITEM = re.compile(
-    r"(?P<body>.+?)\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s*\)",
+    r"(?P<body>.+?)\(\s+(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s+\)",
     re.S,
 )
 
@@ -69,6 +78,11 @@ _SUBSECTION = re.compile(r"[^(,\s]\s+\d+\.\d+\s+(?=[A-Z])")
 # A title longer than this is a run-on sentence that happened to contain ": ",
 # not a bullet title.
 _MAX_TITLE_CHARS = 90
+
+# "None." — often repeated, as the Highlights summary and the full section both say
+# it. Carries no consideration; emitting "Contraindications: None" would be an
+# invented clinical item.
+_EMPTY_DETAIL = re.compile(r"(?:none[.\s]*)+|[.\s]*", re.I)
 
 
 @dataclass(frozen=True)
@@ -86,7 +100,11 @@ def _strip_section_header(text: str, section: str) -> str:
     header = _SECTION_HEADERS.get(section)
     if not header:
         return text
-    return re.sub(rf"^\s*\d+\s+{re.escape(header)}\s*", "", text, count=1, flags=re.I)
+    # Whitespace between the header words is arbitrary in the source SPL — matching
+    # literal single spaces let "5  WARNINGS  AND\nPRECAUTIONS" leak into the first
+    # item's title (codex iter-1 MEDIUM).
+    pattern = r"\s+".join(re.escape(word) for word in header.split())
+    return re.sub(rf"^\s*\d+\s+{pattern}\s*", "", text, count=1, flags=re.I)
 
 
 def _highlights_region(text: str, section: str) -> str:
@@ -116,7 +134,10 @@ def parse_label_considerations(text: Optional[str], section: str) -> Tuple[Label
             # rather than inventing a clinical heading for it.
             title, detail = SECTION_DISPLAY.get(section, section), body
         detail = detail.strip()
-        if not detail or detail.strip(". ") == "":
+        # "4 CONTRAINDICATIONS None. None. ( 4 )" carries no consideration. An empty
+        # result is correct; emitting "Contraindications: None" would be an invented
+        # clinical item (codex iter-1 LOW).
+        if not detail or _EMPTY_DETAIL.fullmatch(detail):
             continue
         out.append(
             LabelConsideration(

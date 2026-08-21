@@ -34,10 +34,14 @@ from src.services.clinical_context.label_considerations import LabelConsideratio
 # Outcomes that ask "does the patient STAY on therapy". What matters is the burden
 # of remaining on it: what must be monitored, when treatment is interrupted or
 # reduced, and how demanding the schedule is.
-_PERSISTENCE_OUTCOMES = frozenset({"persistent_180d", "discontinued_180d", "adherent_180d"})
-# Outcomes that ask "does the patient START". What matters is what gates the first
-# dose.
-_INITIATION_OUTCOMES = frozenset({"treatment_initiated"})
+# Kept in step with brand_map._OUTCOME_FRAMING — an outcome missing here is grounded
+# on NOTHING while claiming the label could not be read (codex iter-1 HIGH).
+_PERSISTENCE_OUTCOMES = frozenset(
+    {"persistent_180d", "discontinued_180d", "adherent_180d", "low_gap_180d"}
+)
+# Outcomes that ask "does the patient START" — or, at HCP grain, does the prescriber
+# start prescribing. What matters is what gates the first dose.
+_INITIATION_OUTCOMES = frozenset({"treatment_initiated", "adopted"})
 
 PERSISTENCE_THEME = "persistence"
 INITIATION_THEME = "initiation"
@@ -50,7 +54,7 @@ _PERSISTENCE_CUES = (
     "interrupt",
     "discontinu",
     "dose reduction",
-    "reduction",
+    "dose modification",
     "withhold",
     "tolerability",
     "days off treatment",
@@ -133,9 +137,16 @@ def _note(
     theme: str,
     selected: Sequence[LabelConsideration],
     available: Sequence[LabelConsideration],
+    label_source: str,
 ) -> str:
     outcome_phrase = outcome_framing_for(outcome)
-    theme_phrase = "staying on therapy" if theme == PERSISTENCE_THEME else "starting therapy"
+    # A two-way ternary made an outcome we have NO theme for fall through to the
+    # "starting therapy" story — asserting something about the analysis we never
+    # established (codex iter-1 HIGH).
+    theme_phrase = {
+        PERSISTENCE_THEME: "staying on therapy",
+        INITIATION_THEME: "starting therapy",
+    }.get(theme, "")
     parts: list[str] = []
 
     if selected:
@@ -145,14 +156,23 @@ def _note(
             f"a filtered view, not the complete safety profile — each item cites the label "
             f"section it came from."
         )
-    elif available:
+    elif label_source == "openfda":
         # The label WAS read; it simply carries no highlighted factor phrased around
         # this outcome. "We checked and there is none" is a different claim from "we
         # could not check", and conflating them is the #1767 defect in a new place.
+        # The label WAS read. Whether it carried no parseable Highlights at all, or
+        # carried some that are phrased around a different question, "we checked and
+        # there is none" is a different claim from "we could not check". Conflating
+        # them is the #1767 defect, and it survived my first fix for it here
+        # (codex iter-1 HIGH).
+        detail = (
+            f"none of its highlighted factors are phrased around {outcome_phrase}"
+            if available
+            else "it carries no highlighted factors we can read"
+        )
         parts.append(
-            f"The prescribing information for {profile.drug_name} was read, but none of "
-            f"its highlighted factors are phrased around {outcome_phrase}; the full "
-            f"prescribing information may still bear on it."
+            f"The prescribing information for {profile.drug_name} was read, but {detail}; "
+            f"the full prescribing information may still bear on it."
         )
     else:
         parts.append(
@@ -163,11 +183,12 @@ def _note(
     if treatment_context.kind == "commercial":
         # The #1763 boundary, kept exactly: the label is silent on the lever. What
         # changed is that we no longer stop at saying so.
-        backdrop = (
-            "the reasons a patient stops that have nothing to do with access"
-            if theme == PERSISTENCE_THEME
-            else "the clinical requirements for starting that have nothing to do with access"
-        )
+        backdrop = {
+            PERSISTENCE_THEME: "the reasons a patient stops that have nothing to do with access",
+            INITIATION_THEME: (
+                "the clinical requirements for starting that have nothing to do with access"
+            ),
+        }.get(theme, "the clinical picture that has nothing to do with access")
         parts.append(
             f"{treatment_context.label} is a commercial access lever and the label says "
             f"nothing about it; none of the above is a claim that the label speaks to "
@@ -184,6 +205,7 @@ def ground_analysis(
     outcome: str,
     treatment_context: Optional[TreatmentContext],
     label_considerations: Sequence[LabelConsideration],
+    label_source: str = "static_fallback",
 ) -> AnalysisGrounding:
     """Clinical grounding for one (treatment -> outcome) analysis.
 
@@ -197,6 +219,14 @@ def ground_analysis(
     return AnalysisGrounding(
         label_considerations=selected,
         competitive_context=_competitive_context(profile, theme),
-        note=_note(profile, treatment_context, outcome, theme, selected, label_considerations),
+        note=_note(
+            profile,
+            treatment_context,
+            outcome,
+            theme,
+            selected,
+            label_considerations,
+            label_source,
+        ),
         outcome_theme=theme,
     )

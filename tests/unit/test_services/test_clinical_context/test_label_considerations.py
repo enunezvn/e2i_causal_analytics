@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from src.services.clinical_context.label_considerations import (
+    CONTRAINDICATIONS_SECTION,
     DOSAGE_SECTION,
     WARNINGS_SECTION,
     parse_label_considerations,
@@ -132,20 +133,51 @@ def test_full_text_subsections_are_excluded_from_the_highlights_items():
 
 
 @pytest.mark.unit
-def test_a_section_with_no_highlights_items_yields_nothing_rather_than_garbage():
-    """Kisqali's contraindications section is literally '4 CONTRAINDICATIONS None.'
-    An empty result is correct; inventing an item would not be."""
-    assert parse_label_considerations(
-        "4 CONTRAINDICATIONS None. None. ( 4 )", "contraindications"
-    ) == () or all(
-        i.detail.strip(". ")
-        for i in parse_label_considerations(
-            "4 CONTRAINDICATIONS None. None. ( 4 )", "contraindications"
-        )
-    )
-
-
-@pytest.mark.unit
 def test_empty_or_missing_text_is_handled():
     assert parse_label_considerations("", WARNINGS_SECTION) == ()
     assert parse_label_considerations(None, WARNINGS_SECTION) == ()  # type: ignore[arg-type]
+
+
+# --- codex iter-1 -------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_a_prose_parenthetical_does_not_terminate_an_item():
+    """codex HIGH. Any numeric parenthetical used to end an item, so a bullet whose
+    own prose contains one was cut in half and the prose number was misattributed as
+    a label cross-reference — truncated verbatim text plus an invented citation.
+
+    Measured against the live labels: real Highlights references are always spaced
+    ('( 2.2 , 5.1 )'), while inline/prose numbers are not ('(5.1)'). Losing a bullet
+    is honest under-reporting; truncating one and citing a made-up section is not.
+    """
+    text = (
+        "5 WARNINGS AND PRECAUTIONS Hepatotoxicity: Assess patients (2) weeks after dose "
+        "and monitor liver function. ( 5.1 )"
+    )
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert len(items) == 1, [(i.title, i.references) for i in items]
+    assert items[0].references == "5.1"
+    assert "Assess patients (2) weeks after dose and monitor liver function." in items[0].detail
+
+
+@pytest.mark.unit
+def test_the_section_header_is_stripped_despite_irregular_whitespace():
+    """codex MEDIUM. The header was matched with literal single spaces, so
+    '5  WARNINGS  AND\\nPRECAUTIONS' would leak into the first title."""
+    text = "5  WARNINGS   AND\nPRECAUTIONS Risk of Bleeding: Monitor for bleeding. ( 5.1 )"
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert items[0].title == "Risk of Bleeding"
+    assert "WARNINGS" not in items[0].detail
+
+
+@pytest.mark.unit
+def test_a_none_only_contraindications_section_yields_no_item():
+    """codex LOW. The previous assertion was `x == () or all(...)`, which passes even
+    if the parser emits a bogus 'Contraindications: None' item."""
+    assert (
+        parse_label_considerations(
+            "4 CONTRAINDICATIONS None. None. ( 4 )", CONTRAINDICATIONS_SECTION
+        )
+        == ()
+    )

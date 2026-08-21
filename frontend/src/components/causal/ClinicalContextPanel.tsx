@@ -122,9 +122,10 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           <p className="text-sm font-medium">Clinical context</p>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          Grounds this commercial signal in the brand&rsquo;s clinical reality — its mechanism,
-          the real trial endpoints our outcomes stand in for, and the approved labeling that
-          keeps any read on-label.
+          The brand&rsquo;s clinical reality alongside this analysis — its mechanism, the real
+          trial endpoints our outcomes stand in for, and the approved labeling. The label
+          describes the therapy and its indication; it makes no claim about a commercial
+          lever, and nothing below reads a commercial result as on-label.
         </p>
       </div>
 

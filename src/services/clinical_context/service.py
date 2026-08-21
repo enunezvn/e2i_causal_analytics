@@ -312,6 +312,10 @@ class ClinicalContextService:
             outcome=outcome,
             treatment_context=treatment_context_for(profile.brand, treatment),
             label_considerations=indications.label_considerations,
+            # Provenance, not decoration: an empty list means "the label was read and
+            # carries none" under openfda and "we could not read the label" under the
+            # curated fallback. Those are different claims (#1767).
+            label_source=indications.source,
         )
         grounding_payload: Optional[Dict[str, Any]] = None
         if treatment is not None:
