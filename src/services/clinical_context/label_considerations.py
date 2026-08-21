@@ -54,19 +54,22 @@ _SECTION_HEADERS = {
     CONTRAINDICATIONS_SECTION: "CONTRAINDICATIONS",
 }
 
-# A Highlights bullet ends at its cross-reference marker. References are one or two
-# levels deep — "( 2 )" is as valid as "( 2.2 , 5.3 , 7.1 )".
+# A Highlights bullet ends at its cross-reference marker: "( 2 )", "( 2.2 , 5.3 )".
 #
-# The INTERNAL WHITESPACE is load-bearing (codex iter-1 HIGH). Accepting any numeric
-# parenthetical made a bullet whose own prose contains one — "Assess patients (2)
-# weeks after dose" — split in half, with "2" misattributed as a label
-# cross-reference: truncated verbatim text plus an invented citation. Measured
-# across the live labels for all three brands, real Highlights references are always
-# spaced ("( 5.1 )") while inline and prose numbers are not ("(5.1)"). Losing a
-# bullet to a formatting change is honest under-reporting; truncating one and citing
-# a section it never named is not.
+# What makes a parenthetical a TERMINATOR is POSITION, not spacing. A real reference
+# ends its bullet, so it is followed by the end of the Highlights region or by the
+# next bullet's capitalised title; a number inside the prose ("Assess patients (2)
+# weeks after dose") is followed by lowercase continuation.
+#
+# An earlier version required the internal whitespace real references happen to
+# carry. That protected the prose case but did NOT fail closed (codex iter-2 HIGH):
+# an unspaced terminal reference simply was not a boundary, so the bullet it ended
+# was swallowed into the next one and rendered under the next one's citation —
+# fabricating a label item out of two, attributed to a section it never named. The
+# positional rule handles both spacings and still rejects prose.
 _ITEM = re.compile(
-    r"(?P<body>.+?)\(\s+(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s+\)",
+    r"(?P<body>.+?)\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s*\)"
+    r"(?=\s*$|\s+[A-Z])",
     re.S,
 )
 

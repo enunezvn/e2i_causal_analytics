@@ -181,3 +181,31 @@ def test_a_none_only_contraindications_section_yields_no_item():
         )
         == ()
     )
+
+
+@pytest.mark.unit
+def test_an_unspaced_terminal_reference_does_not_merge_two_bullets():
+    """codex iter-2 HIGH. Requiring spaced references did not FAIL CLOSED: an
+    unspaced terminal ref was simply not a boundary, so the bullet it ended was
+    swallowed into the NEXT one and given the next one's citation. That fabricates a
+    label item out of two, under a reference it never carried — worse than dropping
+    it. A terminal reference is one followed by end-of-region or a new capitalised
+    bullet; inline prose numbers are followed by lowercase."""
+    text = "5 WARNINGS AND PRECAUTIONS A: Keep this. (5.1) B: Monitor next. ( 5.2 )"
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert [(i.title, i.references) for i in items] == [("A", "5.1"), ("B", "5.2")]
+    assert items[0].detail == "Keep this."
+    assert items[1].detail == "Monitor next."
+
+
+@pytest.mark.unit
+def test_inline_prose_numbers_are_still_not_boundaries():
+    """The iter-1 protection must survive the iter-2 fix."""
+    text = (
+        "5 WARNINGS AND PRECAUTIONS Hepatotoxicity: Assess patients (2) weeks after dose "
+        "and monitor liver function. ( 5.1 )"
+    )
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert len(items) == 1, [(i.title, i.references) for i in items]
+    assert items[0].references == "5.1"
+    assert "(2) weeks after dose" in items[0].detail
