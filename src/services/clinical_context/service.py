@@ -71,8 +71,30 @@ _BrandFragmentTuple = Tuple[
 # from a transient PubMed 429 or CT.gov timeout) is reused only briefly so the
 # layer self-heals — the next request after this window re-attempts the live APIs
 # instead of caching a transient failure for the whole process lifetime. A
-# FULLY-LIVE result is cached indefinitely (biomedical facts change slowly).
+# FULLY-LIVE result is reused for the rest of the worker's life (biomedical facts
+# change slowly); that is NOT unbounded — gunicorn runs with `--max-requests 1000
+# --max-requests-jitter 50`, so a worker recycles roughly every 950-1050 requests
+# and takes these dicts with it.
 _FRAGMENT_TTL_DEGRADED_S = 600.0
+
+# THESE CACHES ARE PER-WORKER, AND THAT MAKES LATENCY HERE EASY TO MISREAD (#1768).
+# The API runs `--workers 2`, and every cache below is a plain module-level dict, so
+# each worker holds its own copy. Consequences, in order of how often they bite:
+#
+#   1. A "cold vs warm" latency figure taken against this endpoint really measures
+#      WHICH WORKER ANSWERED, not whether the cache is warm. During #1763
+#      certification a 21.4s call was quoted as a slow warm hit; it was a cold miss
+#      on the other worker. Do not quote timings from this path without accounting
+#      for that — issue enough identical requests to fill every worker first.
+#   2. Two workers can in principle serve different answers for identical requests.
+#      Measured on 2026-08-21 after #1767 landed: 96 identical requests over three
+#      (brand, outcome, treatment) cases, on both warm and freshly-cold caches,
+#      produced ZERO divergence, with the two independent cold fills per case
+#      confirming both workers were actually reached. A shared/Redis cache was
+#      considered and rejected on that measurement — it would add serialization, a
+#      version-namespaced key and a cross-process downgrade guard to a fail-open
+#      path, to fix something not currently observable. If divergence ever does
+#      resurface, re-measure it that way before building the shared cache.
 
 # Per-(brand,disease) cache of the BRAND-level fragments + the monotonic time the
 # entry was stored + whether it is fully live. Keyed by a tuple so every analysis
@@ -131,7 +153,7 @@ class ClinicalContextService:
         cached = _FRAGMENT_CACHE.get(key)
         if cached is not None:
             frags, stored_at, fully_live = cached
-            # Reuse a fully-live result indefinitely; reuse a degraded result only
+            # Reuse a fully-live result for the worker's life; reuse a degraded one only
             # within the self-heal window, else fall through and retry the live APIs.
             if fully_live or (time.monotonic() - stored_at) < _FRAGMENT_TTL_DEGRADED_S:
                 return frags
@@ -145,7 +167,7 @@ class ClinicalContextService:
         assert isinstance(competitors, CompetitorFragment)
         # Competitors are curated by design (the chosen SSOT), so "curated" is the
         # intended live state — it does NOT make the result degraded. Only the
-        # live-API providers gate the fully-live (cache-indefinitely) decision.
+        # live-API providers gate the fully-live (reuse-for-worker-life) decision.
         fully_live = (
             moa.source == "chembl"
             and eps.source == "clinicaltrials.gov"
