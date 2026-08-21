@@ -71,8 +71,39 @@ _BrandFragmentTuple = Tuple[
 # from a transient PubMed 429 or CT.gov timeout) is reused only briefly so the
 # layer self-heals — the next request after this window re-attempts the live APIs
 # instead of caching a transient failure for the whole process lifetime. A
-# FULLY-LIVE result is cached indefinitely (biomedical facts change slowly).
+# FULLY-LIVE result is reused for the rest of the worker's life (biomedical facts
+# change slowly); that is NOT unbounded — gunicorn runs with `--max-requests 1000
+# --max-requests-jitter 50`, and gunicorn ADDS the jitter (`max_requests +
+# randint(0, jitter)`, workers/base.py) rather than spreading it either side, so a
+# worker recycles after 1000-1050 requests and takes these dicts with it.
 _FRAGMENT_TTL_DEGRADED_S = 600.0
+
+# THESE CACHES ARE PER-WORKER, AND THAT MAKES LATENCY HERE EASY TO MISREAD (#1768).
+# The API runs `--workers 2` and every cache below is a plain module-level dict, so
+# each worker holds its own copy. Two consequences:
+#
+#   1. A "cold vs warm" latency figure taken against this endpoint largely measures
+#      WHICH WORKER ANSWERED. During #1763 certification a 21.4s call was quoted as a
+#      slow warm hit; it was a cold miss on the other worker. Never quote a timing
+#      from this path without filling every worker first. Note also that the route
+#      does per-request work OUTSIDE these caches (`_list_dataset_brands` queries
+#      Supabase on every call), so a slow response is not on its own evidence of a
+#      cold cache here.
+#
+#   2. Two workers can in principle serve different answers to one request. Measured
+#      after #1767 landed and NOT reproduced: 96 sequential requests across three
+#      (brand, outcome, treatment) cases, warm and freshly-cold, zero divergence. The
+#      full protocol, the preconditions that reading depends on, and the argument for
+#      rejecting a shared/Redis cache are recorded on #1768 rather than restated here.
+#      That cache would add serialization, a version-namespaced key and a
+#      cross-process downgrade guard to a fail-open path, to fix something not
+#      currently observable — so if divergence ever resurfaces, re-measure it against
+#      the protocol on #1768 before building it.
+#
+# test_one_process_cold_fills_a_repeated_request_exactly_once pins the one part of
+# that reasoning this module owns: a single process exhausts every provider on the
+# FIRST call for a given request shape, so these three dicts cannot fill on different
+# calls and a lone worker cannot cold-fill the same request twice.
 
 # Per-(brand,disease) cache of the BRAND-level fragments + the monotonic time the
 # entry was stored + whether it is fully live. Keyed by a tuple so every analysis
@@ -131,7 +162,7 @@ class ClinicalContextService:
         cached = _FRAGMENT_CACHE.get(key)
         if cached is not None:
             frags, stored_at, fully_live = cached
-            # Reuse a fully-live result indefinitely; reuse a degraded result only
+            # Reuse a fully-live result for the worker's life; reuse a degraded one only
             # within the self-heal window, else fall through and retry the live APIs.
             if fully_live or (time.monotonic() - stored_at) < _FRAGMENT_TTL_DEGRADED_S:
                 return frags
@@ -145,7 +176,7 @@ class ClinicalContextService:
         assert isinstance(competitors, CompetitorFragment)
         # Competitors are curated by design (the chosen SSOT), so "curated" is the
         # intended live state — it does NOT make the result degraded. Only the
-        # live-API providers gate the fully-live (cache-indefinitely) decision.
+        # live-API providers gate the fully-live (reuse-for-worker-life) decision.
         fully_live = (
             moa.source == "chembl"
             and eps.source == "clinicaltrials.gov"
