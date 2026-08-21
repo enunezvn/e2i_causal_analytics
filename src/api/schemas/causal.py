@@ -982,7 +982,9 @@ class CausalEvidence(BaseModel):
     lookup; the leaderboard fan-out does not).
     """
 
-    status: str = Field(..., description="evidence / commercial_lever / unavailable / not_requested")
+    status: str = Field(
+        ..., description="evidence / commercial_lever / unavailable / not_requested"
+    )
     indication_edge: Optional[IndicationEdge] = Field(
         default=None, description="Open Targets drug -> indication edge for this disease."
     )

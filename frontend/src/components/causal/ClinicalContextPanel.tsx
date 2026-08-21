@@ -93,7 +93,7 @@ const TREATMENT_KIND_NOTE: Record<string, string> = {
   clinical_covariate:
     'a patient-state variable used as an observational treatment — the sources below describe the disease context, not a therapy contrast.',
   commercial:
-    'an access and promotion lever — the biomedical sources below describe the therapy and its indication, not this lever.',
+    'an access and promotion lever — the mechanism, endpoints and label below describe the therapy, not this lever. The real-world-evidence search does carry this lever\u2019s own health-services theme when one exists.',
 };
 
 export function ClinicalContextPanel({ context }: { context: ClinicalContext }) {

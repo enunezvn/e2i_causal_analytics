@@ -251,8 +251,12 @@ export function useClinicalContext(
     // their framing and their literature citation.
     queryKey: ['causal', 'clinical-context', brand, outcome, treatment ?? null],
     queryFn: () => getClinicalContext(brand as string, outcome as string, treatment),
-    // Real biomedical facts change slowly; cache aggressively, no auto-refetch.
-    staleTime: 30 * 60 * 1000,
+    // Real biomedical facts change slowly, but a DEGRADED response (an upstream
+    // that was unreachable) self-heals server-side after 10 minutes — holding the
+    // client copy fresh for 30 would show a stale outage for 20 minutes after the
+    // backend had recovered. Match the backend's self-heal window; a fully-live
+    // result is cached server-side anyway, so the refetch is nearly free.
+    staleTime: 10 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
     retry: false,
     ...options,

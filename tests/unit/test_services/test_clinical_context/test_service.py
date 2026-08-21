@@ -426,7 +426,9 @@ class _StubEvidenceProvider:
         self.calls = []
 
     def evidence(self, profile, *, outcome, treatment_context, search_term):
-        self.calls.append((profile.brand, outcome, getattr(treatment_context, "column", None), search_term))
+        self.calls.append(
+            (profile.brand, outcome, getattr(treatment_context, "column", None), search_term)
+        )
         return self._fragment
 
 
@@ -531,9 +533,15 @@ def test_causal_evidence_never_breaks_the_payload():
 def test_causal_evidence_is_cached_per_analysis():
     provider = _StubEvidenceProvider(_evidence_fragment())
     svc = _service_with_evidence(provider)
-    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
-    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
-    svc.get_context("Kisqali", "persistent_180d", treatment="copay_support", include_causal_evidence=True)
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support", include_causal_evidence=True
+    )
     assert len(provider.calls) == 2
 
 
@@ -588,8 +596,12 @@ def test_a_half_degraded_evidence_fragment_self_heals(monkeypatch):
     )
     provider = _StubEvidenceProvider(degraded)
     svc = _service_with_evidence(provider)
-    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
-    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
     assert len(provider.calls) == 2
 
 
@@ -605,7 +617,9 @@ def test_a_brand_level_citation_fallback_is_retried_not_frozen(monkeypatch):
     svc = _service(
         MechanismFragment("CDK4/6 inhibitor", "chembl"),
         _eps(["OS"], "clinicaltrials.gov"),
-        CitationFragment(art, "pubmed_brand", "ribociclib persistence adherence breast cancer real-world"),
+        CitationFragment(
+            art, "pubmed_brand", "ribociclib persistence adherence breast cancer real-world"
+        ),
         counters,
     )
     svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
@@ -628,4 +642,50 @@ def test_evidence_payload_discloses_unavailable_sources():
     ctx = _service_with_evidence(provider).get_context(
         "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
     )
+    assert ctx["causal_evidence"]["sources_unavailable"] == ["open_targets"]
+
+
+def test_a_degraded_evidence_result_never_overwrites_a_complete_one():
+    """codex iter-2 MEDIUM. Two requests can miss the cache together. The slower one
+    must not replace a complete fragment with the degraded one it happened to get
+    from a transient upstream failure — that would serve the outage to everyone for
+    the whole self-heal window even though a good answer already existed."""
+    import time as _time
+
+    import src.services.clinical_context.service as svc_mod
+    from src.services.clinical_context.brand_map import (
+        compose_rwe_search_term,
+        resolve_brand_profile,
+    )
+    from src.services.clinical_context.causal_evidence import CausalEvidenceFragment
+
+    profile = resolve_brand_profile("Kisqali")
+    key = (
+        "Kisqali",
+        "treatment_arm",
+        compose_rwe_search_term(profile, "persistent_180d", "treatment_arm"),
+    )
+    complete = _evidence_fragment()
+    degraded = CausalEvidenceFragment(
+        status="evidence",
+        indication_edge=None,
+        citations=[],
+        note="Open Targets was unreachable.",
+        sources_unavailable=("open_targets",),
+    )
+
+    class _RacingProvider:
+        """Passes the cache check, then the OTHER request finishes first."""
+
+        def evidence(self, profile, *, outcome, treatment_context, search_term):
+            svc_mod._EVIDENCE_CACHE[key] = (complete, _time.monotonic(), True)
+            return degraded
+
+    ctx = _service_with_evidence(_RacingProvider()).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    kept, _stored_at, complete_flag = svc_mod._EVIDENCE_CACHE[key]
+    assert complete_flag is True
+    assert kept.sources_unavailable == ()
+    # The racer still returns what IT measured — it does not lie about its own call.
     assert ctx["causal_evidence"]["sources_unavailable"] == ["open_targets"]

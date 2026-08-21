@@ -120,8 +120,7 @@ def test_each_profile_carries_a_plain_language_disease_search_term():
     under."""
     assert resolve_brand_profile("Kisqali").disease_search_term == "breast cancer"
     assert (
-        resolve_brand_profile("Remibrutinib").disease_search_term
-        == "chronic spontaneous urticaria"
+        resolve_brand_profile("Remibrutinib").disease_search_term == "chronic spontaneous urticaria"
     )
     assert (
         resolve_brand_profile("Fabhalta").disease_search_term

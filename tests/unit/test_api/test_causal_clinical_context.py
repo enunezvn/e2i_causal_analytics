@@ -210,9 +210,7 @@ _ANALYSIS_CTX = {
 @pytest.mark.asyncio
 async def test_endpoint_forwards_the_treatment_to_the_service():
     with (
-        patch.object(
-            causal_routes._clinical_context_service, "get_context"
-        ) as mock_get,
+        patch.object(causal_routes._clinical_context_service, "get_context") as mock_get,
         patch.object(causal_routes, "_list_dataset_brands", return_value=["Kisqali"]),
     ):
         mock_get.return_value = _ANALYSIS_CTX
@@ -427,9 +425,7 @@ async def test_commercial_lever_evidence_state_reaches_the_client_verbatim():
         "note": "Copay support is a commercial access/promotion lever.",
     }
     with (
-        patch.object(
-            causal_routes._clinical_context_service, "get_context", return_value=payload
-        ),
+        patch.object(causal_routes._clinical_context_service, "get_context", return_value=payload),
         patch.object(causal_routes, "_list_dataset_brands", return_value=["Kisqali"]),
     ):
         ctx = await causal_routes.get_clinical_context(

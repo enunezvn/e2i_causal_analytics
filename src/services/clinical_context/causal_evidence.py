@@ -87,6 +87,11 @@ _MAX_CITATIONS = 3
 _EUROPE_PMC_TIMEOUT_S = 6.0
 _OPEN_TARGETS_TIMEOUT_S = 8.0
 _VERIFICATION_BUDGET_S = 12.0
+# Each ACCEPTED citation costs one more PubMed summary call, which lands after the
+# verification check — so three of them could add three client timeouts to a path
+# that looks bounded. Past this, the citation is still surfaced (it was verified),
+# just without its title/journal.
+_SUMMARY_BUDGET_S = 16.0
 
 # A citation clears the bar only when the abstract names BOTH entities — that is
 # exactly what CitationResolver scores 0.5 for (a causal cue adds more on top).
@@ -182,9 +187,7 @@ class _OpenTargetsLike(Protocol):
 
     def search_disease(self, name: str) -> Optional[str]: ...
 
-    def drug_disease_evidence(
-        self, drug_chembl_id: str, disease_efo_id: str
-    ) -> dict[str, Any]: ...
+    def drug_disease_evidence(self, drug_chembl_id: str, disease_efo_id: str) -> dict[str, Any]: ...
 
 
 class _PubMedSearchLike(Protocol):
@@ -267,11 +270,15 @@ class CausalEvidenceProvider:
             # term in FULL (not merely a shared word).
             term = profile.disease_search_term.lower()
             matches = [
-                r for r in rows if term and term == ((r.get("disease") or {}).get("name") or "").lower()
+                r
+                for r in rows
+                if term and term == ((r.get("disease") or {}).get("name") or "").lower()
             ]
         if not matches:
             return None
-        best = max(matches, key=lambda r: _STAGE_ORDER.get(str(r.get("maxClinicalStage") or ""), -1))
+        best = max(
+            matches, key=lambda r: _STAGE_ORDER.get(str(r.get("maxClinicalStage") or ""), -1)
+        )
         disease = best.get("disease") or {}
         stage = str(best.get("maxClinicalStage") or "UNKNOWN")
         return IndicationEdge(
@@ -323,11 +330,17 @@ class CausalEvidenceProvider:
                 continue
             if verdict.overall_confidence < _MIN_CITATION_CONFIDENCE:
                 continue
-            try:
-                article = self._pubmed.fetch_by_pmid(pmid)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("causal-evidence: summary fetch failed for PMID %s: %s", pmid, exc)
-                article = None
+            article = None
+            if time.monotonic() - started < _SUMMARY_BUDGET_S:
+                try:
+                    article = self._pubmed.fetch_by_pmid(pmid)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "causal-evidence: summary fetch failed for PMID %s: %s", pmid, exc
+                    )
+                    article = None
+            else:
+                logger.info("causal-evidence: summary budget exhausted; PMID %s unadorned", pmid)
             out.append(
                 VerifiedCitation(
                     pmid=pmid,
@@ -366,9 +379,13 @@ class CausalEvidenceProvider:
                 status="commercial_lever",
                 note=(
                     f"{treatment_context.label} is a commercial access/promotion lever. "
-                    "Biomedical and regulatory sources describe the therapy and its "
-                    "indication, not this lever, so no clinical evidence is claimed for "
-                    "the treatment side of this analysis."
+                    "Open Targets and the FDA label describe the therapy and its "
+                    "indication, not this lever, so no indication or approval claim is "
+                    "made for the treatment side of this analysis. The real-world-"
+                    "evidence citation above is a different matter: its search carries "
+                    "this lever's own health-services theme when one exists (copay "
+                    "assistance, patient support programmes), so it can legitimately "
+                    "speak to it."
                 ),
             )
         # The indication edge is a claim about the THERAPY. It belongs to an analysis

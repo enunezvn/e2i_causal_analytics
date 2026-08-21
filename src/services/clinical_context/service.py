@@ -243,7 +243,12 @@ class ClinicalContextService:
         # lever has nothing to re-fetch and a fully-answered result is stable.
         if key is not None:
             complete = evidence.status != "unavailable" and not evidence.sources_unavailable
-            _EVIDENCE_CACHE[key] = (evidence, time.monotonic(), complete)
+            # Two requests can miss the cache together; the slower one must not
+            # replace a complete fragment with the degraded one it happened to get
+            # from a transient upstream failure.
+            existing = _EVIDENCE_CACHE.get(key)
+            if not (existing is not None and existing[2] and not complete):
+                _EVIDENCE_CACHE[key] = (evidence, time.monotonic(), complete)
         return evidence
 
     def get_context(
@@ -322,9 +327,7 @@ class ClinicalContextService:
         evidence_payload: Optional[Dict[str, Any]] = None
         if treatment:
             evidence = (
-                self._causal_evidence_for(
-                    profile, outcome, treatment, treatment_ctx, search_term
-                )
+                self._causal_evidence_for(profile, outcome, treatment, treatment_ctx, search_term)
                 if include_causal_evidence
                 else NOT_REQUESTED
             )

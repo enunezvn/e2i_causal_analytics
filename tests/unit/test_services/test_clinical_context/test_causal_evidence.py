@@ -38,9 +38,18 @@ _KISQALI_OT = {
         "indications": {
             "count": 3,
             "rows": [
-                {"disease": {"id": "MONDO_0007254", "name": "breast cancer"}, "maxClinicalStage": "PHASE_3"},
-                {"disease": {"id": "MONDO_0008315", "name": "prostate cancer"}, "maxClinicalStage": "PHASE_1_2"},
-                {"disease": {"id": "MONDO_0011962", "name": "endometrial cancer"}, "maxClinicalStage": "PHASE_2"},
+                {
+                    "disease": {"id": "MONDO_0007254", "name": "breast cancer"},
+                    "maxClinicalStage": "PHASE_3",
+                },
+                {
+                    "disease": {"id": "MONDO_0008315", "name": "prostate cancer"},
+                    "maxClinicalStage": "PHASE_1_2",
+                },
+                {
+                    "disease": {"id": "MONDO_0011962", "name": "endometrial cancer"},
+                    "maxClinicalStage": "PHASE_2",
+                },
             ],
         },
     }
@@ -68,7 +77,9 @@ _FABHALTA_OT = {
 
 
 class _FakeOpenTargets:
-    def __init__(self, drug_id="CHEMBL3545110", disease_id="MONDO_0007254", payload=None, boom=None):
+    def __init__(
+        self, drug_id="CHEMBL3545110", disease_id="MONDO_0007254", payload=None, boom=None
+    ):
         self._drug_id = drug_id
         self._disease_id = disease_id
         self._payload = payload if payload is not None else _KISQALI_OT
@@ -113,7 +124,9 @@ class _FakeResolver:
         self._verdicts = verdicts or {}
         self.calls = []
 
-    def verify_citation(self, identifier, *, identifier_kind="pmid", subject_name, object_name, **kw):
+    def verify_citation(
+        self, identifier, *, identifier_kind="pmid", subject_name, object_name, **kw
+    ):
         self.calls.append((identifier, subject_name, object_name))
         verdict = self._verdicts.get(identifier)
         if verdict is not None:
@@ -277,9 +290,7 @@ def test_the_literature_search_uses_the_analysis_query():
         treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
         search_term="ribociclib breast cancer persistence real-world",
     )
-    assert [term for term, _ in pubmed.terms] == [
-        "ribociclib breast cancer persistence real-world"
-    ]
+    assert [term for term, _ in pubmed.terms] == ["ribociclib breast cancer persistence real-world"]
 
 
 @pytest.mark.unit
@@ -558,9 +569,7 @@ def test_a_row_with_no_disease_cannot_match_a_missing_disease_id():
             },
         }
     }
-    frag = _provider(
-        open_targets=_FakeOpenTargets(disease_id=None, payload=malformed)
-    ).evidence(
+    frag = _provider(open_targets=_FakeOpenTargets(disease_id=None, payload=malformed)).evidence(
         profile,
         outcome="persistent_180d",
         treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
@@ -636,3 +645,52 @@ def test_the_real_provider_wiring_constructs():
     assert callable(provider._open_targets.search_drug)
     assert callable(provider._pubmed.search_pmids)
     assert callable(provider._resolver.verify_citation)
+
+
+@pytest.mark.unit
+def test_the_commercial_lever_note_does_not_contradict_the_literature_search():
+    """codex iter-2 HIGH. brand_map deliberately gives copay/PSP their own
+    health-services literature themes, and the RWE search DOES surface papers about
+    them (a ribociclib patient-access-programme study, measured live). Saying
+    'biomedical sources do not describe this lever' contradicts the payload sitting
+    next to it. Only the indication/approval sources are silent on the lever."""
+    profile = resolve_brand_profile("Kisqali")
+    frag = _provider().evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        search_term="ribociclib breast cancer persistence copay assistance real-world",
+    )
+    assert frag.status == "commercial_lever"
+    note = frag.note.lower()
+    assert "open targets" in note and "label" in note
+    # It must NOT claim the literature is silent on the lever.
+    assert "biomedical sources describe the therapy" not in note
+    assert "real-world" in note
+
+
+@pytest.mark.unit
+def test_a_summary_fetch_is_skipped_when_the_budget_is_gone(monkeypatch):
+    """codex iter-2 MEDIUM. Each verified citation costs one more PubMed summary
+    call AFTER the verification budget was checked, so three of them could add three
+    client timeouts to a bounded-looking path."""
+    import src.services.clinical_context.causal_evidence as ev_mod
+
+    class _SlowSummaryPubMed(_FakePubMedSearch):
+        def fetch_by_pmid(self, pmid):
+            raise AssertionError("must not fetch a summary with no budget left")
+
+    profile = resolve_brand_profile("Kisqali")
+    monkeypatch.setattr(ev_mod, "_SUMMARY_BUDGET_S", 0.0)
+    frag = _provider(
+        pubmed=_SlowSummaryPubMed(pmids=["1"]),
+        resolver=_FakeResolver({"1": _verdict("1", 0.9)}),
+    ).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    # The citation is still surfaced — it was verified — just without its summary.
+    assert [c.pmid for c in frag.citations] == ["1"]
+    assert frag.citations[0].title == "PMID 1"

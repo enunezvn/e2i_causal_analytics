@@ -319,6 +319,8 @@ describe('ClinicalContextPanel — causal evidence (#1763)', () => {
       status: 'evidence',
       indication_edge: {
         predicate: 'associated_with',
+        drug_id: 'CHEMBL3545110',
+        drug_name: 'RIBOCICLIB',
         disease_id: 'MONDO_0007254',
         disease_name: 'breast cancer',
         max_clinical_stage: 'PHASE_3',
@@ -336,6 +338,7 @@ describe('ClinicalContextPanel — causal evidence (#1763)', () => {
           source: 'pubmed+europepmc',
         },
       ],
+      sources_unavailable: [],
       note: 'Open Targets records the clinical stage per indication and lags the FDA label.',
     },
   };
@@ -363,6 +366,7 @@ describe('ClinicalContextPanel — causal evidence (#1763)', () => {
         status: 'commercial_lever',
         indication_edge: null,
         citations: [],
+        sources_unavailable: [],
         note: 'Copay support is a commercial access/promotion lever. Biomedical and regulatory sources describe the therapy and its indication, not this lever.',
       },
     };
@@ -378,6 +382,7 @@ describe('ClinicalContextPanel — causal evidence (#1763)', () => {
         status: 'not_requested',
         indication_edge: null,
         citations: [],
+        sources_unavailable: [],
         note: 'Analysis-specific evidence is gathered when the analysis is opened.',
       },
     };

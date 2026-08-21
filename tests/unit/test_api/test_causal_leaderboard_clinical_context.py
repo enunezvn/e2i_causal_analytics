@@ -39,7 +39,9 @@ _PAYLOAD = {
 @pytest.mark.asyncio
 async def test_attach_clinical_context_happy_path(monkeypatch):
     monkeypatch.setattr(
-        causal_routes._clinical_context_service, "get_context", lambda b, o, treatment=None: _PAYLOAD
+        causal_routes._clinical_context_service,
+        "get_context",
+        lambda b, o, treatment=None: _PAYLOAD,
     )
     eff = DiscoveredEffect(
         treatment="treatment_arm",

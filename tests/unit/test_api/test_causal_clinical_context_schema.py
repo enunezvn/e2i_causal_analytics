@@ -176,4 +176,6 @@ def test_clinical_context_validates_a_raw_service_payload_with_the_new_keys():
     assert revalidated.treatment_context.label == "Copay support"
     assert revalidated.analysis_framing == "This analysis estimates the effect of X on Y."
     assert revalidated.real_world_evidence is not None
-    assert revalidated.real_world_evidence.search_term == "ribociclib breast cancer copay assistance"
+    assert (
+        revalidated.real_world_evidence.search_term == "ribociclib breast cancer copay assistance"
+    )
