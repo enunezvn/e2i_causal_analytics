@@ -21,6 +21,23 @@ brands, 2026-08-21): each section opens with a numbered ALL-CAPS header, then th
 Highlights bullets as ``Title: detail ( refs )``, then the full prescribing text
 beginning at a ``5.1 Title`` subsection. Only the Highlights are parsed — the full
 text runs to many thousands of characters per subsection.
+
+KNOWN RESIDUAL, stated rather than papered over. openFDA returns ONE FLAT STRING per
+section — there is no Highlights field and no markup to recover — so bullet
+boundaries have to be inferred from the text. One shape is genuinely undecidable: a
+numbered list marker in prose is byte-identical to a real terminal citation when the
+number happens to name the enclosing section. Inside section 2, "Confirm baseline
+ECG. (2) Patients must have adequate counts" cannot be told apart from a bullet
+ending at its own "( 2 )" reference. Where it occurred the bullet would be truncated
+and carry a reference that is not its own.
+
+Not reachable on anything we serve: across 8 live labels / 24 sections every bare
+section-naming candidate was a genuine terminal reference, never a list marker. It
+is also DETECTED rather than merely hoped about — the #1775 live certification
+re-fetches each label and asserts that every rendered detail is verbatim label text
+AND that its reference is printed adjacent to it, which fails loudly on exactly this
+shape. Inventing a rule to guess between the two would cost real bullets to defend
+against something the live labels do not do.
 """
 
 from __future__ import annotations
@@ -93,7 +110,15 @@ _CANDIDATE = re.compile(r"\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\
 # never advanced, and both bullets came out as one under B's citation (codex iter-5
 # HIGH). The section-number invariant cannot catch that one — 5.1 does name section
 # 5, it simply does not own the words it was attached to.
-_BOUNDARY_AFTER = re.compile(r"\s*[A-Z]")
+#
+# The optional glyph is not a guessed shape, it is live data. Palbociclib delimits
+# its Highlights with U+2022, so every reference there is followed by " • Title".
+# Requiring a capital saw prose and merged ALL THREE of its warnings into one item
+# under the third one's citation — a fabricated label item on a marketed oncology
+# drug. Found only by widening the sample from 3 brands to 8; the 3 I had happened
+# to use no glyph.
+_BULLET_GLYPHS = "\u2022\u25aa\u25e6\u00b7\u2023*"
+_BOUNDARY_AFTER = re.compile(rf"\s*[{_BULLET_GLYPHS}]?\s*[A-Z]")
 
 # Fail-closed, and deliberately INDEPENDENT of the boundary heuristic above.
 #
@@ -102,15 +127,30 @@ _BOUNDARY_AFTER = re.compile(r"\s*[A-Z]")
 # a citation it never carried. Rather than keep guessing spacings, assert the
 # invariant instead — a body that STILL CONTAINS a reference naming its own section
 # has swallowed a boundary by construction, whatever the spacing was, so it cannot be
-# attributed to the citation at its end. Measured against the live labels for all
-# three brands: no real Highlights bullet's prose cites its own section inline, so
-# this drops nothing real.
+# attributed to the citation at its end.
+#
+# Why this costs no real content, measured rather than asserted (codex iter-6 raised
+# it as a MEDIUM risk): labels DO carry inline cross-references in Highlights prose —
+# letrozole's contraindications carry four, eculizumab's one. Every one points at
+# ANOTHER section ("[see Use in Specific Populations ( 8.1 )]" inside section 4),
+# which is what a cross-reference IS; a section does not cross-reference itself. This
+# guard fires only on a SELF-reference, so the two do not overlap. Checked across 8
+# live labels / 24 sections: zero items lost.
 _INTERNAL_REFERENCE = _CANDIDATE
 
 # `\s*`, not `\s+`: "(5.1)5.1 Full Text Begins" hid the boundary from a
 # whitespace-requiring pattern, and the prescribing text behind it was then pulled
 # into a consideration under the wrong citation (codex iter-3 HIGH).
-_SUBSECTION = re.compile(r"[^(,\s]\s*\d+\.\d+\s+(?=[A-Z])")
+#
+# The preceding character is a LOOKBEHIND rather than a consumed character, with the
+# start of the region as an alternative to it (codex iter-6 HIGH). Consuming a
+# character meant the pattern could not match at position 0, so a section that opens
+# straight into its full text with no Highlights summary at all — "5 WARNINGS AND
+# PRECAUTIONS 5.1 Serious Infections ..." — found no cutoff and had its ENTIRE
+# prescribing text rendered as a single "consideration". Not reachable on any of the
+# 8 live labels checked (0 of 24 sections), but the cost when it happens is thousands
+# of characters of full text presented as a Highlights bullet.
+_SUBSECTION = re.compile(r"(?:(?<=[^(,\s])|^)\s*\d+\.\d+\s+(?=[A-Z])")
 
 # A title longer than this is a run-on sentence that happened to contain ": ",
 # not a bullet title.
@@ -149,14 +189,19 @@ def _strip_section_header(text: str, section: str) -> str:
     # literal single spaces let "5  WARNINGS  AND\nPRECAUTIONS" leak into the first
     # item's title (codex iter-1 MEDIUM).
     pattern = r"\s+".join(re.escape(word) for word in header.split())
-    return re.sub(rf"^\s*\d+\s+{pattern}\s*", "", text, count=1, flags=re.I)
+    # The number may be written "2" or "2." — everolimus uses the period, and
+    # requiring "<digits><whitespace>" left its whole header inside the first item's
+    # detail ("2. DOSAGE AND ADMINISTRATION Do not combine ..."). A section heading
+    # rendered as label guidance is invented clinical content.
+    return re.sub(rf"^\s*\d+\s*[.:]?\s*{pattern}\s*", "", text, count=1, flags=re.I)
 
 
 def _highlights_region(text: str, section: str) -> str:
     body = _strip_section_header(text, section)
     match = _SUBSECTION.search(body)
-    # +1 keeps the character the lookbehind-free pattern consumed.
-    return body[: match.start() + 1] if match else body
+    # `match.start()` is already the true cut point now that the preceding character
+    # is a lookbehind rather than consumed — no +1 to add it back.
+    return body[: match.start()] if match else body
 
 
 def parse_label_considerations(text: Optional[str], section: str) -> Tuple[LabelConsideration, ...]:
@@ -220,7 +265,9 @@ def _swallowed_a_boundary(body: str, section: str) -> bool:
 
 
 def _consideration(body: str, references: str, section: str) -> Optional[LabelConsideration]:
-    body = " ".join(body.split())
+    # A leading bullet glyph is the delimiter that started this item, not part of the
+    # clinical text — left in place it became the title ("• Neutropenia").
+    body = " ".join(body.split()).lstrip(_BULLET_GLYPHS + " ")
     if not body:
         return None
     title, separator, detail = body.partition(": ")

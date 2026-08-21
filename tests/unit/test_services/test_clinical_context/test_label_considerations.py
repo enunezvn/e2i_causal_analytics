@@ -213,18 +213,43 @@ def test_inline_prose_numbers_are_still_not_boundaries():
 
 
 @pytest.mark.unit
-def test_a_prose_number_followed_by_a_capital_is_not_a_citation():
-    """codex iter-3 HIGH. The positional rule alone still accepted a prose
-    parenthetical that happened to be followed by a capitalised word, truncating the
-    bullet and citing '(1)' as its label section."""
+def test_a_prose_number_followed_by_a_capital_is_never_emitted_as_a_citation():
+    """codex iter-3 HIGH, and its own iter-6 LOW: the assertions did not check what
+    the name claimed.
+
+    The parser DOES treat '(1)' as a boundary here — the shape is identical to a real
+    terminal reference — and rejects it only because '1' does not name section 5. The
+    pending text is then dropped, so the bullet loses its lead and is re-titled by its
+    section. The old test asserted just that the suffix survived, which was true
+    whether or not the truncation happened, so it could not fail.
+
+    Pinning the ACTUAL behaviour, which is the safe resolution of an undecidable
+    input: the prose number is never rendered as a citation, and no text is ever
+    attributed to it. Truncation is under-reporting; misattribution is not.
+    """
     text = (
         "5 WARNINGS AND PRECAUTIONS A: Assess patients (1) Patients received therapy "
         "and monitor labs. ( 5.1 )"
     )
     items = parse_label_considerations(text, WARNINGS_SECTION)
     assert len(items) == 1, [(i.title, i.detail, i.references) for i in items]
-    assert items[0].references == "5.1"
+    assert items[0].references == "5.1", "the prose '(1)' must never become a citation"
     assert "Patients received therapy" in items[0].detail
+    # What the old assertions hid: the lead IS dropped, and the item is honestly
+    # re-titled by its section rather than keeping a title it no longer leads.
+    assert items[0].title == "Warnings and precautions"
+    assert "Assess patients" not in items[0].detail
+
+
+@pytest.mark.unit
+def test_a_section_that_opens_straight_into_its_full_text_yields_nothing():
+    """codex iter-6 HIGH. `_SUBSECTION` CONSUMED the character before the subsection
+    number, so it could not match at position 0. A section carrying no Highlights
+    summary at all found no cutoff, and its entire prescribing text — thousands of
+    characters — was emitted as one 'consideration'. An honest nothing is the only
+    correct answer: there are no Highlights bullets to report."""
+    text = "5 WARNINGS AND PRECAUTIONS 5.1 Serious Infections Monitor patients closely. ( 5.1 )"
+    assert parse_label_considerations(text, WARNINGS_SECTION) == ()
 
 
 @pytest.mark.unit
@@ -347,3 +372,50 @@ def test_a_body_that_swallowed_this_sections_own_reference_is_dropped():
     for item in items:
         assert "Keep this." not in item.detail, (item.title, item.detail, item.references)
         assert "5.1" not in item.detail
+
+
+@pytest.mark.unit
+def test_bullet_glyphs_delimit_highlights_items():
+    """A REAL merge on a REAL label, found by widening the empirical sample.
+
+    Palbociclib's Highlights bullets are delimited by U+2022, so every terminal
+    reference is followed by ' • Title' rather than ' Title'. The boundary rule
+    required a capital, saw prose, and merged ALL THREE warnings into one item titled
+    '• Neutropenia' carrying the THIRD one's citation ('5.3 , 8.1 , 8.3') — a
+    fabricated label item, on a marketed oncology drug, of exactly the kind this
+    module exists to prevent.
+
+    The self-reference invariant did catch it and drop it, which is the honest
+    failure. But three real warnings vanishing is a poor answer when the delimiter is
+    unambiguous: a bullet glyph is a bullet boundary, not a shape to guess at.
+    """
+    text = (
+        "5 WARNINGS AND PRECAUTIONS "
+        "• Neutropenia: Monitor complete blood count prior to start of therapy. ( 2.2 , 5.1 ) "
+        "• Interstitial Lung Disease: Interrupt immediately if suspected. ( 5.2 ) "
+        "• Embryo-Fetal Toxicity: Can cause fetal harm. ( 5.3 , 8.1 , 8.3 )"
+    )
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert [(i.title, i.references) for i in items] == [
+        ("Neutropenia", "2.2 , 5.1"),
+        ("Interstitial Lung Disease", "5.2"),
+        ("Embryo-Fetal Toxicity", "5.3 , 8.1 , 8.3"),
+    ], [(i.title, i.references) for i in items]
+    # the glyph is a delimiter, not part of the clinical text
+    for item in items:
+        assert "•" not in item.title and "•" not in item.detail
+    assert items[0].detail == "Monitor complete blood count prior to start of therapy."
+
+
+@pytest.mark.unit
+def test_a_section_header_numbered_with_a_period_is_still_stripped():
+    """Found on the live everolimus label. The strip required '<digits><space>', so
+    '2. DOSAGE AND ADMINISTRATION' kept its header and rendered it as clinical text:
+    the first dosing item read '2. DOSAGE AND ADMINISTRATION Do not combine ...'.
+    A section heading presented as label guidance is invented content."""
+    text = "2. DOSAGE AND ADMINISTRATION Do not combine the two forms. ( 2.1 )"
+    items = parse_label_considerations(text, DOSAGE_SECTION)
+    assert len(items) == 1, [(i.title, i.detail) for i in items]
+    assert items[0].detail == "Do not combine the two forms."
+    assert "DOSAGE AND ADMINISTRATION" not in items[0].detail
+    assert "DOSAGE AND ADMINISTRATION" not in items[0].title
