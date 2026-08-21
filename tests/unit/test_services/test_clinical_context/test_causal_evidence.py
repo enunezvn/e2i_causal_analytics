@@ -895,3 +895,71 @@ def test_pubmed_returning_no_candidates_at_all_stays_a_settled_absence():
     )
     assert frag.citations == []
     assert frag.sources_unavailable == ()
+
+
+# --- codex iter-2: the REASON must be as honest as the source ------------------
+
+
+@pytest.mark.unit
+def test_a_local_verification_failure_does_not_claim_the_budget_ran_out():
+    """codex iter-2 HIGH. Fixing the source-label conflation introduced a
+    reason-label one: `checks_incomplete` had a single note asserting "the
+    verification budget ran out", and it was also set when `verify_citation` blew up
+    locally. A `ValueError` in our own code is not a budget timeout, and we did not
+    observe one."""
+    profile = resolve_brand_profile("Kisqali")
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1"]), resolver=_BoomResolver()).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.checks_incomplete is True
+    assert "budget" not in frag.note.lower()
+    assert "verification step failed" in frag.note.lower()
+
+
+@pytest.mark.unit
+def test_a_patient_state_treatment_is_not_told_its_missing_edge_came_back_empty():
+    """codex iter-2 HIGH. A `clinical_covariate` NEVER queries Open Targets — that is
+    the #1763 fix. So reporting "no indication edge came back from the public
+    sources" describes a question we deliberately never asked as one that returned
+    empty."""
+    profile = resolve_brand_profile("Kisqali")
+    resolver = _FakeResolver({p: _unresolved(p, error=None) for p in ("1", "2")})
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "disease_stage"),
+        search_term="ribociclib metastatic breast cancer persistence",
+    )
+    assert frag.status == "unavailable"
+    assert "no indication edge" not in frag.note.lower()
+    assert "was sought" in frag.note.lower() or "sought for it" in frag.note.lower()
+
+
+@pytest.mark.unit
+def test_the_unavailable_return_discloses_the_outage_it_reports():
+    """The `status="unavailable"` return built its note separately from the main one
+    and never included the outage sentence — so it could report
+    `sources_unavailable=("open_targets",)` while its note said, flatly, that
+    nothing came back. The note contradicted the payload beside it. Both returns now
+    share one disclosure."""
+    from src.data.kg.open_targets import OpenTargetsError
+
+    profile = resolve_brand_profile("Kisqali")
+    resolver = _FakeResolver({p: _unresolved(p, error=None) for p in ("1",)})
+    frag = _provider(
+        open_targets=_FakeOpenTargets(boom=OpenTargetsError("502")),
+        pubmed=_FakePubMedSearch(pmids=["1"]),
+        resolver=resolver,
+    ).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.status == "unavailable"
+    assert frag.sources_unavailable == ("open_targets",)
+    assert "unreachable" in frag.note.lower()
+    assert "unknown, not absent" in frag.note.lower()

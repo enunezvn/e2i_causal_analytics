@@ -109,14 +109,25 @@ _SOURCE_DISPLAY = {
     "europe_pmc": "Europe PMC",
 }
 
-# Said when WE stopped early rather than when an upstream failed. It must not name
-# a source: accusing a healthy Europe PMC is the same dishonesty inverted (codex
-# iter-1 HIGH, #1767).
-_INCOMPLETE_NOTE = (
-    "The literature check did not finish for this analysis — the verification "
-    "budget ran out before every candidate was checked — so what is missing below "
-    "is unknown, not absent."
-)
+
+def _incomplete_note(budget: int, local: int) -> str:
+    """Said when WE stopped early rather than when an upstream failed.
+
+    It must not name a source — accusing a healthy Europe PMC is the same dishonesty
+    inverted (codex iter-1 HIGH) — and it must not assert a reason we did not
+    observe: a local verification bug is not a budget timeout (codex iter-2 HIGH).
+    """
+    if budget and local:
+        why = "the verification budget ran out and a verification step failed"
+    elif budget:
+        why = "the verification budget ran out before every candidate was checked"
+    else:
+        why = "a verification step failed before it could return"
+    return (
+        f"The literature check did not finish for this analysis — {why} — so what "
+        f"is missing below is unknown, not absent."
+    )
+
 
 _FDA_LABEL_NOTE = (
     "Open Targets records the clinical stage per indication and lags the FDA "
@@ -325,23 +336,28 @@ class CausalEvidenceProvider:
 
     def _citations(
         self, profile: BrandClinicalProfile, search_term: str
-    ) -> tuple[List[VerifiedCitation], int, int]:
+    ) -> tuple[List[VerifiedCitation], int, int, int]:
         """Verified literature for this analysis, plus WHY anything is missing.
 
-        Returns ``(citations, unreachable, unchecked)``:
+        Returns ``(citations, unreachable, unchecked_budget, unchecked_local)``:
 
-        - ``unreachable`` — Europe PMC RAISED for this candidate. A real outage.
-        - ``unchecked``  — we never got an answer for a different reason: our own
-          wall-clock budget stopped us, or the verification call blew up locally.
-          Unfinished, but no upstream is at fault.
+        - ``unreachable``      — Europe PMC RAISED for this candidate. A real outage.
+        - ``unchecked_budget`` — our own wall-clock budget stopped us before this
+          candidate was examined.
+        - ``unchecked_local``  — the verification call blew up locally. The resolver
+          swallows ``EuropePMCError`` itself, so what escapes is not evidence that
+          the upstream is down.
 
-        Both mean "not a settled absence", and they must stay apart: reporting a
-        healthy Europe PMC as unreachable is the same dishonesty inverted.
+        All three mean "not a settled absence", and they must stay apart. Reporting a
+        healthy Europe PMC as unreachable is the same dishonesty inverted, and so is
+        telling the analyst the budget ran out when a local bug is what actually
+        stopped us.
         """
         pmids = self._pubmed.search_pmids(search_term, retmax=_MAX_CANDIDATE_PMIDS)
         out: List[VerifiedCitation] = []
         unreachable = 0
-        unchecked = 0
+        unchecked_budget = 0
+        unchecked_local = 0
         started = time.monotonic()
         for attempt, pmid in enumerate(pmids):
             if len(out) >= _MAX_CITATIONS:
@@ -363,7 +379,7 @@ class CausalEvidenceProvider:
                 # Everything from this candidate on was never examined. Truncating
                 # the search is not the same as searching and finding nothing — but
                 # it is OUR budget that stopped, so Europe PMC is not accused.
-                unchecked += len(pmids) - attempt
+                unchecked_budget += len(pmids) - attempt
                 break
             try:
                 verdict = self._resolver.verify_citation(
@@ -377,8 +393,9 @@ class CausalEvidenceProvider:
             except Exception as exc:  # noqa: BLE001 — best-effort; skip this candidate
                 logger.warning("causal-evidence: verification failed for PMID %s: %s", pmid, exc)
                 # The resolver swallows EuropePMCError itself, so what escapes here
-                # is not evidence that the upstream is down. Unfinished, not accused.
-                unchecked += 1
+                # is not evidence that the upstream is down. Unfinished, not accused —
+                # and not a budget timeout either.
+                unchecked_local += 1
                 continue
             # An unresolved abstract means "could not check", NOT "checked and weak" —
             # it must never reach the panel as a weak-but-shown citation. The verdict's
@@ -413,7 +430,7 @@ class CausalEvidenceProvider:
                     source="pubmed+europepmc",
                 )
             )
-        return out, unreachable, unchecked
+        return out, unreachable, unchecked_budget, unchecked_local
 
     # -- the public entry point -------------------------------------------------
 
@@ -465,8 +482,11 @@ class CausalEvidenceProvider:
                 edge = None
                 unavailable.append("open_targets")
         checks_incomplete = False
+        incomplete_note = ""
         try:
-            citations, lit_unreachable, lit_unchecked = self._citations(profile, search_term)
+            citations, lit_unreachable, lit_budget, lit_local = self._citations(
+                profile, search_term
+            )
         except Exception as exc:  # noqa: BLE001 — best-effort; literature is optional
             logger.warning("causal-evidence: literature search failed for %r: %s", search_term, exc)
             citations = []
@@ -480,20 +500,53 @@ class CausalEvidenceProvider:
                 if lit_unreachable:
                     # Europe PMC actually failed. Name it.
                     unavailable.append("europe_pmc")
-                elif lit_unchecked:
+                elif lit_budget or lit_local:
                     # We stopped early ourselves. Unfinished, but nobody is at fault.
                     checks_incomplete = True
+                    incomplete_note = _incomplete_note(lit_budget, lit_local)
+
+        # WHY anything is missing, composed ONCE and used by both returns. Building
+        # it per-return is how the "unavailable" path came to omit the outage
+        # disclosure entirely while still reporting sources_unavailable — a note
+        # contradicting the payload beside it (codex iter-2 HIGH).
+        disclosure: List[str] = []
+        if unavailable:
+            # An outage must not read as a settled absence.
+            names = [_SOURCE_DISPLAY.get(src, src) for src in unavailable]
+            verb = "was" if len(names) == 1 else "were"
+            disclosure.append(
+                f"{' and '.join(names)} {verb} unreachable for this analysis, so what "
+                f"is missing below is unknown, not absent."
+            )
+        if checks_incomplete:
+            disclosure.append(incomplete_note)
+        # A patient-state treatment never asks Open Targets at all, so the absence of
+        # an edge is BY DESIGN. Saying "no indication edge came back" would report a
+        # question we deliberately never asked as one that returned empty.
+        is_covariate = treatment_context.kind == "clinical_covariate"
+
         if edge is None and not citations:
-            return CausalEvidenceFragment(
-                status="unavailable",
-                note=(
-                    _INCOMPLETE_NOTE
-                    if checks_incomplete
+            parts = list(disclosure)
+            if not parts:
+                # Nothing failed and nothing was truncated: this really is a settled
+                # absence, and we can say so.
+                parts.append(
+                    "No verifiable literature came back for this analysis from the public sources."
+                    if is_covariate
                     else (
                         "No indication edge or verifiable literature came back for this "
                         "analysis from the public sources."
                     )
-                ),
+                )
+            if is_covariate:
+                parts.append(
+                    f"{treatment_context.label} is a patient-state variable used as an "
+                    f"observational treatment, not a therapy, so no drug-indication "
+                    f"claim was sought for it."
+                )
+            return CausalEvidenceFragment(
+                status="unavailable",
+                note=" ".join(parts),
                 sources_unavailable=tuple(unavailable),
                 checks_incomplete=checks_incomplete,
             )
@@ -501,7 +554,7 @@ class CausalEvidenceProvider:
             f"Literature searched as: {search_term!r}; a citation is shown only when its "
             f"abstract names both {profile.drug_name} and {profile.disease_search_term}."
         ]
-        if treatment_context.kind == "clinical_covariate":
+        if is_covariate:
             notes.insert(
                 0,
                 f"{treatment_context.label} is a patient-state variable used as an "
@@ -512,18 +565,7 @@ class CausalEvidenceProvider:
             )
         if edge is not None and edge.predicate != "treats":
             notes.insert(0, _FDA_LABEL_NOTE)
-        if checks_incomplete:
-            # We ran out of our own budget. Unfinished — but no source is accused.
-            notes.insert(0, _INCOMPLETE_NOTE)
-        if unavailable:
-            # An outage must not read as a settled absence.
-            names = [_SOURCE_DISPLAY.get(src, src) for src in unavailable]
-            verb = "was" if len(names) == 1 else "were"
-            notes.insert(
-                0,
-                f"{' and '.join(names)} {verb} unreachable for this analysis, so what "
-                f"is missing below is unknown, not absent.",
-            )
+        notes = disclosure + notes
         return CausalEvidenceFragment(
             status="evidence",
             indication_edge=edge,
