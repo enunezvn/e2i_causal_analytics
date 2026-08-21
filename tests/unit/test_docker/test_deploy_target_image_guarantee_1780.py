@@ -407,3 +407,195 @@ def test_fallback_warning_names_the_local_build_cost() -> None:
     assert "LOCAL-BUILD" in fallback.upper(), (
         "the warning must say the pull may take the local-build path: " + fallback.strip()
     )
+
+
+# --------------------------------------------------------------------------- #
+# 5. `ensure-main-image`'s PROBE — the decision, executed
+#
+# The wiring assertions above prove the job exists and is gated correctly. They say
+# nothing about what it DECIDES, and the decision is the whole point: `needed` gates
+# the checkout + both build steps, and `sha` is what those steps check out and tag.
+# A probe that answers `false` when an image is genuinely missing reintroduces #1780
+# in full, silently, and the job still reports success.
+#
+# Executed against stubbed `git`/`docker` rather than asserted structurally, because
+# every interesting case here is a BRANCH, not a string.
+#
+# NOTE: deliberately NOT run through `_run_shell`, which prepends `set -e`. The probe
+# ships with `set -uo pipefail` and no `-e` on purpose — its fail-soft contract is that
+# a hiccup degrades to `needed=false` instead of failing the deploy. Running it under
+# `set -e` would test a script we do not ship and would hide exactly that property.
+# --------------------------------------------------------------------------- #
+_PROBE_GIT_STUB = """#!/usr/bin/env bash
+case "$1" in
+  fetch)     exit "${STUB_FETCH_RC:-0}" ;;
+  rev-parse) printf '%s\\n' "${STUB_MAIN_SHA:-}" ;;
+esac
+exit 0
+"""
+
+# `docker manifest inspect <registry>/<repo>:<tag>` succeeds only when <repo> is
+# listed in $STUB_PRESENT — i.e. that image really has a manifest at that tag.
+_PROBE_DOCKER_STUB = """#!/usr/bin/env bash
+if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then
+  _ref="$3"; _repo="${_ref##*/}"; _repo="${_repo%%:*}"
+  case " ${STUB_PRESENT:-} " in *" $_repo "*) exit 0 ;; *) exit 1 ;; esac
+fi
+exit 0
+"""
+
+
+def _extract_probe_run() -> str:
+    """The SHIPPED `run:` body of ensure-main-image's probe step, verbatim."""
+    wf = _load_workflow()
+    steps = wf["jobs"][ENSURE_JOB]["steps"]
+    for step in steps:
+        if step.get("id") == "probe":
+            return str(step["run"])
+    raise AssertionError(f"{ENSURE_JOB} has no step with `id: probe`")
+
+
+def _run_probe(tmp_path: Path, **env: str) -> tuple[int, str, dict[str, str]]:
+    """Execute the shipped probe; return (rc, stdout, parsed $GITHUB_OUTPUT)."""
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    for name, stub in (("docker", _PROBE_DOCKER_STUB), ("git", _PROBE_GIT_STUB)):
+        p = stub_bin / name
+        p.write_text(stub)
+        p.chmod(0o755)
+
+    out_file = tmp_path / "gh_output"
+    out_file.touch()
+    runner = tmp_path / "probe.sh"
+    runner.write_text(_extract_probe_run())
+
+    proc = subprocess.run(
+        ["bash", str(runner)],
+        env={
+            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "GITHUB_OUTPUT": str(out_file),
+            "REGISTRY": "ghcr.io",
+            "IMAGE_NAME": "owner/e2i-api",
+            "IMAGE_NAME_FRONTEND": "owner/e2i-frontend",
+            **env,
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    outputs: dict[str, str] = {}
+    for line in out_file.read_text().splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            outputs[k] = v  # last write wins, as GitHub does
+    return proc.returncode, proc.stdout, outputs
+
+
+BOTH = "e2i-api e2i-frontend"
+
+
+@pytest.mark.parametrize(
+    ("trigger", "main_sha", "present", "expect_needed", "why"),
+    [
+        (
+            SHA_A,
+            SHA_A,
+            "",
+            "false",
+            "main has not moved: this run just pushed both images, so probing GHCR "
+            "would be a wasted round-trip against a tag we know exists",
+        ),
+        (
+            SHA_A,
+            SHA_B,
+            BOTH,
+            "false",
+            "main moved but that sha is already fully built (its own run beat us) — "
+            "rebuilding would burn a runner for nothing",
+        ),
+        (
+            SHA_A,
+            SHA_B,
+            "e2i-frontend",
+            "true",
+            "api missing: the droplet's image_exists() requires BOTH, so guaranteeing "
+            "only the frontend leaves the walk rejecting this sha anyway",
+        ),
+        (
+            SHA_A,
+            SHA_B,
+            "e2i-api",
+            "true",
+            "frontend missing — same reason, mirrored",
+        ),
+        (
+            SHA_A,
+            SHA_B,
+            "",
+            "true",
+            "the actual #1780 case: a path-filtered merge nobody ever built",
+        ),
+    ],
+)
+def test_probe_decides_needed_from_what_is_actually_published(
+    tmp_path: Path,
+    trigger: str,
+    main_sha: str,
+    present: str,
+    expect_needed: str,
+    why: str,
+) -> None:
+    """`needed` must track real manifest presence, per repo.
+
+    RED before the fix: there is no ensure-main-image job at all.
+    """
+    rc, _stdout, outputs = _run_probe(
+        tmp_path, TRIGGER_SHA=trigger, STUB_MAIN_SHA=main_sha, STUB_PRESENT=present
+    )
+    assert rc == 0, "the probe must never fail the run — it is a best-effort guarantee"
+    assert outputs.get("needed") == expect_needed, why
+
+
+def test_probe_publishes_the_resolved_main_sha_not_the_trigger(tmp_path: Path) -> None:
+    """`sha` is consumed by the checkout + both build steps.
+
+    If it echoed TRIGGER_SHA the job would cheerfully rebuild and re-tag the sha that
+    was ALREADY built, leave origin/main's sha still missing, and report success — the
+    #1780 failure with an extra build bolted on.
+    """
+    _rc, _stdout, outputs = _run_probe(
+        tmp_path, TRIGGER_SHA=SHA_A, STUB_MAIN_SHA=SHA_B, STUB_PRESENT=""
+    )
+    assert outputs.get("sha") == SHA_B, (
+        "the probe must publish the sha it RESOLVED, not the one this run was triggered by"
+    )
+
+
+def test_probe_is_fail_soft_when_it_cannot_resolve_main(tmp_path: Path) -> None:
+    """A broken `git fetch` must degrade to the pre-#1780 behaviour, not block a deploy.
+
+    Blocking production because a probe hiccuped trades a slow deploy for NO deploy.
+    The step must still exit 0, still publish a usable `sha`, and say why in the log so
+    the give-up is visible rather than silent.
+    """
+    rc, stdout, outputs = _run_probe(
+        tmp_path, TRIGGER_SHA=SHA_A, STUB_MAIN_SHA=SHA_B, STUB_FETCH_RC="1"
+    )
+    assert rc == 0, "a fetch failure must not fail the job"
+    assert outputs.get("needed") == "false", "give up, do not guess that a build is needed"
+    assert outputs.get("sha") == SHA_A, (
+        "downstream steps still read `sha`; it must fall back to the trigger sha rather "
+        "than the empty string a failed `rev-parse` would leave"
+    )
+    assert "WARN" in stdout, "a silent give-up is indistinguishable from a no-op probe"
+
+
+def test_probe_names_every_missing_image_in_the_log(tmp_path: Path) -> None:
+    """The operator-facing half: when this fires, which image was missing must be
+    readable from the log. #1780 cost hours precisely because `manifest unknown`
+    scrolled past with no indication of which sha or repo it referred to."""
+    _rc, stdout, _outputs = _run_probe(
+        tmp_path, TRIGGER_SHA=SHA_A, STUB_MAIN_SHA=SHA_B, STUB_PRESENT="e2i-api"
+    )
+    assert f"MISSING: ghcr.io/owner/e2i-frontend:{SHA_B}" in stdout
+    assert f"present: ghcr.io/owner/e2i-api:{SHA_B}" in stdout
