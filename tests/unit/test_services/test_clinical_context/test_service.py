@@ -933,3 +933,69 @@ def test_grounding_is_null_not_an_empty_object_when_there_is_nothing_to_ground(m
         "Kisqali", "persistent_180d", treatment="copay_support"
     )
     assert ctx["analysis_grounding"] is None, ctx["analysis_grounding"]
+
+
+def test_one_process_cold_fills_a_repeated_request_exactly_once():
+    """Every cache this service owns fills on the FIRST call for a given request
+    shape -- no dict fills later than the others.
+
+    This pins the invariant that licenses the #1768 measurement. That measurement
+    counted SLOW responses to identical sequential requests and read the count as
+    the number of worker processes reached, on the reasoning that one process
+    cannot cold-fill the same key twice. The codex audit of #1786 was right that
+    the reasoning has a second exit: if `_FRAGMENT_CACHE`, `_CITATION_CACHE` and
+    `_EVIDENCE_CACHE` could fill on DIFFERENT calls, a single worker would also
+    produce two slow responses and the count would prove nothing about workers.
+
+    So assert it here, in-process, where worker count is fixed at one: after the
+    first call every provider is already at its final call count, and it stays
+    there. A future change that defers any fragment to a later request breaks
+    this test rather than silently invalidating the measurement in the comment
+    above the caches in service.py.
+    """
+    counters = {
+        "moa": {"n": 0},
+        "ep": {"n": 0},
+        "cite": {"n": 0},
+        "ind": {"n": 0},
+        "comp": {"n": 0},
+    }
+    art = PubMedArticle(pmid="35642282", title="RWE", journal="J", doi="10.1/x")
+    evidence = _StubEvidenceProvider(_evidence_fragment())
+    svc = ClinicalContextService(
+        mechanism_provider=_StubProvider(
+            MechanismFragment("CDK4/6 inhibitor", "chembl"), counters["moa"]
+        ),
+        endpoints_provider=_StubProvider(_eps(["OS"], "clinicaltrials.gov"), counters["ep"]),
+        citation_provider=_StubProvider(CitationFragment(art, "pubmed"), counters["cite"]),
+        indications_provider=_StubProvider(
+            IndicationsFragment(["BC"], None, None, "openfda"), counters["ind"]
+        ),
+        competitor_provider=_StubProvider(
+            CompetitorFragment(["Ibrance (palbociclib)"], 1, "curated"), counters["comp"]
+        ),
+        causal_evidence_provider=evidence,
+    )
+    call = {
+        "brand": "Kisqali",
+        "outcome": "persistent_180d",
+        "treatment": "treatment_arm",
+        "include_causal_evidence": True,
+    }
+
+    svc.get_context(**call)
+    after_first = {k: v["n"] for k, v in counters.items()}
+    after_first["evidence"] = len(evidence.calls)
+
+    # Positive control for THIS test: the first call must actually have exercised
+    # every provider, otherwise "nothing grew afterwards" is vacuous.
+    assert all(n == 1 for n in after_first.values()), after_first
+
+    for _ in range(5):
+        svc.get_context(**call)
+
+    after_all = {k: v["n"] for k, v in counters.items()}
+    after_all["evidence"] = len(evidence.calls)
+    # Nothing cold-filled after the first call, so a second slow response in one
+    # process is not reachable by this route.
+    assert after_all == after_first, after_all
