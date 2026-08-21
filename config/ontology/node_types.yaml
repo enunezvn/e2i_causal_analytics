@@ -366,11 +366,16 @@ node_types:
         type: enum
         required: true
         unique: true
-        # 21-agent architecture aligned with domain_vocabulary.yaml Section 2
+        # 22-agent architecture aligned with domain_vocabulary.yaml Section 2
+        # #1779: this is an ENUMERATION, not just a cross-reference — it was
+        # missing cohort_profiler like every other roster, and
+        # tests/integration/test_ontology/test_vocabulary_enum_sync.py asserts
+        # SECTION 2 ⊆ this list, so fixing SECTION 2 alone turns that test red.
         values:
-          # Tier 0: ML Foundation (8 agents)
+          # Tier 0: ML Foundation (9 agents)
           - scope_definer
           - cohort_constructor
+          - cohort_profiler
           - data_preparer
           - feature_analyzer
           - model_selector

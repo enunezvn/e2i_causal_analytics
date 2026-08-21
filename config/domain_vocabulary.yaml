@@ -242,13 +242,13 @@ payer_categories:
 
 
 # =============================================================================
-# SECTION 2: AGENT ARCHITECTURE (21 Agents, 6 Tiers)
+# SECTION 2: AGENT ARCHITECTURE (22 Agents, 6 Tiers)
 # =============================================================================
 
 agent_tiers:
   description: "Agent tier hierarchy"
   values:
-    - tier_0_ml_foundation    # 8 agents - ML lifecycle
+    - tier_0_ml_foundation    # 9 agents - ML lifecycle
     - tier_1_coordination     # 2 agents - Orchestrator + Tool Composer
     - tier_2_causal           # 3 agents - Causal analytics
     - tier_3_monitoring       # 4 agents - Drift, experiments & health
@@ -256,12 +256,16 @@ agent_tiers:
     - tier_5_self_improvement # 2 agents - Learning & feedback
 
 agents:
-  description: "All 21 agents with tier assignments"
+  description: "All 22 agents with tier assignments"
 
-  # Tier 0: ML Foundation (8 agents)
+  # Tier 0: ML Foundation (9 agents)
+  # #1779: cohort_profiler — enabled and dispatched since d841d87b2 — was absent
+  # here. VocabularyRegistry.get_agents()/get_agent_names() serve these lists at
+  # runtime, so the omission was a hole in a live lookup, not a documentation typo.
   tier_0_ml_foundation:
     - scope_definer
     - cohort_constructor
+    - cohort_profiler
     - data_preparer
     - feature_analyzer
     - model_selector
@@ -832,7 +836,12 @@ semantic_graph_entity_types:
   agent:
     description: "E2I AI Agent"
     id_field: "agent_name"
-    note: "See SECTION 2 for agent values (18-agent architecture)"
+    # #1779: this used to read "(18-agent architecture)". That is not a dated
+    # record like the version_history entry at the foot of the file — it is a
+    # live pointer, and it was describing SECTION 2 with a count SECTION 2 has
+    # not had since v4.0.0. A pointer does not need to restate what it points
+    # at, so the count is gone rather than bumped: it can only rot again.
+    note: "See SECTION 2 for agent values"
     vocabulary_reference: "agents"
 
 # -----------------------------------------------------------------------------

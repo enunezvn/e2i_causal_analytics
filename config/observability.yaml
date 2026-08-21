@@ -338,12 +338,25 @@ causal_discovery:
 # ─────────────────────────────────────────────────────────────────────────────
 # Tier-specific observability settings
 
+# #1779: these lists are the fifth agent roster in the repo and had drifted from
+# src/agents/factory.py::AGENT_REGISTRY_CONFIG by three names — cohort_constructor
+# and cohort_profiler (tier 0) and experiment_monitor (tier 3). Restored, and now
+# pinned by tests/unit/test_agents/test_config_roster_ssot_1779.py.
+#
+# This is NOT a sampling change. `ObservabilityConfig.get_agent_tier()` and
+# `.get_sample_rate()` — the only readers of this block — have zero production
+# call sites; `OpikConnector` loads this file but consumes only `opik:` and
+# `sampling:` (src/mlops/opik_connector.py:129-140), and stamps span tiers from
+# its own hardcoded map. So the three agents were not being sampled at the
+# fallback rate instead of their tier rate; nothing was reading the block at all.
 agent_tiers:
   tier_0:                                  # ML Foundation
     sample_rate: 0.5
     detailed_logging: false
     agents:
       - scope_definer
+      - cohort_constructor
+      - cohort_profiler
       - data_preparer
       - feature_analyzer
       - model_selector
@@ -372,6 +385,7 @@ agent_tiers:
     agents:
       - drift_monitor
       - experiment_designer
+      - experiment_monitor
       - health_score
 
   tier_4:                                  # ML Predictions
