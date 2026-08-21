@@ -586,10 +586,70 @@ def test_word_separated_references_and_footnote_markers():
             item.detail,
         )
 
+    # codex iter-12 HIGH: this half USED to be "for item in footnoted: assert
+    # 'P<0.05' not in item.title" — and the fixture emits ZERO items, so it passed
+    # without ever exercising the thing it named. Vacuous in the exact shape this
+    # file keeps getting caught by: asserting an absence over an empty collection.
     footnoted = parse_label_considerations(
         "5 WARNINGS AND PRECAUTIONS A: In Study 1 (N=123), response was assessed. (5.1) "
         "*P<0.05 versus control. B: Monitor next. ( 5.2 )",
         WARNINGS_SECTION,
     )
-    for item in footnoted:
-        assert "P<0.05" not in item.title, (item.title, item.detail)
+    # POSITIVE CONTROL first: the same text WITHOUT the footnote must parse, or the
+    # assertions below prove nothing about footnotes.
+    clean = parse_label_considerations(
+        "5 WARNINGS AND PRECAUTIONS A: In Study 1 (N=123), response was assessed. (5.1) "
+        "B: Monitor next. ( 5.2 )",
+        WARNINGS_SECTION,
+    )
+    assert [(i.title, i.references) for i in clean] == [("A", "5.1"), ("B", "5.2")], [
+        (i.title, i.references) for i in clean
+    ]
+    # With the footnote present the honest outcome is that BOTH bullets are dropped:
+    # '*' is no longer a delimiter, so '(5.1)' is not a boundary, the bullets merge,
+    # and the self-reference guard drops the merge. Stated plainly rather than left
+    # to an assertion that cannot fail. Corrupting B's title with footnote text —
+    # which is what recognising '*' would do — is the outcome being refused.
+    assert footnoted == (), [(i.title, i.references, i.detail) for i in footnoted]
+
+
+@pytest.mark.unit
+def test_a_see_prefixed_reference_drops_rather_than_merges():
+    """codex iter-12 HIGH. Real SPL writes "(see 5.1)". `_CANDIDATE` cannot match it
+    (the word), and `_is_reference_group` rejected it as prose (alphabetic), so the
+    guard stayed silent and the bullets MERGED — the one failure this module refuses.
+
+    "see" joins "and"/"or" as a word the guard looks past. Note the asymmetry that is
+    deliberate: the guard sees through it, `_CANDIDATE` still does not, so the bullet
+    DROPS rather than being attributed to a reference whose form we have never
+    verified against a real label. Under-reporting over invention.
+    """
+    items = parse_label_considerations(
+        "5 WARNINGS AND PRECAUTIONS A: Keep this. (see 5.1) B: Monitor next. ( 5.4 )",
+        WARNINGS_SECTION,
+    )
+    for item in items:
+        assert not ("Keep this" in item.detail and "Monitor next" in item.detail), (
+            item.title,
+            item.references,
+            item.detail,
+        )
+
+
+@pytest.mark.unit
+def test_word_separated_terminal_references_are_read_not_just_survived():
+    """codex iter-12 MEDIUM. Adding "or" to the guard stopped "( 5.1 or 5.2 )" from
+    MERGING, but the section then parsed to nothing at all, because `_CANDIDATE`
+    still could not see the reference. Never-merge was satisfied; the bullets were
+    still lost, and my commit message implied they were being read.
+
+    Widening `_CANDIDATE` is additive — it can only make a reference visible — so
+    both bullets are now read under their own citations.
+    """
+    items = parse_label_considerations(
+        "5 WARNINGS AND PRECAUTIONS A: Keep this. ( 5.1 or 5.2 ) B: Monitor next. ( 5.4 )",
+        WARNINGS_SECTION,
+    )
+    assert [(i.title, i.references) for i in items] == [("A", "5.1 or 5.2"), ("B", "5.4")], [
+        (i.title, i.references, i.detail) for i in items
+    ]

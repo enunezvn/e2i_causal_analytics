@@ -420,3 +420,36 @@ def test_a_cue_trapped_inside_an_initiation_clause_is_not_persistence():
         label_source="openfda",
     ).label_considerations
     assert "QT Interval Prolongation" in [c.title for c in init]
+
+
+@pytest.mark.unit
+def test_an_unmapped_outcome_blames_our_mapping_not_the_label():
+    """codex iter-12 HIGH. The note had three branches and none of them fit an
+    outcome we never mapped, so it fell into the one for "the label was read".
+
+    It then said "none of its highlighted factors are phrased around tolerability" —
+    a claim about the LABEL — when `_select` had returned nothing because
+    `_theme_for` produced no theme and relevance was never evaluated at all. With an
+    item literally saying "Dose interruption may be required based on individual
+    safety and tolerability" sitting in the input, the sentence is not merely
+    unearned, it is false.
+
+    The gap is in OUR mapping. Say that.
+    """
+    item = LabelConsideration(
+        title="Dosage and administration",
+        detail="Dose interruption may be required based on individual safety and tolerability.",
+        section=DOSAGE_SECTION,
+        references="2.2",
+    )
+    note = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="tolerability",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(item,),
+        label_source="openfda",
+    ).note.lower()
+    assert "none of its highlighted factors" not in note, note
+    assert "was read, but" not in note, note
+    # it must name the real reason: we never mapped this outcome
+    assert "not one we have mapped" in note or "unmapped" in note or "not mapped" in note, note

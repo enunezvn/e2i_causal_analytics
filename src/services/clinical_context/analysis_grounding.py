@@ -183,7 +183,19 @@ def _note(
     }.get(theme, "")
     parts: list[str] = []
 
-    if selected:
+    if not theme:
+        # NONE of the branches below fit an outcome we never mapped, and it used to
+        # fall into the one for "the label was read", claiming "none of its
+        # highlighted factors are phrased around <outcome>". That is a statement about
+        # the LABEL, made when `_select` never evaluated relevance at all because
+        # `_theme_for` produced no theme — false outright whenever a relevant factor
+        # is sitting in the input (codex iter-12 HIGH). The gap is in our mapping.
+        parts.append(
+            f"{outcome_phrase.capitalize()} is not one we have mapped to a clinical "
+            f"question, so no label factors were selected for it. That is a gap in our "
+            f"mapping, not a statement about what the {profile.drug_name} label contains."
+        )
+    elif selected:
         parts.append(
             f"Label factors bearing on {theme_phrase}, selected from the prescribing "
             f"information for {profile.drug_name} by relevance to {outcome_phrase}. This is "

@@ -903,3 +903,33 @@ def test_grounding_survives_the_api_response_model():
     first = grounding["label_considerations"][0]
     assert first["references"] and first["detail"] and first["source"] == "openfda"
     assert grounding["competitive_context"]
+
+
+@pytest.mark.unit
+def test_grounding_is_null_not_an_empty_object_when_there_is_nothing_to_ground(monkeypatch):
+    """codex iter-12 LOW. `treatment is not None` gated the payload, so a grounding
+    with no considerations, no competitive context and no note shipped as an empty
+    OBJECT while the schema and the TS type both document `null` for "no scenario to
+    ground". Not user-visible — the panel declines to render it — but a wire contract
+    that disagrees with its own documentation is the next defect waiting for a
+    consumer who believes the documentation.
+
+    Exercised through the SERVICE, not by asserting a dataclass default. The first
+    version of this test did the latter and proved nothing, which is the precise
+    failure shape this round was about.
+    """
+    import src.services.clinical_context.service as svc
+    from src.services.clinical_context.analysis_grounding import AnalysisGrounding
+
+    service = _svc_with_label_considerations()
+    # POSITIVE CONTROL: the same call yields a populated object before we empty it,
+    # so a later `is None` cannot pass just because the path went missing.
+    populated = service.get_context("Kisqali", "persistent_180d", treatment="copay_support")
+    assert populated["analysis_grounding"] is not None
+    assert populated["analysis_grounding"]["label_considerations"]
+
+    monkeypatch.setattr(svc, "ground_analysis", lambda *a, **k: AnalysisGrounding())
+    ctx = _svc_with_label_considerations().get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support"
+    )
+    assert ctx["analysis_grounding"] is None, ctx["analysis_grounding"]

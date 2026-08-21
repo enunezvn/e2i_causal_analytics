@@ -144,7 +144,7 @@ _SECTION_NUMBERS = {
 # combination left that produced a MERGE (codex iter-8 HIGH). Widening what counts as
 # a candidate is additive: it can only make a reference visible, never hide one. That
 # is why it is safe where the spaced-form rule was not.
-_REF_SEPARATOR = r"(?:\s*[,\u2010-\u2015-]\s*)"
+_REF_SEPARATOR = r"(?:\s*[,\u2010-\u2015-]\s*|\s+(?:and|or)\s+)"
 _CANDIDATE = re.compile(rf"\(\s*(?P<refs>\d+(?:\.\d+)?(?:{_REF_SEPARATOR}\d+(?:\.\d+)?)*)\s*\)")
 
 # A candidate that ends the region, or is followed by the next bullet's capitalised
@@ -216,10 +216,16 @@ _TRAILING_PERIOD = re.compile(r"\s*\.")
 # prose alone.
 _BRACKETED = re.compile(r"[(\[][^()\[\]]*\d[^()\[\]]*[)\]]")
 _NUMBER = re.compile(r"\d+(?:\.\d+)*")
-# The words real reference lists use as separators: "( 5.1 and 5.3 )", "( 5.1 or
-# 5.2 )". Deliberately just these two — "to" would swallow alpelisib's "(2 to less
-# than 18 years of age)", which is the prose this check exists to spare.
-_WORD_SEPARATOR = re.compile(r"\b(?:and|or)\b", re.I)
+# Words that can appear inside a real reference group without making it prose:
+# "( 5.1 and 5.3 )", "( 5.1 or 5.2 )", "(see 5.1)". Deliberately just these three —
+# "to" would swallow alpelisib's "(2 to less than 18 years of age)", which is exactly
+# the prose this check exists to spare.
+#
+# "see" is asymmetric ON PURPOSE. The guard looks past it, so "(see 5.1)" DROPS its
+# bullet instead of merging it forward (codex iter-12 HIGH); `_CANDIDATE` still does
+# not match it, so we never attribute a bullet to a reference form no live label has
+# been observed to use terminally. Under-reporting over invention.
+_WORD_SEPARATOR = re.compile(r"\b(?:and|or|see)\b", re.I)
 _ALPHABETIC = re.compile(r"[A-Za-z]")
 
 # `\s*`, not `\s+`: "(5.1)5.1 Full Text Begins" hid the boundary from a

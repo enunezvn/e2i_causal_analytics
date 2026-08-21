@@ -318,7 +318,17 @@ class ClinicalContextService:
             label_source=indications.source,
         )
         grounding_payload: Optional[Dict[str, Any]] = None
-        if treatment is not None:
+        # `treatment is not None` is necessary but not sufficient. An uncurated
+        # treatment yields a grounding with no considerations, no competitive context
+        # and no note, and we were shipping that as an EMPTY OBJECT while the schema
+        # and the TS type both document `null` for "no scenario to ground". The panel
+        # happened not to render it, so nothing user-visible was wrong — but a wire
+        # contract that disagrees with its own documentation is the next defect
+        # waiting for a consumer who trusts the docs (codex iter-12 LOW).
+        has_grounding = bool(
+            grounding.label_considerations or grounding.competitive_context or grounding.note
+        )
+        if treatment is not None and has_grounding:
             grounding_payload = {
                 "label_considerations": [
                     {
