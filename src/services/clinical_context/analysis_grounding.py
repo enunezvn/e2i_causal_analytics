@@ -115,7 +115,19 @@ def _earns_theme(consideration: LabelConsideration, theme: str) -> bool:
     """
     cues = _PERSISTENCE_CUES if theme == PERSISTENCE_THEME else _INITIATION_CUES
     other = _INITIATION_CUES if theme == PERSISTENCE_THEME else ()
-    for sentence in _SENTENCE.split(f"{consideration.title}. {consideration.detail}"):
+    # The title JOINS the first sentence rather than becoming one of its own.
+    #
+    # As its own sentence it escaped scoping entirely: "ECG Monitoring" carries the
+    # persistence cue with no initiation cue beside it, so a bullet that only gates
+    # STARTING therapy earned "bearing on staying on therapy" — the very claim this
+    # function exists to withhold, bypassed through the heading (codex iter-15 HIGH).
+    #
+    # A title is a heading: it introduces the bullet's first sentence, and belongs
+    # inside that sentence's scope. Measured across the three curated brands, this
+    # changes no real selection (6/3, 3/1, 2/0 either way).
+    sentences = _SENTENCE.split(consideration.detail) or [""]
+    sentences[0] = f"{consideration.title} {sentences[0]}"
+    for sentence in sentences:
         lowered = sentence.lower()
         if any(cue in lowered for cue in cues) and not any(cue in lowered for cue in other):
             return True

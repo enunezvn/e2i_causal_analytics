@@ -470,3 +470,60 @@ def test_an_unmapped_outcome_is_named_readably_not_as_a_dict_key():
     ).note
     assert "Trx_volume" not in note, note
     assert "Trx volume is not one we have mapped" in note, note
+
+
+@pytest.mark.unit
+def test_a_cue_in_the_TITLE_cannot_bypass_sentence_scoping():
+    """codex iter-15 HIGH, on both the code and my test for it.
+
+    `_earns_theme` scanned "{title}. {detail}", making the title its OWN sentence. A
+    title like "ECG Monitoring" then carried the persistence cue with no initiation
+    cue beside it, so a bullet that only gates STARTING therapy earned "bearing on
+    staying on therapy" — the exact claim sentence scoping was added to prevent,
+    bypassed through the heading.
+
+    My regression test could not catch it: its fixture title is "QT Interval
+    Prolongation", which contains no cue, so the title path was never exercised. A
+    near-miss of the same kind as the panel copy — the test proved one shape of title
+    was safe and its docstring claimed all of them were.
+
+    A title is a HEADING: it introduces the bullet's first sentence rather than
+    standing as a claim of its own. Measured across the three curated brands, scoping
+    it that way changes no real selection (6/3, 3/1, 2/0 either way).
+    """
+    gate_titled_like_persistence = LabelConsideration(
+        title="ECG Monitoring",
+        detail="Monitor electrocardiograms prior to initiation of treatment.",
+        section=WARNINGS_SECTION,
+        references="5.1",
+    )
+    picked = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(gate_titled_like_persistence,),
+        label_source="openfda",
+    )
+    assert [c.title for c in picked.label_considerations] == [], [
+        c.title for c in picked.label_considerations
+    ]
+    # POSITIVE CONTROL: the same title with ongoing monitoring in the body IS
+    # persistence, so the assertion above is not passing because titles stopped
+    # counting entirely.
+    with_ongoing = LabelConsideration(
+        title="ECG Monitoring",
+        detail=(
+            "Monitor electrocardiograms prior to initiation of treatment. "
+            "Repeat ECGs at Day 14 and monitor electrolytes at the beginning of each cycle."
+        ),
+        section=WARNINGS_SECTION,
+        references="5.1",
+    )
+    kept = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(with_ongoing,),
+        label_source="openfda",
+    )
+    assert [c.title for c in kept.label_considerations] == ["ECG Monitoring"]
