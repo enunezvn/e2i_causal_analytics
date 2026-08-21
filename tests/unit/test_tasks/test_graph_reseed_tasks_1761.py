@@ -263,24 +263,76 @@ def test_successful_reseed_releases_the_lock_with_a_token_compare(wired) -> None
     assert args == (grt.RESEED_LOCK_KEY, token)
 
 
-def test_a_failing_seed_step_is_reported_not_swallowed(wired) -> None:
+def test_a_failing_step_errors_even_when_the_count_recovered(wired) -> None:
+    """codex iter-1 MEDIUM: a non-zero count is not proof the heal worked.
+
+    ``seed_falkordb.py`` is CREATE-based with no transaction, so a step that dies
+    halfway leaves a PARTIAL curated core. If that were reported as Celery SUCCESS,
+    every later tick would read count > 0, return "ok", and the sentinel would go
+    permanently blind on a graph the page renders incompletely — the reseed that
+    produced it is the only moment the state is visible.
+    """
     ctx = wired(counts=[0, 0, 41], returncodes=[1, 0])
 
-    result = graph_emptiness_sentinel.run()
+    with pytest.raises(GraphReseedError) as excinfo:
+        graph_emptiness_sentinel.run()
 
-    assert result["status"] == "reseeded_with_errors"
-    assert result["curated_node_count"] == 41
-    failed = [step for step in result["steps"] if step["returncode"] != 0]
-    assert [step["script"] for step in failed] == ["seed_falkordb.py"]
+    message = str(excinfo.value)
+    assert "41 curated node(s)" in message, "the operator needs the count that was left"
+    assert "seed_falkordb.py" in message, "the operator needs to know WHICH step failed"
+    assert "PARTIAL" in message
     assert len(ctx.runner.calls) == 2, "a failed structural seed must not abort the sync"
+    assert ctx.redis.eval_calls, "lock must be released before the error propagates"
+
+
+def test_probe_credentials_match_what_the_subprocess_will_use(monkeypatch) -> None:
+    """codex iter-1 LOW: the probe and the seed subprocess must resolve the SAME
+    credential, or the sentinel measures one server and heals another.
+
+    ``scripts/seed_falkordb.py`` lets FALKORDB_PASSWORD outrank a password embedded
+    in FALKORDB_URL (its pre-#1761 behaviour, which its two existing callers rely
+    on). Under secret rotation a stale URL password would otherwise win here while
+    the explicit var won in the subprocess.
+    """
+    for name in ("FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT", "FALKORDB_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+
+    # The container shape: FALKORDB_URL is the only var worker_light sets.
+    monkeypatch.setenv("FALKORDB_URL", "redis://:urlpw@falkordb:6379/0")
+    assert grt._falkordb_conn() == ("falkordb", 6379, "urlpw")
+
+    # Explicit var wins, exactly as the seed subprocess resolves it.
+    monkeypatch.setenv("FALKORDB_PASSWORD", "explicitpw")
+    assert grt._falkordb_conn() == ("falkordb", 6379, "explicitpw")
+
+    # No URL: discrete vars, in-network default port.
+    monkeypatch.delenv("FALKORDB_URL")
+    monkeypatch.setenv("FALKORDB_HOST", "falkordb")
+    monkeypatch.setenv("FALKORDB_PORT", "6379")
+    assert grt._falkordb_conn() == ("falkordb", 6379, "explicitpw")
+
+
+def test_graph_name_defaults_to_the_graph_the_api_reads(monkeypatch) -> None:
+    """worker_light sets none of FALKORDB_GRAPH_NAME/HOST/PORT/PASSWORD (verified in
+    the running container), so this default IS the production target. It must match
+    ``src/api/dependencies/falkordb_client.py``'s default or the sentinel would
+    guard a graph nothing renders."""
+    monkeypatch.delenv("FALKORDB_GRAPH_NAME", raising=False)
+    assert grt._graph_name() == "e2i_causal"
+
+    client_source = (REPO_ROOT / "src" / "api" / "dependencies" / "falkordb_client.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")' in client_source
 
 
 def test_a_hung_seed_script_is_a_recorded_failure_not_an_escape(wired, monkeypatch) -> None:
     """A subprocess timeout must not skip the remaining step or the post-verify.
 
     If TimeoutExpired propagated, the causal sync would never run, the step
-    record would be discarded, and the task would fail with a traceback that
-    says nothing about whether the graph recovered.
+    record would be discarded, and the task would fail with a traceback that says
+    nothing about whether the graph recovered. It still ends as an error — a hung
+    step is a failed step — but a *diagnosable* one.
     """
     ctx = wired(counts=[0, 0, 58])
     real_runner = ctx.runner
@@ -293,16 +345,19 @@ def test_a_hung_seed_script_is_a_recorded_failure_not_an_escape(wired, monkeypat
 
     monkeypatch.setattr(grt.subprocess, "run", _hang_first)
 
-    result = graph_emptiness_sentinel.run()
+    # A hung step is a failed step, so the task errors (see the codex iter-1
+    # MEDIUM above) — but it must error as a GraphReseedError carrying the step
+    # record, NOT by letting TimeoutExpired escape mid-loop.
+    with pytest.raises(GraphReseedError) as excinfo:
+        graph_emptiness_sentinel.run()
 
-    assert result["status"] == "reseeded_with_errors"
-    assert result["curated_node_count"] == 58
-    assert [step["script"] for step in result["steps"]] == [
+    message = str(excinfo.value)
+    assert "timed_out" in message, "the step record must survive into the error"
+    assert "58 curated node(s)" in message
+    assert ctx.runner.scripts == [
         "seed_falkordb.py",
         "sync_causal_paths_to_falkordb.py",
     ], "the causal sync must still run after the structural seed hangs"
-    timed_out = [step for step in result["steps"] if step.get("timed_out")]
-    assert [step["script"] for step in timed_out] == ["seed_falkordb.py"]
     assert ctx.redis.eval_calls, "lock must be released after a hung step"
 
 

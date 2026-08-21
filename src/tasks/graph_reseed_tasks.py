@@ -27,11 +27,22 @@ A failed probe is UNKNOWN, never zero. Reading a FalkorDB outage as "empty" woul
 fire a CREATE-based reseed on every tick and duplicate the graph the moment the
 database came back.
 
+What this does NOT cover
+------------------------
+This is an EMPTINESS sentinel, not a completeness one. Any curated count above zero
+reads as healthy, so a graph that is present but thin — e.g. a structural seed that
+died halfway, since ``seed_falkordb.py`` is CREATE-based and has no transaction —
+is a no-op tick from here on. The one moment that state is visible is the reseed
+that produced it, which is why a failed step raises :class:`GraphReseedError` even
+when the post-count is non-zero. Continuous content health belongs to the
+``graph_content`` node on ``/api/graph/health`` (#1760/#1762).
+
 Memory budget
 -------------
 This module is imported at worker boot (``src/tasks/__init__``) and the reseed runs
-inside ``worker_light``, which sits under a 1.5 GiB cgroup limit (measured 1.03 GiB
-resident, ~476 MiB headroom on 2026-08-21). So:
+inside ``worker_light``, which sits under a 1.5 GiB cgroup limit (measured
+2026-08-21 at 1.03 GiB and 0.90 GiB resident across two samples — 476-610 MiB of
+headroom, not the ~900 MiB the issue assumed). So:
 
 * nothing heavy is imported at module scope — ``falkordb`` and ``redis`` are
   imported lazily inside their helpers (~15 MiB each when they do load);
@@ -75,9 +86,12 @@ RESEED_LOCK_KEY: Final[str] = "e2i:graph:reseed:lock"
 RESEED_LOCK_TTL_SECONDS: Final[int] = 1800
 
 # Per-script wall clock. The structural seed is ~100 nodes / ~280 edges and the
-# causal sync ~109 chains; both finish in seconds against a healthy FalkorDB. The
-# generous ceiling exists so a hung script releases the lock via task failure
-# rather than sitting on it until the TTL.
+# causal sync ~109 chains; both finish in seconds against a healthy FalkorDB. Two
+# steps at this ceiling (1200s) still fit inside RESEED_LOCK_TTL_SECONDS, so a hung
+# script cannot let the lock expire under a still-running reseed. There is no lock
+# renewal: if the task somehow stalls OUTSIDE these two windows past the TTL, a
+# later tick can acquire the lock — the compare-and-delete release still prevents
+# it from being freed by the wrong holder.
 SCRIPT_TIMEOUT_SECONDS: Final[int] = 600
 
 # Compare-and-delete: a bare DEL would drop a lock another holder acquired after
@@ -108,15 +122,26 @@ def _falkordb_conn() -> Tuple[str, int, Optional[str]]:
 
     Local copy of ``src/api/dependencies/falkordb_client.py::_parse_falkordb_config``
     — see the module docstring for why it is copied rather than imported.
+
+    ``FALKORDB_PASSWORD`` outranks a password embedded in ``FALKORDB_URL``, matching
+    ``scripts/seed_falkordb.py::_parse_falkordb_config``. The probe and the seed
+    subprocess must agree on the credential or the sentinel can measure one server
+    and heal another; under secret rotation a stale URL password would otherwise
+    win here while the explicit var won in the subprocess.
     """
+    explicit_password = os.environ.get("FALKORDB_PASSWORD")
     url = os.environ.get("FALKORDB_URL")
     if url:
         parsed = urlparse(url)
-        return parsed.hostname or "localhost", parsed.port or 6379, parsed.password
+        return (
+            parsed.hostname or "localhost",
+            parsed.port or 6379,
+            explicit_password or parsed.password,
+        )
     return (
         os.environ.get("FALKORDB_HOST", "localhost"),
         int(os.environ.get("FALKORDB_PORT", "6379")),
-        os.environ.get("FALKORDB_PASSWORD"),
+        explicit_password,
     )
 
 
@@ -216,8 +241,8 @@ def graph_emptiness_sentinel() -> Dict[str, Any]:
     """Probe the curated core; reseed it under a lock when it is empty.
 
     Returns a status dict on every non-fatal outcome. Raises :class:`GraphReseedError`
-    only for the one case an operator must see: the reseed ran and the graph is still
-    empty.
+    for the two an operator must see: the reseed ran and the graph is still empty, or
+    the reseed ran with a failed step so the curated core may be partial.
     """
     graph_name = _graph_name()
 
@@ -312,20 +337,19 @@ def graph_emptiness_sentinel() -> Dict[str, Any]:
         )
 
     if failed:
-        logger.critical(
-            "graph %s reseeded to %d curated nodes, but %d step(s) failed: %s — the "
-            "graph may be incomplete",
-            graph_name,
-            post_count,
-            len(failed),
-            [step["script"] for step in failed],
+        # A non-zero count is NOT proof the heal worked. seed_falkordb.py is
+        # CREATE-based and has no transaction: a step that dies halfway leaves a
+        # PARTIAL curated core behind, and every later tick then reads count > 0
+        # and returns "ok" — the sentinel goes permanently blind on a graph the
+        # page renders incompletely. Returning a dict here would record Celery
+        # SUCCESS for exactly that state, so this raises instead: the operator
+        # gets a FAILED task naming the step, which is the signal #1758 lacked.
+        raise GraphReseedError(
+            f"self-heal reseed of {graph_name} left {post_count} curated node(s) but "
+            f"{len(failed)} step(s) failed ({[step['script'] for step in failed]}) — the "
+            "curated core may be PARTIAL, and a partial core reads as healthy to every "
+            f"later tick. Step results: {steps}"
         )
-        return {
-            "status": "reseeded_with_errors",
-            "graph": graph_name,
-            "curated_node_count": post_count,
-            "steps": steps,
-        }
 
     logger.critical(
         "graph %s self-healed: %d curated nodes restored (#1761)", graph_name, post_count
