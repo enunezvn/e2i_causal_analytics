@@ -814,3 +814,72 @@ def test_a_budget_truncated_literature_check_is_degraded_without_blaming_a_sourc
 
     _frag, _stored_at, complete = next(iter(svc_mod._EVIDENCE_CACHE.values()))
     assert complete is False, "an unfinished literature check must not be cached as settled"
+
+
+# --- #1775: the payload must GROUND the scenario -------------------------------
+
+
+def _svc_with_label_considerations():
+    """A service whose openFDA fragment carries label considerations, as the real
+    provider now does."""
+    from src.services.clinical_context.label_considerations import (
+        DOSAGE_SECTION,
+        WARNINGS_SECTION,
+        LabelConsideration,
+    )
+
+    considerations = (
+        LabelConsideration(
+            title="QT Interval Prolongation",
+            detail="Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.",
+            section=WARNINGS_SECTION,
+            references="2.2 , 5.3",
+        ),
+        LabelConsideration(
+            title="Dosage and administration",
+            detail="Dose interruption, reduction, and/or discontinuation may be required "
+            "based on individual safety and tolerability.",
+            section=DOSAGE_SECTION,
+            references="2.2",
+        ),
+    )
+    return ClinicalContextService(
+        mechanism_provider=_StubProvider(MechanismFragment("CDK4/6 inhibitor", "chembl")),
+        endpoints_provider=_StubProvider(_eps(["OS"], "clinicaltrials.gov")),
+        citation_provider=_StubProvider(CitationFragment(None, "unavailable")),
+        indications_provider=_StubProvider(
+            IndicationsFragment(["BC"], None, None, "openfda", considerations)
+        ),
+        competitor_provider=_StubProvider(CompetitorFragment(["Ibrance (palbociclib)"], 1)),
+    )
+
+
+def test_a_commercial_analysis_is_grounded_in_the_payload():
+    """THE #1775 REGRESSION at the payload boundary. copay_support used to receive
+    no clinical grounding at all."""
+    ctx = _svc_with_label_considerations().get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support"
+    )
+    grounding = ctx["analysis_grounding"]
+    # POSITIVE CONTROL: assert something is actually there before asserting about it.
+    assert len(grounding["label_considerations"]) >= 1, grounding
+    first = grounding["label_considerations"][0]
+    assert first["source"] == "openfda"
+    assert first["references"], "a consideration must cite the label section it came from"
+    assert grounding["competitive_context"]
+    assert grounding["outcome_theme"] == "persistence"
+
+
+def test_grounding_is_absent_for_the_brand_level_view():
+    """No treatment means no scenario to ground; inventing one is the #1763 defect."""
+    ctx = _svc_with_label_considerations().get_context("Kisqali", "persistent_180d")
+    assert ctx["analysis_grounding"] is None
+
+
+def test_grounding_never_asserts_the_label_speaks_to_the_lever():
+    ctx = _svc_with_label_considerations().get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support"
+    )
+    note = ctx["analysis_grounding"]["note"].lower()
+    assert "says nothing about" in note
+    assert "not the complete" in note
