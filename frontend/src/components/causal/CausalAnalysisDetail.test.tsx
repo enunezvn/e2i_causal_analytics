@@ -2,7 +2,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderWithProviders, screen } from '@/test/utils';
 import { CausalAnalysisDetail } from './CausalAnalysisDetail';
+import { useClinicalContext } from '@/hooks/api';
 import type { AgentCausalAnalysisResponse } from '@/types/causal';
+
+// The detail panel uses exactly one hook from @/hooks/api. Mock it so the clinical
+// context query is observable: without a `brand` prop it stays disabled, which is
+// exactly what `{ data: undefined }` reproduces for the rest of this suite.
+vi.mock('@/hooks/api', () => ({
+  useClinicalContext: vi.fn(() => ({ data: undefined })),
+}));
 
 // Stub the heavy DAG viz — assert the detail feeds it the agent's graph + refutation.
 vi.mock('@/components/visualizations/CausalDiscovery', () => ({
@@ -241,5 +249,18 @@ describe('CausalAnalysisDetail', () => {
   it('badges OLS as the unbiased anchor in the estimator comparison', () => {
     renderWithProviders(<CausalAnalysisDetail result={EFFICIENCY_RESULT} />);
     expect(screen.getByText('Unbiased anchor')).toBeInTheDocument();
+  });
+});
+
+// #1763: every detail view IS a (treatment -> outcome) analysis; the clinical context
+// it requests must say so, or the panel answers a question nobody asked.
+describe('CausalAnalysisDetail — clinical context follows the analysis (#1763)', () => {
+  it('asks for context for this analysis: brand, outcome AND treatment', () => {
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} brand="Kisqali" />);
+    expect(vi.mocked(useClinicalContext)).toHaveBeenCalledWith(
+      'Kisqali',
+      'persistent_180d',
+      'treatment_arm'
+    );
   });
 });

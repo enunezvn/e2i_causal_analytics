@@ -3852,6 +3852,14 @@ export interface paths {
          *     endpoints (ClinicalTrials.gov), and a real-world-evidence citation (PubMed)
          *     for ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.
          *
+         *     With ``treatment``, the response also frames the specific analysis being
+         *     interrogated (treatment -> outcome), the literature search follows that
+         *     analysis instead of the brand alone, and ``causal_evidence`` carries the
+         *     public-knowledge-graph evidence for it: the Open Targets indication edge and
+         *     literature whose abstracts were verified to name both entities. A commercial
+         *     treatment lever (copay, PSP, detailing) returns an explicit
+         *     ``commercial_lever`` state instead of the drug's evidence (#1763).
+         *
          *     Additive narrative ONLY — does not touch the causal estimate or its
          *     adjustment set. Degrades gracefully (static fallbacks) when an upstream API
          *     is down; never fabricates a citation. The payload's ``honesty_label`` states
@@ -7192,6 +7200,41 @@ export interface components {
             selected_estimator?: string | null;
         };
         /**
+         * CausalEvidence
+         * @description Public-knowledge-graph evidence for THIS analysis (treatment -> outcome).
+         *
+         *     ``status``: ``evidence`` (something was found) / ``commercial_lever`` (the
+         *     treatment is an access-or-promotion lever the biomedical sources do not
+         *     describe — no clinical evidence is claimed for it) / ``unavailable`` (asked,
+         *     nothing usable) / ``not_requested`` (the caller did not pay for the live
+         *     lookup; the leaderboard fan-out does not).
+         */
+        CausalEvidence: {
+            /**
+             * Status
+             * @description evidence / commercial_lever / unavailable / not_requested
+             */
+            status: string;
+            /** @description Open Targets drug -> indication edge for this disease. */
+            indication_edge?: components["schemas"]["IndicationEdge"] | null;
+            /**
+             * Citations
+             * @description Abstract-verified citations (capped).
+             */
+            citations?: components["schemas"]["VerifiedCitation"][];
+            /**
+             * Sources Unavailable
+             * @description Sources that were asked and failed. What is missing from this block is then UNKNOWN, not absent — an outage must not read as a settled absence.
+             */
+            sources_unavailable?: string[];
+            /**
+             * Note
+             * @description What was searched / why nothing is claimed.
+             * @default
+             */
+            note: string;
+        };
+        /**
          * CausalGraphNode
          * @description Node in the causal graph.
          */
@@ -7594,6 +7637,18 @@ export interface components {
              */
             our_outcome: string;
             /**
+             * Our Treatment
+             * @description The synthetic treatment column the analysis estimates the effect of. None on the brand-level view (no single analysis in scope).
+             */
+            our_treatment?: string | null;
+            /** @description Curated clinical framing for the treatment side. None when no treatment was supplied or the column has no curated framing (never invented). */
+            treatment_context?: components["schemas"]["TreatmentContext"] | null;
+            /**
+             * Analysis Framing
+             * @description One deterministic sentence naming the analysis this context grounds (treatment -> outcome, for this drug in this disease). None when the treatment has no curated framing.
+             */
+            analysis_framing?: string | null;
+            /**
              * Mapped Endpoint
              * @description The real pivotal-endpoint framing our synthetic outcome stands in for (None when unmapped).
              */
@@ -7608,6 +7663,8 @@ export interface components {
             approved_indications?: components["schemas"]["ApprovedIndications"] | null;
             /** @description Curated therapeutic competitors for the indication. */
             competitor_landscape?: components["schemas"]["CompetitorLandscape"] | null;
+            /** @description Public-KG evidence for this specific analysis. None when no treatment was supplied (there is no analysis to gather evidence for). */
+            causal_evidence?: components["schemas"]["CausalEvidence"] | null;
             /**
              * Honesty Label
              * @description Explicit synthetic-estimate / real-context boundary statement.
@@ -11439,6 +11496,53 @@ export interface components {
          * @enum {string}
          */
         ImplementationDifficulty: "low" | "medium" | "high";
+        /**
+         * IndicationEdge
+         * @description The drug -> indication edge from Open Targets, for the analysis's disease.
+         *
+         *     ``max_clinical_stage`` is the stage recorded for THAT indication node, not the
+         *     drug's highest stage anywhere. Open Targets staging lags the FDA label, so a
+         *     sub-APPROVAL edge is a development-stage signal, NOT a statement that the brand
+         *     is unapproved — ``approved_indications`` (the label) is the approval authority.
+         */
+        IndicationEdge: {
+            /**
+             * Predicate
+             * @description treats (approved) / associated_with (in development)
+             */
+            predicate: string;
+            /**
+             * Drug Id
+             * @description Open Targets / ChEMBL id of the molecule that answered
+             */
+            drug_id: string;
+            /**
+             * Drug Name
+             * @description The molecule Open Targets answered about, verified against the brand's INN before the edge is emitted (salt forms allowed).
+             */
+            drug_name: string;
+            /**
+             * Disease Id
+             * @description Disease node id (e.g. MONDO_0007254)
+             */
+            disease_id: string;
+            /**
+             * Disease Name
+             * @description Disease node name
+             */
+            disease_name: string;
+            /**
+             * Max Clinical Stage
+             * @description Stage for THIS indication node
+             */
+            max_clinical_stage: string;
+            /**
+             * Source
+             * @description Always 'open_targets'.
+             * @default open_targets
+             */
+            source: string;
+        };
         /**
          * InterimAnalysisResult
          * @description Result of interim analysis.
@@ -15384,9 +15488,14 @@ export interface components {
             url: string;
             /**
              * Source
-             * @description pubmed / pubmed_seed
+             * @description pubmed (the analysis-specific search) / pubmed_brand (the brand-level search answered instead) / pubmed_seed / curated
              */
             source: string;
+            /**
+             * Search Term
+             * @description The PubMed query this citation came from, so an analyst can judge how close it is to the analysis. None for a curated citation (not searched).
+             */
+            search_term?: string | null;
         };
         /**
          * RecentWorkflowResponse
@@ -18175,6 +18284,44 @@ export interface components {
              */
             timestamp?: string;
         };
+        /**
+         * TreatmentContext
+         * @description Curated clinical framing for the analysis's TREATMENT column (#1763).
+         *
+         *     ``kind`` states what the public clinical APIs can speak to:
+         *     ``drug_therapy`` (the treatment is a therapy), ``clinical_covariate`` (a
+         *     patient-state variable used as an observational treatment), or ``commercial``
+         *     (an access / promotion lever — biomedical sources do not speak to it, and the
+         *     UI must not imply they do).
+         */
+        TreatmentContext: {
+            /**
+             * Column
+             * @description The synthetic treatment column (e.g. treatment_arm)
+             */
+            column: string;
+            /**
+             * Label
+             * @description Human-readable label for the treatment
+             */
+            label: string;
+            /**
+             * Framing
+             * @description Clinical framing fragment (e.g. 'receiving copay assistance')
+             */
+            framing: string;
+            /**
+             * Kind
+             * @description drug_therapy / clinical_covariate / commercial
+             */
+            kind: string;
+            /**
+             * Source
+             * @description Always 'curated'.
+             * @default curated
+             */
+            source: string;
+        };
         /** TreatmentEffectInsightRequest */
         TreatmentEffectInsightRequest: {
             /** Cohort */
@@ -18816,6 +18963,53 @@ export interface components {
             details?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * VerifiedCitation
+         * @description A citation whose abstract was fetched and checked, not merely retrieved.
+         */
+        VerifiedCitation: {
+            /**
+             * Pmid
+             * @description PubMed ID
+             */
+            pmid: string;
+            /**
+             * Title
+             * @description Article title
+             */
+            title: string;
+            /**
+             * Journal
+             * @description Journal / source
+             */
+            journal?: string | null;
+            /**
+             * Pubdate
+             * @description Publication date string
+             */
+            pubdate?: string | null;
+            /**
+             * Url
+             * @description Canonical pubmed.ncbi.nlm.nih.gov URL
+             */
+            url: string;
+            /**
+             * Entities Found
+             * @description Entities actually found in the abstract (drug + disease).
+             */
+            entities_found?: string[];
+            /**
+             * Confidence
+             * @description CitationResolver confidence; only >= 0.5 is surfaced.
+             */
+            confidence: number;
+            /**
+             * Source
+             * @description Search + verification sources.
+             * @default pubmed+europepmc
+             */
+            source: string;
         };
         /**
          * WithdrawRequest
@@ -27068,6 +27262,8 @@ export interface operations {
                 brand: string;
                 /** @description The synthetic outcome column the effect uses (e.g. persistent_180d); mapped to the real pivotal endpoint. */
                 outcome: string;
+                /** @description The synthetic treatment column the analysis estimates the effect of (e.g. treatment_arm / copay_support). Optional: with it the context is framed for THAT analysis and the literature search follows it; without it the response is the brand-level view. */
+                treatment?: string | null;
             };
             header?: never;
             path?: never;

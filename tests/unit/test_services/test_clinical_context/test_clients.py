@@ -463,3 +463,35 @@ def test_pubmed_explicit_api_key_overrides_the_environment(
     seen = _capture_pubmed_params(monkeypatch, "env-key", api_key="explicit-key")
     for params in seen:
         assert params.get("api_key") == "explicit-key"
+
+
+# --- #1763 Phase 2: multi-PMID relevance search --------------------------------
+
+
+def test_pubmed_search_pmids_returns_the_relevance_ranked_ids() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/esearch.fcgi" in request.url.path
+        q = request.url.query.decode("utf-8")
+        seen["query"] = q
+        return httpx.Response(200, json={"esearchresult": {"idlist": ["11", "22", "33"]}})
+
+    pmids = _pubmed(handler).search_pmids("ribociclib breast cancer persistence", retmax=3)
+    assert pmids == ["11", "22", "33"]
+    assert "retmax=3" in seen["query"]
+    assert "sort=relevance" in seen["query"]
+
+
+def test_pubmed_search_pmids_empty_term_skips_the_network() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
+        raise AssertionError("no HTTP call expected for an empty term")
+
+    assert _pubmed(handler).search_pmids("", retmax=3) == []
+
+
+def test_pubmed_search_pmids_no_hits_is_an_empty_list_not_an_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"esearchresult": {"idlist": []}})
+
+    assert _pubmed(handler).search_pmids("nothing matches this", retmax=5) == []

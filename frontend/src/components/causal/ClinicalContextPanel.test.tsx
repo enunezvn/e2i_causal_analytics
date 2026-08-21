@@ -249,3 +249,195 @@ describe('ClinicalContextPanel', () => {
     expect(screen.getByText(/Additional real-world evidence/i)).toBeInTheDocument();
   });
 });
+
+// #1763: the panel was accurate but read as unrelated to the analysis on screen.
+describe('ClinicalContextPanel — analysis framing (#1763)', () => {
+  const ANALYSIS: ClinicalContext = {
+    ...FULL,
+    our_treatment: 'treatment_arm',
+    treatment_context: {
+      column: 'treatment_arm',
+      label: 'Treatment arm',
+      framing: 'being on a ribociclib-containing regimen',
+      kind: 'drug_therapy',
+      source: 'curated',
+    },
+    analysis_framing:
+      'This analysis estimates the effect of being on a ribociclib-containing regimen on 180-day treatment persistence for ribociclib in Malignant neoplasm of breast.',
+    real_world_evidence: {
+      ...FULL.real_world_evidence!,
+      search_term: 'ribociclib breast cancer persistence real-world',
+    },
+  };
+
+  it('leads with the sentence naming the analysis being interrogated', () => {
+    render(<ClinicalContextPanel context={ANALYSIS} />);
+    expect(
+      screen.getByText(/This analysis estimates the effect of being on a ribociclib-containing regimen/i)
+    ).toBeInTheDocument();
+  });
+
+  it('discloses the literature query behind the live citation', () => {
+    render(<ClinicalContextPanel context={ANALYSIS} />);
+    expect(
+      screen.getByText(/ribociclib breast cancer persistence real-world/i)
+    ).toBeInTheDocument();
+  });
+
+  it('says plainly when the treatment is a commercial lever the clinical sources do not cover', () => {
+    const commercial: ClinicalContext = {
+      ...ANALYSIS,
+      our_treatment: 'copay_support',
+      treatment_context: {
+        column: 'copay_support',
+        label: 'Copay support',
+        framing: 'receiving copay assistance',
+        kind: 'commercial',
+        source: 'curated',
+      },
+      analysis_framing:
+        'This analysis estimates the effect of receiving copay assistance on 180-day treatment persistence for ribociclib in Malignant neoplasm of breast.',
+    };
+    render(<ClinicalContextPanel context={commercial} />);
+    expect(screen.getByText(/access and promotion lever/i)).toBeInTheDocument();
+  });
+
+  it('renders exactly as before when there is no analysis frame', () => {
+    render(<ClinicalContextPanel context={FULL} />);
+    expect(screen.queryByText(/This analysis estimates the effect of/i)).not.toBeInTheDocument();
+    expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
+  });
+});
+
+// #1763 Phase 2: evidence gathered FOR the analysis, and an honest empty state when
+// the treatment is a commercial lever the clinical sources do not describe.
+describe('ClinicalContextPanel — causal evidence (#1763)', () => {
+  const WITH_EVIDENCE: ClinicalContext = {
+    ...FULL,
+    our_treatment: 'treatment_arm',
+    causal_evidence: {
+      status: 'evidence',
+      indication_edge: {
+        predicate: 'associated_with',
+        drug_id: 'CHEMBL3545110',
+        drug_name: 'RIBOCICLIB',
+        disease_id: 'MONDO_0007254',
+        disease_name: 'breast cancer',
+        max_clinical_stage: 'PHASE_3',
+        source: 'open_targets',
+      },
+      citations: [
+        {
+          pmid: '40896422',
+          title: 'Real-world effectiveness and safety of CDK4/6i',
+          journal: 'Front Oncol',
+          pubdate: '2025',
+          url: 'https://pubmed.ncbi.nlm.nih.gov/40896422/',
+          entities_found: ['ribociclib', 'breast cancer'],
+          confidence: 0.5,
+          source: 'pubmed+europepmc',
+        },
+      ],
+      sources_unavailable: [],
+      note: 'Open Targets records the clinical stage per indication and lags the FDA label.',
+    },
+  };
+
+  it('shows the indication edge with the stage of THIS indication node', () => {
+    render(<ClinicalContextPanel context={WITH_EVIDENCE} />);
+    expect(screen.getByText(/is recorded in development for/i)).toBeInTheDocument();
+    expect(screen.getByText(/PHASE_3 · open targets/i)).toBeInTheDocument();
+    // ...and says the label, not this edge, is the approval authority.
+    expect(screen.getByText(/lags the FDA label/i)).toBeInTheDocument();
+  });
+
+  it('links the verified citations and says what the abstract actually named', () => {
+    render(<ClinicalContextPanel context={WITH_EVIDENCE} />);
+    const link = screen.getByRole('link', { name: /Real-world effectiveness and safety of CDK4\/6i/i });
+    expect(link).toHaveAttribute('href', 'https://pubmed.ncbi.nlm.nih.gov/40896422/');
+    expect(screen.getByText(/abstract names ribociclib \+ breast cancer/i)).toBeInTheDocument();
+  });
+
+  it('states plainly that clinical sources do not describe a commercial lever', () => {
+    const lever: ClinicalContext = {
+      ...FULL,
+      our_treatment: 'copay_support',
+      causal_evidence: {
+        status: 'commercial_lever',
+        indication_edge: null,
+        citations: [],
+        sources_unavailable: [],
+        note: 'Copay support is a commercial access/promotion lever. Biomedical and regulatory sources describe the therapy and its indication, not this lever.',
+      },
+    };
+    render(<ClinicalContextPanel context={lever} />);
+    expect(screen.getByText(/not this lever/i)).toBeInTheDocument();
+    expect(screen.queryByText(/is recorded in development for/i)).not.toBeInTheDocument();
+  });
+
+  it('renders no evidence section for a leaderboard payload that never asked for it', () => {
+    const notRequested: ClinicalContext = {
+      ...FULL,
+      causal_evidence: {
+        status: 'not_requested',
+        indication_edge: null,
+        citations: [],
+        sources_unavailable: [],
+        note: 'Analysis-specific evidence is gathered when the analysis is opened.',
+      },
+    };
+    render(<ClinicalContextPanel context={notRequested} />);
+    expect(screen.queryByText(/Evidence for this analysis/i)).not.toBeInTheDocument();
+  });
+});
+
+// The brand-level citation chip is the one honesty label with no UI test: it is what
+// stops a brand-level paper reading as analysis-level (adversarial review finding).
+describe('ClinicalContextPanel — citation provenance chips (#1763)', () => {
+  it('labels a brand-level fallback citation as such, not as a curated fallback', () => {
+    const brandLevel: ClinicalContext = {
+      ...FULL,
+      real_world_evidence: {
+        ...FULL.real_world_evidence!,
+        source: 'pubmed_brand',
+        search_term: 'ribociclib persistence adherence breast cancer real-world',
+      },
+    };
+    render(<ClinicalContextPanel context={brandLevel} />);
+    expect(screen.getByText(/pubmed \(brand-level\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/curated fallback/i)).not.toBeInTheDocument();
+  });
+
+  it('never claims a source it does not recognise is curated', () => {
+    const unknown: ClinicalContext = {
+      ...FULL,
+      real_world_evidence: { ...FULL.real_world_evidence!, source: 'some_new_source' },
+    };
+    render(<ClinicalContextPanel context={unknown} />);
+    expect(screen.getByText(/some_new_source/i)).toBeInTheDocument();
+    expect(screen.queryByText(/curated fallback/i)).not.toBeInTheDocument();
+  });
+
+  it('names the molecule Open Targets actually answered about', () => {
+    const withEdge: ClinicalContext = {
+      ...FULL,
+      causal_evidence: {
+        status: 'evidence',
+        indication_edge: {
+          predicate: 'treats',
+          drug_id: 'CHEMBL3545110',
+          drug_name: 'RIBOCICLIB SUCCINATE',
+          disease_id: 'MONDO_0007254',
+          disease_name: 'breast cancer',
+          max_clinical_stage: 'APPROVAL',
+          source: 'open_targets',
+        },
+        citations: [],
+        sources_unavailable: [],
+        note: '',
+      },
+    };
+    render(<ClinicalContextPanel context={withEdge} />);
+    expect(screen.getByText(/RIBOCICLIB SUCCINATE/i)).toBeInTheDocument();
+  });
+});

@@ -308,13 +308,20 @@ export async function getCausalBrands(
  * Fetch the brand-faithful, sourced clinical context for a discovered effect
  * (drug + mechanism of action, the disease's real pivotal endpoints, a
  * real-world-evidence citation). Additive narrative; never changes the estimate.
+ *
+ * `treatment` scopes the context to THIS analysis (treatment -> outcome): the
+ * response then carries the analysis framing and the literature search follows the
+ * analysis instead of the brand alone. Omit it for the brand-level view.
  */
 export async function getClinicalContext(
   brand: string,
-  outcome: string
+  outcome: string,
+  treatment?: string | null
 ): Promise<ClinicalContext> {
   // Flat params: `get(endpoint, params)` wraps them for axios (see api-client).
-  return get<ClinicalContext>(`${CAUSAL_BASE}/clinical-context`, { brand, outcome });
+  const params: Record<string, string> = { brand, outcome };
+  if (treatment) params.treatment = treatment;
+  return get<ClinicalContext>(`${CAUSAL_BASE}/clinical-context`, params);
 }
 
 /** Poll a discover-effects job by id (ranked effects fill in progressively). */

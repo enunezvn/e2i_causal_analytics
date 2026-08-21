@@ -405,7 +405,74 @@ export interface RealWorldEvidence {
   pubdate?: string | null;
   doi?: string | null;
   url: string;
-  /** pubmed / pubmed_seed */
+  /** pubmed (analysis-specific search) / pubmed_brand (brand-level search answered
+   * instead) / pubmed_seed / curated */
+  source: string;
+  /** The PubMed query this citation came from; null for a curated citation. */
+  search_term?: string | null;
+}
+
+/**
+ * The Open Targets drug -> indication edge for the analysis's disease.
+ * `max_clinical_stage` is the stage of THAT indication node, not the drug's highest
+ * stage anywhere; Open Targets lags the FDA label, so a sub-APPROVAL stage is a
+ * development signal, never a statement that the brand is unapproved.
+ */
+export interface IndicationEdge {
+  /** treats (approved) | associated_with (in development) */
+  predicate: string;
+  /** The molecule Open Targets answered about, verified against the brand's INN. */
+  drug_id: string;
+  drug_name: string;
+  disease_id: string;
+  disease_name: string;
+  max_clinical_stage: string;
+  /** open_targets */
+  source: string;
+}
+
+/** A citation whose abstract was fetched and checked, not merely retrieved. */
+export interface VerifiedCitation {
+  pmid: string;
+  title: string;
+  journal?: string | null;
+  pubdate?: string | null;
+  url: string;
+  /** Entities actually found in the abstract (drug + disease). */
+  entities_found: string[];
+  confidence: number;
+  /** pubmed+europepmc */
+  source: string;
+}
+
+/**
+ * Public-knowledge-graph evidence for THIS analysis. `status` is
+ * `evidence` | `commercial_lever` (an access/promotion lever the biomedical
+ * sources do not describe) | `unavailable` | `not_requested`.
+ */
+export interface CausalEvidence {
+  status: string;
+  indication_edge?: IndicationEdge | null;
+  citations: VerifiedCitation[];
+  /** Sources asked that failed — what is missing is then unknown, not absent. */
+  sources_unavailable: string[];
+  note: string;
+}
+
+/**
+ * Curated clinical framing for the analysis's TREATMENT column. `kind` states what
+ * the public clinical sources can speak to: `drug_therapy` (the treatment is a
+ * therapy), `clinical_covariate` (a patient-state variable used as an observational
+ * treatment), or `commercial` (an access / promotion lever the biomedical sources
+ * do not describe).
+ */
+export interface TreatmentContext {
+  column: string;
+  label: string;
+  framing: string;
+  /** drug_therapy | clinical_covariate | commercial */
+  kind: string;
+  /** curated */
   source: string;
 }
 
@@ -438,6 +505,14 @@ export interface ClinicalContext {
   disease: string;
   /** Our synthetic outcome column this maps from. */
   our_outcome: string;
+  /** The synthetic treatment column the analysis estimates the effect of; null on
+   * the brand-level view (no single analysis in scope). */
+  our_treatment?: string | null;
+  /** Curated clinical framing for the treatment side; null when the column has no
+   * curated framing (never invented). */
+  treatment_context?: TreatmentContext | null;
+  /** One deterministic sentence naming the analysis this context grounds. */
+  analysis_framing?: string | null;
   /** The real pivotal-endpoint framing our synthetic outcome stands in for (null when unmapped). */
   mapped_endpoint?: string | null;
   mechanism: MechanismOfAction;
@@ -451,6 +526,8 @@ export interface ClinicalContext {
   approved_indications?: ApprovedIndications | null;
   /** Competitive market landscape (curated). */
   competitor_landscape?: CompetitorLandscape | null;
+  /** Public-KG evidence for this specific analysis; null without a treatment. */
+  causal_evidence?: CausalEvidence | null;
   honesty_label: string;
 }
 

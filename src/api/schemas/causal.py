@@ -880,7 +880,20 @@ class RealWorldEvidence(BaseModel):
     pubdate: Optional[str] = Field(default=None, description="Publication date string")
     doi: Optional[str] = Field(default=None, description="DOI when available")
     url: str = Field(..., description="Canonical pubmed.ncbi.nlm.nih.gov URL")
-    source: str = Field(..., description="pubmed / pubmed_seed")
+    source: str = Field(
+        ...,
+        description=(
+            "pubmed (the analysis-specific search) / pubmed_brand (the brand-level "
+            "search answered instead) / pubmed_seed / curated"
+        ),
+    )
+    search_term: Optional[str] = Field(
+        default=None,
+        description=(
+            "The PubMed query this citation came from, so an analyst can judge how "
+            "close it is to the analysis. None for a curated citation (not searched)."
+        ),
+    )
 
 
 class ApprovedIndications(BaseModel):
@@ -917,6 +930,96 @@ class CompetitorLandscape(BaseModel):
     source: str = Field(default="curated", description="Always 'curated' (curated SSOT).")
 
 
+class IndicationEdge(BaseModel):
+    """The drug -> indication edge from Open Targets, for the analysis's disease.
+
+    ``max_clinical_stage`` is the stage recorded for THAT indication node, not the
+    drug's highest stage anywhere. Open Targets staging lags the FDA label, so a
+    sub-APPROVAL edge is a development-stage signal, NOT a statement that the brand
+    is unapproved — ``approved_indications`` (the label) is the approval authority.
+    """
+
+    predicate: str = Field(..., description="treats (approved) / associated_with (in development)")
+    drug_id: str = Field(..., description="Open Targets / ChEMBL id of the molecule that answered")
+    drug_name: str = Field(
+        ...,
+        description=(
+            "The molecule Open Targets answered about, verified against the brand's "
+            "INN before the edge is emitted (salt forms allowed)."
+        ),
+    )
+    disease_id: str = Field(..., description="Disease node id (e.g. MONDO_0007254)")
+    disease_name: str = Field(..., description="Disease node name")
+    max_clinical_stage: str = Field(..., description="Stage for THIS indication node")
+    source: str = Field(default="open_targets", description="Always 'open_targets'.")
+
+
+class VerifiedCitation(BaseModel):
+    """A citation whose abstract was fetched and checked, not merely retrieved."""
+
+    pmid: str = Field(..., description="PubMed ID")
+    title: str = Field(..., description="Article title")
+    journal: Optional[str] = Field(default=None, description="Journal / source")
+    pubdate: Optional[str] = Field(default=None, description="Publication date string")
+    url: str = Field(..., description="Canonical pubmed.ncbi.nlm.nih.gov URL")
+    entities_found: List[str] = Field(
+        default_factory=list,
+        description="Entities actually found in the abstract (drug + disease).",
+    )
+    confidence: float = Field(
+        ..., description="CitationResolver confidence; only >= 0.5 is surfaced."
+    )
+    source: str = Field(default="pubmed+europepmc", description="Search + verification sources.")
+
+
+class CausalEvidence(BaseModel):
+    """Public-knowledge-graph evidence for THIS analysis (treatment -> outcome).
+
+    ``status``: ``evidence`` (something was found) / ``commercial_lever`` (the
+    treatment is an access-or-promotion lever the biomedical sources do not
+    describe — no clinical evidence is claimed for it) / ``unavailable`` (asked,
+    nothing usable) / ``not_requested`` (the caller did not pay for the live
+    lookup; the leaderboard fan-out does not).
+    """
+
+    status: str = Field(
+        ..., description="evidence / commercial_lever / unavailable / not_requested"
+    )
+    indication_edge: Optional[IndicationEdge] = Field(
+        default=None, description="Open Targets drug -> indication edge for this disease."
+    )
+    citations: List[VerifiedCitation] = Field(
+        default_factory=list, description="Abstract-verified citations (capped)."
+    )
+    sources_unavailable: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Sources that were asked and failed. What is missing from this block is "
+            "then UNKNOWN, not absent — an outage must not read as a settled absence."
+        ),
+    )
+    note: str = Field(default="", description="What was searched / why nothing is claimed.")
+
+
+class TreatmentContext(BaseModel):
+    """Curated clinical framing for the analysis's TREATMENT column (#1763).
+
+    ``kind`` states what the public clinical APIs can speak to:
+    ``drug_therapy`` (the treatment is a therapy), ``clinical_covariate`` (a
+    patient-state variable used as an observational treatment), or ``commercial``
+    (an access / promotion lever — biomedical sources do not speak to it, and the
+    UI must not imply they do).
+    """
+
+    column: str = Field(..., description="The synthetic treatment column (e.g. treatment_arm)")
+    label: str = Field(..., description="Human-readable label for the treatment")
+    framing: str = Field(
+        ..., description="Clinical framing fragment (e.g. 'receiving copay assistance')"
+    )
+    kind: str = Field(..., description="drug_therapy / clinical_covariate / commercial")
+    source: str = Field(default="curated", description="Always 'curated'.")
+
+
 class ClinicalContext(BaseModel):
     """Brand-faithful, sourced clinical NARRATIVE for a discovered effect.
 
@@ -931,6 +1034,28 @@ class ClinicalContext(BaseModel):
     drug_name: str = Field(..., description="INN drug name (e.g. ribociclib)")
     disease: str = Field(..., description="Indication (e.g. Malignant neoplasm of breast)")
     our_outcome: str = Field(..., description="Our synthetic outcome column this maps from")
+    our_treatment: Optional[str] = Field(
+        default=None,
+        description=(
+            "The synthetic treatment column the analysis estimates the effect of. "
+            "None on the brand-level view (no single analysis in scope)."
+        ),
+    )
+    treatment_context: Optional["TreatmentContext"] = Field(
+        default=None,
+        description=(
+            "Curated clinical framing for the treatment side. None when no treatment "
+            "was supplied or the column has no curated framing (never invented)."
+        ),
+    )
+    analysis_framing: Optional[str] = Field(
+        default=None,
+        description=(
+            "One deterministic sentence naming the analysis this context grounds "
+            "(treatment -> outcome, for this drug in this disease). None when the "
+            "treatment has no curated framing."
+        ),
+    )
     mapped_endpoint: Optional[str] = Field(
         default=None,
         description=(
@@ -956,6 +1081,13 @@ class ClinicalContext(BaseModel):
     )
     competitor_landscape: Optional[CompetitorLandscape] = Field(
         default=None, description="Curated therapeutic competitors for the indication."
+    )
+    causal_evidence: Optional[CausalEvidence] = Field(
+        default=None,
+        description=(
+            "Public-KG evidence for this specific analysis. None when no treatment "
+            "was supplied (there is no analysis to gather evidence for)."
+        ),
     )
     honesty_label: str = Field(
         ..., description="Explicit synthetic-estimate / real-context boundary statement."

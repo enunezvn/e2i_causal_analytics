@@ -62,6 +62,106 @@ class BrandClinicalProfile:
     # paper first (the reported abemaciclib-for-Kisqali confusion). Keys:
     # pmid, title, journal, year, doi. None when no seminal RWE is curated yet.
     seminal_rwe: Optional[Dict[str, str]] = None
+    # Plain-language disease term for LITERATURE search. The SSOT disease string is a
+    # clinical-coding description ("Malignant neoplasm of breast"); clinicians publish
+    # under "breast cancer". Kept separate so neither use distorts the other.
+    disease_search_term: str = ""
+    # #1763: curated clinical framing per synthetic TREATMENT column (the mirror of
+    # outcome_endpoint_map for the treatment side of the analysis). Keyed by column.
+    treatment_context: Dict[str, "TreatmentContext"] = field(default_factory=dict)
+    # #1763: the analysis-specific PubMed term, composed per (outcome, treatment) by
+    # the service and attached to a per-request copy of the profile. None on the
+    # brand-level view, where the curated ``rwe_search_term`` is the right query.
+    analysis_rwe_search_term: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class TreatmentContext:
+    """Curated clinical framing for ONE synthetic treatment column (#1763).
+
+    ``kind`` is what lets the evidence layer stay honest about what the public
+    clinical APIs can and cannot speak to:
+
+    - ``drug_therapy`` — the treatment IS a therapy (the brand's regimen, its
+      initiation, a prior-therapy switch). Drug-disease and drug-outcome clinical
+      evidence is on-topic.
+    - ``clinical_covariate`` — a patient-state variable used as an observational
+      treatment (disease stage, UAS7 severity). Clinical literature speaks to it,
+      but it is not a therapy: no drug-indication claim belongs to it.
+    - ``commercial`` — an access / promotion lever (copay, PSP, detailing,
+      sampling, NBA triggers). Biomedical APIs do NOT speak to this treatment
+      side; the evidence layer must say so rather than attach clinical evidence
+      that is really about the drug.
+
+    ``literature_theme`` is the phrase (if any) this treatment contributes to the
+    real-world-evidence search. ``None`` = the lever has no clinical-literature
+    analogue, so it adds nothing to the query rather than skewing it.
+    """
+
+    column: str
+    label: str
+    framing: str
+    kind: str
+    literature_theme: Optional[str] = None
+
+
+# Our synthetic outcome column -> the phrase used in the analysis framing sentence.
+# Unmapped outcomes fall back to the raw column name (honest, never invented).
+_OUTCOME_FRAMING: Dict[str, str] = {
+    "persistent_180d": "180-day treatment persistence",
+    "discontinued_180d": "180-day treatment discontinuation",
+    "treatment_initiated": "treatment initiation",
+    "adherent_180d": "180-day adherence",
+    "low_gap_180d": "gap-free refill adherence",
+    "adopted": "prescriber adoption",
+}
+
+# Our synthetic outcome -> the theme it contributes to the literature search.
+_OUTCOME_LITERATURE_THEME: Dict[str, str] = {
+    "persistent_180d": "persistence",
+    "discontinued_180d": "discontinuation",
+    "treatment_initiated": "treatment initiation",
+    "adherent_180d": "adherence",
+    "low_gap_180d": "adherence",
+}
+
+# Access / promotion levers. Identical across brands (they are commercial, not
+# clinical), so they are curated once and merged into every brand's map.
+# copay assistance and patient-support programmes DO have a real health-services
+# literature, so they carry a search theme; rep detailing, sampling, NBA triggers
+# and prescriber peer influence do not — they contribute no query term.
+_COMMERCIAL_TREATMENT_CONTEXT: Dict[str, Dict[str, Optional[str]]] = {
+    "copay_support": {
+        "label": "Copay support",
+        "framing": "receiving copay assistance",
+        "literature_theme": "copay assistance",
+    },
+    "psp_enrolled": {
+        "label": "Patient support program",
+        "framing": "being enrolled in a patient support program",
+        "literature_theme": "patient support program",
+    },
+    "rep_detailing_high": {
+        "label": "High rep detailing",
+        "framing": "high sales-representative detailing",
+        "literature_theme": None,
+    },
+    "sample_dropped": {
+        "label": "Sample dropped",
+        "framing": "receiving a product sample",
+        "literature_theme": None,
+    },
+    "trigger_accepted": {
+        "label": "NBA trigger accepted",
+        "framing": "the prescriber acting on a next-best-action trigger",
+        "literature_theme": None,
+    },
+    "peer_influence_score": {
+        "label": "Prescriber peer influence",
+        "framing": "prescriber peer influence in the referral network",
+        "literature_theme": None,
+    },
+}
 
 
 # Enrichment-only static facts keyed by brand. The drug_name / disease / drug_class
@@ -75,6 +175,31 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
             "Progression-Free Survival (PFS)",
             "Invasive Disease-Free Survival (iDFS)",
         ],
+        "disease_search_term": "breast cancer",
+        # #1763: the treatment side of each analysis. treatment_arm is the CDK4/6
+        # regimen itself (combination with an AI / fulvestrant per label), so the
+        # framing says "regimen", not the bare molecule.
+        "treatment_context": {
+            "treatment_arm": {
+                "label": "Treatment arm",
+                "framing": "being on a ribociclib-containing regimen",
+                "kind": "drug_therapy",
+                "literature_theme": None,
+            },
+            "treatment_initiated": {
+                "label": "Treatment initiated",
+                "framing": "initiating ribociclib",
+                "kind": "drug_therapy",
+                "literature_theme": "treatment initiation",
+            },
+            # #1321 Kisqali axis: advanced-line disease as an observational treatment.
+            "disease_stage": {
+                "label": "Advanced line (metastatic / stage IV)",
+                "framing": "advanced-line disease (metastatic / stage IV)",
+                "kind": "clinical_covariate",
+                "literature_theme": "metastatic advanced disease",
+            },
+        },
         "rwe_search_term": "ribociclib persistence adherence breast cancer real-world",
         "rwe_seed_pmid": "35642282",
         "outcome_endpoint_map": {
@@ -121,6 +246,28 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
             "UCT7 (Urticaria Control Test)",
             "ISS7 (Itch Severity Score) / WI-NRS",
         ],
+        "disease_search_term": "chronic spontaneous urticaria",
+        "treatment_context": {
+            "treatment_arm": {
+                "label": "Treatment arm",
+                "framing": "being on remibrutinib",
+                "kind": "drug_therapy",
+                "literature_theme": None,
+            },
+            "treatment_initiated": {
+                "label": "Treatment initiated",
+                "framing": "initiating remibrutinib after antihistamine failure",
+                "kind": "drug_therapy",
+                "literature_theme": "treatment initiation",
+            },
+            # #1321 Remibrutinib axis: uncontrolled CSU as an observational treatment.
+            "urticaria_severity_uas7": {
+                "label": "Uncontrolled CSU (UAS7 >= 28)",
+                "framing": "uncontrolled disease activity (UAS7 >= 28)",
+                "kind": "clinical_covariate",
+                "literature_theme": "disease activity UAS7",
+            },
+        },
         "rwe_search_term": "remibrutinib chronic spontaneous urticaria real-world persistence",
         "rwe_seed_pmid": None,
         "outcome_endpoint_map": {
@@ -149,6 +296,29 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
             "Sustained hemoglobin stabilization (increase >= 2 g/dL without transfusion)",
             "Change from baseline in lactate dehydrogenase (LDH)",
         ],
+        "disease_search_term": "paroxysmal nocturnal hemoglobinuria",
+        "treatment_context": {
+            "treatment_arm": {
+                "label": "Treatment arm",
+                "framing": "being on iptacopan",
+                "kind": "drug_therapy",
+                "literature_theme": None,
+            },
+            "treatment_initiated": {
+                "label": "Treatment initiated",
+                "framing": "initiating iptacopan",
+                "kind": "drug_therapy",
+                "literature_theme": "treatment initiation",
+            },
+            # #1321 Fabhalta pilot: switching off a prior C5 inhibitor is itself a
+            # therapy contrast, so it is drug_therapy, not a covariate.
+            "complement_inhibitor_status": {
+                "label": "Prior C5-inhibitor (switch)",
+                "framing": "switching from a prior C5 inhibitor (eculizumab / ravulizumab)",
+                "kind": "drug_therapy",
+                "literature_theme": "complement inhibitor switch",
+            },
+        },
         "rwe_search_term": "iptacopan paroxysmal nocturnal hemoglobinuria real-world persistence",
         "rwe_seed_pmid": None,
         "outcome_endpoint_map": {
@@ -159,7 +329,12 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
         # Therapy-label fallback (FDA prescribing information, verified 2026-06-20)
         "indications_fallback": [
             "Paroxysmal nocturnal hemoglobinuria (PNH)",
-            "Primary IgA nephropathy (IgAN), to reduce proteinuria",
+            "Primary IgA nephropathy (IgAN), to slow kidney function decline",
+            # Re-verified against the LIVE openFDA label 2026-08-21 (#1763 codex
+            # iter-1): the label carries three indications, not two. The fallback is
+            # what an analyst sees when openFDA is unreachable, so a stale one is a
+            # silently incomplete label at the exact moment we cannot check.
+            "Complement 3 glomerulopathy (C3G), to reduce proteinuria",
         ],
         "limitations_fallback": None,
         "boxed_warning_fallback": (
@@ -183,6 +358,31 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
         },
     },
 }
+
+
+def _build_treatment_context(
+    brand_specific: Dict[str, Dict[str, Optional[str]]],
+) -> Dict[str, TreatmentContext]:
+    """Merge the shared commercial levers with the brand's own therapy / covariate
+    treatments into one column -> TreatmentContext map."""
+    out: Dict[str, TreatmentContext] = {}
+    for column, spec in _COMMERCIAL_TREATMENT_CONTEXT.items():
+        out[column] = TreatmentContext(
+            column=column,
+            label=str(spec["label"]),
+            framing=str(spec["framing"]),
+            kind="commercial",
+            literature_theme=spec.get("literature_theme"),
+        )
+    for column, spec in brand_specific.items():
+        out[column] = TreatmentContext(
+            column=column,
+            label=str(spec["label"]),
+            framing=str(spec["framing"]),
+            kind=str(spec["kind"]),
+            literature_theme=spec.get("literature_theme"),
+        )
+    return out
 
 
 def _build_map() -> Dict[str, BrandClinicalProfile]:
@@ -214,6 +414,8 @@ def _build_map() -> Dict[str, BrandClinicalProfile]:
                 else None
             ),
             competitor_map={k: list(v) for k, v in extra.get("competitor_map", {}).items()},  # type: ignore[attr-defined]
+            disease_search_term=str(extra["disease_search_term"]),
+            treatment_context=_build_treatment_context(extra.get("treatment_context", {})),  # type: ignore[arg-type]
             seminal_rwe=(
                 dict(extra["seminal_rwe"]) if extra.get("seminal_rwe") else None  # type: ignore[call-overload]
             ),
@@ -241,3 +443,69 @@ def endpoint_mapping_for_outcome(brand: str, outcome: str) -> Optional[str]:
     if profile is None:
         return None
     return profile.outcome_endpoint_map.get(outcome)
+
+
+def treatment_context_for(brand: str, treatment: Optional[str]) -> Optional[TreatmentContext]:
+    """Return the curated clinical framing for ``treatment`` under ``brand``.
+
+    ``None`` when the brand is unknown, no treatment was supplied, or the column
+    has no curated framing — the caller then omits the analysis frame entirely
+    rather than emitting a sentence with an invented treatment in it. Brand-distinct
+    treatments (#1321 axes) resolve ONLY under their own brand, so a Fabhalta-only
+    column can never be framed as a Kisqali analysis.
+    """
+    if not treatment:
+        return None
+    profile = BRAND_CLINICAL_MAP.get(brand)
+    if profile is None:
+        return None
+    return profile.treatment_context.get(treatment)
+
+
+def outcome_framing_for(outcome: str) -> str:
+    """Plain-language phrase for our synthetic ``outcome`` column; the raw column
+    name when we have no curated phrase (honest, never invented)."""
+    return _OUTCOME_FRAMING.get(outcome, outcome)
+
+
+def compose_rwe_search_term(
+    profile: BrandClinicalProfile, outcome: str, treatment: Optional[str]
+) -> str:
+    """Compose the analysis-specific PubMed query: drug + plain-language disease +
+    the outcome's theme + the treatment's theme.
+
+    Falls back to the curated brand term when NEITHER side contributes a theme —
+    a half-built query would search worse than the curated one, and a lever with
+    no clinical-literature analogue (rep detailing, sampling) must not have a
+    theme invented for it.
+    """
+    outcome_theme = _OUTCOME_LITERATURE_THEME.get(outcome)
+    context = treatment_context_for(profile.brand, treatment)
+    treatment_theme = context.literature_theme if context is not None else None
+    if not outcome_theme and not treatment_theme:
+        return profile.rwe_search_term
+    parts = [profile.drug_name, profile.disease_search_term]
+    if outcome_theme:
+        parts.append(outcome_theme)
+    if treatment_theme:
+        parts.append(treatment_theme)
+    parts.append("real-world")
+    return " ".join(p for p in parts if p)
+
+
+def analysis_framing_sentence(
+    profile: BrandClinicalProfile, outcome: str, treatment: Optional[str]
+) -> Optional[str]:
+    """One deterministic sentence naming the analysis the panel is grounding:
+    treatment -> outcome, for this drug in this disease.
+
+    ``None`` when the treatment has no curated framing — the panel then shows the
+    brand-level context it always showed, with no claim about an analysis.
+    """
+    context = treatment_context_for(profile.brand, treatment)
+    if context is None:
+        return None
+    return (
+        f"This analysis estimates the effect of {context.framing} on "
+        f"{outcome_framing_for(outcome)} for {profile.drug_name} in {profile.disease}."
+    )

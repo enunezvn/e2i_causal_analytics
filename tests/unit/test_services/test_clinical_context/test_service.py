@@ -264,3 +264,428 @@ def test_openfda_down_degrades_and_self_heals(monkeypatch):
     assert first["approved_indications"]["source"] == "static_fallback"
     second = svc.get_context("Remibrutinib", "persistent_180d")
     assert second["approved_indications"]["source"] == "openfda"  # self-healed
+
+
+# --- #1763: the context must be about the ANALYSIS, not just the brand ---
+
+
+def test_treatment_threads_into_the_payload():
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(None, "unavailable"),
+    )
+    ctx = svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert ctx["our_treatment"] == "treatment_arm"
+    assert ctx["treatment_context"] is not None
+    assert ctx["treatment_context"]["column"] == "treatment_arm"
+    assert ctx["treatment_context"]["kind"] == "drug_therapy"
+    assert ctx["treatment_context"]["source"] == "curated"
+    assert "ribociclib" in ctx["treatment_context"]["framing"].lower()
+    assert ctx["analysis_framing"].startswith("This analysis estimates the effect of ")
+
+
+def test_no_treatment_yields_an_honest_empty_analysis_frame():
+    """The brand-level view (leaderboard MoA chip) passes no treatment: the payload
+    must say so rather than invent an analysis it does not have."""
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(None, "unavailable"),
+    )
+    ctx = svc.get_context("Kisqali", "persistent_180d")
+    assert ctx["our_treatment"] is None
+    assert ctx["treatment_context"] is None
+    assert ctx["analysis_framing"] is None
+
+
+def test_unmapped_treatment_is_reported_but_not_framed():
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(None, "unavailable"),
+    )
+    ctx = svc.get_context("Kisqali", "persistent_180d", treatment="made_up_treatment")
+    assert ctx["our_treatment"] == "made_up_treatment"
+    assert ctx["treatment_context"] is None
+    assert ctx["analysis_framing"] is None
+
+
+class _CapturingCitationProvider:
+    """Records the profile each citation lookup was made with."""
+
+    provider_name = "capture"
+
+    def __init__(self, fragment):
+        self._fragment = fragment
+        self.terms = []
+
+    def enrich(self, profile):
+        self.terms.append(profile.analysis_rwe_search_term)
+        return self._fragment
+
+
+def test_citation_provider_receives_the_analysis_specific_search_term():
+    cap = _CapturingCitationProvider(CitationFragment(None, "unavailable"))
+    svc = ClinicalContextService(
+        mechanism_provider=_StubProvider(MechanismFragment("CDK4/6 inhibitor", "chembl")),
+        endpoints_provider=_StubProvider(_eps(["OS"], "clinicaltrials.gov")),
+        citation_provider=cap,
+        indications_provider=_StubProvider(IndicationsFragment(["BC"], None, None, "openfda")),
+        competitor_provider=_StubProvider(CompetitorFragment(["Ibrance (palbociclib)"], 1)),
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="copay_support")
+    assert len(cap.terms) == 1
+    term = cap.terms[0].lower()
+    assert "ribociclib" in term
+    assert "copay" in term
+    assert "persistence" in term
+
+
+def test_citation_refetches_per_analysis_while_brand_fragments_stay_cached(monkeypatch):
+    """The brand-level fan-out (MoA / endpoints / label / competitors) does NOT vary
+    by analysis and must not be re-fetched; the literature search DOES vary and must
+    be re-run per analysis. Splitting these is the whole point of the per-term
+    citation cache."""
+    import src.services.clinical_context.service as svc_mod
+
+    # Prove the citation re-fetch is driven by the analysis, not by TTL expiry.
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 10_000.0)
+    art = PubMedArticle(pmid="1", title="t", journal="j", doi="10.1/z")
+    counters = {"moa": {"n": 0}, "ep": {"n": 0}, "cite": {"n": 0}}
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(art, "pubmed"),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    svc.get_context("Kisqali", "persistent_180d", treatment="copay_support")
+    assert counters["moa"]["n"] == 1
+    assert counters["ep"]["n"] == 1
+    assert counters["cite"]["n"] == 2
+
+
+def test_same_analysis_reuses_the_cached_citation(monkeypatch):
+    import src.services.clinical_context.service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    art = PubMedArticle(pmid="1", title="t", journal="j", doi="10.1/z")
+    counters = {"cite": {"n": 0}}
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(art, "pubmed"),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert counters["cite"]["n"] == 1
+
+
+def test_unavailable_citation_self_heals_per_analysis(monkeypatch):
+    """An unavailable/seed citation is degraded and must be re-attempted after the
+    self-heal window — the same guarantee the brand-level fan-out has."""
+    import src.services.clinical_context.service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    counters = {"cite": {"n": 0}}
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(None, "unavailable"),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert counters["cite"]["n"] == 2
+
+
+def test_citation_payload_discloses_the_term_that_was_searched():
+    art = PubMedArticle(pmid="35642282", title="RWE", journal="J", doi="10.1/x")
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(art, "pubmed", "ribociclib breast cancer persistence real-world"),
+    )
+    ctx = svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert (
+        ctx["real_world_evidence"]["search_term"]
+        == "ribociclib breast cancer persistence real-world"
+    )
+    # The curated seminal citation was never "searched" — it must not claim a term.
+    assert ctx["seminal_real_world_evidence"]["search_term"] is None
+
+
+# --- #1763 Phase 2: the evidence block is opt-in per call ----------------------
+
+
+class _StubEvidenceProvider:
+    def __init__(self, fragment):
+        self._fragment = fragment
+        self.calls = []
+
+    def evidence(self, profile, *, outcome, treatment_context, search_term):
+        self.calls.append(
+            (profile.brand, outcome, getattr(treatment_context, "column", None), search_term)
+        )
+        return self._fragment
+
+
+def _evidence_fragment():
+    from src.services.clinical_context.causal_evidence import (
+        CausalEvidenceFragment,
+        IndicationEdge,
+        VerifiedCitation,
+    )
+
+    return CausalEvidenceFragment(
+        status="evidence",
+        indication_edge=IndicationEdge(
+            predicate="associated_with",
+            drug_id="CHEMBL3545110",
+            drug_name="RIBOCICLIB",
+            disease_id="MONDO_0007254",
+            disease_name="breast cancer",
+            max_clinical_stage="PHASE_3",
+            source="open_targets",
+        ),
+        citations=[
+            VerifiedCitation(
+                pmid="1",
+                title="Ribociclib persistence in breast cancer",
+                journal="J",
+                pubdate="2024",
+                url="https://pubmed.ncbi.nlm.nih.gov/1/",
+                entities_found=("ribociclib", "breast cancer"),
+                confidence=0.5,
+                source="pubmed+europepmc",
+            )
+        ],
+        note="Open Targets stages lag the FDA label.",
+    )
+
+
+def _service_with_evidence(provider):
+    return ClinicalContextService(
+        mechanism_provider=_StubProvider(MechanismFragment("CDK4/6 inhibitor", "chembl")),
+        endpoints_provider=_StubProvider(_eps(["OS"], "clinicaltrials.gov")),
+        citation_provider=_StubProvider(CitationFragment(None, "unavailable")),
+        indications_provider=_StubProvider(IndicationsFragment(["BC"], None, None, "openfda")),
+        competitor_provider=_StubProvider(CompetitorFragment(["Ibrance (palbociclib)"], 1)),
+        causal_evidence_provider=provider,
+    )
+
+
+def test_causal_evidence_is_attached_when_requested():
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    ev = ctx["causal_evidence"]
+    assert ev["status"] == "evidence"
+    assert ev["indication_edge"]["disease_name"] == "breast cancer"
+    assert ev["indication_edge"]["max_clinical_stage"] == "PHASE_3"
+    assert ev["citations"][0]["pmid"] == "1"
+    assert ev["citations"][0]["confidence"] == 0.5
+    assert ev["note"]
+    # It was asked about THIS analysis, with the analysis-composed query.
+    assert provider.calls[0][0] == "Kisqali"
+    assert provider.calls[0][2] == "treatment_arm"
+    assert "persistence" in provider.calls[0][3]
+
+
+def test_causal_evidence_is_not_fetched_by_default():
+    """The leaderboard fan-out attaches context to every row; the evidence lookup is
+    several live calls per analysis and nothing in the leaderboard renders it, so it
+    stays opt-in and says so rather than looking unavailable."""
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm"
+    )
+    assert provider.calls == []
+    assert ctx["causal_evidence"]["status"] == "not_requested"
+    assert ctx["causal_evidence"]["citations"] == []
+
+
+def test_causal_evidence_is_absent_without_a_treatment():
+    """No treatment means no analysis to gather evidence for."""
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", include_causal_evidence=True
+    )
+    assert provider.calls == []
+    assert ctx["causal_evidence"] is None
+
+
+def test_causal_evidence_never_breaks_the_payload():
+    class _BoomProvider:
+        def evidence(self, profile, *, outcome, treatment_context, search_term):
+            raise RuntimeError("open targets down")
+
+    ctx = _service_with_evidence(_BoomProvider()).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    assert ctx["causal_evidence"]["status"] == "unavailable"
+    assert ctx["mechanism"]["source"] == "chembl"  # the rest of the payload survives
+
+
+def test_causal_evidence_is_cached_per_analysis():
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    svc = _service_with_evidence(provider)
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support", include_causal_evidence=True
+    )
+    assert len(provider.calls) == 2
+
+
+def test_evidence_cache_key_is_bounded_by_the_curated_universe():
+    """`outcome` and `treatment` arrive from query params. Keying the evidence cache
+    on the RAW outcome would let any authenticated caller grow this module-level dict
+    without bound — and re-hit Open Targets / PubMed / Europe PMC for every novel
+    string. The key is the analysis as the curated maps define it, which collapses
+    unmapped outcomes onto the brand-level query they already fall back to."""
+    import src.services.clinical_context.service as svc_mod
+
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    svc = _service_with_evidence(provider)
+    for i in range(20):
+        svc.get_context(
+            "Kisqali",
+            f"made_up_outcome_{i}",
+            treatment="treatment_arm",
+            include_causal_evidence=True,
+        )
+    assert len(svc_mod._EVIDENCE_CACHE) == 1
+    assert len(provider.calls) == 1
+
+
+def test_an_uncurated_treatment_is_never_cached():
+    """An unmapped treatment yields an immediate honest 'unavailable' with no live
+    call, so caching it buys nothing and would be the same unbounded-key hazard."""
+    import src.services.clinical_context.service as svc_mod
+
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    svc = _service_with_evidence(provider)
+    for i in range(20):
+        svc.get_context(
+            "Kisqali", "persistent_180d", treatment=f"junk_{i}", include_causal_evidence=True
+        )
+    assert svc_mod._EVIDENCE_CACHE == {}
+
+
+def test_a_half_degraded_evidence_fragment_self_heals(monkeypatch):
+    """The evidence block must not freeze an upstream outage into the process for
+    good: a fragment whose sources partly failed is degraded, not settled."""
+    import src.services.clinical_context.service as svc_mod
+    from src.services.clinical_context.causal_evidence import CausalEvidenceFragment
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    degraded = CausalEvidenceFragment(
+        status="evidence",
+        indication_edge=None,
+        citations=[],
+        note="Open Targets was unreachable.",
+        sources_unavailable=("open_targets",),
+    )
+    provider = _StubEvidenceProvider(degraded)
+    svc = _service_with_evidence(provider)
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    svc.get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    assert len(provider.calls) == 2
+
+
+def test_a_brand_level_citation_fallback_is_retried_not_frozen(monkeypatch):
+    """`pubmed_brand` means the ANALYSIS query returned nothing — and the provider
+    cannot tell a genuine zero-hit from a swallowed 429. Caching it forever under the
+    analysis key would freeze a transient failure for the process lifetime."""
+    import src.services.clinical_context.service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    art = PubMedArticle(pmid="1", title="t", journal="j", doi="10.1/z")
+    counters = {"cite": {"n": 0}}
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(
+            art, "pubmed_brand", "ribociclib persistence adherence breast cancer real-world"
+        ),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert counters["cite"]["n"] == 2
+
+
+def test_evidence_payload_discloses_unavailable_sources():
+    from src.services.clinical_context.causal_evidence import CausalEvidenceFragment
+
+    provider = _StubEvidenceProvider(
+        CausalEvidenceFragment(
+            status="evidence",
+            indication_edge=None,
+            citations=[],
+            note="Open Targets was unreachable for this analysis.",
+            sources_unavailable=("open_targets",),
+        )
+    )
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    assert ctx["causal_evidence"]["sources_unavailable"] == ["open_targets"]
+
+
+def test_a_degraded_evidence_result_never_overwrites_a_complete_one():
+    """codex iter-2 MEDIUM. Two requests can miss the cache together. The slower one
+    must not replace a complete fragment with the degraded one it happened to get
+    from a transient upstream failure — that would serve the outage to everyone for
+    the whole self-heal window even though a good answer already existed."""
+    import time as _time
+
+    import src.services.clinical_context.service as svc_mod
+    from src.services.clinical_context.brand_map import (
+        compose_rwe_search_term,
+        resolve_brand_profile,
+    )
+    from src.services.clinical_context.causal_evidence import CausalEvidenceFragment
+
+    profile = resolve_brand_profile("Kisqali")
+    key = (
+        "Kisqali",
+        "treatment_arm",
+        compose_rwe_search_term(profile, "persistent_180d", "treatment_arm"),
+    )
+    complete = _evidence_fragment()
+    degraded = CausalEvidenceFragment(
+        status="evidence",
+        indication_edge=None,
+        citations=[],
+        note="Open Targets was unreachable.",
+        sources_unavailable=("open_targets",),
+    )
+
+    class _RacingProvider:
+        """Passes the cache check, then the OTHER request finishes first."""
+
+        def evidence(self, profile, *, outcome, treatment_context, search_term):
+            svc_mod._EVIDENCE_CACHE[key] = (complete, _time.monotonic(), True)
+            return degraded
+
+    ctx = _service_with_evidence(_RacingProvider()).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    kept, _stored_at, complete_flag = svc_mod._EVIDENCE_CACHE[key]
+    assert complete_flag is True
+    assert kept.sources_unavailable == ()
+    # The racer still returns what IT measured — it does not lie about its own call.
+    assert ctx["causal_evidence"]["sources_unavailable"] == ["open_targets"]
