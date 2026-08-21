@@ -35,6 +35,7 @@ structural contract. The live degradation signal itself stays live.
 from __future__ import annotations
 
 import ast
+from collections import Counter
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple, get_args
 
@@ -182,38 +183,288 @@ def _python_files_mentioning(token: str) -> Iterator[Tuple[Path, str]]:
                 yield path, text
 
 
+# Every construct Python gives its OWN namespace. Class bodies and comprehensions
+# belong here just as much as functions do (codex iter-3): a name bound inside one
+# does not bind in the enclosing scope, so counting it there would make an
+# enclosing read look ambiguous and silently drop it — a false green in the guard
+# whose whole job is preventing false greens.
+_SCOPES = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.Lambda,
+    ast.ClassDef,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+
+
+def _is_seam_call(node: Optional[ast.AST]) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == _SEAM
+    )
+
+
+def _nodes_in_scope(scope: ast.AST) -> Iterator[ast.AST]:
+    """Every node under ``scope`` that is not inside a NESTED namespace."""
+    for child in ast.iter_child_nodes(scope):
+        yield child
+        if not isinstance(child, _SCOPES):
+            yield from _nodes_in_scope(child)
+
+
+def _child_scopes(scope: ast.AST) -> Iterator[ast.AST]:
+    """The namespaces nested DIRECTLY inside ``scope`` (not their own nestings)."""
+    for child in ast.iter_child_nodes(scope):
+        if isinstance(child, _SCOPES):
+            yield child
+        else:
+            yield from _child_scopes(child)
+
+
+def _bound_names(nodes: List[ast.AST]) -> Counter[str]:
+    """Every name-binding occurrence in one scope, counted.
+
+    Counting rather than set-membership is what lets the caller ask "is EVERY
+    binding of this name a fan-out assignment", which is the question that keeps
+    the indirect pass from mis-attributing a shadowed name.
+
+    A ``Name`` in ``Store``/``Del`` context covers assignment, augmented
+    assignment, ``for`` targets, ``with ... as`` and the walrus. The rest bind
+    through their own fields and are enumerated explicitly. Comprehension and
+    class-body targets are NOT seen here: ``_nodes_in_scope`` stops at those
+    namespaces, which is exactly where Python puts them.
+    """
+    bound: Counter[str] = Counter()
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound[node.id] += 1
+        elif isinstance(node, ast.arg):
+            bound[node.arg] += 1
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound[node.name] += 1
+        elif isinstance(node, ast.alias):
+            bound[node.asname or node.name.split(".")[0]] += 1
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound[node.name] += 1
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            # Bound somewhere this scope cannot see — never followable.
+            for name in node.names:
+                bound[name] += 1
+    return bound
+
+
 def _positional_reads(path: Path, text: str) -> List[Tuple[int, int, str]]:
     """``(lineno, positions_read, form)`` for every positional read of a
-    ``*._fan_out(...)`` result: tuple unpacks and constant-index subscripts.
+    ``*._fan_out(...)`` result.
 
-    A starred target (``a, *rest = ...``) reads a variable number of positions and
-    is reported as unmeasurable rather than silently skipped.
+    Two forms are swept, because only sweeping the first would let the drift walk
+    one line down and escape (codex iter-1 LOW):
+
+    * DIRECT — the call expression is destructured or subscripted in place
+      (``a, b, c, d = svc._fan_out(p)``, ``svc._fan_out(p)[3]``).
+    * INDIRECT — the call is bound to a name and the NAME is destructured or
+      subscripted (``frags = svc._fan_out(p)`` … ``frags[4]``). Followed per
+      namespace, inherited into nested ones the way a closure reads an enclosing
+      local, and dropped the moment the nested namespace rebinds the name.
+      A name is followed ONLY when *every* binding of it in its own namespace is a
+      fan-out assignment, counted over every binding form the language has, not
+      just plain assignment (codex iter-2 LOW). A missed report is a weaker guard;
+      a wrong one is a guard people start ignoring.
+
+    A starred target (``a, *rest = …``) reads a variable number of positions and is
+    reported as unmeasurable rather than silently skipped.
     """
     tree = ast.parse(text, filename=str(path))
     reads: List[Tuple[int, int, str]] = []
 
-    def _is_seam_call(node: Optional[ast.expr]) -> bool:
-        return (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == _SEAM
+    def _record_unpack(node: ast.AST, target: ast.expr) -> None:
+        if not isinstance(target, (ast.Tuple, ast.List)):
+            return
+        lineno = getattr(node, "lineno", 0)
+        if any(isinstance(e, ast.Starred) for e in target.elts):
+            reads.append((lineno, -1, "starred-unpack"))
+        else:
+            reads.append((lineno, len(target.elts), "unpack"))
+
+    def _record_index(node: ast.Subscript) -> None:
+        index = node.slice
+        if isinstance(index, ast.Constant) and isinstance(index.value, int):
+            position = index.value
+            reads.append((node.lineno, position + 1 if position >= 0 else -position, "index"))
+
+    def _scan(scope: ast.AST, inherited: frozenset) -> None:
+        nodes = list(_nodes_in_scope(scope))
+
+        # Pass 1 — DIRECT reads, plus which names in THIS namespace hold a
+        # fan-out result. Direct reads are structural and never depend on scope.
+        seam_bindings: Counter[str] = Counter()
+        for node in nodes:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and _is_seam_call(node.value):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    _record_unpack(node, target)
+                    if isinstance(target, ast.Name):
+                        seam_bindings[target.id] += 1
+            elif isinstance(node, ast.Subscript) and _is_seam_call(node.value):
+                _record_index(node)
+
+        # A name is followed only when EVERY binding of it here is a fan-out
+        # assignment. Anything else — a loop target, a with/except alias, an
+        # import, a def/class, a parameter, a walrus — makes it ambiguous, and
+        # this guard reports nothing rather than accusing the wrong line. An
+        # inherited name survives only while this namespace does not rebind it.
+        local = _bound_names(nodes)
+        visible = frozenset(
+            {n for n in inherited if local[n] == 0}
+            | {n for n, c in seam_bindings.items() if local[n] == c}
         )
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and _is_seam_call(node.value):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, (ast.Tuple, ast.List)):
-                    if any(isinstance(e, ast.Starred) for e in target.elts):
-                        reads.append((node.lineno, -1, "starred-unpack"))
-                    else:
-                        reads.append((node.lineno, len(target.elts), "unpack"))
-        elif isinstance(node, ast.Subscript) and _is_seam_call(node.value):
-            index = node.slice
-            if isinstance(index, ast.Constant) and isinstance(index.value, int):
-                position = index.value
-                reads.append((node.lineno, position + 1 if position >= 0 else -position, "index"))
+        # Pass 2 — INDIRECT reads through the visible names.
+        if visible:
+            for node in nodes:
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name):
+                    if node.value.id in visible:
+                        for target in node.targets:
+                            _record_unpack(node, target)
+                elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+                    if node.value.id in visible:
+                        _record_index(node)
+
+        for child in _child_scopes(scope):
+            _scan(child, visible)
+
+    _scan(tree, frozenset())
     return reads
+
+
+def test_the_sweep_itself_sees_both_direct_and_indirect_stale_reads() -> None:
+    """A guard nobody has seen fail is a decoration. This runs the sweep over
+    synthetic source holding each stale form and pins what it reports.
+
+    The indirect case is codex iter-1's LOW: before it was handled, moving the
+    stale read one line down (``frags = svc._fan_out(p)`` then ``frags[4]``)
+    walked straight past this guard. The shadowing cases are codex iter-2's LOW:
+    counting only plain assignments as bindings would have let a ``for`` target, a
+    ``with``/``except`` alias, an import or a parameter of the same name get
+    accused of a stale read it never made.
+    """
+    source = (
+        "def direct(svc, p):\n"  # 1
+        "    a, b, c, d, e = svc._fan_out(p)\n"  # 2
+        "    return svc._fan_out(p)[4]\n"  # 3
+        "\n"
+        "def indirect(svc, p):\n"  # 5
+        "    frags = svc._fan_out(p)\n"  # 6
+        "    a, b, c, d, e = frags\n"  # 7
+        "    return frags[4]\n"  # 8
+        "\n"
+        "def starred(svc, p):\n"  # 10
+        "    head, *rest = svc._fan_out(p)\n"  # 11
+        "    return head, rest\n"  # 12
+        "\n"
+        "def correct(svc, p):\n"  # 14
+        "    moa, eps, ind, comp = svc._fan_out(p)\n"  # 15
+        "    return moa, eps, ind, comp\n"  # 16
+        "\n"
+        "def scoped(svc, p):\n"  # 18
+        "    frags = svc._fan_out(p)\n"  # 19
+        "    def inner(other):\n"  # 20
+        "        frags = other\n"  # 21
+        "        return frags[9]\n"  # 22
+        "    return inner, frags[4]\n"  # 23
+        "\n"
+        "def rebound(svc, p, other):\n"  # 25
+        "    frags = svc._fan_out(p)\n"  # 26
+        "    frags = other\n"  # 27
+        "    return frags[9]\n"  # 28
+        "\n"
+        "def loop_shadow(svc, p, rows):\n"  # 30
+        "    frags = svc._fan_out(p)\n"  # 31
+        "    for frags in rows:\n"  # 32
+        "        pass\n"  # 33
+        "    return frags[9]\n"  # 34
+        "\n"
+        "def with_shadow(svc, p, cm):\n"  # 36
+        "    frags = svc._fan_out(p)\n"  # 37
+        "    with cm as frags:\n"  # 38
+        "        return frags[9]\n"  # 39
+        "\n"
+        "def except_shadow(svc, p):\n"  # 41
+        "    frags = svc._fan_out(p)\n"  # 42
+        "    try:\n"  # 43
+        "        pass\n"  # 44
+        "    except ValueError as frags:\n"  # 45
+        "        return frags[9]\n"  # 46
+        "    return None\n"  # 47
+        "\n"
+        "def import_shadow(svc, p):\n"  # 49
+        "    frags = svc._fan_out(p)\n"  # 50
+        "    import frags\n"  # 51
+        "    return frags[9]\n"  # 52
+        "\n"
+        "def param_shadow(svc, p, frags):\n"  # 54
+        "    frags = svc._fan_out(p)\n"  # 55
+        "    return frags[9]\n"  # 56
+        "\n"
+        "def class_body(svc, p, other):\n"  # 58
+        "    frags = svc._fan_out(p)\n"  # 59
+        "    class C:\n"  # 60
+        "        frags = other\n"  # 61
+        "    return C, frags[4]\n"  # 62
+        "\n"
+        "def comp_target(svc, p, rows):\n"  # 64
+        "    frags = svc._fan_out(p)\n"  # 65
+        "    seen = [frags for frags in rows]\n"  # 66
+        "    return seen, frags[4]\n"  # 67
+        "\n"
+        "def closure_read(svc, p):\n"  # 69
+        "    frags = svc._fan_out(p)\n"  # 70
+        "    def inner():\n"  # 71
+        "        return frags[4]\n"  # 72
+        "    return inner\n"  # 73
+        "\n"
+        "def comp_body_read(svc, p, rows):\n"  # 75
+        "    frags = svc._fan_out(p)\n"  # 76
+        "    return [frags[4] for _ in rows]\n"  # 77
+        "\n"
+        "def comp_local_read(svc, p, rows):\n"  # 79
+        "    frags = svc._fan_out(p)\n"  # 80
+        "    return frags, [frags[9] for frags in rows]\n"  # 81
+    )
+    reads = _positional_reads(Path("<synthetic>"), source)
+    by_line = {lineno: (positions, form) for lineno, positions, form in reads}
+
+    assert by_line[2] == (5, "unpack"), "direct 5-way unpack missed"
+    assert by_line[3] == (5, "index"), "direct index-4 read missed"
+    assert by_line[7] == (5, "unpack"), "INDIRECT 5-way unpack missed (codex iter-1 LOW)"
+    assert by_line[8] == (5, "index"), "INDIRECT index-4 read missed (codex iter-1 LOW)"
+    assert by_line[11] == (-1, "starred-unpack"), "starred target must be reported, not skipped"
+    assert by_line[15] == (4, "unpack"), "the correct call site must still be seen"
+    # A nested function is its own scope: the outer read is still followed, and the
+    # inner name that merely shares a spelling is not attributed to the outer one.
+    assert by_line[23] == (5, "index"), "outer-scope indirect read lost to a nested def"
+    assert 22 not in by_line, "a nested scope's unrelated local was attributed to _fan_out"
+    # Every ambiguous shadowing form is deliberately NOT reported: a wrong
+    # accusation is what teaches people to ignore a guard (codex iter-2 LOW).
+    for shadowed in (28, 34, 39, 46, 52, 56):
+        assert shadowed not in by_line, (
+            f"line {shadowed} is a shadowed name, not a verified _fan_out read — "
+            "reporting it would be a false positive"
+        )
+    # A class body and a comprehension are their OWN namespaces, so a name bound
+    # inside one must not make the enclosing read look ambiguous — dropping the
+    # enclosing read there would be a silent false green (codex iter-3 LOW).
+    assert by_line[62] == (5, "index"), "a class-body binding swallowed an enclosing read"
+    assert by_line[67] == (5, "index"), "a comprehension target swallowed an enclosing read"
+    # …and reads INSIDE a nested namespace follow the enclosing name the way a
+    # closure does, unless that namespace rebinds it.
+    assert by_line[72] == (5, "index"), "closure read of the enclosing fan-out result missed"
+    assert by_line[77] == (5, "index"), "comprehension-body read of the enclosing result missed"
+    assert 81 not in by_line, "a comprehension-LOCAL name was attributed to the enclosing result"
 
 
 def test_every_fan_out_call_site_reads_the_declared_arity() -> None:
