@@ -60,7 +60,7 @@ _FINALIZED_AT_IMPORT = celery_app.finalized
 _DECLARED_KEYS = frozenset(celery_app.conf.beat_schedule)
 
 
-def _fingerprint(beat_schedule: dict) -> dict[str, tuple[str, str, str]]:
+def _fingerprint(beat_schedule: dict) -> dict[str, tuple[str, ...]]:
     """A comparable, mutation-proof summary of a beat schedule.
 
     ``repr`` rather than the values themselves for two reasons: the entry dicts are
@@ -68,9 +68,22 @@ def _fingerprint(beat_schedule: dict) -> dict[str, tuple[str, str, str]]:
     thing to itself), and ``43200.0 == 43200`` is True while the reprs differ — the
     float-to-int coercion ``add_periodic_task`` performs is a real change to the
     declared entry even where it is numerically identical.
+
+    ``args``/``kwargs`` are included, not just schedule and options: two declared
+    entries carry real kwargs (``feast-check-freshness`` sends
+    ``{"alert_on_stale": True}``, ``feast-materialize-full-weekly`` sends
+    ``{"feature_views": None}``), and ``add_periodic_task`` rebuilds an entry with
+    ``args=()``/``kwargs={}`` from the signature. Leaving them out would let a hook
+    silently strip a task's arguments whenever it happened to match on the rest.
     """
     return {
-        key: (str(entry.get("task")), repr(entry.get("schedule")), repr(entry.get("options")))
+        key: (
+            str(entry.get("task")),
+            repr(entry.get("schedule")),
+            repr(entry.get("options")),
+            repr(entry.get("args")),
+            repr(entry.get("kwargs")),
+        )
         for key, entry in beat_schedule.items()
     }
 
