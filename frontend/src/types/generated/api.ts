@@ -7686,7 +7686,7 @@ export interface components {
              * @description The real pivotal-endpoint framing our synthetic outcome stands in for (None when unmapped).
              */
             mapped_endpoint?: string | null;
-            /** @description Clinical grounding for this specific analysis: verbatim label factors selected by the outcome, plus the competitive framing. None on the brand-level view (no scenario to ground). */
+            /** @description Clinical grounding for this specific analysis: label factors selected by the outcome, plus the competitive framing. None whenever there is no scenario to ground — on the brand-level view (no treatment), AND when a treatment is supplied that resolves to no curated context, which yields nothing to say rather than an empty object. The narrower wording named only the brand-level case (codex iter-13 MEDIUM). */
             analysis_grounding?: components["schemas"]["AnalysisGrounding"] | null;
             mechanism: components["schemas"]["MechanismOfAction"];
             pivotal_endpoints: components["schemas"]["PivotalEndpoint"];
@@ -12733,11 +12733,23 @@ export interface components {
         };
         /**
          * LabelConsideration
-         * @description One VERBATIM bullet from the FDA label, with the section it came from.
+         * @description One consideration lifted from the FDA label, with the section it came from.
          *
-         *     Never summarised and never generated: a paraphrased clinical consideration is
-         *     the plausible-but-wrong value CLAUDE.md forbids in a user-facing path. The
-         *     reference lets an analyst open the prescribing information at that paragraph.
+         *     ``detail`` is never summarised and never generated — a paraphrased clinical
+         *     consideration is the plausible-but-wrong value CLAUDE.md forbids in a user-facing
+         *     path. ``title`` and ``references`` carry a weaker guarantee, spelled out because
+         *     this docstring used to promise "one VERBATIM bullet ... the reference lets an
+         *     analyst open the prescribing information at that paragraph" for all three fields,
+         *     and that was false for two of the emitters (codex iter-11 HIGH):
+         *
+         *     * ``detail`` — always a contiguous verbatim run of the named section.
+         *     * ``title`` — the bullet's own verbatim heading, or the plain name of its section
+         *       when the bullet has none. Our words in that case, chosen so they cannot be
+         *       mistaken for clinical text.
+         *     * ``references`` — a real label cross-reference for Highlights bullets, which does
+         *       open the prescribing information at that paragraph. For the boxed warning it is
+         *       the literal "Boxed warning": that section carries no cross-reference of its own,
+         *       and naming it is the honest alternative to inventing one.
          */
         LabelConsideration: {
             /**
