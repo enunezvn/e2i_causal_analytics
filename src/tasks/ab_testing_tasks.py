@@ -1419,39 +1419,38 @@ def execute_twin_retraining(
     )
 
 
-# Celery Beat schedule configuration
-@celery_app.on_after_finalize.connect
-def setup_ab_testing_periodic_tasks(sender, **kwargs):
-    """Set up periodic A/B testing tasks."""
-    config = load_config()
-    schedule_config = config.get("schedule", {})
-
-    # Check all active experiments daily at 2 AM
-    sender.add_periodic_task(
-        86400,  # 24 hours
-        check_all_active_experiments.s(),
-        name="ab-interim-analysis-check",
-    )
-
-    # Enrollment health check every 12 hours
-    enrollment_interval = schedule_config.get("enrollment_check_interval_hours", 12)
-    sender.add_periodic_task(
-        enrollment_interval * 3600,
-        enrollment_health_check.s(),
-        name="ab-enrollment-health-check",
-    )
-
-    # SRM detection every 6 hours
-    srm_interval = schedule_config.get("srm_check_interval_hours", 6)
-    sender.add_periodic_task(
-        srm_interval * 3600,
-        srm_detection_sweep.s(),
-        name="ab-srm-detection-sweep",
-    )
-
-    # Weekly cleanup (Sundays)
-    sender.add_periodic_task(
-        604800,  # 7 days
-        cleanup_old_ab_results.s(),
-        name="ab-results-cleanup",
-    )
+# NOTE (#1772): no on_after_finalize/add_periodic_task scheduling here. The former
+# setup_ab_testing_periodic_tasks hook re-registered all four A/B beat entries under
+# the SAME keys celery_app.conf.beat_schedule already declares — and
+# add_periodic_task writes straight into that dict, so at every worker/beat boot the
+# hook REPLACED the declared entries with what it built from the signature:
+#
+#   ab-interim-analysis-check   crontab(hour=1, minute=15)  ->  86400 (bare interval)
+#   ab-enrollment-health-check  43200.0                     ->  43200
+#   ab-srm-detection-sweep      21600.0                     ->  21600
+#   ab-results-cleanup          604800.0                    ->  604800
+#
+# The first one is the functional defect: it undid #1645. An interval schedule is
+# measured from last_run_at, so a 24h entry on a box that deploys several times a
+# day never becomes due — the exact failure #1645 was filed for. The other three
+# came out numerically unchanged *today* only because DEFAULT_CONFIG happens to
+# agree with celery_app.py and config/ab_testing.yaml does not exist; creating that
+# file would have silently overridden two declared beat entries from a second
+# source of truth. All four also lost their declared options={"queue": "quick"},
+# because add_periodic_task rebuilds the entry from the signature and a plain .s()
+# carries no options (inert here: task_routes routes all four to `quick`
+# independently — but only by luck, not by design).
+#
+# Both this hook and the beat_schedule entries it collided with arrived in the same
+# commit (fc9fae4bb, Phase 15 scaffold), so nothing here was the sole registration
+# for any task and no scheduling is lost by removing it. DEFAULT_CONFIG's
+# schedule.interim_analysis_hour ("2 AM UTC") never had a consumer — the hook
+# hardcoded 86400 and ignored it; #1645 is what finally honoured that intent, as
+# crontab(hour=1, minute=15).
+#
+# This is the same remedy already applied to drift_monitoring_tasks.py after the
+# 2026-07-04 alert storm, and what setup_feedback_loop_periodic_tasks says in
+# prose: "Static schedule is preferred for production stability." All A/B beat
+# scheduling now lives in src/workers/celery_app.py beat_schedule, the single
+# source of truth the guards cover: test_beat_hook_no_override_1772.py,
+# test_beat_schedule_registration.py and test_beat_daily_wallclock_1645.py.

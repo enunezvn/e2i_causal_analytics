@@ -79,14 +79,36 @@ class TestCeleryAppConfiguration:
         assert celery_app.conf.task_time_limit == 7200  # 2 hours
         assert celery_app.conf.task_soft_time_limit == 6600  # 1h 50m
 
-    def test_retry_settings_configured(self):
-        """Test auto-retry settings are configured."""
+    def test_no_app_level_autoretry_is_configured(self):
+        """Retries are a per-task decision; there is no app-wide autoretry (#1774).
+
+        This assertion is the inverse of the one it replaces. The old
+        ``test_retry_settings_configured`` pinned four keys —
+        ``task_autoretry_for``, ``task_retry_kwargs``, ``task_retry_backoff``,
+        ``task_retry_backoff_max`` — that are not Celery settings at all. It was
+        green because ``conf.update()`` stores unknown keys verbatim, so it only
+        ever proved that the dict remembered what we put in it, while reading as
+        proof that every task retried three times with backoff. Nothing on the
+        platform ever did.
+
+        What the old test still caught was "someone changed the retry config", and
+        that is kept: this fails if the keys come back. The behavioural half —
+        that no task is autoretry-wrapped and the Task base is stock — lives in
+        tests/unit/test_workers/test_celery_conf_keys_are_real_1774.py.
+        """
         from src.workers.celery_app import celery_app
 
-        assert celery_app.conf.task_autoretry_for == (Exception,)
-        assert celery_app.conf.task_retry_kwargs == {"max_retries": 3}
-        assert celery_app.conf.task_retry_backoff is True
-        assert celery_app.conf.task_retry_backoff_max == 600  # 10 minutes
+        for phantom in (
+            "task_autoretry_for",
+            "task_retry_kwargs",
+            "task_retry_backoff",
+            "task_retry_backoff_max",
+        ):
+            assert phantom not in set(celery_app.conf.changes), (
+                f"{phantom} is not a Celery setting — celery/app/autoretry.py reads "
+                "autoretry_for & friends from the task decorator or the Task class, "
+                "never from app.conf. Setting it here configures nothing (#1774)."
+            )
 
     def test_prefetch_multiplier_is_one(self):
         """Test prefetch is set to 1 for fair distribution."""
