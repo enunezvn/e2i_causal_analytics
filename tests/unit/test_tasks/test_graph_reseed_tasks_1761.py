@@ -275,6 +275,74 @@ def test_a_failing_seed_step_is_reported_not_swallowed(wired) -> None:
     assert len(ctx.runner.calls) == 2, "a failed structural seed must not abort the sync"
 
 
+def test_a_hung_seed_script_is_a_recorded_failure_not_an_escape(wired, monkeypatch) -> None:
+    """A subprocess timeout must not skip the remaining step or the post-verify.
+
+    If TimeoutExpired propagated, the causal sync would never run, the step
+    record would be discarded, and the task would fail with a traceback that
+    says nothing about whether the graph recovered.
+    """
+    ctx = wired(counts=[0, 0, 58])
+    real_runner = ctx.runner
+
+    def _hang_first(cmd, **kwargs):  # noqa: ANN001
+        if not real_runner.calls and "seed_falkordb.py" in cmd[1]:
+            real_runner.calls.append({"cmd": list(cmd), **kwargs})
+            raise subprocess.TimeoutExpired(cmd=list(cmd), timeout=grt.SCRIPT_TIMEOUT_SECONDS)
+        return real_runner(cmd, **kwargs)
+
+    monkeypatch.setattr(grt.subprocess, "run", _hang_first)
+
+    result = graph_emptiness_sentinel.run()
+
+    assert result["status"] == "reseeded_with_errors"
+    assert result["curated_node_count"] == 58
+    assert [step["script"] for step in result["steps"]] == [
+        "seed_falkordb.py",
+        "sync_causal_paths_to_falkordb.py",
+    ], "the causal sync must still run after the structural seed hangs"
+    timed_out = [step for step in result["steps"] if step.get("timed_out")]
+    assert [step["script"] for step in timed_out] == ["seed_falkordb.py"]
+    assert ctx.redis.eval_calls, "lock must be released after a hung step"
+
+
+def test_missing_seed_scripts_report_instead_of_taking_the_lock(
+    wired, monkeypatch, tmp_path
+) -> None:
+    """The container ships scripts/ today, but a future image change must not turn
+    the sentinel into a silent no-op that also holds the lock for 30 minutes."""
+    ctx = wired(counts=[0])
+    monkeypatch.setattr(grt, "_SCRIPTS_DIR", tmp_path)
+
+    result = graph_emptiness_sentinel.run()
+
+    assert result["status"] == "scripts_missing"
+    assert sorted(result["missing"]) == [
+        "seed_falkordb.py",
+        "sync_causal_paths_to_falkordb.py",
+    ]
+    assert ctx.redis.set_calls == [], "no lock should be taken when the heal cannot run"
+    assert ctx.runner.calls == []
+
+
+def test_an_unreachable_redis_fails_closed(wired, monkeypatch) -> None:
+    """No lock means no double-fire guard, and the structural seed is CREATE-based:
+    re-running it on an already-seeded graph was measured to inflate 89 nodes/279
+    edges to 128/573. Without the lock the sentinel must not reseed at all."""
+    ctx = wired(counts=[0])
+
+    def _boom():
+        raise ConnectionError("redis unreachable")
+
+    monkeypatch.setattr(grt, "_redis_client", _boom)
+
+    result = graph_emptiness_sentinel.run()
+
+    assert result["status"] == "lock_error"
+    assert "unreachable" in result["error"]
+    assert ctx.runner.calls == [], "no reseed may run without the double-fire guard"
+
+
 # ---------------------------------------------------------------------------
 # Wiring / boot-safety
 # ---------------------------------------------------------------------------

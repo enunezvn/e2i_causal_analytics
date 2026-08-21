@@ -164,13 +164,10 @@ def test_seed_script_exposes_its_own_connection_config() -> None:
     """
     tree = ast.parse(SEED_SCRIPT.read_text(encoding="utf-8"), filename=str(SEED_SCRIPT))
     defined = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+        node.name for node in ast.walk(tree) if isinstance(node, (ast.ClassDef, ast.FunctionDef))
     }
     assert "SeedFalkorDBConfig" in defined, (
-        "the local connection dataclass is gone — the seeder has no config to "
-        "connect with (#1761)"
+        "the local connection dataclass is gone — the seeder has no config to connect with (#1761)"
     )
     assert "_parse_falkordb_config" in defined, (
         "the FALKORDB_URL-preferring resolver is gone — the seeder falls back to "

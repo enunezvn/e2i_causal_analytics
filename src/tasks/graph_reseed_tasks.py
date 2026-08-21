@@ -166,15 +166,29 @@ def _run_step(script: str, extra_args: Tuple[str, ...], graph_name: str) -> Dict
     # var is its only handle.
     env = {**os.environ, "FALKORDB_GRAPH_NAME": graph_name}
 
-    proc = subprocess.run(
-        cmd,
-        cwd=str(_REPO_ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=SCRIPT_TIMEOUT_SECONDS,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(_REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=SCRIPT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        # A hung script must not escape as an exception: that would skip the
+        # remaining step, discard the step record, and lose the post-verify gate
+        # that decides whether the graph actually recovered. Record it as a
+        # failed step (returncode None) and let the loop continue.
+        logger.error(
+            "graph reseed step TIMED OUT after %ds: %s (graph=%s)",
+            SCRIPT_TIMEOUT_SECONDS,
+            script,
+            graph_name,
+        )
+        return {"script": script, "returncode": None, "timed_out": True}
+
     step: Dict[str, Any] = {"script": script, "returncode": proc.returncode}
     if proc.returncode == 0:
         logger.info("graph reseed step OK: %s (graph=%s)", script, graph_name)
@@ -220,9 +234,7 @@ def graph_emptiness_sentinel() -> Dict[str, Any]:
         return {"status": "probe_failed", "graph": graph_name, "error": str(exc)}
 
     if curated > 0:
-        logger.info(
-            "graph emptiness sentinel: %s healthy (%d curated nodes)", graph_name, curated
-        )
+        logger.info("graph emptiness sentinel: %s healthy (%d curated nodes)", graph_name, curated)
         return {"status": "ok", "graph": graph_name, "curated_node_count": curated}
 
     logger.critical(
@@ -244,9 +256,7 @@ def graph_emptiness_sentinel() -> Dict[str, Any]:
     try:
         redis_client = _redis_client()
         token = uuid.uuid4().hex
-        acquired = redis_client.set(
-            RESEED_LOCK_KEY, token, nx=True, ex=RESEED_LOCK_TTL_SECONDS
-        )
+        acquired = redis_client.set(RESEED_LOCK_KEY, token, nx=True, ex=RESEED_LOCK_TTL_SECONDS)
     except Exception as exc:  # noqa: BLE001 — fail closed: no lock, no CREATE-based reseed
         logger.error(
             "graph reseed lock unavailable (%s) — skipping reseed of %s rather than "

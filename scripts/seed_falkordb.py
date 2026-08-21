@@ -64,20 +64,36 @@ def _parse_falkordb_config() -> Tuple[str, int, Optional[str]]:
     and without preferring it this script's discrete defaults refuse the connection
     inside the container ("Error 111 connecting to localhost:6381").
 
-    The discrete fallback keeps this script's historical ``6381`` default rather
-    than the app client's ``6379``: the app client only ever runs INSIDE the docker
-    network (6379), while a human running this seeder without sourcing ``.env`` is
-    on the host, where FalkorDB is published on 6381. In every containerised call
-    path ``FALKORDB_URL`` is set, so the fallback port is only reached on the host.
+    Two deliberate deviations from those siblings, both to keep this script's
+    existing callers byte-for-byte unchanged:
+
+    * The discrete fallback keeps this script's historical ``6381`` default rather
+      than the app client's ``6379``. The app client only ever runs INSIDE the
+      docker network (6379); a human running this seeder without sourcing ``.env``
+      is on the host, where FalkorDB is published on 6381. Every containerised call
+      path sets ``FALKORDB_URL``, so the fallback port is only ever reached on the host.
+    * ``FALKORDB_PASSWORD`` OUTRANKS a password embedded in ``FALKORDB_URL``. That is
+      what the old ``src.rag.config.FalkorDBConfig.__post_init__`` did, and both
+      existing callers (``scripts/seed_falkordb_all.sh``,
+      ``scripts/seed_falkordb_init.py``) pass ``--host``/``--port`` explicitly while
+      setting ``FALKORDB_PASSWORD`` in the child environment -- letting a URL
+      password win would silently regress them. The URL password is the FALLBACK,
+      which is what makes the container path work: worker_light sets ``FALKORDB_URL``
+      and none of FALKORDB_HOST/PORT/PASSWORD/GRAPH_NAME (verified 2026-08-21).
     """
+    explicit_password = os.environ.get("FALKORDB_PASSWORD")
     url = os.environ.get("FALKORDB_URL")
     if url:
         parsed = urlparse(url)
-        return parsed.hostname or "localhost", parsed.port or 6379, parsed.password
+        return (
+            parsed.hostname or "localhost",
+            parsed.port or 6379,
+            explicit_password or parsed.password,
+        )
     return (
         os.environ.get("FALKORDB_HOST", "localhost"),
         int(os.environ.get("FALKORDB_PORT", "6381")),
-        os.environ.get("FALKORDB_PASSWORD"),
+        explicit_password,
     )
 
 
