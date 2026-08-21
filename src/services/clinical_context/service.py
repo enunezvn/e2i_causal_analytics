@@ -73,8 +73,9 @@ _BrandFragmentTuple = Tuple[
 # instead of caching a transient failure for the whole process lifetime. A
 # FULLY-LIVE result is reused for the rest of the worker's life (biomedical facts
 # change slowly); that is NOT unbounded — gunicorn runs with `--max-requests 1000
-# --max-requests-jitter 50`, so a worker recycles roughly every 950-1050 requests
-# and takes these dicts with it.
+# --max-requests-jitter 50`, and gunicorn ADDS the jitter (`max_requests +
+# randint(0, jitter)`, workers/base.py) rather than spreading it either side, so a
+# worker recycles after 1000-1050 requests and takes these dicts with it.
 _FRAGMENT_TTL_DEGRADED_S = 600.0
 
 # THESE CACHES ARE PER-WORKER, AND THAT MAKES LATENCY HERE EASY TO MISREAD (#1768).
@@ -90,11 +91,20 @@ _FRAGMENT_TTL_DEGRADED_S = 600.0
 #      Measured on 2026-08-21 after #1767 landed: 96 identical requests over three
 #      (brand, outcome, treatment) cases, on both warm and freshly-cold caches,
 #      produced ZERO divergence, with the two independent cold fills per case
-#      confirming both workers were actually reached. A shared/Redis cache was
-#      considered and rejected on that measurement — it would add serialization, a
-#      version-namespaced key and a cross-process downgrade guard to a fail-open
-#      path, to fix something not currently observable. If divergence ever does
-#      resurface, re-measure it that way before building the shared cache.
+#      confirming both workers were actually reached.
+#
+#      THAT INFERENCE REQUIRES SEQUENTIAL REQUESTS, and the measurement was
+#      sequential. None of these dicts is singleflighted, so two CONCURRENT
+#      requests for one key can both miss before either stores its result, and a
+#      second cold fill would then prove nothing about worker count. Anyone
+#      re-running this must issue the requests one at a time, or the control is
+#      void.
+#
+#      A shared/Redis cache was considered and rejected on that measurement — it
+#      would add serialization, a version-namespaced key and a cross-process
+#      downgrade guard to a fail-open path, to fix something not currently
+#      observable. If divergence ever does resurface, re-measure it the same way
+#      (sequentially, watching the cold-fill count) before building it.
 
 # Per-(brand,disease) cache of the BRAND-level fragments + the monotonic time the
 # entry was stored + whether it is fully live. Keyed by a tuple so every analysis
