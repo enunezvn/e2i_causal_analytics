@@ -48,11 +48,23 @@ celery_app.conf.update(
     # Time limits
     task_time_limit=7200,  # 2 hours hard limit
     task_soft_time_limit=6600,  # 1h 50m soft limit
-    # Retry settings
-    task_autoretry_for=(Exception,),
-    task_retry_kwargs={"max_retries": 3},
-    task_retry_backoff=True,
-    task_retry_backoff_max=600,  # 10 minutes max backoff
+    # Retry settings: there are none here, deliberately (#1774). This block used to
+    # pass task_autoretry_for / task_retry_kwargs / task_retry_backoff /
+    # task_retry_backoff_max. None of those is a Celery setting — celery/app/
+    # autoretry.py reads autoretry_for & friends from the task decorator's options
+    # or from an attribute on the Task class, never from app.conf, and the
+    # `task_`-prefixed spellings appear nowhere in celery or kombu. conf.update()
+    # accepts unknown keys and stores them as inert custom config, so the four
+    # documented a platform-wide retry policy that has never existed: measured, 0 of
+    # 54 registered src.* tasks were autoretry-wrapped, against a positive control
+    # that was. Retries are a per-task decision, declared on the decorator.
+    # Removing them is a documentation-of-reality change, not a behaviour change —
+    # and the absence is load-bearing: src.tasks.graph_emptiness_sentinel (#1761)
+    # sets max_retries=0 and raises GraphReseedError on a partial reseed precisely
+    # because nothing retries it globally; an app-wide autoretry would turn one
+    # failed heal into a burst of CREATE-based reseeds. Guarded by
+    # tests/unit/test_workers/test_celery_conf_keys_are_real_1774.py, which asserts
+    # every key passed here exists in celery.app.defaults.
     # Monitoring
     worker_send_task_events=True,
     task_send_sent_event=True,

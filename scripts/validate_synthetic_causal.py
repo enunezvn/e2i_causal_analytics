@@ -964,7 +964,8 @@ def gate_9_provenance(client) -> GateResult:
 
 
 # =============================================================================
-# Gate 10 — 4-cohort x 3-brand x agent e2e + 17-agent crash-free smoke
+# Gate 10 — 4-cohort x 3-brand x agent e2e + crash-free smoke of every enabled
+# agent the gates above do not already prove (count derived, see _GATED_AGENTS)
 # =============================================================================
 COHORTS = ["initiation", "discontinuation", "persistence", "hcp_adoption"]
 BRANDS3 = ["Remibrutinib", "Kisqali", "Fabhalta"]
@@ -1265,7 +1266,7 @@ if __name__ == "__main__":
 #   #   Expected: "[PASS] 1 DATE-FRESHNESS ..."
 #
 # Guardrails: NEVER run a full-tree mypy/pytest on the droplet (CI is arbiter). The
-# harness reads only synthetic-tagged rows and creates no untagged rows; the 17-agent
+# harness reads only synthetic-tagged rows and creates no untagged rows; the gate-10
 # smoke instantiates agents but does not persist. Synthetic rows are is_synthetic=true
 # and excluded from every real read by Shard 07 — safe to leave; remove cleanly with
 # `DELETE FROM <table> WHERE is_synthetic=true;` per READ_PATHS taggable table.

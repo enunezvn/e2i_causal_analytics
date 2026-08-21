@@ -31,11 +31,29 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
 from celery.schedules import crontab, schedule
 
 import src.etl  # noqa: F401 — registers the src.etl.* rollup tasks
 import src.tasks  # noqa: F401 — registers all src.tasks.* task modules
 from src.workers.celery_app import celery_app
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _finalized_app() -> None:
+    """Assert against the schedule production actually runs (#1772).
+
+    ``celery beat`` finalizes the app at startup, which flushes every pending
+    ``add_periodic_task`` from an ``on_after_finalize`` hook into
+    ``conf.beat_schedule``. Reading the dict *before* finalize therefore inspects a
+    state no worker ever sees. This module used to do exactly that and was green by
+    accident: run it after ``test_beat_schedule_registration.py`` (which finalizes)
+    and ``ab-interim-analysis-check`` came back as a bare ``86400`` interval — the
+    #1645 defect, restored by the hook #1772 removed. Finalizing here ourselves
+    makes the assertions order-independent and about production.
+    """
+    celery_app.finalize()
+
 
 # The 11 entries that were ``86400.0`` before #1645, with the slot each now owns.
 # Rationale for every slot lives in the WALL-CLOCK SLOT MAP comment above
