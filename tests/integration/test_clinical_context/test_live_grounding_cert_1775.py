@@ -51,6 +51,39 @@ def _norm(text: str | None) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def _expected_considerations(brand: str, outcome: str, label: dict) -> set[tuple[str, str, str]]:
+    """What THIS code makes of that brand's live label, as (title, references, section)."""
+    from src.services.clinical_context.analysis_grounding import ground_analysis
+    from src.services.clinical_context.brand_map import (
+        resolve_brand_profile,
+        treatment_context_for,
+    )
+    from src.services.clinical_context.label_considerations import (
+        DOSAGE_SECTION,
+        WARNINGS_SECTION,
+        boxed_warning_consideration,
+        parse_label_considerations,
+    )
+
+    items = []
+    for field, section in (
+        ("warnings_and_cautions", WARNINGS_SECTION),
+        ("dosage_and_administration", DOSAGE_SECTION),
+    ):
+        items.extend(parse_label_considerations(" ".join(label.get(field) or []), section))
+    boxed = boxed_warning_consideration(" ".join(label.get("boxed_warning") or []))
+    if boxed is not None:
+        items.append(boxed)
+    grounding = ground_analysis(
+        resolve_brand_profile(brand),
+        outcome=outcome,
+        treatment_context=treatment_context_for(brand, "copay_support"),
+        label_considerations=tuple(items),
+        label_source="openfda",
+    )
+    return {(c.title, c.references, c.section) for c in grounding.label_considerations}
+
+
 @pytest.fixture(scope="module")
 def auth_headers() -> dict[str, str]:
     url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
@@ -113,13 +146,28 @@ def test_every_curated_brand_is_grounded_on_the_wire(brand: str, auth_headers) -
 
 @_OPT_IN
 @pytest.mark.parametrize("brand", sorted(BRAND_CLINICAL_MAP))
-def test_every_rendered_detail_is_verbatim_from_that_brands_own_label(
-    brand: str, auth_headers
+@pytest.mark.parametrize("outcome", ["persistent_180d", "treatment_initiated"])
+def test_the_deployed_grounding_matches_the_label_for_each_brand_and_outcome(
+    brand: str, outcome: str, auth_headers
 ) -> None:
-    """Anti-fabrication, per brand, against ITS OWN live label.
+    """Two independent checks per (brand, outcome), because one is not enough.
 
-    Comparing every brand against one brand's label is how a single-brand cert
-    passes while another brand's grounding is broken.
+    codex iter-17 found this test's predecessor could pass with INITIATION grounding
+    entirely broken: it required non-empty output only for persistence, then verified
+    details "if any were rendered", and its `checked >= 1` control could be satisfied
+    by the persistence pass alone. Removing the boxed-warning path would have zeroed
+    Fabhalta's initiation grounding and still certified green.
+
+    "Require non-empty for every pair" is the wrong repair — Rhapsido genuinely has
+    NO initiation factors, and a cert that demands content where the label has none
+    would push us to invent some. So the expectation is DERIVED instead: parse and
+    select from that brand's own live label here, and require the deployed answer to
+    match exactly. Zero is then asserted as zero where zero is real, and Fabhalta's
+    single boxed-warning item is asserted as present because it is real.
+
+    The verbatim check stays alongside it. The exactness check compares the deploy to
+    THIS code, so it cannot see a defect both share; the verbatim check compares it to
+    the LABEL, which no defect of ours can move.
     """
     profile = BRAND_CLINICAL_MAP[brand]
     fda = httpx.get(
@@ -130,29 +178,64 @@ def test_every_rendered_detail_is_verbatim_from_that_brands_own_label(
     if fda.status_code != 200:
         pytest.skip(f"openFDA unavailable for {profile.drug_name}: HTTP {fda.status_code}")
     label = (fda.json().get("results") or [{}])[0]
+
+    expected = _expected_considerations(brand, outcome, label)
+    grounding = _context(auth_headers, brand=brand, outcome=outcome, treatment="copay_support").get(
+        "analysis_grounding"
+    )
+    assert grounding is not None, f"{brand}/{outcome}: no grounding on the wire"
+    served = {
+        (item["title"], item["references"], item["section"])
+        for item in grounding["label_considerations"]
+    }
+    assert served == expected, (
+        f"{brand}/{outcome}: deployed grounding differs from this label.\n"
+        f"  missing from deploy: {sorted(expected - served)}\n"
+        f"  extra in deploy:     {sorted(served - expected)}"
+    )
+
     sections = {
         "warnings_and_cautions": "warnings_and_cautions",
         "dosage_and_administration": "dosage_and_administration",
         "contraindications": "contraindications",
         "boxed_warning": "boxed_warning",
     }
+    for item in grounding["label_considerations"]:
+        field = sections.get(item["section"])
+        assert field, f"{brand}: unknown section {item['section']!r}"
+        haystack = _norm(" ".join(label.get(field) or []))
+        assert haystack, f"{brand}: label has no {field}"
+        assert _norm(item["detail"]) in haystack, (
+            f"{brand}/{outcome}: detail not verbatim in {field}: {item['detail'][:80]!r}"
+        )
 
-    checked = 0
-    for outcome in ("persistent_180d", "treatment_initiated"):
-        grounding = _context(
-            auth_headers, brand=brand, outcome=outcome, treatment="copay_support"
-        ).get("analysis_grounding")
-        assert grounding is not None, f"{brand}/{outcome}: no grounding"
-        for item in grounding["label_considerations"]:
-            field = sections.get(item["section"])
-            assert field, f"{brand}: unknown section {item['section']!r}"
-            haystack = _norm(" ".join(label.get(field) or []))
-            assert haystack, f"{brand}: label has no {field}"
-            assert _norm(item["detail"]) in haystack, (
-                f"{brand}/{outcome}: detail not verbatim in {field}: {item['detail'][:80]!r}"
-            )
-            checked += 1
-    assert checked >= 1, f"{brand}: nothing was verified (vacuous pass)"
+
+@_OPT_IN
+def test_the_expectations_are_not_all_empty(auth_headers) -> None:
+    """POSITIVE CONTROL for the parametrised test above.
+
+    Every one of its assertions is satisfied by `set() == set()`, so if the local
+    parser returned nothing for every brand the whole matrix would pass while the
+    feature was dead. Require the expectations themselves to have content — including
+    at least one INITIATION pair, which is the case the previous cert could not see.
+    """
+    totals: dict[str, int] = {}
+    for brand, profile in BRAND_CLINICAL_MAP.items():
+        fda = httpx.get(
+            "https://api.fda.gov/drug/label.json",
+            params={"search": f'openfda.generic_name:"{profile.drug_name}"', "limit": 1},
+            timeout=60.0,
+        )
+        if fda.status_code != 200:
+            continue
+        label = (fda.json().get("results") or [{}])[0]
+        for outcome in ("persistent_180d", "treatment_initiated"):
+            totals[f"{brand}/{outcome}"] = len(_expected_considerations(brand, outcome, label))
+    assert totals, "no expectations computed at all"
+    assert sum(totals.values()) >= 3, totals
+    assert any(
+        count >= 1 for key, count in totals.items() if key.endswith("treatment_initiated")
+    ), f"no brand has initiation grounding; the matrix above would be vacuous: {totals}"
 
 
 @_OPT_IN

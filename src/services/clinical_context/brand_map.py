@@ -37,7 +37,14 @@ class BrandClinicalProfile:
     OpenFDA label is unreachable); ``limitations_fallback`` / ``boxed_warning_fallback``
     — curated LoU / boxed-warning text or None when absent for this drug;
     ``competitor_map`` — dict keyed by disease string (lowercased) -> list of
-    competitor ``"Brand (generic)"`` strings within the same therapeutic class.
+    competitor ``"Brand (generic)"`` strings APPROVED FOR THAT INDICATION.
+
+    Not "within the same therapeutic class", which is what this said and what the
+    panel copy repeated: Remibrutinib is a BTK inhibitor curated against anti-IgE and
+    anti-IL-4Ralpha biologics, and iptacopan is a complement Factor B inhibitor
+    curated against a corticosteroid and an endothelin antagonist. Only Kisqali's
+    entry happens to be same-class. Indication is the relation this map actually
+    encodes, and the relation that makes an alternative a competing risk.
     """
 
     brand: str

@@ -153,18 +153,29 @@ def _competitive_context(profile: BrandClinicalProfile, theme: str) -> Optional[
     if not competitors:
         return None
     listed = ", ".join(competitors)
+    # "approved for", not "within the same class". `competitor_map` is KEYED BY
+    # DISEASE and every curated entry is an approval in that indication — for two of
+    # the three brands the alternatives are a different pharmacological class
+    # entirely. Remibrutinib is a BTK inhibitor whose curated alternatives are
+    # anti-IgE and anti-IL-4Ralpha biologics; iptacopan is a complement Factor B
+    # inhibitor whose IgAN alternatives are a corticosteroid and an endothelin
+    # antagonist. Calling those "the same class" is a pharmacological claim the
+    # registry does not support and does not need (codex iter-17 HIGH): what makes
+    # them a competing risk is that a patient can switch TO them for this condition,
+    # which is exactly what indication-level curation establishes.
     if theme == PERSISTENCE_THEME:
         return (
             f"A patient who stops {profile.drug_name} in {profile.disease_search_term} has "
-            f"alternatives within the same class: {listed}. A switch to one of these is a "
-            f"competing risk for this outcome rather than a simple failure to persist, and "
-            f"it is confounding structure for any effect estimated here."
+            f"alternatives approved for the same condition: {listed}. A switch to one of "
+            f"these is a competing risk for this outcome rather than a simple failure to "
+            f"persist, and it is confounding structure for any effect estimated here."
         )
     if theme == INITIATION_THEME:
         return (
             f"At initiation in {profile.disease_search_term}, {profile.drug_name} is chosen "
-            f"against the same-class alternatives {listed}. Which therapy a patient starts "
-            f"is confounding structure for any effect estimated here."
+            f"against other therapies approved for the same condition: {listed}. Which "
+            f"therapy a patient starts is confounding structure for any effect estimated "
+            f"here."
         )
     # No theme means we never established what the analysis asks, so there is nothing
     # to say bears on it. This used to fall through to "Same-class alternatives in

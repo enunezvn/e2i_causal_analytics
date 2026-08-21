@@ -527,3 +527,38 @@ def test_a_cue_in_the_TITLE_cannot_bypass_sentence_scoping():
         label_source="openfda",
     )
     assert [c.title for c in kept.label_considerations] == ["ECG Monitoring"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("brand", ["Kisqali", "Remibrutinib", "Fabhalta"])
+def test_competitors_are_named_by_indication_not_by_drug_class(brand):
+    """codex iter-17 HIGH — the clearest "tells an analyst something untrue" yet.
+
+    The copy said alternatives were "within the same class". For two of the three
+    curated brands that is false, and the registry's own comments say so:
+
+      * Remibrutinib is a BTK inhibitor; its curated alternatives are Xolair
+        (omalizumab, anti-IgE) and Dupixent (dupilumab, anti-IL-4Ralpha), commented
+        "CSU biologics approved for CSU".
+      * Iptacopan is a complement Factor B inhibitor; its IgAN alternatives are
+        Tarpeyo (budesonide, a corticosteroid) and Filspari (sparsentan, an
+        endothelin/angiotensin antagonist), commented "IgAN-approved therapies".
+
+    Only Kisqali's are genuinely same-class (ATC L01EF CDK4/6). `competitor_map` is
+    KEYED BY DISEASE and every curated comment describes an approval in that
+    indication, so indication is what the data supports and indication is what the
+    panel may say. A wrong pharmacological claim is worse than a vaguer true one.
+    """
+    grounding = ground_analysis(
+        resolve_brand_profile(brand),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for(brand, "copay_support"),
+        label_considerations=(),
+        label_source="openfda",
+    )
+    context = (grounding.competitive_context or "").lower()
+    assert context, f"{brand}: no competitive context"
+    assert "same class" not in context, context
+    assert "same-class" not in context, context
+    # POSITIVE CONTROL: it still names the alternatives and ties them to the outcome.
+    assert "competing risk" in context, context
