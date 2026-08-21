@@ -66,7 +66,7 @@ def main() -> None:
     print(f"  authored cells: {dict(cells)}")
     print(f"  author-proposed gold patterns: {dict(proposed)}")
     print(f"  follow-ups with context: {followups}")
-    print("  targets (#1337): ~200-300 total; n>=10 per unmapped agent;")
+    print("  targets (#1337): ~200-300 total; at least ten queries per unmapped agent;")
     print("  ambiguous CLARIFICATION cell populated; gold labels pending judge+human stage")
 
 

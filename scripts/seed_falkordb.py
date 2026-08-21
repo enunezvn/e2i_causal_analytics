@@ -6,7 +6,8 @@ Seeds the FalkorDB knowledge graph with E2I domain entities and relationships:
 - Brands (Remibrutinib, Fabhalta, Kisqali)
 - Regions (northeast, south, midwest, west)
 - KPIs (TRx, NRx, market share, etc.)
-- Agents (demo subset; full roster = 21 per src/agents/factory.py)
+- Agents (a demo subset; the whole roster lives in AGENT_REGISTRY_CONFIG,
+  src/agents/factory.py, and is deliberately NOT restated here — see #1773)
 - Causal relationships between entities
 
 Part of Phase 2, Checkpoint 2.3.

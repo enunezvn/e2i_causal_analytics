@@ -62,6 +62,29 @@ OUT_LOWCONF = HERE / "review" / "gold_low_confidence.md"
 OUT_SUMMARY = HERE / "review" / "gold_axis1_summary.json"
 PROGRESS = HERE / "review" / "empirical_results" / "gold_progress.jsonl"
 
+#: The chat-routable agents a gold label may name — a real SUBSET of
+#: AGENT_REGISTRY_CONFIG, not the whole roster (Tier-0 pipeline agents other than
+#: cohort_constructor own no chat ask). ORDERED, and the single source for both
+#: the judge prompt's list and VALID_AGENTS below: the prompt used to transcribe
+#: the names AND their count by hand, so the two could disagree with the set that
+#: actually enforces them, and the count rotted on any edit (#1773 / #1638).
+GOLD_AGENT_ROSTER: tuple[str, ...] = (
+    "cohort_constructor",
+    "cohort_profiler",
+    "tool_composer",
+    "causal_impact",
+    "gap_analyzer",
+    "heterogeneous_optimizer",
+    "experiment_designer",
+    "experiment_monitor",
+    "drift_monitor",
+    "health_score",
+    "prediction_synthesizer",
+    "resource_optimizer",
+    "explainer",
+    "feedback_learner",
+)
+
 VALID_PATTERNS = {"SINGLE_AGENT", "PARALLEL_DELEGATION", "TOOL_COMPOSER", "CLARIFICATION_NEEDED"}
 GOLD_CONFIDENCE_FLOOR = 0.6
 JUDGE_MODEL = os.getenv("GOLD_JUDGE_MODEL", "claude-sonnet-5")
@@ -251,7 +274,7 @@ HARD RULES (override any instinct):
 2. TOOL_COMPOSER GATE: >=2 DISTINCT capability domains AND dependency-linked. STEP-COUNTING IS WRONG — a single-domain multi-step query is SINGLE_AGENT no matter how many internal steps the owning agent runs. Data sources (sales vs clinical CRM) are NOT capability domains.
 3. A capability that sits entirely inside ONE agent's COVERS list is single-domain. The ask spans domains only when a needed capability appears in that agent's NOT list with a handoff to another agent.
 4. Follow-up queries: label in-context (the provided previous turn travels with the query).
-5. gold_agents must be chosen from these 14 agents ONLY: cohort_constructor, cohort_profiler, tool_composer, causal_impact, gap_analyzer, heterogeneous_optimizer, experiment_designer, experiment_monitor, drift_monitor, health_score, prediction_synthesizer, resource_optimizer, explainer, feedback_learner. (cohort_constructor is pipeline-only; chat cohort asks are owned by cohort_profiler.)
+5. gold_agents must be chosen from these {len(GOLD_AGENT_ROSTER)} agents ONLY: {', '.join(GOLD_AGENT_ROSTER)}. (cohort_constructor is pipeline-only; chat cohort asks are owned by cohort_profiler.)
 
 {registry_digest}
 
@@ -266,11 +289,9 @@ Respond with ONLY a JSON object (no prose, no code fence):
 If genuinely unsure between two routes, pick the better one but LOWER the confidence (< 0.6)."""
 
 
-VALID_AGENTS = {
-    "cohort_constructor", "cohort_profiler", "tool_composer", "causal_impact", "gap_analyzer",
-    "heterogeneous_optimizer", "experiment_designer", "experiment_monitor", "drift_monitor",
-    "health_score", "prediction_synthesizer", "resource_optimizer", "explainer", "feedback_learner",
-}
+#: Validation set == the roster the prompt names. Derived so a name can never be
+#: allowed by one and refused by the other.
+VALID_AGENTS = set(GOLD_AGENT_ROSTER)
 
 
 def extract_text(resp: Any) -> str:
