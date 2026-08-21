@@ -3852,6 +3852,10 @@ export interface paths {
          *     endpoints (ClinicalTrials.gov), and a real-world-evidence citation (PubMed)
          *     for ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.
          *
+         *     With ``treatment``, the response also frames the specific analysis being
+         *     interrogated (treatment -> outcome) and the literature search follows that
+         *     analysis instead of the brand alone (#1763).
+         *
          *     Additive narrative ONLY — does not touch the causal estimate or its
          *     adjustment set. Degrades gracefully (static fallbacks) when an upstream API
          *     is down; never fabricates a citation. The payload's ``honesty_label`` states
@@ -7593,6 +7597,18 @@ export interface components {
              * @description Our synthetic outcome column this maps from
              */
             our_outcome: string;
+            /**
+             * Our Treatment
+             * @description The synthetic treatment column the analysis estimates the effect of. None on the brand-level view (no single analysis in scope).
+             */
+            our_treatment?: string | null;
+            /** @description Curated clinical framing for the treatment side. None when no treatment was supplied or the column has no curated framing (never invented). */
+            treatment_context?: components["schemas"]["TreatmentContext"] | null;
+            /**
+             * Analysis Framing
+             * @description One deterministic sentence naming the analysis this context grounds (treatment -> outcome, for this drug in this disease). None when the treatment has no curated framing.
+             */
+            analysis_framing?: string | null;
             /**
              * Mapped Endpoint
              * @description The real pivotal-endpoint framing our synthetic outcome stands in for (None when unmapped).
@@ -15384,9 +15400,14 @@ export interface components {
             url: string;
             /**
              * Source
-             * @description pubmed / pubmed_seed
+             * @description pubmed (the analysis-specific search) / pubmed_brand (the brand-level search answered instead) / pubmed_seed / curated
              */
             source: string;
+            /**
+             * Search Term
+             * @description The PubMed query this citation came from, so an analyst can judge how close it is to the analysis. None for a curated citation (not searched).
+             */
+            search_term?: string | null;
         };
         /**
          * RecentWorkflowResponse
@@ -18174,6 +18195,44 @@ export interface components {
              * Format: date-time
              */
             timestamp?: string;
+        };
+        /**
+         * TreatmentContext
+         * @description Curated clinical framing for the analysis's TREATMENT column (#1763).
+         *
+         *     ``kind`` states what the public clinical APIs can speak to:
+         *     ``drug_therapy`` (the treatment is a therapy), ``clinical_covariate`` (a
+         *     patient-state variable used as an observational treatment), or ``commercial``
+         *     (an access / promotion lever — biomedical sources do not speak to it, and the
+         *     UI must not imply they do).
+         */
+        TreatmentContext: {
+            /**
+             * Column
+             * @description The synthetic treatment column (e.g. treatment_arm)
+             */
+            column: string;
+            /**
+             * Label
+             * @description Human-readable label for the treatment
+             */
+            label: string;
+            /**
+             * Framing
+             * @description Clinical framing fragment (e.g. 'receiving copay assistance')
+             */
+            framing: string;
+            /**
+             * Kind
+             * @description drug_therapy / clinical_covariate / commercial
+             */
+            kind: string;
+            /**
+             * Source
+             * @description Always 'curated'.
+             * @default curated
+             */
+            source: string;
         };
         /** TreatmentEffectInsightRequest */
         TreatmentEffectInsightRequest: {
@@ -27068,6 +27127,8 @@ export interface operations {
                 brand: string;
                 /** @description The synthetic outcome column the effect uses (e.g. persistent_180d); mapped to the real pivotal endpoint. */
                 outcome: string;
+                /** @description The synthetic treatment column the analysis estimates the effect of (e.g. treatment_arm / copay_support). Optional: with it the context is framed for THAT analysis and the literature search follows it; without it the response is the brand-level view. */
+                treatment?: string | null;
             };
             header?: never;
             path?: never;

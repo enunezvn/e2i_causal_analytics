@@ -305,9 +305,9 @@ export function CausalAnalysisDetail({
     [result]
   );
 
-  // Additive clinical narrative for this effect (brand + outcome). Disabled until
-  // both are present; never touches the estimate above.
-  const clinicalContext = useClinicalContext(brand, result.outcome_var);
+  // Additive clinical narrative for THIS analysis (brand + treatment -> outcome).
+  // Disabled until brand and outcome are present; never touches the estimate above.
+  const clinicalContext = useClinicalContext(brand, result.outcome_var, result.treatment_var);
 
   return (
     <div className="space-y-6">

@@ -14,6 +14,7 @@ import {
   listEstimators,
   getCausalEstimationData,
   getCausalVariables,
+  getClinicalContext,
 } from './causal';
 import { server } from '@/mocks/server';
 import { env } from '@/config/env';
@@ -185,5 +186,65 @@ describe('Causal API Client', () => {
       // (the backend's brand=None keeps the universals only).
       expect(seen).toEqual(['Fabhalta', null, null]);
     });
+  });
+});
+
+// #1763: the clinical context must follow the analysis, so the treatment column has
+// to reach the backend. Nothing pinned the (brand, outcome)-only signature before.
+describe('getClinicalContext (#1763)', () => {
+  const CONTEXT = {
+    brand: 'Kisqali',
+    drug_name: 'ribociclib',
+    disease: 'Malignant neoplasm of breast',
+    our_outcome: 'persistent_180d',
+    our_treatment: 'copay_support',
+    mapped_endpoint: 'Treatment persistence / duration of therapy',
+    treatment_context: {
+      column: 'copay_support',
+      label: 'Copay support',
+      framing: 'receiving copay assistance',
+      kind: 'commercial',
+      source: 'curated',
+    },
+    analysis_framing:
+      'This analysis estimates the effect of receiving copay assistance on 180-day treatment persistence for ribociclib in Malignant neoplasm of breast.',
+    mechanism: { mechanism_of_action: 'CDK4/6 inhibitor', source: 'chembl' },
+    pivotal_endpoints: { endpoints: [], source: 'clinicaltrials.gov' },
+    real_world_evidence: null,
+    honesty_label: 'estimate = synthetic; context = real',
+  };
+
+  it('sends the treatment as a query param when the analysis has one', async () => {
+    let captured: URL | null = null;
+    server.use(
+      http.get(`${env.apiUrl}/causal/clinical-context`, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json(CONTEXT);
+      })
+    );
+
+    const context = await getClinicalContext('Kisqali', 'persistent_180d', 'copay_support');
+
+    expect(captured!.searchParams.get('brand')).toBe('Kisqali');
+    expect(captured!.searchParams.get('outcome')).toBe('persistent_180d');
+    expect(captured!.searchParams.get('treatment')).toBe('copay_support');
+    // The response's analysis fields survive the un-validated get<T> path.
+    expect(context.our_treatment).toBe('copay_support');
+    expect(context.treatment_context?.kind).toBe('commercial');
+    expect(context.analysis_framing).toContain('copay assistance');
+  });
+
+  it('omits the treatment param entirely on the brand-level call', async () => {
+    let captured: URL | null = null;
+    server.use(
+      http.get(`${env.apiUrl}/causal/clinical-context`, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ ...CONTEXT, our_treatment: null, treatment_context: null });
+      })
+    );
+
+    await getClinicalContext('Kisqali', 'persistent_180d');
+
+    expect(captured!.searchParams.has('treatment')).toBe(false);
   });
 });

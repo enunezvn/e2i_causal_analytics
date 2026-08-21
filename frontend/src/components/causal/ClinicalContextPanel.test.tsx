@@ -249,3 +249,62 @@ describe('ClinicalContextPanel', () => {
     expect(screen.getByText(/Additional real-world evidence/i)).toBeInTheDocument();
   });
 });
+
+// #1763: the panel was accurate but read as unrelated to the analysis on screen.
+describe('ClinicalContextPanel — analysis framing (#1763)', () => {
+  const ANALYSIS: ClinicalContext = {
+    ...FULL,
+    our_treatment: 'treatment_arm',
+    treatment_context: {
+      column: 'treatment_arm',
+      label: 'Treatment arm',
+      framing: 'being on a ribociclib-containing regimen',
+      kind: 'drug_therapy',
+      source: 'curated',
+    },
+    analysis_framing:
+      'This analysis estimates the effect of being on a ribociclib-containing regimen on 180-day treatment persistence for ribociclib in Malignant neoplasm of breast.',
+    real_world_evidence: {
+      ...FULL.real_world_evidence!,
+      search_term: 'ribociclib breast cancer persistence real-world',
+    },
+  };
+
+  it('leads with the sentence naming the analysis being interrogated', () => {
+    render(<ClinicalContextPanel context={ANALYSIS} />);
+    expect(
+      screen.getByText(/This analysis estimates the effect of being on a ribociclib-containing regimen/i)
+    ).toBeInTheDocument();
+  });
+
+  it('discloses the literature query behind the live citation', () => {
+    render(<ClinicalContextPanel context={ANALYSIS} />);
+    expect(
+      screen.getByText(/ribociclib breast cancer persistence real-world/i)
+    ).toBeInTheDocument();
+  });
+
+  it('says plainly when the treatment is a commercial lever the clinical sources do not cover', () => {
+    const commercial: ClinicalContext = {
+      ...ANALYSIS,
+      our_treatment: 'copay_support',
+      treatment_context: {
+        column: 'copay_support',
+        label: 'Copay support',
+        framing: 'receiving copay assistance',
+        kind: 'commercial',
+        source: 'curated',
+      },
+      analysis_framing:
+        'This analysis estimates the effect of receiving copay assistance on 180-day treatment persistence for ribociclib in Malignant neoplasm of breast.',
+    };
+    render(<ClinicalContextPanel context={commercial} />);
+    expect(screen.getByText(/access and promotion lever/i)).toBeInTheDocument();
+  });
+
+  it('renders exactly as before when there is no analysis frame', () => {
+    render(<ClinicalContextPanel context={FULL} />);
+    expect(screen.queryByText(/This analysis estimates the effect of/i)).not.toBeInTheDocument();
+    expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
+  });
+});

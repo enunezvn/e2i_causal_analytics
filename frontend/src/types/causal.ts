@@ -405,7 +405,27 @@ export interface RealWorldEvidence {
   pubdate?: string | null;
   doi?: string | null;
   url: string;
-  /** pubmed / pubmed_seed */
+  /** pubmed (analysis-specific search) / pubmed_brand (brand-level search answered
+   * instead) / pubmed_seed / curated */
+  source: string;
+  /** The PubMed query this citation came from; null for a curated citation. */
+  search_term?: string | null;
+}
+
+/**
+ * Curated clinical framing for the analysis's TREATMENT column. `kind` states what
+ * the public clinical sources can speak to: `drug_therapy` (the treatment is a
+ * therapy), `clinical_covariate` (a patient-state variable used as an observational
+ * treatment), or `commercial` (an access / promotion lever the biomedical sources
+ * do not describe).
+ */
+export interface TreatmentContext {
+  column: string;
+  label: string;
+  framing: string;
+  /** drug_therapy | clinical_covariate | commercial */
+  kind: string;
+  /** curated */
   source: string;
 }
 
@@ -438,6 +458,14 @@ export interface ClinicalContext {
   disease: string;
   /** Our synthetic outcome column this maps from. */
   our_outcome: string;
+  /** The synthetic treatment column the analysis estimates the effect of; null on
+   * the brand-level view (no single analysis in scope). */
+  our_treatment?: string | null;
+  /** Curated clinical framing for the treatment side; null when the column has no
+   * curated framing (never invented). */
+  treatment_context?: TreatmentContext | null;
+  /** One deterministic sentence naming the analysis this context grounds. */
+  analysis_framing?: string | null;
   /** The real pivotal-endpoint framing our synthetic outcome stands in for (null when unmapped). */
   mapped_endpoint?: string | null;
   mechanism: MechanismOfAction;

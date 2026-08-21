@@ -29,6 +29,7 @@ function sourceChip(source: string) {
     source === 'pubmed' ||
     source === 'openfda';
   const seed = source === 'pubmed_seed';
+  const brandLevel = source === 'pubmed_brand';
   const curated = source === 'curated';
   if (live) {
     return (
@@ -41,6 +42,15 @@ function sourceChip(source: string) {
     return (
       <Badge variant="outline" className="ml-2 align-middle text-xs">
         pubmed (curated seed)
+      </Badge>
+    );
+  }
+  // The analysis-specific query found nothing and the brand-level query answered
+  // instead — say so, rather than let a brand-level paper read as analysis-level.
+  if (brandLevel) {
+    return (
+      <Badge variant="outline" className="ml-2 align-middle text-xs">
+        pubmed (brand-level)
       </Badge>
     );
   }
@@ -58,6 +68,18 @@ function sourceChip(source: string) {
   );
 }
 
+// What the clinical sources can honestly say about each kind of treatment. A
+// commercial lever has no biomedical literature about the lever itself, and the panel
+// must say so instead of letting the drug's evidence read as evidence for the lever.
+const TREATMENT_KIND_NOTE: Record<string, string> = {
+  drug_therapy:
+    'a therapy contrast — the mechanism, endpoints and label below describe this treatment directly.',
+  clinical_covariate:
+    'a patient-state variable used as an observational treatment — the sources below describe the disease context, not a therapy contrast.',
+  commercial:
+    'an access and promotion lever — the biomedical sources below describe the therapy and its indication, not this lever.',
+};
+
 export function ClinicalContextPanel({ context }: { context: ClinicalContext }) {
   const {
     mechanism,
@@ -66,6 +88,8 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
     seminal_real_world_evidence,
     approved_indications,
     competitor_landscape,
+    treatment_context,
+    analysis_framing,
   } = context;
   // Provenance-aware copy: the endpoint section renders for BOTH the live CT.gov
   // result and the curated static fallback, so the explanatory text must not claim
@@ -84,6 +108,21 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           keeps any read on-label.
         </p>
       </div>
+
+      {/* The analysis this context is grounding. Absent on the brand-level view,
+          where there is no single treatment -> outcome pair in scope. */}
+      {analysis_framing && (
+        <div className="rounded-md bg-muted/50 p-3">
+          <p className="text-sm font-medium">{analysis_framing}</p>
+          {treatment_context && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Treatment{' '}
+              <code className="rounded bg-muted px-1 py-0.5">{treatment_context.column}</code> ={' '}
+              {treatment_context.label} — {TREATMENT_KIND_NOTE[treatment_context.kind] ?? ''}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Drug + mechanism of action */}
       <div className="text-sm">
@@ -190,6 +229,14 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
             </span>
             <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           </a>
+          {real_world_evidence.search_term && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              PubMed query:{' '}
+              <code className="rounded bg-muted px-1 py-0.5">
+                {real_world_evidence.search_term}
+              </code>
+            </p>
+          )}
         </div>
       ) : (
         !seminal_real_world_evidence && (

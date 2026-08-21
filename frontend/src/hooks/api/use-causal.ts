@@ -235,17 +235,22 @@ export function useCausalBrands(
 
 /**
  * Fetch the clinical context (drug + MoA, real pivotal endpoints, RWE citation)
- * for a discovered effect's brand + outcome. Additive narrative — does not touch
- * the causal estimate. Disabled until both `brand` and `outcome` are present.
+ * for a discovered effect's brand + outcome, and — when `treatment` is given — for
+ * that specific (treatment -> outcome) analysis. Additive narrative — does not touch
+ * the causal estimate. Disabled until both `brand` and `outcome` are present;
+ * `treatment` is optional so the brand-level view keeps working unchanged.
  */
 export function useClinicalContext(
   brand: string | null | undefined,
   outcome: string | null | undefined,
+  treatment?: string | null,
   options?: Omit<UseQueryOptions<ClinicalContext, ApiError>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<ClinicalContext, ApiError>({
-    queryKey: ['causal', 'clinical-context', brand, outcome],
-    queryFn: () => getClinicalContext(brand as string, outcome as string),
+    // treatment is part of the key: two analyses of one brand+outcome differ in
+    // their framing and their literature citation.
+    queryKey: ['causal', 'clinical-context', brand, outcome, treatment ?? null],
+    queryFn: () => getClinicalContext(brand as string, outcome as string, treatment),
     // Real biomedical facts change slowly; cache aggressively, no auto-refetch.
     staleTime: 30 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
