@@ -45,6 +45,7 @@ from __future__ import annotations
 import pytest
 from celery import Celery
 from celery.schedules import crontab
+from celery.utils.dispatch.signal import NONE_ID
 
 import src.etl  # noqa: F401 — registers the src.etl.* rollup tasks
 import src.tasks  # noqa: F401 — connects the on_after_finalize receivers
@@ -57,6 +58,24 @@ from src.workers.celery_app import celery_app
 # against a polluted baseline, so the tests fail loudly instead of going green.
 _FINALIZED_AT_IMPORT = celery_app.finalized
 _DECLARED_KEYS = frozenset(celery_app.conf.beat_schedule)
+
+
+def _fingerprint(beat_schedule: dict) -> dict[str, tuple[str, str, str]]:
+    """A comparable, mutation-proof summary of a beat schedule.
+
+    ``repr`` rather than the values themselves for two reasons: the entry dicts are
+    live objects a hook could mutate in place (so holding references would compare a
+    thing to itself), and ``43200.0 == 43200`` is True while the reprs differ — the
+    float-to-int coercion ``add_periodic_task`` performs is a real change to the
+    declared entry even where it is numerically identical.
+    """
+    return {
+        key: (str(entry.get("task")), repr(entry.get("schedule")), repr(entry.get("options")))
+        for key, entry in beat_schedule.items()
+    }
+
+
+_DECLARED_FINGERPRINT = _fingerprint(celery_app.conf.beat_schedule)
 
 # The four keys #1772 was about, with the schedule celery_app.py declares.
 _AB_ENTRIES: list[tuple[str, object]] = [
@@ -75,6 +94,22 @@ def _hook_registered_entries() -> dict[str, dict]:
     probe's ``beat_schedule`` and the production app is left untouched. That also
     makes this check independent of whether some earlier test already finalized
     the real app.
+
+    Two things this deliberately does NOT see, both covered elsewhere in this module:
+
+    * a receiver connected as ``connect(fn, sender=celery_app)`` — celery's
+      ``Signal._live_receivers`` filters on ``id(sender)``, so a sender-filtered
+      receiver fires on the real ``finalize()`` and is skipped here (measured: with
+      one filtered and one unfiltered receiver connected, ``send(sender=probe)``
+      fired 1 of 2, ``send(sender=celery_app)`` fired 2 of 2).
+      ``test_every_finalize_receiver_is_unfiltered`` fails if such a receiver exists,
+      so this function's coverage gap cannot open silently.
+    * a hook that assigns into ``sender.conf.beat_schedule`` directly instead of
+      calling ``add_periodic_task``.
+
+    ``test_finalize_does_not_change_the_declared_beat_schedule`` catches both, and
+    every other mechanism, by comparing the real app across the real ``finalize()``.
+    The probe is kept because it names the offending keys before any of that runs.
     """
     probe = Celery("beat_hook_probe_1772")
     celery_app.on_after_finalize.send(sender=probe)
@@ -154,6 +189,75 @@ def test_no_finalize_hook_registers_any_beat_entry() -> None:
         "runtime-added entry bypasses every guard that inspects that dict "
         "(test_beat_schedule_registration, test_beat_daily_wallclock_1645). See the "
         "NOTE at the end of src/tasks/drift_monitoring_tasks.py for the precedent."
+    )
+
+
+def test_every_finalize_receiver_is_unfiltered() -> None:
+    """Keep ``_hook_registered_entries`` exhaustive, or fail loudly.
+
+    Celery's ``Signal`` stores each receiver under ``(id(receiver), id(sender))`` and
+    ``_live_receivers`` dispatches only to those whose sender id is ``NONE_ID`` (no
+    filter) or matches the sender. A receiver connected as
+    ``on_after_finalize.connect(fn, sender=celery_app)`` therefore runs on the real
+    ``finalize()`` but is invisible to a probe-app replay. Rather than let the probe
+    quietly under-report, assert the condition that makes it complete.
+    """
+    filtered = [
+        receiver
+        for (_receiver_id, sender_id), receiver in celery_app.on_after_finalize.receivers
+        if sender_id != NONE_ID
+    ]
+    assert not filtered, (
+        f"on_after_finalize receivers are connected with a sender filter: {filtered}. "
+        "Those fire on the real finalize() but not on the probe-app replay in "
+        "_hook_registered_entries(), so the two hook guards in this module would "
+        "under-report. Either connect them without a sender= filter, or extend "
+        "_hook_registered_entries to cover them."
+    )
+
+
+def test_finalize_does_not_change_the_declared_beat_schedule() -> None:
+    """The faithful, mechanism-agnostic guard: real app, real ``finalize()``.
+
+    Everything above inspects hooks. This one ignores how a change is made and asks
+    only whether the schedule production runs still equals the schedule
+    ``celery_app.py`` declares. It therefore covers the cases the probe cannot —
+    sender-filtered receivers, and hooks that assign into ``conf.beat_schedule``
+    directly instead of calling ``add_periodic_task``.
+    """
+    assert not _FINALIZED_AT_IMPORT, (
+        "celery_app was already finalized when this module was imported, so "
+        "_DECLARED_FINGERPRINT is a post-hook baseline and comparing against it "
+        "proves nothing. Find what finalizes the app at import time."
+    )
+    assert len(_DECLARED_FINGERPRINT) >= 20, (
+        f"declared beat_schedule unexpectedly small ({len(_DECLARED_FINGERPRINT)} "
+        "entries) — an empty-vs-empty comparison would pass this test vacuously."
+    )
+
+    # Positive control for the comparator: a schedule that differs the way #1772
+    # differed must not fingerprint equal. Without this, an over-lossy _fingerprint
+    # would make every comparison below trivially true.
+    victim = "ab-interim-analysis-check"
+    mutated = dict(celery_app.conf.beat_schedule)
+    mutated[victim] = {"task": "src.tasks.check_all_active_experiments", "schedule": 86400}
+    assert _fingerprint(mutated) != _DECLARED_FINGERPRINT, (
+        "_fingerprint() does not distinguish the #1772 overwrite from the declared "
+        "entry, so it cannot detect the defect it exists to detect."
+    )
+
+    celery_app.finalize()
+
+    actual = _fingerprint(celery_app.conf.beat_schedule)
+    changed = {
+        key: (_DECLARED_FINGERPRINT.get(key), actual.get(key))
+        for key in set(_DECLARED_FINGERPRINT) | set(actual)
+        if _DECLARED_FINGERPRINT.get(key) != actual.get(key)
+    }
+    assert not changed, (
+        f"finalize() changed the declared beat schedule (declared -> after): {changed}. "
+        "celery beat finalizes the app at startup, so this is the schedule production "
+        "runs — it must be the one celery_app.py declares (#1772)."
     )
 
 
