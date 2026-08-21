@@ -329,7 +329,12 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
         # Therapy-label fallback (FDA prescribing information, verified 2026-06-20)
         "indications_fallback": [
             "Paroxysmal nocturnal hemoglobinuria (PNH)",
-            "Primary IgA nephropathy (IgAN), to reduce proteinuria",
+            "Primary IgA nephropathy (IgAN), to slow kidney function decline",
+            # Re-verified against the LIVE openFDA label 2026-08-21 (#1763 codex
+            # iter-1): the label carries three indications, not two. The fallback is
+            # what an analyst sees when openFDA is unreachable, so a stale one is a
+            # silently incomplete label at the exact moment we cannot check.
+            "Complement 3 glomerulopathy (C3G), to reduce proteinuria",
         ],
         "limitations_fallback": None,
         "boxed_warning_fallback": (

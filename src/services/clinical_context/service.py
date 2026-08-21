@@ -85,10 +85,13 @@ _FRAGMENT_CACHE: Dict[Tuple[str, str], Tuple[_BrandFragmentTuple, float, bool]] 
 # by 3 brands x the curated (outcome, treatment) universe.
 _CITATION_CACHE: Dict[Tuple[str, str], Tuple[CitationFragment, float, bool]] = {}
 
-# Per-analysis cache of the public-KG evidence block, keyed by the analysis itself
-# (brand, outcome, treatment). Several live calls back this fragment, so it is
-# gathered only when asked for and reused for the whole self-heal window when it
-# came back degraded.
+# Per-analysis cache of the public-KG evidence block. The key is (brand, curated
+# treatment column, composed query) — NOT the raw outcome/treatment strings, which
+# arrive from query params: keying on those would let any caller grow this dict
+# without bound and re-hit Open Targets / PubMed / Europe PMC for each novel string.
+# Every component is drawn from the curated maps, so the key space is bounded by the
+# 3-brand universe. Several live calls back this fragment, so it is gathered only
+# when asked for and reused for the self-heal window when it came back degraded.
 _EVIDENCE_CACHE: Dict[Tuple[str, str, str], Tuple[CausalEvidenceFragment, float, bool]] = {}
 
 
@@ -174,9 +177,13 @@ class ClinicalContextService:
             analysis_profile = replace(profile, analysis_rwe_search_term=search_term)
         cite = self._citation.enrich(analysis_profile)
         assert isinstance(cite, CitationFragment)
-        # A live PubMed answer (analysis-level or brand-level) is a real result and is
-        # cached; a seed / unavailable citation is degraded and self-heals.
-        fully_live = cite.source in ("pubmed", "pubmed_brand")
+        # Only an answer to the query we asked is settled. `pubmed_brand` means the
+        # ANALYSIS query returned nothing — and the provider cannot tell a genuine
+        # zero-hit from a swallowed 429 or timeout, so caching it forever under the
+        # analysis key would freeze a transient failure for the process lifetime.
+        # It self-heals through the degraded window instead. Seed / unavailable
+        # likewise.
+        fully_live = cite.source == "pubmed"
         _CITATION_CACHE[key] = (cite, time.monotonic(), fully_live)
         return cite
 
@@ -200,12 +207,19 @@ class ClinicalContextService:
         """The public-KG evidence for ONE analysis, cached per (brand, outcome,
         treatment). FAIL-OPEN: any failure degrades to an honest ``unavailable``
         fragment rather than taking the whole payload down."""
-        key = (profile.brand, outcome, treatment)
-        cached = _EVIDENCE_CACHE.get(key)
-        if cached is not None:
-            frag, stored_at, complete = cached
-            if complete or (time.monotonic() - stored_at) < _FRAGMENT_TTL_DEGRADED_S:
-                return frag
+        # An uncurated treatment resolves to an immediate honest "unavailable" with
+        # no live call, so it is neither worth caching nor safe to key on.
+        key = (
+            (profile.brand, treatment_ctx.column, search_term)
+            if treatment_ctx is not None
+            else None
+        )
+        if key is not None:
+            cached = _EVIDENCE_CACHE.get(key)
+            if cached is not None:
+                frag, stored_at, complete = cached
+                if complete or (time.monotonic() - stored_at) < _FRAGMENT_TTL_DEGRADED_S:
+                    return frag
         try:
             evidence = self._evidence_provider().evidence(
                 profile,
@@ -224,10 +238,12 @@ class ClinicalContextService:
                 status="unavailable",
                 note="The public evidence sources could not be reached for this analysis.",
             )
-        # "unavailable" is the only state worth retrying — a commercial lever has
-        # nothing to re-fetch, and a found result is stable.
-        complete = evidence.status != "unavailable"
-        _EVIDENCE_CACHE[key] = (evidence, time.monotonic(), complete)
+        # Worth retrying: an outright "unavailable", and any fragment where a source
+        # was asked and failed (its absence is unknown, not settled). A commercial
+        # lever has nothing to re-fetch and a fully-answered result is stable.
+        if key is not None:
+            complete = evidence.status != "unavailable" and not evidence.sources_unavailable
+            _EVIDENCE_CACHE[key] = (evidence, time.monotonic(), complete)
         return evidence
 
     def get_context(
@@ -317,6 +333,8 @@ class ClinicalContextService:
                 "indication_edge": (
                     {
                         "predicate": evidence.indication_edge.predicate,
+                        "drug_id": evidence.indication_edge.drug_id,
+                        "drug_name": evidence.indication_edge.drug_name,
                         "disease_id": evidence.indication_edge.disease_id,
                         "disease_name": evidence.indication_edge.disease_name,
                         "max_clinical_stage": evidence.indication_edge.max_clinical_stage,
@@ -325,6 +343,7 @@ class ClinicalContextService:
                     if evidence.indication_edge is not None
                     else None
                 ),
+                "sources_unavailable": list(evidence.sources_unavailable),
                 "citations": [
                     {
                         "pmid": c.pmid,

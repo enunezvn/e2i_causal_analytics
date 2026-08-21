@@ -940,6 +940,14 @@ class IndicationEdge(BaseModel):
     """
 
     predicate: str = Field(..., description="treats (approved) / associated_with (in development)")
+    drug_id: str = Field(..., description="Open Targets / ChEMBL id of the molecule that answered")
+    drug_name: str = Field(
+        ...,
+        description=(
+            "The molecule Open Targets answered about, verified against the brand's "
+            "INN before the edge is emitted (salt forms allowed)."
+        ),
+    )
     disease_id: str = Field(..., description="Disease node id (e.g. MONDO_0007254)")
     disease_name: str = Field(..., description="Disease node name")
     max_clinical_stage: str = Field(..., description="Stage for THIS indication node")
@@ -980,6 +988,13 @@ class CausalEvidence(BaseModel):
     )
     citations: List[VerifiedCitation] = Field(
         default_factory=list, description="Abstract-verified citations (capped)."
+    )
+    sources_unavailable: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Sources that were asked and failed. What is missing from this block is "
+            "then UNKNOWN, not absent — an outage must not read as a settled absence."
+        ),
     )
     note: str = Field(default="", description="What was searched / why nothing is claimed.")
 

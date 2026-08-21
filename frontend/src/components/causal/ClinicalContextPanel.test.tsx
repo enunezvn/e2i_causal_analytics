@@ -385,3 +385,54 @@ describe('ClinicalContextPanel — causal evidence (#1763)', () => {
     expect(screen.queryByText(/Evidence for this analysis/i)).not.toBeInTheDocument();
   });
 });
+
+// The brand-level citation chip is the one honesty label with no UI test: it is what
+// stops a brand-level paper reading as analysis-level (adversarial review finding).
+describe('ClinicalContextPanel — citation provenance chips (#1763)', () => {
+  it('labels a brand-level fallback citation as such, not as a curated fallback', () => {
+    const brandLevel: ClinicalContext = {
+      ...FULL,
+      real_world_evidence: {
+        ...FULL.real_world_evidence!,
+        source: 'pubmed_brand',
+        search_term: 'ribociclib persistence adherence breast cancer real-world',
+      },
+    };
+    render(<ClinicalContextPanel context={brandLevel} />);
+    expect(screen.getByText(/pubmed \(brand-level\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/curated fallback/i)).not.toBeInTheDocument();
+  });
+
+  it('never claims a source it does not recognise is curated', () => {
+    const unknown: ClinicalContext = {
+      ...FULL,
+      real_world_evidence: { ...FULL.real_world_evidence!, source: 'some_new_source' },
+    };
+    render(<ClinicalContextPanel context={unknown} />);
+    expect(screen.getByText(/some_new_source/i)).toBeInTheDocument();
+    expect(screen.queryByText(/curated fallback/i)).not.toBeInTheDocument();
+  });
+
+  it('names the molecule Open Targets actually answered about', () => {
+    const withEdge: ClinicalContext = {
+      ...FULL,
+      causal_evidence: {
+        status: 'evidence',
+        indication_edge: {
+          predicate: 'treats',
+          drug_id: 'CHEMBL3545110',
+          drug_name: 'RIBOCICLIB SUCCINATE',
+          disease_id: 'MONDO_0007254',
+          disease_name: 'breast cancer',
+          max_clinical_stage: 'APPROVAL',
+          source: 'open_targets',
+        },
+        citations: [],
+        sources_unavailable: [],
+        note: '',
+      },
+    };
+    render(<ClinicalContextPanel context={withEdge} />);
+    expect(screen.getByText(/RIBOCICLIB SUCCINATE/i)).toBeInTheDocument();
+  });
+});

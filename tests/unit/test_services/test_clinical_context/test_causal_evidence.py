@@ -386,3 +386,253 @@ def test_verification_stops_at_the_wall_clock_budget(monkeypatch):
     # The budget was already spent on entry, so no candidate was fetched at all.
     assert resolver.calls == []
     assert frag.citations == []
+
+
+# --- codex iter-1 findings ------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_a_patient_state_treatment_gets_no_drug_indication_edge():
+    """codex HIGH. TreatmentContext documents clinical_covariate as 'not a therapy:
+    no drug-indication claim belongs to it', but the provider attached the drug's
+    indication edge to it anyway — the therapy's evidence rendered under an
+    'evidence for this analysis' heading for an analysis about disease stage. That
+    is the borrowed-relevance failure #1763 is about, one notch milder."""
+    profile = resolve_brand_profile("Kisqali")
+    ot = _FakeOpenTargets()
+    pubmed = _FakePubMedSearch(pmids=["7"])
+    resolver = _FakeResolver({"7": _verdict("7", 0.9)})
+    frag = _provider(open_targets=ot, pubmed=pubmed, resolver=resolver).evidence(
+        profile,
+        outcome="discontinued_180d",
+        treatment_context=treatment_context_for("Kisqali", "disease_stage"),
+        search_term="ribociclib breast cancer discontinuation metastatic advanced disease",
+    )
+    assert frag.status == "evidence"
+    assert frag.indication_edge is None
+    assert ot.calls == 0  # the edge was not even fetched
+    # The literature IS on-topic (the covariate theme is in the query) and is kept,
+    # but the note must say what was actually verified.
+    assert [c.pmid for c in frag.citations] == ["7"]
+    assert "patient-state" in frag.note.lower() or "not a therapy" in frag.note.lower()
+
+
+@pytest.mark.unit
+def test_a_drug_therapy_treatment_still_gets_the_edge():
+    profile = resolve_brand_profile("Fabhalta")
+    frag = _provider(
+        open_targets=_FakeOpenTargets(
+            drug_id="CHEMBL4594448", disease_id="MONDO_0100244", payload=_FABHALTA_OT
+        )
+    ).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Fabhalta", "complement_inhibitor_status"),
+        search_term="iptacopan pnh switch",
+    )
+    assert frag.indication_edge is not None
+    assert frag.indication_edge.predicate == "treats"
+
+
+@pytest.mark.unit
+def test_verification_reserves_room_for_a_full_timeout_before_starting_one(monkeypatch):
+    """codex MEDIUM. Checking 'elapsed < budget' BEFORE a call that can itself burn a
+    full client timeout does not bound the wait: with a 20s budget and an 8s timeout
+    a call could start at 19.9s and end at 27.9s. Only start a candidate when a whole
+    timeout still fits."""
+    import src.services.clinical_context.causal_evidence as ev_mod
+
+    # Budget smaller than one client timeout: not even the first candidate may start.
+    monkeypatch.setattr(ev_mod, "_VERIFICATION_BUDGET_S", 5.0)
+    monkeypatch.setattr(ev_mod, "_EUROPE_PMC_TIMEOUT_S", 8.0)
+    profile = resolve_brand_profile("Kisqali")
+    resolver = _FakeResolver({"1": _verdict("1", 0.9)})
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert resolver.calls == []
+    assert frag.citations == []
+
+
+# --- adversarial review findings ------------------------------------------------
+
+
+@pytest.mark.unit
+def test_the_edge_is_dropped_when_open_targets_answered_about_another_molecule():
+    """HIGH. `search_drug` is a relevance-ranked search with no name comparison, and
+    the panel attributes the edge to the CURATED drug name — so a mis-resolved
+    molecule would render a regulatory-sounding claim about the wrong drug, and
+    nothing would show it. The disproving field (drug.name) is already fetched."""
+    profile = resolve_brand_profile("Kisqali")
+    wrong = {
+        "drug": {
+            "id": "CHEMBL189963",
+            "name": "PALBOCICLIB",
+            "maximumClinicalStage": "APPROVAL",
+            "indications": {
+                "count": 1,
+                "rows": [
+                    {
+                        "disease": {"id": "MONDO_0007254", "name": "breast cancer"},
+                        "maxClinicalStage": "APPROVAL",
+                    }
+                ],
+            },
+        }
+    }
+    frag = _provider(open_targets=_FakeOpenTargets(payload=wrong)).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.indication_edge is None
+
+
+@pytest.mark.unit
+def test_the_edge_names_the_molecule_that_actually_answered():
+    profile = resolve_brand_profile("Kisqali")
+    frag = _provider().evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.indication_edge is not None
+    assert frag.indication_edge.drug_id == "CHEMBL3545110"
+    assert frag.indication_edge.drug_name.lower() == "ribociclib"
+
+
+@pytest.mark.unit
+def test_a_salt_form_of_the_same_molecule_still_matches():
+    profile = resolve_brand_profile("Kisqali")
+    salt = {
+        "drug": {
+            "id": "CHEMBL3545110",
+            "name": "RIBOCICLIB SUCCINATE",
+            "maximumClinicalStage": "APPROVAL",
+            "indications": {
+                "count": 1,
+                "rows": [
+                    {
+                        "disease": {"id": "MONDO_0007254", "name": "breast cancer"},
+                        "maxClinicalStage": "PHASE_3",
+                    }
+                ],
+            },
+        }
+    }
+    frag = _provider(open_targets=_FakeOpenTargets(payload=salt)).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.indication_edge is not None
+    assert frag.indication_edge.max_clinical_stage == "PHASE_3"
+
+
+@pytest.mark.unit
+def test_a_row_with_no_disease_cannot_match_a_missing_disease_id():
+    """LOW. `row_id == disease_id` with both None matched a malformed row, which also
+    suppressed the full-name fallback — the result was a blank-disease APPROVAL
+    claim."""
+    profile = resolve_brand_profile("Kisqali")
+    malformed = {
+        "drug": {
+            "id": "CHEMBL3545110",
+            "name": "RIBOCICLIB",
+            "maximumClinicalStage": "APPROVAL",
+            "indications": {
+                "count": 2,
+                "rows": [
+                    {"disease": None, "maxClinicalStage": "APPROVAL"},
+                    {
+                        "disease": {"id": "MONDO_0007254", "name": "breast cancer"},
+                        "maxClinicalStage": "PHASE_3",
+                    },
+                ],
+            },
+        }
+    }
+    frag = _provider(
+        open_targets=_FakeOpenTargets(disease_id=None, payload=malformed)
+    ).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.indication_edge is not None
+    assert frag.indication_edge.disease_name == "breast cancer"
+    assert frag.indication_edge.max_clinical_stage == "PHASE_3"
+
+
+@pytest.mark.unit
+def test_a_source_that_errored_is_disclosed_not_silently_read_as_absence():
+    """HIGH. With Open Targets down and PubMed up, the fragment used to come back
+    status='evidence' with no edge — indistinguishable from 'no indication edge
+    exists'. An outage must be visible, and must not be cached as a settled result."""
+    from src.data.kg.open_targets import OpenTargetsError
+
+    profile = resolve_brand_profile("Kisqali")
+    pubmed = _FakePubMedSearch(pmids=["1"])
+    resolver = _FakeResolver({"1": _verdict("1", 0.9)})
+    frag = _provider(
+        open_targets=_FakeOpenTargets(boom=OpenTargetsError("502")),
+        pubmed=pubmed,
+        resolver=resolver,
+    ).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.status == "evidence"
+    assert frag.indication_edge is None
+    assert frag.sources_unavailable == ("open_targets",)
+    assert "unreachable" in frag.note.lower()
+    assert [c.pmid for c in frag.citations] == ["1"]
+
+
+@pytest.mark.unit
+def test_a_literature_failure_is_disclosed_too():
+    profile = resolve_brand_profile("Kisqali")
+    frag = _provider(pubmed=_FakePubMedSearch(boom=RuntimeError("pubmed down"))).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.sources_unavailable == ("pubmed",)
+
+
+@pytest.mark.unit
+def test_the_fda_label_note_does_not_point_in_a_direction_the_panel_does_not_render():
+    """LOW. The note said the approval status comes from "the label section above",
+    but the panel renders the approved-use section BELOW the evidence block."""
+    import src.services.clinical_context.causal_evidence as ev_mod
+
+    assert "above" not in ev_mod._FDA_LABEL_NOTE.lower()
+    assert "approved-use" in ev_mod._FDA_LABEL_NOTE.lower()
+
+
+@pytest.mark.unit
+def test_the_real_provider_wiring_constructs():
+    """MEDIUM. Nothing exercised the production wiring, so a constructor-signature
+    drift in EuropePMCClient / CitationResolver / OpenTargetsClient would first
+    surface as a swallowed warning in prod. No network: constructing the clients
+    opens no connection."""
+    from src.services.clinical_context.causal_evidence import (
+        CausalEvidenceProvider,
+        default_causal_evidence_provider,
+    )
+
+    provider = default_causal_evidence_provider()
+    assert isinstance(provider, CausalEvidenceProvider)
+    assert callable(provider._open_targets.search_drug)
+    assert callable(provider._pubmed.search_pmids)
+    assert callable(provider._resolver.verify_citation)

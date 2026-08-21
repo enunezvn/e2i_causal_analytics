@@ -344,6 +344,8 @@ _EVIDENCE_CTX.update(
             "status": "evidence",
             "indication_edge": {
                 "predicate": "associated_with",
+                "drug_id": "CHEMBL3545110",
+                "drug_name": "RIBOCICLIB",
                 "disease_id": "MONDO_0007254",
                 "disease_name": "breast cancer",
                 "max_clinical_stage": "PHASE_3",
@@ -361,6 +363,7 @@ _EVIDENCE_CTX.update(
                     "source": "pubmed+europepmc",
                 }
             ],
+            "sources_unavailable": [],
             "note": "Open Targets lags the FDA label.",
         },
     }
@@ -407,6 +410,8 @@ async def test_causal_evidence_survives_the_schema():
     assert ctx.causal_evidence.indication_edge is not None
     assert ctx.causal_evidence.indication_edge.predicate == "associated_with"
     assert ctx.causal_evidence.indication_edge.max_clinical_stage == "PHASE_3"
+    assert ctx.causal_evidence.indication_edge.drug_name == "RIBOCICLIB"
+    assert ctx.causal_evidence.sources_unavailable == []
     assert ctx.causal_evidence.citations[0].pmid == "40896422"
     assert ctx.causal_evidence.citations[0].entities_found == ["ribociclib", "breast cancer"]
     assert ctx.causal_evidence.note

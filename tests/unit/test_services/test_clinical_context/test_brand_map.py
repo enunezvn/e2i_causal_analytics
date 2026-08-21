@@ -223,3 +223,16 @@ def test_analysis_framing_is_none_without_a_curated_treatment():
     profile = resolve_brand_profile("Kisqali")
     assert analysis_framing_sentence(profile, "persistent_180d", None) is None
     assert analysis_framing_sentence(profile, "persistent_180d", "made_up_treatment") is None
+
+
+@pytest.mark.unit
+def test_fabhalta_indications_fallback_covers_every_labelled_indication():
+    """codex LOW, confirmed against the LIVE openFDA label 2026-08-21: FABHALTA is
+    indicated for PNH, IgAN and C3G. The curated fallback is what an analyst sees
+    when openFDA is unreachable, so a missing indication is a silently incomplete
+    label in exactly the moment we cannot check."""
+    profile = resolve_brand_profile("Fabhalta")
+    joined = " | ".join(profile.indications_fallback).lower()
+    assert "paroxysmal nocturnal hemoglobinuria" in joined
+    assert "iga nephropathy" in joined
+    assert "c3g" in joined or "complement 3 glomerulopathy" in joined

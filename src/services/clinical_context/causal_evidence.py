@@ -26,6 +26,11 @@ Three honesty rules are load-bearing here:
    enrolment, detailing, sampling and NBA triggers have no biomedical literature
    about the lever; attaching the drug's evidence under an "evidence for this
    analysis" heading would be exactly the confusion #1763 is about.
+4. **Only a drug-therapy treatment gets the drug -> indication edge.** When the
+   treatment is a patient-state contrast (advanced-line disease, UAS7 severity)
+   the therapy's indication says nothing about the contrast under study, so the
+   edge is not fetched at all — the literature (retrieved with the covariate's own
+   theme in the query) stands alone, with a note saying what was verified.
 
 MEASURED live 2026-08-21 (all three brands): every brand's indication node
 matched by EXACT id; ribociclib/breast cancer came back PHASE_3 under a drug-wide
@@ -70,15 +75,18 @@ _APPROVED_CLINICAL_STAGES = frozenset({"APPROVAL", "APPROVED"})
 # How many PMIDs to consider, and how many verified citations to surface. Each
 # candidate costs one Europe PMC fetch, so the candidate list is small and
 # verification stops as soon as the cap is met.
-_MAX_CANDIDATE_PMIDS = 6
+_MAX_CANDIDATE_PMIDS = 5
 _MAX_CITATIONS = 3
 
 # Every candidate costs one Europe PMC round trip, and Europe PMC DOES time out
-# (measured once in an 11-PMID probe on 2026-08-21). Two guards bound the wait a
-# user can sit through: a shorter per-request timeout on this path's client, and a
-# wall-clock budget after which verification stops and returns what it has.
-_EUROPE_PMC_TIMEOUT_S = 8.0
-_VERIFICATION_BUDGET_S = 20.0
+# (measured on 2026-08-21). This whole block runs inside one request while a user
+# waits on a panel, so each upstream gets a shorter timeout than the KG defaults and
+# verification stops on a wall-clock budget, returning what it has. MEASURED
+# end-to-end on the full stack the same day: typically 0.3-3s warm/cold, but one
+# slow-upstream window hit 31.8s — which is why these are tighter than the defaults.
+_EUROPE_PMC_TIMEOUT_S = 6.0
+_OPEN_TARGETS_TIMEOUT_S = 8.0
+_VERIFICATION_BUDGET_S = 12.0
 
 # A citation clears the bar only when the abstract names BOTH entities — that is
 # exactly what CitationResolver scores 0.5 for (a causal cue adds more on top).
@@ -86,9 +94,25 @@ _MIN_CITATION_CONFIDENCE = 0.5
 
 _FDA_LABEL_NOTE = (
     "Open Targets records the clinical stage per indication and lags the FDA "
-    "label; approval status for this brand comes from the label section above, "
-    "not from this edge."
+    "label; approval status for this brand comes from the approved-use section of "
+    "this panel, not from this edge."
 )
+
+
+def _same_molecule(resolved: str, expected: str) -> bool:
+    """True when the Open Targets record we read is the molecule we asked about.
+
+    ``search_drug`` is a relevance-ranked search with no exact-match guarantee, and
+    the panel attributes the edge to a drug name — so an unverified record would
+    render a regulatory-sounding claim sourced from a different molecule, invisibly.
+    Salt / ester forms ("RIBOCICLIB SUCCINATE") are the same molecule and match; an
+    empty resolved name is unverifiable and therefore does NOT match.
+    """
+    r = resolved.strip().casefold()
+    e = expected.strip().casefold()
+    if not r or not e:
+        return False
+    return r == e or e in r.replace("-", " ").split()
 
 
 @dataclass(frozen=True)
@@ -96,6 +120,11 @@ class IndicationEdge:
     """The drug -> indication edge for the analysis's own disease node."""
 
     predicate: str  # "treats" (approved) | "associated_with" (in development)
+    # The molecule Open Targets actually answered about — verified against the
+    # brand's INN before the edge is emitted, and surfaced so the panel names what
+    # matched rather than the curated name it assumed.
+    drug_id: str
+    drug_name: str
     disease_id: str
     disease_name: str
     max_clinical_stage: str
@@ -130,6 +159,10 @@ class CausalEvidenceFragment:
     indication_edge: Optional[IndicationEdge] = None
     citations: List[VerifiedCitation] = field(default_factory=list)
     note: str = ""
+    # Sources that were ASKED and failed. Without this, an Open Targets outage is
+    # indistinguishable from "no indication edge exists" — an absence of evidence
+    # read as evidence of absence — and the service would cache it as settled.
+    sources_unavailable: tuple[str, ...] = ()
 
 
 NOT_REQUESTED = CausalEvidenceFragment(
@@ -211,11 +244,24 @@ class CausalEvidenceProvider:
         disease_id = self._open_targets.search_disease(profile.disease_search_term)
         payload = self._open_targets.drug_disease_evidence(drug_id, disease_id or "")
         drug = (payload or {}).get("drug") or {}
+        resolved_name = str(drug.get("name") or "")
+        if not _same_molecule(resolved_name, profile.drug_name):
+            logger.warning(
+                "causal-evidence: Open Targets resolved %r to %r — refusing to claim "
+                "an indication edge for another molecule",
+                profile.drug_name,
+                resolved_name,
+            )
+            return None
         rows: Sequence[dict[str, Any]] = ((drug.get("indications") or {}).get("rows")) or []
         # EXACT disease-node match first. A loose name match ("cancer") would let
         # prostate / endometrial rows speak for a breast-cancer analysis, which is
         # the same borrowed-relevance failure this whole issue is about.
-        matches = [r for r in rows if ((r.get("disease") or {}).get("id")) == disease_id]
+        matches = (
+            [r for r in rows if ((r.get("disease") or {}).get("id")) == disease_id]
+            if disease_id
+            else []
+        )
         if not matches and not disease_id:
             # No id resolved at all: fall back to rows whose name IS the disease
             # term in FULL (not merely a shared word).
@@ -230,6 +276,8 @@ class CausalEvidenceProvider:
         stage = str(best.get("maxClinicalStage") or "UNKNOWN")
         return IndicationEdge(
             predicate=("treats" if stage in _APPROVED_CLINICAL_STAGES else "associated_with"),
+            drug_id=str(drug.get("id") or ""),
+            drug_name=resolved_name,
             disease_id=str(disease.get("id") or ""),
             disease_name=str(disease.get("name") or ""),
             max_clinical_stage=stage,
@@ -245,7 +293,12 @@ class CausalEvidenceProvider:
         for pmid in pmids:
             if len(out) >= _MAX_CITATIONS:
                 break
-            if time.monotonic() - started >= _VERIFICATION_BUDGET_S:
+            # Reserve room for a WHOLE client timeout: a candidate started at
+            # budget-minus-epsilon can still burn a full Europe PMC timeout on top,
+            # so "elapsed < budget" would not bound the wait it claims to bound.
+            if time.monotonic() - started >= max(
+                0.0, _VERIFICATION_BUDGET_S - _EUROPE_PMC_TIMEOUT_S
+            ):
                 # Out of budget: surface what verified rather than making the user
                 # wait on a slow upstream. Nothing unverified is shown either way.
                 logger.info(
@@ -318,18 +371,28 @@ class CausalEvidenceProvider:
                     "the treatment side of this analysis."
                 ),
             )
-        try:
-            edge = self._indication_edge(profile)
-        except Exception as exc:  # noqa: BLE001 — best-effort; the edge is optional
-            logger.warning(
-                "causal-evidence: Open Targets lookup failed for %s: %s", profile.drug_name, exc
-            )
-            edge = None
+        # The indication edge is a claim about the THERAPY. It belongs to an analysis
+        # whose treatment IS the therapy; for a patient-state contrast it would be the
+        # drug's evidence rendered as evidence about the contrast.
+        unavailable: List[str] = []
+        edge = None
+        if treatment_context.kind == "drug_therapy":
+            try:
+                edge = self._indication_edge(profile)
+            except Exception as exc:  # noqa: BLE001 — best-effort; the edge is optional
+                logger.warning(
+                    "causal-evidence: Open Targets lookup failed for %s: %s",
+                    profile.drug_name,
+                    exc,
+                )
+                edge = None
+                unavailable.append("open_targets")
         try:
             citations = self._citations(profile, search_term)
         except Exception as exc:  # noqa: BLE001 — best-effort; literature is optional
             logger.warning("causal-evidence: literature search failed for %r: %s", search_term, exc)
             citations = []
+            unavailable.append("pubmed")
         if edge is None and not citations:
             return CausalEvidenceFragment(
                 status="unavailable",
@@ -337,18 +400,36 @@ class CausalEvidenceProvider:
                     "No indication edge or verifiable literature came back for this "
                     "analysis from the public sources."
                 ),
+                sources_unavailable=tuple(unavailable),
             )
         notes = [
             f"Literature searched as: {search_term!r}; a citation is shown only when its "
             f"abstract names both {profile.drug_name} and {profile.disease_search_term}."
         ]
+        if treatment_context.kind == "clinical_covariate":
+            notes.insert(
+                0,
+                f"{treatment_context.label} is a patient-state variable used as an "
+                f"observational treatment, not a therapy, so no drug-indication claim is "
+                f"made for it; the literature below was retrieved with this contrast in "
+                f"the query and verified on {profile.drug_name} + "
+                f"{profile.disease_search_term}.",
+            )
         if edge is not None and edge.predicate != "treats":
             notes.insert(0, _FDA_LABEL_NOTE)
+        if unavailable:
+            # An outage must not read as a settled absence.
+            notes.insert(
+                0,
+                f"{' and '.join(unavailable)} was unreachable for this analysis, so what "
+                f"is missing below is unknown, not absent.",
+            )
         return CausalEvidenceFragment(
             status="evidence",
             indication_edge=edge,
             citations=citations,
             note=" ".join(notes),
+            sources_unavailable=tuple(unavailable),
         )
 
 
@@ -361,7 +442,7 @@ def default_causal_evidence_provider() -> CausalEvidenceProvider:
     from src.services.clinical_context.clients import PubMedClient
 
     return CausalEvidenceProvider(
-        open_targets=OpenTargetsClient(),
+        open_targets=OpenTargetsClient(timeout=_OPEN_TARGETS_TIMEOUT_S),
         pubmed=PubMedClient(),
         # A tighter Europe PMC timeout than the KG default: this path runs while a
         # user waits on a panel, not in a batch job.

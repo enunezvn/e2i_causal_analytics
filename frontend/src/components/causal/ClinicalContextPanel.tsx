@@ -68,9 +68,18 @@ function sourceChip(source: string) {
       </Badge>
     );
   }
+  if (source === 'static_fallback') {
+    return (
+      <Badge variant="secondary" className="ml-2 align-middle text-xs">
+        curated fallback
+      </Badge>
+    );
+  }
+  // An unrecognised source is shown verbatim. Calling it "curated fallback" would
+  // assert a provenance we do not know — the one thing this panel must never do.
   return (
     <Badge variant="secondary" className="ml-2 align-middle text-xs">
-      curated fallback
+      {source}
     </Badge>
   );
 }
@@ -197,7 +206,9 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           {causal_evidence.indication_edge && (
             /* Badge renders a <div>, so this wrapper must not be a <p>. */
             <div className="mt-1">
-              <span className="capitalize">{context.drug_name}</span>{' '}
+              {/* The molecule Open Targets actually answered about — verified against
+                  the brand's INN — so the sentence names what matched. */}
+              <span className="capitalize">{causal_evidence.indication_edge.drug_name}</span>{' '}
               {causal_evidence.indication_edge.predicate === 'treats'
                 ? 'is recorded as an approved therapy for'
                 : 'is recorded in development for'}{' '}

@@ -441,6 +441,8 @@ def _evidence_fragment():
         status="evidence",
         indication_edge=IndicationEdge(
             predicate="associated_with",
+            drug_id="CHEMBL3545110",
+            drug_name="RIBOCICLIB",
             disease_id="MONDO_0007254",
             disease_name="breast cancer",
             max_clinical_stage="PHASE_3",
@@ -533,3 +535,97 @@ def test_causal_evidence_is_cached_per_analysis():
     svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
     svc.get_context("Kisqali", "persistent_180d", treatment="copay_support", include_causal_evidence=True)
     assert len(provider.calls) == 2
+
+
+def test_evidence_cache_key_is_bounded_by_the_curated_universe():
+    """`outcome` and `treatment` arrive from query params. Keying the evidence cache
+    on the RAW outcome would let any authenticated caller grow this module-level dict
+    without bound — and re-hit Open Targets / PubMed / Europe PMC for every novel
+    string. The key is the analysis as the curated maps define it, which collapses
+    unmapped outcomes onto the brand-level query they already fall back to."""
+    import src.services.clinical_context.service as svc_mod
+
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    svc = _service_with_evidence(provider)
+    for i in range(20):
+        svc.get_context(
+            "Kisqali",
+            f"made_up_outcome_{i}",
+            treatment="treatment_arm",
+            include_causal_evidence=True,
+        )
+    assert len(svc_mod._EVIDENCE_CACHE) == 1
+    assert len(provider.calls) == 1
+
+
+def test_an_uncurated_treatment_is_never_cached():
+    """An unmapped treatment yields an immediate honest 'unavailable' with no live
+    call, so caching it buys nothing and would be the same unbounded-key hazard."""
+    import src.services.clinical_context.service as svc_mod
+
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    svc = _service_with_evidence(provider)
+    for i in range(20):
+        svc.get_context(
+            "Kisqali", "persistent_180d", treatment=f"junk_{i}", include_causal_evidence=True
+        )
+    assert svc_mod._EVIDENCE_CACHE == {}
+
+
+def test_a_half_degraded_evidence_fragment_self_heals(monkeypatch):
+    """The evidence block must not freeze an upstream outage into the process for
+    good: a fragment whose sources partly failed is degraded, not settled."""
+    import src.services.clinical_context.service as svc_mod
+    from src.services.clinical_context.causal_evidence import CausalEvidenceFragment
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    degraded = CausalEvidenceFragment(
+        status="evidence",
+        indication_edge=None,
+        citations=[],
+        note="Open Targets was unreachable.",
+        sources_unavailable=("open_targets",),
+    )
+    provider = _StubEvidenceProvider(degraded)
+    svc = _service_with_evidence(provider)
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
+    assert len(provider.calls) == 2
+
+
+def test_a_brand_level_citation_fallback_is_retried_not_frozen(monkeypatch):
+    """`pubmed_brand` means the ANALYSIS query returned nothing — and the provider
+    cannot tell a genuine zero-hit from a swallowed 429. Caching it forever under the
+    analysis key would freeze a transient failure for the process lifetime."""
+    import src.services.clinical_context.service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    art = PubMedArticle(pmid="1", title="t", journal="j", doi="10.1/z")
+    counters = {"cite": {"n": 0}}
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(art, "pubmed_brand", "ribociclib persistence adherence breast cancer real-world"),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert counters["cite"]["n"] == 2
+
+
+def test_evidence_payload_discloses_unavailable_sources():
+    from src.services.clinical_context.causal_evidence import CausalEvidenceFragment
+
+    provider = _StubEvidenceProvider(
+        CausalEvidenceFragment(
+            status="evidence",
+            indication_edge=None,
+            citations=[],
+            note="Open Targets was unreachable for this analysis.",
+            sources_unavailable=("open_targets",),
+        )
+    )
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    assert ctx["causal_evidence"]["sources_unavailable"] == ["open_targets"]

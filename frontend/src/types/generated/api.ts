@@ -7223,6 +7223,11 @@ export interface components {
              */
             citations?: components["schemas"]["VerifiedCitation"][];
             /**
+             * Sources Unavailable
+             * @description Sources that were asked and failed. What is missing from this block is then UNKNOWN, not absent — an outage must not read as a settled absence.
+             */
+            sources_unavailable?: string[];
+            /**
              * Note
              * @description What was searched / why nothing is claimed.
              * @default
@@ -11506,6 +11511,16 @@ export interface components {
              * @description treats (approved) / associated_with (in development)
              */
             predicate: string;
+            /**
+             * Drug Id
+             * @description Open Targets / ChEMBL id of the molecule that answered
+             */
+            drug_id: string;
+            /**
+             * Drug Name
+             * @description The molecule Open Targets answered about, verified against the brand's INN before the edge is emitted (salt forms allowed).
+             */
+            drug_name: string;
             /**
              * Disease Id
              * @description Disease node id (e.g. MONDO_0007254)

@@ -421,6 +421,9 @@ export interface RealWorldEvidence {
 export interface IndicationEdge {
   /** treats (approved) | associated_with (in development) */
   predicate: string;
+  /** The molecule Open Targets answered about, verified against the brand's INN. */
+  drug_id: string;
+  drug_name: string;
   disease_id: string;
   disease_name: string;
   max_clinical_stage: string;
@@ -451,6 +454,8 @@ export interface CausalEvidence {
   status: string;
   indication_edge?: IndicationEdge | null;
   citations: VerifiedCitation[];
+  /** Sources asked that failed — what is missing is then unknown, not absent. */
+  sources_unavailable: string[];
   note: string;
 }
 
