@@ -21,7 +21,7 @@ predicate ``semantic_memory.list_nodes(curated_only=True)`` appends, and
 ``KnowledgeGraph.tsx`` always sends ``curated_only: true`` — so this counts what
 the page renders. It matters: after the #1758 wipe, agents repopulated runtime
 nodes within hours, so a TOTAL count would have read non-empty for the whole
-outage. (Live prod 2026-08-21: 100 total nodes, 89 curated, 11 agent-written.)
+outage. (Live prod 2026-08-21: 100 nodes total, 89 curated; the rest runtime writes.)
 
 A failed probe is UNKNOWN, never zero. Reading a FalkorDB outage as "empty" would
 fire a CREATE-based reseed on every tick and duplicate the graph the moment the

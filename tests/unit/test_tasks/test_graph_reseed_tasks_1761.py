@@ -120,7 +120,7 @@ def test_emptiness_predicate_is_the_pages_curated_predicate() -> None:
     into ``n.agent IS NULL`` (``semantic_memory.list_nodes``). After the #1758 wipe
     agents repopulated runtime nodes within hours, so a TOTAL count reads non-empty
     while the entire curated layer is gone (live prod 2026-08-21: 100 total nodes,
-    89 curated, 11 agent-written).
+    89 curated; the rest runtime writes).
     """
     assert "n.agent IS NULL" in grt.CURATED_COUNT_QUERY
     assert "count(n)" in grt.CURATED_COUNT_QUERY
