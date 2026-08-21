@@ -36,22 +36,23 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Iterator, List, Tuple, get_args
+from typing import Iterator, List, Optional, Tuple, get_args
 
 import pytest
 
-from src.services.clinical_context.brand_map import resolve_brand_profile
+from src.services.clinical_context.brand_map import BrandClinicalProfile, resolve_brand_profile
 from src.services.clinical_context.clients import CTGovEndpoint, PubMedArticle
 from src.services.clinical_context.providers import (
     CitationFragment,
+    ClinicalContextProvider,
     CompetitorFragment,
     EndpointsFragment,
     IndicationsFragment,
     MechanismFragment,
 )
 from src.services.clinical_context.service import (
-    _BrandFragmentTuple,
     ClinicalContextService,
+    _BrandFragmentTuple,
     reset_caches,
 )
 
@@ -72,15 +73,16 @@ _DEGRADATION_SIGNAL = (
 )
 
 
-class _StubProvider:
-    """Returns a fixed fragment. No network, no plausible-but-fake live values —
-    every source label below is one the real code emits for a *stub*."""
+class _StubProvider(ClinicalContextProvider):
+    """Returns a fixed fragment. No network — this file asserts a structural
+    contract, so the fragments only need to be the right TYPES; nothing here is
+    presented as, or compared against, a live provider result."""
 
     def __init__(self, fragment: object, name: str = "stub") -> None:
         self._fragment = fragment
         self.provider_name = name
 
-    def enrich(self, profile: object) -> object:
+    def enrich(self, profile: BrandClinicalProfile) -> object:
         return self._fragment
 
 
@@ -190,7 +192,7 @@ def _positional_reads(path: Path, text: str) -> List[Tuple[int, int, str]]:
     tree = ast.parse(text, filename=str(path))
     reads: List[Tuple[int, int, str]] = []
 
-    def _is_seam_call(node: ast.expr) -> bool:
+    def _is_seam_call(node: Optional[ast.expr]) -> bool:
         return (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
