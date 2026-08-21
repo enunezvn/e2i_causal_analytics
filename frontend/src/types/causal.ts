@@ -499,8 +499,15 @@ export interface CompetitorLandscape {
  * `honesty_label` states the boundary: estimate = synthetic cohort; context =
  * real, cited. A `static_fallback` source means the live API was unreachable.
  */
-/** One verbatim bullet from the FDA label, carrying the section it came from so an
- * analyst can open the prescribing information at that paragraph. Never summarised. */
+/** One consideration lifted from the FDA label, carrying the section it came from.
+ *
+ * `detail` is always verbatim label text — never summarised, never generated.
+ * `title` is the bullet's own heading or, when it has none, the plain name of its
+ * section. `references` is a real label cross-reference an analyst can open the
+ * prescribing information at, EXCEPT for the boxed warning, where it is the literal
+ * "Boxed warning" — that section carries no cross-reference of its own. This comment
+ * used to promise "one verbatim bullet ... open the prescribing information at that
+ * paragraph" for all three fields, which was false for two of the emitters. */
 export interface LabelConsideration {
   /** The bullet's own heading, or the section name when it carries none. */
   title: string;

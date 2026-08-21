@@ -2,9 +2,12 @@
 
 The panel must ground a causal scenario in what the label actually says that
 bears on the OUTCOME being analysed (why a patient stops, what gates starting).
-CLAUDE.md forbids plausible-but-fake values in production paths, so every item
-here is verbatim label text carrying its own cross-reference — no summarisation,
-no LLM, nothing invented.
+CLAUDE.md forbids plausible-but-fake values in production paths, so every item's
+DETAIL is verbatim label text — no summarisation, no LLM, nothing invented. Titles
+and references carry a weaker guarantee (a title may be the section's plain name, and
+the boxed warning has no cross-reference of its own); the module docstring states it
+per field. This header used to make the blanket claim, which was false for the boxed
+warning emitter its sibling test file covers.
 
 Fixtures are trimmed but otherwise VERBATIM excerpts captured from the live
 openFDA labels on 2026-08-21.
@@ -559,3 +562,34 @@ def test_a_parenthetical_of_prose_is_not_mistaken_for_a_reference_group():
         (i.title, i.references, i.detail) for i in items
     ]
     assert "2 to less than 18 years of age" in items[0].detail
+
+
+@pytest.mark.unit
+def test_word_separated_references_and_footnote_markers():
+    """codex iter-11, two HIGH in one shape: what counts as a separator, and what
+    counts as a bullet.
+
+    `_is_reference_group` stripped only "and", so "( 5.1 or 5.2 )" read as prose, the
+    guard stayed silent, and the bullets merged. And `*` was in `_BULLET_GLYPHS` on no
+    evidence at all — the live survey found U+2022 and nothing else — so a statistical
+    footnote "*P<0.05 versus control." was treated as the start of a bullet and its
+    text became the next bullet's TITLE.
+    """
+    merged = parse_label_considerations(
+        "5 WARNINGS AND PRECAUTIONS A: Keep this. ( 5.1 or 5.2 ) B: Monitor next. ( 5.4 )",
+        WARNINGS_SECTION,
+    )
+    for item in merged:
+        assert not ("Keep this" in item.detail and "Monitor next" in item.detail), (
+            item.title,
+            item.references,
+            item.detail,
+        )
+
+    footnoted = parse_label_considerations(
+        "5 WARNINGS AND PRECAUTIONS A: In Study 1 (N=123), response was assessed. (5.1) "
+        "*P<0.05 versus control. B: Monitor next. ( 5.2 )",
+        WARNINGS_SECTION,
+    )
+    for item in footnoted:
+        assert "P<0.05" not in item.title, (item.title, item.detail)

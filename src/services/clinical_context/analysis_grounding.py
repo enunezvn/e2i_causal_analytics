@@ -21,6 +21,7 @@ is composed from the curated competitor map. Both are labelled with their source
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Optional, Sequence, Tuple
 
@@ -92,6 +93,35 @@ def _theme_for(outcome: str) -> str:
     return ""
 
 
+# Sentence boundary, good enough for label prose. Abbreviations inside a bullet
+# ("e.g.", "i.e.") would over-split, which costs nothing here: an over-split sentence
+# still carries its own cue or does not.
+_SENTENCE = re.compile(r"(?<=\.)\s+")
+
+
+def _earns_theme(consideration: LabelConsideration, theme: str) -> bool:
+    """True when some SENTENCE carries the theme's cue without being scoped away.
+
+    Matching cues over the whole item let a cue trapped inside an initiation clause
+    earn the persistence claim: "Monitor ECGs and electrolytes prior to initiation."
+    was reported as a factor bearing on STAYING on therapy when it establishes only a
+    pre-initiation gate (codex iter-11 HIGH).
+
+    The blanket rule — an item that mentions initiation is not persistence — was
+    measured against the live ribociclib label and rejected: all three items it would
+    have dropped carry BOTH a gate and ongoing monitoring ("Perform CBC before
+    initiating therapy. Monitor CBC every 2 weeks ..."), and they are real persistence
+    grounding. Scoping per sentence keeps those and drops the gate-only case.
+    """
+    cues = _PERSISTENCE_CUES if theme == PERSISTENCE_THEME else _INITIATION_CUES
+    other = _INITIATION_CUES if theme == PERSISTENCE_THEME else ()
+    for sentence in _SENTENCE.split(f"{consideration.title}. {consideration.detail}"):
+        lowered = sentence.lower()
+        if any(cue in lowered for cue in cues) and not any(cue in lowered for cue in other):
+            return True
+    return False
+
+
 def _select(
     considerations: Sequence[LabelConsideration], theme: str
 ) -> Tuple[LabelConsideration, ...]:
@@ -103,10 +133,7 @@ def _select(
     """
     if not theme:
         return ()
-    cues = _PERSISTENCE_CUES if theme == PERSISTENCE_THEME else _INITIATION_CUES
-    return tuple(
-        c for c in considerations if any(cue in f"{c.title} {c.detail}".lower() for cue in cues)
-    )
+    return tuple(c for c in considerations if _earns_theme(c, theme))
 
 
 def _competitive_context(profile: BrandClinicalProfile, theme: str) -> Optional[str]:

@@ -13,6 +13,8 @@ on it — what the label says drives discontinuation, and what a patient switche
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from src.services.clinical_context.analysis_grounding import ground_analysis
@@ -25,7 +27,21 @@ from src.services.clinical_context.label_considerations import (
 
 _MONITORING = LabelConsideration(
     title="QT Interval Prolongation",
-    detail="Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.",
+    # VERBATIM from the live ribociclib label. It used to be truncated to just
+    # "Monitor electrocardiograms (ECGs) and electrolytes prior to initiation." — a
+    # sentence that establishes only a pre-initiation GATE — and every persistence
+    # assertion in this file leaned on that fixture, so the suite agreed the item bore
+    # on staying on therapy when the fixture text said no such thing (codex iter-11
+    # HIGH). The real bullet carries both the gate AND ongoing monitoring, which is
+    # why it legitimately grounds either question. A fixture that is not what the
+    # label says cannot certify what we tell an analyst the label says.
+    detail=(
+        "KISQALI has been shown to prolong the QT interval in a concentration-dependent "
+        "manner. Monitor electrocardiograms (ECGs) and electrolytes prior to initiation "
+        "of treatment with KISQALI. Repeat ECGs at approximately Day 14 of the first "
+        "cycle, and as clinically indicated. Monitor electrolytes at the beginning of "
+        "each cycle for 6 cycles, and as clinically indicated."
+    ),
     section=WARNINGS_SECTION,
     references="2.2 , 5.3",
 )
@@ -92,6 +108,20 @@ def test_grounding_never_claims_the_label_speaks_to_the_lever():
     assert "copay" in low  # the lever is named...
     # ...but never as something the label or the regulator speaks to.
     assert "label does not" in low or "not a claim" in low or "says nothing about" in low
+    # codex iter-11 HIGH: the assertions above only require a DENIAL to be present, so
+    # a note that both claimed the label speaks to copay AND appended "not a claim"
+    # would pass a test whose docstring promises the opposite.
+    #
+    # Checking for the absence of the affirmative phrasing does NOT work — the denial
+    # contains it ("none of the above is a claim that the label speaks to copay
+    # support"), so a plain substring check fires on the very sentence that makes the
+    # note honest. Truthfulness here is structural, not lexical: EVERY place the note
+    # connects the label to the lever must be negated where it stands.
+    for match in re.finditer(r"the label (?:speaks to|supports|covers|describes)", low):
+        preceding = low[max(0, match.start() - 60) : match.start()]
+        assert any(neg in preceding for neg in ("not ", "none", "nothing", "never", "no ")), (
+            f"unnegated claim at {match.start()}: ...{low[max(0, match.start() - 60) : match.end() + 40]}"
+        )
 
 
 @pytest.mark.unit
@@ -338,3 +368,55 @@ def test_an_unmapped_outcome_gets_no_competitive_claim_either():
     # the #1763 boundary must SURVIVE, though: the label is still silent on the lever
     assert "commercial access lever" in grounding.note.lower()
     assert "says nothing about it" in grounding.note.lower()
+
+
+@pytest.mark.unit
+def test_a_cue_trapped_inside_an_initiation_clause_is_not_persistence():
+    """codex iter-11 HIGH, narrowed by measurement.
+
+    Cue matching ran over the whole item, so "Monitor ECGs and electrolytes prior to
+    initiation." was called a factor "bearing on staying on therapy" — the note said
+    so — when the text establishes only a pre-initiation gate.
+
+    The blanket fix (an item mentioning initiation is not persistence) would have been
+    the spacing-rule mistake again: on the LIVE ribociclib label all three flagged
+    items carry BOTH a gate and ongoing monitoring — "Perform CBC before initiating
+    therapy. Monitor CBC every 2 weeks..." — and excluding them drops three real
+    persistence warnings. So the rule is per SENTENCE: a theme is earned when some
+    sentence carries its cue WITHOUT being scoped to the other one.
+    """
+    gate_only = LabelConsideration(
+        title="QT Interval Prolongation",
+        detail="Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.",
+        section="warnings_and_cautions",
+        references="2.2 , 5.3",
+    )
+    both = LabelConsideration(
+        title="Neutropenia",
+        detail=(
+            "Perform complete blood count (CBC) before initiating therapy with KISQALI. "
+            "Monitor CBC every 2 weeks for the first 2 cycles, at the beginning of each "
+            "subsequent 4 cycles, and as clinically indicated."
+        ),
+        section="warnings_and_cautions",
+        references="2.2 , 5.5",
+    )
+    picked = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(gate_only, both),
+        label_source="openfda",
+    ).label_considerations
+    titles = [c.title for c in picked]
+    assert "Neutropenia" in titles, "ongoing monitoring is genuine persistence grounding"
+    assert "QT Interval Prolongation" not in titles, titles
+    # and it is still an initiation gate, which is a claim we HAVE earned
+    init = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="treatment_initiated",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(gate_only, both),
+        label_source="openfda",
+    ).label_considerations
+    assert "QT Interval Prolongation" in [c.title for c in init]

@@ -163,7 +163,12 @@ _CANDIDATE = re.compile(rf"\(\s*(?P<refs>\d+(?:\.\d+)?(?:{_REF_SEPARATOR}\d+(?:\
 # under the third one's citation — a fabricated label item on a marketed oncology
 # drug. Found only by widening the sample from 3 brands to 8; the 3 I had happened
 # to use no glyph.
-_BULLET_GLYPHS = "\u2022\u25aa\u25e6\u00b7\u2023*"
+# Only characters that are unambiguously bullet delimiters. "*" was in this set on no
+# evidence — the live survey found U+2022 and nothing else — and it let a statistical
+# footnote "*P<0.05 versus control." start a bullet, putting the footnote's text into
+# the NEXT bullet's title (codex iter-11 HIGH). U+00B7 went with it: a middle dot is a
+# multiplication and hydrate separator in chemical names, not a bullet.
+_BULLET_GLYPHS = "\u2022\u25aa\u25e6\u2023"
 # The optional "." is a whole CONVENTION, not an edge case. Our curated brands write
 # "... thereafter. ( 5.1 )"; ivosidenib, spironolactone and atorvastatin write
 # "... thereafter ( 5.1 )." with the sentence period AFTER the citation. Without it
@@ -211,8 +216,10 @@ _TRAILING_PERIOD = re.compile(r"\s*\.")
 # prose alone.
 _BRACKETED = re.compile(r"[(\[][^()\[\]]*\d[^()\[\]]*[)\]]")
 _NUMBER = re.compile(r"\d+(?:\.\d+)*")
-# "and" is the one word real reference lists use as a separator ("( 5.1 and 5.3 )").
-_WORD_SEPARATOR = re.compile(r"\band\b", re.I)
+# The words real reference lists use as separators: "( 5.1 and 5.3 )", "( 5.1 or
+# 5.2 )". Deliberately just these two — "to" would swallow alpelisib's "(2 to less
+# than 18 years of age)", which is the prose this check exists to spare.
+_WORD_SEPARATOR = re.compile(r"\b(?:and|or)\b", re.I)
 _ALPHABETIC = re.compile(r"[A-Za-z]")
 
 # `\s*`, not `\s+`: "(5.1)5.1 Full Text Begins" hid the boundary from a

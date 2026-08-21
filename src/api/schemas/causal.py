@@ -1021,11 +1021,23 @@ class TreatmentContext(BaseModel):
 
 
 class LabelConsideration(BaseModel):
-    """One VERBATIM bullet from the FDA label, with the section it came from.
+    """One consideration lifted from the FDA label, with the section it came from.
 
-    Never summarised and never generated: a paraphrased clinical consideration is
-    the plausible-but-wrong value CLAUDE.md forbids in a user-facing path. The
-    reference lets an analyst open the prescribing information at that paragraph.
+    ``detail`` is never summarised and never generated — a paraphrased clinical
+    consideration is the plausible-but-wrong value CLAUDE.md forbids in a user-facing
+    path. ``title`` and ``references`` carry a weaker guarantee, spelled out because
+    this docstring used to promise "one VERBATIM bullet ... the reference lets an
+    analyst open the prescribing information at that paragraph" for all three fields,
+    and that was false for two of the emitters (codex iter-11 HIGH):
+
+    * ``detail`` — always a contiguous verbatim run of the named section.
+    * ``title`` — the bullet's own verbatim heading, or the plain name of its section
+      when the bullet has none. Our words in that case, chosen so they cannot be
+      mistaken for clinical text.
+    * ``references`` — a real label cross-reference for Highlights bullets, which does
+      open the prescribing information at that paragraph. For the boxed warning it is
+      the literal "Boxed warning": that section carries no cross-reference of its own,
+      and naming it is the honest alternative to inventing one.
     """
 
     title: str = Field(..., description="The bullet's heading, or the section name")

@@ -272,10 +272,15 @@ def _label_considerations(label: dict) -> tuple[LabelConsideration, ...]:
     """Verbatim Highlights bullets from the label sections that bear on starting or
     staying on therapy (#1775).
 
-    Only the two sections whose Highlights are reliably structured are parsed. The
-    boxed warning is deliberately NOT parsed as bullets — it is prose and the
-    prototype produced fragments like "] . Life-threatening ..." from it; it already
-    reaches the panel whole via ``boxed_warning``.
+    Two sections are PARSED into bullets — warnings and dosage — because their
+    Highlights are reliably structured. The boxed warning is deliberately not parsed
+    that way (it is prose; the prototype produced fragments like "] . Life-threatening
+    ..." from it) but it IS appended here, whole, as a single consideration.
+
+    That last clause used to say the boxed warning "already reaches the panel via
+    ``boxed_warning``" and stop there, which stopped being true the moment grounding
+    needed it: Fabhalta's initiation gate lives only in the boxed warning, so an
+    initiation analysis was grounded on nothing without it (codex iter-11 MEDIUM).
     """
     out: list[LabelConsideration] = []
     for section in (WARNINGS_SECTION, DOSAGE_SECTION):
