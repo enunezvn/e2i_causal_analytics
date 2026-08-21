@@ -235,3 +235,39 @@ def test_fabhalta_indications_fallback_covers_every_labelled_indication():
     assert "paroxysmal nocturnal hemoglobinuria" in joined
     assert "iga nephropathy" in joined
     assert "c3g" in joined or "complement 3 glomerulopathy" in joined
+
+
+@pytest.mark.unit
+def test_every_curated_treatment_is_a_treatment_the_platform_actually_offers():
+    """No invented treatment columns.
+
+    The #1763 coverage check ran one direction only — every treatment the UI offers
+    is curated (10/10 on `patient_journeys`). It could not have caught the reverse:
+    a curated `TreatmentContext` for a column that exists nowhere. Such an entry is
+    unreachable, and it documents an analysis axis the platform does not have —
+    which is the same borrowed-relevance problem #1763 was filed about, pointed the
+    other way.
+
+    Note this deliberately checks ALL datasets, not just `patient_journeys`:
+    `peer_influence_score` is a real treatment at HCP grain (`hcp_adoption`), so a
+    patient-journeys-only check would flag it as invented.
+    """
+    # Function-local: importing the causal router pulls in the whole API surface.
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+
+    offered: dict[str, list[str]] = {}
+    for dataset, spec in _CAUSAL_DATASET_SPECS.items():
+        for column in spec.get("treatment", []):
+            offered.setdefault(column, []).append(dataset)
+
+    invented = {
+        column: brand
+        for brand, profile in BRAND_CLINICAL_MAP.items()
+        for column in profile.treatment_context
+        if column not in offered
+    }
+    assert not invented, (
+        f"curated treatment context for column(s) the platform never offers as a "
+        f"treatment: {sorted(invented)}. Either the column was invented, or it was "
+        f"renamed in _CAUSAL_DATASET_SPECS and the curated map was not updated."
+    )

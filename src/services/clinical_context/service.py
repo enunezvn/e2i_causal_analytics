@@ -242,7 +242,14 @@ class ClinicalContextService:
         # was asked and failed (its absence is unknown, not settled). A commercial
         # lever has nothing to re-fetch and a fully-answered result is stable.
         if key is not None:
-            complete = evidence.status != "unavailable" and not evidence.sources_unavailable
+            complete = (
+                evidence.status != "unavailable"
+                and not evidence.sources_unavailable
+                # We stopped early under our own budget: unfinished, so not settled.
+                # Kept apart from sources_unavailable so a healthy Europe PMC is
+                # never named as the reason (codex iter-1 HIGH, #1767).
+                and not evidence.checks_incomplete
+            )
             # Two requests can miss the cache together; the slower one must not
             # replace a complete fragment with the degraded one it happened to get
             # from a transient upstream failure.
