@@ -444,7 +444,10 @@ case "$1" in
   rev-parse)
     if [ "$2" = "FETCH_HEAD" ]; then
       # git errors on an unpopulated FETCH_HEAD rather than echoing a stale value.
-      grep -qE '(^| )origin main( |$)' "$_args_file" 2>/dev/null || exit 1
+      # EXACT match, not a substring: `--quiet upstream origin main` contains
+      # "origin main" but fetches from a remote that does not exist on the runner,
+      # so the probe would take the fail-soft path and skip the guarantee entirely.
+      [ "$(cat "$_args_file" 2>/dev/null)" = "--quiet origin main" ] || exit 1
       printf '%s\\n' "${STUB_MAIN_SHA:-}"
       exit 0
     fi
@@ -658,7 +661,12 @@ def test_probe_resolves_origin_main_and_not_this_run_s_own_ref(tmp_path: Path) -
     _rc, _stdout, outputs, fetch_args = _run_probe(
         tmp_path, TRIGGER_SHA=SHA_A, STUB_MAIN_SHA=SHA_B, STUB_PRESENT=""
     )
-    assert "origin main" in fetch_args, (
-        f"the probe must fetch `origin main`; it fetched: {fetch_args!r}"
+    assert fetch_args == "--quiet origin main", (
+        "the probe must fetch exactly `origin main`; it fetched: "
+        f"{fetch_args!r}. Substring matching is not enough here — codex iter-2 showed "
+        "`--quiet upstream origin main` contains 'origin main', passes a substring "
+        "check, and fetches a remote that does not exist on the runner, so the probe "
+        "silently takes the fail-soft path and skips the #1780 guarantee. If you change "
+        "the fetch deliberately, update this string deliberately."
     )
     assert outputs.get("sha") == SHA_B, "and must publish what that fetch resolved to"
