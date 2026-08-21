@@ -23,18 +23,97 @@ import argparse
 import logging
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List
-
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.rag.config import FalkorDBConfig
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CONNECTION CONFIG
+# =============================================================================
+#
+# This used to be ``from src.rag.config import FalkorDBConfig`` — a 4-field
+# connection dataclass reached through ``src/rag/__init__``, which eagerly imports
+# the dspy stack. Measured 2026-08-21 in the deployed image
+# (ghcr.io/enunezvn/e2i-api:0ff77a084):
+#
+#     falkordb import                    :  15.4 MB delta
+#     src.rag.config import              : 705.0 MB delta (719.0 MB peak)
+#     python scripts/seed_falkordb.py --dry-run : 721.7 MB child peak RSS
+#
+# #1761 makes the beat-scheduled emptiness sentinel
+# (src/tasks/graph_reseed_tasks.py) subprocess this seeder from inside
+# worker_light, which runs under a 1.5 GiB cgroup limit and was measured at
+# 1.03 GiB resident — ~476 MiB of headroom. A 721 MB child is an OOM kill, so the
+# seeder now derives its own connection settings and imports nothing from src/.
+# Guarded by tests/unit/test_scripts/test_seed_falkordb_import_isolation_1761.py.
+
+
+def _parse_falkordb_config() -> Tuple[str, int, Optional[str]]:
+    """Derive host/port/password from ``FALKORDB_URL`` when set, else discrete vars.
+
+    Mirrors ``src/api/dependencies/falkordb_client.py::_parse_falkordb_config`` and
+    ``scripts/sync_causal_paths_to_falkordb.py`` — ``FALKORDB_URL`` is the single
+    connection var docker compose actually sets (``redis://:pw@falkordb:6379/0``),
+    and without preferring it this script's discrete defaults refuse the connection
+    inside the container ("Error 111 connecting to localhost:6381").
+
+    Two deliberate deviations from those siblings, both to keep this script's
+    existing callers byte-for-byte unchanged:
+
+    * The discrete fallback keeps this script's historical ``6381`` default rather
+      than the app client's ``6379``. The app client only ever runs INSIDE the
+      docker network (6379); a human running this seeder without sourcing ``.env``
+      is on the host, where FalkorDB is published on 6381. Every containerised call
+      path sets ``FALKORDB_URL``, so the fallback port is only ever reached on the host.
+    * ``FALKORDB_PASSWORD`` OUTRANKS a password embedded in ``FALKORDB_URL``. That is
+      what the old ``src.rag.config.FalkorDBConfig.__post_init__`` did, and both
+      existing callers (``scripts/seed_falkordb_all.sh``,
+      ``scripts/seed_falkordb_init.py``) pass ``--host``/``--port`` explicitly while
+      setting ``FALKORDB_PASSWORD`` in the child environment -- letting a URL
+      password win would silently regress them. The URL password is the FALLBACK,
+      which is what makes the container path work: worker_light sets ``FALKORDB_URL``
+      and none of FALKORDB_HOST/PORT/PASSWORD/GRAPH_NAME (verified 2026-08-21).
+    """
+    explicit_password = os.environ.get("FALKORDB_PASSWORD")
+    url = os.environ.get("FALKORDB_URL")
+    if url:
+        parsed = urlparse(url)
+        return (
+            parsed.hostname or "localhost",
+            parsed.port or 6379,
+            explicit_password or parsed.password,
+        )
+    return (
+        os.environ.get("FALKORDB_HOST", "localhost"),
+        int(os.environ.get("FALKORDB_PORT", "6381")),
+        explicit_password,
+    )
+
+
+@dataclass
+class SeedFalkorDBConfig:
+    """The four connection fields this seeder actually uses.
+
+    Deliberately NOT ``src.rag.config.FalkorDBConfig`` — see the note above. The
+    ``password`` fallback mirrors that class's ``__post_init__`` so behaviour is
+    unchanged for every existing call path.
+    """
+
+    host: str = "localhost"
+    port: int = 6379
+    graph_name: str = "e2i_causal"
+    password: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.password:
+            self.password = os.getenv("FALKORDB_PASSWORD")
 
 
 # =============================================================================
@@ -1075,7 +1154,7 @@ def generate_verification_queries() -> Dict[str, str]:
 class FalkorDBSeeder:
     """Seeds the FalkorDB knowledge graph with E2I domain data."""
 
-    def __init__(self, config: FalkorDBConfig, dry_run: bool = False):
+    def __init__(self, config: SeedFalkorDBConfig, dry_run: bool = False):
         self.config = config
         self.dry_run = dry_run
         self.client = None
@@ -1257,16 +1336,17 @@ def main():
     parser.add_argument(
         "--clear-first", action="store_true", help="Clear existing data before seeding"
     )
+    env_host, env_port, env_password = _parse_falkordb_config()
     parser.add_argument(
         "--host",
-        default=os.getenv("FALKORDB_HOST", "localhost"),
-        help="FalkorDB host (default: localhost)",
+        default=env_host,
+        help="FalkorDB host (default: from FALKORDB_URL, else FALKORDB_HOST or localhost)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("FALKORDB_PORT", "6381")),
-        help="FalkorDB port (default: 6381)",
+        default=env_port,
+        help="FalkorDB port (default: from FALKORDB_URL, else FALKORDB_PORT or 6381)",
     )
     parser.add_argument(
         "--graph-name",
@@ -1276,7 +1356,12 @@ def main():
 
     args = parser.parse_args()
 
-    config = FalkorDBConfig(host=args.host, port=args.port, graph_name=args.graph_name)
+    config = SeedFalkorDBConfig(
+        host=args.host,
+        port=args.port,
+        graph_name=args.graph_name,
+        password=env_password,
+    )
 
     seeder = FalkorDBSeeder(config, dry_run=args.dry_run)
 
