@@ -53,7 +53,7 @@ class TestRegistryIsTheSourceOfTruth:
 
 class TestNoStaleAgentCountStrings:
     """A hardcoded count in prose is a fact that rots the moment an agent is
-    added. Any literal count anywhere in src/ must equal the registry's."""
+    added. Any literal count in a swept tree must equal the registry's."""
 
     #: Substrings whose lines the sweep must NOT flag, each with its reason.
     #:
@@ -86,7 +86,7 @@ class TestNoStaleAgentCountStrings:
     }
 
     def test_no_source_file_states_a_wrong_whole_roster_count(self):
-        """Sweeps BOTH src/ and frontend/ (codex iter-1).
+        """Sweeps src/, frontend/ and scripts/ (codex iter-1, then #1773).
 
         The first version of this test scanned only ``src/**/*.py`` and required
         the count to sit adjacent to its noun, so it gave FALSE ASSURANCE twice
@@ -94,6 +94,30 @@ class TestNoStaleAgentCountStrings:
         agents" walked straight through the adjective gap. A tripwire that misses
         the drift it exists to catch is worse than none, because it is quoted as
         evidence the sweep was complete.
+
+        #1773 found the same failure a third time, in two independent halves:
+
+        1. ``scripts/`` was never swept, and it is not a dev-only tree —
+           ``docker/Dockerfile:208`` bakes it into the runtime image because the
+           prod rootfs is read-only. Added below.
+        2. The number-first matcher could not see the drift #1773 was filed for.
+           ``seed_falkordb.py`` said "full roster = 21" with the noun BEFORE the
+           number, so widening the roots alone would have left that line green —
+           false assurance again, from the widening meant to end it. Hence the
+           second pattern, ``roster_claim``.
+
+        ``roster_claim`` is deliberately the narrowest form that catches it,
+        because the ALLOWLIST note below is a measured finding, not a slogan. The
+        broad noun-first variants were tried over these four roots first:
+        ``roster<=24 chars><n>`` flagged 10 lines of which 9 were false (dates in
+        "roster (2026-07-11)", the capped experiment roster of 25, and — worst —
+        two comments whose whole point is that a count is NOT hardcoded); adding
+        ``registry`` took it to 47 hits, 46 false. Requiring an explicit copula
+        (``= : is has``) between the noun and the number, on a line that also
+        says "agent", flags exactly 1 line across all four roots: the true
+        positive. That is the whole justification for its shape — anything looser
+        was measured to cry wolf, and a muted tripwire is the failure mode this
+        class exists to prevent.
 
         It still must not flag legitimately SCOPED counts — see
         ``ALLOWED_SCOPED_COUNTS`` for each and why.
@@ -107,10 +131,26 @@ class TestNoStaleAgentCountStrings:
             r"\s*(?:tiered|architecture|system|orchestrat\w*|roster|hierarchy)?",
             re.IGNORECASE,
         )
+        # The noun-BEFORE-number half (#1773): "full roster = 21". See the
+        # docstring for the measurement that fixed its shape.
+        # "of" is NOT in the copula set: the ratio guard below ("133 of 356
+        # agent rows") would swallow it anyway, and "a roster of 21 agents" is
+        # already caught by whole_roster. Listing a branch that can never fire
+        # is the same false assurance in miniature.
+        roster_claim = re.compile(
+            r"\b(?:roster|registry)\b\s*(?:=|:|\bis\b|\bhas\b)\s*(\d+)\b",
+            re.IGNORECASE,
+        )
         roots = [
             (REPO_ROOT / "src", ("*.py",)),
             (REPO_ROOT / "frontend/src", ("*.ts", "*.tsx")),
             (REPO_ROOT / "frontend/e2e", ("*.ts",)),
+            # Shipped in the runtime image (docker/Dockerfile:208), not dev-only.
+            # Source files only, matching the roots above: the benchmark .md/.json
+            # under scripts/benchmarks/ describe the 14-agent chat CONTRACT
+            # registry, a real subset, and sweeping them would buy allowlist
+            # entries rather than caught drift.
+            (REPO_ROOT / "scripts", ("*.py",)),
         ]
         offenders = []
         for root, globs in roots:
@@ -123,7 +163,12 @@ class TestNoStaleAgentCountStrings:
                     except (OSError, UnicodeDecodeError):
                         continue
                     for lineno, line in enumerate(text.splitlines(), start=1):
-                        for m in whole_roster.finditer(line):
+                        # roster_claim only speaks about agents; "registry of 45"
+                        # in this repo is as likely to be KPIs or models.
+                        claims = (
+                            list(roster_claim.finditer(line)) if "agent" in line.lower() else []
+                        )
+                        for m in list(whole_roster.finditer(line)) + claims:
                             hit = m.group(0).strip()
                             if any(a in line for a in self.ALLOWED_SCOPED_COUNTS):
                                 continue
