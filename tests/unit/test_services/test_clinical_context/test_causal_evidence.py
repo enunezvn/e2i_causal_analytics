@@ -268,10 +268,13 @@ def test_only_verified_citations_are_surfaced_and_they_are_capped():
         treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
         search_term="ribociclib breast cancer persistence real-world",
     )
-    assert [c.pmid for c in frag.citations] == ["1", "3", "4"]
+    # PMID 2 scored below the bar and is dropped; the cap is 2 because each
+    # candidate costs one 8-16s Europe PMC round trip (measured), so the candidate
+    # list is short by design.
+    assert [c.pmid for c in frag.citations] == ["1", "3"]
     assert all(c.confidence >= 0.5 for c in frag.citations)
-    # Verification stopped once the cap was met — PMID 5 was never fetched.
-    assert [pmid for pmid, _, _ in resolver.calls] == ["1", "2", "3", "4"]
+    # Only the candidate window was fetched — 4 and 5 were never asked for.
+    assert [pmid for pmid, _, _ in resolver.calls] == ["1", "2", "3"]
     # The entities checked against the abstract are the drug and the plain-language
     # disease (the SSOT coding string never appears in an abstract).
     assert resolver.calls[0][1] == "ribociclib"
@@ -394,9 +397,12 @@ def test_verification_stops_at_the_wall_clock_budget(monkeypatch):
         treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
         search_term="ribociclib breast cancer persistence real-world",
     )
-    # The budget was already spent on entry, so no candidate was fetched at all.
-    assert resolver.calls == []
-    assert frag.citations == []
+    # The FIRST candidate is always attempted. A budget smaller than one call must
+    # mean "verify one, then stop", not "verify nothing" — an evidence block with no
+    # literature because of an arithmetic guard is how a feature dies silently in
+    # production (MEASURED: it did).
+    assert [pmid for pmid, _, _ in resolver.calls] == ["1"]
+    assert [c.pmid for c in frag.citations] == ["1"]
 
 
 # --- codex iter-1 findings ------------------------------------------------------
@@ -453,19 +459,20 @@ def test_verification_reserves_room_for_a_full_timeout_before_starting_one(monke
     timeout still fits."""
     import src.services.clinical_context.causal_evidence as ev_mod
 
-    # Budget smaller than one client timeout: not even the first candidate may start.
+    # Budget smaller than one client timeout: the first candidate still runs; the
+    # second does not.
     monkeypatch.setattr(ev_mod, "_VERIFICATION_BUDGET_S", 5.0)
     monkeypatch.setattr(ev_mod, "_EUROPE_PMC_TIMEOUT_S", 8.0)
     profile = resolve_brand_profile("Kisqali")
-    resolver = _FakeResolver({"1": _verdict("1", 0.9)})
-    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1"]), resolver=resolver).evidence(
+    resolver = _FakeResolver({"1": _verdict("1", 0.9), "2": _verdict("2", 0.9)})
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2"]), resolver=resolver).evidence(
         profile,
         outcome="persistent_180d",
         treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
         search_term="ribociclib breast cancer persistence real-world",
     )
-    assert resolver.calls == []
-    assert frag.citations == []
+    assert [pmid for pmid, _, _ in resolver.calls] == ["1"]
+    assert [c.pmid for c in frag.citations] == ["1"]
 
 
 # --- adversarial review findings ------------------------------------------------
@@ -694,3 +701,18 @@ def test_a_summary_fetch_is_skipped_when_the_budget_is_gone(monkeypatch):
     # The citation is still surfaced — it was verified — just without its summary.
     assert [c.pmid for c in frag.citations] == ["1"]
     assert frag.citations[0].title == "PMID 1"
+
+
+@pytest.mark.unit
+def test_the_europe_pmc_timeout_matches_what_the_upstream_actually_takes():
+    """MEASURED 2026-08-21 from BOTH the API container and the host: Europe PMC's
+    resultType=core answers in 8-16s (container DNS 0.09s / TCP 0.08s / TLS 1.4s, and
+    the host is equally slow — the path is fine, the endpoint is not). The 6s timeout
+    calibrated on a lucky fast window meant every abstract failed to resolve and every
+    citation was dropped: the live panel showed an evidence block with zero
+    literature while every test stayed green."""
+    import src.services.clinical_context.causal_evidence as ev_mod
+
+    assert ev_mod._EUROPE_PMC_TIMEOUT_S >= 18.0
+    # And the budget must leave room for at least one full call to finish.
+    assert ev_mod._VERIFICATION_BUDGET_S >= ev_mod._EUROPE_PMC_TIMEOUT_S
