@@ -171,6 +171,150 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # #1780: the two jobs above build images for the TRIGGERING sha, but the droplet
+  # script resolves `origin/main` at RUN TIME. Those disagree whenever a commit lands
+  # on main between this run's trigger and its droplet step — and when that commit is
+  # excluded by `on.push.paths` (a scripts/tests-only merge, say) NO run will ever
+  # build it. #1431's ancestor-walk was designed for "no image YET" (a newer commit
+  # whose own build is queued behind us, which its own run will deploy); it then waits
+  # for a build that never comes, and the droplet takes the local-build path instead.
+  #
+  # Measured, run 32507847667 (2026-08-21): PR #1778 merged as 32259eb57 touching only
+  # scripts/ and tests/, so deploy.yml never fired for it; the in-flight #1777 deploy
+  # resolved origin/main = 32259eb57, got `manifest unknown`, and local-built for
+  # 25m17s. The 30m SSH command_timeout then fired during the post-flip prune — a
+  # CONVERGED deploy reported as FAILED, with production left on an image that exists
+  # only on the box (so that commit has no rollback target).
+  #
+  # So: before the droplet step, guarantee the sha it is about to resolve HAS images.
+  # This runner is already authenticated to GHCR and its buildx gha cache is warm from
+  # the jobs above, so when this fires the tree usually differs from the sha just built
+  # only in path-filtered files — a near-total cache hit (measured 41s api / 29s
+  # frontend on a warm cache, run 32484523645) against 26 min on the droplet.
+  #
+  # It is a no-op probe on the common path (main has not moved). A residual race
+  # remains — main can move again in the seconds between this job and the droplet's own
+  # `git fetch` — but that IS #1431's original case: a build is genuinely queued, so
+  # the walk's skip-and-converge behaviour is the correct response.
+  ensure-main-image:
+    name: Ensure GHCR Image for main HEAD
+    runs-on: ubuntu-latest
+    # Worst observed cold api build is ~18 min (run 32491004106) and the frontend adds
+    # ~3 min. Bounded like the build jobs so a wedged buildx cannot hold the serialized
+    # deploy-production queue hostage (#1412 review).
+    timeout-minutes: 30
+    needs: [build-and-push, build-and-push-frontend]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so `git fetch origin main` can resolve against this checkout.
+          fetch-depth: 0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve main HEAD and probe its images
+        id: probe
+        env:
+          TRIGGER_SHA: ${{ github.sha }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_NAME_FRONTEND: ${{ env.IMAGE_NAME_FRONTEND }}
+        # Deliberately fail-SOFT (no `set -e`): this job is a best-effort guarantee
+        # layered on top of the droplet's existing walk + local-build fallback. Every
+        # give-up path below leaves `needed=false`, which degrades to the pre-#1780
+        # behaviour — never worse. Blocking a deploy because a probe hiccuped would
+        # trade a slow deploy for NO deploy, which is the wrong trade for prod.
+        run: |
+          set -uo pipefail
+          if ! git fetch --quiet origin main; then
+            echo "==> WARN: could not fetch origin/main — skipping the #1780 guarantee;"
+            echo "    the droplet's own walk + fallback still apply."
+            echo "sha=$TRIGGER_SHA" >> "$GITHUB_OUTPUT"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          MAIN_SHA=$(git rev-parse FETCH_HEAD)
+          echo "sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+          echo "==> main HEAD is $MAIN_SHA; this run built $TRIGGER_SHA"
+          if [ "$MAIN_SHA" = "$TRIGGER_SHA" ]; then
+            echo "==> main has not moved — the images for this sha were just pushed."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Mirrors the droplet's image_exists(): a sha counts as built only when BOTH
+          # e2i-api AND e2i-frontend have a manifest at that exact tag, so guaranteeing
+          # one of them would leave the walk rejecting the sha anyway. No retry on a
+          # negative: unlike the droplet's manifest_present(), a false "missing" here
+          # costs one cache-hit rebuild, never a wrong deploy target.
+          NEEDED=false
+          for REPO in "$IMAGE_NAME" "$IMAGE_NAME_FRONTEND"; do
+            REF="$REGISTRY/$REPO:$MAIN_SHA"
+            if docker manifest inspect "$REF" >/dev/null 2>&1; then
+              echo "==> present: $REF"
+            else
+              echo "==> MISSING: $REF"
+              NEEDED=true
+            fi
+          done
+          echo "needed=$NEEDED" >> "$GITHUB_OUTPUT"
+          if [ "$NEEDED" = true ]; then
+            echo "==> main moved to a sha with no published image — building it here so"
+            echo "    the droplet never has to (see #1780)."
+          fi
+
+      - name: Check out main HEAD
+        if: steps.probe.outputs.needed == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.probe.outputs.sha }}
+
+      - name: Set up Docker Buildx
+        if: steps.probe.outputs.needed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # Both builds tag the SHA ONLY, never `latest`: `latest` tracks the last full
+      # build-and-push and is a human convenience, whereas this job exists solely to
+      # close the sha-tag gap the droplet pulls by. Re-tagging `latest` here would move
+      # it on a gap-fill, which is not what it means.
+      #
+      # continue-on-error on BOTH: if the gap-fill build fails we are back to exactly
+      # the pre-#1780 situation (the droplet walks, and worst case local-builds), so
+      # failing this job would convert a slow deploy into no deploy at all. The step
+      # still shows red in the run, which is the signal an operator needs.
+      - name: Build and push api image for main HEAD
+        if: steps.probe.outputs.needed == 'true'
+        continue-on-error: true
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.probe.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image for main HEAD
+        if: steps.probe.outputs.needed == 'true'
+        continue-on-error: true
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/frontend/Dockerfile
+          target: production
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FRONTEND }}:${{ steps.probe.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     name: Deploy to Droplet
     runs-on: ubuntu-latest
@@ -178,7 +322,9 @@ jobs:
     # handshake overhead, so a hung deploy self-cancels instead of blockading the
     # serialized deploy-production queue for GitHub's 360-min default. (#1412 review)
     timeout-minutes: 40
-    needs: [build-and-push, build-and-push-frontend]
+    # #1780: ensure-main-image must complete BEFORE the SSH step, or the droplet can
+    # resolve a sha whose image is still being pushed.
+    needs: [build-and-push, build-and-push-frontend, ensure-main-image]
     environment: production
     # #528-B: packages:read so the job's GITHUB_TOKEN can pull the images it just
     # pushed; the token is forwarded to the droplet for `docker login ghcr.io`.
@@ -353,9 +499,63 @@ jobs:
               return 1
             }
 
+            # #1780: echo the sha that is actually RUNNING, or return non-zero when it
+            # cannot be established. docker-compose.yml pins the api service to
+            # `ghcr.io/$IMAGE_OWNER/e2i-api:$IMAGE_TAG` under the fixed container_name
+            # e2i_api, and every deploy exports IMAGE_TAG=$NEW_SHA — so the running
+            # container's image TAG is the deployed sha.
+            #
+            # That is NOT the same thing as `git rev-parse HEAD` in $PROJECT_DIR, which
+            # is what the #1431 floor used to read. PROD == DEV == this box, so the
+            # deploy checkout is ALSO a human working copy: a plain `git pull` there
+            # moves the checkout sha without deploying anything. Measured on 2026-08-21
+            # (run 32507847667): the checkout had been moved out of band to 32259eb while the
+            # containers were still on 9444237ae, so the floor read b1aba1c — a CHILD of
+            # the running sha, with published images — as a "downgrade", refused it, and
+            # left a ~26-min droplet local build as the only path.
+            #
+            # Every rejection below degrades the floor back to the checkout HEAD, i.e.
+            # exactly the pre-#1780 behaviour — never worse. `docker inspect` is
+            # read-only and `|| true` keeps a dead/absent docker from tripping `set -e`.
+            running_image_sha() {
+              _img=$(docker inspect --format '{{.Config.Image}}' e2i_api 2>/dev/null || true)
+              # A locally-built image ("e2i-causal-analytics-api") carries no ':' at all,
+              # so ${_img##*:} yields the whole ref; the guards below reject it. That is
+              # precisely the state #1780's local-build fallback leaves behind.
+              _tag="${_img##*:}"
+              [ ${#_tag} -eq 40 ] || return 1
+              case "$_tag" in
+                *[!0-9a-f]*) return 1 ;;
+              esac
+              # A well-formed sha still has to be a commit HERE: `git merge-base
+              # --is-ancestor` ERRORS on an unknown object, and an erroring floor is an
+              # absent floor.
+              git cat-file -e "${_tag}^{commit}" 2>/dev/null || return 1
+              echo "$_tag"
+            }
+
             cd "$PROJECT_DIR"
-            PREV_SHA=$(git rev-parse HEAD)
-            echo "==> Pre-deploy SHA: ${PREV_SHA:0:7}"
+            # #1780: PREV_SHA means "the commit production was previously RUNNING", and
+            # every consumer treats it that way — the #1431 downgrade floor, the
+            # rollback_to_prev target + its IMAGE_TAG, the baked-image-input diff, and
+            # the no-delta re-run detector. It was computed from the CHECKOUT head, and
+            # the name and the value had drifted apart: PROD == DEV == this box, so
+            # $PROJECT_DIR is also a human working copy (see running_image_sha above).
+            # Anchoring the rollback on the checkout is the worse half of that: on
+            # 2026-08-21 a rollback would have reset to 32259eb — a tree the containers
+            # were never on, whose image is not in GHCR — so the rollback pull would
+            # fail and local-build on an already-stressed box, which is exactly the
+            # #528-B OOM path. The running container's tag is by construction an image
+            # that exists. Fall back to the checkout head when it cannot be established:
+            # that is precisely the pre-#1780 value, so this is never worse.
+            CHECKOUT_SHA=$(git rev-parse HEAD)
+            PREV_SHA="$CHECKOUT_SHA"
+            PREV_SRC="checkout HEAD"
+            if RUNNING_SHA=$(running_image_sha); then
+              PREV_SHA="$RUNNING_SHA"
+              PREV_SRC="running api image"
+            fi
+            echo "==> Pre-deploy SHA: ${PREV_SHA:0:7} (from the $PREV_SRC; checkout is at ${CHECKOUT_SHA:0:7})"
 
             # Hard-sync to origin/main — droplet is a deploy target, not a dev box.
             # Abort only if a TRACKED file was hot-patched live: that is the change
@@ -386,24 +586,43 @@ jobs:
             # a handful of commits can be ahead of the last built one, so 30 is generous
             # headroom without an unbounded registry-probe loop; the walk stops at the
             # first hit, normally origin/main HEAD (1 probe). A DOWNGRADE FLOOR (below)
-            # then refuses any TARGET_SHA that is a strict ANCESTOR of the running
-            # PREV_SHA: PREV_SHA is NOT guaranteed to have a GHCR image (a prior deploy
-            # may have taken the local-build fallback onto a commit whose CI run was
+            # then refuses any TARGET_SHA that is a strict ANCESTOR of what is RUNNING:
+            # the running sha is NOT guaranteed to have a GHCR image (a prior deploy may
+            # have taken the local-build fallback onto a commit whose CI run was
             # orphaned/cancelled under the concurrency group), so WITHOUT the floor the
             # walk could skip past it and land on an older-but-built ancestor — silently
             # deploying + migrating STRICTLY OLDER code. If GHCR auth fails, no built
             # ancestor is found in the window, OR the only built ancestor would be a
             # downgrade, fall back to the prior blind origin/main behavior (never WORSE
-            # than before — the pull's --build fallback still runs). NOTE: this rests on
-            # code-reasoning + review, NOT on a faithful reproduction of a live deploy
-            # race (which cannot be staged on the box); the SHA-selection core + the
-            # downgrade floor are exercised by a committed stubbed-probe dry-run
-            # (scripts/test_deploy_sha_selection.sh).
+            # than before — the pull's --build fallback still runs).
+            #
+            # #1780 corrected what PREV_SHA IS. It was `git rev-parse HEAD` of the droplet
+            # checkout, used as a stand-in for "what is running", but PROD == DEV == this
+            # box: a human `git pull` in $PROJECT_DIR moves the checkout with no deploy
+            # behind it. See running_image_sha() above for the measured incident. It is
+            # now the running api container's image tag, degrading to the checkout head
+            # only when that cannot be established.
+            #
+            # NOTE: this rests on code-reasoning + review, NOT on a live deploy race
+            # (which cannot be staged on the box); the SHA-selection core + the downgrade
+            # floor are exercised by a committed stubbed-probe dry-run
+            # (scripts/test_deploy_sha_selection.sh), and the running_image_sha() helper
+            # by tests/unit/test_docker/test_deploy_target_image_guarantee_1780.py.
             export IMAGE_OWNER="$(echo "${IMAGE_OWNER:-}" | tr '[:upper:]' '[:lower:]')"
             TARGET_SHA=""
+            # #1780: record WHY we fell back, so the warning below states the branch the
+            # code actually took. The old message hardcoded "GHCR auth failed or none
+            # built in the 30-commit window" for all three causes; on 2026-08-21 both of
+            # those were false (auth worked, b1aba1c WAS found) and the real cause — the
+            # downgrade floor, named one line above — went unmentioned, sending a human
+            # after a GHCR auth failure that had not happened.
+            FALLBACK_REASON=""
             if [ -n "$IMAGE_OWNER" ] \
                && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1; then
               TARGET_SHA=$(git rev-list --topo-order origin/main | head -n 30 | select_built_sha || true)
+              [ -n "$TARGET_SHA" ] || FALLBACK_REASON="GHCR auth SUCCEEDED, but no commit in the 30-commit origin/main window has BOTH published images"
+            else
+              FALLBACK_REASON="GHCR auth unavailable (IMAGE_OWNER unset, or docker login failed) — no ancestor could be probed at all"
             fi
             # #1431 downgrade floor: never deploy code strictly OLDER than what is running.
             # If the newest built ancestor is a strict ancestor of PREV_SHA (older), reject
@@ -411,9 +630,17 @@ jobs:
             # `!= PREV_SHA` guard keeps a same-SHA redeploy (not a downgrade) allowed; a
             # NEWER TARGET_SHA (PREV_SHA is its ancestor) makes --is-ancestor return non-zero
             # so the floor does not fire.
+            # #1780: PREV_SHA is now the RUNNING sha (resolved above), so this floor asks
+            # the question it always meant to ask. Both mis-anchored directions were
+            # real: a checkout pulled AHEAD of the containers refused a valid upgrade
+            # (the 2026-08-21 incident), and a checkout left BEHIND them waved through a
+            # target strictly OLDER than what is running — the silent downgrade this
+            # floor exists to prevent. Both are covered by
+            # scripts/test_deploy_sha_selection.sh Part 3.
             if [ -n "$TARGET_SHA" ] && [ "$TARGET_SHA" != "$PREV_SHA" ] \
                && git merge-base --is-ancestor "$TARGET_SHA" "$PREV_SHA"; then
-              echo "==> WARN: newest built ancestor ${TARGET_SHA:0:7} is OLDER than the running ${PREV_SHA:0:7} — refusing to downgrade; using origin/main instead."
+              echo "==> WARN: newest built ancestor ${TARGET_SHA:0:7} is OLDER than the $PREV_SRC ${PREV_SHA:0:7} — refusing to downgrade; using origin/main instead."
+              FALLBACK_REASON="the newest built ancestor (${TARGET_SHA:0:7}) is OLDER than the $PREV_SRC (${PREV_SHA:0:7}) and was refused as a downgrade"
               TARGET_SHA=""
             fi
             if [ -n "$TARGET_SHA" ]; then
@@ -424,7 +651,7 @@ jobs:
               fi
               git reset --hard "$TARGET_SHA"
             else
-              echo "==> WARN: no pre-built GHCR image confirmed for any recent origin/main ancestor (GHCR auth failed or none built in the 30-commit window). Falling back to origin/main ${ORIGIN_SHA:0:7} — the pull below may take the local-build path."
+              echo "==> WARN: blind reset to origin/main ${ORIGIN_SHA:0:7} — reason: ${FALLBACK_REASON}. If ${ORIGIN_SHA:0:7} has no published image the pull below takes the LOCAL-BUILD path (~26 min on this box; the 30m SSH command_timeout then fires mid-cleanup and reports a converged deploy as FAILED — #1780)."
               git reset --hard origin/main
             fi
             NEW_SHA=$(git rev-parse HEAD)
