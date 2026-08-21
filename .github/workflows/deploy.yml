@@ -509,7 +509,7 @@ jobs:
             # is what the #1431 floor used to read. PROD == DEV == this box, so the
             # deploy checkout is ALSO a human working copy: a plain `git pull` there
             # moves the checkout sha without deploying anything. Measured on 2026-08-21
-            # (run 32507847667): the checkout had been pulled to 32259eb while the
+            # (run 32507847667): the checkout had been moved out of band to 32259eb while the
             # containers were still on 9444237ae, so the floor read b1aba1c — a CHILD of
             # the running sha, with published images — as a "downgrade", refused it, and
             # left a ~26-min droplet local build as the only path.

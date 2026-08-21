@@ -147,10 +147,10 @@ echo "===== Part 3: #1780 — the floor must be anchored to the RUNNING image ==
 # real downgrade through). Both directions are exercised below.
 #
 # (g) is the 2026-08-21 incident (deploy run 32507847667) in miniature: the checkout
-#     had been pulled to 32259eb while the containers were still on 9444237ae, so the
-#     floor read b1aba1c — a CHILD of the running sha, with published images — as a
-#     "downgrade", refused it, and left a ~26-min droplet local build as the only path
-#     (which then blew the 30m SSH timeout).
+#     had been moved out of band to 32259eb while the containers were still on
+#     9444237ae, so the floor read b1aba1c — a CHILD of the running sha, with
+#     published images — as a "downgrade", refused it, and left a ~26-min droplet
+#     local build as the only path (which then blew the 30m SSH timeout).
 PREV_SHA="$C5"; RUNNING_SHA="$C3"; BUILT_SET="$C4 $C3"
 check "g_running_anchor_allows_upgrade" "$C4" "$(resolve_target)"
 # (h) the mirror image, and the more dangerous one: the checkout is BEHIND the running

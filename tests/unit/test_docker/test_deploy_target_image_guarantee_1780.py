@@ -24,10 +24,10 @@ Two independent holes, both pinned here:
    target against ``PREV_SHA`` = ``git rev-parse HEAD`` of the droplet checkout. But
    PROD == DEV == the same box, so ``$PROJECT_DIR`` is also a human working copy and a
    plain ``git pull`` there moves ``PREV_SHA`` without deploying anything. On
-   2026-08-21 the checkout had been pulled to ``32259eb`` while the containers were
-   still on ``9444237ae``, so the floor read ``b1aba1c`` — a CHILD of the running sha,
-   with published images — as a "downgrade" and refused it. Fixed by deriving the
-   running sha from the ``e2i_api`` container's compose-pinned image tag.
+   2026-08-21 the checkout had been moved out of band to ``32259eb`` while the
+   containers were still on ``9444237ae``, so the floor read ``b1aba1c`` — a CHILD of
+   the running sha, with published images — as a "downgrade" and refused it. Fixed by
+   deriving the running sha from the ``e2i_api`` container's compose-pinned image tag.
 
 The selection/floor CONTROL FLOW is exercised end-to-end by the network-free
 ``scripts/test_deploy_sha_selection.sh``. This module pins the parts that live in the
