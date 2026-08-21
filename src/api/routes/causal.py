@@ -2019,8 +2019,12 @@ async def get_clinical_context(
     for ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.
 
     With ``treatment``, the response also frames the specific analysis being
-    interrogated (treatment -> outcome) and the literature search follows that
-    analysis instead of the brand alone (#1763).
+    interrogated (treatment -> outcome), the literature search follows that
+    analysis instead of the brand alone, and ``causal_evidence`` carries the
+    public-knowledge-graph evidence for it: the Open Targets indication edge and
+    literature whose abstracts were verified to name both entities. A commercial
+    treatment lever (copay, PSP, detailing) returns an explicit
+    ``commercial_lever`` state instead of the drug's evidence (#1763).
 
     Additive narrative ONLY — does not touch the causal estimate or its
     adjustment set. Degrades gracefully (static fallbacks) when an upstream API
@@ -2038,7 +2042,13 @@ async def get_clinical_context(
         # worker thread so a slow / timing-out / rate-limited upstream cannot block
         # the event loop (the cold-cache call can take tens of seconds worst case).
         payload = await asyncio.to_thread(
-            _clinical_context_service.get_context, brand, outcome, treatment=treatment
+            _clinical_context_service.get_context,
+            brand,
+            outcome,
+            treatment=treatment,
+            # This is the panel the analyst opened — the one place the extra live
+            # evidence calls are worth paying for (the leaderboard fan-out is not).
+            include_causal_evidence=True,
         )
     except KeyError:
         # The brand_map has no profile for this brand (no enrichment facts).

@@ -12,7 +12,14 @@
  * @module components/causal/ClinicalContextPanel
  */
 
-import { BookText, Building2, ExternalLink, FlaskConical, Stethoscope } from 'lucide-react';
+import {
+  BookText,
+  Building2,
+  ExternalLink,
+  FlaskConical,
+  Microscope,
+  Stethoscope,
+} from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import type { ClinicalContext } from '@/types/causal';
@@ -90,6 +97,7 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
     competitor_landscape,
     treatment_context,
     analysis_framing,
+    causal_evidence,
   } = context;
   // Provenance-aware copy: the endpoint section renders for BOTH the live CT.gov
   // result and the curated static fallback, so the explanatory text must not claim
@@ -173,6 +181,60 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
               ? 'What this brand’s pivotal trials actually measured — the clinical ground truth our synthetic outcome stands in for.'
               : 'The disease’s established pivotal efficacy measures (curated reference) — the clinical ground truth our synthetic outcome stands in for.'}
           </p>
+        </div>
+      )}
+
+      {/* Public-KG evidence for THIS analysis: the Open Targets indication edge and
+          literature whose abstracts were verified to name both entities. A commercial
+          treatment lever gets the honest "these sources do not describe this lever"
+          state instead of the drug's evidence under an analysis heading. */}
+      {causal_evidence && causal_evidence.status !== 'not_requested' && (
+        <div className="text-sm">
+          <div className="flex items-center gap-1 text-muted-foreground">
+            <Microscope className="h-3.5 w-3.5" />
+            Evidence for this analysis
+          </div>
+          {causal_evidence.indication_edge && (
+            /* Badge renders a <div>, so this wrapper must not be a <p>. */
+            <div className="mt-1">
+              <span className="capitalize">{context.drug_name}</span>{' '}
+              {causal_evidence.indication_edge.predicate === 'treats'
+                ? 'is recorded as an approved therapy for'
+                : 'is recorded in development for'}{' '}
+              <span className="font-medium">{causal_evidence.indication_edge.disease_name}</span>
+              <Badge variant="outline" className="ml-2 align-middle text-xs">
+                {causal_evidence.indication_edge.max_clinical_stage} · open targets
+              </Badge>
+            </div>
+          )}
+          {causal_evidence.citations.length > 0 && (
+            <ul className="mt-1 space-y-1">
+              {causal_evidence.citations.map((citation) => (
+                <li key={citation.pmid}>
+                  <a
+                    href={citation.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-start gap-1 text-primary hover:underline"
+                  >
+                    <span>
+                      {citation.title}
+                      {citation.journal ? ` — ${citation.journal}` : ''}
+                      {citation.pubdate ? ` (${citation.pubdate})` : ''}
+                      {` · PMID ${citation.pmid}`}
+                    </span>
+                    <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  </a>
+                  <span className="ml-1 text-xs text-muted-foreground">
+                    abstract names {citation.entities_found.join(' + ')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {causal_evidence.note && (
+            <p className="mt-1 text-xs text-muted-foreground">{causal_evidence.note}</p>
+          )}
         </div>
       )}
 

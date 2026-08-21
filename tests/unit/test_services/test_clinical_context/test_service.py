@@ -415,3 +415,121 @@ def test_citation_payload_discloses_the_term_that_was_searched():
     )
     # The curated seminal citation was never "searched" — it must not claim a term.
     assert ctx["seminal_real_world_evidence"]["search_term"] is None
+
+
+# --- #1763 Phase 2: the evidence block is opt-in per call ----------------------
+
+
+class _StubEvidenceProvider:
+    def __init__(self, fragment):
+        self._fragment = fragment
+        self.calls = []
+
+    def evidence(self, profile, *, outcome, treatment_context, search_term):
+        self.calls.append((profile.brand, outcome, getattr(treatment_context, "column", None), search_term))
+        return self._fragment
+
+
+def _evidence_fragment():
+    from src.services.clinical_context.causal_evidence import (
+        CausalEvidenceFragment,
+        IndicationEdge,
+        VerifiedCitation,
+    )
+
+    return CausalEvidenceFragment(
+        status="evidence",
+        indication_edge=IndicationEdge(
+            predicate="associated_with",
+            disease_id="MONDO_0007254",
+            disease_name="breast cancer",
+            max_clinical_stage="PHASE_3",
+            source="open_targets",
+        ),
+        citations=[
+            VerifiedCitation(
+                pmid="1",
+                title="Ribociclib persistence in breast cancer",
+                journal="J",
+                pubdate="2024",
+                url="https://pubmed.ncbi.nlm.nih.gov/1/",
+                entities_found=("ribociclib", "breast cancer"),
+                confidence=0.5,
+                source="pubmed+europepmc",
+            )
+        ],
+        note="Open Targets stages lag the FDA label.",
+    )
+
+
+def _service_with_evidence(provider):
+    return ClinicalContextService(
+        mechanism_provider=_StubProvider(MechanismFragment("CDK4/6 inhibitor", "chembl")),
+        endpoints_provider=_StubProvider(_eps(["OS"], "clinicaltrials.gov")),
+        citation_provider=_StubProvider(CitationFragment(None, "unavailable")),
+        indications_provider=_StubProvider(IndicationsFragment(["BC"], None, None, "openfda")),
+        competitor_provider=_StubProvider(CompetitorFragment(["Ibrance (palbociclib)"], 1)),
+        causal_evidence_provider=provider,
+    )
+
+
+def test_causal_evidence_is_attached_when_requested():
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    ev = ctx["causal_evidence"]
+    assert ev["status"] == "evidence"
+    assert ev["indication_edge"]["disease_name"] == "breast cancer"
+    assert ev["indication_edge"]["max_clinical_stage"] == "PHASE_3"
+    assert ev["citations"][0]["pmid"] == "1"
+    assert ev["citations"][0]["confidence"] == 0.5
+    assert ev["note"]
+    # It was asked about THIS analysis, with the analysis-composed query.
+    assert provider.calls[0][0] == "Kisqali"
+    assert provider.calls[0][2] == "treatment_arm"
+    assert "persistence" in provider.calls[0][3]
+
+
+def test_causal_evidence_is_not_fetched_by_default():
+    """The leaderboard fan-out attaches context to every row; the evidence lookup is
+    several live calls per analysis and nothing in the leaderboard renders it, so it
+    stays opt-in and says so rather than looking unavailable."""
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm"
+    )
+    assert provider.calls == []
+    assert ctx["causal_evidence"]["status"] == "not_requested"
+    assert ctx["causal_evidence"]["citations"] == []
+
+
+def test_causal_evidence_is_absent_without_a_treatment():
+    """No treatment means no analysis to gather evidence for."""
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", include_causal_evidence=True
+    )
+    assert provider.calls == []
+    assert ctx["causal_evidence"] is None
+
+
+def test_causal_evidence_never_breaks_the_payload():
+    class _BoomProvider:
+        def evidence(self, profile, *, outcome, treatment_context, search_term):
+            raise RuntimeError("open targets down")
+
+    ctx = _service_with_evidence(_BoomProvider()).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    assert ctx["causal_evidence"]["status"] == "unavailable"
+    assert ctx["mechanism"]["source"] == "chembl"  # the rest of the payload survives
+
+
+def test_causal_evidence_is_cached_per_analysis():
+    provider = _StubEvidenceProvider(_evidence_fragment())
+    svc = _service_with_evidence(provider)
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True)
+    svc.get_context("Kisqali", "persistent_180d", treatment="copay_support", include_causal_evidence=True)
+    assert len(provider.calls) == 2

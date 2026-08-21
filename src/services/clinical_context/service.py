@@ -18,11 +18,17 @@ from typing import Any, Dict, Optional, Tuple
 
 from src.services.clinical_context.brand_map import (
     BrandClinicalProfile,
+    TreatmentContext,
     analysis_framing_sentence,
     compose_rwe_search_term,
     endpoint_mapping_for_outcome,
     resolve_brand_profile,
     treatment_context_for,
+)
+from src.services.clinical_context.causal_evidence import (
+    NOT_REQUESTED,
+    CausalEvidenceFragment,
+    CausalEvidenceProviderLike,
 )
 from src.services.clinical_context.clients import (
     ClinicalTrialsClient,
@@ -79,6 +85,12 @@ _FRAGMENT_CACHE: Dict[Tuple[str, str], Tuple[_BrandFragmentTuple, float, bool]] 
 # by 3 brands x the curated (outcome, treatment) universe.
 _CITATION_CACHE: Dict[Tuple[str, str], Tuple[CitationFragment, float, bool]] = {}
 
+# Per-analysis cache of the public-KG evidence block, keyed by the analysis itself
+# (brand, outcome, treatment). Several live calls back this fragment, so it is
+# gathered only when asked for and reused for the whole self-heal window when it
+# came back degraded.
+_EVIDENCE_CACHE: Dict[Tuple[str, str, str], Tuple[CausalEvidenceFragment, float, bool]] = {}
+
 
 class ClinicalContextService:
     """Assemble a brand's clinical context from the providers."""
@@ -91,6 +103,7 @@ class ClinicalContextService:
         citation_provider: Optional[ClinicalContextProvider] = None,
         indications_provider: Optional[ClinicalContextProvider] = None,
         competitor_provider: Optional[ClinicalContextProvider] = None,
+        causal_evidence_provider: Optional[CausalEvidenceProviderLike] = None,
     ) -> None:
         # Default real providers wire the public-REST clients; tests inject stubs.
         # Q1: _default_chembl() already returns a ChEMBLMechanismProvider — single-wrap.
@@ -103,6 +116,10 @@ class ClinicalContextService:
             client=_OpenFDAClient()
         )
         self._competitor = competitor_provider or CuratedCompetitorProvider()
+        # Built lazily on first use: constructing it opens the Open Targets / Europe
+        # PMC / PubMed clients, and most calls (the whole leaderboard fan-out) never
+        # ask for the evidence block.
+        self._causal_evidence: Optional[CausalEvidenceProviderLike] = causal_evidence_provider
 
     def _fan_out(self, profile: BrandClinicalProfile) -> _BrandFragmentTuple:
         """The brand-level fragments — none of these vary by the analysis."""
@@ -163,8 +180,63 @@ class ClinicalContextService:
         _CITATION_CACHE[key] = (cite, time.monotonic(), fully_live)
         return cite
 
+    def _evidence_provider(self) -> CausalEvidenceProviderLike:
+        if self._causal_evidence is None:
+            from src.services.clinical_context.causal_evidence import (
+                default_causal_evidence_provider,
+            )
+
+            self._causal_evidence = default_causal_evidence_provider()
+        return self._causal_evidence
+
+    def _causal_evidence_for(
+        self,
+        profile: BrandClinicalProfile,
+        outcome: str,
+        treatment: str,
+        treatment_ctx: Optional[TreatmentContext],
+        search_term: str,
+    ) -> CausalEvidenceFragment:
+        """The public-KG evidence for ONE analysis, cached per (brand, outcome,
+        treatment). FAIL-OPEN: any failure degrades to an honest ``unavailable``
+        fragment rather than taking the whole payload down."""
+        key = (profile.brand, outcome, treatment)
+        cached = _EVIDENCE_CACHE.get(key)
+        if cached is not None:
+            frag, stored_at, complete = cached
+            if complete or (time.monotonic() - stored_at) < _FRAGMENT_TTL_DEGRADED_S:
+                return frag
+        try:
+            evidence = self._evidence_provider().evidence(
+                profile,
+                outcome=outcome,
+                treatment_context=treatment_ctx,
+                search_term=search_term,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort; never fails the payload
+            logger.warning(
+                "clinical-context: causal evidence unavailable for %s/%s: %s",
+                profile.brand,
+                treatment,
+                exc,
+            )
+            evidence = CausalEvidenceFragment(
+                status="unavailable",
+                note="The public evidence sources could not be reached for this analysis.",
+            )
+        # "unavailable" is the only state worth retrying — a commercial lever has
+        # nothing to re-fetch, and a found result is stable.
+        complete = evidence.status != "unavailable"
+        _EVIDENCE_CACHE[key] = (evidence, time.monotonic(), complete)
+        return evidence
+
     def get_context(
-        self, brand: str, outcome: str, treatment: Optional[str] = None
+        self,
+        brand: str,
+        outcome: str,
+        treatment: Optional[str] = None,
+        *,
+        include_causal_evidence: bool = False,
     ) -> Dict[str, Any]:
         """Return the assembled clinical-context payload for one analysis.
 
@@ -173,12 +245,18 @@ class ClinicalContextService:
         analysis; without it (the brand-level view) the analysis frame is omitted
         entirely rather than guessed.
 
+        ``include_causal_evidence`` gates the public-KG evidence block (Open Targets
+        indication edge + abstract-verified literature). It is several live calls per
+        analysis, so the leaderboard fan-out — which renders none of it — leaves it
+        off and the payload says ``not_requested`` rather than looking unavailable.
+
         Raises ``KeyError`` on an unknown brand (the endpoint maps it to 404).
         Never raises on an API failure — providers degrade to static fallbacks.
         """
         profile = resolve_brand_profile(brand)
         moa, eps, indications, competitors = self._fan_out(profile)
-        cite = self._citation_for(profile, compose_rwe_search_term(profile, outcome, treatment))
+        search_term = compose_rwe_search_term(profile, outcome, treatment)
+        cite = self._citation_for(profile, search_term)
         citation_payload: Optional[Dict[str, Any]] = None
         if cite.citation is not None:
             citation_payload = {
@@ -223,6 +301,45 @@ class ClinicalContextService:
                 "kind": treatment_ctx.kind,
                 "source": "curated",
             }
+        # Public-KG evidence for THIS analysis. Absent entirely without a treatment
+        # (there is no analysis to gather evidence for).
+        evidence_payload: Optional[Dict[str, Any]] = None
+        if treatment:
+            evidence = (
+                self._causal_evidence_for(
+                    profile, outcome, treatment, treatment_ctx, search_term
+                )
+                if include_causal_evidence
+                else NOT_REQUESTED
+            )
+            evidence_payload = {
+                "status": evidence.status,
+                "indication_edge": (
+                    {
+                        "predicate": evidence.indication_edge.predicate,
+                        "disease_id": evidence.indication_edge.disease_id,
+                        "disease_name": evidence.indication_edge.disease_name,
+                        "max_clinical_stage": evidence.indication_edge.max_clinical_stage,
+                        "source": evidence.indication_edge.source,
+                    }
+                    if evidence.indication_edge is not None
+                    else None
+                ),
+                "citations": [
+                    {
+                        "pmid": c.pmid,
+                        "title": c.title,
+                        "journal": c.journal,
+                        "pubdate": c.pubdate,
+                        "url": c.url,
+                        "entities_found": list(c.entities_found),
+                        "confidence": c.confidence,
+                        "source": c.source,
+                    }
+                    for c in evidence.citations
+                ],
+                "note": evidence.note,
+            }
         return {
             "brand": profile.brand,
             "drug_name": profile.drug_name,
@@ -256,6 +373,7 @@ class ClinicalContextService:
                 "count": competitors.count,
                 "source": competitors.source,
             },
+            "causal_evidence": evidence_payload,
             "honesty_label": HONESTY_LABEL,
         }
 
@@ -273,6 +391,7 @@ def reset_caches() -> None:
     underlying REST client caches (useful in tests)."""
     _FRAGMENT_CACHE.clear()
     _CITATION_CACHE.clear()
+    _EVIDENCE_CACHE.clear()
     from src.data.kg.chembl import reset_caches as chembl_reset
     from src.services.clinical_context.clients import reset_caches as clients_reset
 

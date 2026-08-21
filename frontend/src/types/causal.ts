@@ -413,6 +413,48 @@ export interface RealWorldEvidence {
 }
 
 /**
+ * The Open Targets drug -> indication edge for the analysis's disease.
+ * `max_clinical_stage` is the stage of THAT indication node, not the drug's highest
+ * stage anywhere; Open Targets lags the FDA label, so a sub-APPROVAL stage is a
+ * development signal, never a statement that the brand is unapproved.
+ */
+export interface IndicationEdge {
+  /** treats (approved) | associated_with (in development) */
+  predicate: string;
+  disease_id: string;
+  disease_name: string;
+  max_clinical_stage: string;
+  /** open_targets */
+  source: string;
+}
+
+/** A citation whose abstract was fetched and checked, not merely retrieved. */
+export interface VerifiedCitation {
+  pmid: string;
+  title: string;
+  journal?: string | null;
+  pubdate?: string | null;
+  url: string;
+  /** Entities actually found in the abstract (drug + disease). */
+  entities_found: string[];
+  confidence: number;
+  /** pubmed+europepmc */
+  source: string;
+}
+
+/**
+ * Public-knowledge-graph evidence for THIS analysis. `status` is
+ * `evidence` | `commercial_lever` (an access/promotion lever the biomedical
+ * sources do not describe) | `unavailable` | `not_requested`.
+ */
+export interface CausalEvidence {
+  status: string;
+  indication_edge?: IndicationEdge | null;
+  citations: VerifiedCitation[];
+  note: string;
+}
+
+/**
  * Curated clinical framing for the analysis's TREATMENT column. `kind` states what
  * the public clinical sources can speak to: `drug_therapy` (the treatment is a
  * therapy), `clinical_covariate` (a patient-state variable used as an observational
@@ -479,6 +521,8 @@ export interface ClinicalContext {
   approved_indications?: ApprovedIndications | null;
   /** Competitive market landscape (curated). */
   competitor_landscape?: CompetitorLandscape | null;
+  /** Public-KG evidence for this specific analysis; null without a treatment. */
+  causal_evidence?: CausalEvidence | null;
   honesty_label: string;
 }
 

@@ -308,3 +308,80 @@ describe('ClinicalContextPanel — analysis framing (#1763)', () => {
     expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
   });
 });
+
+// #1763 Phase 2: evidence gathered FOR the analysis, and an honest empty state when
+// the treatment is a commercial lever the clinical sources do not describe.
+describe('ClinicalContextPanel — causal evidence (#1763)', () => {
+  const WITH_EVIDENCE: ClinicalContext = {
+    ...FULL,
+    our_treatment: 'treatment_arm',
+    causal_evidence: {
+      status: 'evidence',
+      indication_edge: {
+        predicate: 'associated_with',
+        disease_id: 'MONDO_0007254',
+        disease_name: 'breast cancer',
+        max_clinical_stage: 'PHASE_3',
+        source: 'open_targets',
+      },
+      citations: [
+        {
+          pmid: '40896422',
+          title: 'Real-world effectiveness and safety of CDK4/6i',
+          journal: 'Front Oncol',
+          pubdate: '2025',
+          url: 'https://pubmed.ncbi.nlm.nih.gov/40896422/',
+          entities_found: ['ribociclib', 'breast cancer'],
+          confidence: 0.5,
+          source: 'pubmed+europepmc',
+        },
+      ],
+      note: 'Open Targets records the clinical stage per indication and lags the FDA label.',
+    },
+  };
+
+  it('shows the indication edge with the stage of THIS indication node', () => {
+    render(<ClinicalContextPanel context={WITH_EVIDENCE} />);
+    expect(screen.getByText(/is recorded in development for/i)).toBeInTheDocument();
+    expect(screen.getByText(/PHASE_3 · open targets/i)).toBeInTheDocument();
+    // ...and says the label, not this edge, is the approval authority.
+    expect(screen.getByText(/lags the FDA label/i)).toBeInTheDocument();
+  });
+
+  it('links the verified citations and says what the abstract actually named', () => {
+    render(<ClinicalContextPanel context={WITH_EVIDENCE} />);
+    const link = screen.getByRole('link', { name: /Real-world effectiveness and safety of CDK4\/6i/i });
+    expect(link).toHaveAttribute('href', 'https://pubmed.ncbi.nlm.nih.gov/40896422/');
+    expect(screen.getByText(/abstract names ribociclib \+ breast cancer/i)).toBeInTheDocument();
+  });
+
+  it('states plainly that clinical sources do not describe a commercial lever', () => {
+    const lever: ClinicalContext = {
+      ...FULL,
+      our_treatment: 'copay_support',
+      causal_evidence: {
+        status: 'commercial_lever',
+        indication_edge: null,
+        citations: [],
+        note: 'Copay support is a commercial access/promotion lever. Biomedical and regulatory sources describe the therapy and its indication, not this lever.',
+      },
+    };
+    render(<ClinicalContextPanel context={lever} />);
+    expect(screen.getByText(/not this lever/i)).toBeInTheDocument();
+    expect(screen.queryByText(/is recorded in development for/i)).not.toBeInTheDocument();
+  });
+
+  it('renders no evidence section for a leaderboard payload that never asked for it', () => {
+    const notRequested: ClinicalContext = {
+      ...FULL,
+      causal_evidence: {
+        status: 'not_requested',
+        indication_edge: null,
+        citations: [],
+        note: 'Analysis-specific evidence is gathered when the analysis is opened.',
+      },
+    };
+    render(<ClinicalContextPanel context={notRequested} />);
+    expect(screen.queryByText(/Evidence for this analysis/i)).not.toBeInTheDocument();
+  });
+});

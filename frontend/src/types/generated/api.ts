@@ -3853,8 +3853,12 @@ export interface paths {
          *     for ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.
          *
          *     With ``treatment``, the response also frames the specific analysis being
-         *     interrogated (treatment -> outcome) and the literature search follows that
-         *     analysis instead of the brand alone (#1763).
+         *     interrogated (treatment -> outcome), the literature search follows that
+         *     analysis instead of the brand alone, and ``causal_evidence`` carries the
+         *     public-knowledge-graph evidence for it: the Open Targets indication edge and
+         *     literature whose abstracts were verified to name both entities. A commercial
+         *     treatment lever (copay, PSP, detailing) returns an explicit
+         *     ``commercial_lever`` state instead of the drug's evidence (#1763).
          *
          *     Additive narrative ONLY — does not touch the causal estimate or its
          *     adjustment set. Degrades gracefully (static fallbacks) when an upstream API
@@ -7196,6 +7200,36 @@ export interface components {
             selected_estimator?: string | null;
         };
         /**
+         * CausalEvidence
+         * @description Public-knowledge-graph evidence for THIS analysis (treatment -> outcome).
+         *
+         *     ``status``: ``evidence`` (something was found) / ``commercial_lever`` (the
+         *     treatment is an access-or-promotion lever the biomedical sources do not
+         *     describe — no clinical evidence is claimed for it) / ``unavailable`` (asked,
+         *     nothing usable) / ``not_requested`` (the caller did not pay for the live
+         *     lookup; the leaderboard fan-out does not).
+         */
+        CausalEvidence: {
+            /**
+             * Status
+             * @description evidence / commercial_lever / unavailable / not_requested
+             */
+            status: string;
+            /** @description Open Targets drug -> indication edge for this disease. */
+            indication_edge?: components["schemas"]["IndicationEdge"] | null;
+            /**
+             * Citations
+             * @description Abstract-verified citations (capped).
+             */
+            citations?: components["schemas"]["VerifiedCitation"][];
+            /**
+             * Note
+             * @description What was searched / why nothing is claimed.
+             * @default
+             */
+            note: string;
+        };
+        /**
          * CausalGraphNode
          * @description Node in the causal graph.
          */
@@ -7624,6 +7658,8 @@ export interface components {
             approved_indications?: components["schemas"]["ApprovedIndications"] | null;
             /** @description Curated therapeutic competitors for the indication. */
             competitor_landscape?: components["schemas"]["CompetitorLandscape"] | null;
+            /** @description Public-KG evidence for this specific analysis. None when no treatment was supplied (there is no analysis to gather evidence for). */
+            causal_evidence?: components["schemas"]["CausalEvidence"] | null;
             /**
              * Honesty Label
              * @description Explicit synthetic-estimate / real-context boundary statement.
@@ -11455,6 +11491,43 @@ export interface components {
          * @enum {string}
          */
         ImplementationDifficulty: "low" | "medium" | "high";
+        /**
+         * IndicationEdge
+         * @description The drug -> indication edge from Open Targets, for the analysis's disease.
+         *
+         *     ``max_clinical_stage`` is the stage recorded for THAT indication node, not the
+         *     drug's highest stage anywhere. Open Targets staging lags the FDA label, so a
+         *     sub-APPROVAL edge is a development-stage signal, NOT a statement that the brand
+         *     is unapproved — ``approved_indications`` (the label) is the approval authority.
+         */
+        IndicationEdge: {
+            /**
+             * Predicate
+             * @description treats (approved) / associated_with (in development)
+             */
+            predicate: string;
+            /**
+             * Disease Id
+             * @description Disease node id (e.g. MONDO_0007254)
+             */
+            disease_id: string;
+            /**
+             * Disease Name
+             * @description Disease node name
+             */
+            disease_name: string;
+            /**
+             * Max Clinical Stage
+             * @description Stage for THIS indication node
+             */
+            max_clinical_stage: string;
+            /**
+             * Source
+             * @description Always 'open_targets'.
+             * @default open_targets
+             */
+            source: string;
+        };
         /**
          * InterimAnalysisResult
          * @description Result of interim analysis.
@@ -18875,6 +18948,53 @@ export interface components {
             details?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * VerifiedCitation
+         * @description A citation whose abstract was fetched and checked, not merely retrieved.
+         */
+        VerifiedCitation: {
+            /**
+             * Pmid
+             * @description PubMed ID
+             */
+            pmid: string;
+            /**
+             * Title
+             * @description Article title
+             */
+            title: string;
+            /**
+             * Journal
+             * @description Journal / source
+             */
+            journal?: string | null;
+            /**
+             * Pubdate
+             * @description Publication date string
+             */
+            pubdate?: string | null;
+            /**
+             * Url
+             * @description Canonical pubmed.ncbi.nlm.nih.gov URL
+             */
+            url: string;
+            /**
+             * Entities Found
+             * @description Entities actually found in the abstract (drug + disease).
+             */
+            entities_found?: string[];
+            /**
+             * Confidence
+             * @description CitationResolver confidence; only >= 0.5 is surfaced.
+             */
+            confidence: number;
+            /**
+             * Source
+             * @description Search + verification sources.
+             * @default pubmed+europepmc
+             */
+            source: string;
         };
         /**
          * WithdrawRequest

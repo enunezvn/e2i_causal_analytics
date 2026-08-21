@@ -280,6 +280,32 @@ class PubMedClient:
             return None
         return _pubmed_fetch_by_pmid_cached(self, pmid)
 
+    def search_pmids(self, term: str, *, retmax: int = 5) -> list[str]:
+        """esearch for ``term`` (relevance-sorted) -> up to ``retmax`` PMIDs.
+
+        The single-hit ``top_article`` is the right tool for one citation; the
+        evidence layer needs candidates it can verify and discard (#1763). Empty
+        term skips the network; no hits is an empty list, never an error.
+        """
+        if not term or retmax <= 0:
+            return []
+        return list(_pubmed_search_pmids_cached(self, term, retmax))
+
+    def _search_pmids_uncached(self, term: str, retmax: int) -> tuple[str, ...]:
+        payload = self._get(
+            "/esearch.fcgi",
+            {
+                "db": "pubmed",
+                "term": term,
+                "retmode": "json",
+                "retmax": retmax,
+                "sort": "relevance",
+            },
+            op="esearch",
+        )
+        idlist = payload.get("esearchresult", {}).get("idlist") or []
+        return tuple(str(pmid) for pmid in idlist)
+
     def _esearch_top_pmid(self, term: str) -> Optional[str]:
         payload = self._get(
             "/esearch.fcgi",
@@ -640,8 +666,14 @@ def _pubmed_fetch_by_pmid_cached(client: PubMedClient, pmid: str) -> Optional[Pu
     return client._esummary(pmid)
 
 
+@lru_cache(maxsize=_LRU_MAXSIZE)
+def _pubmed_search_pmids_cached(client: PubMedClient, term: str, retmax: int) -> tuple[str, ...]:
+    return client._search_pmids_uncached(term, retmax)
+
+
 def reset_caches() -> None:
     """Clear the in-process clinical-trials / pubmed caches (useful in tests)."""
     _ctgov_primary_endpoints_cached.cache_clear()
     _pubmed_top_article_cached.cache_clear()
     _pubmed_fetch_by_pmid_cached.cache_clear()
+    _pubmed_search_pmids_cached.cache_clear()
