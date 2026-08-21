@@ -880,7 +880,20 @@ class RealWorldEvidence(BaseModel):
     pubdate: Optional[str] = Field(default=None, description="Publication date string")
     doi: Optional[str] = Field(default=None, description="DOI when available")
     url: str = Field(..., description="Canonical pubmed.ncbi.nlm.nih.gov URL")
-    source: str = Field(..., description="pubmed / pubmed_seed")
+    source: str = Field(
+        ...,
+        description=(
+            "pubmed (the analysis-specific search) / pubmed_brand (the brand-level "
+            "search answered instead) / pubmed_seed / curated"
+        ),
+    )
+    search_term: Optional[str] = Field(
+        default=None,
+        description=(
+            "The PubMed query this citation came from, so an analyst can judge how "
+            "close it is to the analysis. None for a curated citation (not searched)."
+        ),
+    )
 
 
 class ApprovedIndications(BaseModel):
@@ -917,6 +930,25 @@ class CompetitorLandscape(BaseModel):
     source: str = Field(default="curated", description="Always 'curated' (curated SSOT).")
 
 
+class TreatmentContext(BaseModel):
+    """Curated clinical framing for the analysis's TREATMENT column (#1763).
+
+    ``kind`` states what the public clinical APIs can speak to:
+    ``drug_therapy`` (the treatment is a therapy), ``clinical_covariate`` (a
+    patient-state variable used as an observational treatment), or ``commercial``
+    (an access / promotion lever — biomedical sources do not speak to it, and the
+    UI must not imply they do).
+    """
+
+    column: str = Field(..., description="The synthetic treatment column (e.g. treatment_arm)")
+    label: str = Field(..., description="Human-readable label for the treatment")
+    framing: str = Field(
+        ..., description="Clinical framing fragment (e.g. 'receiving copay assistance')"
+    )
+    kind: str = Field(..., description="drug_therapy / clinical_covariate / commercial")
+    source: str = Field(default="curated", description="Always 'curated'.")
+
+
 class ClinicalContext(BaseModel):
     """Brand-faithful, sourced clinical NARRATIVE for a discovered effect.
 
@@ -931,6 +963,28 @@ class ClinicalContext(BaseModel):
     drug_name: str = Field(..., description="INN drug name (e.g. ribociclib)")
     disease: str = Field(..., description="Indication (e.g. Malignant neoplasm of breast)")
     our_outcome: str = Field(..., description="Our synthetic outcome column this maps from")
+    our_treatment: Optional[str] = Field(
+        default=None,
+        description=(
+            "The synthetic treatment column the analysis estimates the effect of. "
+            "None on the brand-level view (no single analysis in scope)."
+        ),
+    )
+    treatment_context: Optional["TreatmentContext"] = Field(
+        default=None,
+        description=(
+            "Curated clinical framing for the treatment side. None when no treatment "
+            "was supplied or the column has no curated framing (never invented)."
+        ),
+    )
+    analysis_framing: Optional[str] = Field(
+        default=None,
+        description=(
+            "One deterministic sentence naming the analysis this context grounds "
+            "(treatment -> outcome, for this drug in this disease). None when the "
+            "treatment has no curated framing."
+        ),
+    )
     mapped_endpoint: Optional[str] = Field(
         default=None,
         description=(

@@ -1745,16 +1745,21 @@ def _effect_from_agent_response(
 
 
 async def _attach_clinical_context(effect: DiscoveredEffect) -> None:
-    """Best-effort: attach brand+outcome-scoped clinical context to a completed
-    leaderboard row. FAIL-OPEN — any failure (unknown brand, API down) leaves
-    ``clinical_context=None`` and never disrupts the row or the discover job. Skips
-    rows without a brand or without an estimate. The service caches per (brand,
-    disease), so the many candidate rows of one brand trigger a single live fan-out."""
+    """Best-effort: attach clinical context for THIS row's analysis (brand +
+    treatment -> outcome) to a completed leaderboard row. FAIL-OPEN — any failure
+    (unknown brand, API down) leaves ``clinical_context=None`` and never disrupts the
+    row or the discover job. Skips rows without a brand or without an estimate. The
+    brand-level fan-out is cached per (brand, disease) so the many candidate rows of
+    one brand trigger a single live fan-out; only the literature citation varies per
+    analysis (#1763) and is cached per composed query."""
     if not effect.brand or effect.ate is None:
         return
     try:
         payload = await asyncio.to_thread(
-            _clinical_context_service.get_context, effect.brand, effect.outcome
+            _clinical_context_service.get_context,
+            effect.brand,
+            effect.outcome,
+            treatment=effect.treatment,
         )
         effect.clinical_context = ClinicalContext.model_validate(payload)
     except Exception as exc:  # noqa: BLE001 — best-effort; context never fails a row
@@ -1998,11 +2003,24 @@ async def get_clinical_context(
             "mapped to the real pivotal endpoint."
         ),
     ),
+    treatment: Optional[str] = Query(
+        default=None,
+        description=(
+            "The synthetic treatment column the analysis estimates the effect of "
+            "(e.g. treatment_arm / copay_support). Optional: with it the context is "
+            "framed for THAT analysis and the literature search follows it; without "
+            "it the response is the brand-level view."
+        ),
+    ),
     user: Dict[str, Any] = Depends(require_viewer),
 ) -> ClinicalContext:
     """Return the drug + mechanism of action (ChEMBL), the disease's real pivotal
     endpoints (ClinicalTrials.gov), and a real-world-evidence citation (PubMed)
     for ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.
+
+    With ``treatment``, the response also frames the specific analysis being
+    interrogated (treatment -> outcome) and the literature search follows that
+    analysis instead of the brand alone (#1763).
 
     Additive narrative ONLY — does not touch the causal estimate or its
     adjustment set. Degrades gracefully (static fallbacks) when an upstream API
@@ -2019,7 +2037,9 @@ async def get_clinical_context(
         # Offload the synchronous httpx fan-out (ChEMBL + CT.gov + PubMed) to a
         # worker thread so a slow / timing-out / rate-limited upstream cannot block
         # the event loop (the cold-cache call can take tens of seconds worst case).
-        payload = await asyncio.to_thread(_clinical_context_service.get_context, brand, outcome)
+        payload = await asyncio.to_thread(
+            _clinical_context_service.get_context, brand, outcome, treatment=treatment
+        )
     except KeyError:
         # The brand_map has no profile for this brand (no enrichment facts).
         raise HTTPException(

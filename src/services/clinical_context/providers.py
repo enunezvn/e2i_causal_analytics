@@ -45,7 +45,13 @@ class EndpointsFragment:
 @dataclass(frozen=True)
 class CitationFragment:
     citation: Optional[PubMedArticle]
-    source: str  # "pubmed" | "pubmed_seed" | "unavailable"
+    # "pubmed" (the analysis-specific search, or the brand search on the brand-level
+    # view) | "pubmed_brand" (the analysis-specific search found nothing and the
+    # brand-level search answered instead) | "pubmed_seed" | "unavailable"
+    source: str
+    # The query that produced this citation, so the panel can disclose WHAT was
+    # searched. None for a curated seed (it was not found by searching).
+    search_term: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -190,26 +196,50 @@ class ClinicalTrialsEndpointProvider(ClinicalContextProvider):
 
 
 class PubMedRWEProvider(ClinicalContextProvider):
-    """Real-world-evidence citation via PubMed: relevance search, then the
-    curated seed PMID, then unavailable (honest — never a fabricated citation)."""
+    """Real-world-evidence citation via PubMed, down an honest ladder:
+
+    1. the ANALYSIS-specific query (drug + disease + this analysis's outcome and
+       treatment themes) when the service composed one (#1763);
+    2. the curated BRAND-level query — labelled ``pubmed_brand`` so the panel never
+       claims a brand-level paper is about this particular analysis;
+    3. the curated seed PMID;
+    4. unavailable (honest — never a fabricated citation).
+
+    MEASURED 2026-08-21 against live PubMed: 6/10 analysis-composed queries returned
+    a real analysis-relevant article (e.g. a ribociclib patient-access-programme
+    study for psp_enrolled, an iptacopan C5-switch study for
+    complement_inhibitor_status); the other 4 fell through this ladder as designed.
+    """
 
     provider_name = "pubmed_rwe"
 
     def __init__(self, client: _PubMedLike) -> None:
         self._client = client
 
-    def enrich(self, profile: BrandClinicalProfile) -> CitationFragment:
+    def _search(self, term: str) -> Optional[PubMedArticle]:
+        """One best-effort relevance search; any failure reads as no hit."""
         try:
-            article = self._client.top_article(profile.rwe_search_term)
-        except Exception as exc:  # noqa: BLE001 — best-effort; any failure => try seed
-            logger.warning(
-                "clinical-context: PubMed search failed for %r: %s",
-                profile.rwe_search_term,
-                exc,
-            )
-            article = None
+            return self._client.top_article(term)
+        except Exception as exc:  # noqa: BLE001 — best-effort; any failure => next rung
+            logger.warning("clinical-context: PubMed search failed for %r: %s", term, exc)
+            return None
+
+    def enrich(self, profile: BrandClinicalProfile) -> CitationFragment:
+        analysis_term = profile.analysis_rwe_search_term
+        if analysis_term:
+            article = self._search(analysis_term)
+            if article is not None:
+                return CitationFragment(
+                    citation=article, source="pubmed", search_term=analysis_term
+                )
+        article = self._search(profile.rwe_search_term)
         if article is not None:
-            return CitationFragment(citation=article, source="pubmed")
+            # A brand-level answer to an analysis-specific question is still useful,
+            # but it must be labelled as brand-level, not passed off as analysis-level.
+            source = "pubmed_brand" if analysis_term else "pubmed"
+            return CitationFragment(
+                citation=article, source=source, search_term=profile.rwe_search_term
+            )
         if profile.rwe_seed_pmid:
             try:
                 seed = self._client.fetch_by_pmid(profile.rwe_seed_pmid)
