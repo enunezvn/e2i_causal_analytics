@@ -109,6 +109,15 @@ _SOURCE_DISPLAY = {
     "europe_pmc": "Europe PMC",
 }
 
+# Said when WE stopped early rather than when an upstream failed. It must not name
+# a source: accusing a healthy Europe PMC is the same dishonesty inverted (codex
+# iter-1 HIGH, #1767).
+_INCOMPLETE_NOTE = (
+    "The literature check did not finish for this analysis — the verification "
+    "budget ran out before every candidate was checked — so what is missing below "
+    "is unknown, not absent."
+)
+
 _FDA_LABEL_NOTE = (
     "Open Targets records the clinical stage per indication and lags the FDA "
     "label; approval status for this brand comes from the approved-use section of "
@@ -180,6 +189,15 @@ class CausalEvidenceFragment:
     # indistinguishable from "no indication edge exists" — an absence of evidence
     # read as evidence of absence — and the service would cache it as settled.
     sources_unavailable: tuple[str, ...] = ()
+    # We stopped early under OUR OWN budget, or a check blew up locally — so the
+    # literature question is unfinished, but NO upstream is being accused (codex
+    # iter-1 HIGH, #1767). Naming Europe PMC here would be the inverse dishonesty:
+    # a healthy source reported as unreachable, re-fetched every 600s forever.
+    #
+    # Deliberately NOT serialized onto the wire: the payload is assembled key by
+    # key in service.py, the analyst-facing truth is carried by ``note``, and the
+    # only machine consumer is the service's cache-completeness decision.
+    checks_incomplete: bool = False
 
 
 NOT_REQUESTED = CausalEvidenceFragment(
@@ -307,18 +325,23 @@ class CausalEvidenceProvider:
 
     def _citations(
         self, profile: BrandClinicalProfile, search_term: str
-    ) -> tuple[List[VerifiedCitation], int]:
-        """Verified literature for this analysis, plus how many candidates we could
-        NOT check (#1767).
+    ) -> tuple[List[VerifiedCitation], int, int]:
+        """Verified literature for this analysis, plus WHY anything is missing.
 
-        The second element is what separates "we searched and found nothing" from
-        "we could not complete the search". Only the first is a settled absence; the
-        second must degrade the fragment so it self-heals rather than being cached
-        as a fact about the literature.
+        Returns ``(citations, unreachable, unchecked)``:
+
+        - ``unreachable`` — Europe PMC RAISED for this candidate. A real outage.
+        - ``unchecked``  — we never got an answer for a different reason: our own
+          wall-clock budget stopped us, or the verification call blew up locally.
+          Unfinished, but no upstream is at fault.
+
+        Both mean "not a settled absence", and they must stay apart: reporting a
+        healthy Europe PMC as unreachable is the same dishonesty inverted.
         """
         pmids = self._pubmed.search_pmids(search_term, retmax=_MAX_CANDIDATE_PMIDS)
         out: List[VerifiedCitation] = []
-        undetermined = 0
+        unreachable = 0
+        unchecked = 0
         started = time.monotonic()
         for attempt, pmid in enumerate(pmids):
             if len(out) >= _MAX_CITATIONS:
@@ -338,8 +361,9 @@ class CausalEvidenceProvider:
                     "causal-evidence: verification budget exhausted after %d citation(s)", len(out)
                 )
                 # Everything from this candidate on was never examined. Truncating
-                # the search is not the same as searching and finding nothing.
-                undetermined += len(pmids) - attempt
+                # the search is not the same as searching and finding nothing — but
+                # it is OUR budget that stopped, so Europe PMC is not accused.
+                unchecked += len(pmids) - attempt
                 break
             try:
                 verdict = self._resolver.verify_citation(
@@ -352,7 +376,9 @@ class CausalEvidenceProvider:
                 )
             except Exception as exc:  # noqa: BLE001 — best-effort; skip this candidate
                 logger.warning("causal-evidence: verification failed for PMID %s: %s", pmid, exc)
-                undetermined += 1
+                # The resolver swallows EuropePMCError itself, so what escapes here
+                # is not evidence that the upstream is down. Unfinished, not accused.
+                unchecked += 1
                 continue
             # An unresolved abstract means "could not check", NOT "checked and weak" —
             # it must never reach the panel as a weak-but-shown citation. The verdict's
@@ -360,7 +386,7 @@ class CausalEvidenceProvider:
             # answered and simply holds no abstract, which IS a settled negative.
             if not verdict.abstract_resolved:
                 if verdict.error:
-                    undetermined += 1
+                    unreachable += 1
                 continue
             if verdict.overall_confidence < _MIN_CITATION_CONFIDENCE:
                 continue
@@ -387,7 +413,7 @@ class CausalEvidenceProvider:
                     source="pubmed+europepmc",
                 )
             )
-        return out, undetermined
+        return out, unreachable, unchecked
 
     # -- the public entry point -------------------------------------------------
 
@@ -438,27 +464,38 @@ class CausalEvidenceProvider:
                 )
                 edge = None
                 unavailable.append("open_targets")
+        checks_incomplete = False
         try:
-            citations, undetermined = self._citations(profile, search_term)
+            citations, lit_unreachable, lit_unchecked = self._citations(profile, search_term)
         except Exception as exc:  # noqa: BLE001 — best-effort; literature is optional
             logger.warning("causal-evidence: literature search failed for %r: %s", search_term, exc)
             citations = []
             unavailable.append("pubmed")
         else:
-            # Nothing verified AND at least one candidate we could not check: the
-            # literature question is UNANSWERED, not answered "none". Disclosing it
-            # is also what keeps the service from caching this as a settled result
+            # Nothing verified, and we did not get a real answer for at least one
+            # candidate: the literature question is UNANSWERED, not answered "none".
+            # Saying so is also what keeps the service from caching this as settled
             # for the worker's process lifetime (#1767).
-            if not citations and undetermined:
-                unavailable.append("europe_pmc")
+            if not citations:
+                if lit_unreachable:
+                    # Europe PMC actually failed. Name it.
+                    unavailable.append("europe_pmc")
+                elif lit_unchecked:
+                    # We stopped early ourselves. Unfinished, but nobody is at fault.
+                    checks_incomplete = True
         if edge is None and not citations:
             return CausalEvidenceFragment(
                 status="unavailable",
                 note=(
-                    "No indication edge or verifiable literature came back for this "
-                    "analysis from the public sources."
+                    _INCOMPLETE_NOTE
+                    if checks_incomplete
+                    else (
+                        "No indication edge or verifiable literature came back for this "
+                        "analysis from the public sources."
+                    )
                 ),
                 sources_unavailable=tuple(unavailable),
+                checks_incomplete=checks_incomplete,
             )
         notes = [
             f"Literature searched as: {search_term!r}; a citation is shown only when its "
@@ -475,6 +512,9 @@ class CausalEvidenceProvider:
             )
         if edge is not None and edge.predicate != "treats":
             notes.insert(0, _FDA_LABEL_NOTE)
+        if checks_incomplete:
+            # We ran out of our own budget. Unfinished — but no source is accused.
+            notes.insert(0, _INCOMPLETE_NOTE)
         if unavailable:
             # An outage must not read as a settled absence.
             names = [_SOURCE_DISPLAY.get(src, src) for src in unavailable]
@@ -490,6 +530,7 @@ class CausalEvidenceProvider:
             citations=citations,
             note=" ".join(notes),
             sources_unavailable=tuple(unavailable),
+            checks_incomplete=checks_incomplete,
         )
 
 

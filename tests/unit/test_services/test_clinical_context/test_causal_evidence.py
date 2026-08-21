@@ -795,9 +795,12 @@ def test_a_checked_but_weak_citation_is_not_an_outage():
 
 
 @pytest.mark.unit
-def test_a_verification_that_raised_counts_as_could_not_check():
-    """The per-candidate ``except ... continue``. It swallowed the exception without
-    recording anything, so an outage arriving as an exception was invisible too."""
+def test_a_verification_that_raised_is_unfinished_but_accuses_nobody():
+    """The per-candidate ``except ... continue`` swallowed the exception without
+    recording anything, so this was invisible. It is now recorded — but as
+    UNFINISHED, not as a Europe PMC outage: the resolver swallows EuropePMCError
+    itself, so whatever escapes here is not evidence that the upstream is down
+    (codex iter-1 HIGH)."""
     profile = resolve_brand_profile("Kisqali")
     frag = _provider(pubmed=_FakePubMedSearch(pmids=["1"]), resolver=_BoomResolver()).evidence(
         profile,
@@ -806,12 +809,21 @@ def test_a_verification_that_raised_counts_as_could_not_check():
         search_term="ribociclib breast cancer persistence real-world",
     )
     assert frag.citations == []
-    assert "europe_pmc" in frag.sources_unavailable
+    assert frag.checks_incomplete is True
+    assert frag.sources_unavailable == ()
+    assert "europe pmc" not in frag.note.lower()
 
 
 @pytest.mark.unit
-def test_candidates_the_budget_never_reached_are_not_a_settled_absence(monkeypatch):
-    """Truncating the search is not the same as searching and finding nothing."""
+def test_candidates_the_budget_never_reached_are_unfinished_not_an_outage(monkeypatch):
+    """Truncating the search is not the same as searching and finding nothing — but
+    it is OUR budget that stopped, so Europe PMC must not be named.
+
+    codex iter-1 HIGH: the first version of this fix reported ``europe_pmc``
+    unavailable here. Europe PMC can be perfectly healthy (just slow, in its
+    measured 8-16s band) and get blamed for a limit we imposed, which would also
+    re-hit three upstreams every 600s forever.
+    """
     import src.services.clinical_context.causal_evidence as ev_mod
 
     monkeypatch.setattr(ev_mod, "_VERIFICATION_BUDGET_S", 0.0)
@@ -825,7 +837,31 @@ def test_candidates_the_budget_never_reached_are_not_a_settled_absence(monkeypat
         search_term="ribociclib breast cancer persistence real-world",
     )
     assert frag.citations == []
-    assert "europe_pmc" in frag.sources_unavailable
+    # Unfinished, so not settled...
+    assert frag.checks_incomplete is True
+    # ...but nobody is accused.
+    assert frag.sources_unavailable == ()
+    assert "europe pmc" not in frag.note.lower()
+    assert "did not finish" in frag.note.lower()
+
+
+@pytest.mark.unit
+def test_a_real_outage_still_names_europe_pmc_and_does_not_claim_our_budget():
+    """The two reasons must not blur in the other direction either: when Europe PMC
+    actually raised, say so, and do not dress it up as a budget decision."""
+    profile = resolve_brand_profile("Kisqali")
+    resolver = _FakeResolver(
+        {p: _unresolved(p, error="Europe PMC transport error") for p in ("1", "2", "3")}
+    )
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2", "3"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.sources_unavailable == ("europe_pmc",)
+    assert frag.checks_incomplete is False
+    assert "did not finish" not in frag.note.lower()
 
 
 @pytest.mark.unit

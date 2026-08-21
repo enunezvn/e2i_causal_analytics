@@ -773,3 +773,44 @@ def test_a_europe_pmc_outage_is_not_cached_as_a_settled_no_literature(monkeypatc
     assert len(svc_mod._EVIDENCE_CACHE) == 1
     _frag, _stored_at, complete = next(iter(svc_mod._EVIDENCE_CACHE.values()))
     assert complete is False, "an unchecked literature result must never be cached as complete"
+
+
+def test_a_budget_truncated_literature_check_is_degraded_without_blaming_a_source(monkeypatch):
+    """codex iter-1 HIGH (#1767). Stopping early under our OWN wall-clock budget
+    leaves the literature question unfinished, so the fragment must not be cached as
+    settled — but Europe PMC must not be named either. Naming a healthy source is
+    the same dishonesty inverted, and it would re-hit three upstreams every 600s for
+    the life of the process."""
+    import src.services.clinical_context.causal_evidence as ev_mod
+    import src.services.clinical_context.service as svc_mod
+    from src.services.clinical_context.causal_evidence import CausalEvidenceProvider
+
+    monkeypatch.setattr(ev_mod, "_VERIFICATION_BUDGET_S", 0.0)
+
+    class _WeakThenUnreached:
+        """Candidate 1 resolves and is genuinely weak; 2 and 3 are never reached."""
+
+        def verify_citation(self, identifier, **kw):
+            from src.data.kg.types import CitationVerdict
+
+            return CitationVerdict(
+                identifier=identifier,
+                identifier_kind="pmid",
+                abstract_resolved=True,
+                entities_found=("ribociclib",),
+                causal_cue_found=None,
+                overall_confidence=0.1,
+                error=None,
+            )
+
+    provider = CausalEvidenceProvider(
+        open_targets=_OkOpenTargets(), pubmed=_OkPubMed(), resolver=_WeakThenUnreached()
+    )
+    ctx = _service_with_evidence(provider).get_context(
+        "Kisqali", "persistent_180d", treatment="treatment_arm", include_causal_evidence=True
+    )
+    assert ctx["causal_evidence"]["sources_unavailable"] == []
+    assert "europe pmc" not in ctx["causal_evidence"]["note"].lower()
+
+    _frag, _stored_at, complete = next(iter(svc_mod._EVIDENCE_CACHE.values()))
+    assert complete is False, "an unfinished literature check must not be cached as settled"
