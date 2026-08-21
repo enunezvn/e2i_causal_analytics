@@ -23,6 +23,14 @@
 #            (a) PREV built + newer unbuilt        -> deploys PREV (no local build)
 #            (b) PREV image-less + only OLDER built -> floor forces fallback (NO downgrade)
 #            (c) normal HEAD built                  -> deploys HEAD
+#   Part 3 — #1780: the floor must be anchored to the RUNNING image, not to the
+#            droplet CHECKOUT head. PROD == DEV == the same box, so $PROJECT_DIR is
+#            also a human working copy and a `git pull` there moves the checkout with
+#            no deploy behind it. Anchored wrongly the floor both refuses valid
+#            upgrades (the 2026-08-21 incident, run 32507847667) and permits real
+#            downgrades. deploy.yml's running_image_sha() supplies the anchor and its
+#            parsing/validation is covered by
+#            tests/unit/test_docker/test_deploy_target_image_guarantee_1780.py.
 #
 # Exit 0 = all cases pass. Exit 1 = a regression.
 #
@@ -89,11 +97,14 @@ for n in 1 2 3 4 5; do
 done
 
 # resolve_target: EXACT logic from deploy.yml (walk + downgrade floor). Uses the
-# ambient $BUILT_SET (via the image_exists stub) and $PREV_SHA.
+# ambient $BUILT_SET (via the image_exists stub), $PREV_SHA (the droplet CHECKOUT
+# head) and $RUNNING_SHA (#1780: what the api container is actually running, empty
+# when deploy.yml's running_image_sha() could not establish it).
 resolve_target() {
   _t=$(git rev-list --topo-order HEAD | head -n 30 | select_built_sha || true)
-  if [ -n "$_t" ] && [ "$_t" != "$PREV_SHA" ] \
-     && git merge-base --is-ancestor "$_t" "$PREV_SHA"; then
+  _floor="${RUNNING_SHA:-$PREV_SHA}"
+  if [ -n "$_t" ] && [ "$_t" != "$_floor" ] \
+     && git merge-base --is-ancestor "$_t" "$_floor"; then
     _t=""   # strict downgrade -> refuse, fall back to blind origin/main
   fi
   echo "$_t"
