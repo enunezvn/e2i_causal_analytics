@@ -122,11 +122,19 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           <Stethoscope className="h-4 w-4 text-muted-foreground" />
           <p className="text-sm font-medium">Clinical context</p>
         </div>
+        {/* The mapping claim lives in TWO places in this file and I fixed only the
+            other one. `mapped_endpoint` is nullable, so "the real trial endpoints our
+            outcomes stand in for" is unearned for an outcome we never mapped, exactly
+            as it was sixty lines below (codex iter-14 HIGH). The claim is the unit,
+            not the file — and here, not even the file. */}
         <p className="mt-1 text-xs text-muted-foreground">
-          The brand&rsquo;s clinical reality alongside this analysis — its mechanism, the real
-          trial endpoints our outcomes stand in for, and the approved labeling. The label
-          describes the therapy and its indication; it makes no claim about a commercial
-          lever, and nothing below reads a commercial result as on-label.
+          The brand&rsquo;s clinical reality alongside this analysis — its mechanism,
+          {mapped_endpoint
+            ? ' the real trial endpoints our outcomes stand in for,'
+            : ' this brand\u2019s real trial endpoints,'}{' '}
+          and the approved labeling. The label describes the therapy and its indication; it
+          makes no claim about a commercial lever, and nothing below reads a commercial
+          result as on-label.
         </p>
       </div>
 

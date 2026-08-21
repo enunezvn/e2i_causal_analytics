@@ -190,8 +190,13 @@ def _note(
         # the LABEL, made when `_select` never evaluated relevance at all because
         # `_theme_for` produced no theme — false outright whenever a relevant factor
         # is sitting in the input (codex iter-12 HIGH). The gap is in our mapping.
+        # An unmapped outcome has no curated phrasing, so `outcome_framing_for` hands
+        # back the raw key — "trx_volume" rendered as "Trx_volume" to an analyst.
+        # Naming the identifier is right (it is what the analysis actually selected);
+        # showing it with its underscore is just us leaking a dict key into prose.
+        readable = outcome_phrase.replace("_", " ")
         parts.append(
-            f"{outcome_phrase.capitalize()} is not one we have mapped to a clinical "
+            f"{readable.capitalize()} is not one we have mapped to a clinical "
             f"question, so no label factors were selected for it. That is a gap in our "
             f"mapping, not a statement about what the {profile.drug_name} label contains."
         )

@@ -453,3 +453,20 @@ def test_an_unmapped_outcome_blames_our_mapping_not_the_label():
     assert "was read, but" not in note, note
     # it must name the real reason: we never mapped this outcome
     assert "not one we have mapped" in note or "unmapped" in note or "not mapped" in note, note
+
+
+@pytest.mark.unit
+def test_an_unmapped_outcome_is_named_readably_not_as_a_dict_key():
+    """Small, but it is the analyst-facing sentence: the unmapped branch rendered the
+    raw outcome identifier, so the panel said "Trx_volume is not one we have mapped".
+    Naming the identifier is correct — it is what the analysis selected — but showing
+    it with its underscore is a dict key leaking into prose."""
+    note = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="trx_volume",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(),
+        label_source="openfda",
+    ).note
+    assert "Trx_volume" not in note, note
+    assert "Trx volume is not one we have mapped" in note, note

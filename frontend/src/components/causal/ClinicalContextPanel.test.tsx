@@ -586,13 +586,35 @@ describe('ClinicalContextPanel endpoint copy honesty', () => {
     // and the backend returns mapped_endpoint: null when the outcome is not one we
     // have mapped. Same defect as the grounding heading — the sentence around the
     // data promised more than the data carried.
-    render(<ClinicalContextPanel context={{ ...FULL, mapped_endpoint: null }} />);
-    expect(screen.queryByText(/stands in for/i)).not.toBeInTheDocument();
+    // codex iter-14 HIGH: this asserted /stands in for/i, and the claim that survived
+    // was the panel INTRO's plural "stand in for". The regex simply did not match the
+    // text still on screen, so the test passed while the defect rendered. Vacuity by
+    // near-miss rather than by empty collection — match BOTH forms, and scan the whole
+    // container rather than trusting one query.
+    const { container } = render(
+      <ClinicalContextPanel context={{ ...FULL, mapped_endpoint: null }} />,
+    );
+    expect(container.textContent).not.toMatch(/stands? in for/i);
     expect(screen.getByText(/not one we have mapped to any of them/i)).toBeInTheDocument();
   });
 
   it('still makes the mapping claim when the outcome IS mapped', () => {
-    render(<ClinicalContextPanel context={FULL} />);
-    expect(screen.getByText(/stands in for/i)).toBeInTheDocument();
+    const { container } = render(<ClinicalContextPanel context={FULL} />);
+    // POSITIVE CONTROL for the assertion above: both places that make the claim.
+    expect(container.textContent).toMatch(/outcomes stand in for/i);
+    expect(container.textContent).toMatch(/outcome stands in for/i);
+  });
+});
+
+describe('ClinicalContextPanel copy renders as text, not markup', () => {
+  it('never shows a raw HTML entity to the reader', () => {
+    // Caught immediately after writing it: `&rsquo;` inside a JSX *expression* is a
+    // plain string, not an entity, so the conditional intro would have printed
+    // "brand&rsquo;s" on screen. JSX only decodes entities in literal text children.
+    for (const ctx of [FULL, { ...FULL, mapped_endpoint: null }]) {
+      const { container, unmount } = render(<ClinicalContextPanel context={ctx} />);
+      expect(container.textContent).not.toMatch(/&[a-z]+;/i);
+      unmount();
+    }
   });
 });
