@@ -136,28 +136,31 @@ printf '%s\\n' "${STUB_IMAGE:-}"
 exit "${STUB_DOCKER_RC:-0}"
 """
 
-# `git cat-file -e <sha>^{commit}` succeeds only for shas listed in $STUB_COMMITS.
+# `git cat-file -e <sha>^{commit}` succeeds only for shas listed in $STUB_COMMITS;
+# `git rev-parse HEAD` reports the droplet CHECKOUT head.
 _GIT_STUB = """#!/usr/bin/env bash
 if [ "$1" = "cat-file" ]; then
   _want=${3%%^*}
   case " ${STUB_COMMITS:-} " in *" $_want "*) exit 0 ;; *) exit 1 ;; esac
 fi
+if [ "$1" = "rev-parse" ]; then
+  printf '%s\\n' "${STUB_CHECKOUT:-}"
+fi
 exit 0
 """
 
 
-def _run_helper(tmp_path: Path, **env: str) -> tuple[int, str]:
-    """Execute the SHIPPED running_image_sha() against stubbed docker/git."""
-    helper = _extract_helper(_extract_deploy_script(), HELPER)
+def _run_shell(tmp_path: Path, body: str, **env: str) -> tuple[int, str]:
+    """Run a slice of the SHIPPED deploy script against stubbed docker/git."""
     stub_bin = tmp_path / "bin"
     stub_bin.mkdir()
-    for name, body in (("docker", _DOCKER_STUB), ("git", _GIT_STUB)):
+    for name, stub in (("docker", _DOCKER_STUB), ("git", _GIT_STUB)):
         p = stub_bin / name
-        p.write_text(body)
+        p.write_text(stub)
         p.chmod(0o755)
 
     runner = tmp_path / "run.sh"
-    runner.write_text("set -e\n" + helper + f"\n{HELPER}\n")
+    runner.write_text("set -e\n" + body)
     proc = subprocess.run(
         ["bash", str(runner)],
         env={"PATH": f"{stub_bin}:/usr/bin:/bin", **env},
@@ -166,6 +169,12 @@ def _run_helper(tmp_path: Path, **env: str) -> tuple[int, str]:
         timeout=30,
     )
     return proc.returncode, proc.stdout.strip()
+
+
+def _run_helper(tmp_path: Path, **env: str) -> tuple[int, str]:
+    """Execute the SHIPPED running_image_sha() against stubbed docker/git."""
+    helper = _extract_helper(_extract_deploy_script(), HELPER)
+    return _run_shell(tmp_path, helper + f"\n{HELPER}\n", **env)
 
 
 SHA_A = "a" * 40
@@ -245,24 +254,97 @@ def test_running_image_sha_survives_a_docker_failure(tmp_path: Path) -> None:
     assert (rc, out) == (1, "")
 
 
-def test_floor_compares_against_the_running_sha_not_the_checkout() -> None:
-    """Structural: the `merge-base --is-ancestor` floor must be fed the resolved
-    floor sha, not `$PREV_SHA` directly."""
-    script = _extract_deploy_script()
-    floor = next(
-        (ln for ln in script.splitlines() if "merge-base --is-ancestor" in ln),
+def _extract_anchor_block(script: str) -> str:
+    """The SHIPPED lines that decide what PREV_SHA is, verbatim."""
+    lines = script.splitlines()
+    start = next(
+        (i for i, ln in enumerate(lines) if ln.strip().startswith("CHECKOUT_SHA=")),
         None,
     )
-    assert floor is not None, "deploy.yml lost the #1431 downgrade floor"
-    assert "$PREV_SHA" not in floor, (
-        "the floor still compares against the checkout HEAD. PROD == DEV == this box, "
-        "so a human `git pull` in $PROJECT_DIR moves PREV_SHA without deploying "
-        "anything — that is exactly what refused the built, NEWER b1aba1c on "
-        "2026-08-21 and forced a 26-min local build. Anchor it on the running image: "
-        + floor.strip()
+    assert start is not None, (
+        "deploy.yml's droplet script never records the checkout sha separately, so "
+        "PREV_SHA is still just `git rev-parse HEAD` (#1780)"
     )
-    assert HELPER in script, (
-        f"the floor sha must come from {HELPER}() (the running container's image tag)"
+    end = next(i for i, ln in enumerate(lines) if "==> Pre-deploy SHA:" in ln)
+    ind = len(lines[start]) - len(lines[start].lstrip())
+    return "\n".join(ln[ind:] for ln in lines[start : end + 1])
+
+
+@pytest.mark.parametrize(
+    ("image", "commits", "expected", "why"),
+    [
+        (
+            f"ghcr.io/owner/e2i-api:{SHA_B}",
+            f"{SHA_A} {SHA_B}",
+            SHA_B,
+            "the running container's tag wins over the checkout head",
+        ),
+        (
+            "ghcr.io/owner/e2i-api:latest",
+            SHA_A,
+            SHA_A,
+            "unusable tag -> degrade to the checkout head (the pre-#1780 value)",
+        ),
+    ],
+)
+def test_prev_sha_is_anchored_on_the_running_image(
+    tmp_path: Path, image: str, commits: str, expected: str, why: str
+) -> None:
+    """Executed, not grepped: run the shipped anchor block and read PREV_SHA back.
+
+    PREV_SHA is the single anchor the floor, rollback_to_prev (both its `git reset`
+    target and its IMAGE_TAG), the baked-image-input diff and the no-delta re-run
+    detector all consume, so getting it from the running container fixes all of them
+    at once. RED before the fix: the block does not exist, and PREV_SHA was
+    unconditionally `git rev-parse HEAD`.
+    """
+    script = _extract_deploy_script()
+    block = _extract_helper(script, HELPER) + "\n" + _extract_anchor_block(script)
+    rc, out = _run_shell(
+        tmp_path,
+        block + '\nprintf "PREV=%s\\n" "$PREV_SHA"\n',
+        STUB_IMAGE=image,
+        STUB_COMMITS=commits,
+        STUB_CHECKOUT=SHA_A,
+    )
+    assert rc == 0, out
+    assert f"PREV={expected}" in out, why + f"\ngot:\n{out}"
+
+
+def test_rollback_and_diffs_inherit_the_running_anchor() -> None:
+    """The anchor must be resolved BEFORE anything consumes it, and the consumers must
+    keep reading it rather than re-deriving the checkout head.
+
+    A rollback to the checkout head is the dangerous half: on 2026-08-21 that would have
+    reset production to 32259eb — a tree the containers were never on, and one with no
+    GHCR image, so `rollback_to_prev`'s pull would fail and local-build on an already
+    stressed box (the #528-B OOM path the pulled tier exists to avoid).
+    """
+    script = _extract_deploy_script()
+    assert HELPER in script, f"PREV_SHA must be derived from {HELPER}()"
+    lines = script.splitlines()
+    anchor_at = next(i for i, ln in enumerate(lines) if ln.strip() == 'PREV_SHA="$RUNNING_SHA"')
+    first_use = next(
+        i for i, ln in enumerate(lines) if i > anchor_at - 1 and "merge-base --is-ancestor" in ln
+    )
+    assert anchor_at < first_use, "the floor must run after the anchor is resolved"
+
+    calls = [i for i, ln in enumerate(lines) if re.match(r"\s*rollback_to_prev\s", ln)]
+    assert calls, "deploy.yml lost its rollback_to_prev call sites"
+    assert anchor_at < min(calls), (
+        "PREV_SHA must be re-anchored before any rollback can fire, or a failed deploy "
+        "rolls production back to a tree it was never running"
+    )
+    body = _extract_helper(script, "rollback_to_prev")
+    assert 'git reset --hard "$PREV_SHA"' in body, (
+        "rollback_to_prev must reset to the shared PREV_SHA anchor"
+    )
+    assert 'export IMAGE_TAG="$PREV_SHA"' in body, (
+        "the rollback must pull the image tag of what was RUNNING — that image exists "
+        "by construction, whereas the checkout head's may never have been built"
+    )
+    assert 'git diff --name-only "$PREV_SHA" "$NEW_SHA"' in script, (
+        "the baked-image-input diff must also measure against what is running"
     )
 
 

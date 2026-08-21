@@ -535,8 +535,27 @@ jobs:
             }
 
             cd "$PROJECT_DIR"
-            PREV_SHA=$(git rev-parse HEAD)
-            echo "==> Pre-deploy SHA: ${PREV_SHA:0:7}"
+            # #1780: PREV_SHA means "the commit production was previously RUNNING", and
+            # every consumer treats it that way — the #1431 downgrade floor, the
+            # rollback_to_prev target + its IMAGE_TAG, the baked-image-input diff, and
+            # the no-delta re-run detector. It was computed from the CHECKOUT head, and
+            # the name and the value had drifted apart: PROD == DEV == this box, so
+            # $PROJECT_DIR is also a human working copy (see running_image_sha above).
+            # Anchoring the rollback on the checkout is the worse half of that: on
+            # 2026-08-21 a rollback would have reset to 32259eb — a tree the containers
+            # were never on, whose image is not in GHCR — so the rollback pull would
+            # fail and local-build on an already-stressed box, which is exactly the
+            # #528-B OOM path. The running container's tag is by construction an image
+            # that exists. Fall back to the checkout head when it cannot be established:
+            # that is precisely the pre-#1780 value, so this is never worse.
+            CHECKOUT_SHA=$(git rev-parse HEAD)
+            PREV_SHA="$CHECKOUT_SHA"
+            PREV_SRC="checkout HEAD"
+            if RUNNING_SHA=$(running_image_sha); then
+              PREV_SHA="$RUNNING_SHA"
+              PREV_SRC="running api image"
+            fi
+            echo "==> Pre-deploy SHA: ${PREV_SHA:0:7} (from the $PREV_SRC; checkout is at ${CHECKOUT_SHA:0:7})"
 
             # Hard-sync to origin/main — droplet is a deploy target, not a dev box.
             # Abort only if a TRACKED file was hot-patched live: that is the change
@@ -577,12 +596,12 @@ jobs:
             # downgrade, fall back to the prior blind origin/main behavior (never WORSE
             # than before — the pull's --build fallback still runs).
             #
-            # #1780 corrected the floor's ANCHOR. It read PREV_SHA (`git rev-parse HEAD`
-            # of the droplet checkout) as a stand-in for "what is running", but PROD ==
-            # DEV == this box: a human `git pull` in $PROJECT_DIR moves the checkout with
-            # no deploy behind it. See running_image_sha() above for the measured
-            # incident. The floor now anchors on the api container's own image tag and
-            # degrades to PREV_SHA only when that cannot be established.
+            # #1780 corrected what PREV_SHA IS. It was `git rev-parse HEAD` of the droplet
+            # checkout, used as a stand-in for "what is running", but PROD == DEV == this
+            # box: a human `git pull` in $PROJECT_DIR moves the checkout with no deploy
+            # behind it. See running_image_sha() above for the measured incident. It is
+            # now the running api container's image tag, degrading to the checkout head
+            # only when that cannot be established.
             #
             # NOTE: this rests on code-reasoning + review, NOT on a live deploy race
             # (which cannot be staged on the box); the SHA-selection core + the downgrade
@@ -611,24 +630,17 @@ jobs:
             # `!= PREV_SHA` guard keeps a same-SHA redeploy (not a downgrade) allowed; a
             # NEWER TARGET_SHA (PREV_SHA is its ancestor) makes --is-ancestor return non-zero
             # so the floor does not fire.
-            # #1780: anchor that floor on what is RUNNING, not on the checkout HEAD (see
-            # running_image_sha above for why the two diverge on this box). Both
-            # mis-anchored directions are real: a checkout pulled AHEAD of the containers
-            # refuses a valid upgrade (the 2026-08-21 incident), and a checkout left
-            # BEHIND them waves through a target strictly OLDER than what is running —
-            # the silent downgrade this floor exists to prevent. Both are covered by
+            # #1780: PREV_SHA is now the RUNNING sha (resolved above), so this floor asks
+            # the question it always meant to ask. Both mis-anchored directions were
+            # real: a checkout pulled AHEAD of the containers refused a valid upgrade
+            # (the 2026-08-21 incident), and a checkout left BEHIND them waved through a
+            # target strictly OLDER than what is running — the silent downgrade this
+            # floor exists to prevent. Both are covered by
             # scripts/test_deploy_sha_selection.sh Part 3.
-            FLOOR_SHA="$PREV_SHA"
-            FLOOR_SRC="checkout HEAD"
-            if RUNNING_SHA=$(running_image_sha); then
-              FLOOR_SHA="$RUNNING_SHA"
-              FLOOR_SRC="running api image"
-            fi
-            echo "==> Downgrade floor: ${FLOOR_SHA:0:7} (from the $FLOOR_SRC)"
-            if [ -n "$TARGET_SHA" ] && [ "$TARGET_SHA" != "$FLOOR_SHA" ] \
-               && git merge-base --is-ancestor "$TARGET_SHA" "$FLOOR_SHA"; then
-              echo "==> WARN: newest built ancestor ${TARGET_SHA:0:7} is OLDER than the $FLOOR_SRC ${FLOOR_SHA:0:7} — refusing to downgrade; using origin/main instead."
-              FALLBACK_REASON="the newest built ancestor (${TARGET_SHA:0:7}) is OLDER than the $FLOOR_SRC (${FLOOR_SHA:0:7}) and was refused as a downgrade"
+            if [ -n "$TARGET_SHA" ] && [ "$TARGET_SHA" != "$PREV_SHA" ] \
+               && git merge-base --is-ancestor "$TARGET_SHA" "$PREV_SHA"; then
+              echo "==> WARN: newest built ancestor ${TARGET_SHA:0:7} is OLDER than the $PREV_SRC ${PREV_SHA:0:7} — refusing to downgrade; using origin/main instead."
+              FALLBACK_REASON="the newest built ancestor (${TARGET_SHA:0:7}) is OLDER than the $PREV_SRC (${PREV_SHA:0:7}) and was refused as a downgrade"
               TARGET_SHA=""
             fi
             if [ -n "$TARGET_SHA" ]; then

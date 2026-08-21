@@ -100,11 +100,16 @@ done
 # ambient $BUILT_SET (via the image_exists stub), $PREV_SHA (the droplet CHECKOUT
 # head) and $RUNNING_SHA (#1780: what the api container is actually running, empty
 # when deploy.yml's running_image_sha() could not establish it).
+#
+# The `${RUNNING_SHA:-$PREV_SHA}` collapse mirrors deploy.yml, which performs it once
+# at the PREV_SHA assignment — so the SAME anchor is inherited by the floor below, by
+# rollback_to_prev's target and IMAGE_TAG, by the baked-image-input diff, and by the
+# no-delta re-run detector. deploy.yml's floor itself reads a plain $PREV_SHA.
 resolve_target() {
   _t=$(git rev-list --topo-order HEAD | head -n 30 | select_built_sha || true)
-  _floor="${RUNNING_SHA:-$PREV_SHA}"
-  if [ -n "$_t" ] && [ "$_t" != "$_floor" ] \
-     && git merge-base --is-ancestor "$_t" "$_floor"; then
+  _prev="${RUNNING_SHA:-$PREV_SHA}"
+  if [ -n "$_t" ] && [ "$_t" != "$_prev" ] \
+     && git merge-base --is-ancestor "$_t" "$_prev"; then
     _t=""   # strict downgrade -> refuse, fall back to blind origin/main
   fi
   echo "$_t"
