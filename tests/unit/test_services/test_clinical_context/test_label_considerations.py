@@ -419,3 +419,40 @@ def test_a_section_header_numbered_with_a_period_is_still_stripped():
     assert items[0].detail == "Do not combine the two forms."
     assert "DOSAGE AND ADMINISTRATION" not in items[0].detail
     assert "DOSAGE AND ADMINISTRATION" not in items[0].title
+
+
+@pytest.mark.unit
+def test_the_undecidable_inline_reference_is_bounded_to_mis_segmentation():
+    """codex iter-7 HIGH + MEDIUM, characterised rather than "fixed".
+
+    An inline reference naming its own section, after a sentence end and before a
+    capital, is byte-identical to a real terminal citation — olaparib's live label
+    writes exactly this shape as a genuine one. So this input IS split into two
+    considerations, and no rule can tell it apart without dropping olaparib's real
+    warnings, which is what requiring the spaced form was measured to do.
+
+    What this test pins is the BOUND, which is the part that must never regress: the
+    damage stays mis-segmentation. Every rendered detail is a contiguous verbatim run
+    of the section, and no item ever carries words from a bullet on the far side of
+    another item's citation. A split is recoverable by an analyst opening the PI; a
+    merge that puts one warning's words under another warning's citation is not.
+
+    codex's MEDIUM was the load-bearing half: the verbatim + adjacency audit CANNOT
+    catch this, because the mis-split detail is verbatim and its reference genuinely
+    is adjacent. The module docstring no longer claims otherwise.
+    """
+    section_text = (
+        "A: Monitor renal function. (5.1) Patients with renal impairment should "
+        "interrupt therapy. ( 5.2 )"
+    )
+    items = parse_label_considerations(
+        f"5 WARNINGS AND PRECAUTIONS {section_text}", WARNINGS_SECTION
+    )
+    assert items, "the bullet must not vanish"
+    for item in items:
+        assert item.detail in section_text, f"not a contiguous verbatim run: {item.detail!r}"
+    # No merge: no item may hold text from both sides of the inner reference.
+    for item in items:
+        assert not (
+            "Monitor renal function" in item.detail and "interrupt therapy" in item.detail
+        ), (item.title, item.references, item.detail)

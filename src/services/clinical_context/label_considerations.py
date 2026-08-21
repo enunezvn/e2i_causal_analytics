@@ -23,21 +23,39 @@ beginning at a ``5.1 Title`` subsection. Only the Highlights are parsed — the 
 text runs to many thousands of characters per subsection.
 
 KNOWN RESIDUAL, stated rather than papered over. openFDA returns ONE FLAT STRING per
-section — there is no Highlights field and no markup to recover — so bullet
-boundaries have to be inferred from the text. One shape is genuinely undecidable: a
-numbered list marker in prose is byte-identical to a real terminal citation when the
-number happens to name the enclosing section. Inside section 2, "Confirm baseline
-ECG. (2) Patients must have adequate counts" cannot be told apart from a bullet
-ending at its own "( 2 )" reference. Where it occurred the bullet would be truncated
-and carry a reference that is not its own.
+section — no Highlights field, no markup to recover — so bullet boundaries have to be
+inferred from the text, and one family of shapes is genuinely UNDECIDABLE. A
+parenthetical that names this section, sits after a sentence end and is followed by a
+capital is byte-identical whether it is the bullet's own terminal citation or an
+inline reference mid-bullet:
 
-Not reachable on anything we serve: across 8 live labels / 24 sections every bare
-section-naming candidate was a genuine terminal reference, never a list marker. It
-is also DETECTED rather than merely hoped about — the #1775 live certification
-re-fetches each label and asserts that every rendered detail is verbatim label text
-AND that its reference is printed adjacent to it, which fails loudly on exactly this
-shape. Inventing a rule to guess between the two would cost real bullets to defend
-against something the live labels do not do.
+    "... Discontinue if MDS/AML is confirmed. (5.1) • Pneumonitis: ..."   terminal
+    "... Monitor renal function. (5.1) Patients with renal impairment ..." inline
+
+The first is olaparib's real label. The second is the same shape used inline, and it
+would be split into two considerations with the first citing a reference it does not
+own. A numbered list marker — "Confirm baseline ECG. (2) Patients must ..." inside
+section 2 — is the same ambiguity again.
+
+Two things are NOT true of this residual, and both were claimed here before being
+checked:
+
+* It is NOT caught by the verbatim/adjacency audit. The mis-split item's detail IS
+  verbatim and IS immediately followed by the reference it was given, so every
+  dimension that audit measures passes (codex iter-7). Nothing downstream detects it.
+* It CANNOT be closed by requiring the spaced "( 5.1 )" form. That rule was written,
+  measured against 16 labels where all 160 terminal references were spaced, and
+  falsified by the 17th: olaparib mixes both forms INSIDE ONE SECTION, and the rule
+  silently dropped its MDS/AML and Pneumonitis warnings. Reverted.
+
+What is true is empirical and bounded: across 20 live labels / 60 sections / 176
+items, every bare section-naming candidate was a genuine terminal reference and the
+audit found zero verbatim, adjacency or header-leak violations. The damage if the
+shape ever appears is mis-SEGMENTATION — a bullet split, or its citation borrowed
+from an inline reference — never invented words, because every rendered character is
+a contiguous run of the section it is attributed to. Guessing between the two
+readings has now twice been measured to cost real safety warnings, which is a worse
+trade than the residual.
 """
 
 from __future__ import annotations
