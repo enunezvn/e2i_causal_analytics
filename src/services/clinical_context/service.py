@@ -79,42 +79,31 @@ _BrandFragmentTuple = Tuple[
 _FRAGMENT_TTL_DEGRADED_S = 600.0
 
 # THESE CACHES ARE PER-WORKER, AND THAT MAKES LATENCY HERE EASY TO MISREAD (#1768).
-# The API runs `--workers 2`, and every cache below is a plain module-level dict, so
-# each worker holds its own copy. Consequences, in order of how often they bite:
+# The API runs `--workers 2` and every cache below is a plain module-level dict, so
+# each worker holds its own copy. Two consequences:
 #
-#   1. A "cold vs warm" latency figure taken against this endpoint really measures
-#      WHICH WORKER ANSWERED, not whether the cache is warm. During #1763
-#      certification a 21.4s call was quoted as a slow warm hit; it was a cold miss
-#      on the other worker. Do not quote timings from this path without accounting
-#      for that — issue enough identical requests to fill every worker first.
-#   2. Two workers can in principle serve different answers for identical requests.
-#      Measured on 2026-08-21 after #1767 landed: 96 identical requests over three
-#      (brand, outcome, treatment) cases, on both warm and freshly-cold caches,
-#      produced ZERO divergence. The cold-fill COUNT was the control — two per
-#      case, read as "both workers were reached".
+#   1. A "cold vs warm" latency figure taken against this endpoint largely measures
+#      WHICH WORKER ANSWERED. During #1763 certification a 21.4s call was quoted as a
+#      slow warm hit; it was a cold miss on the other worker. Never quote a timing
+#      from this path without filling every worker first. Note also that the route
+#      does per-request work OUTSIDE these caches (`_list_dataset_brands` queries
+#      Supabase on every call), so a slow response is not on its own evidence of a
+#      cold cache here.
 #
-#      THAT READING HAS THREE PRECONDITIONS, all of which held for the recorded
-#      run, and all of which a re-run must reproduce or the control is void:
-#        - Requests must be SEQUENTIAL. None of these dicts is singleflighted, so
-#          two CONCURRENT requests for one key can both miss before either stores,
-#          and one worker would then produce two cold fills on its own.
-#        - The run must stay inside one cache generation: shorter than
-#          _FRAGMENT_TTL_DEGRADED_S if any fragment came back degraded, and well
-#          short of the ~1000 requests that recycle a worker. Either boundary
-#          crossed mid-run lets ONE worker legitimately cold-fill twice.
-#        - Every request must have the same shape, `include_causal_evidence`
-#          included, since that gates whether the evidence fan-out runs at all.
-#      The remaining exit — separate dicts filling on different calls, which would
-#      also give one worker two cold fills — is closed in-tree by
-#      test_one_process_cold_fills_a_repeated_request_exactly_once, which pins
-#      that every provider is exhausted by the FIRST call. Break that test and
-#      this measurement stops meaning what it says.
+#   2. Two workers can in principle serve different answers to one request. Measured
+#      after #1767 landed and NOT reproduced: 96 sequential requests across three
+#      (brand, outcome, treatment) cases, warm and freshly-cold, zero divergence. The
+#      full protocol, the preconditions that reading depends on, and the argument for
+#      rejecting a shared/Redis cache are recorded on #1768 rather than restated here.
+#      That cache would add serialization, a version-namespaced key and a
+#      cross-process downgrade guard to a fail-open path, to fix something not
+#      currently observable — so if divergence ever resurfaces, re-measure it against
+#      the protocol on #1768 before building it.
 #
-#      A shared/Redis cache was considered and rejected on that measurement — it
-#      would add serialization, a version-namespaced key and a cross-process
-#      downgrade guard to a fail-open path, to fix something not currently
-#      observable. If divergence ever does resurface, re-measure it the same way
-#      before building it.
+# test_one_process_cold_fills_a_repeated_request_exactly_once pins the one part of
+# that reasoning this module owns: a single process exhausts every provider on the
+# FIRST call for a given request shape, so these three dicts cannot fill on different
+# calls and a lone worker cannot cold-fill the same request twice.
 
 # Per-(brand,disease) cache of the BRAND-level fragments + the monotonic time the
 # entry was stored + whether it is fully live. Keyed by a tuple so every analysis

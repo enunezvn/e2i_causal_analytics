@@ -939,19 +939,20 @@ def test_one_process_cold_fills_a_repeated_request_exactly_once():
     """Every cache this service owns fills on the FIRST call for a given request
     shape -- no dict fills later than the others.
 
-    This pins the invariant that licenses the #1768 measurement. That measurement
-    counted SLOW responses to identical sequential requests and read the count as
-    the number of worker processes reached, on the reasoning that one process
-    cannot cold-fill the same key twice. The codex audit of #1786 was right that
-    the reasoning has a second exit: if `_FRAGMENT_CACHE`, `_CITATION_CACHE` and
-    `_EVIDENCE_CACHE` could fill on DIFFERENT calls, a single worker would also
-    produce two slow responses and the count would prove nothing about workers.
+    This pins the one part of the #1768 reasoning that THIS MODULE owns. That
+    measurement counted slow responses to identical sequential requests and read
+    the count as the number of workers reached, on the reasoning that one process
+    cannot cold-fill the same request twice. If `_FRAGMENT_CACHE`,
+    `_CITATION_CACHE` and `_EVIDENCE_CACHE` could fill on DIFFERENT calls, a lone
+    worker would produce two slow responses by itself and the count would prove
+    nothing. So assert it here, in-process, where worker count is fixed at one.
 
-    So assert it here, in-process, where worker count is fixed at one: after the
-    first call every provider is already at its final call count, and it stays
-    there. A future change that defers any fragment to a later request breaks
-    this test rather than silently invalidating the measurement in the comment
-    above the caches in service.py.
+    Deliberately NOT claimed: that a slow HTTP response implies a cold cache here.
+    The route does per-request work outside these dicts, so the end-to-end
+    inference has preconditions this test does not carry -- they live on #1768.
+    What breaking this test does mean is that a future change deferred a fragment
+    to a later call, which would invalidate the measurement rather than merely
+    slow things down.
     """
     counters = {
         "moa": {"n": 0},
