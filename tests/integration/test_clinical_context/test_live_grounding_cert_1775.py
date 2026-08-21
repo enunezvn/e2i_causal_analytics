@@ -81,7 +81,14 @@ def _expected_considerations(brand: str, outcome: str, label: dict) -> set[tuple
         label_considerations=tuple(items),
         label_source="openfda",
     )
-    return {(c.title, c.references, c.section) for c in grounding.label_considerations}
+    # `detail` is included ON PURPOSE. Comparing only (title, references, section)
+    # let a deployed build truncate or alter the text an analyst actually READS while
+    # still matching — and the docstring promised "match exactly" (codex iter-18
+    # MEDIUM). The detail is the only field carrying label content; leaving it out of
+    # an exactness check makes the check weaker than its own description.
+    return {
+        (c.title, c.references, c.section, _norm(c.detail)) for c in grounding.label_considerations
+    }
 
 
 @pytest.fixture(scope="module")
@@ -185,7 +192,7 @@ def test_the_deployed_grounding_matches_the_label_for_each_brand_and_outcome(
     )
     assert grounding is not None, f"{brand}/{outcome}: no grounding on the wire"
     served = {
-        (item["title"], item["references"], item["section"])
+        (item["title"], item["references"], item["section"], _norm(item["detail"]))
         for item in grounding["label_considerations"]
     }
     assert served == expected, (

@@ -525,8 +525,10 @@ export interface AnalysisGrounding {
   /** Label factors selected by the OUTCOME under analysis. A filtered view, not the
    * complete safety profile — `note` says so. */
   label_considerations: LabelConsideration[];
-  /** The same-class alternatives framed against the outcome: on a persistence
-   * question a switch is a competing risk, not a simple failure to persist. */
+  /** Alternatives APPROVED FOR THE SAME CONDITION, framed against the outcome: on a
+   * persistence question a switch is a competing risk, not a simple failure to
+   * persist. Not "same-class" — the curated map is keyed by disease, and for two of
+   * three brands the alternatives are a different pharmacological class entirely. */
   competitive_context?: string | null;
   note: string;
   /** `persistence` | `initiation` | '' when the outcome is unrecognised. */

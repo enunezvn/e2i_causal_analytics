@@ -6468,7 +6468,7 @@ export interface components {
             label_considerations?: components["schemas"]["LabelConsideration"][];
             /**
              * Competitive Context
-             * @description Same-class alternatives framed against the outcome: on a persistence question a switch is a competing risk, not a failure to persist.
+             * @description Alternatives APPROVED FOR THE SAME CONDITION, framed against the outcome: on a persistence question a switch is a competing risk, not a failure to persist. Not 'same-class', which is what this said and what the panel copy repeated — the curated map is keyed by DISEASE, and for two of three brands the alternatives are a different pharmacological class entirely.
              */
             competitive_context?: string | null;
             /**
