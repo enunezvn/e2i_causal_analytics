@@ -190,19 +190,30 @@ def _note(
     if treatment_context.kind == "commercial":
         # The #1763 boundary, kept exactly: the label is silent on the lever. What
         # changed is that we no longer stop at saying so.
+        boundary = (
+            f"{treatment_context.label} is a commercial access lever and the label says "
+            f"nothing about it; none of the above is a claim that the label speaks to "
+            f"{treatment_context.label.lower()}."
+        )
+        # The backdrop sentence tells the reader HOW TO READ THE ESTIMATE, so it may
+        # only be said once we know what the outcome asks. A `.get(theme, default)`
+        # kept asserting "the clinical picture that has nothing to do with access" for
+        # an outcome `_theme_for` had explicitly declined to map — the same
+        # borrowed-relevance defect as the competitive fallthrough, one function over
+        # (codex iter-10 HIGH). No theme now means the boundary is stated and nothing
+        # more is claimed.
         backdrop = {
             PERSISTENCE_THEME: "the reasons a patient stops that have nothing to do with access",
             INITIATION_THEME: (
                 "the clinical requirements for starting that have nothing to do with access"
             ),
-        }.get(theme, "the clinical picture that has nothing to do with access")
-        parts.append(
-            f"{treatment_context.label} is a commercial access lever and the label says "
-            f"nothing about it; none of the above is a claim that the label speaks to "
-            f"{treatment_context.label.lower()}. It is the clinical backdrop the lever "
-            f"operates against — {backdrop}, which an estimate of this lever has to be "
-            f"read alongside."
-        )
+        }.get(theme)
+        if backdrop:
+            boundary += (
+                f" It is the clinical backdrop the lever operates against — {backdrop}, "
+                f"which an estimate of this lever has to be read alongside."
+            )
+        parts.append(boundary)
     return " ".join(parts)
 
 

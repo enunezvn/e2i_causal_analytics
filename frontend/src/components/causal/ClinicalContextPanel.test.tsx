@@ -527,3 +527,54 @@ describe('ClinicalContextPanel grounding disclosure', () => {
     expect(screen.getByText(/unknown, not absent/i)).toBeInTheDocument();
   });
 });
+
+describe('ClinicalContextPanel grounding heading honesty', () => {
+  it('does not claim something bears on the analysis when nothing does', () => {
+    // codex iter-10 HIGH. The body correctly said "unknown, not absent" while the
+    // HEADING above it announced "What bears on this analysis" — a claim that
+    // something does. The earlier test passed for the wrong reason: it checked the
+    // disclosure appeared, never that the surrounding claim stayed honest.
+    render(
+      <ClinicalContextPanel
+        context={{
+          ...FULL,
+          analysis_grounding: {
+            label_considerations: [],
+            competitive_context: null,
+            note: 'The FDA label for Kisqali could not be read for factors bearing on 180-day treatment persistence, so what is missing here is unknown, not absent.',
+            outcome_theme: 'persistence',
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/unknown, not absent/i)).toBeInTheDocument();
+    expect(screen.queryByText(/what bears on this analysis/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/nothing established for this analysis/i)).toBeInTheDocument();
+  });
+
+  it('still uses the affirmative heading when there IS something', () => {
+    render(
+      <ClinicalContextPanel
+        context={{
+          ...FULL,
+          analysis_grounding: {
+            label_considerations: [
+              {
+                title: 'QT Interval Prolongation',
+                detail: 'Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.',
+                section: 'warnings_and_cautions',
+                references: '2.2 , 5.3',
+                source: 'openfda',
+              },
+            ],
+            competitive_context: null,
+            note: 'Label factors bearing on staying on therapy.',
+            outcome_theme: 'persistence',
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/what bears on this analysis/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing established for this analysis/i)).not.toBeInTheDocument();
+  });
+});

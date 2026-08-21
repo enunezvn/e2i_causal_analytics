@@ -328,3 +328,13 @@ def test_an_unmapped_outcome_gets_no_competitive_claim_either():
     assert grounding.competitive_context is None, grounding.competitive_context
     # the disclosure survives — it is the only thing left to render
     assert grounding.note
+    # codex iter-10 HIGH: this test asserted only that a note EXISTS while its
+    # docstring claimed "no grounding CLAIMS at all", so it passed while the note
+    # still told the reader how to read the estimate. The commercial paragraph kept
+    # a default backdrop — "the clinical picture that has nothing to do with access"
+    # — for a theme we never established.
+    assert "clinical backdrop" not in grounding.note.lower(), grounding.note
+    assert "read alongside" not in grounding.note.lower(), grounding.note
+    # the #1763 boundary must SURVIVE, though: the label is still silent on the lever
+    assert "commercial access lever" in grounding.note.lower()
+    assert "says nothing about it" in grounding.note.lower()

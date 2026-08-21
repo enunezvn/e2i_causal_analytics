@@ -218,7 +218,16 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           <div className="text-sm">
             <div className="flex items-center gap-1 text-muted-foreground">
               <ClipboardList className="h-3.5 w-3.5" />
-              What bears on this analysis
+              {/* The heading is a CLAIM. With nothing selected and no competitive
+                  framing, the body honestly said "unknown, not absent" underneath a
+                  header announcing that something bears on the analysis (codex
+                  iter-10 HIGH). The disclosure still renders — it is the only thing
+                  distinguishing "we read the label and found nothing" from "we could
+                  not read it" — but it no longer arrives under a claim it refutes. */}
+              {analysis_grounding.label_considerations.length > 0 ||
+              analysis_grounding.competitive_context
+                ? 'What bears on this analysis'
+                : 'Nothing established for this analysis'}
             </div>
             {analysis_grounding.label_considerations.length > 0 && (
               <ul className="mt-1 space-y-1">

@@ -10,11 +10,24 @@ All of that is already in the openFDA label we fetch for `approved_indications` 
 34 sections come back for ribociclib and we keep three. This module reads the ones
 that bear on the analysis and throws nothing else away.
 
-**Every item is VERBATIM label text carrying its own cross-reference.** No
-summarisation, no LLM, no derived clinical claim: a fabricated or truncated
-consideration would be exactly the plausible-but-wrong value CLAUDE.md forbids in a
-user-facing path. The reference (e.g. ``2.2 , 5.3``) lets an analyst open the
-prescribing information at the paragraph the sentence came from.
+**Every item's DETAIL is verbatim label text.** No summarisation, no LLM, no derived
+clinical claim: a fabricated or truncated consideration would be exactly the
+plausible-but-wrong value CLAUDE.md forbids in a user-facing path.
+
+The title and reference carry a weaker guarantee, stated here because an earlier
+version of this paragraph promised "every item is verbatim label text carrying its
+own cross-reference" and that was simply false for two of the three emitters (codex
+iter-8 and iter-10). Precisely:
+
+* ``detail`` — always a contiguous verbatim run of the section it is attributed to.
+* ``title`` — the bullet's own verbatim heading when it has one, otherwise this
+  module's plain name for the section ("Warnings and precautions"). Our words, chosen
+  so they cannot be mistaken for clinical content.
+* ``references`` — a real label cross-reference (e.g. ``2.2 , 5.3``) for Highlights
+  bullets, which lets an analyst open the prescribing information at the paragraph
+  the sentence came from. For ``boxed_warning_consideration`` it is the literal string
+  "Boxed warning": the boxed warning has no cross-reference of its own, and naming the
+  section it came from is the honest alternative to inventing one.
 
 Structure of the source text (verified against the live labels for all three
 brands, 2026-08-21): each section opens with a numbered ALL-CAPS header, then the
