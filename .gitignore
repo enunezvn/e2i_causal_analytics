@@ -269,3 +269,8 @@ data/synthetic/
 data/deployment_manifest.json
 # #840 prediction_synthesizer deploy outputs (env-specific, regenerated)
 data/model_artifacts/
+
+# Codex audit briefs written per-iteration into the worktree root. The existing
+# `.codex` rule does not match these filenames, so 14 of them reached main during
+# the #1775 audit rounds via `git add -A`.
+.codex_brief_*.md
