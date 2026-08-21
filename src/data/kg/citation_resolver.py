@@ -163,21 +163,41 @@ class CitationResolver:
         if self._owns_umls and self.umls is not None:
             self.umls.close()
 
+    def _resolve_with_reason(
+        self, identifier: str, identifier_kind: str
+    ) -> tuple[Optional[AbstractRecord], Optional[str]]:
+        """Resolve an abstract, keeping WHY it is missing.
+
+        Two very different outcomes both produce ``None`` (#1767):
+
+        - the source **raised** (transport error, HTTP >= 400, non-JSON) — the
+          abstract is UNKNOWN;
+        - the source **answered** and holds no abstract for this identifier — a
+          settled absence.
+
+        Collapsing them is what let a total Europe PMC outage be cached as "there
+        is no literature for this analysis". The second element is a reason string
+        when (and only when) the source raised.
+        """
+        if identifier_kind == "pmid":
+            try:
+                return self.europe_pmc.fetch_abstract(identifier), None
+            except EuropePMCError as exc:
+                logger.warning("Europe PMC fetch failed for PMID %s: %s", identifier, exc)
+                return None, f"Europe PMC unreachable: {exc}"
+        try:
+            return self.crossref.fetch_doi_metadata(identifier), None
+        except CrossrefError as exc:
+            logger.warning("Crossref fetch failed for DOI %s: %s", identifier, exc)
+            return None, f"Crossref unreachable: {exc}"
+
     def resolve_pmid(self, pmid: str) -> Optional[AbstractRecord]:
         """Fetch the abstract for a PMID. Returns None when unavailable."""
-        try:
-            return self.europe_pmc.fetch_abstract(pmid)
-        except EuropePMCError as exc:
-            logger.warning("Europe PMC fetch failed for PMID %s: %s", pmid, exc)
-            return None
+        return self._resolve_with_reason(pmid, "pmid")[0]
 
     def resolve_doi(self, doi: str) -> Optional[AbstractRecord]:
         """Fetch metadata + abstract for a DOI. Returns None when unavailable."""
-        try:
-            return self.crossref.fetch_doi_metadata(doi)
-        except CrossrefError as exc:
-            logger.warning("Crossref fetch failed for DOI %s: %s", doi, exc)
-            return None
+        return self._resolve_with_reason(doi, "doi")[0]
 
     def verify_citation(
         self,
@@ -205,7 +225,10 @@ class CitationResolver:
         Returns:
             ``CitationVerdict`` with the abstract-resolved flag, the
             entities found, the causal cue found (if any), and the
-            aggregated confidence.
+            aggregated confidence. When the abstract could not be resolved,
+            ``error`` is set if and only if the upstream RAISED — an
+            unresolved verdict with ``error is None`` means the source
+            answered and holds no abstract (#1767).
         """
         if identifier_kind not in ("pmid", "doi"):
             # Codex review MEDIUM (2026-05-08): preserve the original input
@@ -218,17 +241,17 @@ class CitationResolver:
                 abstract_resolved=False,
                 error=f"unsupported identifier_kind: {identifier_kind}",
             )
-        record = (
-            self.resolve_pmid(identifier)
-            if identifier_kind == "pmid"
-            else self.resolve_doi(identifier)
-        )
+        record, resolve_error = self._resolve_with_reason(identifier, identifier_kind)
         if record is None:
+            # ``error`` is set ONLY when the source raised. An unresolved abstract
+            # with ``error is None`` means the source answered and holds none —
+            # a settled negative that must not be reported as an outage.
             return CitationVerdict(
                 identifier=identifier,
                 identifier_kind=identifier_kind,  # type: ignore[arg-type]
                 abstract_resolved=False,
                 overall_confidence=0.0,
+                error=resolve_error,
             )
         # Build the candidate term lists for each entity. The preferred
         # name supplied by the caller is always included; UMLS preferred

@@ -176,6 +176,18 @@ class CitationVerdict:
     kind preserve the original input rather than masquerading as a PMID.
     Successful verdicts still always carry ``"pmid"`` or ``"doi"``;
     consumers should check ``error is None`` before trusting the kind.
+
+    ``error`` also carries the reason an abstract could not be resolved (#1767).
+    When ``abstract_resolved`` is False:
+
+    - ``error`` set   -> the source RAISED; the abstract is UNKNOWN;
+    - ``error`` None  -> the source ANSWERED and holds no abstract for this
+      identifier; the absence is settled.
+
+    Callers that report source health must honour that split in both
+    directions: reading an outage as "nothing found" hides a failure, and
+    reading a genuine no-abstract record as an outage slanders a healthy
+    source.
     """
 
     identifier: str

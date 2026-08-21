@@ -100,6 +100,15 @@ _SUMMARY_BUDGET_S = 16.0
 # exactly what CitationResolver scores 0.5 for (a causal cue adds more on top).
 _MIN_CITATION_CONFIDENCE = 0.5
 
+# Human-readable names for the machine-readable ``sources_unavailable`` keys. The
+# panel renders the note verbatim, so "europe_pmc was unreachable" would leak an
+# internal identifier at the exact moment we are asking the analyst to trust us.
+_SOURCE_DISPLAY = {
+    "open_targets": "Open Targets",
+    "pubmed": "PubMed",
+    "europe_pmc": "Europe PMC",
+}
+
 _FDA_LABEL_NOTE = (
     "Open Targets records the clinical stage per indication and lags the FDA "
     "label; approval status for this brand comes from the approved-use section of "
@@ -296,9 +305,20 @@ class CausalEvidenceProvider:
 
     # -- verified literature ----------------------------------------------------
 
-    def _citations(self, profile: BrandClinicalProfile, search_term: str) -> List[VerifiedCitation]:
+    def _citations(
+        self, profile: BrandClinicalProfile, search_term: str
+    ) -> tuple[List[VerifiedCitation], int]:
+        """Verified literature for this analysis, plus how many candidates we could
+        NOT check (#1767).
+
+        The second element is what separates "we searched and found nothing" from
+        "we could not complete the search". Only the first is a settled absence; the
+        second must degrade the fragment so it self-heals rather than being cached
+        as a fact about the literature.
+        """
         pmids = self._pubmed.search_pmids(search_term, retmax=_MAX_CANDIDATE_PMIDS)
         out: List[VerifiedCitation] = []
+        undetermined = 0
         started = time.monotonic()
         for attempt, pmid in enumerate(pmids):
             if len(out) >= _MAX_CITATIONS:
@@ -317,6 +337,9 @@ class CausalEvidenceProvider:
                 logger.info(
                     "causal-evidence: verification budget exhausted after %d citation(s)", len(out)
                 )
+                # Everything from this candidate on was never examined. Truncating
+                # the search is not the same as searching and finding nothing.
+                undetermined += len(pmids) - attempt
                 break
             try:
                 verdict = self._resolver.verify_citation(
@@ -329,10 +352,15 @@ class CausalEvidenceProvider:
                 )
             except Exception as exc:  # noqa: BLE001 — best-effort; skip this candidate
                 logger.warning("causal-evidence: verification failed for PMID %s: %s", pmid, exc)
+                undetermined += 1
                 continue
             # An unresolved abstract means "could not check", NOT "checked and weak" —
-            # it must never reach the panel as a weak-but-shown citation.
+            # it must never reach the panel as a weak-but-shown citation. The verdict's
+            # ``error`` is set only when the source RAISED; unset means the source
+            # answered and simply holds no abstract, which IS a settled negative.
             if not verdict.abstract_resolved:
+                if verdict.error:
+                    undetermined += 1
                 continue
             if verdict.overall_confidence < _MIN_CITATION_CONFIDENCE:
                 continue
@@ -359,7 +387,7 @@ class CausalEvidenceProvider:
                     source="pubmed+europepmc",
                 )
             )
-        return out
+        return out, undetermined
 
     # -- the public entry point -------------------------------------------------
 
@@ -411,11 +439,18 @@ class CausalEvidenceProvider:
                 edge = None
                 unavailable.append("open_targets")
         try:
-            citations = self._citations(profile, search_term)
+            citations, undetermined = self._citations(profile, search_term)
         except Exception as exc:  # noqa: BLE001 — best-effort; literature is optional
             logger.warning("causal-evidence: literature search failed for %r: %s", search_term, exc)
             citations = []
             unavailable.append("pubmed")
+        else:
+            # Nothing verified AND at least one candidate we could not check: the
+            # literature question is UNANSWERED, not answered "none". Disclosing it
+            # is also what keeps the service from caching this as a settled result
+            # for the worker's process lifetime (#1767).
+            if not citations and undetermined:
+                unavailable.append("europe_pmc")
         if edge is None and not citations:
             return CausalEvidenceFragment(
                 status="unavailable",
@@ -442,9 +477,11 @@ class CausalEvidenceProvider:
             notes.insert(0, _FDA_LABEL_NOTE)
         if unavailable:
             # An outage must not read as a settled absence.
+            names = [_SOURCE_DISPLAY.get(src, src) for src in unavailable]
+            verb = "was" if len(names) == 1 else "were"
             notes.insert(
                 0,
-                f"{' and '.join(unavailable)} was unreachable for this analysis, so what "
+                f"{' and '.join(names)} {verb} unreachable for this analysis, so what "
                 f"is missing below is unknown, not absent.",
             )
         return CausalEvidenceFragment(
