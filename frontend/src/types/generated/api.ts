@@ -6452,6 +6452,39 @@ export interface components {
             expected_response: number;
         };
         /**
+         * AnalysisGrounding
+         * @description Clinical grounding for ONE (treatment -> outcome) analysis (#1775).
+         *
+         *     #1763 made the panel follow the analysis for therapy and covariate treatments
+         *     but answered COMMERCIAL levers with a refusal, which on patient_journeys is 5 of
+         *     the 10 selectable treatments. Declining to claim the label speaks to a lever is
+         *     right; declining to ground the analysis was not.
+         */
+        AnalysisGrounding: {
+            /**
+             * Label Considerations
+             * @description Label factors selected by the OUTCOME under analysis. A filtered view, not the complete safety profile — `note` says so.
+             */
+            label_considerations?: components["schemas"]["LabelConsideration"][];
+            /**
+             * Competitive Context
+             * @description Same-class alternatives framed against the outcome: on a persistence question a switch is a competing risk, not a failure to persist.
+             */
+            competitive_context?: string | null;
+            /**
+             * Note
+             * @description States the outcome filter, and for a commercial lever states that the label says nothing about the lever and none of this claims otherwise.
+             * @default
+             */
+            note: string;
+            /**
+             * Outcome Theme
+             * @description 'persistence' | 'initiation' | '' if unrecognised
+             * @default
+             */
+            outcome_theme: string;
+        };
+        /**
          * AnalysisMethod
          * @description Analysis methods.
          * @enum {string}
@@ -7653,6 +7686,8 @@ export interface components {
              * @description The real pivotal-endpoint framing our synthetic outcome stands in for (None when unmapped).
              */
             mapped_endpoint?: string | null;
+            /** @description Clinical grounding for this specific analysis: verbatim label factors selected by the outcome, plus the competitive framing. None on the brand-level view (no scenario to ground). */
+            analysis_grounding?: components["schemas"]["AnalysisGrounding"] | null;
             mechanism: components["schemas"]["MechanismOfAction"];
             pivotal_endpoints: components["schemas"]["PivotalEndpoint"];
             /** @description A real cited RWE reference; None when none was found. */
@@ -12695,6 +12730,42 @@ export interface components {
              * @description When applied
              */
             applied_at?: string | null;
+        };
+        /**
+         * LabelConsideration
+         * @description One VERBATIM bullet from the FDA label, with the section it came from.
+         *
+         *     Never summarised and never generated: a paraphrased clinical consideration is
+         *     the plausible-but-wrong value CLAUDE.md forbids in a user-facing path. The
+         *     reference lets an analyst open the prescribing information at that paragraph.
+         */
+        LabelConsideration: {
+            /**
+             * Title
+             * @description The bullet's heading, or the section name
+             */
+            title: string;
+            /**
+             * Detail
+             * @description Verbatim label text
+             */
+            detail: string;
+            /**
+             * Section
+             * @description openFDA section key, e.g. warnings_and_cautions
+             */
+            section: string;
+            /**
+             * References
+             * @description Label cross-reference, e.g. '2.2 , 5.3'
+             */
+            references: string;
+            /**
+             * Source
+             * @description Always openfda for label text
+             * @default openfda
+             */
+            source: string;
         };
         /**
          * LatencyBreakdown

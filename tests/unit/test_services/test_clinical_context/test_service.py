@@ -883,3 +883,23 @@ def test_grounding_never_asserts_the_label_speaks_to_the_lever():
     note = ctx["analysis_grounding"]["note"].lower()
     assert "says nothing about" in note
     assert "not the complete" in note
+
+
+def test_grounding_survives_the_api_response_model():
+    """#1775 wire guard. `response_model=ClinicalContext` DROPS any key the Pydantic
+    schema does not declare, so the whole grounding feature shipped invisibly to the
+    panel until the schema knew about it — a green backend and an unchanged UI.
+    Verified by construction: this test failed before AnalysisGrounding existed."""
+    from src.api.schemas.causal import ClinicalContext
+
+    payload = _svc_with_label_considerations().get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support"
+    )
+    dumped = ClinicalContext.model_validate(payload).model_dump()
+    grounding = dumped.get("analysis_grounding")
+    assert grounding is not None, "response_model stripped analysis_grounding"
+    # POSITIVE CONTROL: a present-but-empty block would satisfy `is not None`.
+    assert len(grounding["label_considerations"]) >= 1
+    first = grounding["label_considerations"][0]
+    assert first["references"] and first["detail"] and first["source"] == "openfda"
+    assert grounding["competitive_context"]

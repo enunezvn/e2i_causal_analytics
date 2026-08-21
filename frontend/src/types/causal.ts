@@ -499,6 +499,33 @@ export interface CompetitorLandscape {
  * `honesty_label` states the boundary: estimate = synthetic cohort; context =
  * real, cited. A `static_fallback` source means the live API was unreachable.
  */
+/** One verbatim bullet from the FDA label, carrying the section it came from so an
+ * analyst can open the prescribing information at that paragraph. Never summarised. */
+export interface LabelConsideration {
+  /** The bullet's own heading, or the section name when it carries none. */
+  title: string;
+  /** Verbatim label text. */
+  detail: string;
+  /** openFDA section key, e.g. `warnings_and_cautions`. */
+  section: string;
+  /** Label cross-reference, e.g. `2.2 , 5.3`. */
+  references: string;
+  source: string;
+}
+
+/** Clinical grounding for one causal scenario (#1775). */
+export interface AnalysisGrounding {
+  /** Label factors selected by the OUTCOME under analysis. A filtered view, not the
+   * complete safety profile — `note` says so. */
+  label_considerations: LabelConsideration[];
+  /** The same-class alternatives framed against the outcome: on a persistence
+   * question a switch is a competing risk, not a simple failure to persist. */
+  competitive_context?: string | null;
+  note: string;
+  /** `persistence` | `initiation` | '' when the outcome is unrecognised. */
+  outcome_theme: string;
+}
+
 export interface ClinicalContext {
   brand: string;
   drug_name: string;
@@ -528,6 +555,12 @@ export interface ClinicalContext {
   competitor_landscape?: CompetitorLandscape | null;
   /** Public-KG evidence for this specific analysis; null without a treatment. */
   causal_evidence?: CausalEvidence | null;
+  /** #1775 — clinical grounding for THIS treatment -> outcome pair: verbatim label
+   * factors selected by the outcome, plus the competitive framing. Null without a
+   * treatment (no scenario to ground). Present for commercial levers too: declining
+   * to claim the label speaks to a lever is right, declining to ground the analysis
+   * was not. */
+  analysis_grounding?: AnalysisGrounding | null;
   honesty_label: string;
 }
 

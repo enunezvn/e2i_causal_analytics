@@ -441,3 +441,62 @@ describe('ClinicalContextPanel — citation provenance chips (#1763)', () => {
     expect(screen.getByText(/RIBOCICLIB SUCCINATE/i)).toBeInTheDocument();
   });
 });
+
+describe('#1775 — grounding the causal scenario', () => {
+  const GROUNDED: ClinicalContext = {
+    ...FULL,
+    our_treatment: 'copay_support',
+    analysis_grounding: {
+      label_considerations: [
+        {
+          title: 'QT Interval Prolongation',
+          detail: 'Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.',
+          section: 'warnings_and_cautions',
+          references: '2.2 , 5.3',
+          source: 'openfda',
+        },
+        {
+          title: 'Dosage and administration',
+          detail:
+            'Dose interruption, reduction, and/or discontinuation may be required based on individual safety and tolerability.',
+          section: 'dosage_and_administration',
+          references: '2.2',
+          source: 'openfda',
+        },
+      ],
+      competitive_context:
+        'A patient who stops ribociclib in breast cancer has alternatives within the same class: Ibrance (palbociclib), Verzenio (abemaciclib). A switch to one of these is a competing risk for this outcome.',
+      note: 'Label factors bearing on staying on therapy ... This is a filtered view, not the complete safety profile. Copay support is a commercial access lever and the label says nothing about it.',
+      outcome_theme: 'persistence',
+    },
+  };
+
+  it('grounds a COMMERCIAL analysis instead of only refusing', () => {
+    render(<ClinicalContextPanel context={GROUNDED} />);
+    expect(screen.getByText(/what bears on this analysis/i)).toBeInTheDocument();
+    expect(screen.getByText(/QT Interval Prolongation/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Dose interruption, reduction, and\/or discontinuation/)
+    ).toBeInTheDocument();
+  });
+
+  it('cites the label section each consideration came from', () => {
+    render(<ClinicalContextPanel context={GROUNDED} />);
+    expect(screen.getByText(/label 2\.2 , 5\.3/)).toBeInTheDocument();
+  });
+
+  it('frames the competitor set as a competing risk for the outcome', () => {
+    render(<ClinicalContextPanel context={GROUNDED} />);
+    expect(screen.getByText(/competing risk for this outcome/i)).toBeInTheDocument();
+  });
+
+  it('keeps the boundary: the label says nothing about the lever', () => {
+    render(<ClinicalContextPanel context={GROUNDED} />);
+    expect(screen.getByText(/the label says nothing about it/i)).toBeInTheDocument();
+  });
+
+  it('renders nothing when there is no scenario to ground', () => {
+    render(<ClinicalContextPanel context={{ ...FULL, analysis_grounding: null }} />);
+    expect(screen.queryByText(/what bears on this analysis/i)).not.toBeInTheDocument();
+  });
+});

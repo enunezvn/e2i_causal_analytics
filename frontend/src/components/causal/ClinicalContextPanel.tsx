@@ -15,6 +15,7 @@
 import {
   BookText,
   Building2,
+  ClipboardList,
   ExternalLink,
   FlaskConical,
   Microscope,
@@ -107,6 +108,7 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
     treatment_context,
     analysis_framing,
     causal_evidence,
+    analysis_grounding,
   } = context;
   // Provenance-aware copy: the endpoint section renders for BOTH the live CT.gov
   // result and the curated static fallback, so the explanatory text must not claim
@@ -192,6 +194,43 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           </p>
         </div>
       )}
+
+      {/* #1775 — clinical grounding for THIS scenario. Verbatim label factors chosen
+          by the OUTCOME (what drives stopping, or what gates starting) plus the
+          competitive framing. Shown for commercial levers too: the panel used to
+          answer a copay-support question with a refusal and stop there, which is the
+          "accurate but isolated" complaint #1763 was filed about, still live for half
+          the treatment space. The note carries the boundary — the label says nothing
+          about the lever — so nothing here reads as a regulatory claim about it. */}
+      {analysis_grounding &&
+        (analysis_grounding.label_considerations.length > 0 ||
+          analysis_grounding.competitive_context) && (
+          <div className="text-sm">
+            <div className="flex items-center gap-1 text-muted-foreground">
+              <ClipboardList className="h-3.5 w-3.5" />
+              What bears on this analysis
+            </div>
+            {analysis_grounding.label_considerations.length > 0 && (
+              <ul className="mt-1 space-y-1">
+                {analysis_grounding.label_considerations.map((consideration) => (
+                  <li key={`${consideration.section}-${consideration.references}-${consideration.title}`}>
+                    <span className="font-medium">{consideration.title}</span>
+                    <span className="text-muted-foreground"> — {consideration.detail}</span>
+                    <Badge variant="outline" className="ml-2 align-middle text-xs">
+                      label {consideration.references}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {analysis_grounding.competitive_context && (
+              <p className="mt-1">{analysis_grounding.competitive_context}</p>
+            )}
+            {analysis_grounding.note && (
+              <p className="mt-1 text-xs text-muted-foreground">{analysis_grounding.note}</p>
+            )}
+          </div>
+        )}
 
       {/* Public-KG evidence for THIS analysis: the Open Targets indication edge and
           literature whose abstracts were verified to name both entities. A commercial
