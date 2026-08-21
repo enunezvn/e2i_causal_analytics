@@ -716,3 +716,146 @@ def test_the_europe_pmc_timeout_matches_what_the_upstream_actually_takes():
     assert ev_mod._EUROPE_PMC_TIMEOUT_S >= 18.0
     # And the budget must leave room for at least one full call to finish.
     assert ev_mod._VERIFICATION_BUDGET_S >= ev_mod._EUROPE_PMC_TIMEOUT_S
+
+
+# --- #1767: "we could not check" is not "there is nothing" ----------------------
+
+
+def _unresolved(pmid, *, error):
+    """A candidate whose abstract did not resolve. ``error`` is what separates an
+    outage (Europe PMC raised) from a settled absence (no abstract on record)."""
+    return CitationVerdict(
+        identifier=pmid,
+        identifier_kind="pmid",
+        abstract_resolved=False,
+        entities_found=(),
+        causal_cue_found=None,
+        overall_confidence=0.0,
+        error=error,
+    )
+
+
+class _BoomResolver:
+    def verify_citation(self, identifier, **kw):
+        raise RuntimeError("europe pmc connection reset")
+
+
+@pytest.mark.unit
+def test_a_europe_pmc_outage_is_disclosed_not_read_as_no_literature():
+    """THE #1767 REGRESSION. Every candidate came back unchecked because Europe PMC
+    was down, the Open Targets edge succeeded, and the fragment reported
+    status='evidence' with zero citations and an EMPTY sources_unavailable. That
+    makes ``complete`` True in the service, which pins "there is no literature for
+    this analysis" for the whole worker process."""
+    profile = resolve_brand_profile("Kisqali")
+    resolver = _FakeResolver(
+        {p: _unresolved(p, error="Europe PMC transport error") for p in ("1", "2", "3")}
+    )
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2", "3"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.citations == []
+    assert "europe_pmc" in frag.sources_unavailable
+    assert "unreachable" in frag.note.lower()
+
+
+@pytest.mark.unit
+def test_a_pmid_with_no_abstract_on_record_is_a_settled_negative():
+    """The opposite direction, and just as important: Europe PMC ANSWERED and holds
+    no abstract for these PMIDs. Reporting a healthy source as unavailable would be
+    the same dishonesty inverted, and would make the fragment self-heal forever."""
+    profile = resolve_brand_profile("Kisqali")
+    resolver = _FakeResolver({p: _unresolved(p, error=None) for p in ("1", "2")})
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.citations == []
+    assert frag.sources_unavailable == ()
+
+
+@pytest.mark.unit
+def test_a_checked_but_weak_citation_is_not_an_outage():
+    """Confidence below the bar is a real answer about a resolved abstract."""
+    profile = resolve_brand_profile("Kisqali")
+    resolver = _FakeResolver({"1": _verdict("1", 0.2), "2": _verdict("2", 0.1)})
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.citations == []
+    assert frag.sources_unavailable == ()
+
+
+@pytest.mark.unit
+def test_a_verification_that_raised_counts_as_could_not_check():
+    """The per-candidate ``except ... continue``. It swallowed the exception without
+    recording anything, so an outage arriving as an exception was invisible too."""
+    profile = resolve_brand_profile("Kisqali")
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1"]), resolver=_BoomResolver()).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.citations == []
+    assert "europe_pmc" in frag.sources_unavailable
+
+
+@pytest.mark.unit
+def test_candidates_the_budget_never_reached_are_not_a_settled_absence(monkeypatch):
+    """Truncating the search is not the same as searching and finding nothing."""
+    import src.services.clinical_context.causal_evidence as ev_mod
+
+    monkeypatch.setattr(ev_mod, "_VERIFICATION_BUDGET_S", 0.0)
+    profile = resolve_brand_profile("Kisqali")
+    # Candidate "1" is a settled weak answer; "2" and "3" are never examined.
+    resolver = _FakeResolver({"1": _verdict("1", 0.2)})
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2", "3"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.citations == []
+    assert "europe_pmc" in frag.sources_unavailable
+
+
+@pytest.mark.unit
+def test_a_verified_citation_settles_the_literature_check():
+    """Something verified, so the block has literature to show. A partial miss must
+    not degrade a fragment that answered the question."""
+    profile = resolve_brand_profile("Kisqali")
+    resolver = _FakeResolver(
+        {"1": _verdict("1", 0.9), "2": _unresolved("2", error="Europe PMC transport error")}
+    )
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert [c.pmid for c in frag.citations] == ["1"]
+    assert frag.sources_unavailable == ()
+
+
+@pytest.mark.unit
+def test_pubmed_returning_no_candidates_at_all_stays_a_settled_absence():
+    """No candidate was undetermined because there was no candidate. The literature
+    search itself answered; that is not a Europe PMC outage."""
+    profile = resolve_brand_profile("Kisqali")
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=[]), resolver=_FakeResolver()).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.citations == []
+    assert frag.sources_unavailable == ()

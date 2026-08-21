@@ -403,3 +403,70 @@ def test_find_causal_cue_finds_multi_word_phrase() -> None:
     them in natural-language abstracts."""
     haystack = "ibuprofen treatment leads to improved outcomes".lower()
     assert _find_causal_cue(haystack) == "leads to"
+
+
+# --- #1767: an outage and a settled absence must not look identical -------------
+
+
+class _BrokenEuropePMC:
+    """Europe PMC raised — the abstract is UNKNOWN, not absent."""
+
+    def fetch_abstract(self, pmid: str) -> Optional[AbstractRecord]:
+        from src.data.kg.europe_pmc import EuropePMCError
+
+        raise EuropePMCError("simulated read timeout")
+
+    def close(self) -> None:
+        pass
+
+
+class _BrokenCrossref:
+    def fetch_doi_metadata(self, doi: str) -> Optional[AbstractRecord]:
+        from src.data.kg.crossref import CrossrefError
+
+        raise CrossrefError("simulated read timeout")
+
+    def close(self) -> None:
+        pass
+
+
+def test_verify_citation_records_the_error_when_europe_pmc_was_unreachable() -> None:
+    """#1767. ``resolve_pmid`` swallows ``EuropePMCError`` and returns None, and a
+    PMID that Europe PMC simply holds no abstract for ALSO returns None. Both land
+    on ``abstract_resolved=False`` with ``error=None``, so no caller can tell an
+    outage from a settled absence. That is what let a total Europe PMC outage be
+    cached as "there is no literature for this analysis"."""
+    verdict = _resolver(europe_pmc=_BrokenEuropePMC()).verify_citation(  # type: ignore[arg-type]
+        "12345678",
+        subject_name="ribociclib",
+        object_name="breast cancer",
+    )
+    assert not verdict.abstract_resolved
+    assert verdict.error is not None
+    assert "europe pmc" in verdict.error.lower()
+
+
+def test_verify_citation_leaves_error_unset_when_the_record_has_no_abstract() -> None:
+    """The other half of the same distinction. Europe PMC ANSWERED and holds no
+    abstract for this PMID: a settled negative. Reporting a healthy source as
+    unavailable is the same dishonesty pointing the other way."""
+    verdict = _resolver(europe_pmc=_StubEuropePMC()).verify_citation(
+        "12345678",
+        subject_name="ribociclib",
+        object_name="breast cancer",
+    )
+    assert not verdict.abstract_resolved
+    assert verdict.error is None
+
+
+def test_verify_citation_records_the_error_when_crossref_was_unreachable() -> None:
+    """The DOI arm collapses the same two cases in ``resolve_doi``."""
+    verdict = _resolver(crossref=_BrokenCrossref()).verify_citation(  # type: ignore[arg-type]
+        "10.1234/abc",
+        identifier_kind="doi",
+        subject_name="ribociclib",
+        object_name="breast cancer",
+    )
+    assert not verdict.abstract_resolved
+    assert verdict.error is not None
+    assert "crossref" in verdict.error.lower()
