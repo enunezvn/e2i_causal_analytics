@@ -52,10 +52,18 @@ What is true is empirical and bounded: across 20 live labels / 60 sections / 176
 items, every bare section-naming candidate was a genuine terminal reference and the
 audit found zero verbatim, adjacency or header-leak violations. The damage if the
 shape ever appears is mis-SEGMENTATION — a bullet split, or its citation borrowed
-from an inline reference — never invented words, because every rendered character is
-a contiguous run of the section it is attributed to. Guessing between the two
-readings has now twice been measured to cost real safety warnings, which is a worse
-trade than the residual.
+from an inline reference — never invented clinical text, because every rendered
+DETAIL is a contiguous verbatim run of the section it is attributed to.
+
+That bound covers the detail, and only the detail. A TITLE is either the bullet's own
+verbatim heading or, when the bullet carries none, this module's plain name for the
+section ("Warnings and precautions" from SECTION_DISPLAY) — our words, not the
+label's, and chosen so they cannot be mistaken for clinical content (codex iter-8
+HIGH: the earlier wording claimed verbatim for both). `boxed_warning_consideration`
+is the same shape: verbatim detail under a section-name title.
+
+Guessing between the two readings has now twice been measured to cost real safety
+warnings, which is a worse trade than the residual.
 """
 
 from __future__ import annotations
@@ -117,7 +125,14 @@ _SECTION_NUMBERS = {
 # ANY numeric parenthetical is a CANDIDATE terminator. Whether it actually ends a
 # bullet is decided in the scan below, not by the pattern — see
 # ``parse_label_considerations`` for why that separation matters.
-_CANDIDATE = re.compile(r"\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s*\)")
+# Separators seen between reference numbers: commas, and hyphen/dash ranges. A range
+# was invisible to this pattern, which made a terminal "( 5.1-5.3 )" invisible BOTH as
+# a boundary and to the self-reference invariant that backstops it — the one
+# combination left that produced a MERGE (codex iter-8 HIGH). Widening what counts as
+# a candidate is additive: it can only make a reference visible, never hide one. That
+# is why it is safe where the spaced-form rule was not.
+_REF_SEPARATOR = r"(?:\s*[,\u2010-\u2015-]\s*)"
+_CANDIDATE = re.compile(rf"\(\s*(?P<refs>\d+(?:\.\d+)?(?:{_REF_SEPARATOR}\d+(?:\.\d+)?)*)\s*\)")
 
 # A candidate that ends the region, or is followed by the next bullet's capitalised
 # title, is SHAPED like a boundary. One followed by lowercase continuation is prose
@@ -196,7 +211,7 @@ def _references_name_this_section(references: str, section: str) -> bool:
     own = _SECTION_NUMBERS.get(section)
     if own is None:
         return True
-    return any(ref.split(".")[0] == own for ref in re.split(r"\s*,\s*", references) if ref)
+    return any(ref.split(".")[0] == own for ref in re.split(_REF_SEPARATOR, references) if ref)
 
 
 def _strip_section_header(text: str, section: str) -> str:

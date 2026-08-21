@@ -127,7 +127,14 @@ def _competitive_context(profile: BrandClinicalProfile, theme: str) -> Optional[
             f"against the same-class alternatives {listed}. Which therapy a patient starts "
             f"is confounding structure for any effect estimated here."
         )
-    return f"Same-class alternatives in {profile.disease_search_term}: {listed}."
+    # No theme means we never established what the analysis asks, so there is nothing
+    # to say bears on it. This used to fall through to "Same-class alternatives in
+    # X: ..." which the panel renders under the heading "What bears on this analysis"
+    # — asserting relevance to an outcome the code explicitly declined to map, which
+    # is the borrowed-relevance complaint #1763 was filed about (codex iter-8 HIGH).
+    # `_select` already returns nothing here; this makes the two consistent. The
+    # honest note still renders and says what was and was not established.
+    return None
 
 
 def _note(

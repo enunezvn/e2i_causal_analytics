@@ -301,3 +301,30 @@ def test_a_bare_clinical_reduction_does_not_count_as_a_persistence_factor():
     )
     g = _ground("copay_support", considerations=(item,))
     assert g.label_considerations == ()
+
+
+@pytest.mark.unit
+def test_an_unmapped_outcome_gets_no_competitive_claim_either():
+    """codex iter-8 HIGH. `_select` correctly returns nothing for an outcome we never
+    mapped, but `_competitive_context` fell through to a generic "Same-class
+    alternatives in X: ..." — and the panel renders that under the heading "What
+    bears on this analysis". Asserting that competitors bear on an outcome the code
+    explicitly declined to map is borrowed relevance, which is the exact complaint
+    #1763 was filed about.
+
+    No theme means no grounding CLAIMS at all. The honest note still renders, and
+    says what was and was not established.
+    """
+    profile = resolve_brand_profile("Kisqali")
+    grounding = ground_analysis(
+        profile,
+        outcome="some_unmapped_outcome",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(),
+        label_source="openfda",
+    )
+    assert grounding.outcome_theme == ""
+    assert grounding.label_considerations == ()
+    assert grounding.competitive_context is None, grounding.competitive_context
+    # the disclosure survives — it is the only thing left to render
+    assert grounding.note

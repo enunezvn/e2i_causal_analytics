@@ -202,10 +202,19 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           answer a copay-support question with a refusal and stop there, which is the
           "accurate but isolated" complaint #1763 was filed about, still live for half
           the treatment space. The note carries the boundary — the label says nothing
-          about the lever — so nothing here reads as a regulatory claim about it. */}
+          about the lever — so nothing here reads as a regulatory claim about it.
+
+          The `note` alone is enough to render this block. It is the only thing that
+          separates "the label was read and carries nothing bearing on this outcome"
+          from "we could not read the label" (#1767), so gating it behind
+          considerations-or-competitors removed the disclosure in exactly the case it
+          exists for. Every curated brand currently has competitors, which made that
+          honesty accidental rather than structural — one brand added without a
+          competitor map would have silently dropped it. */}
       {analysis_grounding &&
         (analysis_grounding.label_considerations.length > 0 ||
-          analysis_grounding.competitive_context) && (
+          analysis_grounding.competitive_context ||
+          analysis_grounding.note) && (
           <div className="text-sm">
             <div className="flex items-center gap-1 text-muted-foreground">
               <ClipboardList className="h-3.5 w-3.5" />

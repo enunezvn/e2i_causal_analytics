@@ -500,3 +500,30 @@ describe('#1775 — grounding the causal scenario', () => {
     expect(screen.queryByText(/what bears on this analysis/i)).not.toBeInTheDocument();
   });
 });
+
+describe('ClinicalContextPanel grounding disclosure', () => {
+  it('still shows the note when there is nothing to ground on', () => {
+    // The note is the ONLY thing that separates "the label was read and carries
+    // nothing bearing on this outcome" from "we could not read the label" (#1767).
+    // Gating the block on considerations-or-competitors meant that disclosure
+    // vanished in exactly the case it exists for. Today every curated brand has
+    // competitors so this never fired in production — the honesty was accidental,
+    // not structural, and one brand added without a competitor map would have
+    // silently removed it.
+    render(
+      <ClinicalContextPanel
+        context={{
+          ...FULL,
+          analysis_grounding: {
+            label_considerations: [],
+            competitive_context: null,
+            note: 'The FDA label for Kisqali could not be read for factors bearing on 180-day treatment persistence, so what is missing here is unknown, not absent.',
+            outcome_theme: 'persistence',
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/could not be read/i)).toBeInTheDocument();
+    expect(screen.getByText(/unknown, not absent/i)).toBeInTheDocument();
+  });
+});

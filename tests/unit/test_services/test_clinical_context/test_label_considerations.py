@@ -456,3 +456,25 @@ def test_the_undecidable_inline_reference_is_bounded_to_mis_segmentation():
         assert not (
             "Monitor renal function" in item.detail and "interrupt therapy" in item.detail
         ), (item.title, item.references, item.detail)
+
+
+@pytest.mark.unit
+def test_a_range_form_reference_terminates_its_bullet_instead_of_merging():
+    """codex iter-8 HIGH. `_CANDIDATE` matched comma lists but not ranges, so a
+    terminal "( 5.1-5.3 )" was invisible BOTH as a boundary and to the self-reference
+    invariant that backstops it — the one combination that still produced a MERGE,
+    which is the failure class this module refuses. Bullet A's words came out inside
+    bullet B under B's citation.
+
+    Not found on any of the 20 live labels (0 range references across 60 sections),
+    but widening what counts as a candidate is additive: it can only make a reference
+    visible, never hide one, which is why it is safe where the spaced-form rule was
+    not.
+    """
+    text = "5 WARNINGS AND PRECAUTIONS A: Keep this. ( 5.1-5.3 ) B: Monitor next. ( 5.4 )"
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert [(i.title, i.references) for i in items] == [("A", "5.1-5.3"), ("B", "5.4")], [
+        (i.title, i.references, i.detail) for i in items
+    ]
+    for item in items:
+        assert not ("Keep this" in item.detail and "Monitor next" in item.detail)
