@@ -105,3 +105,75 @@ def test_discovered_effect_embeds_clinical_context_forward_ref():
     dumped = e.model_dump()
     assert dumped["clinical_context"]["approved_indications"]["source"] == "openfda"
     assert dumped["clinical_context"]["competitor_landscape"]["source"] == "curated"
+
+
+# --- #1763: the analysis frame is part of the wire contract ---
+
+
+@pytest.mark.unit
+def test_treatment_context_model_round_trips_on_clinical_context():
+    from src.api.schemas.causal import TreatmentContext
+
+    ctx = _clinical_context().model_copy(
+        update={
+            "our_treatment": "treatment_arm",
+            "treatment_context": TreatmentContext(
+                column="treatment_arm",
+                label="Treatment arm",
+                framing="being on a ribociclib-containing regimen",
+                kind="drug_therapy",
+                source="curated",
+            ),
+            "analysis_framing": (
+                "This analysis estimates the effect of being on a ribociclib-containing "
+                "regimen on 180-day treatment persistence for ribociclib in Malignant "
+                "neoplasm of breast."
+            ),
+        }
+    )
+    dumped = ctx.model_dump()
+    assert dumped["our_treatment"] == "treatment_arm"
+    assert dumped["treatment_context"]["kind"] == "drug_therapy"
+    assert dumped["analysis_framing"].startswith("This analysis estimates the effect of ")
+
+
+@pytest.mark.unit
+def test_analysis_fields_are_optional_and_default_to_none():
+    """A brand-level payload (no treatment) must still validate — the panel then
+    renders exactly as it did before #1763."""
+    ctx = _clinical_context()
+    assert ctx.our_treatment is None
+    assert ctx.treatment_context is None
+    assert ctx.analysis_framing is None
+
+
+@pytest.mark.unit
+def test_clinical_context_validates_a_raw_service_payload_with_the_new_keys():
+    """Pydantic v2 defaults to extra='ignore' — an undeclared key is dropped
+    silently. Validate from a RAW dict (as the route does) so a missing field
+    declaration fails here instead of vanishing on the wire."""
+    payload = _clinical_context().model_dump()
+    payload["our_treatment"] = "copay_support"
+    payload["treatment_context"] = {
+        "column": "copay_support",
+        "label": "Copay support",
+        "framing": "receiving copay assistance",
+        "kind": "commercial",
+        "source": "curated",
+    }
+    payload["analysis_framing"] = "This analysis estimates the effect of X on Y."
+    payload["real_world_evidence"] = {
+        "pmid": "1",
+        "title": "t",
+        "journal": "j",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+        "source": "pubmed",
+        "search_term": "ribociclib breast cancer copay assistance",
+    }
+    revalidated = ClinicalContext.model_validate(payload)
+    assert revalidated.our_treatment == "copay_support"
+    assert revalidated.treatment_context is not None
+    assert revalidated.treatment_context.label == "Copay support"
+    assert revalidated.analysis_framing == "This analysis estimates the effect of X on Y."
+    assert revalidated.real_world_evidence is not None
+    assert revalidated.real_world_evidence.search_term == "ribociclib breast cancer copay assistance"

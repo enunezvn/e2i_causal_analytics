@@ -264,3 +264,154 @@ def test_openfda_down_degrades_and_self_heals(monkeypatch):
     assert first["approved_indications"]["source"] == "static_fallback"
     second = svc.get_context("Remibrutinib", "persistent_180d")
     assert second["approved_indications"]["source"] == "openfda"  # self-healed
+
+
+# --- #1763: the context must be about the ANALYSIS, not just the brand ---
+
+
+def test_treatment_threads_into_the_payload():
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(None, "unavailable"),
+    )
+    ctx = svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert ctx["our_treatment"] == "treatment_arm"
+    assert ctx["treatment_context"] is not None
+    assert ctx["treatment_context"]["column"] == "treatment_arm"
+    assert ctx["treatment_context"]["kind"] == "drug_therapy"
+    assert ctx["treatment_context"]["source"] == "curated"
+    assert "ribociclib" in ctx["treatment_context"]["framing"].lower()
+    assert ctx["analysis_framing"].startswith("This analysis estimates the effect of ")
+
+
+def test_no_treatment_yields_an_honest_empty_analysis_frame():
+    """The brand-level view (leaderboard MoA chip) passes no treatment: the payload
+    must say so rather than invent an analysis it does not have."""
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(None, "unavailable"),
+    )
+    ctx = svc.get_context("Kisqali", "persistent_180d")
+    assert ctx["our_treatment"] is None
+    assert ctx["treatment_context"] is None
+    assert ctx["analysis_framing"] is None
+
+
+def test_unmapped_treatment_is_reported_but_not_framed():
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(None, "unavailable"),
+    )
+    ctx = svc.get_context("Kisqali", "persistent_180d", treatment="made_up_treatment")
+    assert ctx["our_treatment"] == "made_up_treatment"
+    assert ctx["treatment_context"] is None
+    assert ctx["analysis_framing"] is None
+
+
+class _CapturingCitationProvider:
+    """Records the profile each citation lookup was made with."""
+
+    provider_name = "capture"
+
+    def __init__(self, fragment):
+        self._fragment = fragment
+        self.terms = []
+
+    def enrich(self, profile):
+        self.terms.append(profile.analysis_rwe_search_term)
+        return self._fragment
+
+
+def test_citation_provider_receives_the_analysis_specific_search_term():
+    cap = _CapturingCitationProvider(CitationFragment(None, "unavailable"))
+    svc = ClinicalContextService(
+        mechanism_provider=_StubProvider(MechanismFragment("CDK4/6 inhibitor", "chembl")),
+        endpoints_provider=_StubProvider(_eps(["OS"], "clinicaltrials.gov")),
+        citation_provider=cap,
+        indications_provider=_StubProvider(IndicationsFragment(["BC"], None, None, "openfda")),
+        competitor_provider=_StubProvider(CompetitorFragment(["Ibrance (palbociclib)"], 1)),
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="copay_support")
+    assert len(cap.terms) == 1
+    term = cap.terms[0].lower()
+    assert "ribociclib" in term
+    assert "copay" in term
+    assert "persistence" in term
+
+
+def test_citation_refetches_per_analysis_while_brand_fragments_stay_cached(monkeypatch):
+    """The brand-level fan-out (MoA / endpoints / label / competitors) does NOT vary
+    by analysis and must not be re-fetched; the literature search DOES vary and must
+    be re-run per analysis. Splitting these is the whole point of the per-term
+    citation cache."""
+    import src.services.clinical_context.service as svc_mod
+
+    # Prove the citation re-fetch is driven by the analysis, not by TTL expiry.
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 10_000.0)
+    art = PubMedArticle(pmid="1", title="t", journal="j", doi="10.1/z")
+    counters = {"moa": {"n": 0}, "ep": {"n": 0}, "cite": {"n": 0}}
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(art, "pubmed"),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    svc.get_context("Kisqali", "persistent_180d", treatment="copay_support")
+    assert counters["moa"]["n"] == 1
+    assert counters["ep"]["n"] == 1
+    assert counters["cite"]["n"] == 2
+
+
+def test_same_analysis_reuses_the_cached_citation(monkeypatch):
+    import src.services.clinical_context.service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    art = PubMedArticle(pmid="1", title="t", journal="j", doi="10.1/z")
+    counters = {"cite": {"n": 0}}
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(art, "pubmed"),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert counters["cite"]["n"] == 1
+
+
+def test_unavailable_citation_self_heals_per_analysis(monkeypatch):
+    """An unavailable/seed citation is degraded and must be re-attempted after the
+    self-heal window — the same guarantee the brand-level fan-out has."""
+    import src.services.clinical_context.service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    counters = {"cite": {"n": 0}}
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(None, "unavailable"),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert counters["cite"]["n"] == 2
+
+
+def test_citation_payload_discloses_the_term_that_was_searched():
+    art = PubMedArticle(pmid="35642282", title="RWE", journal="J", doi="10.1/x")
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        _eps(["OS"], "clinicaltrials.gov"),
+        CitationFragment(art, "pubmed", "ribociclib breast cancer persistence real-world"),
+    )
+    ctx = svc.get_context("Kisqali", "persistent_180d", treatment="treatment_arm")
+    assert (
+        ctx["real_world_evidence"]["search_term"]
+        == "ribociclib breast cancer persistence real-world"
+    )
+    # The curated seminal citation was never "searched" — it must not claim a term.
+    assert ctx["seminal_real_world_evidence"]["search_term"] is None

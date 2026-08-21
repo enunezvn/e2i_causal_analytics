@@ -306,3 +306,95 @@ def test_curated_competitor_unknown_disease_is_empty():
     assert frag.competitors == []
     assert frag.count == 0
     assert frag.source == "curated"
+
+
+# --- #1763: the RWE search follows the ANALYSIS, with an honest fallback ladder ---
+
+
+class _TermAwarePubMed:
+    """Returns a different article per search term (and records what was searched)."""
+
+    def __init__(self, by_term=None, by_pmid=None):
+        self._by_term = by_term or {}
+        self._by_pmid = by_pmid
+        self.terms = []
+
+    def top_article(self, term):
+        self.terms.append(term)
+        return self._by_term.get(term)
+
+    def fetch_by_pmid(self, pmid):
+        return self._by_pmid
+
+
+@pytest.mark.unit
+def test_pubmed_provider_searches_the_analysis_term_when_present():
+    from dataclasses import replace
+
+    from src.services.clinical_context.clients import PubMedArticle
+
+    profile = replace(
+        resolve_brand_profile("Kisqali"),
+        analysis_rwe_search_term="ribociclib breast cancer copay assistance persistence",
+    )
+    hit = PubMedArticle(pmid="111", title="Copay + persistence", journal="J")
+    client = _TermAwarePubMed(by_term={profile.analysis_rwe_search_term: hit})
+    frag = PubMedRWEProvider(client=client).enrich(profile)
+    assert frag.citation is not None and frag.citation.pmid == "111"
+    assert frag.source == "pubmed"
+    # The payload discloses WHAT was searched, so an analyst can judge relevance.
+    assert frag.search_term == profile.analysis_rwe_search_term
+    assert client.terms == [profile.analysis_rwe_search_term]
+
+
+@pytest.mark.unit
+def test_pubmed_provider_falls_back_to_the_brand_term_and_says_so():
+    """A narrow analysis-specific query can legitimately return nothing. Falling back
+    to the brand-level query is right — but the source must NOT still claim the
+    citation is analysis-specific."""
+    from dataclasses import replace
+
+    from src.services.clinical_context.clients import PubMedArticle
+
+    base = resolve_brand_profile("Kisqali")
+    profile = replace(base, analysis_rwe_search_term="ribociclib breast cancer no such thing")
+    brand_hit = PubMedArticle(pmid="222", title="Brand-level RWE", journal="J")
+    client = _TermAwarePubMed(by_term={base.rwe_search_term: brand_hit})
+    frag = PubMedRWEProvider(client=client).enrich(profile)
+    assert frag.citation is not None and frag.citation.pmid == "222"
+    assert frag.source == "pubmed_brand"
+    assert frag.search_term == base.rwe_search_term
+    assert client.terms == [profile.analysis_rwe_search_term, base.rwe_search_term]
+
+
+@pytest.mark.unit
+def test_pubmed_provider_ladder_ends_at_the_seed_then_unavailable():
+    from dataclasses import replace
+
+    from src.services.clinical_context.clients import PubMedArticle
+
+    base = resolve_brand_profile("Kisqali")  # rwe_seed_pmid = 35642282
+    profile = replace(base, analysis_rwe_search_term="nothing matches this")
+    seed = PubMedArticle(pmid="35642282", title="Seed RWE", journal="J")
+    frag = PubMedRWEProvider(client=_TermAwarePubMed(by_pmid=seed)).enrich(profile)
+    assert frag.source == "pubmed_seed"
+    assert frag.search_term is None  # a curated seed was not found by searching
+
+    fab = replace(resolve_brand_profile("Fabhalta"), analysis_rwe_search_term="nothing")
+    empty = PubMedRWEProvider(client=_TermAwarePubMed()).enrich(fab)
+    assert empty.citation is None and empty.source == "unavailable"
+
+
+@pytest.mark.unit
+def test_pubmed_provider_without_an_analysis_term_stays_brand_level_pubmed():
+    """No analysis term (the brand-level view) => one search, labelled plain
+    'pubmed' — the pre-#1763 behaviour, unchanged."""
+    from src.services.clinical_context.clients import PubMedArticle
+
+    profile = resolve_brand_profile("Kisqali")
+    hit = PubMedArticle(pmid="333", title="Brand RWE", journal="J")
+    client = _TermAwarePubMed(by_term={profile.rwe_search_term: hit})
+    frag = PubMedRWEProvider(client=client).enrich(profile)
+    assert frag.source == "pubmed"
+    assert frag.search_term == profile.rwe_search_term
+    assert client.terms == [profile.rwe_search_term]

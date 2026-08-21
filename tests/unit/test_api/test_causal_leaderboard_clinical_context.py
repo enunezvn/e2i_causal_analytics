@@ -39,7 +39,7 @@ _PAYLOAD = {
 @pytest.mark.asyncio
 async def test_attach_clinical_context_happy_path(monkeypatch):
     monkeypatch.setattr(
-        causal_routes._clinical_context_service, "get_context", lambda b, o: _PAYLOAD
+        causal_routes._clinical_context_service, "get_context", lambda b, o, treatment=None: _PAYLOAD
     )
     eff = DiscoveredEffect(
         treatment="treatment_arm",
@@ -58,7 +58,7 @@ async def test_attach_clinical_context_happy_path(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attach_clinical_context_fail_open(monkeypatch):
-    def _boom(brand, outcome):
+    def _boom(brand, outcome, treatment=None):
         raise RuntimeError("clinical-context API unavailable")
 
     monkeypatch.setattr(causal_routes._clinical_context_service, "get_context", _boom)
@@ -78,7 +78,7 @@ async def test_attach_clinical_context_fail_open(monkeypatch):
 async def test_attach_clinical_context_skips_without_brand_or_estimate(monkeypatch):
     calls = {"n": 0}
 
-    def _track(brand, outcome):
+    def _track(brand, outcome, treatment=None):
         calls["n"] += 1
         return _PAYLOAD
 
@@ -90,3 +90,29 @@ async def test_attach_clinical_context_skips_without_brand_or_estimate(monkeypat
     assert calls["n"] == 0  # neither triggered a fetch
     assert no_brand.clinical_context is None
     assert no_estimate.clinical_context is None
+
+
+# --- #1763: the leaderboard row already knows its treatment — pass it through ---
+
+
+@pytest.mark.asyncio
+async def test_attach_clinical_context_passes_the_row_treatment(monkeypatch):
+    """Every leaderboard row is a (treatment -> outcome) analysis. Fetching context
+    for the brand+outcome only is what made the panel read as 'accurate but
+    unrelated' to the analysis being interrogated (#1763)."""
+    seen = {}
+
+    def _capture(brand, outcome, treatment=None):
+        seen["args"] = (brand, outcome, treatment)
+        return _PAYLOAD
+
+    monkeypatch.setattr(causal_routes._clinical_context_service, "get_context", _capture)
+    eff = DiscoveredEffect(
+        treatment="copay_support",
+        outcome="persistent_180d",
+        brand="Kisqali",
+        status="completed",
+        ate=0.12,
+    )
+    await causal_routes._attach_clinical_context(eff)
+    assert seen["args"] == ("Kisqali", "persistent_180d", "copay_support")
