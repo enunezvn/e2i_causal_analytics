@@ -367,3 +367,82 @@ def test_reattach_refuses_when_main_is_held_by_another_worktree(tmp_path: Path) 
         "a failed re-attach must leave the checkout exactly as it found it"
     )
     assert _git(repo, "rev-parse", "feature") == feat
+
+
+def test_a_locked_worktree_on_another_branch_does_not_block_the_deploy(
+    tmp_path: Path,
+) -> None:
+    """`git worktree list --porcelain` emits a `locked` record for locked worktrees.
+
+    The Agent tool creates worktrees LOCKED BY CONSTRUCTION — every one adds a line like::
+
+        locked claude agent agent-a62babefb225c59de (pid 4118421 start 443524708)
+
+    None of the other fixtures here produce that record, so until now the awk's correct
+    handling of it rested on one live observation of the real repo rather than on
+    anything repeatable. Reordering the two patterns in that awk would regress it
+    silently. This is the same fixture-fidelity gap as the two stub-fidelity findings on
+    #1788: the fake answered a shape the real thing does not have.
+
+    The overwhelmingly common live state — a locked agent worktree on its OWN branch —
+    must not refuse.
+    """
+    repo = _make_repo(tmp_path)
+    feat = _checkout_feature_with_work(repo)
+    agent_wt = tmp_path / "agent_worktree"
+    _git(repo, "worktree", "add", "-q", "-b", "worktree-agent-deadbeef", str(agent_wt))
+    _git(repo, "worktree", "lock", str(agent_wt))
+
+    porcelain = _git(repo, "worktree", "list", "--porcelain")
+    assert "\nlocked" in "\n" + porcelain, (
+        "precondition: this fixture must actually produce a `locked` record, or it is "
+        f"not testing the thing it claims. Got:\n{porcelain}"
+    )
+
+    proc = _run_helper(repo)
+
+    assert proc.returncode == 0, (
+        "a locked worktree on its own branch holds nothing we care about and must not "
+        f"block a deploy.\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+    )
+    assert _git(repo, "symbolic-ref", "--short", "HEAD") == "main"
+    assert _git(repo, "rev-parse", "feature") == feat
+
+    _git(repo, "worktree", "unlock", str(agent_wt))
+
+
+def test_a_locked_worktree_holding_main_still_refuses(tmp_path: Path) -> None:
+    """And the same record must not let a real holder slip through.
+
+    Recovery is worth knowing and is NOT obvious from the error text: a locked worktree
+    needs `git worktree unlock` before `git worktree remove` will touch it, so an
+    operator reading "Resolve the worktree first" may go hunting for a stale directory
+    they cannot delete. Left as a wording follow-up rather than a blocker — the state
+    needs an agent worktree to somehow hold `main`, and agent worktrees are named
+    `worktree-agent-<id>`.
+    """
+    repo = _make_repo(tmp_path)
+    feat = _checkout_feature_with_work(repo)
+    held = tmp_path / "locked_holder"
+    _git(repo, "worktree", "add", "-q", str(held), "main")
+    _git(repo, "worktree", "lock", str(held))
+
+    proc = _run_helper(repo)
+
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0, "a locked holder is still a holder"
+    assert "another worktree" in out
+    # Assert the PATH, not just the refusal. Asserting only the decision made this test
+    # vacuous against the regression it exists to catch: dropping the `/^worktree /`
+    # rule so awk captures every line leaves `wt` as substr("branch refs/heads/main",
+    # 10) == "fs/heads/main", which is still != $_self, so the refuse/allow decision is
+    # IDENTICAL and 13 tests stayed green. The operator-facing path is the only place
+    # the awk's correctness is observable.
+    assert str(held) in out, (
+        "the refusal must name the ACTUAL holding worktree — a mis-parsed path still "
+        f"refuses, so only this assertion proves the awk parsed anything.\nGot: {out!r}"
+    )
+    assert _git(repo, "symbolic-ref", "--short", "HEAD") == "feature"
+    assert _git(repo, "rev-parse", "feature") == feat
+
+    _git(repo, "worktree", "unlock", str(held))
