@@ -1128,9 +1128,12 @@ class ClinicalContext(BaseModel):
     analysis_grounding: Optional[AnalysisGrounding] = Field(
         default=None,
         description=(
-            "Clinical grounding for this specific analysis: verbatim label factors "
-            "selected by the outcome, plus the competitive framing. None on the "
-            "brand-level view (no scenario to ground)."
+            "Clinical grounding for this specific analysis: label factors selected "
+            "by the outcome, plus the competitive framing. None whenever there is no "
+            "scenario to ground — on the brand-level view (no treatment), AND when a "
+            "treatment is supplied that resolves to no curated context, which yields "
+            "nothing to say rather than an empty object. The narrower wording named "
+            "only the brand-level case (codex iter-13 MEDIUM)."
         ),
     )
     mechanism: MechanismOfAction

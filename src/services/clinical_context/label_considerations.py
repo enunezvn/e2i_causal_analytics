@@ -144,7 +144,15 @@ _SECTION_NUMBERS = {
 # combination left that produced a MERGE (codex iter-8 HIGH). Widening what counts as
 # a candidate is additive: it can only make a reference visible, never hide one. That
 # is why it is safe where the spaced-form rule was not.
-_REF_SEPARATOR = r"(?:\s*[,\u2010-\u2015-]\s*|\s+(?:and|or)\s+)"
+# Punctuation only. Iteration 12 added "and"/"or" here so that "( 5.1 or 5.2 )" would
+# be READ rather than merely not merged — and it then read "occurred in 5 or 6
+# patients ( 5 or 6 )" as a bullet citing "label 5 or 6" (codex iter-13 HIGH).
+#
+# The measurement I should have run first: word-separated TERMINAL references occur
+# ZERO times across 28 live labels / 82 sections. Support for a form never observed
+# admitted prose instead. `_WORD_SEPARATOR` still lets the GUARD look past those
+# words, so such a group cannot cause a merge; it simply never becomes a citation.
+_REF_SEPARATOR = r"(?:\s*[,\u2010-\u2015-]\s*)"
 _CANDIDATE = re.compile(rf"\(\s*(?P<refs>\d+(?:\.\d+)?(?:{_REF_SEPARATOR}\d+(?:\.\d+)?)*)\s*\)")
 
 # A candidate that ends the region, or is followed by the next bullet's capitalised
@@ -366,12 +374,26 @@ def _swallowed_a_boundary(body: str, section: str) -> bool:
     own = _SECTION_NUMBERS.get(section)
     if own is None:
         return False
-    return any(
-        number.split(".")[0] == own
-        for match in _BRACKETED.finditer(body)
-        if _is_reference_group(match.group(0))
-        for number in _NUMBER.findall(match.group(0))
-    )
+    for match in _BRACKETED.finditer(body):
+        group = match.group(0)
+        numbers = _NUMBER.findall(group)
+        if _is_reference_group(group):
+            # Nothing but references and separators: any number naming this section
+            # ended a bullet we failed to see.
+            if any(number.split(".")[0] == own for number in numbers):
+                return True
+        elif any("." in number and number.split(".")[0] == own for number in numbers):
+            # Prose in the group, but it carries a DOTTED "N.M" for this very section
+            # — "(5.1, Table 1)" — which is a cross-reference shape, not a quantity
+            # (codex iter-13 HIGH). Measured free across 28 live labels: all five
+            # groups holding both a dotted number and words are prose ("(0.1 mL of
+            # 150 mg/mL solution)", "(eGFR below 30 mL/min/1.73 m 2 )") and not one
+            # of their dotted numbers names its own section.
+            #
+            # A BARE integer gets no such rule: it is ambiguous with a prose quantity,
+            # which is what spares alpelisib's "(2 to less than 18 years of age)".
+            return True
+    return False
 
 
 def _consideration(body: str, references: str, section: str) -> Optional[LabelConsideration]:

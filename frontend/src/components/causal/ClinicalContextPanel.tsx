@@ -109,6 +109,7 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
     analysis_framing,
     causal_evidence,
     analysis_grounding,
+    mapped_endpoint,
   } = context;
   // Provenance-aware copy: the endpoint section renders for BOTH the live CT.gov
   // result and the curated static fallback, so the explanatory text must not claim
@@ -188,10 +189,21 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
               trial endpoints
             </p>
           )}
+          {/* "the clinical ground truth our synthetic outcome stands in for" is a
+              claim about a MAPPING, and the backend returns `mapped_endpoint: null`
+              whenever the outcome is not one we have mapped. The copy asserted the
+              correspondence regardless (codex iter-13 MEDIUM), so an unmapped outcome
+              got trial endpoints presented as its clinical equivalent. Same defect as
+              the grounding heading: the sentence around the data made a promise the
+              data did not carry. */}
           <p className="mt-1 text-xs text-muted-foreground">
-            {endpointsFromCtgov
-              ? 'What this brand’s pivotal trials actually measured — the clinical ground truth our synthetic outcome stands in for.'
-              : 'The disease’s established pivotal efficacy measures (curated reference) — the clinical ground truth our synthetic outcome stands in for.'}
+            {mapped_endpoint
+              ? endpointsFromCtgov
+                ? 'What this brand’s pivotal trials actually measured — the clinical ground truth our synthetic outcome stands in for.'
+                : 'The disease’s established pivotal efficacy measures (curated reference) — the clinical ground truth our synthetic outcome stands in for.'
+              : endpointsFromCtgov
+                ? 'What this brand’s pivotal trials actually measured. This analysis’s outcome is not one we have mapped to any of them.'
+                : 'The disease’s established pivotal efficacy measures (curated reference). This analysis’s outcome is not one we have mapped to any of them.'}
           </p>
         </div>
       )}

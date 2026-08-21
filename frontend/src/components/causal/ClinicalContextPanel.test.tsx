@@ -578,3 +578,21 @@ describe('ClinicalContextPanel grounding heading honesty', () => {
     expect(screen.queryByText(/nothing established for this analysis/i)).not.toBeInTheDocument();
   });
 });
+
+describe('ClinicalContextPanel endpoint copy honesty', () => {
+  it('does not claim the outcome stands in for the endpoints when it is unmapped', () => {
+    // codex iter-13 MEDIUM. The endpoints render for any brand, but "the clinical
+    // ground truth our synthetic outcome stands in for" is a claim about a MAPPING,
+    // and the backend returns mapped_endpoint: null when the outcome is not one we
+    // have mapped. Same defect as the grounding heading — the sentence around the
+    // data promised more than the data carried.
+    render(<ClinicalContextPanel context={{ ...FULL, mapped_endpoint: null }} />);
+    expect(screen.queryByText(/stands in for/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/not one we have mapped to any of them/i)).toBeInTheDocument();
+  });
+
+  it('still makes the mapping claim when the outcome IS mapped', () => {
+    render(<ClinicalContextPanel context={FULL} />);
+    expect(screen.getByText(/stands in for/i)).toBeInTheDocument();
+  });
+});

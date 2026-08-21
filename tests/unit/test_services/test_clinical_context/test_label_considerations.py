@@ -637,19 +637,93 @@ def test_a_see_prefixed_reference_drops_rather_than_merges():
 
 
 @pytest.mark.unit
-def test_word_separated_terminal_references_are_read_not_just_survived():
-    """codex iter-12 MEDIUM. Adding "or" to the guard stopped "( 5.1 or 5.2 )" from
-    MERGING, but the section then parsed to nothing at all, because `_CANDIDATE`
-    still could not see the reference. Never-merge was satisfied; the bullets were
-    still lost, and my commit message implied they were being read.
+def test_word_separated_references_drop_rather_than_merge_or_invent():
+    """The full arc of one decision, because the middle of it shipped.
 
-    Widening `_CANDIDATE` is additive — it can only make a reference visible — so
-    both bullets are now read under their own citations.
+    iter-11: adding "or" to the GUARD stopped "( 5.1 or 5.2 )" from merging, and the
+    section then parsed to nothing.
+    iter-12 (codex MEDIUM): I called that under-reporting and widened `_CANDIDATE` so
+    the reference would be READ.
+    iter-13 (codex HIGH): that widening read "occurred in 5 or 6 patients ( 5 or 6 )"
+    as a bullet citing "label 5 or 6".
+
+    The measurement that settles it, which belonged at the start: word-separated
+    TERMINAL references occur ZERO times across 28 live labels / 82 sections. I had
+    added support for a form no label has been observed to use, on the strength of a
+    constructed example, and it admitted prose.
+
+    So the honest behaviour is the one pinned here: such a group never becomes a
+    citation, and the guard still looks past its words so it can never cause a MERGE.
+    The bullets are lost. Losing a bullet whose reference form we cannot verify beats
+    inventing a citation for it.
     """
     items = parse_label_considerations(
         "5 WARNINGS AND PRECAUTIONS A: Keep this. ( 5.1 or 5.2 ) B: Monitor next. ( 5.4 )",
         WARNINGS_SECTION,
     )
-    assert [(i.title, i.references) for i in items] == [("A", "5.1 or 5.2"), ("B", "5.4")], [
-        (i.title, i.references, i.detail) for i in items
+    for item in items:
+        assert not ("Keep this" in item.detail and "Monitor next" in item.detail), (
+            item.title,
+            item.references,
+            item.detail,
+        )
+    assert "5.1 or 5.2" not in [i.references for i in items]
+
+
+@pytest.mark.unit
+def test_a_bracketed_self_reference_with_prose_in_it_still_drops():
+    """codex iter-13 HIGH. "(5.1, Table 1)" carries a self-reference AND a word, so
+    `_CANDIDATE` skipped it and `_is_reference_group` rejected it as prose — the last
+    combination that still MERGED.
+
+    The guard now fires on either shape: a group that is nothing but references, OR a
+    group containing a DOTTED "N.M" whose section is this one. Measured against 28
+    live labels, the second rule is free: all five bracketed groups carrying both a
+    dotted number and words are prose — "(0.1 mL of 150 mg/mL solution)", "(eGFR
+    below 30 mL/min/1.73 m 2 )" — and not one of their dotted numbers names its own
+    section. A bare integer stays ambiguous with prose quantities, which is why it
+    still requires the pure-reference form; that is what spares alpelisib's
+    "(2 to less than 18 years of age)".
+    """
+    items = parse_label_considerations(
+        "5 WARNINGS AND PRECAUTIONS A: Keep this. (5.1, Table 1) B: Monitor next. ( 5.4 )",
+        WARNINGS_SECTION,
+    )
+    for item in items:
+        assert not ("Keep this" in item.detail and "Monitor next" in item.detail), (
+            item.title,
+            item.references,
+            item.detail,
+        )
+    # and the real-label prose shapes must still parse
+    kept = parse_label_considerations(
+        "2 DOSAGE AND ADMINISTRATION Dose: Inject 0.1 mL of solution "
+        "(0.1 mL of 150 mg/mL solution) once daily. ( 2.1 )",
+        DOSAGE_SECTION,
+    )
+    assert [(i.title, i.references) for i in kept] == [("Dose", "2.1")], [
+        (i.title, i.references, i.detail) for i in kept
     ]
+
+
+@pytest.mark.unit
+def test_prose_numbers_joined_by_a_word_are_not_a_citation():
+    """codex iter-13 HIGH, and this one was MY REGRESSION from the round before.
+
+    Iteration 12 widened `_CANDIDATE` to accept "and"/"or" separators so that
+    "( 5.1 or 5.2 )" would be READ rather than merely not merged. It then read
+    "Adverse reactions occurred in 5 or 6 patients ( 5 or 6 )" as a bullet citing
+    "label 5 or 6".
+
+    The measurement I should have run first: word-separated TERMINAL references occur
+    ZERO times across 28 live labels / 82 sections. I added support for a form I have
+    never observed and it admitted prose. Reverted — the guard still looks past
+    "and"/"or" so such a group cannot cause a MERGE, but nothing is ever attributed
+    to a reference form no label has been seen to use.
+    """
+    items = parse_label_considerations(
+        "5 WARNINGS AND PRECAUTIONS Risk: Adverse reactions occurred in 5 or 6 patients "
+        "( 5 or 6 ).",
+        WARNINGS_SECTION,
+    )
+    assert [i.references for i in items] == [], [(i.title, i.references) for i in items]

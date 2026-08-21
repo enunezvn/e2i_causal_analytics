@@ -562,11 +562,13 @@ export interface ClinicalContext {
   competitor_landscape?: CompetitorLandscape | null;
   /** Public-KG evidence for this specific analysis; null without a treatment. */
   causal_evidence?: CausalEvidence | null;
-  /** #1775 — clinical grounding for THIS treatment -> outcome pair: verbatim label
-   * factors selected by the outcome, plus the competitive framing. Null without a
-   * treatment (no scenario to ground). Present for commercial levers too: declining
-   * to claim the label speaks to a lever is right, declining to ground the analysis
-   * was not. */
+  /** #1775 — clinical grounding for THIS treatment -> outcome pair: label factors
+   * selected by the outcome, plus the competitive framing. Null whenever there is no
+   * scenario to ground: without a treatment, AND when a treatment resolves to no
+   * curated context — that yields nothing to say rather than an empty object. (The
+   * previous wording named only the no-treatment case.) Present for commercial levers
+   * too: declining to claim the label speaks to a lever is right, declining to ground
+   * the analysis was not. */
   analysis_grounding?: AnalysisGrounding | null;
   honesty_label: string;
 }
