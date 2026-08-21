@@ -534,6 +534,62 @@ jobs:
               echo "$_tag"
             }
 
+            # #1787: the dirty-tracked-files guard below inspects the working TREE. It
+            # says nothing about where HEAD POINTS, and `git reset --hard` moves the
+            # CHECKED-OUT BRANCH REF, not just the worktree. PROD == DEV == this box, so
+            # $PROJECT_DIR is also a shared human working copy: reset while HEAD is on
+            # someone's branch and their committed-but-unpushed work is rewound to the
+            # reflog while the guard reports all-clear. The inversion is the defect — a
+            # developer who COMMITTED is less protected than one who left files dirty,
+            # which trains people not to commit here at all.
+            #
+            # Measured 2026-08-21: the checkout sat on
+            # `docs/issue-1768-per-worker-cache-measurement` when a deploy was
+            # dispatched. Only that branch being dirty for an unrelated reason stopped
+            # the rewind.
+            #
+            # RE-ATTACH rather than refuse: refusing would let one stray checkout block
+            # EVERY production deploy until a human noticed, trading silent data loss for
+            # an availability outage. This also repairs a DETACHED HEAD — the state the
+            # 2026-07-21 rollback left for two days, during which the unheld `main` got
+            # taken over by worktree `gh pr merge --delete-branch` runs.
+            #
+            # `git checkout -B main` takes NO start point ON PURPOSE: main is re-pointed
+            # at the CURRENT HEAD, so the worktree does not change and nothing can
+            # collide. With a start point (`... -B main origin/main`) git ABORTS when an
+            # untracked file would be overwritten — measured — which would fail deploys
+            # on exactly the ops scratch files the `-uno` guard deliberately tolerates.
+            # The `reset --hard` further down then moves main to the real target.
+            reattach_to_main() {
+              _head_branch=$(git symbolic-ref --short -q HEAD || true)
+              [ "$_head_branch" = "main" ] && return 0
+              # `git checkout -B main` BYPASSES git's own worktree lock. Measured on
+              # git 2.43.0: plain `git checkout main` refuses with "fatal: main is
+              # already used by worktree at ...", but the -B form SUCCEEDS, silently
+              # moving main and leaving the holding worktree on a branch that was
+              # rewound underneath it. That is the 2026-07-21 incident in reverse, so
+              # the check has to be explicit — git will not make it for us here.
+              _holder=$(git worktree list --porcelain | awk '
+                /^worktree /{wt=substr($0,10)}
+                /^branch refs\/heads\/main$/{print wt}')
+              _self=$(git rev-parse --show-toplevel)
+              if [ -n "$_holder" ] && [ "$_holder" != "$_self" ]; then
+                echo "ERROR: main is checked out in another worktree ($_holder)."
+                echo "       Re-attaching would move main out from under it, and refusing"
+                echo "       to re-attach means refusing to reset --hard while HEAD is on"
+                echo "       '${_head_branch:-detached HEAD}' — that would rewind it and"
+                echo "       orphan any unpushed commits. Resolve the worktree first."
+                return 1
+              fi
+              echo "==> checkout is on '${_head_branch:-detached HEAD}', not main — re-attaching before any reset (#1787)"
+              git checkout -B main || {
+                echo "ERROR: could not re-attach HEAD to main."
+                echo "       Refusing to reset --hard while HEAD is on '${_head_branch:-detached HEAD}':"
+                echo "       that would rewind it and orphan any unpushed commits."
+                return 1
+              }
+            }
+
             cd "$PROJECT_DIR"
             # #1780: PREV_SHA means "the commit production was previously RUNNING", and
             # every consumer treats it that way — the #1431 downgrade floor, the
@@ -570,6 +626,10 @@ jobs:
             fi
             git fetch origin main
             ORIGIN_SHA=$(git rev-parse origin/main)
+
+            # #1787: after the fetch (so a fetch failure does not move a human's HEAD for
+            # nothing) and before the walk, because every path below ends in reset --hard.
+            reattach_to_main
 
             # #1431: do NOT blindly `reset --hard origin/main`. Production deploys are
             # serialized (concurrency: deploy-production, cancel-in-progress:false —
