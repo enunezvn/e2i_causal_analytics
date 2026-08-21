@@ -54,6 +54,18 @@ _SECTION_HEADERS = {
     CONTRAINDICATIONS_SECTION: "CONTRAINDICATIONS",
 }
 
+# The PI section number each section owns. Measured across the live labels for all
+# three brands: EVERY Highlights bullet in section N cites section N, usually
+# alongside others ("2.2 , 5.1" inside section 5). Defence in depth — independent of
+# how clever the regex is, a "reference" that never names its own section is not one
+# we established, so the item is dropped rather than rendered with a citation it
+# never carried.
+_SECTION_NUMBERS = {
+    WARNINGS_SECTION: "5",
+    DOSAGE_SECTION: "2",
+    CONTRAINDICATIONS_SECTION: "4",
+}
+
 # A Highlights bullet ends at its cross-reference marker: "( 2 )", "( 2.2 , 5.3 )".
 #
 # What makes a parenthetical a TERMINATOR is POSITION, not spacing. A real reference
@@ -67,8 +79,16 @@ _SECTION_HEADERS = {
 # was swallowed into the next one and rendered under the next one's citation —
 # fabricating a label item out of two, attributed to a section it never named. The
 # positional rule handles both spacings and still rejects prose.
+# Two INDEPENDENT signals must both hold, because either alone still let a prose
+# number pose as a citation (codex iter-2 and iter-3):
+#   - the parenthetical ENDS a sentence — every Highlights bullet across all three
+#     live labels closes with "." before its reference;
+#   - it is FOLLOWED by the end of the region or the next bullet's capitalised title.
+# "Assess patients (1) Patients received therapy" satisfies the second and fails the
+# first, which is exactly the case that truncated a bullet and invented "(1)" as its
+# label section.
 _ITEM = re.compile(
-    r"(?P<body>.+?)\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s*\)"
+    r"(?P<body>.+?[.])\s*\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s*\)"
     r"(?=\s*$|\s+[A-Z])",
     re.S,
 )
@@ -76,7 +96,10 @@ _ITEM = re.compile(
 # The full prescribing text starts at a "5.1 Title" subsection header — an N.M NOT
 # sitting inside a "( ... )" reference list, so the preceding character is neither
 # "(" nor ",".
-_SUBSECTION = re.compile(r"[^(,\s]\s+\d+\.\d+\s+(?=[A-Z])")
+# `\s*`, not `\s+`: "(5.1)5.1 Full Text Begins" hid the boundary from a
+# whitespace-requiring pattern, and the prescribing text behind it was then pulled
+# into a consideration under the wrong citation (codex iter-3 HIGH).
+_SUBSECTION = re.compile(r"[^(,\s]\s*\d+\.\d+\s+(?=[A-Z])")
 
 # A title longer than this is a run-on sentence that happened to contain ": ",
 # not a bullet title.
@@ -97,6 +120,14 @@ class LabelConsideration:
     section: str
     references: str
     source: str = "openfda"
+
+
+def _references_name_this_section(references: str, section: str) -> bool:
+    """True when the parsed reference list names the section it was found in."""
+    own = _SECTION_NUMBERS.get(section)
+    if own is None:
+        return True
+    return any(ref.split(".")[0] == own for ref in re.split(r"\s*,\s*", references) if ref)
 
 
 def _strip_section_header(text: str, section: str) -> str:
@@ -136,6 +167,8 @@ def parse_label_considerations(text: Optional[str], section: str) -> Tuple[Label
             # No bullet title of its own: name it by the section it came from
             # rather than inventing a clinical heading for it.
             title, detail = SECTION_DISPLAY.get(section, section), body
+        if not _references_name_this_section(references, section):
+            continue
         detail = detail.strip()
         # "4 CONTRAINDICATIONS None. None. ( 4 )" carries no consideration. An empty
         # result is correct; emitting "Contraindications: None" would be an invented

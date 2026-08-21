@@ -17,6 +17,7 @@ import pytest
 from src.services.clinical_context.label_considerations import (
     CONTRAINDICATIONS_SECTION,
     DOSAGE_SECTION,
+    SECTION_DISPLAY,
     WARNINGS_SECTION,
     parse_label_considerations,
 )
@@ -209,3 +210,66 @@ def test_inline_prose_numbers_are_still_not_boundaries():
     assert len(items) == 1, [(i.title, i.references) for i in items]
     assert items[0].references == "5.1"
     assert "(2) weeks after dose" in items[0].detail
+
+
+@pytest.mark.unit
+def test_a_prose_number_followed_by_a_capital_is_not_a_citation():
+    """codex iter-3 HIGH. The positional rule alone still accepted a prose
+    parenthetical that happened to be followed by a capitalised word, truncating the
+    bullet and citing '(1)' as its label section."""
+    text = (
+        "5 WARNINGS AND PRECAUTIONS A: Assess patients (1) Patients received therapy "
+        "and monitor labs. ( 5.1 )"
+    )
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert len(items) == 1, [(i.title, i.detail, i.references) for i in items]
+    assert items[0].references == "5.1"
+    assert "Patients received therapy" in items[0].detail
+
+
+@pytest.mark.unit
+def test_full_prescribing_text_cannot_leak_in_when_the_boundary_is_unspaced():
+    """codex iter-3 HIGH. `_SUBSECTION` required whitespace before the full-text
+    header, so '(5.1)5.1 Full Text Begins' hid the boundary and prescribing text was
+    pulled into a consideration under the wrong citation."""
+    text = "5 WARNINGS AND PRECAUTIONS A: Keep this. (5.1)5.1 Full Text Begins Monitor full text. ( 5.2 )"
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    for item in items:
+        assert "Full Text Begins" not in item.detail
+        assert "Monitor full text" not in item.detail
+
+
+@pytest.mark.unit
+def test_a_citation_that_does_not_name_this_section_is_dropped():
+    """Defence in depth against a fabricated citation, independent of the regex.
+
+    Measured across the live labels for all three brands: EVERY Highlights bullet in
+    section N cites section N, usually alongside others ('2.2 , 5.1' in section 5).
+    A parsed 'reference' that never names its own section is not a cross-reference we
+    established, so the item is dropped rather than rendered with it.
+    """
+    text = "5 WARNINGS AND PRECAUTIONS Bogus: Something happened. ( 9.9 )"
+    assert parse_label_considerations(text, WARNINGS_SECTION) == ()
+
+
+@pytest.mark.unit
+def test_every_rendered_detail_is_verbatim_from_the_source_section():
+    """The promise of this module in one assertion: whatever reaches the panel can be
+    found in the label text we were given."""
+    import re as _re
+
+    for text, section in (
+        (_KISQALI_WARNINGS, WARNINGS_SECTION),
+        (_FABHALTA_WARNINGS, WARNINGS_SECTION),
+        (_RHAPSIDO_WARNINGS, WARNINGS_SECTION),
+        (_KISQALI_DOSAGE, DOSAGE_SECTION),
+    ):
+        haystack = " ".join(text.split())
+        items = parse_label_considerations(text, section)
+        assert items, f"expected items for {section}"
+        for item in items:
+            assert " ".join(item.detail.split()) in haystack, item.detail
+            if item.title not in SECTION_DISPLAY.values():
+                assert " ".join(item.title.split()) in haystack, item.title
+            for ref in _re.split(r"\s*,\s*", item.references):
+                assert ref in haystack, ref
