@@ -75,18 +75,21 @@ _APPROVED_CLINICAL_STAGES = frozenset({"APPROVAL", "APPROVED"})
 # How many PMIDs to consider, and how many verified citations to surface. Each
 # candidate costs one Europe PMC fetch, so the candidate list is small and
 # verification stops as soon as the cap is met.
-_MAX_CANDIDATE_PMIDS = 5
-_MAX_CITATIONS = 3
+_MAX_CANDIDATE_PMIDS = 3
+_MAX_CITATIONS = 2
 
-# Every candidate costs one Europe PMC round trip, and Europe PMC DOES time out
-# (measured on 2026-08-21). This whole block runs inside one request while a user
-# waits on a panel, so each upstream gets a shorter timeout than the KG defaults and
-# verification stops on a wall-clock budget, returning what it has. MEASURED
-# end-to-end on the full stack the same day: typically 0.3-3s warm/cold, but one
-# slow-upstream window hit 31.8s — which is why these are tighter than the defaults.
-_EUROPE_PMC_TIMEOUT_S = 6.0
+# Europe PMC is the slow upstream here, and it is slow BY ITSELF, not because of
+# the network: MEASURED 2026-08-21 from the API container, resultType=core answered
+# in 8.3 / 8.6 / 10.0 / 16.1s with DNS 0.09s, TCP 0.08s and TLS 1.4s — and the host
+# was equally slow (11.7s) for the same query. A 6s timeout (calibrated on a lucky
+# fast window) therefore dropped EVERY abstract in production: the live panel showed
+# an evidence block with no literature at all while every unit test stayed green.
+# The timeout now covers the observed worst case; the wall-clock budget bounds how
+# many of these a user can wait through, and the candidate list is short because
+# each candidate is expensive.
+_EUROPE_PMC_TIMEOUT_S = 20.0
 _OPEN_TARGETS_TIMEOUT_S = 8.0
-_VERIFICATION_BUDGET_S = 12.0
+_VERIFICATION_BUDGET_S = 22.0
 # Each ACCEPTED citation costs one more PubMed summary call, which lands after the
 # verification check — so three of them could add three client timeouts to a path
 # that looks bounded. Past this, the citation is still surfaced (it was verified),
@@ -297,13 +300,16 @@ class CausalEvidenceProvider:
         pmids = self._pubmed.search_pmids(search_term, retmax=_MAX_CANDIDATE_PMIDS)
         out: List[VerifiedCitation] = []
         started = time.monotonic()
-        for pmid in pmids:
+        for attempt, pmid in enumerate(pmids):
             if len(out) >= _MAX_CITATIONS:
                 break
-            # Reserve room for a WHOLE client timeout: a candidate started at
-            # budget-minus-epsilon can still burn a full Europe PMC timeout on top,
-            # so "elapsed < budget" would not bound the wait it claims to bound.
-            if time.monotonic() - started >= max(
+            # Reserve room for a WHOLE client timeout before starting ANOTHER
+            # candidate: one started at budget-minus-epsilon can still burn a full
+            # Europe PMC timeout on top, so "elapsed < budget" would not bound the
+            # wait it claims to bound. The FIRST candidate always runs, though —
+            # "the budget cannot fit a call" must mean "verify one and stop", never
+            # "verify nothing", which is what silently emptied this block in prod.
+            if attempt > 0 and time.monotonic() - started >= max(
                 0.0, _VERIFICATION_BUDGET_S - _EUROPE_PMC_TIMEOUT_S
             ):
                 # Out of budget: surface what verified rather than making the user
