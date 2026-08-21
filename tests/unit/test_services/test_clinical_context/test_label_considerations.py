@@ -478,3 +478,84 @@ def test_a_range_form_reference_terminates_its_bullet_instead_of_merging():
     ]
     for item in items:
         assert not ("Keep this" in item.detail and "Monitor next" in item.detail)
+
+
+@pytest.mark.unit
+def test_a_bullet_whose_period_follows_its_citation_is_still_read():
+    """codex iter-9 MEDIUM, and it is a whole CONVENTION we were blind to.
+
+    Our three curated brands write '... regularly thereafter. ( 5.1 )'. Plenty of
+    labels write '... regularly thereafter ( 5.1 ).' with the sentence period AFTER
+    the citation — and for those, `_BOUNDARY_AFTER` saw '. •' and read prose while
+    the ends-with-a-period rule rejected the body, so the section parsed to NOTHING.
+
+    Measured across 28 live labels: 10 sections returned zero items purely because of
+    this, including every section of ivosidenib and atorvastatin and both of
+    spironolactone's. The text below is spironolactone's real Highlights.
+    """
+    text = (
+        "5 WARNINGS AND PRECAUTIONS "
+        "• Hyperkalemia: Monitor serum potassium within one week of initiation and "
+        "regularly thereafter ( 5.1 ). "
+        "• Hypotension and Worsening Renal Function: Monitor volume status and renal "
+        "function periodically ( 5.2 )."
+    )
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert [(i.title, i.references) for i in items] == [
+        ("Hyperkalemia", "5.1"),
+        ("Hypotension and Worsening Renal Function", "5.2"),
+    ], [(i.title, i.references, i.detail) for i in items]
+    assert items[0].detail == (
+        "Monitor serum potassium within one week of initiation and regularly thereafter"
+    )
+
+
+@pytest.mark.unit
+def test_an_unrecognised_reference_separator_drops_the_bullet_instead_of_merging():
+    """codex iter-9 HIGH, and the finding is really about MY BACKSTOP.
+
+    `_swallowed_a_boundary` was described as independent defence in depth, but it
+    located internal references with `_CANDIDATE` — the very pattern that failed to
+    recognise the form. A backstop sharing the blind spot of the thing it backstops
+    is not a backstop, so every separator `_CANDIDATE` missed ('; ', ' and ', '/',
+    square brackets, '5.1.1') produced a MERGE.
+
+    It now scans with a deliberately LOOSE pattern of its own: any bracketed group
+    containing a number that names this section. Loose is the correct bias there
+    because the guard can only ever DROP, never emit.
+    """
+    for terminal in ("( 5.1; 5.3 )", "( 5.1 and 5.3 )", "( 5.1/5.3 )", "( 5.1.1 )", "[5.1]"):
+        text = f"5 WARNINGS AND PRECAUTIONS A: Keep this. {terminal} B: Monitor next. ( 5.4 )"
+        items = parse_label_considerations(text, WARNINGS_SECTION)
+        for item in items:
+            assert not ("Keep this" in item.detail and "Monitor next" in item.detail), (
+                terminal,
+                item.title,
+                item.references,
+                item.detail,
+            )
+
+
+@pytest.mark.unit
+def test_a_parenthetical_of_prose_is_not_mistaken_for_a_reference_group():
+    """Measured cost of making the backstop loose, caught on a real label.
+
+    Alpelisib's dosing bullet says "Pediatric patients (2 to less than 18 years of
+    age): 50 mg ...". That is an AGE RANGE, but it is a bracketed group containing
+    "2", which names the dosage section — so the loose guard read it as a swallowed
+    boundary and dropped a real, correctly-parsed bullet.
+
+    "Loose is safe because it can only drop" was wrong: dropping real label content is
+    a cost, not a free failure. The guard now fires only on groups holding NOTHING but
+    reference numbers and separators, which still covers every separator codex found
+    ('; ', ' and ', '/', brackets, '5.1.1') while leaving prose alone.
+    """
+    text = (
+        "2 DOSAGE AND ADMINISTRATION Recommended Dose: Pediatric patients "
+        "(2 to less than 18 years of age): 50 mg taken orally once daily with food. ( 2.1 )"
+    )
+    items = parse_label_considerations(text, DOSAGE_SECTION)
+    assert [(i.title, i.references) for i in items] == [("Recommended Dose", "2.1")], [
+        (i.title, i.references, i.detail) for i in items
+    ]
+    assert "2 to less than 18 years of age" in items[0].detail

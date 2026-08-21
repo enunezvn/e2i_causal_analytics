@@ -151,7 +151,16 @@ _CANDIDATE = re.compile(rf"\(\s*(?P<refs>\d+(?:\.\d+)?(?:{_REF_SEPARATOR}\d+(?:\
 # drug. Found only by widening the sample from 3 brands to 8; the 3 I had happened
 # to use no glyph.
 _BULLET_GLYPHS = "\u2022\u25aa\u25e6\u00b7\u2023*"
-_BOUNDARY_AFTER = re.compile(rf"\s*[{_BULLET_GLYPHS}]?\s*[A-Z]")
+# The optional "." is a whole CONVENTION, not an edge case. Our curated brands write
+# "... thereafter. ( 5.1 )"; ivosidenib, spironolactone and atorvastatin write
+# "... thereafter ( 5.1 )." with the sentence period AFTER the citation. Without it
+# this pattern saw ". \u2022" and read prose, and 10 of 82 live sections parsed to
+# NOTHING while carrying perfectly good Highlights (codex iter-9 MEDIUM).
+_BOUNDARY_AFTER = re.compile(rf"\s*\.?\s*[{_BULLET_GLYPHS}]?\s*[A-Z]")
+
+# Matches the sentence period when it trails the citation, so the cursor can step
+# over it instead of leaving it to open the next bullet's title.
+_TRAILING_PERIOD = re.compile(r"\s*\.")
 
 # Fail-closed, and deliberately INDEPENDENT of the boundary heuristic above.
 #
@@ -169,7 +178,29 @@ _BOUNDARY_AFTER = re.compile(rf"\s*[{_BULLET_GLYPHS}]?\s*[A-Z]")
 # which is what a cross-reference IS; a section does not cross-reference itself. This
 # guard fires only on a SELF-reference, so the two do not overlap. Checked across 8
 # live labels / 24 sections: zero items lost.
-_INTERNAL_REFERENCE = _CANDIDATE
+# DELIBERATELY LOOSE, and deliberately NOT `_CANDIDATE`.
+#
+# This guard was described as independent defence in depth while locating internal
+# references with `_CANDIDATE` — the very pattern whose blind spots it exists to
+# cover. A backstop that shares the blind spot of the thing it backstops is not one,
+# so every separator `_CANDIDATE` did not know ("5.1; 5.3", "5.1 and 5.3", "5.1/5.3",
+# "[5.1]", "5.1.1") sailed past both and produced a MERGE (codex iter-9 HIGH).
+#
+# So it now scans with a pattern of its own: any bracketed group that holds NOTHING
+# but reference numbers and separators, carrying a number that names this section.
+#
+# The first version accepted any bracketed group containing a digit, on the reasoning
+# that a guard which can only DROP should bias loose. Measurement said otherwise —
+# alpelisib's "Pediatric patients (2 to less than 18 years of age)" is an age range,
+# and "2" names the dosage section, so a real correctly-parsed bullet was thrown away.
+# Dropping real label content is a cost, not a free failure. Requiring the group to be
+# nothing but numbers and separators still covers every form codex found while leaving
+# prose alone.
+_BRACKETED = re.compile(r"[(\[][^()\[\]]*\d[^()\[\]]*[)\]]")
+_NUMBER = re.compile(r"\d+(?:\.\d+)*")
+# "and" is the one word real reference lists use as a separator ("( 5.1 and 5.3 )").
+_WORD_SEPARATOR = re.compile(r"\band\b", re.I)
+_ALPHABETIC = re.compile(r"[A-Za-z]")
 
 # `\s*`, not `\s+`: "(5.1)5.1 Full Text Begins" hid the boundary from a
 # whitespace-requiring pattern, and the prescribing text behind it was then pulled
@@ -263,16 +294,22 @@ def parse_label_considerations(text: Optional[str], section: str) -> Tuple[Label
     cursor = 0
     for match in _CANDIDATE.finditer(region):
         after = region[match.end() :]
-        if after.strip() and not _BOUNDARY_AFTER.match(after):
+        # `strip(" .")`, not `strip()`: under the trailing-period convention the LAST
+        # bullet ends "( 5.2 )." and everything after the citation is that period, so
+        # a bare `strip()` saw content, demanded a following capital, found none, and
+        # silently dropped the final bullet of every such section.
+        if after.strip(" .") and not _BOUNDARY_AFTER.match(after):
             # Prose inside the current bullet — keep accumulating.
             continue
         body = region[cursor : match.start()]
         references = " ".join(match.group("refs").split())
         # Past this point the bullet ends here no matter what we decide about it.
-        cursor = match.end()
-        # Every Highlights bullet across all three live labels closes with "." before
-        # its reference. A body that does not cannot be attributed to this citation.
-        if not body.rstrip().endswith("."):
+        trailing = _TRAILING_PERIOD.match(after)
+        cursor = match.end() + (trailing.end() if trailing else 0)
+        # A Highlights bullet closes with a sentence period, on EITHER side of its
+        # citation depending on the label's convention. A body with neither cannot be
+        # attributed to this citation.
+        if not (body.rstrip().endswith(".") or trailing):
             continue
         if not _references_name_this_section(references, section):
             continue
@@ -284,6 +321,15 @@ def parse_label_considerations(text: Optional[str], section: str) -> Tuple[Label
     return tuple(out)
 
 
+def _is_reference_group(bracketed: str) -> bool:
+    """True when a bracketed group holds only reference numbers and separators.
+
+    Distinguishes "( 5.1 and 5.3 )" from "(2 to less than 18 years of age)" — both
+    are bracketed groups naming a section number, only one is a citation.
+    """
+    return not _ALPHABETIC.search(_WORD_SEPARATOR.sub(" ", bracketed))
+
+
 def _swallowed_a_boundary(body: str, section: str) -> bool:
     """True when the pending body still carries a reference to its OWN section.
 
@@ -291,9 +337,14 @@ def _swallowed_a_boundary(body: str, section: str) -> bool:
     body is two bullets glued together. Drop it: under-reporting is honest, and
     rendering one bullet's words under another's citation is not.
     """
+    own = _SECTION_NUMBERS.get(section)
+    if own is None:
+        return False
     return any(
-        _references_name_this_section(" ".join(m.group("refs").split()), section)
-        for m in _INTERNAL_REFERENCE.finditer(body)
+        number.split(".")[0] == own
+        for match in _BRACKETED.finditer(body)
+        if _is_reference_group(match.group(0))
+        for number in _NUMBER.findall(match.group(0))
     )
 
 
