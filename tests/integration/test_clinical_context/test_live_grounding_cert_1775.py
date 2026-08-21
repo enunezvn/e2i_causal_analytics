@@ -51,6 +51,35 @@ def _norm(text: str | None) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def _live_label(drug_name: str) -> dict:
+    """The label the SERVICE would choose, fetched the way the service fetches it.
+
+    This is deliberately `_OpenFDAClient._pick_best` and not a reimplementation.
+    The first version of this cert used `limit: 1` and its own idea of "the label",
+    which for ribociclib returns KISQALI FEMARA CO-PACK — a different SPL from the
+    one production serves. Every Kisqali comparison then failed against a correct
+    deploy, and the report read like a product defect.
+
+    The service asks for five records and takes the first whose `generic_name` is a
+    SINGLE-element list matching the drug exactly, which is how it prefers the
+    mono-product label over a co-pack. Duplicating that rule in a test is how the
+    test ends up certifying against a document the product never read.
+    """
+    from src.services.clinical_context.clients import _OpenFDAClient
+
+    response = httpx.get(
+        "https://api.fda.gov/drug/label.json",
+        params={"search": f'openfda.generic_name:"{drug_name}"', "limit": 5},
+        timeout=60.0,
+    )
+    if response.status_code != 200:
+        pytest.skip(f"openFDA unavailable for {drug_name}: HTTP {response.status_code}")
+    results = response.json().get("results") or []
+    if not results:
+        pytest.skip(f"openFDA returned no label for {drug_name}")
+    return _OpenFDAClient._pick_best(results, drug_name)
+
+
 def _expected_considerations(brand: str, outcome: str, label: dict) -> set[tuple[str, str, str]]:
     """What THIS code makes of that brand's live label, as (title, references, section)."""
     from src.services.clinical_context.analysis_grounding import ground_analysis
@@ -177,14 +206,7 @@ def test_the_deployed_grounding_matches_the_label_for_each_brand_and_outcome(
     the LABEL, which no defect of ours can move.
     """
     profile = BRAND_CLINICAL_MAP[brand]
-    fda = httpx.get(
-        "https://api.fda.gov/drug/label.json",
-        params={"search": f'openfda.generic_name:"{profile.drug_name}"', "limit": 1},
-        timeout=60.0,
-    )
-    if fda.status_code != 200:
-        pytest.skip(f"openFDA unavailable for {profile.drug_name}: HTTP {fda.status_code}")
-    label = (fda.json().get("results") or [{}])[0]
+    label = _live_label(profile.drug_name)
 
     expected = _expected_considerations(brand, outcome, label)
     grounding = _context(auth_headers, brand=brand, outcome=outcome, treatment="copay_support").get(
@@ -228,14 +250,7 @@ def test_the_expectations_are_not_all_empty(auth_headers) -> None:
     """
     totals: dict[str, int] = {}
     for brand, profile in BRAND_CLINICAL_MAP.items():
-        fda = httpx.get(
-            "https://api.fda.gov/drug/label.json",
-            params={"search": f'openfda.generic_name:"{profile.drug_name}"', "limit": 1},
-            timeout=60.0,
-        )
-        if fda.status_code != 200:
-            continue
-        label = (fda.json().get("results") or [{}])[0]
+        label = _live_label(profile.drug_name)
         for outcome in ("persistent_180d", "treatment_initiated"):
             totals[f"{brand}/{outcome}"] = len(_expected_considerations(brand, outcome, label))
     assert totals, "no expectations computed at all"
