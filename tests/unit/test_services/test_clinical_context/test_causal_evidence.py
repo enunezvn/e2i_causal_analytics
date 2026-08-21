@@ -963,3 +963,31 @@ def test_the_unavailable_return_discloses_the_outage_it_reports():
     assert frag.sources_unavailable == ("open_targets",)
     assert "unreachable" in frag.note.lower()
     assert "unknown, not absent" in frag.note.lower()
+
+
+@pytest.mark.unit
+def test_an_outage_mixed_with_truncation_discloses_both(monkeypatch):
+    """codex iter-3 HIGH. The two reasons were alternatives (`if`/`elif`), so an
+    outage on the first candidate silenced the fact that our budget then stopped the
+    rest. The analyst would read "Europe PMC was unreachable" and reasonably believe
+    the remaining candidates WERE checked and came back empty."""
+    import src.services.clinical_context.causal_evidence as ev_mod
+
+    monkeypatch.setattr(ev_mod, "_VERIFICATION_BUDGET_S", 0.0)
+    profile = resolve_brand_profile("Kisqali")
+    # Candidate "1" fails on a real Europe PMC error; "2" and "3" are never reached.
+    resolver = _FakeResolver({"1": _unresolved("1", error="Europe PMC transport error")})
+    frag = _provider(pubmed=_FakePubMedSearch(pmids=["1", "2", "3"]), resolver=resolver).evidence(
+        profile,
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "treatment_arm"),
+        search_term="ribociclib breast cancer persistence real-world",
+    )
+    assert frag.citations == []
+    # The outage is named...
+    assert frag.sources_unavailable == ("europe_pmc",)
+    assert "unreachable" in frag.note.lower()
+    # ...AND the truncation is not silently dropped.
+    assert frag.checks_incomplete is True
+    assert "did not finish" in frag.note.lower()
+    assert "budget ran out" in frag.note.lower()

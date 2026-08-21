@@ -497,11 +497,16 @@ class CausalEvidenceProvider:
             # Saying so is also what keeps the service from caching this as settled
             # for the worker's process lifetime (#1767).
             if not citations:
+                # These are INDEPENDENT, not alternatives (codex iter-3 HIGH). One
+                # candidate can fail on a Europe PMC error while the budget then
+                # stops the rest; reporting only the outage would leave the analyst
+                # believing the remaining candidates were checked and came back
+                # empty. Everything we actually observed gets said.
                 if lit_unreachable:
                     # Europe PMC actually failed. Name it.
                     unavailable.append("europe_pmc")
-                elif lit_budget or lit_local:
-                    # We stopped early ourselves. Unfinished, but nobody is at fault.
+                if lit_budget or lit_local:
+                    # We also stopped early ourselves. Unfinished — nobody at fault.
                     checks_incomplete = True
                     incomplete_note = _incomplete_note(lit_budget, lit_local)
 
