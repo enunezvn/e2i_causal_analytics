@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import inspect
 import pathlib
 
 from celery.app.defaults import NAMESPACES, flatten
@@ -50,7 +51,9 @@ from src.workers.celery_app import celery_app
 # src/workers/__init__.py does `from .celery_app import celery_app`, which rebinds
 # the name `src.workers.celery_app` to the Celery *instance* and shadows the
 # submodule, so the plain import form hands back an object with no __file__.
-_SOURCE_PATH = pathlib.Path(importlib.import_module("src.workers.celery_app").__file__)
+# inspect.getfile rather than __file__: it is typed str (not str | None) and
+# raises instead of quietly yielding a Path("None") the AST walk would fail on.
+_SOURCE_PATH = pathlib.Path(inspect.getfile(importlib.import_module("src.workers.celery_app")))
 
 # Every setting name Celery actually understands.
 _REAL_SETTINGS = {key.lower() for key, _ in flatten(NAMESPACES)}

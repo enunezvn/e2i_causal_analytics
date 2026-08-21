@@ -59,12 +59,12 @@ _FINALIZED_AT_IMPORT = celery_app.finalized
 _DECLARED_KEYS = frozenset(celery_app.conf.beat_schedule)
 
 # The four keys #1772 was about, with the schedule celery_app.py declares.
-_AB_ENTRIES: dict[str, object] = {
-    "ab-interim-analysis-check": crontab(hour=1, minute=15),
-    "ab-enrollment-health-check": 43200.0,
-    "ab-srm-detection-sweep": 21600.0,
-    "ab-results-cleanup": 604800.0,
-}
+_AB_ENTRIES: list[tuple[str, object]] = [
+    ("ab-enrollment-health-check", 43200.0),
+    ("ab-interim-analysis-check", crontab(hour=1, minute=15)),
+    ("ab-results-cleanup", 604800.0),
+    ("ab-srm-detection-sweep", 21600.0),
+]
 
 
 def _hook_registered_entries() -> dict[str, dict]:
@@ -157,7 +157,7 @@ def test_no_finalize_hook_registers_any_beat_entry() -> None:
     )
 
 
-@pytest.mark.parametrize(("name", "expected"), sorted(_AB_ENTRIES.items(), key=lambda kv: kv[0]))
+@pytest.mark.parametrize(("name", "expected"), _AB_ENTRIES)
 def test_ab_entry_survives_finalize(name: str, expected: object) -> None:
     """End-to-end regression on the real app: finalize, then re-read the entry.
 
@@ -166,7 +166,7 @@ def test_ab_entry_survives_finalize(name: str, expected: object) -> None:
     to have done it keeps the assertion order-independent.
     """
     celery_app.finalize()
-    entry = celery_app.conf.beat_schedule[name]
+    entry: dict[str, object] = celery_app.conf.beat_schedule[name]
 
     assert entry["schedule"] == expected, (
         f"{name} no longer holds its declared schedule after finalize: "
