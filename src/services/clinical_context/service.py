@@ -16,6 +16,7 @@ import time
 from dataclasses import replace
 from typing import Any, Dict, Optional, Tuple
 
+from src.services.clinical_context.analysis_grounding import ground_analysis
 from src.services.clinical_context.brand_map import (
     BrandClinicalProfile,
     TreatmentContext,
@@ -301,6 +302,34 @@ class ClinicalContextService:
         # always present for brands that have one, so the brand of interest gets a
         # brand-faithful reference regardless of what the live relevance search above
         # returned. The URL is built from the PMID; source is honestly "curated".
+        # #1775: ground the SCENARIO. The label considerations ride along on the
+        # brand-level indications fragment (already cached), and the selection by
+        # outcome costs no I/O. Commercial levers are grounded like any other
+        # analysis — declining to claim the label speaks to a lever is right,
+        # declining to ground the analysis at all was not.
+        grounding = ground_analysis(
+            profile,
+            outcome=outcome,
+            treatment_context=treatment_context_for(profile.brand, treatment),
+            label_considerations=indications.label_considerations,
+        )
+        grounding_payload: Optional[Dict[str, Any]] = None
+        if treatment is not None:
+            grounding_payload = {
+                "label_considerations": [
+                    {
+                        "title": c.title,
+                        "detail": c.detail,
+                        "section": c.section,
+                        "references": c.references,
+                        "source": c.source,
+                    }
+                    for c in grounding.label_considerations
+                ],
+                "competitive_context": grounding.competitive_context,
+                "note": grounding.note,
+                "outcome_theme": grounding.outcome_theme,
+            }
         seminal_payload: Optional[Dict[str, Any]] = None
         if profile.seminal_rwe:
             s = profile.seminal_rwe
@@ -378,6 +407,7 @@ class ClinicalContextService:
             "mapped_endpoint": endpoint_mapping_for_outcome(brand, outcome),
             "treatment_context": treatment_payload,
             "analysis_framing": analysis_framing_sentence(profile, outcome, treatment),
+            "analysis_grounding": grounding_payload,
             "mechanism": {
                 "mechanism_of_action": moa.mechanism_of_action,
                 "source": moa.source,

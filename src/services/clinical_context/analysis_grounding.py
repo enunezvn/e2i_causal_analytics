@@ -1,0 +1,202 @@
+"""#1775 — ground a causal scenario in the clinical context that bears on it.
+
+#1763 made the clinical panel follow the analysis for ``drug_therapy`` and
+``clinical_covariate`` treatments. For ``commercial`` levers it shipped an honest
+REFUSAL instead: "Open Targets and the FDA label describe the therapy and its
+indication, not this lever." On the ``patient_journeys`` dataset 5 of the 10
+selectable treatments are commercial, so half of every analysis an analyst can run
+got a panel that declined to connect itself to the question being asked.
+
+Declining to make a claim ABOUT the lever was right and is preserved. Declining to
+GROUND the analysis was not. "Does copay support improve 180-day persistence?" has
+obvious clinical content bearing on it: what the label says drives discontinuation
+(monitoring burden, dose interruption, the dosing schedule) and what a patient
+switches to when they stop. That is the clinical backdrop the commercial effect is
+being isolated against — it is confounding structure, not a regulatory claim.
+
+Nothing here is generated. Label considerations are verbatim label text selected by
+the outcome under analysis (see ``label_considerations``); the competitive framing
+is composed from the curated competitor map. Both are labelled with their source.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional, Sequence, Tuple
+
+from src.services.clinical_context.brand_map import (
+    BrandClinicalProfile,
+    TreatmentContext,
+    outcome_framing_for,
+)
+from src.services.clinical_context.label_considerations import LabelConsideration
+
+# Outcomes that ask "does the patient STAY on therapy". What matters is the burden
+# of remaining on it: what must be monitored, when treatment is interrupted or
+# reduced, and how demanding the schedule is.
+_PERSISTENCE_OUTCOMES = frozenset({"persistent_180d", "discontinued_180d", "adherent_180d"})
+# Outcomes that ask "does the patient START". What matters is what gates the first
+# dose.
+_INITIATION_OUTCOMES = frozenset({"treatment_initiated"})
+
+PERSISTENCE_THEME = "persistence"
+INITIATION_THEME = "initiation"
+
+# Verbatim label phrasing that marks a consideration as bearing on STAYING on
+# therapy. Matched against the label's own words — no clinical inference is made
+# about a consideration the label did not phrase this way.
+_PERSISTENCE_CUES = (
+    "monitor",
+    "interrupt",
+    "discontinu",
+    "dose reduction",
+    "reduction",
+    "withhold",
+    "tolerability",
+    "days off treatment",
+    "permanently discontinue",
+)
+# Phrasing that marks a consideration as a gate on STARTING therapy.
+_INITIATION_CUES = (
+    "before initiating",
+    "prior to initiation",
+    "prior to starting",
+    "before the first dose",
+    "before treatment",
+    "vaccinat",
+    "for initiation",
+    "contraindicated",
+    "before initiation",
+)
+
+
+@dataclass(frozen=True)
+class AnalysisGrounding:
+    """The clinical context that bears on ONE (treatment -> outcome) analysis."""
+
+    label_considerations: Tuple[LabelConsideration, ...] = field(default_factory=tuple)
+    competitive_context: Optional[str] = None
+    note: str = ""
+    outcome_theme: str = ""
+
+
+def _theme_for(outcome: str) -> str:
+    if outcome in _PERSISTENCE_OUTCOMES:
+        return PERSISTENCE_THEME
+    if outcome in _INITIATION_OUTCOMES:
+        return INITIATION_THEME
+    return ""
+
+
+def _select(
+    considerations: Sequence[LabelConsideration], theme: str
+) -> Tuple[LabelConsideration, ...]:
+    """Considerations whose OWN WORDS bear on the theme under analysis.
+
+    An unrecognised outcome selects nothing rather than showing the whole label:
+    an unfiltered dump under an "evidence for this analysis" heading is the
+    borrowed-relevance failure #1763 was filed about.
+    """
+    if not theme:
+        return ()
+    cues = _PERSISTENCE_CUES if theme == PERSISTENCE_THEME else _INITIATION_CUES
+    return tuple(
+        c for c in considerations if any(cue in f"{c.title} {c.detail}".lower() for cue in cues)
+    )
+
+
+def _competitive_context(profile: BrandClinicalProfile, theme: str) -> Optional[str]:
+    competitors = profile.competitor_map.get(profile.disease.lower()) or []
+    if not competitors:
+        return None
+    listed = ", ".join(competitors)
+    if theme == PERSISTENCE_THEME:
+        return (
+            f"A patient who stops {profile.drug_name} in {profile.disease_search_term} has "
+            f"alternatives within the same class: {listed}. A switch to one of these is a "
+            f"competing risk for this outcome rather than a simple failure to persist, and "
+            f"it is confounding structure for any effect estimated here."
+        )
+    if theme == INITIATION_THEME:
+        return (
+            f"At initiation in {profile.disease_search_term}, {profile.drug_name} is chosen "
+            f"against the same-class alternatives {listed}. Which therapy a patient starts "
+            f"is confounding structure for any effect estimated here."
+        )
+    return f"Same-class alternatives in {profile.disease_search_term}: {listed}."
+
+
+def _note(
+    profile: BrandClinicalProfile,
+    treatment_context: TreatmentContext,
+    outcome: str,
+    theme: str,
+    selected: Sequence[LabelConsideration],
+    available: Sequence[LabelConsideration],
+) -> str:
+    outcome_phrase = outcome_framing_for(outcome)
+    theme_phrase = "staying on therapy" if theme == PERSISTENCE_THEME else "starting therapy"
+    parts: list[str] = []
+
+    if selected:
+        parts.append(
+            f"Label factors bearing on {theme_phrase}, selected from the prescribing "
+            f"information for {profile.drug_name} by relevance to {outcome_phrase}. This is "
+            f"a filtered view, not the complete safety profile — each item cites the label "
+            f"section it came from."
+        )
+    elif available:
+        # The label WAS read; it simply carries no highlighted factor phrased around
+        # this outcome. "We checked and there is none" is a different claim from "we
+        # could not check", and conflating them is the #1767 defect in a new place.
+        parts.append(
+            f"The prescribing information for {profile.drug_name} was read, but none of "
+            f"its highlighted factors are phrased around {outcome_phrase}; the full "
+            f"prescribing information may still bear on it."
+        )
+    else:
+        parts.append(
+            f"The FDA label for {profile.drug_name} could not be read for factors bearing "
+            f"on {outcome_phrase}, so what is missing here is unknown, not absent."
+        )
+
+    if treatment_context.kind == "commercial":
+        # The #1763 boundary, kept exactly: the label is silent on the lever. What
+        # changed is that we no longer stop at saying so.
+        backdrop = (
+            "the reasons a patient stops that have nothing to do with access"
+            if theme == PERSISTENCE_THEME
+            else "the clinical requirements for starting that have nothing to do with access"
+        )
+        parts.append(
+            f"{treatment_context.label} is a commercial access lever and the label says "
+            f"nothing about it; none of the above is a claim that the label speaks to "
+            f"{treatment_context.label.lower()}. It is the clinical backdrop the lever "
+            f"operates against — {backdrop}, which an estimate of this lever has to be "
+            f"read alongside."
+        )
+    return " ".join(parts)
+
+
+def ground_analysis(
+    profile: BrandClinicalProfile,
+    *,
+    outcome: str,
+    treatment_context: Optional[TreatmentContext],
+    label_considerations: Sequence[LabelConsideration],
+) -> AnalysisGrounding:
+    """Clinical grounding for one (treatment -> outcome) analysis.
+
+    Returns an empty grounding when there is no curated treatment framing: without
+    a scenario there is nothing to ground, and guessing one is what #1763 was about.
+    """
+    if treatment_context is None:
+        return AnalysisGrounding()
+    theme = _theme_for(outcome)
+    selected = _select(label_considerations, theme)
+    return AnalysisGrounding(
+        label_considerations=selected,
+        competitive_context=_competitive_context(profile, theme),
+        note=_note(profile, treatment_context, outcome, theme, selected, label_considerations),
+        outcome_theme=theme,
+    )

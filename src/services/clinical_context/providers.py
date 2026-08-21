@@ -20,6 +20,13 @@ from src.services.clinical_context.clients import (
     CTGovEndpoint,
     PubMedArticle,
 )
+from src.services.clinical_context.label_considerations import (
+    DOSAGE_SECTION,
+    WARNINGS_SECTION,
+    LabelConsideration,
+    boxed_warning_consideration,
+    parse_label_considerations,
+)
 
 # Best-effort contract: the providers' broad `except Exception` deliberately also
 # swallows ClinicalTrialsError / PubMedError from clients.py (degrade to fallback).
@@ -60,6 +67,12 @@ class IndicationsFragment:
     limitations_of_use: Optional[str] = None
     boxed_warning: Optional[str] = None
     source: str = "static_fallback"  # "openfda" | "static_fallback"
+    # #1775: verbatim label facts that bear on whether a patient STARTS or STAYS ON
+    # therapy. Extracted here because this is where the full label is already in
+    # hand — 34 sections come back for ribociclib and we used to keep three. The
+    # brand-level fragment cache then covers them at no extra upstream cost, and the
+    # per-analysis SELECTION happens downstream with no I/O.
+    label_considerations: tuple["LabelConsideration", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -255,6 +268,33 @@ class PubMedRWEProvider(ClinicalContextProvider):
         return CitationFragment(citation=None, source="unavailable")
 
 
+def _label_considerations(label: dict) -> tuple[LabelConsideration, ...]:
+    """Verbatim Highlights bullets from the label sections that bear on starting or
+    staying on therapy (#1775).
+
+    Only the two sections whose Highlights are reliably structured are parsed. The
+    boxed warning is deliberately NOT parsed as bullets — it is prose and the
+    prototype produced fragments like "] . Life-threatening ..." from it; it already
+    reaches the panel whole via ``boxed_warning``.
+    """
+    out: list[LabelConsideration] = []
+    for section in (WARNINGS_SECTION, DOSAGE_SECTION):
+        raw = label.get(section)
+        if not raw:
+            continue
+        text = raw[0] if isinstance(raw, list) else str(raw)
+        out.extend(parse_label_considerations(text, section))
+    # The boxed warning goes in WHOLE. Fabhalta's initiation gate — vaccinate against
+    # encapsulated bacteria before the first dose — lives only here, so an initiation
+    # analysis was grounded on nothing at all without it.
+    boxed = label.get("boxed_warning")
+    boxed_text = (boxed[0] if isinstance(boxed, list) else boxed) if boxed else None
+    item = boxed_warning_consideration(boxed_text)
+    if item is not None:
+        out.append(item)
+    return tuple(out)
+
+
 class OpenFDAIndicationsProvider(ClinicalContextProvider):
     """Drug -> FDA-label approved indications + limitations of use + boxed warning
     via OpenFDA, with the curated static fallback. Real-first: when a live label is
@@ -285,6 +325,7 @@ class OpenFDAIndicationsProvider(ClinicalContextProvider):
                     limitations_of_use=self._client.limitations_of_use(label),
                     boxed_warning=self._client.boxed_warning(label),
                     source="openfda",
+                    label_considerations=_label_considerations(label),
                 )
         return IndicationsFragment(
             approved_indications=list(profile.indications_fallback),
