@@ -814,3 +814,122 @@ def test_a_budget_truncated_literature_check_is_degraded_without_blaming_a_sourc
 
     _frag, _stored_at, complete = next(iter(svc_mod._EVIDENCE_CACHE.values()))
     assert complete is False, "an unfinished literature check must not be cached as settled"
+
+
+# --- #1775: the payload must GROUND the scenario -------------------------------
+
+
+def _svc_with_label_considerations():
+    """A service whose openFDA fragment carries label considerations, as the real
+    provider now does."""
+    from src.services.clinical_context.label_considerations import (
+        DOSAGE_SECTION,
+        WARNINGS_SECTION,
+        LabelConsideration,
+    )
+
+    considerations = (
+        LabelConsideration(
+            title="QT Interval Prolongation",
+            detail="Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.",
+            section=WARNINGS_SECTION,
+            references="2.2 , 5.3",
+        ),
+        LabelConsideration(
+            title="Dosage and administration",
+            detail="Dose interruption, reduction, and/or discontinuation may be required "
+            "based on individual safety and tolerability.",
+            section=DOSAGE_SECTION,
+            references="2.2",
+        ),
+    )
+    return ClinicalContextService(
+        mechanism_provider=_StubProvider(MechanismFragment("CDK4/6 inhibitor", "chembl")),
+        endpoints_provider=_StubProvider(_eps(["OS"], "clinicaltrials.gov")),
+        citation_provider=_StubProvider(CitationFragment(None, "unavailable")),
+        indications_provider=_StubProvider(
+            IndicationsFragment(["BC"], None, None, "openfda", considerations)
+        ),
+        competitor_provider=_StubProvider(CompetitorFragment(["Ibrance (palbociclib)"], 1)),
+    )
+
+
+def test_a_commercial_analysis_is_grounded_in_the_payload():
+    """THE #1775 REGRESSION at the payload boundary. copay_support used to receive
+    no clinical grounding at all."""
+    ctx = _svc_with_label_considerations().get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support"
+    )
+    grounding = ctx["analysis_grounding"]
+    # POSITIVE CONTROL: assert something is actually there before asserting about it.
+    assert len(grounding["label_considerations"]) >= 1, grounding
+    first = grounding["label_considerations"][0]
+    assert first["source"] == "openfda"
+    assert first["references"], "a consideration must cite the label section it came from"
+    assert grounding["competitive_context"]
+    assert grounding["outcome_theme"] == "persistence"
+
+
+def test_grounding_is_absent_for_the_brand_level_view():
+    """No treatment means no scenario to ground; inventing one is the #1763 defect."""
+    ctx = _svc_with_label_considerations().get_context("Kisqali", "persistent_180d")
+    assert ctx["analysis_grounding"] is None
+
+
+def test_grounding_never_asserts_the_label_speaks_to_the_lever():
+    ctx = _svc_with_label_considerations().get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support"
+    )
+    note = ctx["analysis_grounding"]["note"].lower()
+    assert "says nothing about" in note
+    assert "not the complete" in note
+
+
+def test_grounding_survives_the_api_response_model():
+    """#1775 wire guard. `response_model=ClinicalContext` DROPS any key the Pydantic
+    schema does not declare, so the whole grounding feature shipped invisibly to the
+    panel until the schema knew about it — a green backend and an unchanged UI.
+    Verified by construction: this test failed before AnalysisGrounding existed."""
+    from src.api.schemas.causal import ClinicalContext
+
+    payload = _svc_with_label_considerations().get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support"
+    )
+    dumped = ClinicalContext.model_validate(payload).model_dump()
+    grounding = dumped.get("analysis_grounding")
+    assert grounding is not None, "response_model stripped analysis_grounding"
+    # POSITIVE CONTROL: a present-but-empty block would satisfy `is not None`.
+    assert len(grounding["label_considerations"]) >= 1
+    first = grounding["label_considerations"][0]
+    assert first["references"] and first["detail"] and first["source"] == "openfda"
+    assert grounding["competitive_context"]
+
+
+@pytest.mark.unit
+def test_grounding_is_null_not_an_empty_object_when_there_is_nothing_to_ground(monkeypatch):
+    """codex iter-12 LOW. `treatment is not None` gated the payload, so a grounding
+    with no considerations, no competitive context and no note shipped as an empty
+    OBJECT while the schema and the TS type both document `null` for "no scenario to
+    ground". Not user-visible — the panel declines to render it — but a wire contract
+    that disagrees with its own documentation is the next defect waiting for a
+    consumer who believes the documentation.
+
+    Exercised through the SERVICE, not by asserting a dataclass default. The first
+    version of this test did the latter and proved nothing, which is the precise
+    failure shape this round was about.
+    """
+    import src.services.clinical_context.service as svc
+    from src.services.clinical_context.analysis_grounding import AnalysisGrounding
+
+    service = _svc_with_label_considerations()
+    # POSITIVE CONTROL: the same call yields a populated object before we empty it,
+    # so a later `is None` cannot pass just because the path went missing.
+    populated = service.get_context("Kisqali", "persistent_180d", treatment="copay_support")
+    assert populated["analysis_grounding"] is not None
+    assert populated["analysis_grounding"]["label_considerations"]
+
+    monkeypatch.setattr(svc, "ground_analysis", lambda *a, **k: AnalysisGrounding())
+    ctx = _svc_with_label_considerations().get_context(
+        "Kisqali", "persistent_180d", treatment="copay_support"
+    )
+    assert ctx["analysis_grounding"] is None, ctx["analysis_grounding"]

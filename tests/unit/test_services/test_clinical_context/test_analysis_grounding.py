@@ -1,0 +1,564 @@
+"""#1775 — grounding a causal scenario in the clinical context that bears on it.
+
+#1763 made the context follow the analysis for drug-therapy and covariate
+treatments. For COMMERCIAL levers it shipped an honest refusal instead — "Open
+Targets and the FDA label describe the therapy, not this lever" — and on the
+patient_journeys dataset 5 of the 10 selectable treatments are commercial. Half of
+all analyses therefore got a panel that declined to connect itself to the question.
+
+Refusing to make a claim ABOUT the lever was right. Refusing to ground the analysis
+was not: a copay-support persistence question has obvious clinical content bearing
+on it — what the label says drives discontinuation, and what a patient switches to.
+"""
+
+from __future__ import annotations
+
+import re
+
+import pytest
+
+from src.services.clinical_context.analysis_grounding import ground_analysis
+from src.services.clinical_context.brand_map import resolve_brand_profile, treatment_context_for
+from src.services.clinical_context.label_considerations import (
+    DOSAGE_SECTION,
+    WARNINGS_SECTION,
+    LabelConsideration,
+)
+
+_MONITORING = LabelConsideration(
+    title="QT Interval Prolongation",
+    # VERBATIM from the live ribociclib label. It used to be truncated to just
+    # "Monitor electrocardiograms (ECGs) and electrolytes prior to initiation." — a
+    # sentence that establishes only a pre-initiation GATE — and every persistence
+    # assertion in this file leaned on that fixture, so the suite agreed the item bore
+    # on staying on therapy when the fixture text said no such thing (codex iter-11
+    # HIGH). The real bullet carries both the gate AND ongoing monitoring, which is
+    # why it legitimately grounds either question. A fixture that is not what the
+    # label says cannot certify what we tell an analyst the label says.
+    detail=(
+        "KISQALI has been shown to prolong the QT interval in a concentration-dependent "
+        "manner. Monitor electrocardiograms (ECGs) and electrolytes prior to initiation "
+        "of treatment with KISQALI. Repeat ECGs at approximately Day 14 of the first "
+        "cycle, and as clinically indicated. Monitor electrolytes at the beginning of "
+        "each cycle for 6 cycles, and as clinically indicated."
+    ),
+    section=WARNINGS_SECTION,
+    references="2.2 , 5.3",
+)
+_SCHEDULE = LabelConsideration(
+    title="Advanced or Metastatic Breast Cancer Recommended starting dose",
+    detail="600 mg orally once daily for 21 consecutive days followed by 7 days off treatment.",
+    section=DOSAGE_SECTION,
+    references="2.1",
+)
+_INTERRUPTION = LabelConsideration(
+    title="Dosage and administration",
+    detail="Dose interruption, reduction, and/or discontinuation may be required based on "
+    "individual safety and tolerability.",
+    section=DOSAGE_SECTION,
+    references="2.2",
+)
+_EMBRYO = LabelConsideration(
+    title="Embryo-Fetal Toxicity",
+    detail="Can cause fetal harm. Advise females of reproductive potential to use effective "
+    "contraception during therapy.",
+    section=WARNINGS_SECTION,
+    references="5.7",
+)
+_ALL = (_MONITORING, _SCHEDULE, _INTERRUPTION, _EMBRYO)
+
+
+def _ground(
+    treatment,
+    outcome="persistent_180d",
+    considerations=_ALL,
+    brand="Kisqali",
+    label_source="openfda",
+):
+    """Defaults to a label that WAS read. Provenance is load-bearing: an empty
+    consideration list means "checked, none" under openfda and "could not check"
+    under static_fallback, and those must never share a sentence."""
+    return ground_analysis(
+        resolve_brand_profile(brand),
+        outcome=outcome,
+        treatment_context=treatment_context_for(brand, treatment),
+        label_considerations=considerations,
+        label_source=label_source,
+    )
+
+
+@pytest.mark.unit
+def test_a_commercial_lever_is_GROUNDED_not_refused():
+    """THE #1775 REGRESSION. copay_support -> persistent_180d used to receive no
+    clinical content at all for the treatment side."""
+    g = _ground("copay_support")
+    assert g.label_considerations, "a commercial analysis must still be grounded"
+    titles = [c.title for c in g.label_considerations]
+    assert "QT Interval Prolongation" in titles
+    assert g.competitive_context
+    assert g.note
+
+
+@pytest.mark.unit
+def test_grounding_never_claims_the_label_speaks_to_the_lever():
+    """The honesty boundary that #1763 was right about, preserved. The label says
+    nothing about copay assistance and must not appear to."""
+    g = _ground("copay_support")
+    low = g.note.lower()
+    assert "copay" in low  # the lever is named...
+    # ...but never as something the label or the regulator speaks to.
+    assert "label does not" in low or "not a claim" in low or "says nothing about" in low
+    # codex iter-11 HIGH: the assertions above only require a DENIAL to be present, so
+    # a note that both claimed the label speaks to copay AND appended "not a claim"
+    # would pass a test whose docstring promises the opposite.
+    #
+    # Checking for the absence of the affirmative phrasing does NOT work — the denial
+    # contains it ("none of the above is a claim that the label speaks to copay
+    # support"), so a plain substring check fires on the very sentence that makes the
+    # note honest. Truthfulness here is structural, not lexical: EVERY place the note
+    # connects the label to the lever must be negated where it stands.
+    for match in re.finditer(r"the label (?:speaks to|supports|covers|describes)", low):
+        preceding = low[max(0, match.start() - 60) : match.start()]
+        assert any(neg in preceding for neg in ("not ", "none", "nothing", "never", "no ")), (
+            f"unnegated claim at {match.start()}: ...{low[max(0, match.start() - 60) : match.end() + 40]}"
+        )
+
+
+@pytest.mark.unit
+def test_considerations_are_selected_by_the_OUTCOME_being_analysed():
+    """A persistence question wants what drives stopping — monitoring burden, dose
+    interruption, the dosing schedule. Embryo-fetal toxicity is real and important
+    and has nothing to do with 180-day persistence."""
+    g = _ground("copay_support", outcome="persistent_180d")
+    titles = [c.title for c in g.label_considerations]
+    assert "Dosage and administration" in titles  # dose interruption
+    assert "Embryo-Fetal Toxicity" not in titles
+
+
+@pytest.mark.unit
+def test_the_outcome_filter_is_disclosed_so_it_cannot_read_as_the_whole_label():
+    """Showing a filtered subset without saying so invites the reader to treat it as
+    the complete safety picture."""
+    g = _ground("copay_support")
+    assert "persistence" in g.note.lower() or "staying on" in g.note.lower()
+    assert "not the complete" in g.note.lower() or "full prescribing" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_an_initiation_outcome_selects_pre_initiation_gates_instead():
+    g = _ground("copay_support", outcome="treatment_initiated")
+    titles = [c.title for c in g.label_considerations]
+    assert "QT Interval Prolongation" in titles  # "prior to initiation"
+    assert "Advanced or Metastatic Breast Cancer Recommended starting dose" not in titles
+
+
+@pytest.mark.unit
+def test_the_competitive_context_frames_switching_as_a_competing_risk():
+    """A bare list of two competitor names does not ground anything. For a
+    persistence question the competitor set IS the alternative a patient switches
+    to, which is a competing risk for the outcome and a confounder for the estimate."""
+    g = _ground("copay_support")
+    ctx = g.competitive_context or ""
+    assert "Ibrance (palbociclib)" in ctx and "Verzenio (abemaciclib)" in ctx
+    assert "switch" in ctx.lower()
+
+
+@pytest.mark.unit
+def test_a_drug_therapy_analysis_is_grounded_too():
+    """Grounding is about the SCENARIO, not about rescuing commercial levers."""
+    g = _ground("treatment_arm")
+    assert g.label_considerations
+    assert g.competitive_context
+
+
+@pytest.mark.unit
+def test_no_label_considerations_yields_an_honest_empty_grounding():
+    """openFDA down, or a label with no parseable Highlights: say nothing rather
+    than invent a clinical consideration."""
+    g = _ground("copay_support", considerations=(), label_source="static_fallback")
+    assert g.label_considerations == ()
+    assert "could not" in g.note.lower() or "no label" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_an_uncurated_treatment_is_not_grounded_against_an_invented_scenario():
+    g = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=None,
+        label_considerations=_ALL,
+    )
+    assert g.label_considerations == ()
+    assert g.competitive_context is None
+
+
+# --- found by running the REAL providers against the LIVE labels ---------------
+
+
+@pytest.mark.unit
+def test_the_note_does_not_talk_about_stopping_on_an_initiation_outcome():
+    """Found live on Fabhalta psp_enrolled -> treatment_initiated: the commercial
+    clause was hardcoded to "the reasons a patient stops", which is the wrong
+    question entirely for an initiation outcome."""
+    g = _ground("copay_support", outcome="treatment_initiated")
+    low = g.note.lower()
+    assert "reasons a patient stops" not in low
+    assert "start" in low
+
+
+@pytest.mark.unit
+def test_a_label_that_read_fine_but_matched_nothing_is_not_reported_as_unreadable():
+    """Found live: the note said "The FDA label ... could not be read", when the
+    label had been read perfectly and simply carried no Highlights bullet bearing on
+    that outcome. That is the outage-vs-absence conflation of #1767 recurring here —
+    'we could not check' and 'we checked and there is none' are different claims."""
+    # _EMBRYO matches NEITHER theme. Using a persistence item here would match the
+    # initiation cue "prior to initiation" inside its own text and pass vacuously.
+    g = _ground("copay_support", outcome="treatment_initiated", considerations=(_EMBRYO,))
+    low = g.note.lower()
+    assert "could not be read" not in low
+    assert "none of" in low or "no highlighted" in low
+
+
+@pytest.mark.unit
+def test_no_considerations_at_all_still_reads_as_could_not_check():
+    """The other side of the same split: nothing came back from the label at all."""
+    g = _ground("copay_support", considerations=(), label_source="static_fallback")
+    assert "could not be read" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_a_boxed_warning_is_available_as_a_consideration():
+    """Found live on Fabhalta: its initiation gate — vaccinate before the first dose
+    — lives in the BOXED WARNING, which is prose rather than Highlights bullets and
+    so produced no consideration at all. It reaches the panel whole elsewhere, but
+    it was invisible to grounding."""
+    from src.services.clinical_context.label_considerations import (
+        BOXED_WARNING_SECTION,
+        boxed_warning_consideration,
+    )
+
+    item = boxed_warning_consideration(
+        "WARNING: SERIOUS INFECTIONS CAUSED BY ENCAPSULATED BACTERIA FABHALTA increases the "
+        "risk of serious infections. Complete or update vaccinations against encapsulated "
+        "bacteria at least 2 weeks prior to initiation."
+    )
+    assert item is not None
+    assert item.section == BOXED_WARNING_SECTION
+    assert item.source == "openfda"
+    g = _ground("copay_support", outcome="treatment_initiated", considerations=(item,))
+    assert [c.section for c in g.label_considerations] == [BOXED_WARNING_SECTION]
+    assert boxed_warning_consideration(None) is None
+    assert boxed_warning_consideration("   ") is None
+
+
+# --- codex iter-1 -------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_every_curated_outcome_gets_a_theme():
+    """codex HIGH. `low_gap_180d` (gap-free refill adherence) and `adopted`
+    (prescriber adoption) were omitted, so an adherence analysis — the one most
+    directly about staying on therapy — was grounded on NOTHING while claiming the
+    label could not be read."""
+    from src.services.clinical_context.analysis_grounding import _theme_for
+
+    for outcome in ("persistent_180d", "discontinued_180d", "adherent_180d", "low_gap_180d"):
+        assert _theme_for(outcome) == "persistence", outcome
+    for outcome in ("treatment_initiated", "adopted"):
+        assert _theme_for(outcome) == "initiation", outcome
+
+
+@pytest.mark.unit
+def test_an_adherence_outcome_is_grounded_like_a_persistence_one():
+    g = _ground("copay_support", outcome="low_gap_180d")
+    assert [c.title for c in g.label_considerations]
+    assert "staying on therapy" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_an_unrecognised_outcome_does_not_get_the_starting_therapy_story():
+    """codex HIGH. The theme phrase was a two-way ternary, so an outcome we have no
+    theme for fell through to 'starting therapy' — asserting a story about the
+    analysis that we never established."""
+    g = _ground("copay_support", outcome="some_unmapped_outcome")
+    low = g.note.lower()
+    assert "starting therapy" not in low
+    assert "staying on therapy" not in low
+    # The commercial backdrop clause defaulted to the initiation wording too.
+    assert "requirements for starting" not in low
+    assert "reasons a patient stops" not in low
+
+
+@pytest.mark.unit
+def test_a_label_read_with_no_parseable_items_is_not_reported_as_unreadable():
+    """codex HIGH — the #1767 conflation surviving my own fix for it. An empty
+    consideration list meant 'could not be read', but the provider returns
+    source='openfda' with an empty tuple when the label WAS read and simply carried
+    no parseable Highlights."""
+    g = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(),
+        label_source="openfda",
+    )
+    assert "could not be read" not in g.note.lower()
+    assert "no highlighted" in g.note.lower() or "carries no" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_an_unreachable_label_still_reads_as_could_not_check():
+    g = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(),
+        label_source="static_fallback",
+    )
+    assert "could not be read" in g.note.lower()
+
+
+@pytest.mark.unit
+def test_a_bare_clinical_reduction_does_not_count_as_a_persistence_factor():
+    """codex MEDIUM. The cue list contained bare 'reduction', which matches any
+    clinical reduction ('reduction in tumour size') rather than DOSE reduction."""
+    item = LabelConsideration(
+        title="Efficacy",
+        detail="A reduction in circulating tumour cells was observed.",
+        section=WARNINGS_SECTION,
+        references="5.9",
+    )
+    g = _ground("copay_support", considerations=(item,))
+    assert g.label_considerations == ()
+
+
+@pytest.mark.unit
+def test_an_unmapped_outcome_gets_no_competitive_claim_either():
+    """codex iter-8 HIGH. `_select` correctly returns nothing for an outcome we never
+    mapped, but `_competitive_context` fell through to a generic "Same-class
+    alternatives in X: ..." — and the panel renders that under the heading "What
+    bears on this analysis". Asserting that competitors bear on an outcome the code
+    explicitly declined to map is borrowed relevance, which is the exact complaint
+    #1763 was filed about.
+
+    No theme means no grounding CLAIMS at all. The honest note still renders, and
+    says what was and was not established.
+    """
+    profile = resolve_brand_profile("Kisqali")
+    grounding = ground_analysis(
+        profile,
+        outcome="some_unmapped_outcome",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(),
+        label_source="openfda",
+    )
+    assert grounding.outcome_theme == ""
+    assert grounding.label_considerations == ()
+    assert grounding.competitive_context is None, grounding.competitive_context
+    # the disclosure survives — it is the only thing left to render
+    assert grounding.note
+    # codex iter-10 HIGH: this test asserted only that a note EXISTS while its
+    # docstring claimed "no grounding CLAIMS at all", so it passed while the note
+    # still told the reader how to read the estimate. The commercial paragraph kept
+    # a default backdrop — "the clinical picture that has nothing to do with access"
+    # — for a theme we never established.
+    assert "clinical backdrop" not in grounding.note.lower(), grounding.note
+    assert "read alongside" not in grounding.note.lower(), grounding.note
+    # the #1763 boundary must SURVIVE, though: the label is still silent on the lever
+    assert "commercial access lever" in grounding.note.lower()
+    assert "says nothing about it" in grounding.note.lower()
+
+
+@pytest.mark.unit
+def test_a_cue_trapped_inside_an_initiation_clause_is_not_persistence():
+    """codex iter-11 HIGH, narrowed by measurement.
+
+    Cue matching ran over the whole item, so "Monitor ECGs and electrolytes prior to
+    initiation." was called a factor "bearing on staying on therapy" — the note said
+    so — when the text establishes only a pre-initiation gate.
+
+    The blanket fix (an item mentioning initiation is not persistence) would have been
+    the spacing-rule mistake again: on the LIVE ribociclib label all three flagged
+    items carry BOTH a gate and ongoing monitoring — "Perform CBC before initiating
+    therapy. Monitor CBC every 2 weeks..." — and excluding them drops three real
+    persistence warnings. So the rule is per SENTENCE: a theme is earned when some
+    sentence carries its cue WITHOUT being scoped to the other one.
+    """
+    gate_only = LabelConsideration(
+        title="QT Interval Prolongation",
+        detail="Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.",
+        section="warnings_and_cautions",
+        references="2.2 , 5.3",
+    )
+    both = LabelConsideration(
+        title="Neutropenia",
+        detail=(
+            "Perform complete blood count (CBC) before initiating therapy with KISQALI. "
+            "Monitor CBC every 2 weeks for the first 2 cycles, at the beginning of each "
+            "subsequent 4 cycles, and as clinically indicated."
+        ),
+        section="warnings_and_cautions",
+        references="2.2 , 5.5",
+    )
+    picked = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(gate_only, both),
+        label_source="openfda",
+    ).label_considerations
+    titles = [c.title for c in picked]
+    assert "Neutropenia" in titles, "ongoing monitoring is genuine persistence grounding"
+    assert "QT Interval Prolongation" not in titles, titles
+    # and it is still an initiation gate, which is a claim we HAVE earned
+    init = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="treatment_initiated",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(gate_only, both),
+        label_source="openfda",
+    ).label_considerations
+    assert "QT Interval Prolongation" in [c.title for c in init]
+
+
+@pytest.mark.unit
+def test_an_unmapped_outcome_blames_our_mapping_not_the_label():
+    """codex iter-12 HIGH. The note had three branches and none of them fit an
+    outcome we never mapped, so it fell into the one for "the label was read".
+
+    It then said "none of its highlighted factors are phrased around tolerability" —
+    a claim about the LABEL — when `_select` had returned nothing because
+    `_theme_for` produced no theme and relevance was never evaluated at all. With an
+    item literally saying "Dose interruption may be required based on individual
+    safety and tolerability" sitting in the input, the sentence is not merely
+    unearned, it is false.
+
+    The gap is in OUR mapping. Say that.
+    """
+    item = LabelConsideration(
+        title="Dosage and administration",
+        detail="Dose interruption may be required based on individual safety and tolerability.",
+        section=DOSAGE_SECTION,
+        references="2.2",
+    )
+    note = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="tolerability",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(item,),
+        label_source="openfda",
+    ).note.lower()
+    assert "none of its highlighted factors" not in note, note
+    assert "was read, but" not in note, note
+    # it must name the real reason: we never mapped this outcome
+    assert "not one we have mapped" in note or "unmapped" in note or "not mapped" in note, note
+
+
+@pytest.mark.unit
+def test_an_unmapped_outcome_is_named_readably_not_as_a_dict_key():
+    """Small, but it is the analyst-facing sentence: the unmapped branch rendered the
+    raw outcome identifier, so the panel said "Trx_volume is not one we have mapped".
+    Naming the identifier is correct — it is what the analysis selected — but showing
+    it with its underscore is a dict key leaking into prose."""
+    note = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="trx_volume",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(),
+        label_source="openfda",
+    ).note
+    assert "Trx_volume" not in note, note
+    assert "Trx volume is not one we have mapped" in note, note
+
+
+@pytest.mark.unit
+def test_a_cue_in_the_TITLE_cannot_bypass_sentence_scoping():
+    """codex iter-15 HIGH, on both the code and my test for it.
+
+    `_earns_theme` scanned "{title}. {detail}", making the title its OWN sentence. A
+    title like "ECG Monitoring" then carried the persistence cue with no initiation
+    cue beside it, so a bullet that only gates STARTING therapy earned "bearing on
+    staying on therapy" — the exact claim sentence scoping was added to prevent,
+    bypassed through the heading.
+
+    My regression test could not catch it: its fixture title is "QT Interval
+    Prolongation", which contains no cue, so the title path was never exercised. A
+    near-miss of the same kind as the panel copy — the test proved one shape of title
+    was safe and its docstring claimed all of them were.
+
+    A title is a HEADING: it introduces the bullet's first sentence rather than
+    standing as a claim of its own. Measured across the three curated brands, scoping
+    it that way changes no real selection (6/3, 3/1, 2/0 either way).
+    """
+    gate_titled_like_persistence = LabelConsideration(
+        title="ECG Monitoring",
+        detail="Monitor electrocardiograms prior to initiation of treatment.",
+        section=WARNINGS_SECTION,
+        references="5.1",
+    )
+    picked = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(gate_titled_like_persistence,),
+        label_source="openfda",
+    )
+    assert [c.title for c in picked.label_considerations] == [], [
+        c.title for c in picked.label_considerations
+    ]
+    # POSITIVE CONTROL: the same title with ongoing monitoring in the body IS
+    # persistence, so the assertion above is not passing because titles stopped
+    # counting entirely.
+    with_ongoing = LabelConsideration(
+        title="ECG Monitoring",
+        detail=(
+            "Monitor electrocardiograms prior to initiation of treatment. "
+            "Repeat ECGs at Day 14 and monitor electrolytes at the beginning of each cycle."
+        ),
+        section=WARNINGS_SECTION,
+        references="5.1",
+    )
+    kept = ground_analysis(
+        resolve_brand_profile("Kisqali"),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for("Kisqali", "copay_support"),
+        label_considerations=(with_ongoing,),
+        label_source="openfda",
+    )
+    assert [c.title for c in kept.label_considerations] == ["ECG Monitoring"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("brand", ["Kisqali", "Remibrutinib", "Fabhalta"])
+def test_competitors_are_named_by_indication_not_by_drug_class(brand):
+    """codex iter-17 HIGH — the clearest "tells an analyst something untrue" yet.
+
+    The copy said alternatives were "within the same class". For two of the three
+    curated brands that is false, and the registry's own comments say so:
+
+      * Remibrutinib is a BTK inhibitor; its curated alternatives are Xolair
+        (omalizumab, anti-IgE) and Dupixent (dupilumab, anti-IL-4Ralpha), commented
+        "CSU biologics approved for CSU".
+      * Iptacopan is a complement Factor B inhibitor; its IgAN alternatives are
+        Tarpeyo (budesonide, a corticosteroid) and Filspari (sparsentan, an
+        endothelin/angiotensin antagonist), commented "IgAN-approved therapies".
+
+    Only Kisqali's are genuinely same-class (ATC L01EF CDK4/6). `competitor_map` is
+    KEYED BY DISEASE and every curated comment describes an approval in that
+    indication, so indication is what the data supports and indication is what the
+    panel may say. A wrong pharmacological claim is worse than a vaguer true one.
+    """
+    grounding = ground_analysis(
+        resolve_brand_profile(brand),
+        outcome="persistent_180d",
+        treatment_context=treatment_context_for(brand, "copay_support"),
+        label_considerations=(),
+        label_source="openfda",
+    )
+    context = (grounding.competitive_context or "").lower()
+    assert context, f"{brand}: no competitive context"
+    assert "same class" not in context, context
+    assert "same-class" not in context, context
+    # POSITIVE CONTROL: it still names the alternatives and ties them to the outcome.
+    assert "competing risk" in context, context

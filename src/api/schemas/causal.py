@@ -1020,6 +1020,72 @@ class TreatmentContext(BaseModel):
     source: str = Field(default="curated", description="Always 'curated'.")
 
 
+class LabelConsideration(BaseModel):
+    """One consideration lifted from the FDA label, with the section it came from.
+
+    ``detail`` is never summarised and never generated — a paraphrased clinical
+    consideration is the plausible-but-wrong value CLAUDE.md forbids in a user-facing
+    path. ``title`` and ``references`` carry a weaker guarantee, spelled out because
+    this docstring used to promise "one VERBATIM bullet ... the reference lets an
+    analyst open the prescribing information at that paragraph" for all three fields,
+    and that was false for two of the emitters (codex iter-11 HIGH):
+
+    * ``detail`` — always a contiguous verbatim run of the named section.
+    * ``title`` — the bullet's own verbatim heading, or the plain name of its section
+      when the bullet has none. Our words in that case, chosen so they cannot be
+      mistaken for clinical text.
+    * ``references`` — a real label cross-reference for Highlights bullets, which does
+      open the prescribing information at that paragraph. For the boxed warning it is
+      the literal "Boxed warning": that section carries no cross-reference of its own,
+      and naming it is the honest alternative to inventing one.
+    """
+
+    title: str = Field(..., description="The bullet's heading, or the section name")
+    detail: str = Field(..., description="Verbatim label text")
+    section: str = Field(..., description="openFDA section key, e.g. warnings_and_cautions")
+    references: str = Field(..., description="Label cross-reference, e.g. '2.2 , 5.3'")
+    source: str = Field(default="openfda", description="Always openfda for label text")
+
+
+class AnalysisGrounding(BaseModel):
+    """Clinical grounding for ONE (treatment -> outcome) analysis (#1775).
+
+    #1763 made the panel follow the analysis for therapy and covariate treatments
+    but answered COMMERCIAL levers with a refusal, which on patient_journeys is 5 of
+    the 10 selectable treatments. Declining to claim the label speaks to a lever is
+    right; declining to ground the analysis was not.
+    """
+
+    label_considerations: List[LabelConsideration] = Field(
+        default_factory=list,
+        description=(
+            "Label factors selected by the OUTCOME under analysis. A filtered view, "
+            "not the complete safety profile — `note` says so."
+        ),
+    )
+    competitive_context: Optional[str] = Field(
+        default=None,
+        description=(
+            "Alternatives APPROVED FOR THE SAME CONDITION, framed against the "
+            "outcome: on a persistence question a switch is a competing risk, not a "
+            "failure to persist. Not 'same-class', which is what this said and what "
+            "the panel copy repeated — the curated map is keyed by DISEASE, and for "
+            "two of three brands the alternatives are a different pharmacological "
+            "class entirely."
+        ),
+    )
+    note: str = Field(
+        default="",
+        description=(
+            "States the outcome filter, and for a commercial lever states that the "
+            "label says nothing about the lever and none of this claims otherwise."
+        ),
+    )
+    outcome_theme: str = Field(
+        default="", description="'persistence' | 'initiation' | '' if unrecognised"
+    )
+
+
 class ClinicalContext(BaseModel):
     """Brand-faithful, sourced clinical NARRATIVE for a discovered effect.
 
@@ -1061,6 +1127,17 @@ class ClinicalContext(BaseModel):
         description=(
             "The real pivotal-endpoint framing our synthetic outcome stands in for "
             "(None when unmapped)."
+        ),
+    )
+    analysis_grounding: Optional[AnalysisGrounding] = Field(
+        default=None,
+        description=(
+            "Clinical grounding for this specific analysis: label factors selected "
+            "by the outcome, plus the competitive framing. None whenever there is no "
+            "scenario to ground — on the brand-level view (no treatment), AND when a "
+            "treatment is supplied that resolves to no curated context, which yields "
+            "nothing to say rather than an empty object. The narrower wording named "
+            "only the brand-level case (codex iter-13 MEDIUM)."
         ),
     )
     mechanism: MechanismOfAction

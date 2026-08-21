@@ -441,3 +441,180 @@ describe('ClinicalContextPanel — citation provenance chips (#1763)', () => {
     expect(screen.getByText(/RIBOCICLIB SUCCINATE/i)).toBeInTheDocument();
   });
 });
+
+describe('#1775 — grounding the causal scenario', () => {
+  const GROUNDED: ClinicalContext = {
+    ...FULL,
+    our_treatment: 'copay_support',
+    analysis_grounding: {
+      label_considerations: [
+        {
+          title: 'QT Interval Prolongation',
+          detail: 'Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.',
+          section: 'warnings_and_cautions',
+          references: '2.2 , 5.3',
+          source: 'openfda',
+        },
+        {
+          title: 'Dosage and administration',
+          detail:
+            'Dose interruption, reduction, and/or discontinuation may be required based on individual safety and tolerability.',
+          section: 'dosage_and_administration',
+          references: '2.2',
+          source: 'openfda',
+        },
+      ],
+      competitive_context:
+        'A patient who stops ribociclib in breast cancer has alternatives within the same class: Ibrance (palbociclib), Verzenio (abemaciclib). A switch to one of these is a competing risk for this outcome.',
+      note: 'Label factors bearing on staying on therapy ... This is a filtered view, not the complete safety profile. Copay support is a commercial access lever and the label says nothing about it.',
+      outcome_theme: 'persistence',
+    },
+  };
+
+  it('grounds a COMMERCIAL analysis instead of only refusing', () => {
+    render(<ClinicalContextPanel context={GROUNDED} />);
+    expect(screen.getByText(/what bears on this analysis/i)).toBeInTheDocument();
+    expect(screen.getByText(/QT Interval Prolongation/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Dose interruption, reduction, and\/or discontinuation/)
+    ).toBeInTheDocument();
+  });
+
+  it('cites the label section each consideration came from', () => {
+    render(<ClinicalContextPanel context={GROUNDED} />);
+    expect(screen.getByText(/label 2\.2 , 5\.3/)).toBeInTheDocument();
+  });
+
+  it('frames the competitor set as a competing risk for the outcome', () => {
+    render(<ClinicalContextPanel context={GROUNDED} />);
+    expect(screen.getByText(/competing risk for this outcome/i)).toBeInTheDocument();
+  });
+
+  it('keeps the boundary: the label says nothing about the lever', () => {
+    render(<ClinicalContextPanel context={GROUNDED} />);
+    expect(screen.getByText(/the label says nothing about it/i)).toBeInTheDocument();
+  });
+
+  it('renders nothing when there is no scenario to ground', () => {
+    render(<ClinicalContextPanel context={{ ...FULL, analysis_grounding: null }} />);
+    expect(screen.queryByText(/what bears on this analysis/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('ClinicalContextPanel grounding disclosure', () => {
+  it('still shows the note when there is nothing to ground on', () => {
+    // The note is the ONLY thing that separates "the label was read and carries
+    // nothing bearing on this outcome" from "we could not read the label" (#1767).
+    // Gating the block on considerations-or-competitors meant that disclosure
+    // vanished in exactly the case it exists for. Today every curated brand has
+    // competitors so this never fired in production — the honesty was accidental,
+    // not structural, and one brand added without a competitor map would have
+    // silently removed it.
+    render(
+      <ClinicalContextPanel
+        context={{
+          ...FULL,
+          analysis_grounding: {
+            label_considerations: [],
+            competitive_context: null,
+            note: 'The FDA label for Kisqali could not be read for factors bearing on 180-day treatment persistence, so what is missing here is unknown, not absent.',
+            outcome_theme: 'persistence',
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/could not be read/i)).toBeInTheDocument();
+    expect(screen.getByText(/unknown, not absent/i)).toBeInTheDocument();
+  });
+});
+
+describe('ClinicalContextPanel grounding heading honesty', () => {
+  it('does not claim something bears on the analysis when nothing does', () => {
+    // codex iter-10 HIGH. The body correctly said "unknown, not absent" while the
+    // HEADING above it announced "What bears on this analysis" — a claim that
+    // something does. The earlier test passed for the wrong reason: it checked the
+    // disclosure appeared, never that the surrounding claim stayed honest.
+    render(
+      <ClinicalContextPanel
+        context={{
+          ...FULL,
+          analysis_grounding: {
+            label_considerations: [],
+            competitive_context: null,
+            note: 'The FDA label for Kisqali could not be read for factors bearing on 180-day treatment persistence, so what is missing here is unknown, not absent.',
+            outcome_theme: 'persistence',
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/unknown, not absent/i)).toBeInTheDocument();
+    expect(screen.queryByText(/what bears on this analysis/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/nothing established for this analysis/i)).toBeInTheDocument();
+  });
+
+  it('still uses the affirmative heading when there IS something', () => {
+    render(
+      <ClinicalContextPanel
+        context={{
+          ...FULL,
+          analysis_grounding: {
+            label_considerations: [
+              {
+                title: 'QT Interval Prolongation',
+                detail: 'Monitor electrocardiograms (ECGs) and electrolytes prior to initiation.',
+                section: 'warnings_and_cautions',
+                references: '2.2 , 5.3',
+                source: 'openfda',
+              },
+            ],
+            competitive_context: null,
+            note: 'Label factors bearing on staying on therapy.',
+            outcome_theme: 'persistence',
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/what bears on this analysis/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing established for this analysis/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('ClinicalContextPanel endpoint copy honesty', () => {
+  it('does not claim the outcome stands in for the endpoints when it is unmapped', () => {
+    // codex iter-13 MEDIUM. The endpoints render for any brand, but "the clinical
+    // ground truth our synthetic outcome stands in for" is a claim about a MAPPING,
+    // and the backend returns mapped_endpoint: null when the outcome is not one we
+    // have mapped. Same defect as the grounding heading — the sentence around the
+    // data promised more than the data carried.
+    // codex iter-14 HIGH: this asserted /stands in for/i, and the claim that survived
+    // was the panel INTRO's plural "stand in for". The regex simply did not match the
+    // text still on screen, so the test passed while the defect rendered. Vacuity by
+    // near-miss rather than by empty collection — match BOTH forms, and scan the whole
+    // container rather than trusting one query.
+    const { container } = render(
+      <ClinicalContextPanel context={{ ...FULL, mapped_endpoint: null }} />,
+    );
+    expect(container.textContent).not.toMatch(/stands? in for/i);
+    expect(screen.getByText(/not one we have mapped to any of them/i)).toBeInTheDocument();
+  });
+
+  it('still makes the mapping claim when the outcome IS mapped', () => {
+    const { container } = render(<ClinicalContextPanel context={FULL} />);
+    // POSITIVE CONTROL for the assertion above: both places that make the claim.
+    expect(container.textContent).toMatch(/outcomes stand in for/i);
+    expect(container.textContent).toMatch(/outcome stands in for/i);
+  });
+});
+
+describe('ClinicalContextPanel copy renders as text, not markup', () => {
+  it('never shows a raw HTML entity to the reader', () => {
+    // Caught immediately after writing it: `&rsquo;` inside a JSX *expression* is a
+    // plain string, not an entity, so the conditional intro would have printed
+    // "brand&rsquo;s" on screen. JSX only decodes entities in literal text children.
+    for (const ctx of [FULL, { ...FULL, mapped_endpoint: null }]) {
+      const { container, unmount } = render(<ClinicalContextPanel context={ctx} />);
+      expect(container.textContent).not.toMatch(/&[a-z]+;/i);
+      unmount();
+    }
+  });
+});

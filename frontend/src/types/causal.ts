@@ -499,6 +499,42 @@ export interface CompetitorLandscape {
  * `honesty_label` states the boundary: estimate = synthetic cohort; context =
  * real, cited. A `static_fallback` source means the live API was unreachable.
  */
+/** One consideration lifted from the FDA label, carrying the section it came from.
+ *
+ * `detail` is always verbatim label text — never summarised, never generated.
+ * `title` is the bullet's own heading or, when it has none, the plain name of its
+ * section. `references` is a real label cross-reference an analyst can open the
+ * prescribing information at, EXCEPT for the boxed warning, where it is the literal
+ * "Boxed warning" — that section carries no cross-reference of its own. This comment
+ * used to promise "one verbatim bullet ... open the prescribing information at that
+ * paragraph" for all three fields, which was false for two of the emitters. */
+export interface LabelConsideration {
+  /** The bullet's own heading, or the section name when it carries none. */
+  title: string;
+  /** Verbatim label text. */
+  detail: string;
+  /** openFDA section key, e.g. `warnings_and_cautions`. */
+  section: string;
+  /** Label cross-reference, e.g. `2.2 , 5.3`. */
+  references: string;
+  source: string;
+}
+
+/** Clinical grounding for one causal scenario (#1775). */
+export interface AnalysisGrounding {
+  /** Label factors selected by the OUTCOME under analysis. A filtered view, not the
+   * complete safety profile — `note` says so. */
+  label_considerations: LabelConsideration[];
+  /** Alternatives APPROVED FOR THE SAME CONDITION, framed against the outcome: on a
+   * persistence question a switch is a competing risk, not a simple failure to
+   * persist. Not "same-class" — the curated map is keyed by disease, and for two of
+   * three brands the alternatives are a different pharmacological class entirely. */
+  competitive_context?: string | null;
+  note: string;
+  /** `persistence` | `initiation` | '' when the outcome is unrecognised. */
+  outcome_theme: string;
+}
+
 export interface ClinicalContext {
   brand: string;
   drug_name: string;
@@ -528,6 +564,14 @@ export interface ClinicalContext {
   competitor_landscape?: CompetitorLandscape | null;
   /** Public-KG evidence for this specific analysis; null without a treatment. */
   causal_evidence?: CausalEvidence | null;
+  /** #1775 — clinical grounding for THIS treatment -> outcome pair: label factors
+   * selected by the outcome, plus the competitive framing. Null whenever there is no
+   * scenario to ground: without a treatment, AND when a treatment resolves to no
+   * curated context — that yields nothing to say rather than an empty object. (The
+   * previous wording named only the no-treatment case.) Present for commercial levers
+   * too: declining to claim the label speaks to a lever is right, declining to ground
+   * the analysis was not. */
+  analysis_grounding?: AnalysisGrounding | null;
   honesty_label: string;
 }
 

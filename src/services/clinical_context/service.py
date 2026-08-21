@@ -16,6 +16,7 @@ import time
 from dataclasses import replace
 from typing import Any, Dict, Optional, Tuple
 
+from src.services.clinical_context.analysis_grounding import ground_analysis
 from src.services.clinical_context.brand_map import (
     BrandClinicalProfile,
     TreatmentContext,
@@ -301,6 +302,48 @@ class ClinicalContextService:
         # always present for brands that have one, so the brand of interest gets a
         # brand-faithful reference regardless of what the live relevance search above
         # returned. The URL is built from the PMID; source is honestly "curated".
+        # #1775: ground the SCENARIO. The label considerations ride along on the
+        # brand-level indications fragment (already cached), and the selection by
+        # outcome costs no I/O. Commercial levers are grounded like any other
+        # analysis — declining to claim the label speaks to a lever is right,
+        # declining to ground the analysis at all was not.
+        grounding = ground_analysis(
+            profile,
+            outcome=outcome,
+            treatment_context=treatment_context_for(profile.brand, treatment),
+            label_considerations=indications.label_considerations,
+            # Provenance, not decoration: an empty list means "the label was read and
+            # carries none" under openfda and "we could not read the label" under the
+            # curated fallback. Those are different claims (#1767).
+            label_source=indications.source,
+        )
+        grounding_payload: Optional[Dict[str, Any]] = None
+        # `treatment is not None` is necessary but not sufficient. An uncurated
+        # treatment yields a grounding with no considerations, no competitive context
+        # and no note, and we were shipping that as an EMPTY OBJECT while the schema
+        # and the TS type both document `null` for "no scenario to ground". The panel
+        # happened not to render it, so nothing user-visible was wrong — but a wire
+        # contract that disagrees with its own documentation is the next defect
+        # waiting for a consumer who trusts the docs (codex iter-12 LOW).
+        has_grounding = bool(
+            grounding.label_considerations or grounding.competitive_context or grounding.note
+        )
+        if treatment is not None and has_grounding:
+            grounding_payload = {
+                "label_considerations": [
+                    {
+                        "title": c.title,
+                        "detail": c.detail,
+                        "section": c.section,
+                        "references": c.references,
+                        "source": c.source,
+                    }
+                    for c in grounding.label_considerations
+                ],
+                "competitive_context": grounding.competitive_context,
+                "note": grounding.note,
+                "outcome_theme": grounding.outcome_theme,
+            }
         seminal_payload: Optional[Dict[str, Any]] = None
         if profile.seminal_rwe:
             s = profile.seminal_rwe
@@ -378,6 +421,7 @@ class ClinicalContextService:
             "mapped_endpoint": endpoint_mapping_for_outcome(brand, outcome),
             "treatment_context": treatment_payload,
             "analysis_framing": analysis_framing_sentence(profile, outcome, treatment),
+            "analysis_grounding": grounding_payload,
             "mechanism": {
                 "mechanism_of_action": moa.mechanism_of_action,
                 "source": moa.source,

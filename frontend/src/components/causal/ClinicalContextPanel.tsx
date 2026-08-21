@@ -15,6 +15,7 @@
 import {
   BookText,
   Building2,
+  ClipboardList,
   ExternalLink,
   FlaskConical,
   Microscope,
@@ -107,6 +108,8 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
     treatment_context,
     analysis_framing,
     causal_evidence,
+    analysis_grounding,
+    mapped_endpoint,
   } = context;
   // Provenance-aware copy: the endpoint section renders for BOTH the live CT.gov
   // result and the curated static fallback, so the explanatory text must not claim
@@ -119,10 +122,19 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           <Stethoscope className="h-4 w-4 text-muted-foreground" />
           <p className="text-sm font-medium">Clinical context</p>
         </div>
+        {/* The mapping claim lives in TWO places in this file and I fixed only the
+            other one. `mapped_endpoint` is nullable, so "the real trial endpoints our
+            outcomes stand in for" is unearned for an outcome we never mapped, exactly
+            as it was sixty lines below (codex iter-14 HIGH). The claim is the unit,
+            not the file — and here, not even the file. */}
         <p className="mt-1 text-xs text-muted-foreground">
-          Grounds this commercial signal in the brand&rsquo;s clinical reality — its mechanism,
-          the real trial endpoints our outcomes stand in for, and the approved labeling that
-          keeps any read on-label.
+          The brand&rsquo;s clinical reality alongside this analysis — its mechanism,
+          {mapped_endpoint
+            ? ' the real trial endpoints our outcomes stand in for,'
+            : ' this brand\u2019s real trial endpoints,'}{' '}
+          and the approved labeling. The label describes the therapy and its indication; it
+          makes no claim about a commercial lever, and nothing below reads a commercial
+          result as on-label.
         </p>
       </div>
 
@@ -185,13 +197,79 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
               trial endpoints
             </p>
           )}
+          {/* "the clinical ground truth our synthetic outcome stands in for" is a
+              claim about a MAPPING, and the backend returns `mapped_endpoint: null`
+              whenever the outcome is not one we have mapped. The copy asserted the
+              correspondence regardless (codex iter-13 MEDIUM), so an unmapped outcome
+              got trial endpoints presented as its clinical equivalent. Same defect as
+              the grounding heading: the sentence around the data made a promise the
+              data did not carry. */}
           <p className="mt-1 text-xs text-muted-foreground">
-            {endpointsFromCtgov
-              ? 'What this brand’s pivotal trials actually measured — the clinical ground truth our synthetic outcome stands in for.'
-              : 'The disease’s established pivotal efficacy measures (curated reference) — the clinical ground truth our synthetic outcome stands in for.'}
+            {mapped_endpoint
+              ? endpointsFromCtgov
+                ? 'What this brand’s pivotal trials actually measured — the clinical ground truth our synthetic outcome stands in for.'
+                : 'The disease’s established pivotal efficacy measures (curated reference) — the clinical ground truth our synthetic outcome stands in for.'
+              : endpointsFromCtgov
+                ? 'What this brand’s pivotal trials actually measured. This analysis’s outcome is not one we have mapped to any of them.'
+                : 'The disease’s established pivotal efficacy measures (curated reference). This analysis’s outcome is not one we have mapped to any of them.'}
           </p>
         </div>
       )}
+
+      {/* #1775 — clinical grounding for THIS scenario. Verbatim label factors chosen
+          by the OUTCOME (what drives stopping, or what gates starting) plus the
+          competitive framing. Shown for commercial levers too: the panel used to
+          answer a copay-support question with a refusal and stop there, which is the
+          "accurate but isolated" complaint #1763 was filed about, still live for half
+          the treatment space. The note carries the boundary — the label says nothing
+          about the lever — so nothing here reads as a regulatory claim about it.
+
+          The `note` alone is enough to render this block. It is the only thing that
+          separates "the label was read and carries nothing bearing on this outcome"
+          from "we could not read the label" (#1767), so gating it behind
+          considerations-or-competitors removed the disclosure in exactly the case it
+          exists for. Every curated brand currently has competitors, which made that
+          honesty accidental rather than structural — one brand added without a
+          competitor map would have silently dropped it. */}
+      {analysis_grounding &&
+        (analysis_grounding.label_considerations.length > 0 ||
+          analysis_grounding.competitive_context ||
+          analysis_grounding.note) && (
+          <div className="text-sm">
+            <div className="flex items-center gap-1 text-muted-foreground">
+              <ClipboardList className="h-3.5 w-3.5" />
+              {/* The heading is a CLAIM. With nothing selected and no competitive
+                  framing, the body honestly said "unknown, not absent" underneath a
+                  header announcing that something bears on the analysis (codex
+                  iter-10 HIGH). The disclosure still renders — it is the only thing
+                  distinguishing "we read the label and found nothing" from "we could
+                  not read it" — but it no longer arrives under a claim it refutes. */}
+              {analysis_grounding.label_considerations.length > 0 ||
+              analysis_grounding.competitive_context
+                ? 'What bears on this analysis'
+                : 'Nothing established for this analysis'}
+            </div>
+            {analysis_grounding.label_considerations.length > 0 && (
+              <ul className="mt-1 space-y-1">
+                {analysis_grounding.label_considerations.map((consideration) => (
+                  <li key={`${consideration.section}-${consideration.references}-${consideration.title}`}>
+                    <span className="font-medium">{consideration.title}</span>
+                    <span className="text-muted-foreground"> — {consideration.detail}</span>
+                    <Badge variant="outline" className="ml-2 align-middle text-xs">
+                      label {consideration.references}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {analysis_grounding.competitive_context && (
+              <p className="mt-1">{analysis_grounding.competitive_context}</p>
+            )}
+            {analysis_grounding.note && (
+              <p className="mt-1 text-xs text-muted-foreground">{analysis_grounding.note}</p>
+            )}
+          </div>
+        )}
 
       {/* Public-KG evidence for THIS analysis: the Open Targets indication edge and
           literature whose abstracts were verified to name both entities. A commercial

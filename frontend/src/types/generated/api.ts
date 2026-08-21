@@ -6452,6 +6452,39 @@ export interface components {
             expected_response: number;
         };
         /**
+         * AnalysisGrounding
+         * @description Clinical grounding for ONE (treatment -> outcome) analysis (#1775).
+         *
+         *     #1763 made the panel follow the analysis for therapy and covariate treatments
+         *     but answered COMMERCIAL levers with a refusal, which on patient_journeys is 5 of
+         *     the 10 selectable treatments. Declining to claim the label speaks to a lever is
+         *     right; declining to ground the analysis was not.
+         */
+        AnalysisGrounding: {
+            /**
+             * Label Considerations
+             * @description Label factors selected by the OUTCOME under analysis. A filtered view, not the complete safety profile — `note` says so.
+             */
+            label_considerations?: components["schemas"]["LabelConsideration"][];
+            /**
+             * Competitive Context
+             * @description Alternatives APPROVED FOR THE SAME CONDITION, framed against the outcome: on a persistence question a switch is a competing risk, not a failure to persist. Not 'same-class', which is what this said and what the panel copy repeated — the curated map is keyed by DISEASE, and for two of three brands the alternatives are a different pharmacological class entirely.
+             */
+            competitive_context?: string | null;
+            /**
+             * Note
+             * @description States the outcome filter, and for a commercial lever states that the label says nothing about the lever and none of this claims otherwise.
+             * @default
+             */
+            note: string;
+            /**
+             * Outcome Theme
+             * @description 'persistence' | 'initiation' | '' if unrecognised
+             * @default
+             */
+            outcome_theme: string;
+        };
+        /**
          * AnalysisMethod
          * @description Analysis methods.
          * @enum {string}
@@ -7653,6 +7686,8 @@ export interface components {
              * @description The real pivotal-endpoint framing our synthetic outcome stands in for (None when unmapped).
              */
             mapped_endpoint?: string | null;
+            /** @description Clinical grounding for this specific analysis: label factors selected by the outcome, plus the competitive framing. None whenever there is no scenario to ground — on the brand-level view (no treatment), AND when a treatment is supplied that resolves to no curated context, which yields nothing to say rather than an empty object. The narrower wording named only the brand-level case (codex iter-13 MEDIUM). */
+            analysis_grounding?: components["schemas"]["AnalysisGrounding"] | null;
             mechanism: components["schemas"]["MechanismOfAction"];
             pivotal_endpoints: components["schemas"]["PivotalEndpoint"];
             /** @description A real cited RWE reference; None when none was found. */
@@ -12695,6 +12730,54 @@ export interface components {
              * @description When applied
              */
             applied_at?: string | null;
+        };
+        /**
+         * LabelConsideration
+         * @description One consideration lifted from the FDA label, with the section it came from.
+         *
+         *     ``detail`` is never summarised and never generated — a paraphrased clinical
+         *     consideration is the plausible-but-wrong value CLAUDE.md forbids in a user-facing
+         *     path. ``title`` and ``references`` carry a weaker guarantee, spelled out because
+         *     this docstring used to promise "one VERBATIM bullet ... the reference lets an
+         *     analyst open the prescribing information at that paragraph" for all three fields,
+         *     and that was false for two of the emitters (codex iter-11 HIGH):
+         *
+         *     * ``detail`` — always a contiguous verbatim run of the named section.
+         *     * ``title`` — the bullet's own verbatim heading, or the plain name of its section
+         *       when the bullet has none. Our words in that case, chosen so they cannot be
+         *       mistaken for clinical text.
+         *     * ``references`` — a real label cross-reference for Highlights bullets, which does
+         *       open the prescribing information at that paragraph. For the boxed warning it is
+         *       the literal "Boxed warning": that section carries no cross-reference of its own,
+         *       and naming it is the honest alternative to inventing one.
+         */
+        LabelConsideration: {
+            /**
+             * Title
+             * @description The bullet's heading, or the section name
+             */
+            title: string;
+            /**
+             * Detail
+             * @description Verbatim label text
+             */
+            detail: string;
+            /**
+             * Section
+             * @description openFDA section key, e.g. warnings_and_cautions
+             */
+            section: string;
+            /**
+             * References
+             * @description Label cross-reference, e.g. '2.2 , 5.3'
+             */
+            references: string;
+            /**
+             * Source
+             * @description Always openfda for label text
+             * @default openfda
+             */
+            source: string;
         };
         /**
          * LatencyBreakdown
