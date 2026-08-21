@@ -273,3 +273,41 @@ def test_every_rendered_detail_is_verbatim_from_the_source_section():
                 assert " ".join(item.title.split()) in haystack, item.title
             for ref in _re.split(r"\s*,\s*", item.references):
                 assert ref in haystack, ref
+
+
+@pytest.mark.unit
+def test_a_rejected_citation_drops_its_bullet_instead_of_merging_it_forward():
+    """codex iter-4 HIGH — the ROOT of this whole family.
+
+    Every validation rule added created a new merge opportunity, because the parser
+    was a lazy scan that simply kept going when a citation was rejected: the bullet
+    it belonged to got absorbed into the NEXT one and rendered under the next one's
+    reference. Here bullet A ends in ')' rather than '.', so its own '( 5.1 )' is
+    rejected — and A's text then appeared inside B, cited only to 5.2.
+
+    Dropping an un-attributable bullet is honest under-reporting. Carrying its words
+    forward under someone else's citation is fabrication.
+    """
+    text = (
+        "5 WARNINGS AND PRECAUTIONS "
+        "A: Avoid use in patients taking strong CYP3A inhibitors (including ketoconazole) ( 5.1 ) "
+        "B: Monitor next. ( 5.2 )"
+    )
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert [(i.title, i.references) for i in items] == [("B", "5.2")]
+    assert items[0].detail == "Monitor next."
+    for item in items:
+        assert "ketoconazole" not in item.detail
+        assert "5.1" not in item.detail
+
+
+@pytest.mark.unit
+def test_a_bullet_whose_reference_names_another_section_is_dropped_not_merged():
+    """The section-number invariant must drop, never absorb, for the same reason."""
+    text = (
+        "5 WARNINGS AND PRECAUTIONS Bogus: Something happened. ( 9.9 ) "
+        "Real: Monitor liver function. ( 5.5 )"
+    )
+    items = parse_label_considerations(text, WARNINGS_SECTION)
+    assert [(i.title, i.references) for i in items] == [("Real", "5.5")]
+    assert "Something happened" not in items[0].detail

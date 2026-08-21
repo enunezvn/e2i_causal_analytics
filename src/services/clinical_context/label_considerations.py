@@ -79,23 +79,16 @@ _SECTION_NUMBERS = {
 # was swallowed into the next one and rendered under the next one's citation —
 # fabricating a label item out of two, attributed to a section it never named. The
 # positional rule handles both spacings and still rejects prose.
-# Two INDEPENDENT signals must both hold, because either alone still let a prose
-# number pose as a citation (codex iter-2 and iter-3):
-#   - the parenthetical ENDS a sentence — every Highlights bullet across all three
-#     live labels closes with "." before its reference;
-#   - it is FOLLOWED by the end of the region or the next bullet's capitalised title.
-# "Assess patients (1) Patients received therapy" satisfies the second and fails the
-# first, which is exactly the case that truncated a bullet and invented "(1)" as its
-# label section.
-_ITEM = re.compile(
-    r"(?P<body>.+?[.])\s*\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s*\)"
-    r"(?=\s*$|\s+[A-Z])",
-    re.S,
-)
+# ANY numeric parenthetical is a CANDIDATE terminator. Whether it actually ends a
+# bullet is decided in the scan below, not by the pattern — see
+# ``parse_label_considerations`` for why that separation matters.
+_CANDIDATE = re.compile(r"\(\s*(?P<refs>\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*)\s*\)")
 
-# The full prescribing text starts at a "5.1 Title" subsection header — an N.M NOT
-# sitting inside a "( ... )" reference list, so the preceding character is neither
-# "(" nor ",".
+# A candidate that ends the region, or is followed by the next bullet's capitalised
+# title, is SHAPED like a boundary. One followed by lowercase continuation is prose
+# inside a bullet ("Assess patients (2) weeks after dose").
+_BOUNDARY_AFTER = re.compile(r"\s+[A-Z]")
+
 # `\s*`, not `\s+`: "(5.1)5.1 Full Text Begins" hid the boundary from a
 # whitespace-requiring pattern, and the prescribing text behind it was then pulled
 # into a consideration under the wrong citation (codex iter-3 HIGH).
@@ -151,39 +144,66 @@ def _highlights_region(text: str, section: str) -> str:
 def parse_label_considerations(text: Optional[str], section: str) -> Tuple[LabelConsideration, ...]:
     """Verbatim Highlights bullets from one label section.
 
-    Returns an empty tuple when the section is absent or carries no bullets — an
-    honest nothing, never an invented item.
+    Walks the candidate references left to right with an explicit cursor rather than
+    letting one lazy pattern scan the whole region. That separation is the point
+    (codex iter-4): with a lazy scan, EVERY validation rule added a new way to
+    fabricate — when a citation was rejected the scan simply continued, so the bullet
+    it belonged to was absorbed into the next one and rendered under the next one's
+    reference. Words from one bullet under another bullet's citation is exactly the
+    invented clinical text this module exists to prevent.
+
+    Here, a candidate shaped like a boundary ALWAYS ends the current bullet. If it
+    fails validation the pending text is DROPPED and the cursor moves past it, so an
+    un-attributable bullet is lost rather than carried forward. Losing a bullet is
+    honest under-reporting; the alternative is not.
+
+    Returns an empty tuple when the section is absent or carries no bullets we can
+    stand behind — an honest nothing, never an invented item.
     """
     if not text:
         return ()
+    region = _highlights_region(text, section)
     out: list[LabelConsideration] = []
-    for match in _ITEM.finditer(_highlights_region(text, section)):
-        body = " ".join(match.group("body").split())
-        references = " ".join(match.group("refs").split())
-        if not body:
+    cursor = 0
+    for match in _CANDIDATE.finditer(region):
+        after = region[match.end() :]
+        if after.strip() and not _BOUNDARY_AFTER.match(after):
+            # Prose inside the current bullet — keep accumulating.
             continue
-        title, separator, detail = body.partition(": ")
-        if not separator or len(title) > _MAX_TITLE_CHARS:
-            # No bullet title of its own: name it by the section it came from
-            # rather than inventing a clinical heading for it.
-            title, detail = SECTION_DISPLAY.get(section, section), body
+        body = region[cursor : match.start()]
+        references = " ".join(match.group("refs").split())
+        # Past this point the bullet ends here no matter what we decide about it.
+        cursor = match.end()
+        # Every Highlights bullet across all three live labels closes with "." before
+        # its reference. A body that does not cannot be attributed to this citation.
+        if not body.rstrip().endswith("."):
+            continue
         if not _references_name_this_section(references, section):
             continue
-        detail = detail.strip()
-        # "4 CONTRAINDICATIONS None. None. ( 4 )" carries no consideration. An empty
-        # result is correct; emitting "Contraindications: None" would be an invented
-        # clinical item (codex iter-1 LOW).
-        if not detail or _EMPTY_DETAIL.fullmatch(detail):
-            continue
-        out.append(
-            LabelConsideration(
-                title=title.strip(),
-                detail=detail,
-                section=section,
-                references=references,
-            )
-        )
+        item = _consideration(body, references, section)
+        if item is not None:
+            out.append(item)
     return tuple(out)
+
+
+def _consideration(body: str, references: str, section: str) -> Optional[LabelConsideration]:
+    body = " ".join(body.split())
+    if not body:
+        return None
+    title, separator, detail = body.partition(": ")
+    if not separator or len(title) > _MAX_TITLE_CHARS:
+        # No bullet title of its own: name it by the section it came from rather
+        # than inventing a clinical heading for it.
+        title, detail = SECTION_DISPLAY.get(section, section), body
+    detail = detail.strip()
+    if not detail or _EMPTY_DETAIL.fullmatch(detail):
+        return None
+    return LabelConsideration(
+        title=title.strip(),
+        detail=detail,
+        section=section,
+        references=references,
+    )
 
 
 def boxed_warning_consideration(text: Optional[str]) -> Optional[LabelConsideration]:
