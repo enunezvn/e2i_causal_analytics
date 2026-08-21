@@ -197,6 +197,16 @@ def test_reattach_is_a_no_op_on_main(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     assert _git(repo, "symbolic-ref", "--short", "HEAD") == "main"
     assert _git(repo, "rev-parse", "main") == before, "a no-op must not move main"
+    # Codex found this test vacuous in the dimension it claims: deleting the early
+    # `[ "$_head_branch" = "main" ] && return 0` guard left all 10 green, because
+    # `git checkout -B main` while already on main also leaves the ref alone. The
+    # observable difference is the LOG — without the guard the helper announces
+    # "checkout is on 'main', not main", which is both noise on every deploy and
+    # nonsense. Asserting silence is what makes the guard load-bearing.
+    assert proc.stdout.strip() == "", (
+        "already on main is the common path: it must be silent, not announce a "
+        f"re-attach it is not doing. Got: {proc.stdout!r}"
+    )
 
 
 def test_reattach_survives_an_untracked_collision(tmp_path: Path) -> None:
@@ -292,6 +302,20 @@ def test_reattach_is_called_before_every_hard_reset() -> None:
         f"{min(resets)} — re-attaching after the reset is too late to protect anything"
     )
 
+    # `rollback_to_prev()` also resets --hard, inside its own body. Codex flagged that
+    # this test's name overclaimed: scanning for literal `git reset --hard` misses those.
+    # Its CALL SITES are what matter, and every one must also come after the re-attach.
+    rollback_calls = [
+        i
+        for i, ln in enumerate(lines)
+        if ln.strip().startswith("rollback_to_prev ") or ln.strip() == "rollback_to_prev"
+    ]
+    assert rollback_calls, "no rollback_to_prev call sites found — script restructured?"
+    assert call < min(rollback_calls), (
+        f"rollback_to_prev() resets --hard too; its first call is at "
+        f"{min(rollback_calls)}, before {HELPER}() at {call}"
+    )
+
 
 @pytest.mark.parametrize(
     "forbidden",
@@ -313,3 +337,33 @@ def test_reattach_never_uses_a_start_point(forbidden: str) -> None:
         f"{forbidden!r} aborts when an untracked file collides with a path tracked on "
         "main — see the docstring of test_reattach_survives_an_untracked_collision"
     )
+
+
+def test_reattach_refuses_when_main_is_held_by_another_worktree(tmp_path: Path) -> None:
+    """The box runs git worktrees, so `main` can be held elsewhere.
+
+    `git checkout -B main` fails there, and the helper must FAIL LOUDLY rather than let
+    the deploy fall through to `reset --hard` while HEAD is still on someone's branch.
+    Forcing past it would be worse than stopping: it would move a branch another worktree
+    is actively using.
+
+    Codex flagged the absence of this test; the failure path existed but nothing
+    exercised it.
+    """
+    repo = _make_repo(tmp_path)
+    feat = _checkout_feature_with_work(repo)
+    held = tmp_path / "other_worktree"
+    _git(repo, "worktree", "add", "-q", str(held), "main")
+
+    proc = _run_helper(repo)
+
+    assert proc.returncode != 0, (
+        "must not silently continue to reset --hard with HEAD on a feature branch"
+    )
+    assert "another worktree" in (proc.stdout + proc.stderr), (
+        "the operator needs to be told WHY, or this looks like a random git failure"
+    )
+    assert _git(repo, "symbolic-ref", "--short", "HEAD") == "feature", (
+        "a failed re-attach must leave the checkout exactly as it found it"
+    )
+    assert _git(repo, "rev-parse", "feature") == feat
