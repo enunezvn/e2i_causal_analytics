@@ -43,7 +43,11 @@ over a silently-corrupted computation and stays green):
     set. A matcher that can never report anything fails here.
   * ``test_trigger_globs_all_have_a_recognised_shape`` fails closed if a future trigger
     entry uses a glob form ``_glob_covers`` does not understand, rather than letting the
-    matcher silently under- or over-cover.
+    matcher silently under- or over-cover. The real deploy.yml exercises only its happy
+    path, so ``test_shape_gate_rejects_negated_path_filters`` drives the rejecting branch
+    directly — executing a guard is not exercising it — and pins the specific fail-open
+    it closes: GitHub's ``paths`` are order-dependent and a ``!`` entry SUBTRACTS
+    matches, which a "does any entry cover this?" matcher structurally cannot see.
 
 FAITHFULNESS LIMIT: this proves the deploy TRIGGER set covers the Dockerfile's declared
 image inputs. It does not prove GitHub's own path-filter engine agrees with
@@ -267,6 +271,34 @@ def _glob_covers(trigger: str, src: str) -> bool:
     return (not is_dir) and path == trigger
 
 
+def _is_recognised_trigger_shape(trigger: str) -> bool:
+    """Is ``trigger`` one of the two forms ``_glob_covers`` reasons about correctly?
+
+    Kept as a named predicate rather than inlined: this is a fail-CLOSED gate, and the
+    negated form of the condition is easy to misread (and so to "simplify" back into the
+    hole it plugs).
+
+      * ``**`` / ``prefix/**`` / a literal path -> recognised.
+      * ANY ``!`` negation -> NOT recognised, on purpose. GitHub applies ``paths``
+        entries in order and a ``!`` entry SUBTRACTS matches, but ``_glob_covers`` only
+        answers "does some entry cover this source?" — it cannot see a subtraction. A
+        negation must therefore be rejected here rather than silently mis-scored as
+        coverage. See ``test_shape_gate_rejects_negated_path_filters``.
+      * A wildcard anywhere else (``scripts/*.py``, ``**/x.py``) -> NOT recognised.
+    """
+    if trigger.startswith("!"):
+        return False
+    if trigger == "**":
+        return True
+    if trigger.endswith("/**"):
+        return not _WILDCARD.search(trigger[: -len("/**")])
+    return not _WILDCARD.search(trigger)
+
+
+def _unrecognised_shapes(triggers: list[str]) -> list[str]:
+    return [t for t in triggers if not _is_recognised_trigger_shape(t)]
+
+
 def _uncovered(inputs: dict[str, list[str]], triggers: list[str]) -> dict[str, list[str]]:
     """Image-input paths that no trigger glob covers, with their provenance."""
     return {
@@ -316,6 +348,10 @@ def test_glob_covers_semantics() -> None:
         ("scripts/*.py", "scripts/"),
         ("**/seed_falkordb.py", "scripts/"),
         ("!scripts/**", "scripts/"),
+        # Negations are order-dependent in GitHub Actions paths filters. This
+        # matcher is a coverage predicate, not a full path-filter evaluator, so
+        # negations must never be accepted by the workflow shape check below.
+        ("!scripts/seed_falkordb.py", "scripts/seed_falkordb.py"),
     ]
     for trigger, src in not_covered:
         assert not _glob_covers(trigger, src), f"{trigger!r} must NOT cover {src!r}"
@@ -330,20 +366,50 @@ def test_trigger_globs_all_have_a_recognised_shape() -> None:
     """
     triggers = _trigger_paths()
     assert triggers, "deploy.yml on.push.paths parsed as EMPTY — the parser is broken"
-    unrecognised = [
-        t
-        for t in triggers
-        if not (
-            t == "**"
-            or (t.endswith("/**") and not _WILDCARD.search(t[: -len("/**")]))
-            or not _WILDCARD.search(t)
-        )
-    ]
+    unrecognised = _unrecognised_shapes(triggers)
     assert unrecognised == [], (
         "deploy.yml on.push.paths uses glob forms this test's matcher does not "
         f"understand: {unrecognised}. Extend _glob_covers (and this shape check) "
         "rather than leaving the coverage invariant ambiguous."
     )
+
+
+def test_shape_gate_rejects_negated_path_filters() -> None:
+    """POSITIVE CONTROL for the shape gate — and the reason it must reject ``!`` at all.
+
+    The real deploy.yml contains no negated entry, so the ``!`` branch of
+    ``_is_recognised_trigger_shape`` never fires against it: executing that guard is not
+    exercising it. This drives the branch directly, and pins the fail-open it exists to
+    prevent.
+
+    GitHub's ``paths`` filters are ORDER-DEPENDENT and SUBTRACTIVE: ``scripts/**``
+    followed by ``!scripts/benchmarks/**`` means a benchmarks-only push does NOT deploy.
+    ``_glob_covers`` answers only "does any entry cover this source?", so it would still
+    score ``scripts/`` as fully covered and the whole suite would go GREEN over a
+    workflow reproducing the exact #1783 defect. The coverage matcher cannot see the
+    subtraction — so the shape gate refuses negations outright, forcing whoever adds one
+    to make the matcher order-aware first.
+    """
+    subtractive = ["src/**", "config/**", "pyproject.toml", "scripts/**", "!scripts/benchmarks/**"]
+
+    # 1. The gate catches it.
+    assert _unrecognised_shapes(subtractive) == ["!scripts/benchmarks/**"], (
+        f"the shape gate must reject a negated path filter; got {_unrecognised_shapes(subtractive)}"
+    )
+
+    # 2. THE FAIL-OPEN IT PREVENTS: coverage alone is blind to the subtraction. This
+    #    asserts the blindness explicitly, so the gate can never be "simplified" away
+    #    without this test explaining what it was load-bearing for.
+    inputs = _image_input_paths(DOCKERFILE.read_text())
+    assert "scripts/" not in _uncovered(inputs, subtractive), (
+        "precondition of this control changed: _glob_covers is expected to score "
+        "scripts/ as covered here (it cannot see the negation) — which is exactly why "
+        "the shape gate, not the coverage check, is what must reject negations"
+    )
+
+    # 3. A plain (non-negated) list of the same shapes is accepted — the gate rejects
+    #    negation specifically, not every entry.
+    assert _unrecognised_shapes(subtractive[:-1]) == []
 
 
 # --------------------------------------------------------------------------- #
