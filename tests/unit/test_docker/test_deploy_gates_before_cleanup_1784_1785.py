@@ -53,6 +53,7 @@ All matching here is literal (Python ``in`` / ``str.index``), never a regex.
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -436,8 +437,9 @@ def test_summary_renders_three_distinct_verdicts(tmp_path: Path) -> None:
 # 4. #1785 — fail fast when the resolved sha has no GHCR image
 # --------------------------------------------------------------------------- #
 GATE_AUTH_START = "GATE_AUTH_OK=false"
-GATE_AUTH_BRANCH = 'if [ "$GATE_AUTH_OK" != true ]; then'
-FAIL_FAST_OPENER = 'elif ! image_exists "$NEW_SHA"; then'
+GATE_AUTH_BRANCH = 'if [ -n "$GATE_STANDDOWN" ]; then'
+PROBE_CALL = 'images_verdict "$NEW_SHA" || IMAGES_VERDICT=$?'
+FAIL_FAST_OPENER = 'elif [ "$IMAGES_VERDICT" -ne 0 ]; then'
 
 
 def _line_index(lines: list[str], wanted: str, what: str) -> int:
@@ -462,10 +464,18 @@ def _extract_gate_block() -> str:
         "indistinguishable from a missing image",
     )
     branch = _line_index(
-        lines, GATE_AUTH_BRANCH, "#1785: the gate never branches on whether auth worked"
+        lines,
+        GATE_AUTH_BRANCH,
+        "#1785: the gate never branches on whether it got an answer it can stand behind",
     )
     _line_index(
-        lines, FAIL_FAST_OPENER, "#1785: the manifest assertion is not the auth branch's `elif`"
+        lines, FAIL_FAST_OPENER, "#1785: the manifest assertion is not the stand-down `elif`"
+    )
+    assert any(PROBE_CALL in ln for ln in lines), (
+        "#1785: the gate does not call the three-way images_verdict — a boolean probe "
+        "cannot tell a registry that SAID absent from one that would not answer, which "
+        "is the whole finding. Rollout script lines matching 'verdict':\n"
+        + "\n".join(f"  {ln}" for ln in lines if "verdict" in ln)
     )
     indent = len(lines[branch]) - len(lines[branch].lstrip())
     for j in range(branch + 1, len(lines)):
@@ -486,7 +496,7 @@ def test_manifest_assertion_sits_between_sha_resolution_and_the_expensive_work()
         script,
         {
             "NEW_SHA resolved": "NEW_SHA=$(git rev-parse HEAD)",
-            "#1785 manifest assertion": FAIL_FAST_OPENER,
+            "#1785 manifest assertion": PROBE_CALL,
             "DB migrations": "bash scripts/run_migrations.sh",
             "GHCR pull / local-build fallback": "$COMPOSE_CMD pull api",
         },
@@ -537,16 +547,17 @@ def _run_gate(tmp_path: Path, preamble: str, **env: str) -> tuple[int, str]:
 
 
 def _run_fail_fast(
-    tmp_path: Path, image_exists_rc: int, login_rc: int = 0, **env: str
+    tmp_path: Path, verdict_rc: int, login_rc: int = 0, **env: str
 ) -> tuple[int, str]:
     """Drive the shipped gate down a chosen branch with the manifest probe stubbed out.
 
-    Auth succeeds by default, so these cases exercise the assertion itself. The
-    auth-failure path is covered against the REAL probes below, deliberately: stubbing
-    `image_exists` is exactly what made the whole class of registry-unreachable defects
-    invisible in the first place.
+    `verdict_rc` is images_verdict's three-way status: 0 published, 1 the registry NAMED
+    it absent, 2 no answer we can stand behind. Auth succeeds by default, so these cases
+    exercise the assertion itself. Every case where the ANSWER is in question is covered
+    against the REAL probes below, deliberately: stubbing the probe is exactly what made
+    the whole class of registry-unreachable defects invisible in the first place.
     """
-    preamble = _docker_stub(login_rc) + f"image_exists() {{ return {image_exists_rc}; }}\n"
+    preamble = _docker_stub(login_rc) + f"images_verdict() {{ return {verdict_rc}; }}\n"
     runner = tmp_path / "failfast.sh"
     runner.write_text(
         "set -e\n" + preamble + _extract_gate_block() + '\necho "REACHED THE EXPENSIVE WORK"\n'
@@ -568,7 +579,7 @@ def test_a_missing_ghcr_image_fails_fast_naming_the_sha(tmp_path: Path) -> None:
     """The failing branch, driven directly (a real deploy almost never takes it)."""
     rc, out = _run_fail_fast(
         tmp_path,
-        image_exists_rc=1,
+        verdict_rc=1,
         NEW_SHA=SHA,
         IMAGE_OWNER="enunezvn",
         FALLBACK_REASON="GHCR auth SUCCEEDED, but no commit in the window has both images",
@@ -591,7 +602,7 @@ def test_a_present_ghcr_image_lets_the_deploy_proceed(tmp_path: Path) -> None:
 
     Without this, a fail-fast that ALWAYS fired would satisfy the test above.
     """
-    rc, out = _run_fail_fast(tmp_path, image_exists_rc=0, NEW_SHA=SHA, IMAGE_OWNER="enunezvn")
+    rc, out = _run_fail_fast(tmp_path, verdict_rc=0, NEW_SHA=SHA, IMAGE_OWNER="enunezvn")
     assert rc == 0, f"a published image must not fail the deploy; rc={rc}, output:\n{out}"
     assert "REACHED THE EXPENSIVE WORK" in out, (
         f"the deploy must continue when the image exists:\n{out}"
@@ -606,7 +617,7 @@ def test_fail_fast_message_states_the_refusal_and_the_recovery(tmp_path: Path) -
     discover. The replacement has to say what it refused (the local build), why (no
     rollback target + an OOM-prone build on a live prod box), and how to recover.
     """
-    _, out = _run_fail_fast(tmp_path, image_exists_rc=1, NEW_SHA=SHA, IMAGE_OWNER="enunezvn")
+    _, out = _run_fail_fast(tmp_path, verdict_rc=1, NEW_SHA=SHA, IMAGE_OWNER="enunezvn")
     lowered = out.lower()
     for phrase, why in (
         # "local-build path" is this file's own established term for it.
@@ -648,7 +659,7 @@ def test_fail_fast_survives_an_absent_fallback_reason(tmp_path: Path, reason: st
     instructions, and a FALLBACK_REASON that exists is carried forward to the human.
     """
     rc, out = _run_fail_fast(
-        tmp_path, image_exists_rc=1, NEW_SHA=SHA, IMAGE_OWNER="enunezvn", FALLBACK_REASON=reason
+        tmp_path, verdict_rc=1, NEW_SHA=SHA, IMAGE_OWNER="enunezvn", FALLBACK_REASON=reason
     )
     assert rc != 0
     assert "gh workflow run deploy.yml" in out, (
@@ -680,12 +691,12 @@ def test_fail_fast_survives_an_absent_fallback_reason(tmp_path: Path, reason: st
 # exactly this case. These tests stub `docker`, never `image_exists`: stubbing the
 # probe is what made this whole class of defect invisible in the first pass.
 # --------------------------------------------------------------------------- #
-PROBE_HELPERS_START = "manifest_present() {"
+PROBE_HELPERS_START = "manifest_probe_once() {"
 PROBE_HELPERS_END = "# Given candidate SHAs on stdin"
 
 
 def _extract_probe_helpers() -> str:
-    """The REAL manifest_present/image_exists source, verbatim and dedented."""
+    """The REAL manifest_probe_once/manifest_verdict/images_verdict source, dedented."""
     script = _ssh_script(ROLLOUT_ID)
     start = script.find(PROBE_HELPERS_START)
     end = script.find(PROBE_HELPERS_END)
@@ -745,8 +756,9 @@ def test_a_ghcr_auth_failure_is_not_reported_as_a_missing_image(
         f"an auth failure was announced as a missing image:\n{out}"
     )
     lowered = out.lower()
-    assert "skipping" in lowered and "auth" in lowered, (
-        f"standing down must be stated, and attributed to auth, not to the image:\n{out}"
+    assert "skipping" in lowered and "login" in lowered, (
+        "standing down must be stated, and attributed to the LOGIN that failed rather "
+        f"than to the image:\n{out}"
     )
 
 
@@ -790,6 +802,220 @@ def test_an_authenticated_present_image_proceeds_through_the_real_probes(
     assert rc == 0, f"a published image must not fail the deploy:\n{out}"
     assert "REACHED THE EXPENSIVE WORK" in out, f"the deploy must proceed:\n{out}"
     assert "SKIPPING" not in out, f"the gate stood down on a path where auth worked:\n{out}"
+
+
+# --------------------------------------------------------------------------- #
+# 5b. #1785 — LOGGED IN is not AUTHORIZED TO READ
+#
+# Codex iter-2 HIGH, reproduced against the shipped gate before it was believed.
+# The iter-1 fix asserted only that `docker login` succeeded — and a successful login
+# does not mean the manifest can be read. GHCR's login endpoint accepts any valid PAT;
+# package-level `read:packages` grants are checked at the MANIFEST, so a scope-reduced
+# token, a package unlinked from its repo, or revoked org access all answer
+# `denied: requested access to the resource is denied` while the image plainly exists.
+# A registry 5xx or a network stall that outlives the single retry lands in the same
+# bucket. Measured by driving the SHIPPED gate at 658250acd (login stubbed to 0, the
+# manifest read stubbed to a persistent non-definitive error):
+#
+#     login OK + manifest present (control)   -> PROCEEDS
+#     login OK + DEFINITIVE absent            -> HARD-FAIL as missing image   (correct)
+#     login OK + persistent DENIED            -> HARD-FAIL as missing image   (WRONG)
+#     login OK + persistent UNAUTHORIZED      -> HARD-FAIL as missing image   (WRONG)
+#     login OK + network error                -> HARD-FAIL as missing image   (WRONG)
+#     login FAILS                             -> stands down                  (correct)
+#
+# The three WRONG rows are the iter-1 defect one layer in: a converged deploy refused,
+# announced as a missing image, sending a human after ensure-main-image when the real
+# cause is registry ACCESS. The fix gives the probe a third answer — present /
+# DEFINITIVELY absent / no answer at all — and spends the refusal only on the middle one.
+#
+# These tests stub `docker` and drive the REAL classifier. The per-ref stub below answers
+# each of the two image refs separately and counts attempts on DISK, because the probe
+# runs inside `$(...)` — a subshell, where an in-memory counter would silently never
+# advance and "persistent" would quietly mean "failed once".
+# --------------------------------------------------------------------------- #
+DEFINITIVE_ABSENT = "manifest unknown: manifest unknown"
+INCONCLUSIVE = "denied: requested access to the resource is denied"
+
+
+def _docker_ref_stub(
+    login_rc: int,
+    api: list[tuple[int, str]],
+    frontend: list[tuple[int, str]],
+) -> str:
+    """A `docker` stub that answers per-REF and per-ATTEMPT.
+
+    `api`/`frontend` are the successive answers for that ref as ``(rc, stderr)``; the
+    LAST entry repeats for any further attempt. Like `_docker_stub`, it uses `return`
+    and never `exit` — a shell function that exits tears the harness down where a real
+    external binary only sets a status.
+    """
+    arms = []
+    for slot, answers in (("api", api), ("frontend", frontend)):
+        for i, (rc, err) in enumerate(answers, start=1):
+            label = f"{slot}:{i}" if i < len(answers) else f"{slot}:*"
+            emit = f'printf "%s\\n" {shlex.quote(err)} >&2; ' if err else ""
+            arms.append(f"    {label}) {emit}return {rc} ;;")
+    return (
+        "docker() {\n"
+        '  if [ "$1" = "login" ]; then\n'
+        "    cat >/dev/null 2>&1 || true\n"
+        f"    return {login_rc}\n"
+        "  fi\n"
+        '  case "$3" in\n'
+        "    *e2i-api:*) _slot=api ;;\n"
+        "    *e2i-frontend:*) _slot=frontend ;;\n"
+        '    *) printf "%s\\n" "stub: unexpected ref $3" >&2; return 1 ;;\n'
+        "  esac\n"
+        '  _f="$STUB_STATE/$_slot"\n'
+        "  _n=0\n"
+        '  if [ -f "$_f" ]; then _n=$(cat "$_f"); fi\n'
+        "  _n=$((_n + 1))\n"
+        '  printf "%s\\n" "$_n" > "$_f"\n'
+        '  case "${_slot}:${_n}" in\n' + "\n".join(arms) + "\n"
+        "  esac\n"
+        "  return 1\n"
+        "}\n"
+    )
+
+
+def _run_gate_per_ref(
+    tmp_path: Path,
+    *,
+    api: list[tuple[int, str]],
+    frontend: list[tuple[int, str]],
+    login_rc: int = 0,
+    **env: str,
+) -> tuple[int, str]:
+    state = tmp_path / "stub_state"
+    state.mkdir(exist_ok=True)
+    preamble = (
+        _docker_ref_stub(login_rc, api, frontend)
+        + "sleep() { :; }\n"  # collapse the retry's wait; the DISK counter still advances
+        + _extract_probe_helpers()
+    )
+    return _run_gate(
+        tmp_path,
+        preamble,
+        STUB_STATE=str(state),
+        NEW_SHA=SHA,
+        IMAGE_OWNER="enunezvn",
+        GHCR_TOKEN="t",
+        **env,
+    )
+
+
+@pytest.mark.parametrize(
+    "stderr_text",
+    [
+        "denied: requested access to the resource is denied",
+        "unauthorized: authentication required",
+        "Get https://ghcr.io/v2/: dial tcp 140.82.121.33:443: i/o timeout",
+        "error parsing HTTP 503 response body",
+    ],
+)
+def test_a_persistent_registry_denial_is_not_reported_as_a_missing_image(
+    tmp_path: Path, stderr_text: str
+) -> None:
+    """Login SUCCEEDS, the manifest read is refused anyway — the gate must stand down.
+
+    This is the iter-2 HIGH. `docker login` proves the credential is valid, not that it
+    may read this package, so a gate that treats "logged in" as "the answer is
+    trustworthy" still converts a GHCR access failure into a missing-image hard fail.
+    """
+    rc, out = _run_gate_per_ref(tmp_path, api=[(1, stderr_text)], frontend=[(1, stderr_text)])
+    assert rc == 0, (
+        "a registry that refused to answer must not hard-fail the deploy "
+        f"(stderr was {stderr_text!r}); rc={rc}, output:\n{out}"
+    )
+    assert "REACHED THE EXPENSIVE WORK" in out, (
+        f"the deploy must fall through to the pull's own fresh login:\n{out}"
+    )
+    assert "no published GHCR image" not in out, (
+        f"a registry ACCESS failure was announced as a MISSING IMAGE:\n{out}"
+    )
+    assert "SKIPPING" in out, f"standing down must be stated, not silent:\n{out}"
+    assert "authorized to READ" in out, (
+        "the stand-down must name the actual distinction — logged in is not authorized "
+        f"to read this package — so a human is not sent after ensure-main-image:\n{out}"
+    )
+
+
+def test_a_transient_denial_that_clears_on_retry_counts_as_published(tmp_path: Path) -> None:
+    """Positive control for the retry: one flake must not cost a stand-down.
+
+    The stub's FIRST answer is a denial and its second is the manifest. If the attempt
+    counter did not advance — it lives on disk precisely because the probe runs in a
+    subshell — this would stand down, and the assertion below says so.
+    """
+    rc, out = _run_gate_per_ref(
+        tmp_path,
+        api=[(1, INCONCLUSIVE), (0, "")],
+        frontend=[(1, INCONCLUSIVE), (0, "")],
+    )
+    assert rc == 0, f"a flake that cleared on retry must not fail the deploy:\n{out}"
+    assert "REACHED THE EXPENSIVE WORK" in out, f"the deploy must proceed:\n{out}"
+    assert "SKIPPING" not in out, (
+        f"the retry succeeded, so there was nothing to stand down from:\n{out}"
+    )
+
+
+@pytest.mark.parametrize("absent_side", ["api", "frontend"])
+def test_a_definitive_absent_on_either_image_alone_still_fails_fast(
+    tmp_path: Path, absent_side: str
+) -> None:
+    """#1431: BOTH images must be published, so either one missing is the broken invariant.
+
+    The three-way verdict must not weaken the AND that `image_exists` enforced.
+    """
+    present: list[tuple[int, str]] = [(0, "")]
+    absent: list[tuple[int, str]] = [(1, DEFINITIVE_ABSENT)]
+    rc, out = _run_gate_per_ref(
+        tmp_path,
+        api=absent if absent_side == "api" else present,
+        frontend=absent if absent_side == "frontend" else present,
+    )
+    assert rc != 0, f"{absent_side} is definitively absent and the deploy continued:\n{out}"
+    assert "no published GHCR image" in out and SHA in out, (
+        f"the hard-fail must name the sha:\n{out}"
+    )
+
+
+def test_a_definitive_absent_outranks_an_inconclusive_answer(tmp_path: Path) -> None:
+    """One ref unreadable, the other NAMED absent -> still a hard fail.
+
+    A positive fact about one image outweighs a missing answer about the other: whatever
+    the api package would have said, the frontend image is not published, so the #1785
+    invariant is broken and the refusal is one we can stand behind.
+    """
+    rc, out = _run_gate_per_ref(
+        tmp_path,
+        api=[(1, INCONCLUSIVE)],
+        frontend=[(1, DEFINITIVE_ABSENT)],
+    )
+    assert rc != 0, (
+        "a DEFINITIVE absent on one image must outrank an inconclusive answer on the "
+        f"other — the invariant is broken either way:\n{out}"
+    )
+    assert "no published GHCR image" in out, f"the hard-fail message must appear:\n{out}"
+
+
+def test_the_absent_classification_has_exactly_one_source_of_truth() -> None:
+    """The definitive-absent string list must exist ONCE in the rollout script.
+
+    The sha walk (`select_built_sha`) and the #1785 gate now ask two different questions
+    of the same classification. Two copies of these strings would let them drift into
+    disagreeing about what "absent" means — and a gate that calls a definitive absent
+    "inconclusive", or the reverse, is this defect's own family. Asserts the COUNT, so a
+    failure prints what it actually found.
+    """
+    script = _ssh_script(ROLLOUT_ID)
+    needle = '*"no such manifest"*|*"manifest unknown"*|*"not found"*|*"UNKNOWN"*'
+    occurrences = [(i, ln.strip()) for i, ln in enumerate(script.splitlines()) if needle in ln]
+    assert len(occurrences) == 1, (
+        "the definitive-absent classification must have a single source of truth; found "
+        f"{len(occurrences)} copies:\n" + "\n".join(f"  line {i}: {ln}" for i, ln in occurrences)
+    )
 
 
 # --------------------------------------------------------------------------- #
