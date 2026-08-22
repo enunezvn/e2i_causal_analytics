@@ -50,6 +50,8 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Deque, Dict, List, Optional
 
+from src.agents.factory import AGENT_TIER_NUMBERS
+
 logger = logging.getLogger(__name__)
 
 
@@ -126,40 +128,127 @@ DEFAULT_SLO_TARGETS: Dict[AgentTier, SLOTarget] = {
     ),
 }
 
-# Agent to tier mapping
-AGENT_TIER_MAP: Dict[str, AgentTier] = {
-    # Tier 0
-    "scope_definer": AgentTier.TIER_0_FOUNDATION,
-    "data_preparer": AgentTier.TIER_0_FOUNDATION,
-    "feature_analyzer": AgentTier.TIER_0_FOUNDATION,
-    "model_selector": AgentTier.TIER_0_FOUNDATION,
-    "model_trainer": AgentTier.TIER_0_FOUNDATION,
-    "model_deployer": AgentTier.TIER_0_FOUNDATION,
-    "observability_connector": AgentTier.TIER_0_FOUNDATION,
-    # Tier 1
-    "orchestrator": AgentTier.TIER_1_ORCHESTRATOR,
-    "tool_composer": AgentTier.TIER_1_ORCHESTRATOR,
-    # Tier 2
-    "causal_impact": AgentTier.TIER_2_CAUSAL,
-    "gap_analyzer": AgentTier.TIER_2_CAUSAL,
-    "heterogeneous_optimizer": AgentTier.TIER_2_CAUSAL,
-    "cohort_constructor": AgentTier.TIER_2_CAUSAL,
-    # Tier 3
-    "drift_monitor": AgentTier.TIER_3_MONITORING,
-    "experiment_designer": AgentTier.TIER_3_MONITORING,
-    "health_score": AgentTier.TIER_3_MONITORING,
-    # Tier 4
-    "prediction_synthesizer": AgentTier.TIER_4_ML,
-    "resource_optimizer": AgentTier.TIER_4_ML,
-    # Tier 5
-    "explainer": AgentTier.TIER_5_LEARNING,
-    "feedback_learner": AgentTier.TIER_5_LEARNING,
+
+class UnknownAgentError(KeyError):
+    """The agent name is not in :data:`~src.agents.factory.AGENT_REGISTRY_CONFIG`.
+
+    Subclasses ``KeyError`` because that is what the lookup it replaces would
+    have raised without its default, so ``except KeyError`` still catches it.
+    """
+
+
+#: ``{tier NUMBER: AgentTier}``, derived from the enum rather than typed out.
+#:
+#: A hand-written version of exactly this table is the second probe bug behind
+#: #1791: it omitted ``TIER_4_ML`` and ``TIER_5_LEARNING`` and confidently
+#: reported the registry as "7 of 22 wrong". Deriving it from ``AgentTier``
+#: means a new tier member cannot be forgotten here.
+_TIER_BY_NUMBER: Dict[int, AgentTier] = {
+    # ``AgentTier`` members are STRINGS ("tier_0" .. "tier_5") while the
+    # registry stores ints, so the coercion is explicit in both directions.
+    # Comparing the two without it makes all 22 agents look wrong -- the third
+    # probe bug, which reported "20 of 22".
+    int(member.value.split("_", 1)[1]): member
+    for member in AgentTier
 }
 
 
+def _build_agent_tier_map() -> Dict[str, AgentTier]:
+    """Project ``AGENT_REGISTRY_CONFIG``'s tier column onto :class:`AgentTier`.
+
+    #1791: this was a hand-written literal that never agreed with the registry.
+    It was short ``cohort_profiler`` and ``experiment_monitor``, and it placed
+    ``cohort_constructor`` in ``TIER_2_CAUSAL`` while the registry said tier 0 --
+    wrong in the very commit that introduced the map (f272766ae), so this is a
+    roster that never matched its source rather than one that fell behind.
+
+    Deriving it means the map is complete by construction: registering an agent
+    updates the SLO roster, and no separate edit can be forgotten.
+
+    Raises:
+        RuntimeError: if the registry uses a tier number with no ``AgentTier``
+            member. Fails closed at import rather than silently dropping the
+            agent from SLO monitoring, which is the failure mode this whole
+            issue is about. ``tests/unit/test_agents/test_config_roster_ssot_1779.py``
+            catches it in CI first.
+    """
+    tier_map: Dict[str, AgentTier] = {}
+    unmapped: Dict[str, int] = {}
+    for agent_name, tier_number in AGENT_TIER_NUMBERS.items():
+        member = _TIER_BY_NUMBER.get(tier_number)
+        if member is None:
+            unmapped[agent_name] = tier_number
+        else:
+            tier_map[agent_name] = member
+
+    if unmapped:
+        raise RuntimeError(
+            f"AGENT_REGISTRY_CONFIG places {unmapped} in tier number(s) that "
+            f"AgentTier does not define (it defines {sorted(_TIER_BY_NUMBER)}). "
+            f"Add the missing AgentTier member and a DEFAULT_SLO_TARGETS entry for it."
+        )
+    return tier_map
+
+
+#: Agent to tier mapping -- a projection of the registry, NOT a second roster.
+#: Still a plain ``Dict[str, AgentTier]``: ``SLOMonitor.get_tier_compliance``
+#: iterates it with ``.items()`` and it is re-exported from ``src/mlops/__init__``.
+AGENT_TIER_MAP: Dict[str, AgentTier] = _build_agent_tier_map()
+
+
+#: Names already warned about by :meth:`SLOMonitor.record`, so an unregistered
+#: agent in a hot instrumentation path logs once rather than once per request.
+_warned_unknown_agents: set = set()
+
+
 def get_agent_tier(agent_name: str) -> AgentTier:
-    """Get the tier for an agent."""
-    return AGENT_TIER_MAP.get(agent_name, AgentTier.TIER_2_CAUSAL)
+    """Get the tier for an agent.
+
+    Raises:
+        UnknownAgentError: if ``agent_name`` is not a registered agent.
+
+    **Unknown-agent policy (#1791).** Each path gets the behaviour its job
+    requires, which is why they differ:
+
+    ==========================================  ==========================
+    path                                        unknown agent
+    ==========================================  ==========================
+    ``get_agent_tier`` / ``get_slo_target``     RAISES -- a precise question
+                                                deserves a precise answer,
+                                                never an invented SLO
+    ``SLOMonitor.record``                       records + warns once --
+                                                instrumentation must not
+                                                break the observed system
+    ``SLOMonitor.get_all_compliance``           OMITS it -- an aggregate
+                                                must degrade, not explode
+    ``opik_connector._get_agent_tier``          returns ``UNKNOWN_AGENT_TIER``
+                                                -- tracing must not drop spans
+    ==========================================  ==========================
+
+    The through-line is omit-or-report, never fabricate.
+
+    #1791: this used to return ``AgentTier.TIER_2_CAUSAL`` for anything it did
+    not recognise, which meant the map could not distinguish "I have never
+    heard of this agent" from "this agent is deliberately in tier 2" -- and
+    ``get_slo_target`` then handed back real TIER_2 SLO targets either way. That
+    default was doing real damage while the map was incomplete: two registered
+    agents were silently measured against the wrong SLO.
+
+    Now that :data:`AGENT_TIER_MAP` is complete by construction, an unrecognised
+    name can only be a typo, a component that is not an agent, or an agent
+    removed from the registry. In all three cases the honest answer is "no SLO
+    is defined for this", and a monitor that instead reports 99.5%-availability
+    compliance against a fabricated target is worse than one that refuses --
+    a confidently wrong number is the worst possible output for a monitoring
+    system. So this raises rather than guessing.
+    """
+    try:
+        return AGENT_TIER_MAP[agent_name]
+    except KeyError:
+        raise UnknownAgentError(
+            f"{agent_name!r} is not a registered agent, so it has no SLO tier. "
+            f"Known agents: {sorted(AGENT_TIER_MAP)}"
+        ) from None
 
 
 def get_slo_target(agent_name: str) -> SLOTarget:
@@ -321,7 +410,25 @@ class SLOMonitor:
 
         Returns:
             Created RequestRecord
+
+        An unregistered ``agent_name`` is RECORDED, not rejected -- see the
+        unknown-agent policy note on :func:`get_agent_tier`. This is the
+        instrumentation entry point, and instrumentation must never break the
+        thing it instruments. It warns once per name so the mistake is visible
+        at the point it is made rather than surfacing later inside an unrelated
+        aggregate call.
         """
+        if agent_name not in AGENT_TIER_MAP and agent_name not in _warned_unknown_agents:
+            _warned_unknown_agents.add(agent_name)
+            logger.warning(
+                "SLO request recorded for %r, which is not a registered agent. It has "
+                "no SLO tier, so it will be OMITTED from aggregate SLO reads "
+                "(get_all_compliance / get_summary / get_violated_slos). "
+                "Registered agents: %s",
+                agent_name,
+                sorted(AGENT_TIER_MAP),
+            )
+
         record = RequestRecord(
             agent_name=agent_name,
             latency_ms=latency_ms,
@@ -467,11 +574,33 @@ class SLOMonitor:
         self,
         window_hours: Optional[int] = None,
     ) -> Dict[str, SLOCompliance]:
-        """Get SLO compliance for all agents."""
+        """Get SLO compliance for every recorded agent that HAS an SLO.
+
+        Agents that are not in :data:`AGENT_TIER_MAP` are OMITTED rather than
+        raising. ``record()`` accepts any name, so without this one unknown
+        name -- a typo, a non-agent component, an agent dropped from the
+        registry -- would turn every aggregate observability read
+        (:meth:`get_summary`, :meth:`get_violated_slos`,
+        :meth:`get_metrics_for_prometheus`, and the module-level
+        ``get_all_slo_compliance``) into an exception. An observability
+        aggregate must degrade, not explode.
+
+        Omitting is not a return to the fail-open default this replaced. The
+        distinction that matters is OMIT versus FABRICATE: leaving an agent out
+        of the summary is honest about having no SLO for it, whereas the old
+        ``.get(name, TIER_2_CAUSAL)`` invented one and reported compliance
+        against it. ``record()`` has already warned about the name, and
+        :meth:`get_compliance` still raises for a DIRECT query, so a precise
+        question still gets a precise answer.
+        """
         with self._lock:
             agent_names = list(self._records.keys())
 
-        return {name: self.get_compliance(name, window_hours) for name in agent_names}
+        return {
+            name: self.get_compliance(name, window_hours)
+            for name in agent_names
+            if name in AGENT_TIER_MAP
+        }
 
     def get_tier_compliance(
         self,
@@ -632,10 +761,16 @@ def get_slo_monitor() -> SLOMonitor:
 
 
 def reset_slo_monitor() -> None:
-    """Reset the singleton monitor (mainly for testing)."""
+    """Reset the singleton monitor (mainly for testing).
+
+    Also clears the once-per-name unknown-agent warning set, so a test that
+    asserts on that warning is not silenced by an earlier test having already
+    warned for the same name.
+    """
     global _slo_monitor
     with _slo_monitor_lock:
         _slo_monitor = None
+    _warned_unknown_agents.clear()
 
 
 # =============================================================================
@@ -724,6 +859,8 @@ __all__ = [
     "AGENT_TIER_MAP",
     "get_agent_tier",
     "get_slo_target",
+    # Errors
+    "UnknownAgentError",
     # Singleton
     "get_slo_monitor",
     "reset_slo_monitor",

@@ -51,6 +51,7 @@ from typing import Any, Dict, List, Optional
 
 from uuid_utils import uuid7 as uuid7_func  # For Opik-compatible UUID v7
 
+from src.agents.factory import AGENT_TIER_NUMBERS
 from src.utils.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -58,6 +59,14 @@ from src.utils.circuit_breaker import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Tier reported for a name that is not in ``AGENT_REGISTRY_CONFIG`` (#1791).
+#:
+#: Negative on purpose: it must not collide with a real tier. The value this
+#: replaces was ``0``, which IS a real tier (ML Foundation), so every unknown
+#: agent was labelled as a foundation agent on its span -- a plausible, wrong
+#: value indistinguishable from a true one. This one is obviously not a tier.
+UNKNOWN_AGENT_TIER = -1
 
 
 class SpanType(str, Enum):
@@ -939,42 +948,36 @@ class OpikConnector:
             logger.warning(f"Failed to flush Opik tracker: {e}")
 
     def _get_agent_tier(self, agent_name: str) -> int:
-        """Get the tier number for an agent.
+        """Get the tier number for an agent, for Opik span metadata.
 
         Args:
             agent_name: Name of the agent
 
         Returns:
-            Tier number (0-5)
+            The agent's registry tier (0-5), or :data:`UNKNOWN_AGENT_TIER` if
+            ``agent_name`` is not a registered agent.
+
+        #1791: this carried its own hand-written ``tier_mapping`` -- a third
+        roster, agreeing with neither ``AGENT_REGISTRY_CONFIG`` nor
+        ``slo_monitor.AGENT_TIER_MAP``. It was short three agents
+        (``cohort_constructor``, ``cohort_profiler``, ``experiment_monitor``)
+        and its ``.get(name, 0)`` default hid two of them: both cohort agents
+        are genuinely tier 0, so the default returned the right number for the
+        wrong reason, and only ``experiment_monitor`` (tier 3) was visibly
+        wrong. Deriving from the registry fixes all three at once.
+
+        Unlike ``slo_monitor.get_agent_tier`` this stays TOTAL and never
+        raises. It runs while building the metadata for a trace, inside an
+        ``except Exception`` that swallows and logs, so raising here would
+        silently drop the span instead of surfacing anything -- observability
+        must not break, or quietly disable, the thing it observes.
+
+        The sentinel matters though. The old default was ``0``, a REAL tier
+        (ML Foundation), so an unrecognised name was stamped onto the span as a
+        plausible, wrong, indistinguishable value. ``UNKNOWN_AGENT_TIER`` is
+        deliberately not a tier any agent can have, so an anomaly reads as one.
         """
-        tier_mapping = {
-            # Tier 0 - ML Foundation
-            "scope_definer": 0,
-            "data_preparer": 0,
-            "feature_analyzer": 0,
-            "model_selector": 0,
-            "model_trainer": 0,
-            "model_deployer": 0,
-            "observability_connector": 0,
-            # Tier 1 - Coordination
-            "orchestrator": 1,
-            "tool_composer": 1,
-            # Tier 2 - Causal Analytics
-            "causal_impact": 2,
-            "gap_analyzer": 2,
-            "heterogeneous_optimizer": 2,
-            # Tier 3 - Monitoring
-            "drift_monitor": 3,
-            "experiment_designer": 3,
-            "health_score": 3,
-            # Tier 4 - ML Predictions
-            "prediction_synthesizer": 4,
-            "resource_optimizer": 4,
-            # Tier 5 - Self-Improvement
-            "explainer": 5,
-            "feedback_learner": 5,
-        }
-        return tier_mapping.get(agent_name, 0)
+        return AGENT_TIER_NUMBERS.get(agent_name, UNKNOWN_AGENT_TIER)
 
     def get_status(self) -> Dict[str, Any]:
         """Get comprehensive status including circuit breaker state.

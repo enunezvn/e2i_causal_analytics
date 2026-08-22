@@ -240,6 +240,28 @@ AGENT_TIER_NAMES: Dict[int, str] = {
     5: "Self-Improvement",
 }
 
+#: ``{agent_name: tier NUMBER}`` -- the registry's tier column, projected.
+#:
+#: #1791: ``src/mlops/slo_monitor.py`` and ``src/mlops/opik_connector.py`` each
+#: carried their OWN hand-written copy of this mapping. Neither agreed with the
+#: registry and they did not agree with each other: the SLO map was short two
+#: agents and put ``cohort_constructor`` in tier 2 while the registry said 0
+#: (wrong since the commit that created it, not drift), and the opik map was
+#: short three. Both are now projections of this one, so a new agent reaches
+#: every consumer by being registered rather than by being remembered.
+#:
+#: Kept here, next to the data, for the same reason as :data:`AGENT_TIER_NAMES`:
+#: a projection that lives beside its source cannot drift from it, and a
+#: consumer that has to reach for one is far less likely to retype it.
+#:
+#: NOTE the read: ``AGENT_REGISTRY_CONFIG`` values are plain dicts, so this must
+#: subscript ``config["tier"]``. ``getattr(config, "tier", None)`` returns None
+#: for every agent and reads exactly like "the registry has no tier data" --
+#: the probe bug that first reported this issue as 7 of 22 rather than 3 of 22.
+AGENT_TIER_NUMBERS: Dict[str, int] = {
+    name: int(config["tier"]) for name, config in AGENT_REGISTRY_CONFIG.items()
+}
+
 
 def build_agent_roster_block() -> str:
     """Render the agent roster as prompt-ready text, derived from the registry.
