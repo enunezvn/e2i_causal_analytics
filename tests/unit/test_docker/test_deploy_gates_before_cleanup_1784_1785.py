@@ -433,6 +433,63 @@ def test_summary_renders_three_distinct_verdicts(tmp_path: Path) -> None:
     )
 
 
+def test_a_failed_rollout_is_not_attributed_to_a_rollback_that_may_not_have_happened(
+    tmp_path: Path,
+) -> None:
+    """Codex iter-3 HIGH. #1784 is about false attribution, and this PR added a new mode.
+
+    Run 32507847667 announced "rollback triggered or post-deploy drift check failed"
+    when neither had occurred — that false attribution is the reason #1784 was filed.
+    Option 5 rewrote which VARIABLE the verdict reads but kept the same sentence on the
+    failure side, and this PR then added a failure mode that reaches it: the #1785
+    fail-fast exits before the migrations, before any flip, before rollback and before
+    the drift check, and its own log line says "nothing was flipped or migrated".
+
+    The step outcome cannot tell those apart — `failure` is all there is — so the fix is
+    not a better guess. The summary must stop naming a cause it does not have, and
+    instead enumerate what the gated half covers, in the order it runs, so a human lands
+    in the right part of the log.
+    """
+    failed = _render_summary(tmp_path, rollout="failure", cleanup="success")
+    assert "Deployment Failed" in failed, failed
+
+    lowered = failed.lower()
+    assert "published-image" in lowered or "#1785" in failed, (
+        "the #1785 fail-fast is a rollout failure that flips and migrates NOTHING; a "
+        "summary that never mentions it sends a human looking for a rollback that did "
+        f"not happen. Rendered:\n{failed}"
+    )
+    for claim in ("rollback triggered", "rollback was triggered"):
+        assert claim not in lowered, (
+            "the summary asserts a rollback as fact from a signal that cannot show one "
+            f"— the exact false attribution #1784 was filed over. Rendered:\n{failed}"
+        )
+
+
+@pytest.mark.parametrize("outcome", ["skipped", "cancelled", ""])
+def test_a_rollout_that_never_ran_is_not_reported_as_a_failed_deploy(
+    tmp_path: Path, outcome: str
+) -> None:
+    """`if: always()` also renders when the rollout never executed.
+
+    A checkout failure, a cancelled run, or a job that died before the SSH step all give
+    the summary something that is not `success` — and the shipped script treats every
+    one of them as "Deployment Failed — rollback triggered". Nothing was deployed, so
+    nothing was rolled back. This one IS derivable from the outcome, unlike the case
+    above, so there is no excuse for guessing it.
+    """
+    rendered = _render_summary(tmp_path, rollout=outcome, cleanup="skipped")
+    lowered = rendered.lower()
+    assert "rollback" not in lowered, (
+        f"outcome {outcome!r} means the rollout never ran, so there was nothing to roll "
+        f"back. Rendered:\n{rendered}"
+    )
+    assert "did not run" in lowered or "never ran" in lowered, (
+        f"outcome {outcome!r} must be reported as a rollout that did not run, not as a "
+        f"failed deploy. Rendered:\n{rendered}"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 4. #1785 — fail fast when the resolved sha has no GHCR image
 # --------------------------------------------------------------------------- #
