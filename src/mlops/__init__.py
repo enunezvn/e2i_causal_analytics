@@ -134,6 +134,8 @@ from .slo_monitor import (
     SLOMonitor,
     # Classes
     SLOTarget,
+    # Errors
+    UnknownAgentError,
     get_agent_tier,
     get_all_slo_compliance,
     get_slo_compliance,
@@ -237,6 +239,7 @@ __all__ = [
     "SLOMonitor",
     "DEFAULT_SLO_TARGETS",
     "AGENT_TIER_MAP",
+    "UnknownAgentError",
     "get_agent_tier",
     "get_slo_target",
     "get_slo_monitor",

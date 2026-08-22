@@ -50,6 +50,8 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Deque, Dict, List, Optional
 
+from src.agents.factory import AGENT_TIER_NUMBERS
+
 logger = logging.getLogger(__name__)
 
 
@@ -126,40 +128,102 @@ DEFAULT_SLO_TARGETS: Dict[AgentTier, SLOTarget] = {
     ),
 }
 
-# Agent to tier mapping
-AGENT_TIER_MAP: Dict[str, AgentTier] = {
-    # Tier 0
-    "scope_definer": AgentTier.TIER_0_FOUNDATION,
-    "data_preparer": AgentTier.TIER_0_FOUNDATION,
-    "feature_analyzer": AgentTier.TIER_0_FOUNDATION,
-    "model_selector": AgentTier.TIER_0_FOUNDATION,
-    "model_trainer": AgentTier.TIER_0_FOUNDATION,
-    "model_deployer": AgentTier.TIER_0_FOUNDATION,
-    "observability_connector": AgentTier.TIER_0_FOUNDATION,
-    # Tier 1
-    "orchestrator": AgentTier.TIER_1_ORCHESTRATOR,
-    "tool_composer": AgentTier.TIER_1_ORCHESTRATOR,
-    # Tier 2
-    "causal_impact": AgentTier.TIER_2_CAUSAL,
-    "gap_analyzer": AgentTier.TIER_2_CAUSAL,
-    "heterogeneous_optimizer": AgentTier.TIER_2_CAUSAL,
-    "cohort_constructor": AgentTier.TIER_2_CAUSAL,
-    # Tier 3
-    "drift_monitor": AgentTier.TIER_3_MONITORING,
-    "experiment_designer": AgentTier.TIER_3_MONITORING,
-    "health_score": AgentTier.TIER_3_MONITORING,
-    # Tier 4
-    "prediction_synthesizer": AgentTier.TIER_4_ML,
-    "resource_optimizer": AgentTier.TIER_4_ML,
-    # Tier 5
-    "explainer": AgentTier.TIER_5_LEARNING,
-    "feedback_learner": AgentTier.TIER_5_LEARNING,
+
+class UnknownAgentError(KeyError):
+    """The agent name is not in :data:`~src.agents.factory.AGENT_REGISTRY_CONFIG`.
+
+    Subclasses ``KeyError`` because that is what the lookup it replaces would
+    have raised without its default, so ``except KeyError`` still catches it.
+    """
+
+
+#: ``{tier NUMBER: AgentTier}``, derived from the enum rather than typed out.
+#:
+#: A hand-written version of exactly this table is the second probe bug behind
+#: #1791: it omitted ``TIER_4_ML`` and ``TIER_5_LEARNING`` and confidently
+#: reported the registry as "7 of 22 wrong". Deriving it from ``AgentTier``
+#: means a new tier member cannot be forgotten here.
+_TIER_BY_NUMBER: Dict[int, AgentTier] = {
+    # ``AgentTier`` members are STRINGS ("tier_0" .. "tier_5") while the
+    # registry stores ints, so the coercion is explicit in both directions.
+    # Comparing the two without it makes all 22 agents look wrong -- the third
+    # probe bug, which reported "20 of 22".
+    int(member.value.split("_", 1)[1]): member
+    for member in AgentTier
 }
 
 
+def _build_agent_tier_map() -> Dict[str, AgentTier]:
+    """Project ``AGENT_REGISTRY_CONFIG``'s tier column onto :class:`AgentTier`.
+
+    #1791: this was a hand-written literal that never agreed with the registry.
+    It was short ``cohort_profiler`` and ``experiment_monitor``, and it placed
+    ``cohort_constructor`` in ``TIER_2_CAUSAL`` while the registry said tier 0 --
+    wrong in the very commit that introduced the map (f272766ae), so this is a
+    roster that never matched its source rather than one that fell behind.
+
+    Deriving it means the map is complete by construction: registering an agent
+    updates the SLO roster, and no separate edit can be forgotten.
+
+    Raises:
+        RuntimeError: if the registry uses a tier number with no ``AgentTier``
+            member. Fails closed at import rather than silently dropping the
+            agent from SLO monitoring, which is the failure mode this whole
+            issue is about. ``tests/unit/test_agents/test_config_roster_ssot_1779.py``
+            catches it in CI first.
+    """
+    tier_map: Dict[str, AgentTier] = {}
+    unmapped: Dict[str, int] = {}
+    for agent_name, tier_number in AGENT_TIER_NUMBERS.items():
+        member = _TIER_BY_NUMBER.get(tier_number)
+        if member is None:
+            unmapped[agent_name] = tier_number
+        else:
+            tier_map[agent_name] = member
+
+    if unmapped:
+        raise RuntimeError(
+            f"AGENT_REGISTRY_CONFIG places {unmapped} in tier number(s) that "
+            f"AgentTier does not define (it defines {sorted(_TIER_BY_NUMBER)}). "
+            f"Add the missing AgentTier member and a DEFAULT_SLO_TARGETS entry for it."
+        )
+    return tier_map
+
+
+#: Agent to tier mapping -- a projection of the registry, NOT a second roster.
+#: Still a plain ``Dict[str, AgentTier]``: ``SLOMonitor.get_tier_compliance``
+#: iterates it with ``.items()`` and it is re-exported from ``src/mlops/__init__``.
+AGENT_TIER_MAP: Dict[str, AgentTier] = _build_agent_tier_map()
+
+
 def get_agent_tier(agent_name: str) -> AgentTier:
-    """Get the tier for an agent."""
-    return AGENT_TIER_MAP.get(agent_name, AgentTier.TIER_2_CAUSAL)
+    """Get the tier for an agent.
+
+    Raises:
+        UnknownAgentError: if ``agent_name`` is not a registered agent.
+
+    #1791: this used to return ``AgentTier.TIER_2_CAUSAL`` for anything it did
+    not recognise, which meant the map could not distinguish "I have never
+    heard of this agent" from "this agent is deliberately in tier 2" -- and
+    ``get_slo_target`` then handed back real TIER_2 SLO targets either way. That
+    default was doing real damage while the map was incomplete: two registered
+    agents were silently measured against the wrong SLO.
+
+    Now that :data:`AGENT_TIER_MAP` is complete by construction, an unrecognised
+    name can only be a typo, a component that is not an agent, or an agent
+    removed from the registry. In all three cases the honest answer is "no SLO
+    is defined for this", and a monitor that instead reports 99.5%-availability
+    compliance against a fabricated target is worse than one that refuses --
+    a confidently wrong number is the worst possible output for a monitoring
+    system. So this raises rather than guessing.
+    """
+    try:
+        return AGENT_TIER_MAP[agent_name]
+    except KeyError:
+        raise UnknownAgentError(
+            f"{agent_name!r} is not a registered agent, so it has no SLO tier. "
+            f"Known agents: {sorted(AGENT_TIER_MAP)}"
+        ) from None
 
 
 def get_slo_target(agent_name: str) -> SLOTarget:
@@ -724,6 +788,8 @@ __all__ = [
     "AGENT_TIER_MAP",
     "get_agent_tier",
     "get_slo_target",
+    # Errors
+    "UnknownAgentError",
     # Singleton
     "get_slo_monitor",
     "reset_slo_monitor",
