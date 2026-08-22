@@ -492,27 +492,70 @@ jobs:
               fi
             }
 
-            # Probe ONE image ref. 0 = manifest present. A DEFINITIVE "absent"
-            # (no such manifest / manifest unknown / not found) is trusted at once and
-            # NOT retried — that is the common case for a race's newest, not-yet-built
-            # commit, and retrying it would needlessly slow the walk (and the pathological
-            # nothing-built window). Any OTHER non-zero (auth blip, rate-limit, transient
-            # network) is retried ONCE after a short sleep, so a flake cannot push the
-            # walk past a good candidate. Captured in an `if <assign>` so the failing
-            # probe is set -e-exempt (never aborts the deploy). Error-string matching is
-            # a best effort: a wording change only degrades a definitive-absent to one
-            # needless retry — never an incorrect result (the #1431 downgrade floor and
-            # the forward pull's --build fallback both still protect correctness).
-            manifest_present() {
-              _ref="$1"
-              if _err=$(docker manifest inspect "$_ref" 2>&1 >/dev/null); then
+            # Probe ONE image ref, ONCE, and say what the answer MEANS. This is the only
+            # place that classifies a failed `docker manifest inspect`:
+            #
+            #   0 = the manifest is there
+            #   1 = the registry NAMED it absent (no such manifest / manifest unknown /
+            #       not found / UNKNOWN)
+            #   2 = anything else — denied, unauthorized, rate-limited, network. We asked
+            #       and did not get an answer about existence.
+            #
+            # The 1-vs-2 split did not used to exist because nothing needed it: the only
+            # consumer was the sha walk, for which a false negative costs a slightly older
+            # deploy. #1785's gate REFUSES a deploy, and there a false negative is a
+            # CONVERGED deploy turned into a hard failure announced as a missing image.
+            # Keeping both consumers on ONE classification is the point — two copies of
+            # these strings would let the walk and the gate drift into disagreeing about
+            # what "absent" means, and that disagreement is this defect's own family.
+            # (tests/unit/test_docker/test_deploy_gates_before_cleanup_1784_1785.py
+            # asserts the list appears exactly once in this script.)
+            #
+            # Captured in an `if <assign>` so the failing probe is set -e-exempt (never
+            # aborts the deploy). Error-string matching is a best effort, and the cost of
+            # a wording change is now stated honestly for BOTH consumers: the walk sees a
+            # definitive-absent degrade into one needless retry, and the #1785 gate sees it
+            # degrade into "no answer" — which makes the gate STAND DOWN rather than refuse.
+            # Both directions fail safe; neither can invent a hard failure.
+            manifest_probe_once() {
+              if _err=$(docker manifest inspect "$1" 2>&1 >/dev/null); then
                 return 0
               fi
               case "$_err" in
                 *"no such manifest"*|*"manifest unknown"*|*"not found"*|*"UNKNOWN"*) return 1 ;;
               esac
+              return 2
+            }
+
+            # Same three answers, with the retry policy applied. A DEFINITIVE absent is
+            # trusted at once and NOT retried — that is the common case for a race's
+            # newest, not-yet-built commit, and retrying it would needlessly slow the walk
+            # (and the pathological nothing-built window). An INCONCLUSIVE answer is
+            # retried ONCE after a short sleep, so a flake cannot push the walk past a
+            # good candidate, nor make the #1785 gate stand down over one blip.
+            # No `local` in plain /bin/sh, so every scratch name here is GLOBAL and each
+            # helper owns a distinct one: `_mv` must not be the same variable as the `_mp`
+            # its caller is holding, or a callee's leftover value becomes the caller's
+            # answer on the branch where `|| _x=$?` does not fire.
+            manifest_verdict() {
+              _mv=0
+              manifest_probe_once "$1" || _mv=$?
+              if [ "$_mv" -ne 2 ]; then
+                return "$_mv"
+              fi
               sleep 3
-              docker manifest inspect "$_ref" >/dev/null 2>&1
+              _mv=0
+              manifest_probe_once "$1" || _mv=$?
+              return "$_mv"
+            }
+
+            # The BOOLEAN the sha walk wants: present, or not-safe-to-treat-as-present.
+            # Collapsing "absent" and "no answer" into one FALSE is correct HERE and only
+            # here — the walk just moves to the next candidate either way.
+            manifest_present() {
+              _mp=0
+              manifest_verdict "$1" || _mp=$?
+              [ "$_mp" -eq 0 ]
             }
 
             # #1431: a commit's app images are PUBLISHED iff BOTH e2i-api (shared by
@@ -528,6 +571,39 @@ jobs:
               _sha="$1"
               manifest_present "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${_sha}" \
                 && manifest_present "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${_sha}"
+            }
+
+            # #1785: the three-way form of image_exists(), for the gate below — the one
+            # caller that REFUSES a deploy and therefore may not treat "I could not ask"
+            # as "it is not there". Both images must be published (#1431), so:
+            #   1 (definitively absent) on EITHER ref wins — the invariant is broken
+            #     whatever the other ref would have said, and that is a refusal we can
+            #     stand behind;
+            #   2 (no answer) otherwise, if either ref was inconclusive;
+            #   0 only when both manifests were actually read.
+            # Unlike image_exists() this does NOT short-circuit: the precedence rule needs
+            # both answers, and the extra manifest read costs one HTTP round trip on the
+            # failing path only.
+            images_verdict() {
+              _sha="$1"
+              _api=0
+              manifest_verdict "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${_sha}" || _api=$?
+              _fe=0
+              manifest_verdict "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${_sha}" || _fe=$?
+              if [ "$_api" -eq 1 ] || [ "$_fe" -eq 1 ]; then
+                return 1
+              fi
+              # CLOSED, not open: "published" is claimed only when BOTH manifests were
+              # actually read. Everything else — 2, or a status this function does not
+              # know (127 if a helper is ever renamed out from under it, 130 on a signal)
+              # — is "no answer", which stands down AND SAYS SO. The first cut fell
+              # through to `return 0`, so an unrecognised status was silently read as
+              # both images being present; the deploy proceeds either way, but only one
+              # of those two claims a fact we do not have.
+              if [ "$_api" -eq 0 ] && [ "$_fe" -eq 0 ]; then
+                return 0
+              fi
+              return 2
             }
 
             # Given candidate SHAs on stdin (newest first), echo the FIRST whose images
@@ -786,34 +862,57 @@ jobs:
             # ensure-main-image (PR #1782) builds any sha the droplet is about to resolve,
             # "no image for the target" is a BROKEN INVARIANT, not a routine miss — which
             # is what makes asserting it here worth the deploys it will refuse.
-            # PRECONDITION, and not decoration: a MISSING image and an UNREACHABLE
-            # registry are the same non-zero at this call site. manifest_present() trusts
-            # a DEFINITIVE absent at once ("no such manifest"/"manifest unknown"/"not
-            # found"/"UNKNOWN") and retries anything ELSE once before giving up, so
-            # `denied` and `unauthorized` both arrive here as "absent". Measured by
-            # driving the unmodified manifest_present/image_exists above with a stubbed
-            # docker: definitive-absent, denied, no-basic-auth-creds and unauthorized all
-            # return FALSE; only a present manifest returns TRUE.
+            # PRECONDITION, and not decoration: a MISSING image and a registry that will
+            # not ANSWER are the same non-zero at a boolean call site, and this gate is
+            # the one caller that turns a non-zero into a refused deploy. So it asks the
+            # three-way images_verdict() instead: published / the registry NAMED it
+            # absent / no answer at all. The refusal is spent only on the middle one.
             #
-            # Asserting without this would turn a GHCR auth blip into a hard deploy
-            # failure ANNOUNCED AS A MISSING IMAGE, and would do it BEFORE the pull
-            # below — which performs its own fresh `docker login` and is precisely the
+            # Two distinct ways to have no answer, and both must stand down:
+            #
+            #   1. `docker login` fails (or IMAGE_OWNER is unset) — the registry is never
+            #      asked at all.
+            #   2. login SUCCEEDS and the manifest read is refused anyway. This is not a
+            #      corner case: GHCR's login endpoint accepts any valid PAT, while
+            #      `read:packages` is enforced at the MANIFEST, so a scope-reduced token,
+            #      a package unlinked from its repo, or revoked org access all answer
+            #      `denied` on an image that plainly exists. A 5xx or a network stall that
+            #      outlives manifest_verdict()'s one retry lands in the same bucket.
+            #
+            # Asserting on either would turn a GHCR ACCESS failure into a hard deploy
+            # failure ANNOUNCED AS A MISSING IMAGE — and would do it BEFORE the pull
+            # below, which performs its own fresh `docker login` and is precisely the
             # self-healing path a transient blip needs. That is a worse outcome than the
-            # one #1785 exists to prevent, so the refusal is spent only on an answer we
-            # can actually stand behind: we reached GHCR authenticated and it said no.
-            # When we cannot ask, behaviour is exactly what it was before #1785.
+            # one #1785 exists to prevent, and it would send a human after
+            # ensure-main-image for a problem that is not there. When we cannot get an
+            # answer, behaviour is exactly what it was before #1785.
             GATE_AUTH_OK=false
             if [ -n "$IMAGE_OWNER" ] \
                && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1; then
               GATE_AUTH_OK=true
             fi
+            # Defaults to 2 ("no answer") so that any path which never reaches the probe
+            # stands down rather than asserting.
+            IMAGES_VERDICT=2
+            GATE_STANDDOWN=""
             if [ "$GATE_AUTH_OK" != true ]; then
-              echo "==> WARN: cannot reach ${REGISTRY:-ghcr.io} authenticated — SKIPPING the #1785 published-image assertion for ${NEW_SHA}."
-              echo "==>   A registry we cannot ask and an image that is absent are the same answer"
-              echo "==>   here, so asserting would report a GHCR auth failure as a missing image and"
-              echo "==>   refuse a deploy the pull below can still self-heal with its own fresh login."
-              echo "==>   If that pull also fails, the local-build path is taken as it always was."
-            elif ! image_exists "$NEW_SHA"; then
+              GATE_STANDDOWN="docker login to ${REGISTRY:-ghcr.io} failed, or IMAGE_OWNER is unset — the registry was never asked"
+            else
+              IMAGES_VERDICT=0
+              images_verdict "$NEW_SHA" || IMAGES_VERDICT=$?
+              if [ "$IMAGES_VERDICT" -eq 2 ]; then
+                GATE_STANDDOWN="${REGISTRY:-ghcr.io} answered twice with something that is neither a manifest nor a definitive absent (denied / unauthorized / rate-limit / network) — being logged in is not the same as being authorized to READ this package"
+              fi
+            fi
+            if [ -n "$GATE_STANDDOWN" ]; then
+              echo "==> WARN: SKIPPING the #1785 published-image assertion for ${NEW_SHA}."
+              echo "==>   Reason: ${GATE_STANDDOWN}."
+              echo "==>   A registry that will not answer and an image that is absent are the same"
+              echo "==>   non-zero here, so asserting would report a GHCR ACCESS failure as a MISSING"
+              echo "==>   IMAGE and refuse a deploy the pull below can still self-heal with its own"
+              echo "==>   fresh login. If that pull also fails, the local-build path is taken as it"
+              echo "==>   always was — behaviour is exactly what it was before #1785."
+            elif [ "$IMAGES_VERDICT" -ne 0 ]; then
               echo "==> ERROR: no published GHCR image for the resolved target ${NEW_SHA}"
               echo "==>   expected BOTH ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${NEW_SHA}"
               echo "==>   and          ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${NEW_SHA}"
