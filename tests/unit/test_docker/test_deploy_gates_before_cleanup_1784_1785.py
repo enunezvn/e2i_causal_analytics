@@ -454,16 +454,25 @@ def test_a_failed_rollout_is_not_attributed_to_a_rollback_that_may_not_have_happ
     assert "Deployment Failed" in failed, failed
 
     lowered = failed.lower()
-    assert "published-image" in lowered or "#1785" in failed, (
-        "the #1785 fail-fast is a rollout failure that flips and migrates NOTHING; a "
-        "summary that never mentions it sends a human looking for a rollback that did "
-        f"not happen. Rendered:\n{failed}"
-    )
-    for claim in ("rollback triggered", "rollback was triggered"):
-        assert claim not in lowered, (
-            "the summary asserts a rollback as fact from a signal that cannot show one "
-            f"— the exact false attribution #1784 was filed over. Rendered:\n{failed}"
+
+    # Banning two spellings of "rollback triggered" is NOT the assertion this needs, and
+    # codex iter-4 said so: a summary that named the DRIFT CHECK as the cause instead
+    # would have sailed through, which is the same defect wearing the other half of the
+    # old sentence. What actually distinguishes attribution from enumeration is that ALL
+    # FOUR gates are offered and none is picked — so assert exactly that.
+    for gate in ("#1785", "migration", "flip", "#1479"):
+        assert gate in lowered or gate in failed, (
+            f"the failure summary must offer every gate the rollout step covers; {gate!r} "
+            f"is missing, which turns a list into a nomination. Rendered:\n{failed}"
         )
+    assert "does not guess" in lowered, (
+        "the summary must state that it is NOT naming a cause — `outcome` is one word "
+        f"and cannot carry which gate fired. Rendered:\n{failed}"
+    )
+    assert "nothing is flipped or migrated" in lowered, (
+        "the #1785 entry must carry the fact that makes it worth listing first: that "
+        f"branch touches the box not at all. Rendered:\n{failed}"
+    )
 
 
 @pytest.mark.parametrize("outcome", ["skipped", ""])
@@ -512,9 +521,12 @@ def test_a_cancelled_rollout_does_not_claim_the_droplet_was_untouched(tmp_path: 
     assert "not derivable" in lowered, (
         f"the summary must say plainly that how far it got is unknown:\n{rendered}"
     )
-    assert "prune" in lowered, (
-        "a cancel also skips the post-deploy prune (`if: !cancelled()`), which is part "
-        f"of what state the box is left in:\n{rendered}"
+    # "mentions the prune" would pass a summary that said the prune RAN. The fact that
+    # matters to an operator is that it did not, so assert the consequence.
+    assert "prune is skipped" in lowered and "nothing was reclaimed" in lowered, (
+        "a cancel also skips the post-deploy prune (`if: !cancelled()`), and the summary "
+        "must say it was SKIPPED — that is part of what state the box is left in:\n"
+        f"{rendered}"
     )
 
 
