@@ -1281,6 +1281,14 @@ jobs:
       # announced "rollback triggered or post-deploy drift check failed"; neither had
       # occurred. Reading the two step outcomes makes the verdict derivable instead of
       # guessed at, and there is exactly one source of truth for each half.
+      #
+      # Reading the right variable was only half of it. The first cut of this rewrite kept
+      # that same rollback/drift sentence on the failure side — so the attribution was
+      # still invented, just from a better input, and #1785 then added a failure mode that
+      # reaches it having flipped and migrated NOTHING. Four outcomes are rendered now,
+      # and the failure one names no cause: `outcome` is one word and cannot carry which
+      # gate fired, so it enumerates the gated half in the order it runs and defers to the
+      # log. A summary that cannot know something must say so rather than pick.
       - name: Deployment summary
         if: always()
         env:
@@ -1301,10 +1309,45 @@ jobs:
               echo "The rollout flipped and passed every gate, including the #1479 image-drift check." >> "$GITHUB_STEP_SUMMARY"
               echo "Only the disk-hygiene prune was cut short; the next deploy reclaims the same space." >> "$GITHUB_STEP_SUMMARY"
             fi
+          elif [ "$ROLLOUT_OUTCOME" = "failure" ]; then
+            # The gated half failed. WHICH gate is NOT derivable here — `outcome` is one
+            # word — so this must not name one. The old sentence did ("rollback triggered
+            # or post-deploy drift check failed"), and that is the exact false attribution
+            # #1784 was filed over: run 32507847667 printed it when neither had happened.
+            # Option 5 fixed which VARIABLE the verdict reads and left the sentence, and
+            # then #1785 added a failure mode that reaches it and flips NOTHING — a human
+            # sent after rollback state for a deploy that never touched the box.
+            #
+            # So: enumerate what the gated half covers, in the order it runs, and point at
+            # the log. The list is ordered deliberately — the earlier the entry, the less
+            # of the box was touched, and the first one touched nothing at all.
+            echo "## Deployment Failed during the gated rollout — see the log for which gate" >> "$GITHUB_STEP_SUMMARY"
+            echo "The rollout step covers, in this order:" >> "$GITHUB_STEP_SUMMARY"
+            echo "1. the #1785 published-image assertion — **nothing is flipped or migrated** if this is what failed;" >> "$GITHUB_STEP_SUMMARY"
+            echo "2. the DB migrations;" >> "$GITHUB_STEP_SUMMARY"
+            echo "3. the service flip, and the rollback if it did not come up;" >> "$GITHUB_STEP_SUMMARY"
+            echo "4. the #1479 post-deploy image-drift check, which runs only after a converged flip." >> "$GITHUB_STEP_SUMMARY"
+            echo "The step log states which one; this summary does not guess." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$ROLLOUT_OUTCOME" = "cancelled" ]; then
+            # A cancel is NOT "it never ran". `cancel-in-progress` is false for this
+            # group, so a newer deploy cannot cancel this one — but a human can, and so
+            # can the job's own timeout-minutes, and either lands wherever the rollout
+            # happened to be. Saying "the droplet was never reached" here would be a
+            # fresh false attribution in the middle of a fix for false attribution.
+            # State what is actually known, and say plainly that the rest is not.
+            echo "## Deployment CANCELLED during the gated rollout" >> "$GITHUB_STEP_SUMMARY"
+            echo "How far it got is **not derivable here** — a cancel is a manual stop or this job's" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`timeout-minutes\`, and either can land mid-rollout, so the droplet may be part-flipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "Check the step log and the RUNNING image tags before deploying again." >> "$GITHUB_STEP_SUMMARY"
+            echo "The post-deploy prune is skipped on a cancel (\`if: !cancelled()\`), so nothing was reclaimed." >> "$GITHUB_STEP_SUMMARY"
           else
-            # A rolled-back deploy, OR a converged deploy whose #1479 drift check fired
-            # — read the log. Both are genuine failures of the gated half.
-            echo "## Deployment Failed — rollback triggered or post-deploy drift check failed (see log)" >> "$GITHUB_STEP_SUMMARY"
+            # `skipped` (or empty) is the one outcome that PROVES the step never started —
+            # a checkout failure, a job that died before the SSH step. Nothing was
+            # deployed, so nothing was rolled back. Unlike the failure branch, this is
+            # derivable from the outcome, so guessing it would be inexcusable.
+            echo "## Deployment did not run — the rollout step reported \`${ROLLOUT_OUTCOME:-<unset>}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "The step never started, so nothing was migrated, flipped or reverted." >> "$GITHUB_STEP_SUMMARY"
+            echo "Look at the steps BEFORE the rollout in this job." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "- **Commit:** \`$COMMIT_SHA\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Branch:** $BRANCH_NAME" >> "$GITHUB_STEP_SUMMARY"

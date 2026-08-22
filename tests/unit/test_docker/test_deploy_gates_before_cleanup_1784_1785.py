@@ -466,27 +466,55 @@ def test_a_failed_rollout_is_not_attributed_to_a_rollback_that_may_not_have_happ
         )
 
 
-@pytest.mark.parametrize("outcome", ["skipped", "cancelled", ""])
-def test_a_rollout_that_never_ran_is_not_reported_as_a_failed_deploy(
+@pytest.mark.parametrize("outcome", ["skipped", ""])
+def test_a_rollout_that_never_started_is_not_reported_as_a_failed_deploy(
     tmp_path: Path, outcome: str
 ) -> None:
     """`if: always()` also renders when the rollout never executed.
 
-    A checkout failure, a cancelled run, or a job that died before the SSH step all give
-    the summary something that is not `success` — and the shipped script treats every
-    one of them as "Deployment Failed — rollback triggered". Nothing was deployed, so
-    nothing was rolled back. This one IS derivable from the outcome, unlike the case
-    above, so there is no excuse for guessing it.
+    A checkout failure or a job that died before the SSH step leaves the summary with
+    something that is not `success`, and the shipped script treated every one of them as
+    "Deployment Failed — rollback triggered". Nothing was deployed, so nothing was
+    rolled back. Unlike the failure branch, this IS derivable from the outcome, so there
+    is no excuse for guessing it.
     """
     rendered = _render_summary(tmp_path, rollout=outcome, cleanup="skipped")
     lowered = rendered.lower()
-    assert "rollback" not in lowered, (
-        f"outcome {outcome!r} means the rollout never ran, so there was nothing to roll "
-        f"back. Rendered:\n{rendered}"
+    assert "rollback" not in lowered and "reverted" not in lowered.split("nothing was")[0], (
+        f"outcome {outcome!r} means the rollout never started, so there was nothing to "
+        f"roll back. Rendered:\n{rendered}"
     )
-    assert "did not run" in lowered or "never ran" in lowered, (
+    assert "did not run" in lowered or "never started" in lowered, (
         f"outcome {outcome!r} must be reported as a rollout that did not run, not as a "
         f"failed deploy. Rendered:\n{rendered}"
+    )
+
+
+def test_a_cancelled_rollout_does_not_claim_the_droplet_was_untouched(tmp_path: Path) -> None:
+    """A cancel is not "it never ran" — and my first fix for the above said it was.
+
+    Lumping `cancelled` in with `skipped` produced the sentence "The droplet was never
+    reached", which is a FRESH false attribution inside a fix for false attribution.
+    `cancel-in-progress` is false for the `deploy-production` group, so a newer deploy
+    cannot cancel this one — but a human can, and so can this job's own
+    `timeout-minutes`, and either lands wherever the rollout happened to be. The box may
+    be part-flipped, which is the state the #1784 prune guard exists for.
+
+    So the summary must say what is known and name the rest as not derivable.
+    """
+    rendered = _render_summary(tmp_path, rollout="cancelled", cleanup="skipped")
+    lowered = rendered.lower()
+    assert "cancelled" in lowered, f"the cancel must be named:\n{rendered}"
+    assert "never reached" not in lowered and "never started" not in lowered, (
+        "a cancel can land mid-rollout, so the summary must not claim the droplet was "
+        f"untouched:\n{rendered}"
+    )
+    assert "not derivable" in lowered, (
+        f"the summary must say plainly that how far it got is unknown:\n{rendered}"
+    )
+    assert "prune" in lowered, (
+        "a cancel also skips the post-deploy prune (`if: !cancelled()`), which is part "
+        f"of what state the box is left in:\n{rendered}"
     )
 
 
