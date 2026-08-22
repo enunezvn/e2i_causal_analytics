@@ -1041,6 +1041,63 @@ def test_an_unrecognised_probe_status_stands_down_rather_than_claiming_published
     )
 
 
+@pytest.mark.parametrize(
+    ("label", "answers", "expected_rc", "expected_probes"),
+    [
+        ("present", [(0, "")], 0, 1),
+        ("definitive absent, NOT retried", [(1, DEFINITIVE_ABSENT)], 1, 1),
+        ("inconclusive then present", [(1, INCONCLUSIVE), (0, "")], 0, 2),
+        ("inconclusive twice", [(1, INCONCLUSIVE), (1, INCONCLUSIVE)], 1, 2),
+    ],
+)
+def test_manifest_present_still_answers_what_the_sha_walk_relied_on(
+    tmp_path: Path,
+    label: str,
+    answers: list[tuple[int, str]],
+    expected_rc: int,
+    expected_probes: int,
+) -> None:
+    """`manifest_present` is now expressed via the three-way verdict — pin what it means.
+
+    `select_built_sha`/`image_exists` are the OTHER consumer of these helpers, and
+    scripts/test_deploy_sha_selection.sh stubs `image_exists` outright, so nothing else
+    in the repo exercises this function against a real probe. Both halves are pinned:
+    the boolean, AND the PROBE COUNT — a definitive absent must still cost exactly one
+    manifest read, because retrying it is what would slow the walk (and the pathological
+    nothing-built window) that the no-retry rule exists to keep fast.
+    """
+    state = tmp_path / "probe_state"
+    state.mkdir(exist_ok=True)
+    counter = state / "api"
+    runner = tmp_path / "mp.sh"
+    runner.write_text(
+        "set -e\n"
+        + _docker_ref_stub(0, answers, answers)
+        + "sleep() { :; }\n"
+        + _extract_probe_helpers()
+        + '\nif manifest_present "ghcr.io/enunezvn/e2i-api:sha"; then\n'
+        '  echo "RESULT=0"\n'
+        "else\n"
+        '  echo "RESULT=1"\n'
+        "fi\n"
+        f'printf "PROBES=%s\\n" "$(cat {counter} 2>/dev/null || echo 0)"\n'
+    )
+    proc = subprocess.run(
+        ["bash", str(runner)],
+        env={"PATH": "/usr/bin:/bin", "STUB_STATE": str(state)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    out = proc.stdout + proc.stderr
+    got_rc = next((ln for ln in out.splitlines() if ln.startswith("RESULT=")), "RESULT=?")
+    got_probes = next((ln for ln in out.splitlines() if ln.startswith("PROBES=")), "PROBES=?")
+    assert (got_rc, got_probes) == (f"RESULT={expected_rc}", f"PROBES={expected_probes}"), (
+        f"manifest_present changed meaning for {label!r}: expected "
+        f"RESULT={expected_rc}/PROBES={expected_probes}, got {got_rc}/{got_probes}.\n{out}"
+    )
+
+
 def test_the_absent_classification_has_exactly_one_source_of_truth() -> None:
     """The definitive-absent string list must exist ONCE in the rollout script.
 
