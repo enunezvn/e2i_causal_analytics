@@ -351,10 +351,16 @@ jobs:
   deploy:
     name: Deploy to Droplet
     runs-on: ubuntu-latest
-    # Exceeds the 30m appleboy/ssh-action command_timeout (below) plus checkout + SSH
-    # handshake overhead, so a hung deploy self-cancels instead of blockading the
-    # serialized deploy-production queue for GitHub's 360-min default. (#1412 review)
-    timeout-minutes: 40
+    # Exceeds the SUM of both appleboy/ssh-action command_timeouts below (30m gated
+    # rollout + 15m cleanup) plus checkout and two SSH handshakes, so a hung deploy
+    # self-cancels instead of blockading the serialized deploy-production queue for
+    # GitHub's 360-min default. (#1412 review)
+    # #1784: this bound is a SUM now that the prune has its own step, and it must stay
+    # strictly above that sum. If the JOB timeout fired first it would kill the gated
+    # rollout in order to punish a slow prune — re-merging on the job axis exactly the
+    # two failure modes the split exists to separate. Recomputed, not pinned, by
+    # tests/unit/test_docker/test_deploy_gates_before_cleanup_1784_1785.py.
+    timeout-minutes: 50
     # #1780: ensure-main-image must complete BEFORE the SSH step, or the droplet can
     # resolve a sha whose image is still being pushed.
     needs: [build-and-push, build-and-push-frontend, ensure-main-image]
@@ -368,7 +374,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # #1784 option 4 — the GATED half of the deploy, and nothing else. Flip,
+      # health gate, bentoml readiness gate, #1479 drift check. No cleanup runs here.
+      # Cleanup that sits downstream of a gate spends the GATE's time budget, and a
+      # command_timeout kills the SSH command outright, so the `|| true` that makes a
+      # prune best-effort never gets to run. Measured on run 32507847667 (2026-08-21):
+      # the prune got 44 seconds of the 30m budget, the timeout fired mid-prune, the
+      # drift check below never executed, and a deploy that had flipped all six
+      # services and passed its health gate four minutes earlier reported FAILED.
       - name: Deploy via SSH
+        id: rollout
         uses: appleboy/ssh-action@v1
         env:
           # #528-B: forwarded to the droplet for the GHCR pull. IMAGE_OWNER names the
@@ -477,27 +492,70 @@ jobs:
               fi
             }
 
-            # Probe ONE image ref. 0 = manifest present. A DEFINITIVE "absent"
-            # (no such manifest / manifest unknown / not found) is trusted at once and
-            # NOT retried — that is the common case for a race's newest, not-yet-built
-            # commit, and retrying it would needlessly slow the walk (and the pathological
-            # nothing-built window). Any OTHER non-zero (auth blip, rate-limit, transient
-            # network) is retried ONCE after a short sleep, so a flake cannot push the
-            # walk past a good candidate. Captured in an `if <assign>` so the failing
-            # probe is set -e-exempt (never aborts the deploy). Error-string matching is
-            # a best effort: a wording change only degrades a definitive-absent to one
-            # needless retry — never an incorrect result (the #1431 downgrade floor and
-            # the forward pull's --build fallback both still protect correctness).
-            manifest_present() {
-              _ref="$1"
-              if _err=$(docker manifest inspect "$_ref" 2>&1 >/dev/null); then
+            # Probe ONE image ref, ONCE, and say what the answer MEANS. This is the only
+            # place that classifies a failed `docker manifest inspect`:
+            #
+            #   0 = the manifest is there
+            #   1 = the registry NAMED it absent (no such manifest / manifest unknown /
+            #       not found / UNKNOWN)
+            #   2 = anything else — denied, unauthorized, rate-limited, network. We asked
+            #       and did not get an answer about existence.
+            #
+            # The 1-vs-2 split did not used to exist because nothing needed it: the only
+            # consumer was the sha walk, for which a false negative costs a slightly older
+            # deploy. #1785's gate REFUSES a deploy, and there a false negative is a
+            # CONVERGED deploy turned into a hard failure announced as a missing image.
+            # Keeping both consumers on ONE classification is the point — two copies of
+            # these strings would let the walk and the gate drift into disagreeing about
+            # what "absent" means, and that disagreement is this defect's own family.
+            # (tests/unit/test_docker/test_deploy_gates_before_cleanup_1784_1785.py
+            # asserts the list appears exactly once in this script.)
+            #
+            # Captured in an `if <assign>` so the failing probe is set -e-exempt (never
+            # aborts the deploy). Error-string matching is a best effort, and the cost of
+            # a wording change is now stated honestly for BOTH consumers: the walk sees a
+            # definitive-absent degrade into one needless retry, and the #1785 gate sees it
+            # degrade into "no answer" — which makes the gate STAND DOWN rather than refuse.
+            # Both directions fail safe; neither can invent a hard failure.
+            manifest_probe_once() {
+              if _err=$(docker manifest inspect "$1" 2>&1 >/dev/null); then
                 return 0
               fi
               case "$_err" in
                 *"no such manifest"*|*"manifest unknown"*|*"not found"*|*"UNKNOWN"*) return 1 ;;
               esac
+              return 2
+            }
+
+            # Same three answers, with the retry policy applied. A DEFINITIVE absent is
+            # trusted at once and NOT retried — that is the common case for a race's
+            # newest, not-yet-built commit, and retrying it would needlessly slow the walk
+            # (and the pathological nothing-built window). An INCONCLUSIVE answer is
+            # retried ONCE after a short sleep, so a flake cannot push the walk past a
+            # good candidate, nor make the #1785 gate stand down over one blip.
+            # No `local` in plain /bin/sh, so every scratch name here is GLOBAL and each
+            # helper owns a distinct one: `_mv` must not be the same variable as the `_mp`
+            # its caller is holding, or a callee's leftover value becomes the caller's
+            # answer on the branch where `|| _x=$?` does not fire.
+            manifest_verdict() {
+              _mv=0
+              manifest_probe_once "$1" || _mv=$?
+              if [ "$_mv" -ne 2 ]; then
+                return "$_mv"
+              fi
               sleep 3
-              docker manifest inspect "$_ref" >/dev/null 2>&1
+              _mv=0
+              manifest_probe_once "$1" || _mv=$?
+              return "$_mv"
+            }
+
+            # The BOOLEAN the sha walk wants: present, or not-safe-to-treat-as-present.
+            # Collapsing "absent" and "no answer" into one FALSE is correct HERE and only
+            # here — the walk just moves to the next candidate either way.
+            manifest_present() {
+              _mp=0
+              manifest_verdict "$1" || _mp=$?
+              [ "$_mp" -eq 0 ]
             }
 
             # #1431: a commit's app images are PUBLISHED iff BOTH e2i-api (shared by
@@ -513,6 +571,39 @@ jobs:
               _sha="$1"
               manifest_present "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${_sha}" \
                 && manifest_present "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${_sha}"
+            }
+
+            # #1785: the three-way form of image_exists(), for the gate below — the one
+            # caller that REFUSES a deploy and therefore may not treat "I could not ask"
+            # as "it is not there". Both images must be published (#1431), so:
+            #   1 (definitively absent) on EITHER ref wins — the invariant is broken
+            #     whatever the other ref would have said, and that is a refusal we can
+            #     stand behind;
+            #   2 (no answer) otherwise, if either ref was inconclusive;
+            #   0 only when both manifests were actually read.
+            # Unlike image_exists() this does NOT short-circuit: the precedence rule needs
+            # both answers, and the extra manifest read costs one HTTP round trip on the
+            # failing path only.
+            images_verdict() {
+              _sha="$1"
+              _api=0
+              manifest_verdict "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${_sha}" || _api=$?
+              _fe=0
+              manifest_verdict "${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${_sha}" || _fe=$?
+              if [ "$_api" -eq 1 ] || [ "$_fe" -eq 1 ]; then
+                return 1
+              fi
+              # CLOSED, not open: "published" is claimed only when BOTH manifests were
+              # actually read. Everything else — 2, or a status this function does not
+              # know (127 if a helper is ever renamed out from under it, 130 on a signal)
+              # — is "no answer", which stands down AND SAYS SO. The first cut fell
+              # through to `return 0`, so an unrecognised status was silently read as
+              # both images being present; the deploy proceeds either way, but only one
+              # of those two claims a fact we do not have.
+              if [ "$_api" -eq 0 ] && [ "$_fe" -eq 0 ]; then
+                return 0
+              fi
+              return 2
             }
 
             # Given candidate SHAs on stdin (newest first), echo the FIRST whose images
@@ -750,6 +841,94 @@ jobs:
             NEW_SHA=$(git rev-parse HEAD)
             echo "==> Deploying ${NEW_SHA:0:7}"
 
+            # #1785: the target is FIXED now, and this is the last cheap moment before
+            # the deploy starts spending. Assert the images actually exist rather than
+            # discovering it three steps downstream as `manifest unknown` scrolling past
+            # mid-run. Placement is the whole point: earlier and the reset has not landed
+            # yet, later and the DB migrations have already applied and the ~26-min build
+            # has already started. Two manifest reads, no layer pull; on the normal path
+            # select_built_sha() already proved this exact sha, so it is a no-op.
+            #
+            # WHY FAIL RATHER THAN BUILD, stated as the honest trade it is: a deploy that
+            # would have CONVERGED now fails. On 2026-08-21 the local build worked — it
+            # produced correct images in 25m17s and flipped all six services. But the
+            # image it produces exists ONLY on this box, so prod has no rollback target
+            # (rollback_to_prev cannot pull it), and the NEXT deploy resolves the same
+            # imageless sha and repeats the whole thing — the "zero-on-box-build" property
+            # the GHCR path exists to provide is lost with nobody told. It also runs an
+            # OOM-prone 26-min Docker build on a memory-pressured box that is serving
+            # production traffic (#528-B). Both harms are properties of the local build
+            # itself, not of the timeout that made them visible. And now that
+            # ensure-main-image (PR #1782) builds any sha the droplet is about to resolve,
+            # "no image for the target" is a BROKEN INVARIANT, not a routine miss — which
+            # is what makes asserting it here worth the deploys it will refuse.
+            # PRECONDITION, and not decoration: a MISSING image and a registry that will
+            # not ANSWER are the same non-zero at a boolean call site, and this gate is
+            # the one caller that turns a non-zero into a refused deploy. So it asks the
+            # three-way images_verdict() instead: published / the registry NAMED it
+            # absent / no answer at all. The refusal is spent only on the middle one.
+            #
+            # Two distinct ways to have no answer, and both must stand down:
+            #
+            #   1. `docker login` fails (or IMAGE_OWNER is unset) — the registry is never
+            #      asked at all.
+            #   2. login SUCCEEDS and the manifest read is refused anyway. This is not a
+            #      corner case: GHCR's login endpoint accepts any valid PAT, while
+            #      `read:packages` is enforced at the MANIFEST, so a scope-reduced token,
+            #      a package unlinked from its repo, or revoked org access all answer
+            #      `denied` on an image that plainly exists. A 5xx or a network stall that
+            #      outlives manifest_verdict()'s one retry lands in the same bucket.
+            #
+            # Asserting on either would turn a GHCR ACCESS failure into a hard deploy
+            # failure ANNOUNCED AS A MISSING IMAGE — and would do it BEFORE the pull
+            # below, which performs its own fresh `docker login` and is precisely the
+            # self-healing path a transient blip needs. That is a worse outcome than the
+            # one #1785 exists to prevent, and it would send a human after
+            # ensure-main-image for a problem that is not there. When we cannot get an
+            # answer, behaviour is exactly what it was before #1785.
+            GATE_AUTH_OK=false
+            if [ -n "$IMAGE_OWNER" ] \
+               && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1; then
+              GATE_AUTH_OK=true
+            fi
+            # Defaults to 2 ("no answer") so that any path which never reaches the probe
+            # stands down rather than asserting.
+            IMAGES_VERDICT=2
+            GATE_STANDDOWN=""
+            if [ "$GATE_AUTH_OK" != true ]; then
+              GATE_STANDDOWN="docker login to ${REGISTRY:-ghcr.io} failed, or IMAGE_OWNER is unset — the registry was never asked"
+            else
+              IMAGES_VERDICT=0
+              images_verdict "$NEW_SHA" || IMAGES_VERDICT=$?
+              if [ "$IMAGES_VERDICT" -eq 2 ]; then
+                GATE_STANDDOWN="${REGISTRY:-ghcr.io} answered twice with something that is neither a manifest nor a definitive absent (denied / unauthorized / rate-limit / network) — being logged in is not the same as being authorized to READ this package"
+              fi
+            fi
+            if [ -n "$GATE_STANDDOWN" ]; then
+              echo "==> WARN: SKIPPING the #1785 published-image assertion for ${NEW_SHA}."
+              echo "==>   Reason: ${GATE_STANDDOWN}."
+              echo "==>   A registry that will not answer and an image that is absent are the same"
+              echo "==>   non-zero here, so asserting would report a GHCR ACCESS failure as a MISSING"
+              echo "==>   IMAGE and refuse a deploy the pull below can still self-heal with its own"
+              echo "==>   fresh login. If that pull also fails, the local-build path is taken as it"
+              echo "==>   always was — behaviour is exactly what it was before #1785."
+            elif [ "$IMAGES_VERDICT" -ne 0 ]; then
+              echo "==> ERROR: no published GHCR image for the resolved target ${NEW_SHA}"
+              echo "==>   expected BOTH ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${NEW_SHA}"
+              echo "==>   and          ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${NEW_SHA}"
+              if [ -n "$FALLBACK_REASON" ]; then
+                echo "==>   sha selection fell back to origin/main because: ${FALLBACK_REASON}"
+              fi
+              echo "==>   Refusing the droplet local-build path (#1785): it yields an image that"
+              echo "==>   exists only on this box (no rollback target, and the next deploy repeats"
+              echo "==>   it) and runs a ~26-min OOM-prone build on a live prod box (#528-B)."
+              echo "==>   ensure-main-image (#1780/PR #1782) should have published this sha already;"
+              echo "==>   that it did not is the thing to look at."
+              echo "==>   Recover: gh workflow run deploy.yml   (builds + pushes, then redeploy)."
+              echo "==> Deploy FAILED before any change was made — nothing was flipped or migrated."
+              exit 1
+            fi
+
             # Tree is now at NEW_SHA — select the overlay this commit needs (may be none).
             COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
             echo "==> Compose overlay: $(pick_overlay) (empty = base prod only)"
@@ -976,27 +1155,6 @@ jobs:
               fi
             fi
 
-            # Post-deploy prune (only reached when the health check passed). The
-            # rebuild above re-tags :latest onto a new image and orphans the prior
-            # build; under BuildKit those layers stay pinned by the build cache, so
-            # `docker image prune` alone frees ~0 bytes — the builder-cache prune is
-            # what actually reclaims them. Without this, dangling builds + build cache
-            # grew to 100% disk on 2026-05-29 (~33x 19.4GB orphaned images + 146GB
-            # build cache). Dangling/cache-only (never -a): no live or tagged image
-            # and no running container is touched. Best-effort (|| true) so a prune
-            # hiccup never fails an otherwise-successful deploy.
-            # #565 recurrence fix: old SHA-tagged e2i-{api,frontend,worker,scheduler}
-            # images are NOT dangling, so `docker image prune -f` (no -a) never removed
-            # them and they accumulated every deploy (~33×19.4GB orphaned images by
-            # 2026-05-29). `-a` removes images with NO associated container in ANY state,
-            # so opik (intentionally stopped — its containers still exist) and every
-            # active sidecar are protected; only truly-orphaned old-SHA images are
-            # reclaimed. The rollback path rebuilds/repulls from source and runs BEFORE
-            # this step, so dropping old SHA images cannot break a rollback.
-            echo "==> Post-deploy prune (unreferenced images + full build cache)"
-            docker image prune -a -f || true
-            docker builder prune -a -f || true
-
             # #1479 recurrence guard: compare every compose-pinned service's RUNNING
             # image (docker inspect via compose labels) against the pin the deploy's
             # own $COMPOSE_CMD resolves. The mlflow pin bumps #442/#1477 never reached
@@ -1007,27 +1165,189 @@ jobs:
             # was health-gated; a pin mismatch on a never-recreated sidecar is fixed
             # by a deliberate operator recreate (stateful services need a backup
             # first — mlflow's first v3.15.1 boot runs a one-way sqlite migration),
-            # not by rolling back code. Runs AFTER the prune so disk hygiene still
-            # happens when the alarm fires. IMAGE_OWNER/IMAGE_TAG are already
-            # exported above, so the app tier resolves to THIS deploy's SHA tags —
-            # a stale app container (failed recreate) is caught here too.
+            # not by rolling back code. IMAGE_OWNER/IMAGE_TAG are already exported
+            # above, so the app tier resolves to THIS deploy's SHA tags — a stale app
+            # container (failed recreate) is caught here too.
+            # #1784: this used to carry "Runs AFTER the prune so disk hygiene still
+            # happens when the alarm fires." Half of that is now false and half is
+            # still required. The ordering claim is false: the prune moved to its own
+            # step, and this is the LAST command in the gated half, so no unbounded
+            # operation can ever sit in front of the alarm again. The requirement it
+            # encoded survives verbatim — a pin mismatch fails this step, and the disk
+            # still needs hygiene when it does — and is now carried by the cleanup
+            # step's `if: !cancelled()` rather than by an ordering nobody could see.
             echo "==> Post-deploy image drift check (#1479)"
             python3 scripts/deploy/check_image_drift.py --compose-cmd "$COMPOSE_CMD"
 
+      # #1784 option 2 — the prune, in its own SSH step, after every gate, with its own
+      # command_timeout. Its duration is the one thing here that scales with accumulated
+      # garbage rather than with the deploy, so it is the one step whose overrun must
+      # cost only itself. `continue-on-error` makes that literal: a prune that exceeds
+      # its own budget is reported (option 5, in the summary below) and does not turn a
+      # converged deploy red.
+      #
+      # `if: !cancelled()` — NOT the default success(). Disk hygiene must still happen
+      # when the #1479 alarm fires, which is the surviving half of the ordering comment
+      # this block used to live behind. It is deliberately broader than that: a deploy
+      # that pulled images and then rolled back is exactly when garbage accumulates, and
+      # `prune -a` cannot touch an image with a container in ANY state, so the rolled-back
+      # tier is protected. Not always(): starting a fresh SSH prune while the job is being
+      # cancelled (the back-to-back-merge supersede path, #1412/#1428) is the wrong moment.
+      # The one behaviour change to state plainly: after a rollback, the just-pulled
+      # NEW_SHA images become container-less and are now pruned, where before the script
+      # exited first. A retry re-pulls them from GHCR — which #1785 below makes a hard
+      # precondition of deploying at all, so the source of truth is always there.
+      #
+      # FUTURE DIRECTION (#1784 option 3, deliberately NOT done here): disk hygiene is
+      # not deploy-shaped work and belongs on a cron on the box. That is box
+      # configuration, not a workflow change, so it cannot land in this file.
+      - name: Post-deploy prune via SSH
+        id: cleanup
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1
+        env:
+          # What the prune below is allowed to reclaim depends on whether the box is in
+          # a converged state or a half-recovered one, and only the rollout STEP knows.
+          # `skipped` (the rollout never ran at all — e.g. a checkout failure) and the
+          # empty string both fall on the conservative side, which is the intent.
+          ROLLOUT_OUTCOME: ${{ steps.rollout.outcome }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # Its OWN budget, so a slow prune fails only its own step. Generous against
+          # the observed shape (the 2026-08-21 prune had deleted images within 36s
+          # before it was cut off) while staying bounded: see the job timeout above,
+          # which must remain strictly greater than this plus the rollout's 30m.
+          command_timeout: 15m
+          script_stop: true
+          # `env:` above does not cross the SSH boundary on its own — appleboy/ssh-action
+          # forwards only what `envs:` names (same wiring as the rollout's GHCR vars).
+          # Omit it and the droplet reads an empty ROLLOUT_OUTCOME and prunes as if every
+          # deploy had failed.
+          envs: ROLLOUT_OUTCOME
+          script: |
+            set -e
+
+            # The forward rollout re-tags :latest onto a new image and orphans the prior
+            # build; under BuildKit those layers stay pinned by the build cache, so
+            # `docker image prune` alone frees ~0 bytes — the builder-cache prune is
+            # what actually reclaims them. Without this, dangling builds + build cache
+            # grew to 100% disk on 2026-05-29 (~33x 19.4GB orphaned images + 146GB
+            # build cache).
+            # #565 recurrence fix: old SHA-tagged e2i-{api,frontend,worker,scheduler}
+            # images are NOT dangling, so `docker image prune -f` (no -a) never removed
+            # them and they accumulated every deploy. `-a` removes images with NO
+            # associated container in ANY state, so opik (intentionally stopped — its
+            # containers still exist) and every active sidecar are protected; only
+            # truly-orphaned old-SHA images are reclaimed.
+            # Best-effort (|| true) so a prune that ERRORS is still non-fatal — that is
+            # a different failure from a prune that is SLOW, which is what the step's
+            # own command_timeout and continue-on-error now cover (#1784).
+            #
+            # WHY THE IMAGE PRUNE IS CONDITIONAL. "Images with a container are spared"
+            # is only a safety argument while the box HAS the containers it should. This
+            # comment used to say a rollback "completed before this step starts, so
+            # dropping old SHA images cannot break a rollback" — that is not an
+            # invariant. Every `up` inside rollback_to_prev is WARN-and-continue:
+            #     $COMPOSE_CMD up -d ... || echo "==> WARN: rollback 'up' ... failed —
+            #                                     droplet may be in a PARTIAL state"
+            # so a double fault (the deploy fails AND its own rollback partly fails)
+            # leaves services with no container at all, and `-a` then reclaims exactly
+            # the images an operator is mid-recovery with. Moving the prune into its own
+            # always-running step is what made that state reachable, so it is guarded
+            # here: reclaim images only when the rollout actually converged. Anything
+            # left behind is reclaimed by the next successful deploy, and on the
+            # pull-then-rollback path those images are what a retry would want anyway.
+            #
+            # The BUILD CACHE is not conditional — it is never a recovery input, and
+            # after a local-build attempt it is where the bulk of the garbage is.
+            echo "==> Post-deploy prune (rollout outcome: ${ROLLOUT_OUTCOME:-<unset>})"
+            if [ "${ROLLOUT_OUTCOME:-}" = "success" ]; then
+              docker image prune -a -f || true
+            else
+              echo "==> Rollout did not succeed — SKIPPING the image prune. The box may be"
+              echo "==>   partially recovered (rollback_to_prev's 'up' calls are best-effort),"
+              echo "==>   and -a spares only images that still HAVE a container. Build cache"
+              echo "==>   is still reclaimed below; images are reclaimed by the next green deploy."
+            fi
+            docker builder prune -a -f || true
+
+      # #1784 option 5 — report the two outcomes separately. `job.status` was the SSH
+      # step's status re-labelled, so "the flip failed" and "the deploy converged and
+      # cleanup was cut short" rendered identically — and only the second has ever
+      # actually happened. Run 32507847667 handed this step `JOB_STATUS: failure` and it
+      # announced "rollback triggered or post-deploy drift check failed"; neither had
+      # occurred. Reading the two step outcomes makes the verdict derivable instead of
+      # guessed at, and there is exactly one source of truth for each half.
+      #
+      # Reading the right variable was only half of it. The first cut of this rewrite kept
+      # that same rollback/drift sentence on the failure side — so the attribution was
+      # still invented, just from a better input, and #1785 then added a failure mode that
+      # reaches it having flipped and migrated NOTHING. Four outcomes are rendered now,
+      # and the failure one names no cause: `outcome` is one word and cannot carry which
+      # gate fired, so it enumerates the gated half in the order it runs and defers to the
+      # log. A summary that cannot know something must say so rather than pick.
       - name: Deployment summary
         if: always()
         env:
-          JOB_STATUS: ${{ job.status }}
+          ROLLOUT_OUTCOME: ${{ steps.rollout.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
           COMMIT_SHA: ${{ github.sha }}
           BRANCH_NAME: ${{ github.ref_name }}
           ACTOR: ${{ github.actor }}
         run: |
-          if [ "$JOB_STATUS" = "success" ]; then
-            echo "## Deployment Succeeded" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ROLLOUT_OUTCOME" = "success" ]; then
+            if [ "$CLEANUP_OUTCOME" = "success" ]; then
+              echo "## Deployment Succeeded" >> "$GITHUB_STEP_SUMMARY"
+            else
+              # The flip and every gate passed. Only disk hygiene was cut short, and it
+              # cannot be rolled back into or retried out of — it is reclaimed on the
+              # next deploy. This is NOT a failed deploy and must never read as one.
+              echo "## Deployment Succeeded — post-deploy cleanup did not finish (\`$CLEANUP_OUTCOME\`)" >> "$GITHUB_STEP_SUMMARY"
+              echo "The rollout flipped and passed every gate, including the #1479 image-drift check." >> "$GITHUB_STEP_SUMMARY"
+              echo "Only the disk-hygiene prune was cut short; the next deploy reclaims the same space." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          elif [ "$ROLLOUT_OUTCOME" = "failure" ]; then
+            # The gated half failed. WHICH gate is NOT derivable here — `outcome` is one
+            # word — so this must not name one. The old sentence did ("rollback triggered
+            # or post-deploy drift check failed"), and that is the exact false attribution
+            # #1784 was filed over: run 32507847667 printed it when neither had happened.
+            # Option 5 fixed which VARIABLE the verdict reads and left the sentence, and
+            # then #1785 added a failure mode that reaches it and flips NOTHING — a human
+            # sent after rollback state for a deploy that never touched the box.
+            #
+            # So: enumerate what the gated half covers, in the order it runs, and point at
+            # the log. The list is ordered deliberately — the earlier the entry, the less
+            # of the box was touched, and the first one touched nothing at all.
+            echo "## Deployment Failed during the gated rollout — see the log for which gate" >> "$GITHUB_STEP_SUMMARY"
+            echo "The rollout step covers, in this order:" >> "$GITHUB_STEP_SUMMARY"
+            echo "1. the #1785 published-image assertion — **nothing is flipped or migrated** if this is what failed;" >> "$GITHUB_STEP_SUMMARY"
+            echo "2. the DB migrations;" >> "$GITHUB_STEP_SUMMARY"
+            echo "3. the service flip, and the rollback if it did not come up;" >> "$GITHUB_STEP_SUMMARY"
+            echo "4. the #1479 post-deploy image-drift check, which runs only after a converged flip." >> "$GITHUB_STEP_SUMMARY"
+            echo "The step log states which one; this summary does not guess." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$ROLLOUT_OUTCOME" = "cancelled" ]; then
+            # A cancel is NOT "it never ran". `cancel-in-progress` is false for this
+            # group, so a newer deploy cannot cancel this one — but a human can, and so
+            # can the job's own timeout-minutes, and either lands wherever the rollout
+            # happened to be. Saying "the droplet was never reached" here would be a
+            # fresh false attribution in the middle of a fix for false attribution.
+            # State what is actually known, and say plainly that the rest is not.
+            echo "## Deployment CANCELLED during the gated rollout" >> "$GITHUB_STEP_SUMMARY"
+            echo "How far it got is **not derivable here** — a cancel is a manual stop or this job's" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`timeout-minutes\`, and either can land mid-rollout, so the droplet may be part-flipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "Check the step log and the RUNNING image tags before deploying again." >> "$GITHUB_STEP_SUMMARY"
+            echo "The post-deploy prune is skipped on a cancel (\`if: !cancelled()\`), so nothing was reclaimed." >> "$GITHUB_STEP_SUMMARY"
           else
-            # A failure here is EITHER a rolled-back deploy OR a converged deploy
-            # whose post-deploy image-drift check (#1479) fired — read the log.
-            echo "## Deployment Failed — rollback triggered or post-deploy drift check failed (see log)" >> "$GITHUB_STEP_SUMMARY"
+            # `skipped` (or empty) is the one outcome that PROVES the step never started —
+            # a checkout failure, a job that died before the SSH step. Nothing was
+            # deployed, so nothing was rolled back. Unlike the failure branch, this is
+            # derivable from the outcome, so guessing it would be inexcusable.
+            echo "## Deployment did not run — the rollout step reported \`${ROLLOUT_OUTCOME:-<unset>}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "The step never started, so nothing was migrated, flipped or reverted." >> "$GITHUB_STEP_SUMMARY"
+            echo "Look at the steps BEFORE the rollout in this job." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "- **Commit:** \`$COMMIT_SHA\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Branch:** $BRANCH_NAME" >> "$GITHUB_STEP_SUMMARY"
