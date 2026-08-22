@@ -435,23 +435,41 @@ def test_summary_renders_three_distinct_verdicts(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # 4. #1785 — fail fast when the resolved sha has no GHCR image
 # --------------------------------------------------------------------------- #
-FAIL_FAST_OPENER = 'if ! image_exists "$NEW_SHA"; then'
+GATE_AUTH_START = "GATE_AUTH_OK=false"
+GATE_AUTH_BRANCH = 'if [ "$GATE_AUTH_OK" != true ]; then'
+FAIL_FAST_OPENER = 'elif ! image_exists "$NEW_SHA"; then'
 
 
-def _extract_fail_fast_block() -> str:
-    """The SHIPPED assertion, verbatim, from opener to its own-indent `fi`."""
+def _line_index(lines: list[str], wanted: str, what: str) -> int:
+    idx = next((i for i, ln in enumerate(lines) if ln.strip() == wanted), None)
+    assert idx is not None, f"{what} — expected a line {wanted!r} in the rollout script"
+    return idx
+
+
+def _extract_gate_block() -> str:
+    """The SHIPPED #1785 gate, verbatim: auth precondition through its own-indent `fi`.
+
+    Spans from the auth flag to the close of the branch chain, because the precondition
+    is not decoration — it is the difference between "this image is absent" and "I could
+    not ask", and the two must be extracted and executed together.
+    """
     script = _ssh_script(ROLLOUT_ID)
     lines = script.splitlines()
-    start = next((i for i, ln in enumerate(lines) if ln.strip() == FAIL_FAST_OPENER), None)
-    assert start is not None, (
-        "#1785: the droplet never asserts a GHCR manifest exists for the resolved "
-        f"NEW_SHA — expected a line {FAIL_FAST_OPENER!r} in the rollout script"
+    start = _line_index(
+        lines,
+        GATE_AUTH_START,
+        "#1785: the gate has no GHCR-auth precondition, so an unreachable registry is "
+        "indistinguishable from a missing image",
     )
-    indent = len(lines[start]) - len(lines[start].lstrip())
-    for j in range(start + 1, len(lines)):
+    branch = _line_index(
+        lines, GATE_AUTH_BRANCH, "#1785: the gate never branches on whether auth worked"
+    )
+    _line_index(lines, FAIL_FAST_OPENER, "#1785: the manifest assertion is not the auth branch's `elif`")
+    indent = len(lines[branch]) - len(lines[branch].lstrip())
+    for j in range(branch + 1, len(lines)):
         if lines[j].strip() == "fi" and (len(lines[j]) - len(lines[j].lstrip())) == indent:
             return "\n".join(ln[indent:] for ln in lines[start : j + 1])
-    raise AssertionError("the #1785 assertion has no closing `fi` at its own indent")
+    raise AssertionError("the #1785 gate has no closing `fi` at its own indent")
 
 
 def test_manifest_assertion_sits_between_sha_resolution_and_the_expensive_work() -> None:
@@ -479,15 +497,58 @@ def test_manifest_assertion_sits_between_sha_resolution_and_the_expensive_work()
     )
 
 
-def _run_fail_fast(tmp_path: Path, image_exists_rc: int, **env: str) -> tuple[int, str]:
-    """Drive the shipped assertion down a chosen branch with a stubbed probe."""
-    body = (
-        f"image_exists() {{ return {image_exists_rc}; }}\n"
-        + _extract_fail_fast_block()
-        + '\necho "REACHED THE EXPENSIVE WORK"\n'
+def _docker_stub(login_rc: int, manifest_rc: int = 1, manifest_stderr: str = "") -> str:
+    """A `docker` stub that is faithful about the one thing that matters: it is a BINARY.
+
+    `return`, never `exit`. A first cut of this harness used `exit 1` and every auth
+    case silently printed nothing, because a shell FUNCTION that calls `exit` tears the
+    whole script down where a real external `docker` only sets an exit status. That is
+    a stub-fidelity failure, and it is the shape that hides the very defect being
+    hunted, so the correction is recorded here rather than quietly fixed. The `cat`
+    drains `docker login`'s piped stdin, as the real binary does.
+    """
+    return (
+        "docker() {\n"
+        '  case "$1" in\n'
+        f"    login) cat >/dev/null 2>&1 || true; return {login_rc} ;;\n"
+        f'    manifest) printf %s\\\\n "{manifest_stderr}" >&2; return {manifest_rc} ;;\n'
+        "    *) return 0 ;;\n"
+        "  esac\n"
+        "}\n"
     )
+
+
+def _run_gate(tmp_path: Path, preamble: str, **env: str) -> tuple[int, str]:
+    """Execute the SHIPPED gate block under a supplied preamble of stubs."""
+    runner = tmp_path / "gate.sh"
+    runner.write_text(
+        "set -e\n" + preamble + _extract_gate_block() + '\necho "REACHED THE EXPENSIVE WORK"\n'
+    )
+    proc = subprocess.run(
+        ["bash", str(runner)],
+        env={"PATH": "/usr/bin:/bin", **env},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def _run_fail_fast(
+    tmp_path: Path, image_exists_rc: int, login_rc: int = 0, **env: str
+) -> tuple[int, str]:
+    """Drive the shipped gate down a chosen branch with the manifest probe stubbed out.
+
+    Auth succeeds by default, so these cases exercise the assertion itself. The
+    auth-failure path is covered against the REAL probes below, deliberately: stubbing
+    `image_exists` is exactly what made the whole class of registry-unreachable defects
+    invisible in the first place.
+    """
+    preamble = _docker_stub(login_rc) + f"image_exists() {{ return {image_exists_rc}; }}\n"
     runner = tmp_path / "failfast.sh"
-    runner.write_text("set -e\n" + body)
+    runner.write_text(
+        "set -e\n" + preamble + _extract_gate_block() + '\necho "REACHED THE EXPENSIVE WORK"\n'
+    )
     proc = subprocess.run(
         ["bash", str(runner)],
         env={"PATH": "/usr/bin:/bin", **env},
@@ -593,3 +654,253 @@ def test_fail_fast_survives_an_absent_fallback_reason(tmp_path: Path, reason: st
     )
     if reason:
         assert reason in out, f"a present FALLBACK_REASON must be shown:\n{out}"
+
+
+# --------------------------------------------------------------------------- #
+# 5. #1785 — an UNREACHABLE registry is not a MISSING image
+#
+# Codex HIGH, reproduced against the real helpers before it was believed.
+# `manifest_present()` trusts a DEFINITIVE absent at once ("no such manifest" /
+# "manifest unknown" / "not found" / "UNKNOWN") and retries anything else once before
+# giving up — so `denied`, `unauthorized` and `manifest unknown` all arrive at the call
+# site as the same non-zero. Measured by driving the extracted, unmodified
+# manifest_present/image_exists with a stubbed `docker`:
+#
+#     definitive absent      image_exists -> FALSE
+#     GHCR auth denied       image_exists -> FALSE
+#     no basic auth creds    image_exists -> FALSE
+#     unauthorized           image_exists -> FALSE
+#     present (control)      image_exists -> TRUE
+#
+# Without a precondition the gate therefore converts a GHCR auth blip into a hard
+# deploy failure announced as "no published GHCR image", and it does so BEFORE the pull
+# step, which performs its OWN fresh `docker login` and was the self-healing path for
+# exactly this case. These tests stub `docker`, never `image_exists`: stubbing the
+# probe is what made this whole class of defect invisible in the first pass.
+# --------------------------------------------------------------------------- #
+PROBE_HELPERS_START = "manifest_present() {"
+PROBE_HELPERS_END = "# Given candidate SHAs on stdin"
+
+
+def _extract_probe_helpers() -> str:
+    """The REAL manifest_present/image_exists source, verbatim and dedented."""
+    script = _ssh_script(ROLLOUT_ID)
+    start = script.find(PROBE_HELPERS_START)
+    end = script.find(PROBE_HELPERS_END)
+    assert 0 <= start < end, (
+        f"could not locate the real manifest probes in the rollout script ({start}, {end})"
+    )
+    lines = script[start:end].splitlines()
+    indent = len(lines[0]) - len(lines[0].lstrip())
+    return "\n".join(ln[indent:] if ln.strip() else "" for ln in lines) + "\n"
+
+
+def _run_gate_against_real_probes(
+    tmp_path: Path, *, login_rc: int, manifest_rc: int, manifest_stderr: str, **env: str
+) -> tuple[int, str]:
+    preamble = (
+        _docker_stub(login_rc, manifest_rc, manifest_stderr)
+        + "sleep() { :; }\n"  # collapse manifest_present's one retry
+        + _extract_probe_helpers()
+    )
+    return _run_gate(tmp_path, preamble, **env)
+
+
+@pytest.mark.parametrize(
+    "manifest_stderr",
+    [
+        "denied: denied",
+        "denied: requested access to the resource is denied",
+        "unauthorized: authentication required",
+    ],
+)
+def test_a_ghcr_auth_failure_is_not_reported_as_a_missing_image(
+    tmp_path: Path, manifest_stderr: str
+) -> None:
+    """Login fails -> the gate must NOT fire, and must say why it stood down.
+
+    The deploy has to reach the pull step, whose own fresh `docker login` is the
+    self-healing path a transient blip needs. Turning that into a hard failure is a
+    strictly worse outcome than the one #1785 set out to prevent.
+    """
+    rc, out = _run_gate_against_real_probes(
+        tmp_path,
+        login_rc=1,
+        manifest_rc=1,
+        manifest_stderr=manifest_stderr,
+        NEW_SHA=SHA,
+        IMAGE_OWNER="enunezvn",
+        GHCR_TOKEN="t",
+    )
+    assert rc == 0, (
+        "a registry we could not authenticate to must not hard-fail the deploy "
+        f"(stderr was {manifest_stderr!r}); rc={rc}, output:\n{out}"
+    )
+    assert "REACHED THE EXPENSIVE WORK" in out, (
+        f"the deploy must fall through to the pull's own fresh login:\n{out}"
+    )
+    assert "no published GHCR image" not in out, (
+        f"an auth failure was announced as a missing image:\n{out}"
+    )
+    lowered = out.lower()
+    assert "skipping" in lowered and "auth" in lowered, (
+        f"standing down must be stated, and attributed to auth, not to the image:\n{out}"
+    )
+
+
+def test_an_authenticated_absent_image_still_fails_fast_through_the_real_probes(
+    tmp_path: Path,
+) -> None:
+    """Positive control for the precondition: it must not neuter the gate.
+
+    Login succeeds and the registry answers a DEFINITIVE absent — the one case #1785
+    exists for. A precondition that always stood down would satisfy the test above.
+    """
+    rc, out = _run_gate_against_real_probes(
+        tmp_path,
+        login_rc=0,
+        manifest_rc=1,
+        manifest_stderr="manifest unknown: manifest unknown",
+        NEW_SHA=SHA,
+        IMAGE_OWNER="enunezvn",
+        GHCR_TOKEN="t",
+    )
+    assert rc != 0, f"an authenticated, definitively-absent image must fail:\n{out}"
+    assert "REACHED THE EXPENSIVE WORK" not in out, f"the deploy continued anyway:\n{out}"
+    assert SHA in out and "no published GHCR image" in out, (
+        f"the hard-fail message must survive the precondition:\n{out}"
+    )
+
+
+def test_an_authenticated_present_image_proceeds_through_the_real_probes(
+    tmp_path: Path,
+) -> None:
+    """The path every healthy deploy takes, with nothing but `docker` stubbed."""
+    rc, out = _run_gate_against_real_probes(
+        tmp_path,
+        login_rc=0,
+        manifest_rc=0,
+        manifest_stderr="",
+        NEW_SHA=SHA,
+        IMAGE_OWNER="enunezvn",
+        GHCR_TOKEN="t",
+    )
+    assert rc == 0, f"a published image must not fail the deploy:\n{out}"
+    assert "REACHED THE EXPENSIVE WORK" in out, f"the deploy must proceed:\n{out}"
+    assert "SKIPPING" not in out, f"the gate stood down on a path where auth worked:\n{out}"
+
+
+# --------------------------------------------------------------------------- #
+# 6. #1784 — the cleanup step must not prune into a half-recovered box
+#
+# Codex MED. The prune comment justified `-a` with "any rollback the rollout step
+# performed rebuilt/repulled from source and COMPLETED before this step starts". That
+# claim does not hold: every `up` inside `rollback_to_prev` is best-effort —
+#
+#     $COMPOSE_CMD up -d ... || echo "==> WARN: rollback 'up' ... failed — droplet may
+#                                     be in a PARTIAL state; manual intervention required"
+#
+# — so a double fault (the deploy fails AND its own rollback partly fails) leaves
+# services with no container at all. `prune -a` spares only images that HAVE a
+# container, so precisely in that state it reclaims images an operator is mid-recovery
+# with. Splitting the prune into its own always-running step is what made this
+# reachable, so the fix belongs in the same PR: the image prune is conditioned on the
+# rollout having actually succeeded. The build-cache prune is not — it is never a
+# recovery input, and after a local-build attempt it is where the bulk of the garbage
+# is. Also covers the LOW: a rollout that never RAN reports `skipped`, which is not
+# `success`, so it takes the conservative path by construction.
+# --------------------------------------------------------------------------- #
+def _run_cleanup(tmp_path: Path, rollout_outcome: str) -> list[str]:
+    """Execute the SHIPPED cleanup script and return the docker commands it issued."""
+    log = tmp_path / "docker.log"
+    runner = tmp_path / "cleanup.sh"
+    runner.write_text(
+        f'docker() {{ echo "$*" >> "{log}"; return 0; }}\n' + _ssh_script(CLEANUP_ID) + "\n"
+    )
+    proc = subprocess.run(
+        ["bash", str(runner)],
+        env={"PATH": "/usr/bin:/bin", "ROLLOUT_OUTCOME": rollout_outcome},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, (
+        f"the cleanup script must never fail its own step; rc={proc.returncode}\n"
+        f"{proc.stdout}{proc.stderr}"
+    )
+    return log.read_text().splitlines() if log.exists() else []
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expect_image_prune"),
+    [
+        ("success", True),
+        ("failure", False),
+        ("cancelled", False),
+        ("skipped", False),
+        ("", False),
+    ],
+)
+def test_image_prune_runs_only_after_a_rollout_that_actually_succeeded(
+    tmp_path: Path, outcome: str, expect_image_prune: bool
+) -> None:
+    """Prints the commands it OBSERVED, so a wrong verdict shows its own derivation."""
+    issued = _run_cleanup(tmp_path, outcome)
+    image_prunes = [c for c in issued if c.startswith("image prune")]
+    builder_prunes = [c for c in issued if c.startswith("builder prune")]
+    assert bool(image_prunes) is expect_image_prune, (
+        f"ROLLOUT_OUTCOME={outcome!r}: expected the image prune "
+        f"{'to run' if expect_image_prune else 'to be SKIPPED'}; docker calls were {issued}"
+    )
+    assert builder_prunes, (
+        f"ROLLOUT_OUTCOME={outcome!r}: the build cache is never a recovery input and "
+        f"must be reclaimed on every path; docker calls were {issued}"
+    )
+
+
+def test_cleanup_step_is_told_the_rollout_outcome() -> None:
+    """The condition is worthless if the value never reaches the droplet.
+
+    `env:` alone does not cross the SSH boundary — appleboy/ssh-action forwards only
+    what `envs:` names, the same wiring IMAGE_OWNER/GHCR_USER/GHCR_TOKEN already use.
+    """
+    step = _step(CLEANUP_ID)
+    env = step.get("env") or {}
+    assert "ROLLOUT_OUTCOME" in env, (
+        f"the cleanup step never reads the rollout's outcome; its env is {env}"
+    )
+    assert "steps.rollout.outcome" in str(env["ROLLOUT_OUTCOME"]), (
+        "ROLLOUT_OUTCOME must come from the rollout STEP, not the job; got "
+        f"{env['ROLLOUT_OUTCOME']!r}"
+    )
+    forwarded = [n.strip() for n in str((step.get("with") or {}).get("envs", "")).split(",")]
+    assert "ROLLOUT_OUTCOME" in forwarded, (
+        "ROLLOUT_OUTCOME is set on the runner but never forwarded over SSH, so the "
+        f"droplet sees it empty and prunes as if the rollout failed; envs are {forwarded}"
+    )
+
+
+def test_prune_comment_no_longer_claims_rollback_always_completed() -> None:
+    """The false invariant has to go, because it is the argument for deleting the guard.
+
+    A comment asserting "a rollback always completed before this step" reads as a proof
+    that the condition above is redundant. It is not true: `rollback_to_prev` WARNs and
+    continues on a failed `up`.
+
+    Both halves are asserted UNCONDITIONALLY and on distinct text. A first cut guarded
+    the correction behind `if stale in prose`, which goes vacuous the moment the stale
+    sentence is deleted — and its corrective marker ("best-effort") was one lowercasing
+    away from being satisfied by the unrelated `Best-effort (|| true)` sentence already
+    in the block. Near-miss matching is how a guard fails open.
+    """
+    prose = _prose(_ssh_script(CLEANUP_ID))
+    stale = "completed before this step starts, so dropping old SHA images cannot break a rollback"
+    assert stale not in prose, (
+        "the prune comment still states as an invariant that a rollback has completed "
+        f"by the time this step runs. It has not, necessarily:\n{prose}"
+    )
+    assert "rollback_to_prev" in prose, (
+        "nothing in the prune comment names `rollback_to_prev`, whose every `up` is "
+        "WARN-and-continue — which is the entire reason the image prune is now "
+        f"conditional. Unrecorded, the condition reads as redundant:\n{prose}"
+    )
