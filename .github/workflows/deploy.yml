@@ -351,10 +351,16 @@ jobs:
   deploy:
     name: Deploy to Droplet
     runs-on: ubuntu-latest
-    # Exceeds the 30m appleboy/ssh-action command_timeout (below) plus checkout + SSH
-    # handshake overhead, so a hung deploy self-cancels instead of blockading the
-    # serialized deploy-production queue for GitHub's 360-min default. (#1412 review)
-    timeout-minutes: 40
+    # Exceeds the SUM of both appleboy/ssh-action command_timeouts below (30m gated
+    # rollout + 15m cleanup) plus checkout and two SSH handshakes, so a hung deploy
+    # self-cancels instead of blockading the serialized deploy-production queue for
+    # GitHub's 360-min default. (#1412 review)
+    # #1784: this bound is a SUM now that the prune has its own step, and it must stay
+    # strictly above that sum. If the JOB timeout fired first it would kill the gated
+    # rollout in order to punish a slow prune — re-merging on the job axis exactly the
+    # two failure modes the split exists to separate. Recomputed, not pinned, by
+    # tests/unit/test_docker/test_deploy_gates_before_cleanup_1784_1785.py.
+    timeout-minutes: 50
     # #1780: ensure-main-image must complete BEFORE the SSH step, or the droplet can
     # resolve a sha whose image is still being pushed.
     needs: [build-and-push, build-and-push-frontend, ensure-main-image]
@@ -368,7 +374,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # #1784 option 4 — the GATED half of the deploy, and nothing else. Flip,
+      # health gate, bentoml readiness gate, #1479 drift check. No cleanup runs here.
+      # Cleanup that sits downstream of a gate spends the GATE's time budget, and a
+      # command_timeout kills the SSH command outright, so the `|| true` that makes a
+      # prune best-effort never gets to run. Measured on run 32507847667 (2026-08-21):
+      # the prune got 44 seconds of the 30m budget, the timeout fired mid-prune, the
+      # drift check below never executed, and a deploy that had flipped all six
+      # services and passed its health gate four minutes earlier reported FAILED.
       - name: Deploy via SSH
+        id: rollout
         uses: appleboy/ssh-action@v1
         env:
           # #528-B: forwarded to the droplet for the GHCR pull. IMAGE_OWNER names the
@@ -976,27 +991,6 @@ jobs:
               fi
             fi
 
-            # Post-deploy prune (only reached when the health check passed). The
-            # rebuild above re-tags :latest onto a new image and orphans the prior
-            # build; under BuildKit those layers stay pinned by the build cache, so
-            # `docker image prune` alone frees ~0 bytes — the builder-cache prune is
-            # what actually reclaims them. Without this, dangling builds + build cache
-            # grew to 100% disk on 2026-05-29 (~33x 19.4GB orphaned images + 146GB
-            # build cache). Dangling/cache-only (never -a): no live or tagged image
-            # and no running container is touched. Best-effort (|| true) so a prune
-            # hiccup never fails an otherwise-successful deploy.
-            # #565 recurrence fix: old SHA-tagged e2i-{api,frontend,worker,scheduler}
-            # images are NOT dangling, so `docker image prune -f` (no -a) never removed
-            # them and they accumulated every deploy (~33×19.4GB orphaned images by
-            # 2026-05-29). `-a` removes images with NO associated container in ANY state,
-            # so opik (intentionally stopped — its containers still exist) and every
-            # active sidecar are protected; only truly-orphaned old-SHA images are
-            # reclaimed. The rollback path rebuilds/repulls from source and runs BEFORE
-            # this step, so dropping old SHA images cannot break a rollback.
-            echo "==> Post-deploy prune (unreferenced images + full build cache)"
-            docker image prune -a -f || true
-            docker builder prune -a -f || true
-
             # #1479 recurrence guard: compare every compose-pinned service's RUNNING
             # image (docker inspect via compose labels) against the pin the deploy's
             # own $COMPOSE_CMD resolves. The mlflow pin bumps #442/#1477 never reached
@@ -1007,26 +1001,111 @@ jobs:
             # was health-gated; a pin mismatch on a never-recreated sidecar is fixed
             # by a deliberate operator recreate (stateful services need a backup
             # first — mlflow's first v3.15.1 boot runs a one-way sqlite migration),
-            # not by rolling back code. Runs AFTER the prune so disk hygiene still
-            # happens when the alarm fires. IMAGE_OWNER/IMAGE_TAG are already
-            # exported above, so the app tier resolves to THIS deploy's SHA tags —
-            # a stale app container (failed recreate) is caught here too.
+            # not by rolling back code. IMAGE_OWNER/IMAGE_TAG are already exported
+            # above, so the app tier resolves to THIS deploy's SHA tags — a stale app
+            # container (failed recreate) is caught here too.
+            # #1784: this used to carry "Runs AFTER the prune so disk hygiene still
+            # happens when the alarm fires." Half of that is now false and half is
+            # still required. The ordering claim is false: the prune moved to its own
+            # step, and this is the LAST command in the gated half, so no unbounded
+            # operation can ever sit in front of the alarm again. The requirement it
+            # encoded survives verbatim — a pin mismatch fails this step, and the disk
+            # still needs hygiene when it does — and is now carried by the cleanup
+            # step's `if: !cancelled()` rather than by an ordering nobody could see.
             echo "==> Post-deploy image drift check (#1479)"
             python3 scripts/deploy/check_image_drift.py --compose-cmd "$COMPOSE_CMD"
 
+      # #1784 option 2 — the prune, in its own SSH step, after every gate, with its own
+      # command_timeout. Its duration is the one thing here that scales with accumulated
+      # garbage rather than with the deploy, so it is the one step whose overrun must
+      # cost only itself. `continue-on-error` makes that literal: a prune that exceeds
+      # its own budget is reported (option 5, in the summary below) and does not turn a
+      # converged deploy red.
+      #
+      # `if: !cancelled()` — NOT the default success(). Disk hygiene must still happen
+      # when the #1479 alarm fires, which is the surviving half of the ordering comment
+      # this block used to live behind. It is deliberately broader than that: a deploy
+      # that pulled images and then rolled back is exactly when garbage accumulates, and
+      # `prune -a` cannot touch an image with a container in ANY state, so the rolled-back
+      # tier is protected. Not always(): starting a fresh SSH prune while the job is being
+      # cancelled (the back-to-back-merge supersede path, #1412/#1428) is the wrong moment.
+      # The one behaviour change to state plainly: after a rollback, the just-pulled
+      # NEW_SHA images become container-less and are now pruned, where before the script
+      # exited first. A retry re-pulls them from GHCR — which #1785 below makes a hard
+      # precondition of deploying at all, so the source of truth is always there.
+      #
+      # FUTURE DIRECTION (#1784 option 3, deliberately NOT done here): disk hygiene is
+      # not deploy-shaped work and belongs on a cron on the box. That is box
+      # configuration, not a workflow change, so it cannot land in this file.
+      - name: Post-deploy prune via SSH
+        id: cleanup
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # Its OWN budget, so a slow prune fails only its own step. Generous against
+          # the observed shape (the 2026-08-21 prune had deleted images within 36s
+          # before it was cut off) while staying bounded: see the job timeout above,
+          # which must remain strictly greater than this plus the rollout's 30m.
+          command_timeout: 15m
+          script_stop: true
+          script: |
+            set -e
+
+            # The forward rollout re-tags :latest onto a new image and orphans the prior
+            # build; under BuildKit those layers stay pinned by the build cache, so
+            # `docker image prune` alone frees ~0 bytes — the builder-cache prune is
+            # what actually reclaims them. Without this, dangling builds + build cache
+            # grew to 100% disk on 2026-05-29 (~33x 19.4GB orphaned images + 146GB
+            # build cache).
+            # #565 recurrence fix: old SHA-tagged e2i-{api,frontend,worker,scheduler}
+            # images are NOT dangling, so `docker image prune -f` (no -a) never removed
+            # them and they accumulated every deploy. `-a` removes images with NO
+            # associated container in ANY state, so opik (intentionally stopped — its
+            # containers still exist) and every active sidecar are protected; only
+            # truly-orphaned old-SHA images are reclaimed. Any rollback the rollout
+            # step performed rebuilt/repulled from source and completed before this
+            # step starts, so dropping old SHA images cannot break a rollback.
+            # Best-effort (|| true) so a prune that ERRORS is still non-fatal — that is
+            # a different failure from a prune that is SLOW, which is what the step's
+            # own command_timeout and continue-on-error now cover (#1784).
+            echo "==> Post-deploy prune (unreferenced images + full build cache)"
+            docker image prune -a -f || true
+            docker builder prune -a -f || true
+
+      # #1784 option 5 — report the two outcomes separately. `job.status` was the SSH
+      # step's status re-labelled, so "the flip failed" and "the deploy converged and
+      # cleanup was cut short" rendered identically — and only the second has ever
+      # actually happened. Run 32507847667 handed this step `JOB_STATUS: failure` and it
+      # announced "rollback triggered or post-deploy drift check failed"; neither had
+      # occurred. Reading the two step outcomes makes the verdict derivable instead of
+      # guessed at, and there is exactly one source of truth for each half.
       - name: Deployment summary
         if: always()
         env:
-          JOB_STATUS: ${{ job.status }}
+          ROLLOUT_OUTCOME: ${{ steps.rollout.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
           COMMIT_SHA: ${{ github.sha }}
           BRANCH_NAME: ${{ github.ref_name }}
           ACTOR: ${{ github.actor }}
         run: |
-          if [ "$JOB_STATUS" = "success" ]; then
-            echo "## Deployment Succeeded" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ROLLOUT_OUTCOME" = "success" ]; then
+            if [ "$CLEANUP_OUTCOME" = "success" ]; then
+              echo "## Deployment Succeeded" >> "$GITHUB_STEP_SUMMARY"
+            else
+              # The flip and every gate passed. Only disk hygiene was cut short, and it
+              # cannot be rolled back into or retried out of — it is reclaimed on the
+              # next deploy. This is NOT a failed deploy and must never read as one.
+              echo "## Deployment Succeeded — post-deploy cleanup did not finish (\`$CLEANUP_OUTCOME\`)" >> "$GITHUB_STEP_SUMMARY"
+              echo "The rollout flipped and passed every gate, including the #1479 image-drift check." >> "$GITHUB_STEP_SUMMARY"
+              echo "Only the disk-hygiene prune was cut short; the next deploy reclaims the same space." >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
-            # A failure here is EITHER a rolled-back deploy OR a converged deploy
-            # whose post-deploy image-drift check (#1479) fired — read the log.
+            # A rolled-back deploy, OR a converged deploy whose #1479 drift check fired
+            # — read the log. Both are genuine failures of the gated half.
             echo "## Deployment Failed — rollback triggered or post-deploy drift check failed (see log)" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "- **Commit:** \`$COMMIT_SHA\`" >> "$GITHUB_STEP_SUMMARY"

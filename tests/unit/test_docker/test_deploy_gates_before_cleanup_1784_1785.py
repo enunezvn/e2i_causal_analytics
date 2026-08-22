@@ -142,6 +142,21 @@ def _index_map(script: str, markers: dict[str, str]) -> dict[str, int]:
     return {label: script.find(needle) for label, needle in markers.items()}
 
 
+def _prose(script: str) -> str:
+    """Comment text with the `#` markers and line wrapping flattened away.
+
+    A phrase in a wrapped comment is split across lines at an arbitrary column, so a
+    literal search over the raw script silently misses it — the fail-open shape that
+    has bitten this repo repeatedly. Flatten first, then match literally.
+    """
+    words: list[str] = []
+    for line in script.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            words.extend(stripped.lstrip("#").split())
+    return " ".join(words)
+
+
 def _last_command_line(script: str) -> str:
     for line in reversed(script.splitlines()):
         stripped = line.strip()
@@ -202,19 +217,26 @@ def test_rollout_gate_order_is_derived_and_monotonic() -> None:
     )
 
 
-def test_drift_check_comment_no_longer_claims_it_runs_after_the_prune() -> None:
-    """The comment explaining the ordering must describe the ordering that ships.
+def test_drift_check_comment_does_not_assert_a_prune_that_is_no_longer_there() -> None:
+    """A comment that is now false must be corrected, not carried over.
 
     It read "Runs AFTER the prune so disk hygiene still happens when the alarm fires."
-    The surviving intent — hygiene must still happen when the alarm fires — is now
-    carried by the cleanup step's `if:` (see the option-5 guards). The claim about
-    ordering is false once the prune leaves the script, and a false comment about
-    ordering is what let the ordering be misread in the first place.
+    Half is now false — the prune left this script — and half is still required: the
+    alarm fails this step, and the disk still needs hygiene when it does. That half now
+    lives on the cleanup step's `if:` (see the option-5 guards).
+
+    The distinction this guard has to make is between ASSERTING the old ordering and
+    QUOTING it in order to record what changed. A bare "the phrase is absent" check
+    cannot tell those apart and would punish the better comment, so the requirement is:
+    drop the sentence, or keep it only alongside an explicit correction.
     """
-    script = _ssh_script(ROLLOUT_ID)
-    assert "Runs AFTER the prune" not in script, (
-        "the drift-check comment still claims it runs after the prune, but the prune "
-        "is no longer in this script"
+    prose = _prose(_ssh_script(ROLLOUT_ID))
+    claim = "Runs AFTER the prune"
+    if claim not in prose:
+        return
+    assert "the prune moved to its own step" in prose, (
+        f"the rollout script still carries {claim!r} without saying the prune moved, "
+        "so it reads as a live claim about an ordering that no longer exists"
     )
 
 
@@ -236,15 +258,23 @@ def test_prune_lives_in_its_own_ssh_step_after_the_gated_rollout() -> None:
 
     cleanup_script = _ssh_script(CLEANUP_ID)
     missing = [cmd for cmd in PRUNE_COMMANDS if cmd not in cleanup_script]
-    assert not missing, (
-        f"the cleanup step does not run {missing}. Its script is:\n{cleanup_script}"
+    assert not missing, f"the cleanup step does not run {missing}. Its script is:\n{cleanup_script}"
+    # Only the INVOCATIONS, not the echo that announces them: `|| true` is about a
+    # prune that ERRORS, which is a different failure from the slow prune #1784 is
+    # about, and the older guard must survive this move intact.
+    invocations = [
+        line.rstrip()
+        for line in cleanup_script.splitlines()
+        if line.strip().startswith("docker ") and " prune " in line
+    ]
+    assert len(invocations) == len(PRUNE_COMMANDS), (
+        f"expected one invocation per prune command; derived: {invocations}"
     )
-    for line in cleanup_script.splitlines():
-        if "prune" in line and not line.strip().startswith("#"):
-            assert line.rstrip().endswith("|| true"), (
-                "each prune keeps its own end-of-line `|| true` guard (#272 discipline) "
-                f"so a prune that ERRORS is still best-effort: {line!r}"
-            )
+    for line in invocations:
+        assert line.endswith("|| true"), (
+            "each prune keeps its own end-of-line `|| true` guard (#272 discipline) "
+            f"so a prune that ERRORS is still best-effort: {line!r}"
+        )
 
 
 def test_job_budget_is_recomputed_from_both_ssh_timeouts() -> None:

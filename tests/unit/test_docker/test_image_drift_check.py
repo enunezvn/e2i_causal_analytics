@@ -277,18 +277,47 @@ def _load_workflow() -> dict:
 
 
 def _extract_deploy_script() -> str:
+    """The GATED ssh script — the one carrying the rollout and its health gate.
+
+    #1784 split the deploy job into two ssh-action steps (gated rollout, then a
+    separate cleanup prune), so "the first step with a `script:`" stopped being an
+    unambiguous way to name this one. Selecting on the health gate is stable under a
+    step reorder or an id rename, and fails loudly instead of silently returning the
+    cleanup script — which would make every assertion below vacuous.
+    """
     wf = _load_workflow()
-    for step in wf["jobs"]["deploy"]["steps"]:
-        with_ = step.get("with") or {}
-        if "script" in with_:
-            return str(with_["script"])
-    raise AssertionError("deploy.yml has no ssh-action step carrying a `script:`")
+    scripts = [
+        str((step.get("with") or {})["script"])
+        for step in wf["jobs"]["deploy"]["steps"]
+        if "script" in (step.get("with") or {})
+    ]
+    assert scripts, "deploy.yml has no ssh-action step carrying a `script:`"
+    gated = [s for s in scripts if "Waiting for health check" in s]
+    assert len(gated) == 1, (
+        "expected exactly ONE gated ssh script (the one carrying the app health gate); "
+        f"found {len(gated)} among {len(scripts)} ssh scripts"
+    )
+    return gated[0]
 
 
 def test_deploy_script_invokes_drift_check_after_rollout() -> None:
     """deploy.yml must run the drift check AFTER the rollout + health gates
     (the check verifies the CONVERGED state) and pass it the deploy's own
-    $COMPOSE_CMD so both sides resolve the same compose file set."""
+    $COMPOSE_CMD so both sides resolve the same compose file set.
+
+    #1784 note on what this still catches. It was written to catch three things: the
+    check being dropped, the check being moved ahead of the converged state, and the
+    check losing $COMPOSE_CMD. All three survive the split — the prune left this
+    script, so the two indices below are unchanged and this passes for exactly the
+    reason it always did.
+
+    What it never covered, and still does not, is what may sit BETWEEN those two
+    indices: `invoke_at > health_at` stayed true with an unbounded `docker builder
+    prune -a -f` wedged in front of the check, which is precisely how run 32507847667
+    reached the drift check's line number with no time left to execute it. That gap is
+    now held by test_deploy_gates_before_cleanup_1784_1785.py, which asserts no cleanup
+    command survives in this script and that the drift check is its LAST command.
+    """
     script = _extract_deploy_script()
     assert "scripts/deploy/check_image_drift.py" in script, (
         "deploy.yml no longer invokes the #1479 image-drift check"
