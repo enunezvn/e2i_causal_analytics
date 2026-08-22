@@ -1000,6 +1000,47 @@ def test_a_definitive_absent_outranks_an_inconclusive_answer(tmp_path: Path) -> 
     assert "no published GHCR image" in out, f"the hard-fail message must appear:\n{out}"
 
 
+@pytest.mark.parametrize("odd_status", [127, 126, 3, 130])
+def test_an_unrecognised_probe_status_stands_down_rather_than_claiming_published(
+    tmp_path: Path, odd_status: int
+) -> None:
+    """A status images_verdict does not recognise must mean "no answer", not "published".
+
+    Found by a positive control, not by review: a scratch harness that extracted the
+    helpers from the wrong starting line left `manifest_verdict` undefined, so every
+    call returned 127 (command not found) — and the DEFINITIVE-ABSENT control quietly
+    reported PROCEEDS. The combiner was testing for 1 and for 2 and falling through to
+    `return 0`, so any other status was read as "both manifests are there".
+
+    The practical outcome of falling through is the same either way — the deploy
+    proceeds to the pull, exactly as it did before #1785 — but one of them says so in
+    the log and the other claims a fact it does not have. After an iter-1 finding about
+    a gate announcing the wrong reason, the silent version is not the one to keep.
+    """
+    state = tmp_path / "stub_state"
+    state.mkdir(exist_ok=True)
+    preamble = (
+        _docker_ref_stub(0, [(0, "")], [(0, "")])
+        + "sleep() { :; }\n"
+        + _extract_probe_helpers()
+        # Redefined AFTER the real helpers, so this is the definition that binds.
+        + f"manifest_verdict() {{ return {odd_status}; }}\n"
+    )
+    rc, out = _run_gate(
+        tmp_path,
+        preamble,
+        STUB_STATE=str(state),
+        NEW_SHA=SHA,
+        IMAGE_OWNER="enunezvn",
+        GHCR_TOKEN="t",
+    )
+    assert rc == 0, f"an unrecognised status must not hard-fail the deploy:\n{out}"
+    assert "REACHED THE EXPENSIVE WORK" in out, f"the deploy must still proceed:\n{out}"
+    assert "SKIPPING" in out, (
+        f"status {odd_status} was silently read as 'both images published':\n{out}"
+    )
+
+
 def test_the_absent_classification_has_exactly_one_source_of_truth() -> None:
     """The definitive-absent string list must exist ONCE in the rollout script.
 
