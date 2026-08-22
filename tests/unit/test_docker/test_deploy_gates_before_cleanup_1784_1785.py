@@ -546,7 +546,8 @@ def test_fail_fast_message_states_the_refusal_and_the_recovery(tmp_path: Path) -
     _, out = _run_fail_fast(tmp_path, image_exists_rc=1, NEW_SHA=SHA, IMAGE_OWNER="enunezvn")
     lowered = out.lower()
     for phrase, why in (
-        ("local build", "must name the path it is refusing"),
+        # "local-build path" is this file's own established term for it.
+        ("local-build", "must name the path it is refusing"),
         ("rollback", "must state that a box-only image is not a rollback target"),
         ("gh workflow run deploy.yml", "must give the recovery command"),
     ):
@@ -555,9 +556,34 @@ def test_fail_fast_message_states_the_refusal_and_the_recovery(tmp_path: Path) -
 
 @pytest.mark.parametrize("reason", ["", "GHCR auth unavailable — no ancestor was probed"])
 def test_fail_fast_survives_an_absent_fallback_reason(tmp_path: Path, reason: str) -> None:
-    """`[ -n "$X" ] && echo ...` under `set -e` exits on the empty case and swallows
-    every line after it. The message must survive an empty FALLBACK_REASON with its
-    recovery instructions intact."""
+    """The message must survive an empty FALLBACK_REASON with its recovery intact.
+
+    A correction worth recording, because I nearly shipped the claim. I wrote the
+    conditional as an `if` block believing `[ -n "$X" ] && echo ...` would abort the
+    script under `set -e` when X is empty and swallow every line after it, including
+    the recovery command. Measured instead of assumed::
+
+        set -e
+        if ! false; then
+          echo line1
+          [ -n "$FR" ] && echo "reason: $FR"
+          echo "RECOVERY LINE"
+          exit 7
+        fi
+        $ FR="" bash se.sh
+        line1
+        RECOVERY LINE
+        rc=7
+
+    bash does NOT apply errexit to a short-circuited AND-list, so the `&&` form was
+    safe and the `if` form is a readability choice, not a bug fix. Mutation-testing
+    confirms it: swapping the shipped `if` back to `&&` leaves both cases below GREEN,
+    which is the correct result rather than a gap.
+
+    What this test does pin — and what a mutation DOES break — is the property that
+    actually matters: both branches of the optional line still emit the recovery
+    instructions, and a FALLBACK_REASON that exists is carried forward to the human.
+    """
     rc, out = _run_fail_fast(
         tmp_path, image_exists_rc=1, NEW_SHA=SHA, IMAGE_OWNER="enunezvn", FALLBACK_REASON=reason
     )

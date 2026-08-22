@@ -765,6 +765,44 @@ jobs:
             NEW_SHA=$(git rev-parse HEAD)
             echo "==> Deploying ${NEW_SHA:0:7}"
 
+            # #1785: the target is FIXED now, and this is the last cheap moment before
+            # the deploy starts spending. Assert the images actually exist rather than
+            # discovering it three steps downstream as `manifest unknown` scrolling past
+            # mid-run. Placement is the whole point: earlier and the reset has not landed
+            # yet, later and the DB migrations have already applied and the ~26-min build
+            # has already started. Two manifest reads, no layer pull; on the normal path
+            # select_built_sha() already proved this exact sha, so it is a no-op.
+            #
+            # WHY FAIL RATHER THAN BUILD, stated as the honest trade it is: a deploy that
+            # would have CONVERGED now fails. On 2026-08-21 the local build worked — it
+            # produced correct images in 25m17s and flipped all six services. But the
+            # image it produces exists ONLY on this box, so prod has no rollback target
+            # (rollback_to_prev cannot pull it), and the NEXT deploy resolves the same
+            # imageless sha and repeats the whole thing — the "zero-on-box-build" property
+            # the GHCR path exists to provide is lost with nobody told. It also runs an
+            # OOM-prone 26-min Docker build on a memory-pressured box that is serving
+            # production traffic (#528-B). Both harms are properties of the local build
+            # itself, not of the timeout that made them visible. And now that
+            # ensure-main-image (PR #1782) builds any sha the droplet is about to resolve,
+            # "no image for the target" is a BROKEN INVARIANT, not a routine miss — which
+            # is what makes asserting it here worth the deploys it will refuse.
+            if ! image_exists "$NEW_SHA"; then
+              echo "==> ERROR: no published GHCR image for the resolved target ${NEW_SHA}"
+              echo "==>   expected BOTH ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${NEW_SHA}"
+              echo "==>   and          ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${NEW_SHA}"
+              if [ -n "$FALLBACK_REASON" ]; then
+                echo "==>   sha selection fell back to origin/main because: ${FALLBACK_REASON}"
+              fi
+              echo "==>   Refusing the droplet local-build path (#1785): it yields an image that"
+              echo "==>   exists only on this box (no rollback target, and the next deploy repeats"
+              echo "==>   it) and runs a ~26-min OOM-prone build on a live prod box (#528-B)."
+              echo "==>   ensure-main-image (#1780/PR #1782) should have published this sha already;"
+              echo "==>   that it did not is the thing to look at."
+              echo "==>   Recover: gh workflow run deploy.yml   (builds + pushes, then redeploy)."
+              echo "==> Deploy FAILED before any change was made — nothing was flipped or migrated."
+              exit 1
+            fi
+
             # Tree is now at NEW_SHA — select the overlay this commit needs (may be none).
             COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
             echo "==> Compose overlay: $(pick_overlay) (empty = base prod only)"
