@@ -464,7 +464,9 @@ def _extract_gate_block() -> str:
     branch = _line_index(
         lines, GATE_AUTH_BRANCH, "#1785: the gate never branches on whether auth worked"
     )
-    _line_index(lines, FAIL_FAST_OPENER, "#1785: the manifest assertion is not the auth branch's `elif`")
+    _line_index(
+        lines, FAIL_FAST_OPENER, "#1785: the manifest assertion is not the auth branch's `elif`"
+    )
     indent = len(lines[branch]) - len(lines[branch].lstrip())
     for j in range(branch + 1, len(lines)):
         if lines[j].strip() == "fi" and (len(lines[j]) - len(lines[j].lstrip())) == indent:
@@ -887,18 +889,30 @@ def test_prune_comment_no_longer_claims_rollback_always_completed() -> None:
     that the condition above is redundant. It is not true: `rollback_to_prev` WARNs and
     continues on a failed `up`.
 
-    Both halves are asserted UNCONDITIONALLY and on distinct text. A first cut guarded
-    the correction behind `if stale in prose`, which goes vacuous the moment the stale
-    sentence is deleted — and its corrective marker ("best-effort") was one lowercasing
-    away from being satisfied by the unrelated `Best-effort (|| true)` sentence already
-    in the block. Near-miss matching is how a guard fails open.
+    Two corrections are baked into the shape of this guard.
+
+    First, a naive `stale not in prose` punishes the BETTER comment: quoting the old
+    sentence in order to contradict it is more useful to the next reader than deleting
+    it silently, and the same trap already caught me on the drift-check comment. So the
+    claim may survive only inside a window that also contradicts it.
+
+    Second, the load-bearing assertion is the unconditional one. Guarding everything
+    behind `if stale in prose` goes vacuous the moment the sentence is deleted — and
+    the first corrective marker I reached for ("best-effort") was one lowercasing away
+    from being satisfied by the unrelated `Best-effort (|| true)` sentence already in
+    the block. Near-miss matching is how a guard fails open.
     """
     prose = _prose(_ssh_script(CLEANUP_ID))
     stale = "completed before this step starts, so dropping old SHA images cannot break a rollback"
-    assert stale not in prose, (
-        "the prune comment still states as an invariant that a rollback has completed "
-        f"by the time this step runs. It has not, necessarily:\n{prose}"
-    )
+    idx = prose.find(stale)
+    if idx >= 0:
+        window = prose[max(0, idx - 90) : idx + len(stale) + 90]
+        contradictions = ("used to say", "not an invariant", "is not true", "does not hold")
+        assert any(marker in window for marker in contradictions), (
+            "the prune comment still states as a live invariant that a rollback has "
+            "completed by the time this step runs. It has not, necessarily. Quote it to "
+            f"correct it, or drop it — the text around it says neither:\n{window}"
+        )
     assert "rollback_to_prev" in prose, (
         "nothing in the prune comment names `rollback_to_prev`, whose every `up` is "
         "WARN-and-continue — which is the entire reason the image prune is now "

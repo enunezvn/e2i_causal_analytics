@@ -786,7 +786,34 @@ jobs:
             # ensure-main-image (PR #1782) builds any sha the droplet is about to resolve,
             # "no image for the target" is a BROKEN INVARIANT, not a routine miss — which
             # is what makes asserting it here worth the deploys it will refuse.
-            if ! image_exists "$NEW_SHA"; then
+            # PRECONDITION, and not decoration: a MISSING image and an UNREACHABLE
+            # registry are the same non-zero at this call site. manifest_present() trusts
+            # a DEFINITIVE absent at once ("no such manifest"/"manifest unknown"/"not
+            # found"/"UNKNOWN") and retries anything ELSE once before giving up, so
+            # `denied` and `unauthorized` both arrive here as "absent". Measured by
+            # driving the unmodified manifest_present/image_exists above with a stubbed
+            # docker: definitive-absent, denied, no-basic-auth-creds and unauthorized all
+            # return FALSE; only a present manifest returns TRUE.
+            #
+            # Asserting without this would turn a GHCR auth blip into a hard deploy
+            # failure ANNOUNCED AS A MISSING IMAGE, and would do it BEFORE the pull
+            # below — which performs its own fresh `docker login` and is precisely the
+            # self-healing path a transient blip needs. That is a worse outcome than the
+            # one #1785 exists to prevent, so the refusal is spent only on an answer we
+            # can actually stand behind: we reached GHCR authenticated and it said no.
+            # When we cannot ask, behaviour is exactly what it was before #1785.
+            GATE_AUTH_OK=false
+            if [ -n "$IMAGE_OWNER" ] \
+               && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1; then
+              GATE_AUTH_OK=true
+            fi
+            if [ "$GATE_AUTH_OK" != true ]; then
+              echo "==> WARN: cannot reach ${REGISTRY:-ghcr.io} authenticated — SKIPPING the #1785 published-image assertion for ${NEW_SHA}."
+              echo "==>   A registry we cannot ask and an image that is absent are the same answer"
+              echo "==>   here, so asserting would report a GHCR auth failure as a missing image and"
+              echo "==>   refuse a deploy the pull below can still self-heal with its own fresh login."
+              echo "==>   If that pull also fails, the local-build path is taken as it always was."
+            elif ! image_exists "$NEW_SHA"; then
               echo "==> ERROR: no published GHCR image for the resolved target ${NEW_SHA}"
               echo "==>   expected BOTH ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-api:${NEW_SHA}"
               echo "==>   and          ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/e2i-frontend:${NEW_SHA}"
@@ -1080,6 +1107,12 @@ jobs:
         if: ${{ !cancelled() }}
         continue-on-error: true
         uses: appleboy/ssh-action@v1
+        env:
+          # What the prune below is allowed to reclaim depends on whether the box is in
+          # a converged state or a half-recovered one, and only the rollout STEP knows.
+          # `skipped` (the rollout never ran at all — e.g. a checkout failure) and the
+          # empty string both fall on the conservative side, which is the intent.
+          ROLLOUT_OUTCOME: ${{ steps.rollout.outcome }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -1090,6 +1123,11 @@ jobs:
           # which must remain strictly greater than this plus the rollout's 30m.
           command_timeout: 15m
           script_stop: true
+          # `env:` above does not cross the SSH boundary on its own — appleboy/ssh-action
+          # forwards only what `envs:` names (same wiring as the rollout's GHCR vars).
+          # Omit it and the droplet reads an empty ROLLOUT_OUTCOME and prunes as if every
+          # deploy had failed.
+          envs: ROLLOUT_OUTCOME
           script: |
             set -e
 
@@ -1104,14 +1142,37 @@ jobs:
             # them and they accumulated every deploy. `-a` removes images with NO
             # associated container in ANY state, so opik (intentionally stopped — its
             # containers still exist) and every active sidecar are protected; only
-            # truly-orphaned old-SHA images are reclaimed. Any rollback the rollout
-            # step performed rebuilt/repulled from source and completed before this
-            # step starts, so dropping old SHA images cannot break a rollback.
+            # truly-orphaned old-SHA images are reclaimed.
             # Best-effort (|| true) so a prune that ERRORS is still non-fatal — that is
             # a different failure from a prune that is SLOW, which is what the step's
             # own command_timeout and continue-on-error now cover (#1784).
-            echo "==> Post-deploy prune (unreferenced images + full build cache)"
-            docker image prune -a -f || true
+            #
+            # WHY THE IMAGE PRUNE IS CONDITIONAL. "Images with a container are spared"
+            # is only a safety argument while the box HAS the containers it should. This
+            # comment used to say a rollback "completed before this step starts, so
+            # dropping old SHA images cannot break a rollback" — that is not an
+            # invariant. Every `up` inside rollback_to_prev is WARN-and-continue:
+            #     $COMPOSE_CMD up -d ... || echo "==> WARN: rollback 'up' ... failed —
+            #                                     droplet may be in a PARTIAL state"
+            # so a double fault (the deploy fails AND its own rollback partly fails)
+            # leaves services with no container at all, and `-a` then reclaims exactly
+            # the images an operator is mid-recovery with. Moving the prune into its own
+            # always-running step is what made that state reachable, so it is guarded
+            # here: reclaim images only when the rollout actually converged. Anything
+            # left behind is reclaimed by the next successful deploy, and on the
+            # pull-then-rollback path those images are what a retry would want anyway.
+            #
+            # The BUILD CACHE is not conditional — it is never a recovery input, and
+            # after a local-build attempt it is where the bulk of the garbage is.
+            echo "==> Post-deploy prune (rollout outcome: ${ROLLOUT_OUTCOME:-<unset>})"
+            if [ "${ROLLOUT_OUTCOME:-}" = "success" ]; then
+              docker image prune -a -f || true
+            else
+              echo "==> Rollout did not succeed — SKIPPING the image prune. The box may be"
+              echo "==>   partially recovered (rollback_to_prev's 'up' calls are best-effort),"
+              echo "==>   and -a spares only images that still HAVE a container. Build cache"
+              echo "==>   is still reclaimed below; images are reclaimed by the next green deploy."
+            fi
             docker builder prune -a -f || true
 
       # #1784 option 5 — report the two outcomes separately. `job.status` was the SSH
