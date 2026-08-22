@@ -46,6 +46,39 @@ on:
       # change there — e.g. removing the mlflow allowlist entry after the
       # deliberate recreate — must itself trigger a deploy to take effect.
       - 'scripts/deploy/**'
+      # #1783: `COPY scripts/ ./scripts/` (docker/Dockerfile:208, production stage)
+      # bakes the WHOLE tree in, so every file under it is an image input by
+      # definition — but only the two subtrees above were ever listed. A change
+      # anywhere else altered what the image WOULD contain without running the build
+      # that would produce it, and prod kept the previously-baked copy until some
+      # unrelated src/** push rebuilt incidentally: unbounded, unannounced, the
+      # #1479 pin-drift family. Not hypothetical — #1761's graph-emptiness sentinel
+      # runs scripts/seed_falkordb.py AS A SUBPROCESS out of the baked image
+      # (src/tasks/graph_reseed_tasks.py: a top-level `import scripts.*` crash-looped
+      # every worker in the 2026-05-26 incident), and a push editing it deployed
+      # nothing.
+      # ACCEPTED COST, stated rather than hidden: scripts/benchmarks/** and
+      # scripts/demos/** churn now each trigger a full production deploy. That is the
+      # price of making "rebuild only when an image input changed" TRUE rather than
+      # aspirational. Narrowing the COPY instead (#1783 option 2) is the better end
+      # state but is NOT statically decidable — anything invoking a script BY PATH is
+      # invisible to the import graph, exactly like the subprocess above, so it risks
+      # silently breaking a live self-heal path.
+      # The two entries above are now subsumed by this one and are KEPT deliberately:
+      # each records an INDEPENDENT reason that survives a future narrowing of the
+      # COPY — scripts/bentoml/** is an input to a DIFFERENT image
+      # (docker/bentoml/Dockerfile:35), and scripts/deploy/** is consumed from the
+      # droplet checkout, never baked at all.
+      - 'scripts/**'
+      # #1607 + #1783: the KG Layer-2 caches are COPYed into the production image
+      # (docker/Dockerfile:202) and .dockerignore un-ignores them (`!data/kg_cache/**`)
+      # against its blanket `data/`. src/data/kg/activation.py binds a cohort's
+      # feature manifest to these committed artifacts and the adaptive-validity node
+      # loads them on the hot path — baked image inputs, not runtime artifacts — yet
+      # no entry here matched them, so a cache refresh shipped nothing. Scoped to
+      # data/kg_cache/** and not data/**: the rest of data/ is .dockerignore'd and
+      # never reaches any image, so triggering on it would be a pure false deploy.
+      - 'data/kg_cache/**'
   workflow_dispatch:
 
 # Serialize production deploys: at most one run of THIS workflow proceeds at a

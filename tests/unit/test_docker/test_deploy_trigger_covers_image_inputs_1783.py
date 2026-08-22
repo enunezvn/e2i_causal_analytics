@@ -1,8 +1,8 @@
 """#1783 — every repo path baked into the production image must be a deploy trigger.
 
-ROOT CAUSE (verified against this repo, not inferred): ``docker/Dockerfile``'s
-production stage ``COPY``s five repo paths into the image, but ``deploy.yml``'s
-``on.push.paths`` covers only three of them:
+ROOT CAUSE AS FOUND (verified against this repo, not inferred): ``docker/Dockerfile``'s
+production stage ``COPY``s five repo paths into the image, and ``deploy.yml``'s
+``on.push.paths`` covered only three of them:
 
     line 188  COPY pyproject.toml ./              -> 'pyproject.toml'      COVERED
     line 191  COPY src/ ./src/                    -> 'src/**'              COVERED
@@ -11,13 +11,21 @@ production stage ``COPY``s five repo paths into the image, but ``deploy.yml``'s
     line 208  COPY scripts/ ./scripts/            -> 'scripts/bentoml/**'  PARTIAL
                                                      'scripts/deploy/**'
 
+``scripts/`` is the gap #1783 reports; ``data/kg_cache/`` is a second instance the issue
+does not mention (3 files tracked in git, explicitly un-ignored in ``.dockerignore`` via
+``!data/kg_cache/**``, matched by no trigger entry at all).
+
 So a push touching ``scripts/seed_falkordb.py`` (executed as a SUBPROCESS out of the
 baked image by #1761's graph-emptiness sentinel) or ``data/kg_cache/*.json`` (bound by
-``src/data/kg/activation.py`` on the adaptive-validity hot path) changes what the image
-WOULD contain without triggering the build that would produce it. Production then runs a
-stale baked artifact until some unrelated ``src/**`` push rebuilds the image incidentally.
-The window closes on its own, nothing bounds it, and nothing announces it — the same
+``src/data/kg/activation.py`` on the adaptive-validity hot path) changed what the image
+WOULD contain without triggering the build that would produce it. Production then ran a
+stale baked artifact until some unrelated ``src/**`` push rebuilt the image incidentally.
+The window closed on its own, nothing bounded it, and nothing announced it — the same
 "silent divergence that self-heals" family as #1479's five-week mlflow pin drift.
+
+Both are now trigger paths. This test is the standing invariant, so the NEXT production
+``COPY`` added without a matching trigger fails here instead of shipping the same defect
+a third time.
 
 WHY A STRUCTURAL TEST RATHER THAN A LIVE CERTIFICATION: ``.github/**`` is itself absent
 from ``deploy.yml``'s ``on.push.paths``, so merging a trigger fix deploys nothing and
