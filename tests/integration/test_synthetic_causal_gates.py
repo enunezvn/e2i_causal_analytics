@@ -173,7 +173,8 @@ def test_gate_9_provenance_default_exclude(client):
 
 
 # =============================================================================
-# Gate 10 — 4-cohort x 3-brand x agent e2e + 17-agent crash-free smoke
+# Gate 10 — 4-cohort x 3-brand x agent e2e + crash-free smoke of every enabled
+# agent the gates above do not already prove (count derived, see _GATED_AGENTS)
 # =============================================================================
 
 
@@ -185,7 +186,17 @@ def test_gate_10_cohort_brand_agent_e2e(client):
     assert res.ok, res.measured  # measured maps each cell -> {label_rate, ate}
 
 
-def test_other_17_agents_smoke():
+def test_other_agents_smoke():
+    """Smoke every enabled agent the gates above do not already prove.
+
+    The name carried "17" until #1779, and the number was never a constant: it is
+    ``len(enabled agents) - len(_GATED_AGENTS)``, evaluated at call time. Measured
+    against the registry as it stood in each commit, it was **16** when this test
+    was written (53f6f9a49, 2026-06-10: 21 enabled, 5 gated) — i.e. the 17 was
+    already wrong — and only became accidentally correct on 2026-07-13 when
+    d841d87b2 registered ``cohort_profiler`` (22 enabled, 5 gated). A name that
+    has to be edited to stay true is a fact that rots; the count is derived.
+    """
     from scripts.validate_synthetic_causal import _smoke_other_agents
 
     crashed = _smoke_other_agents()

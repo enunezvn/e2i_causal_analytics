@@ -1,5 +1,5 @@
 # E2I Causal Analytics - Agent Configuration V4.2
-# 21-Agent 6-Tier Architecture Configuration
+# 22-Agent 6-Tier Architecture Configuration
 # Includes: Tier 0 ML Foundation, Causal Validation, MLOps Integration, Feature Store
 
 version: "4.2.1"
@@ -228,12 +228,12 @@ tier1_orchestration:
       store_successful_patterns: true
 
 # ═══════════════════════════════════════════════════════════════════
-# AGENT CONFIGURATIONS (21 Agents)
+# AGENT CONFIGURATIONS (22 Agents)
 # ═══════════════════════════════════════════════════════════════════
 
 agents:
   # ─────────────────────────────────────────────────────────────────
-  # TIER 0: ML FOUNDATION (8 agents) - NEW in V4
+  # TIER 0: ML FOUNDATION (9 agents) - NEW in V4
   # ─────────────────────────────────────────────────────────────────
   
   scope_definer:
@@ -489,6 +489,43 @@ agents:
       - PATIENT_GROUP
       - POPULATION
       - FILTER
+
+  # #1779: cohort_profiler has been an enabled, dispatched Tier-0 agent since
+  # d841d87b2 and was never added here. Values below are derived from
+  # src/agents/factory.py::AGENT_REGISTRY_CONFIG (tier, enabled),
+  # src/agents/cohort_profiler/__init__.py (description) and
+  # .claude/contracts/tier0/cohort_profiler.md (capabilities) -- not invented.
+  cohort_profiler:
+    tier: ml_foundation
+    enabled: true
+    description: "Chat companion to cohort_constructor: sizes and segments the eligible population with real DB-backed counts (severity tier, line of therapy, HCP TRx cohorts)"
+
+    capabilities:
+      - population_sizing
+      - severity_tier_breakdown
+      - line_of_therapy_breakdown
+      - brand_binding
+      - inclusion_criteria_binding
+      - hcp_trx_threshold_cohorts
+
+    # Deliberately all false, and NOT copied from cohort_constructor above.
+    # cohort_profiler reads no ML split: every read goes through the mig-105 KPI
+    # calculator or the migration-044 `kpi_query` allowlist RPC against live
+    # prescribing data (.claude/contracts/tier0/cohort_profiler.md "Data access").
+    # Mirroring a neighbour's split policy here would assert an access pattern
+    # this agent does not have.
+    data_access:
+      train: false
+      validation: false
+      test: false
+      holdout: false
+
+    # The one intent that verifiably dispatches here:
+    # INTENT_TO_AGENTS["cohort_definition"] -> cohort_profiler
+    # (src/agents/orchestrator/nodes/router.py) and Domain.COHORT_DEFINITION
+    # (src/agents/orchestrator/classifier/pattern_selector.py).
+    routes_from_intents:
+      - COHORT_DEFINITION
 
   # ─────────────────────────────────────────────────────────────────
   # TIER 1: COORDINATION (2 agents)
@@ -1037,11 +1074,12 @@ routing:
     default_agent: explainer
     error_agent: orchestrator
     
-  # V4.3: Priority ordering for all 21 agents (now includes tool_composer)
+  # V4.3: Priority ordering for all 22 agents (now includes tool_composer)
   priority_order:
     # Tier 0: ML Foundation
     - scope_definer
     - cohort_constructor
+    - cohort_profiler
     - data_preparer
     - feature_analyzer
     - model_selector
