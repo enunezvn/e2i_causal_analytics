@@ -43,38 +43,20 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml  # type: ignore[import-untyped]
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+from tests.unit.test_docker.conftest import (
+    ROLLOUT_ID,
+    bash_run,
+    extract_shell_function,
+    ssh_script,
+)
 
 HELPER = "reattach_to_main"
 
-
-# --------------------------------------------------------------------------- #
-# Extraction (the SHIPPED artifact, verbatim)
-# --------------------------------------------------------------------------- #
-def _extract_deploy_script() -> str:
-    wf: dict = yaml.safe_load(DEPLOY_WORKFLOW.read_text())
-    for step in wf["jobs"]["deploy"]["steps"]:
-        with_ = step.get("with") or {}
-        if "script" in with_:
-            return str(with_["script"])
-    raise AssertionError("deploy.yml has no ssh-action step carrying a `script:`")
-
-
-def _extract_helper(script: str, name: str) -> str:
-    lines = script.splitlines()
-    start = next(
-        (i for i, ln in enumerate(lines) if ln.strip().startswith(f"{name}() {{")),
-        None,
-    )
-    assert start is not None, f"deploy.yml's droplet script defines no {name}() helper"
-    indent = len(lines[start]) - len(lines[start].lstrip())
-    for j in range(start + 1, len(lines)):
-        if lines[j].strip() == "}" and (len(lines[j]) - len(lines[j].lstrip())) == indent:
-            return "\n".join(ln[indent:] for ln in lines[start : j + 1])
-    raise AssertionError(f"{name}() in deploy.yml has no closing brace at its own indent")
+# Extraction is shared (#1796). The own-indent closing-brace scan that used to live
+# here — and, written independently, in test_deploy_target_image_guarantee_1780.py —
+# is now `extract_shell_function`; the rollout script is addressed by its step `id`
+# rather than by "the first step that has a `script:`".
 
 
 # --------------------------------------------------------------------------- #
@@ -104,13 +86,13 @@ def _make_repo(tmp_path: Path) -> Path:
 
 
 def _run_helper(repo: Path) -> subprocess.CompletedProcess[str]:
-    """Execute the SHIPPED reattach_to_main() inside a real checkout."""
-    body = _extract_helper(_extract_deploy_script(), HELPER)
-    runner = repo.parent / "run.sh"
-    runner.write_text("set -e\n" + body + f"\n{HELPER}\n")
-    return subprocess.run(
-        ["bash", str(runner)], cwd=repo, capture_output=True, text=True, timeout=30
-    )
+    """Execute the SHIPPED reattach_to_main() inside a real checkout.
+
+    Env is INHERITED, not replaced: `git` must be the real binary here (this harness is
+    about what git actually does to refs), and it needs $HOME/$PATH to behave normally.
+    """
+    body = extract_shell_function(ssh_script(ROLLOUT_ID), HELPER)
+    return bash_run(repo.parent, body, trailer=f"\n{HELPER}\n", cwd=repo, name="run.sh")
 
 
 def _checkout_feature_with_work(repo: Path) -> str:
@@ -280,7 +262,7 @@ def test_reattach_is_called_before_every_hard_reset() -> None:
     Ordering is the entire contract here, so it is asserted on the shipped script rather
     than left to a reviewer's eye.
     """
-    script = _extract_deploy_script()
+    script = ssh_script(ROLLOUT_ID)
     lines = script.splitlines()
 
     call = next(
@@ -332,7 +314,7 @@ def test_reattach_never_uses_a_start_point(forbidden: str) -> None:
     runs it. The failure it prevents is a deploy outage on an ops scratch file, and the
     edit that causes it looks like a harmless clarification.
     """
-    helper = _extract_helper(_extract_deploy_script(), HELPER)
+    helper = extract_shell_function(ssh_script(ROLLOUT_ID), HELPER)
     assert forbidden not in helper, (
         f"{forbidden!r} aborts when an untracked file collides with a path tracked on "
         "main — see the docstring of test_reattach_survives_an_untracked_collision"
