@@ -70,7 +70,9 @@ def _bash(script: str, env: dict[str, str] | None = None) -> subprocess.Complete
         ("3-04:00:00", 10, True),
     ],
 )
-def test_npm_age_rule_compares_numerically(etime: str, hours_threshold: int, should_select: bool) -> None:
+def test_npm_age_rule_compares_numerically(
+    etime: str, hours_threshold: int, should_select: bool
+) -> None:
     """A process's age must be compared as a number, not as a string.
 
     Red on the shipped code for every ``01..09``-hour case: ``"02" > "1"`` is
@@ -132,7 +134,7 @@ def test_zombie_reap_reports_what_it_actually_reaped_not_signals_sent() -> None:
 
     # Locate the zombie section.
     assert "zombie" in text.lower(), "cleanup_orphans.sh no longer handles zombies"
-    zombie_block = text[text.index("# 3."):]
+    zombie_block = text[text.index("# 3.") :]
     zombie_block = zombie_block[: zombie_block.index("# 4.")]
     # Discriminate CODE from PROSE. The fix's own comment quotes the defective
     # line to explain what it used to do; a raw grep over the block therefore
@@ -146,9 +148,7 @@ def test_zombie_reap_reports_what_it_actually_reaped_not_signals_sent() -> None:
         "does not reap the zombie, and reporting it as killed is a success claim "
         "with no outcome behind it (#1798 defect 1)"
     )
-    assert "REAPED" in zombie_code, (
-        "the zombie branch must report what was actually reaped"
-    )
+    assert "REAPED" in zombie_code, "the zombie branch must report what was actually reaped"
 
 
 def test_zombie_reap_recounts_after_signalling() -> None:
@@ -240,7 +240,9 @@ def test_a_missing_log_is_reported_not_silently_passed(cron_fixture: tuple[Path,
     assert "memory_monitor.log" in res.stdout
 
 
-def test_intervals_are_DERIVED_from_the_crontab_not_hardcoded(cron_fixture: tuple[Path, Path]) -> None:
+def test_intervals_are_DERIVED_from_the_crontab_not_hardcoded(
+    cron_fixture: tuple[Path, Path],
+) -> None:
     """Changing the schedule in the crontab must change the verdict.
 
     A second hardcoded copy of the intervals would drift from the real crontab
@@ -268,7 +270,9 @@ def test_intervals_are_DERIVED_from_the_crontab_not_hardcoded(cron_fixture: tupl
     )
 
 
-def test_unparseable_schedule_is_reported_as_unknown_not_guessed(cron_fixture: tuple[Path, Path]) -> None:
+def test_unparseable_schedule_is_reported_as_unknown_not_guessed(
+    cron_fixture: tuple[Path, Path],
+) -> None:
     """Omit-or-report: never fabricate an interval for a schedule we can't read."""
     cron, logdir = cron_fixture
     for name in ("orphan_cleanup", "memory_monitor", "docker_cleanup"):
@@ -286,7 +290,9 @@ def test_unparseable_schedule_is_reported_as_unknown_not_guessed(cron_fixture: t
     )
 
 
-def test_a_job_with_no_log_redirect_is_not_reported_as_stale(cron_fixture: tuple[Path, Path]) -> None:
+def test_a_job_with_no_log_redirect_is_not_reported_as_stale(
+    cron_fixture: tuple[Path, Path],
+) -> None:
     """The log-rotation job writes no log; absence of a log is not a failure."""
     cron, logdir = cron_fixture
     _touch(logdir / "orphan_cleanup.log", 60)
@@ -295,7 +301,9 @@ def test_a_job_with_no_log_redirect_is_not_reported_as_stale(cron_fixture: tuple
 
     res = _bash(f"{FRESHNESS} --crontab {cron}")
     assert res.returncode == 0
-    assert "truncate" not in res.stdout, "a job with no log redirect must not be checked for staleness"
+    assert "truncate" not in res.stdout, (
+        "a job with no log redirect must not be checked for staleness"
+    )
 
 
 def test_freshness_check_does_not_itself_depend_on_cron() -> None:
@@ -305,7 +313,9 @@ def test_freshness_check_does_not_itself_depend_on_cron() -> None:
     crontab stopped running -- which is the entire failure mode of #1798.
     """
     text = FRESHNESS.read_text()
-    assert "--crontab" in text, "the checker must accept an explicit crontab path so it can be run anywhere"
+    assert "--crontab" in text, (
+        "the checker must accept an explicit crontab path so it can be run anywhere"
+    )
     setup = (MAINTENANCE / "setup_cron.sh").read_text()
     assert "check_maintenance_freshness.sh" not in setup, (
         "the freshness check must NOT be installed as a cron job -- a checker that "
@@ -348,7 +358,7 @@ def test_zombie_reap_reports_ZERO_when_the_parent_ignores_sigchld() -> None:
         }
         """
     )
-    res = _bash(harness + "\n" + block + "\necho \"FINAL_KILLED_COUNT=$KILLED_COUNT\"")
+    res = _bash(harness + "\n" + block + '\necho "FINAL_KILLED_COUNT=$KILLED_COUNT"')
 
     assert "FINAL_KILLED_COUNT=0" in res.stdout, (
         "the parent never reaped, so nothing was killed -- but the script "
@@ -357,7 +367,9 @@ def test_zombie_reap_reports_ZERO_when_the_parent_ignores_sigchld() -> None:
     assert "REAPED 0 of 3" in res.stdout, (
         f"expected an honest 'REAPED 0 of 3'. stdout={res.stdout!r}"
     )
-    assert "3 remain" in res.stdout, f"the remaining zombies must be reported. stdout={res.stdout!r}"
+    assert "3 remain" in res.stdout, (
+        f"the remaining zombies must be reported. stdout={res.stdout!r}"
+    )
 
 
 def test_zombie_reap_reports_the_TRUE_count_when_the_parent_does_reap() -> None:
@@ -395,7 +407,12 @@ def test_zombie_reap_reports_the_TRUE_count_when_the_parent_does_reap() -> None:
         }
         """
     )
-    res = _bash(harness + "\n" + block + "\necho \"FINAL_KILLED_COUNT=$KILLED_COUNT\"; rm -f /tmp/e2i_zombie_probe_*")
+    res = _bash(
+        harness
+        + "\n"
+        + block
+        + '\necho "FINAL_KILLED_COUNT=$KILLED_COUNT"; rm -f /tmp/e2i_zombie_probe_*'
+    )
 
     assert "REAPED 2 of 3" in res.stdout, f"expected 'REAPED 2 of 3'. stdout={res.stdout!r}"
     assert "FINAL_KILLED_COUNT=2" in res.stdout, f"stdout={res.stdout!r}"
