@@ -162,16 +162,9 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip())
 
 
-def line_index(
-    lines: list[str],
-    marker: str,
-    *,
-    how: Match = "exact",
-    start: int = 0,
-    what: str = "",
-) -> int:
+def line_index(lines: list[str], marker: str, *, how: Match = "exact", what: str = "") -> int:
     """Index of the first line matching ``marker``, or an assertion naming what is missing."""
-    idx = next((i for i in range(start, len(lines)) if _matches(lines[i], marker, how)), None)
+    idx = next((i for i, ln in enumerate(lines) if _matches(ln, marker, how)), None)
     assert idx is not None, (
         f"{what or 'marker not found'} — expected a line {how} {marker!r} in the script"
     )
