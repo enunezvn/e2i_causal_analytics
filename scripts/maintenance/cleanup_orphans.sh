@@ -114,14 +114,16 @@ kill_orphans 'exec\(eval' "exec(eval) Node.js/esbuild orphan"
 kill_orphans 'esbuild.*service' "orphaned esbuild service"
 
 # 3. Defunct/zombie processes (state Z)
-zombie_pids=$(ps aux | awk '$8 ~ /Z/ {print $2}' || true)
+count_zombies() { ps aux | awk '$8 ~ /Z/ {print $2}'; }
+zombie_pids=$(count_zombies || true)
 if [[ -n "$zombie_pids" ]]; then
     count=$(echo "$zombie_pids" | wc -l)
     log "Found $count zombie process(es)"
     TOTAL_FOUND=$((TOTAL_FOUND + count))
 
+    signalled=0
     for pid in $zombie_pids; do
-        # Zombies can't be killed directly - kill parent instead
+        # Zombies can't be killed directly - signal the parent to reap instead.
         ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || echo "")
         if [[ -n "$ppid" && "$ppid" != "1" ]]; then
             if $DRY_RUN; then
@@ -129,10 +131,24 @@ if [[ -n "$zombie_pids" ]]; then
             else
                 log "  Signaling parent $ppid to reap zombie $pid"
                 kill -SIGCHLD "$ppid" 2>/dev/null || true
-                KILLED_COUNT=$((KILLED_COUNT + 1))
+                signalled=$((signalled + 1))
             fi
         fi
     done
+
+    # #1798: signalling a parent is NOT reaping a zombie. This used to do
+    # KILLED_COUNT=$((KILLED_COUNT + 1)) per SIGCHLD sent, so the 2026-08-23 run
+    # logged "Processes killed: 40" while all 40 zombies were still there. A
+    # parent that ignores SIGCHLD (or is itself stuck) reaps nothing. Re-observe
+    # the zombie set and report the difference, so the number means something.
+    if ! $DRY_RUN; then
+        sleep 1
+        remaining=$(count_zombies | wc -l)
+        REAPED=$((count - remaining))
+        (( REAPED < 0 )) && REAPED=0
+        log "  Signalled $signalled parent(s); REAPED $REAPED of $count zombie(s); $remaining remain"
+        KILLED_COUNT=$((KILLED_COUNT + REAPED))
+    fi
 fi
 
 # 4. Orphaned vite dev server processes (not attached to terminal)
@@ -140,7 +156,18 @@ kill_orphans 'node.*vite' "orphaned vite dev server"
 
 # 5. Old npm processes running for more than 1 hour
 # This catches stuck npm install/run processes
-old_npm=$(ps -eo pid,etime,comm | grep npm | awk '$2 ~ /^[0-9]+-/ || $2 ~ /^[0-9]+:[0-9]+:[0-9]+/ && substr($2,1,2) > 1 {print $1}' || true)
+# #1798: the age threshold is a NAMED knob, and the comparison is NUMERIC.
+# It used to be an inline `substr($2,1,2) > 1`. substr() returns a STRING, so
+# "02" > 1 is a LEXICAL compare and is FALSE ('0' < '1') -- the rule advertised
+# "more than 1 hour" and actually fired at 10 hours, exempting everything from
+# 1h to 9h59m for the script's entire life.
+#
+# The default stays at 10h ON PURPOSE. 10h is the behaviour that has actually
+# been running in production; npm is now also used for long-lived MCP servers
+# (e.g. `npm exec chrome-devtools-mcp`), which a 1h threshold would kill hourly.
+# Lowering it is a deliberate decision, not a bug fix -- change it here.
+NPM_MAX_AGE_HOURS="${NPM_MAX_AGE_HOURS:-10}"
+old_npm=$(ps -eo pid,etime,comm | grep npm | awk -v maxh="$NPM_MAX_AGE_HOURS" '$2 ~ /^[0-9]+-/ || ($2 ~ /^[0-9]+:[0-9]+:[0-9]+/ && substr($2,1,2)+0 >= maxh) {print $1}' || true)
 if [[ -n "$old_npm" ]]; then
     count=$(echo "$old_npm" | wc -l)
     log "Found $count long-running npm process(es)"
