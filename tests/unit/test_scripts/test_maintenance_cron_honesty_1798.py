@@ -331,3 +331,91 @@ def test_freshness_check_does_not_itself_depend_on_cron() -> None:
         "the freshness check must NOT be installed as a cron job -- a checker that "
         "runs from the cron it is checking is dead whenever the thing it checks is dead"
     )
+
+
+def test_zombie_reap_reports_ZERO_when_the_parent_ignores_sigchld() -> None:
+    """Behavioural reproduction of the 2026-08-23 observation.
+
+    40 zombies, 40 parents signalled, 40 zombies still present afterwards -- and
+    the log said ``Processes killed: 40``. This executes the real zombie branch
+    against a parent that does not reap, and requires the reported number to be
+    the number that actually went away: zero.
+
+    The structural tests above assert the *shape* of the fix; this one asserts
+    the *behaviour*, and is the one that would survive a fix that re-counts but
+    still reports the wrong figure.
+    """
+    text = CLEANUP_ORPHANS.read_text()
+    block = text[text.index("# 3.") : text.index("# 4.")]
+
+    harness = textwrap.dedent(
+        """
+        DRY_RUN=false
+        TOTAL_FOUND=0
+        KILLED_COUNT=0
+        log() { echo "$*"; }
+        sleep() { :; }
+        # The parent ignores SIGCHLD, so the zombies never go away.
+        kill() { return 0; }
+        ps() {
+          if [[ "${1:-}" == "aux" ]]; then
+            echo "root 111 0.0 0.0 0 0 ? Z 10:00 0:00 [a] <defunct>"
+            echo "root 222 0.0 0.0 0 0 ? Z 10:00 0:00 [b] <defunct>"
+            echo "root 333 0.0 0.0 0 0 ? Z 10:00 0:00 [c] <defunct>"
+          else
+            echo " 3846"
+          fi
+        }
+        """
+    )
+    res = _bash(harness + "\n" + block + "\necho \"FINAL_KILLED_COUNT=$KILLED_COUNT\"")
+
+    assert "FINAL_KILLED_COUNT=0" in res.stdout, (
+        "the parent never reaped, so nothing was killed -- but the script "
+        f"still counted some. stdout={res.stdout!r}"
+    )
+    assert "REAPED 0 of 3" in res.stdout, (
+        f"expected an honest 'REAPED 0 of 3'. stdout={res.stdout!r}"
+    )
+    assert "3 remain" in res.stdout, f"the remaining zombies must be reported. stdout={res.stdout!r}"
+
+
+def test_zombie_reap_reports_the_TRUE_count_when_the_parent_does_reap() -> None:
+    """Positive control: when zombies do go away, the number must reflect it.
+
+    Without this, a fix that always reports 0 would pass the test above.
+    """
+    text = CLEANUP_ORPHANS.read_text()
+    block = text[text.index("# 3.") : text.index("# 4.")]
+
+    harness = textwrap.dedent(
+        """
+        DRY_RUN=false
+        TOTAL_FOUND=0
+        KILLED_COUNT=0
+        STATE=/tmp/e2i_zombie_probe_$$
+        echo first > "$STATE"
+        log() { echo "$*"; }
+        sleep() { :; }
+        kill() { return 0; }
+        ps() {
+          if [[ "${1:-}" == "aux" ]]; then
+            if [[ "$(cat "$STATE")" == "first" ]]; then
+              echo "root 111 0.0 0.0 0 0 ? Z 10:00 0:00 [a] <defunct>"
+              echo "root 222 0.0 0.0 0 0 ? Z 10:00 0:00 [b] <defunct>"
+              echo "root 333 0.0 0.0 0 0 ? Z 10:00 0:00 [c] <defunct>"
+              echo second > "$STATE"
+            else
+              # two were reaped; one parent was stuck
+              echo "root 333 0.0 0.0 0 0 ? Z 10:00 0:00 [c] <defunct>"
+            fi
+          else
+            echo " 3846"
+          fi
+        }
+        """
+    )
+    res = _bash(harness + "\n" + block + "\necho \"FINAL_KILLED_COUNT=$KILLED_COUNT\"; rm -f /tmp/e2i_zombie_probe_*")
+
+    assert "REAPED 2 of 3" in res.stdout, f"expected 'REAPED 2 of 3'. stdout={res.stdout!r}"
+    assert "FINAL_KILLED_COUNT=2" in res.stdout, f"stdout={res.stdout!r}"
