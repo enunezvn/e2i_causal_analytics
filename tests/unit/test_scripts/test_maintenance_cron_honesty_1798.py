@@ -475,6 +475,15 @@ def test_a_fresh_log_with_NO_success_stamp_is_not_reported_fresh(
         f"false-OK this guard exists for. stdout={res.stdout!r}"
     )
     assert "docker_cleanup" in res.stdout
+    # Pin the BRANCH, not just the verdict. Without this the test passes even when
+    # the missing-stamp branch is dead: execution falls through to `stat` on a
+    # nonexistent file, mtime becomes 0, the age is astronomically over the limit,
+    # and it fails as STALE -- the right answer for the wrong reason, which a
+    # mutation of that branch would sail straight through.
+    assert "NEVER COMPLETED" in res.stdout, (
+        "a missing stamp must be reported as never-completed, not incidentally "
+        f"caught by an age comparison against mtime 0. stdout={res.stdout!r}"
+    )
 
 
 def test_a_stale_stamp_fails_even_when_the_log_was_just_written(
@@ -534,9 +543,9 @@ def _docker_stub_bin(tmp_path: Path) -> Path:
     docker.write_text(
         "#!/bin/bash\n"
         'case "$*" in\n'
-        '  *"system df"*--format*) printf \'Images\\t19.81GB\\nContainers\\t0B\\nLocal Volumes\\t4.316GB\\nBuild Cache\\t0B\\n\' ;;\n'
-        '  *"system df"*) printf \'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n\' ;;\n'
-        '  *ps*-a*until=*) echo "Error response from daemon: invalid filter \'until\'" >&2; exit 1 ;;\n'
+        "  *\"system df\"*--format*) printf 'Images\\t19.81GB\\nContainers\\t0B\\nLocal Volumes\\t4.316GB\\nBuild Cache\\t0B\\n' ;;\n"
+        "  *\"system df\"*) printf 'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n' ;;\n"
+        "  *ps*-a*until=*) echo \"Error response from daemon: invalid filter 'until'\" >&2; exit 1 ;;\n"
         "  *) exit 0 ;;\n"
         "esac\n"
         "exit 0\n"
@@ -606,9 +615,7 @@ def test_dry_run_reports_the_BUILD_CACHE_row_not_the_images_row(tmp_path: Path) 
     res = _run_docker_cleanup(tmp_path, "--dry-run")
     line = [ln for ln in res.stdout.splitlines() if "uild cache reclaimable" in ln]
     assert line, f"no build-cache line. stdout={res.stdout!r}"
-    assert "19.81GB" not in line[0], (
-        f"reported the Images row as build cache: {line[0]!r}"
-    )
+    assert "19.81GB" not in line[0], f"reported the Images row as build cache: {line[0]!r}"
     assert "0B" in line[0], f"expected the Build Cache row (0B): {line[0]!r}"
 
 
