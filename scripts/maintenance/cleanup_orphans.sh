@@ -12,7 +12,21 @@ set -euo pipefail
 
 DRY_RUN=false
 VERBOSE=false
-LOG_FILE="/var/log/e2i/orphan_cleanup.log"
+LOG_FILE="${LOG_FILE:-/var/log/e2i/orphan_cleanup.log}"
+
+# #1798: a success stamp is the ONLY honest "this job completed" signal.
+# The log is written by ANYTHING that invokes this script -- a --dry-run, a run
+# that aborts halfway, a human debugging by hand -- so log mtime answers "was
+# this file written", not "did this job complete". Keying the freshness check on
+# log mtime produced a false OK for a job that had not run in 56 days.
+# Only a real, completed run touches this.
+write_success_stamp() {
+    local _dir _name
+    _dir=$(dirname "$LOG_FILE")
+    _name=$(basename "$0" .sh)
+    touch "${_dir}/.${_name}.success" 2>/dev/null || true
+}
+
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -185,6 +199,7 @@ if [[ -n "$old_npm" ]]; then
 fi
 
 # Summary
+if ! $DRY_RUN; then write_success_stamp; fi
 log "=== Cleanup Complete ==="
 log "Total orphan processes found: $TOTAL_FOUND"
 if $DRY_RUN; then

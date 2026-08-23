@@ -25,7 +25,21 @@
 
 set -euo pipefail
 
-LOG_FILE="/var/log/e2i/docker_cleanup.log"
+LOG_FILE="${LOG_FILE:-/var/log/e2i/docker_cleanup.log}"
+
+# #1798: a success stamp is the ONLY honest "this job completed" signal.
+# The log is written by ANYTHING that invokes this script -- a --dry-run, a run
+# that aborts halfway, a human debugging by hand -- so log mtime answers "was
+# this file written", not "did this job complete". Keying the freshness check on
+# log mtime produced a false OK for a job that had not run in 56 days.
+# Only a real, completed run touches this.
+write_success_stamp() {
+    local _dir _name
+    _dir=$(dirname "$LOG_FILE")
+    _name=$(basename "$0" .sh)
+    touch "${_dir}/.${_name}.success" 2>/dev/null || true
+}
+
 DRY_RUN=false
 VERBOSE=false
 
@@ -93,7 +107,13 @@ timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
     # 1. Build cache (typically the biggest win)
     log_step "Pruning build cache..."
     if [[ "$DRY_RUN" == true ]]; then
-        build_cache=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 || echo "unknown")
+        # #1798: this was `--format '{{.Reclaimable}}' | head -1`, which takes the
+        # IMAGES row -- docker system df prints one row per type. It reported
+        # "Build cache reclaimable: 19.81GB" while build cache was 0B. Select the
+        # row by its Type instead of by position.
+        build_cache=$(docker system df --format '{{.Type}}\t{{.Reclaimable}}' 2>/dev/null \
+            | awk -F'\t' '$1=="Build Cache"{print $2}' || true)
+        build_cache=${build_cache:-unknown}
         log_info "[DRY RUN] Build cache reclaimable: $build_cache"
     else
         docker builder prune -f 2>&1 || log_warn "Build cache prune returned non-zero"
@@ -118,12 +138,18 @@ timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
     # 3. Exited containers older than 24h
     log_step "Pruning exited containers (>24h old)..."
     if [[ "$DRY_RUN" == true ]]; then
-        exited=$(docker ps -a --filter "status=exited" --filter "until=24h" --format "  {{.Names}} ({{.Status}})" 2>/dev/null)
+        # #1798: `until` is NOT a valid `docker ps` filter -- the daemon rejects it
+        # ("invalid filter 'until'"). Under `set -euo pipefail` that non-zero exit
+        # killed the whole run here, so --dry-run never reached the volume or
+        # network steps. It IS valid for `docker container prune` (the real branch
+        # below), which is why only the preview was broken. List exited containers
+        # without the filter and say plainly that the prune applies the age cut.
+        exited=$(docker ps -a --filter "status=exited" --format "  {{.Names}} ({{.Status}})" 2>/dev/null || true)
         if [[ -n "$exited" ]]; then
-            log_info "[DRY RUN] Would remove:"
+            log_info "[DRY RUN] Exited containers (the real prune removes those >24h):"
             echo "$exited"
         else
-            log_info "No exited containers older than 24h"
+            log_info "No exited containers"
         fi
     else
         docker container prune -f --filter "until=24h" 2>&1
@@ -165,6 +191,9 @@ timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
     log_info "Root filesystem usage: $disk_usage"
 
     echo "========================================"
+    if [[ "$DRY_RUN" != true ]]; then
+        write_success_stamp
+    fi
     echo "Docker cleanup finished at $(timestamp)"
     echo "========================================"
 
