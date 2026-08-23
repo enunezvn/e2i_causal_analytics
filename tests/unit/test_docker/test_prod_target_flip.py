@@ -25,14 +25,21 @@ on-droplet rollout are exercised by the operational GATE, not here.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from tests.unit.test_docker.conftest import (
+    REPO_ROOT,
+    ROLLOUT_ID,
+    extract_shell_function,
+    ssh_script,
+    trigger_paths,
+)
+
 BASE_COMPOSE = REPO_ROOT / "docker" / "docker-compose.yml"
 FRONTEND_DEV_OVERLAY = REPO_ROOT / "docker" / "docker-compose.frontend-dev.yml"
-DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 
 # App services that must run the prod target after the flip (frontend intentionally
 # excluded — it stays dev/Vite until #528-B restores its prod image).
@@ -62,8 +69,6 @@ def _load(path: Path) -> dict:
 
 def _exclusion_tokens(script: str) -> list[str]:
     """The `|`-separated alternatives inside the rebuild-detector `grep -vE` anchor."""
-    import re
-
     m = re.search(r"grep -vE '\^\(([^']+)\)'", script)
     assert m, "could not locate the anchored grep -vE exclusion alternation"
     return m.group(1).split("|")
@@ -73,16 +78,19 @@ def _services(doc: dict) -> dict:
     return doc.get("services", {}) or {}
 
 
-def _deploy_text() -> str:
-    return DEPLOY_WORKFLOW.read_text()
-
-
 def _deploy_script() -> str:
-    """The SSH deploy script body (the heredoc that runs on the droplet)."""
-    text = _deploy_text()
+    """The SSH deploy script body (the heredoc that runs on the droplet).
+
+    #1796: this used to return the WHOLE deploy.yml text while claiming to be the
+    droplet script, which made every ``in script`` assertion below fail-open — a phrase
+    that had moved into a comment, a trigger path, or another job entirely still
+    satisfied it. It is now the rollout step's `script:` addressed BY ID, so the
+    assertions read only what the droplet actually executes.
+    """
+    script = ssh_script(ROLLOUT_ID)
     # The risky recreate logic lives after the compose command is defined.
-    assert "COMPOSE_CMD=" in text, "deploy.yml lost its COMPOSE_CMD definition"
-    return text
+    assert "COMPOSE_CMD=" in script, "deploy.yml lost its COMPOSE_CMD definition"
+    return script
 
 
 # --------------------------------------------------------------------------- #
@@ -262,8 +270,6 @@ def test_recreate_set_includes_feast_and_materializer():
         "deploy must recreate feast-materializer (durable populate)"
     )
     # 'feast' as a standalone recreate target (word-boundary; not just 'feast-materializer').
-    import re
-
     assert re.search(r"(?<![\w-])feast(?![\w-])", script), "deploy must recreate the feast sidecar"
 
 
@@ -326,11 +332,10 @@ def test_materialize_gate_failure_is_fail_loud_and_rolls_feast_back():
     # THEN force-recreate the services it is handed (restore the Feast the old API
     # uses). Since PR #1317 the rollback is `git reset --hard` — a raw-sha `checkout`
     # detaches HEAD and the forward path never reattaches it (2026-07-21 incident).
-    import re as _re
-
-    helper_m = _re.search(r"rollback_to_prev\(\)\s*\{(.*?)\n\s*\}", script, _re.DOTALL)
-    assert helper_m, "rollback_to_prev() helper definition not found"
-    helper = helper_m.group(1)
+    # #1796: was a non-greedy `rollback_to_prev\(\)\s*\{(.*?)\n\s*\}` regex — the third
+    # independent spelling of "slice this shell function out". It now uses the shared
+    # own-indent extractor, which cannot be ended early by a nested `}`.
+    helper = extract_shell_function(script, "rollback_to_prev")
     assert 'git reset --hard "$PREV_SHA"' in helper, (
         "rollback_to_prev must `git reset --hard` to PREV_SHA (NOT `git checkout` — "
         "a raw-sha checkout detaches the droplet HEAD; PR #1317)"
@@ -353,11 +358,7 @@ def test_deploy_trigger_includes_frontend_dev_overlay():
     live deploy input, so it must be listed or a frontend-dev change silently never
     deploys.
     """
-    doc = yaml.safe_load(_deploy_text())
-    on = doc.get("on")
-    if on is None:  # PyYAML (YAML 1.1) parses bare ``on:`` as boolean True
-        on = doc.get(True)
-    paths = (on or {}).get("push", {}).get("paths", []) or []
+    paths = trigger_paths()
     assert "docker/docker-compose.frontend-dev.yml" in paths, (
         f"deploy on.push.paths must include the consumed slim overlay (parsed: {paths})"
     )

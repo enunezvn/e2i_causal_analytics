@@ -60,12 +60,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
-import yaml  # type: ignore[import-untyped]
+from tests.unit.test_docker.conftest import REPO_ROOT, trigger_paths
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 DOCKERFILE = REPO_ROOT / "docker" / "Dockerfile"
 
 #: The stage the production image is built from (``docker build --target production``,
@@ -75,19 +72,8 @@ PRODUCTION_STAGE = "production"
 _WILDCARD = re.compile(r"[*?\[]")
 
 
-# --------------------------------------------------------------------------- #
-# deploy.yml trigger extraction
-# --------------------------------------------------------------------------- #
-def _trigger_paths() -> list[str]:
-    """``on.push.paths`` from deploy.yml.
-
-    PyYAML (YAML 1.1) parses a bare ``on:`` mapping key as the boolean ``True``.
-    """
-    wf = yaml.safe_load(DEPLOY_WORKFLOW.read_text())
-    on = wf.get("on")
-    if on is None:
-        on = wf.get(True)
-    return list((on or {}).get("push", {}).get("paths", []) or [])
+# deploy.yml's ``on.push.paths`` is read through the shared ``trigger_paths()`` (#1796),
+# which owns the YAML-1.1 gotcha that makes a bare ``on:`` key parse as ``True``.
 
 
 # --------------------------------------------------------------------------- #
@@ -364,7 +350,7 @@ def test_trigger_globs_all_have_a_recognised_shape() -> None:
     nothing (or, worse under a laxer matcher, as covering everything) and the invariant
     below would quietly stop meaning what it says.
     """
-    triggers = _trigger_paths()
+    triggers = trigger_paths()
     assert triggers, "deploy.yml on.push.paths parsed as EMPTY — the parser is broken"
     unrecognised = _unrecognised_shapes(triggers)
     assert unrecognised == [], (
@@ -543,7 +529,7 @@ def test_every_production_image_input_is_a_deploy_trigger() -> None:
     would produce it, and production keeps serving the previously-baked copy until an
     unrelated commit rebuilds incidentally.
     """
-    triggers = _trigger_paths()
+    triggers = trigger_paths()
     inputs = _image_input_paths(DOCKERFILE.read_text())
     uncovered = _uncovered(inputs, triggers)
     assert uncovered == {}, (

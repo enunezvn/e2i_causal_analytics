@@ -54,17 +54,28 @@ from __future__ import annotations
 
 import re
 import shlex
-import subprocess
 from pathlib import Path
 
 import pytest
-import yaml  # type: ignore[import-untyped]
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
-
-ROLLOUT_ID = "rollout"
-CLEANUP_ID = "cleanup"
+from tests.unit.test_docker.conftest import (
+    CLEANUP_ID,
+    ROLLOUT_ID,
+    extract_block,
+    format_step_table,
+    index_map,
+    job_steps,
+    line_index,
+    load_workflow,
+    prose,
+    render_step_summary,
+    run_fragment,
+    ssh_script,
+    step_by_id,
+    step_index,
+    step_table,
+    step_with,
+)
 
 # The two cleanup commands, verbatim. Literals, matched literally.
 PRUNE_COMMANDS = ("docker image prune -a -f", "docker builder prune -a -f")
@@ -73,54 +84,13 @@ DRIFT_CHECK = "scripts/deploy/check_image_drift.py"
 
 
 # --------------------------------------------------------------------------- #
-# Extraction — the SHIPPED artifact, addressed by step id
+# Extraction — the SHIPPED artifact, addressed by step id.
+#
+# #1796: the load / step-table / by-id lookup / `with.script` accessor that used to sit
+# here are now shared (tests/unit/test_docker/conftest.py) — six other modules in this
+# directory were each carrying their own spelling of them. What stays here is what is
+# specific to THIS defect: the gate's own markers, its stubs, and the assertions.
 # --------------------------------------------------------------------------- #
-def _load_workflow() -> dict:
-    wf: dict = yaml.safe_load(DEPLOY_WORKFLOW.read_text())
-    return wf
-
-
-def _deploy_steps() -> list[dict]:
-    return list(_load_workflow()["jobs"]["deploy"]["steps"])
-
-
-def _step_table() -> list[tuple[int, str, str, str]]:
-    """The DERIVED step order: (index, id, name, uses/run). Printed by every failure."""
-    table = []
-    for i, step in enumerate(_deploy_steps()):
-        kind = step.get("uses") or ("run:" if "run" in step else "?")
-        table.append((i, str(step.get("id", "")), str(step.get("name", "")), str(kind)))
-    return table
-
-
-def _fmt(table: list[tuple[int, str, str, str]]) -> str:
-    return "\n".join(f"  [{i}] id={id_!r} name={name!r} {kind}" for i, id_, name, kind in table)
-
-
-def _step_index(step_id: str) -> int:
-    for i, step in enumerate(_deploy_steps()):
-        if step.get("id") == step_id:
-            return i
-    raise AssertionError(
-        f"the deploy job has no step with id {step_id!r}. Derived step table:\n"
-        + _fmt(_step_table())
-    )
-
-
-def _step(step_id: str) -> dict:
-    return _deploy_steps()[_step_index(step_id)]
-
-
-def _ssh_script(step_id: str) -> str:
-    step = _step(step_id)
-    with_ = step.get("with") or {}
-    assert "script" in with_, (
-        f"step id={step_id!r} carries no `script:` — it is not an ssh-action step. "
-        f"Derived step table:\n{_fmt(_step_table())}"
-    )
-    return str(with_["script"])
-
-
 def _minutes(duration: str) -> int:
     """Parse a Go-style ssh-action duration ('30m', '15m', '900s') into whole minutes."""
     m = re.fullmatch(r"(\d+)([smh])", duration.strip())
@@ -130,32 +100,11 @@ def _minutes(duration: str) -> int:
 
 
 def _command_timeout(step_id: str) -> str:
-    with_ = _step(step_id).get("with") or {}
-    assert "command_timeout" in with_, (
-        f"step id={step_id!r} declares no command_timeout of its own; it would inherit "
-        f"the action default. Derived `with` keys: {sorted(with_)}"
+    return step_with(
+        step_id,
+        "command_timeout",
+        what="it would inherit the action default instead of declaring its own budget",
     )
-    return str(with_["command_timeout"])
-
-
-def _index_map(script: str, markers: dict[str, str]) -> dict[str, int]:
-    """Derive each marker's position. Missing markers surface as -1, never silently."""
-    return {label: script.find(needle) for label, needle in markers.items()}
-
-
-def _prose(script: str) -> str:
-    """Comment text with the `#` markers and line wrapping flattened away.
-
-    A phrase in a wrapped comment is split across lines at an arbitrary column, so a
-    literal search over the raw script silently misses it — the fail-open shape that
-    has bitten this repo repeatedly. Flatten first, then match literally.
-    """
-    words: list[str] = []
-    for line in script.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            words.extend(stripped.lstrip("#").split())
-    return " ".join(words)
 
 
 def _last_command_line(script: str) -> str:
@@ -177,7 +126,7 @@ def test_no_cleanup_command_survives_inside_the_gated_rollout_script() -> None:
     found and where, so a mutation that moves one back is visible as a value, not as
     a flipped boolean.
     """
-    script = _ssh_script(ROLLOUT_ID)
+    script = ssh_script(ROLLOUT_ID)
     found = {cmd: script.find(cmd) for cmd in PRUNE_COMMANDS if cmd in script}
     assert not found, (
         "#1784 option 4: cleanup must not run inside the gated SSH step — its time "
@@ -195,8 +144,8 @@ def test_rollout_gate_order_is_derived_and_monotonic() -> None:
     BETWEEN them — which is exactly where the prune sat. This derives the full
     ordered index map and prints it.
     """
-    script = _ssh_script(ROLLOUT_ID)
-    order = _index_map(
+    script = ssh_script(ROLLOUT_ID)
+    order = index_map(
         script,
         {
             "app health gate": "Waiting for health check",
@@ -231,11 +180,11 @@ def test_drift_check_comment_does_not_assert_a_prune_that_is_no_longer_there() -
     cannot tell those apart and would punish the better comment, so the requirement is:
     drop the sentence, or keep it only alongside an explicit correction.
     """
-    prose = _prose(_ssh_script(ROLLOUT_ID))
+    flattened = prose(ssh_script(ROLLOUT_ID))
     claim = "Runs AFTER the prune"
-    if claim not in prose:
+    if claim not in flattened:
         return
-    assert "the prune moved to its own step" in prose, (
+    assert "the prune moved to its own step" in flattened, (
         f"the rollout script still carries {claim!r} without saying the prune moved, "
         "so it reads as a live claim about an ordering that no longer exists"
     )
@@ -245,19 +194,19 @@ def test_drift_check_comment_does_not_assert_a_prune_that_is_no_longer_there() -
 # 2. #1784 option 2 — the prune gets its own SSH step, with its own budget
 # --------------------------------------------------------------------------- #
 def test_prune_lives_in_its_own_ssh_step_after_the_gated_rollout() -> None:
-    table = _step_table()
-    rollout_at = _step_index(ROLLOUT_ID)
-    cleanup_at = _step_index(CLEANUP_ID)
+    table = step_table()
+    rollout_at = step_index(ROLLOUT_ID)
+    cleanup_at = step_index(CLEANUP_ID)
     assert cleanup_at > rollout_at, (
-        f"the cleanup step must follow the gated rollout. Derived step table:\n{_fmt(table)}"
+        f"the cleanup step must follow the gated rollout. Derived step table:\n{format_step_table(table)}"
     )
 
-    cleanup = _step(CLEANUP_ID)
+    cleanup = step_by_id(CLEANUP_ID)
     assert str(cleanup.get("uses", "")).startswith("appleboy/ssh-action"), (
         f"the cleanup step must be its own SSH invocation; got uses={cleanup.get('uses')!r}"
     )
 
-    cleanup_script = _ssh_script(CLEANUP_ID)
+    cleanup_script = ssh_script(CLEANUP_ID)
     missing = [cmd for cmd in PRUNE_COMMANDS if cmd not in cleanup_script]
     assert not missing, f"the cleanup step does not run {missing}. Its script is:\n{cleanup_script}"
     # Only the INVOCATIONS, not the echo that announces them: `|| true` is about a
@@ -288,7 +237,7 @@ def test_job_budget_is_recomputed_from_both_ssh_timeouts() -> None:
     it derived. A budget that no longer covers both steps would let the JOB timeout
     fire first, which reports failure on exactly the axis #1784 is trying to separate.
     """
-    job = _load_workflow()["jobs"]["deploy"]
+    job = load_workflow()["jobs"]["deploy"]
     rollout_m = _minutes(_command_timeout(ROLLOUT_ID))
     cleanup_m = _minutes(_command_timeout(CLEANUP_ID))
     job_m = int(job["timeout-minutes"])
@@ -308,7 +257,7 @@ def test_job_budget_is_recomputed_from_both_ssh_timeouts() -> None:
 # 3. #1784 option 5 — a cut-short cleanup must not present as a failed deploy
 # --------------------------------------------------------------------------- #
 def test_cleanup_failure_cannot_fail_the_job() -> None:
-    cleanup = _step(CLEANUP_ID)
+    cleanup = step_by_id(CLEANUP_ID)
     assert cleanup.get("continue-on-error") is True, (
         "#1784 option 5: a prune that overruns its own budget must not turn the job "
         f"red — the rollout already converged and was health-gated. Got: "
@@ -324,7 +273,7 @@ def test_cleanup_still_runs_when_a_gate_fires() -> None:
     the disk still needs hygiene. Default step semantics (`success()`) would skip the
     cleanup in exactly that case, so the condition must be broader than success.
     """
-    cleanup = _step(CLEANUP_ID)
+    cleanup = step_by_id(CLEANUP_ID)
     condition = str(cleanup.get("if", ""))
     assert condition, (
         "the cleanup step has no `if:`, so it inherits success() and is SKIPPED "
@@ -341,7 +290,7 @@ def test_cleanup_still_runs_when_a_gate_fires() -> None:
 
 
 def _summary_step() -> dict:
-    for step in _deploy_steps():
+    for step in job_steps():
         if "run" in step and "GITHUB_STEP_SUMMARY" in str(step["run"]):
             return step
     raise AssertionError("the deploy job has no step writing GITHUB_STEP_SUMMARY")
@@ -380,23 +329,12 @@ def _render_summary(tmp_path: Path, **outcomes: str) -> str:
             if f"steps.{step_id}.outcome" in expr:
                 env[name] = value
         env.setdefault(name, "test")
-    summary_file = tmp_path / f"summary_{'_'.join(sorted(outcomes.values()))}.md"
-    summary_file.write_text("")
-    runner = tmp_path / "summary.sh"
-    runner.write_text(str(step["run"]))
-    proc = subprocess.run(
-        ["bash", str(runner)],
-        env={
-            "PATH": "/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary_file),
-            **env,
-        },
-        capture_output=True,
-        text=True,
-        timeout=30,
+    return render_step_summary(
+        tmp_path,
+        str(step["run"]),
+        env=env,
+        summary_name=f"summary_{'_'.join(sorted(outcomes.values()))}.md",
     )
-    assert proc.returncode == 0, f"summary script failed: {proc.stderr}"
-    return summary_file.read_text()
 
 
 def test_summary_renders_three_distinct_verdicts(tmp_path: Path) -> None:
@@ -539,34 +477,37 @@ PROBE_CALL = 'images_verdict "$NEW_SHA" || IMAGES_VERDICT=$?'
 FAIL_FAST_OPENER = 'elif [ "$IMAGES_VERDICT" -ne 0 ]; then'
 
 
-def _line_index(lines: list[str], wanted: str, what: str) -> int:
-    idx = next((i for i, ln in enumerate(lines) if ln.strip() == wanted), None)
-    assert idx is not None, f"{what} — expected a line {wanted!r} in the rollout script"
-    return idx
-
-
 def _extract_gate_block() -> str:
     """The SHIPPED #1785 gate, verbatim: auth precondition through its own-indent `fi`.
 
     Spans from the auth flag to the close of the branch chain, because the precondition
     is not decoration — it is the difference between "this image is absent" and "I could
-    not ask", and the two must be extracted and executed together.
+    not ask", and the two must be extracted and executed together. That is why the block
+    is ANCHORED on the branch rather than on its own first line: the closing `fi` belongs
+    to the `if` that opens partway in, and matching the first `fi` at any indent would
+    slice the stand-down arm off the gate it is being executed to exercise.
+
+    The three markers below are asserted here rather than in a test of their own: each
+    one absent means the gate is not the shape #1785 built, and every case downstream
+    would then be exercising something else.
     """
-    script = _ssh_script(ROLLOUT_ID)
+    script = ssh_script(ROLLOUT_ID)
     lines = script.splitlines()
-    start = _line_index(
+    line_index(
         lines,
         GATE_AUTH_START,
-        "#1785: the gate has no GHCR-auth precondition, so an unreachable registry is "
-        "indistinguishable from a missing image",
+        what="#1785: the gate has no GHCR-auth precondition, so an unreachable registry "
+        "is indistinguishable from a missing image",
     )
-    branch = _line_index(
+    line_index(
         lines,
         GATE_AUTH_BRANCH,
-        "#1785: the gate never branches on whether it got an answer it can stand behind",
+        what="#1785: the gate never branches on whether it got an answer it can stand behind",
     )
-    _line_index(
-        lines, FAIL_FAST_OPENER, "#1785: the manifest assertion is not the stand-down `elif`"
+    line_index(
+        lines,
+        FAIL_FAST_OPENER,
+        what="#1785: the manifest assertion is not the stand-down `elif`",
     )
     assert any(PROBE_CALL in ln for ln in lines), (
         "#1785: the gate does not call the three-way images_verdict — a boolean probe "
@@ -574,11 +515,13 @@ def _extract_gate_block() -> str:
         "is the whole finding. Rollout script lines matching 'verdict':\n"
         + "\n".join(f"  {ln}" for ln in lines if "verdict" in ln)
     )
-    indent = len(lines[branch]) - len(lines[branch].lstrip())
-    for j in range(branch + 1, len(lines)):
-        if lines[j].strip() == "fi" and (len(lines[j]) - len(lines[j].lstrip())) == indent:
-            return "\n".join(ln[indent:] for ln in lines[start : j + 1])
-    raise AssertionError("the #1785 gate has no closing `fi` at its own indent")
+    return extract_block(
+        script,
+        start=GATE_AUTH_START,
+        end="fi",
+        anchor=GATE_AUTH_BRANCH,
+        what="the #1785 gate",
+    )
 
 
 def test_manifest_assertion_sits_between_sha_resolution_and_the_expensive_work() -> None:
@@ -588,8 +531,8 @@ def test_manifest_assertion_sits_between_sha_resolution_and_the_expensive_work()
     landed on yet; later and the DB migrations have already run and the ~26-min build
     has already started. Derives the index map and prints it.
     """
-    script = _ssh_script(ROLLOUT_ID)
-    order = _index_map(
+    script = ssh_script(ROLLOUT_ID)
+    order = index_map(
         script,
         {
             "NEW_SHA resolved": "NEW_SHA=$(git rev-parse HEAD)",
@@ -627,20 +570,21 @@ def _docker_stub(login_rc: int, manifest_rc: int = 1, manifest_stderr: str = "")
     )
 
 
-def _run_gate(tmp_path: Path, preamble: str, **env: str) -> tuple[int, str]:
+#: Emitted after the gate. Its ABSENCE is what "the gate refused" looks like, and its
+#: presence is the positive control that the fragment ran to the end at all.
+REACHED = '\necho "REACHED THE EXPENSIVE WORK"\n'
+
+
+def _run_gate(tmp_path: Path, preamble: str, name: str = "gate.sh", **env: str) -> tuple[int, str]:
     """Execute the SHIPPED gate block under a supplied preamble of stubs."""
-    runner = tmp_path / "gate.sh"
-    runner.write_text(
-        "set -e\n" + preamble + _extract_gate_block() + '\necho "REACHED THE EXPENSIVE WORK"\n'
-    )
-    proc = subprocess.run(
-        ["bash", str(runner)],
+    return run_fragment(
+        tmp_path,
+        _extract_gate_block(),
+        preamble=preamble,
+        trailer=REACHED,
         env={"PATH": "/usr/bin:/bin", **env},
-        capture_output=True,
-        text=True,
-        timeout=30,
+        name=name,
     )
-    return proc.returncode, proc.stdout + proc.stderr
 
 
 def _run_fail_fast(
@@ -655,18 +599,7 @@ def _run_fail_fast(
     the whole class of registry-unreachable defects invisible in the first place.
     """
     preamble = _docker_stub(login_rc) + f"images_verdict() {{ return {verdict_rc}; }}\n"
-    runner = tmp_path / "failfast.sh"
-    runner.write_text(
-        "set -e\n" + preamble + _extract_gate_block() + '\necho "REACHED THE EXPENSIVE WORK"\n'
-    )
-    proc = subprocess.run(
-        ["bash", str(runner)],
-        env={"PATH": "/usr/bin:/bin", **env},
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return proc.returncode, proc.stdout + proc.stderr
+    return _run_gate(tmp_path, preamble, name="failfast.sh", **env)
 
 
 SHA = "c" * 40
@@ -793,16 +726,24 @@ PROBE_HELPERS_END = "# Given candidate SHAs on stdin"
 
 
 def _extract_probe_helpers() -> str:
-    """The REAL manifest_probe_once/manifest_verdict/images_verdict source, dedented."""
-    script = _ssh_script(ROLLOUT_ID)
-    start = script.find(PROBE_HELPERS_START)
-    end = script.find(PROBE_HELPERS_END)
-    assert 0 <= start < end, (
-        f"could not locate the real manifest probes in the rollout script ({start}, {end})"
+    """The REAL manifest_probe_once/manifest_verdict/images_verdict source, dedented.
+
+    A RUN of four helpers, not one function, so it is delimited by the comment that
+    opens the next helper rather than by a brace — hence `include_end=False`.
+    """
+    return (
+        extract_block(
+            ssh_script(ROLLOUT_ID),
+            start=PROBE_HELPERS_START,
+            start_match="contains",
+            end=PROBE_HELPERS_END,
+            end_match="contains",
+            own_indent=False,
+            include_end=False,
+            what="the real manifest probes in the rollout script",
+        )
+        + "\n"
     )
-    lines = script[start:end].splitlines()
-    indent = len(lines[0]) - len(lines[0].lstrip())
-    return "\n".join(ln[indent:] if ln.strip() else "" for ln in lines) + "\n"
 
 
 def _run_gate_against_real_probes(
@@ -1166,27 +1107,21 @@ def test_manifest_present_still_answers_what_the_sha_walk_relied_on(
     state = tmp_path / "probe_state"
     state.mkdir(exist_ok=True)
     counter = state / "api"
-    runner = tmp_path / "mp.sh"
-    runner.write_text(
-        "set -e\n"
-        + _docker_ref_stub(0, answers, answers)
-        + "sleep() { :; }\n"
-        + _extract_probe_helpers()
-        + '\nif manifest_present "ghcr.io/enunezvn/e2i-api:sha"; then\n'
-        '  echo "RESULT=0"\n'
-        "else\n"
-        '  echo "RESULT=1"\n'
-        "fi\n"
-        f'printf "PROBES=%s\\n" "$(cat {counter} 2>/dev/null || echo 0)"\n'
-    )
-    proc = subprocess.run(
-        ["bash", str(runner)],
+    _rc, out = run_fragment(
+        tmp_path,
+        _extract_probe_helpers(),
+        preamble=_docker_ref_stub(0, answers, answers) + "sleep() { :; }\n",
+        trailer=(
+            '\nif manifest_present "ghcr.io/enunezvn/e2i-api:sha"; then\n'
+            '  echo "RESULT=0"\n'
+            "else\n"
+            '  echo "RESULT=1"\n'
+            "fi\n"
+            f'printf "PROBES=%s\\n" "$(cat {counter} 2>/dev/null || echo 0)"\n'
+        ),
         env={"PATH": "/usr/bin:/bin", "STUB_STATE": str(state)},
-        capture_output=True,
-        text=True,
-        timeout=30,
+        name="mp.sh",
     )
-    out = proc.stdout + proc.stderr
     got_rc = next((ln for ln in out.splitlines() if ln.startswith("RESULT=")), "RESULT=?")
     got_probes = next((ln for ln in out.splitlines() if ln.startswith("PROBES=")), "PROBES=?")
     assert (got_rc, got_probes) == (f"RESULT={expected_rc}", f"PROBES={expected_probes}"), (
@@ -1204,7 +1139,7 @@ def test_the_absent_classification_has_exactly_one_source_of_truth() -> None:
     "inconclusive", or the reverse, is this defect's own family. Asserts the COUNT, so a
     failure prints what it actually found.
     """
-    script = _ssh_script(ROLLOUT_ID)
+    script = ssh_script(ROLLOUT_ID)
     needle = '*"no such manifest"*|*"manifest unknown"*|*"not found"*|*"UNKNOWN"*'
     occurrences = [(i, ln.strip()) for i, ln in enumerate(script.splitlines()) if needle in ln]
     assert len(occurrences) == 1, (
@@ -1236,21 +1171,17 @@ def test_the_absent_classification_has_exactly_one_source_of_truth() -> None:
 def _run_cleanup(tmp_path: Path, rollout_outcome: str) -> list[str]:
     """Execute the SHIPPED cleanup script and return the docker commands it issued."""
     log = tmp_path / "docker.log"
-    runner = tmp_path / "cleanup.sh"
-    runner.write_text(
-        f'docker() {{ echo "$*" >> "{log}"; return 0; }}\n' + _ssh_script(CLEANUP_ID) + "\n"
-    )
-    proc = subprocess.run(
-        ["bash", str(runner)],
+    # No `set -e`: the shipped step does not run under it, and adding it here would make
+    # a `|| true`-guarded prune look fatal — the opposite of what this asserts.
+    rc, out = run_fragment(
+        tmp_path,
+        ssh_script(CLEANUP_ID) + "\n",
+        preamble=f'docker() {{ echo "$*" >> "{log}"; return 0; }}\n',
+        set_e=False,
         env={"PATH": "/usr/bin:/bin", "ROLLOUT_OUTCOME": rollout_outcome},
-        capture_output=True,
-        text=True,
-        timeout=30,
+        name="cleanup.sh",
     )
-    assert proc.returncode == 0, (
-        f"the cleanup script must never fail its own step; rc={proc.returncode}\n"
-        f"{proc.stdout}{proc.stderr}"
-    )
+    assert rc == 0, f"the cleanup script must never fail its own step; rc={rc}\n{out}"
     return log.read_text().splitlines() if log.exists() else []
 
 
@@ -1287,7 +1218,7 @@ def test_cleanup_step_is_told_the_rollout_outcome() -> None:
     `env:` alone does not cross the SSH boundary — appleboy/ssh-action forwards only
     what `envs:` names, the same wiring IMAGE_OWNER/GHCR_USER/GHCR_TOKEN already use.
     """
-    step = _step(CLEANUP_ID)
+    step = step_by_id(CLEANUP_ID)
     env = step.get("env") or {}
     assert "ROLLOUT_OUTCOME" in env, (
         f"the cleanup step never reads the rollout's outcome; its env is {env}"
@@ -1323,19 +1254,19 @@ def test_prune_comment_no_longer_claims_rollback_always_completed() -> None:
     from being satisfied by the unrelated `Best-effort (|| true)` sentence already in
     the block. Near-miss matching is how a guard fails open.
     """
-    prose = _prose(_ssh_script(CLEANUP_ID))
+    flattened = prose(ssh_script(CLEANUP_ID))
     stale = "completed before this step starts, so dropping old SHA images cannot break a rollback"
-    idx = prose.find(stale)
+    idx = flattened.find(stale)
     if idx >= 0:
-        window = prose[max(0, idx - 90) : idx + len(stale) + 90]
+        window = flattened[max(0, idx - 90) : idx + len(stale) + 90]
         contradictions = ("used to say", "not an invariant", "is not true", "does not hold")
         assert any(marker in window for marker in contradictions), (
             "the prune comment still states as a live invariant that a rollback has "
             "completed by the time this step runs. It has not, necessarily. Quote it to "
             f"correct it, or drop it — the text around it says neither:\n{window}"
         )
-    assert "rollback_to_prev" in prose, (
+    assert "rollback_to_prev" in flattened, (
         "nothing in the prune comment names `rollback_to_prev`, whose every `up` is "
         "WARN-and-continue — which is the entire reason the image prune is now "
-        f"conditional. Unrecorded, the condition reads as redundant:\n{prose}"
+        f"conditional. Unrecorded, the condition reads as redundant:\n{flattened}"
     )

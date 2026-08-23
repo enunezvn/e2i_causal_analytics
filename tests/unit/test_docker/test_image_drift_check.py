@@ -49,8 +49,16 @@ from pathlib import Path
 import pytest
 import yaml  # type: ignore[import-untyped]
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+from tests.unit.test_docker.conftest import (
+    REPO_ROOT,
+    ROLLOUT_ID,
+    bash_run,
+    redirect_project_dir,
+    ssh_script,
+    trigger_paths,
+    write_stub_bin,
+)
+
 SCRIPT_PATH = REPO_ROOT / "scripts" / "deploy" / "check_image_drift.py"
 ALLOWLIST_PATH = REPO_ROOT / "scripts" / "deploy" / "image_drift_allowlist.json"
 
@@ -271,33 +279,22 @@ def test_shipped_allowlist_file_is_valid_and_ticketed() -> None:
 # Structural wiring guards on deploy.yml (#618-style: the step cannot be
 # silently dropped later)
 # --------------------------------------------------------------------------- #
-def _load_workflow() -> dict:
-    wf: dict = yaml.safe_load(DEPLOY_WORKFLOW.read_text())
-    return wf
-
-
 def _extract_deploy_script() -> str:
     """The GATED ssh script — the one carrying the rollout and its health gate.
 
     #1784 split the deploy job into two ssh-action steps (gated rollout, then a
     separate cleanup prune), so "the first step with a `script:`" stopped being an
-    unambiguous way to name this one. Selecting on the health gate is stable under a
-    step reorder or an id rename, and fails loudly instead of silently returning the
-    cleanup script — which would make every assertion below vacuous.
+    unambiguous way to name this one. #1796 addresses it by `id` instead; the health
+    gate is kept as a CONTENT check on top, because an id that is renamed onto the
+    wrong step would otherwise hand every assertion below the cleanup script — and
+    they would all pass vacuously.
     """
-    wf = _load_workflow()
-    scripts = [
-        str((step.get("with") or {})["script"])
-        for step in wf["jobs"]["deploy"]["steps"]
-        if "script" in (step.get("with") or {})
-    ]
-    assert scripts, "deploy.yml has no ssh-action step carrying a `script:`"
-    gated = [s for s in scripts if "Waiting for health check" in s]
-    assert len(gated) == 1, (
-        "expected exactly ONE gated ssh script (the one carrying the app health gate); "
-        f"found {len(gated)} among {len(scripts)} ssh scripts"
+    script = ssh_script(ROLLOUT_ID)
+    assert "Waiting for health check" in script, (
+        f"the step with id={ROLLOUT_ID!r} does not carry the app health gate, so it is "
+        "not the gated rollout script — every assertion below would be vacuous"
     )
-    return gated[0]
+    return script
 
 
 def test_deploy_script_invokes_drift_check_after_rollout() -> None:
@@ -339,12 +336,9 @@ def test_trigger_paths_cover_drift_check_inputs() -> None:
     """A change to the check script/allowlist must itself trigger a deploy
     (mirrors the scripts/bentoml/** precedent): the script is consumed at
     deploy time from the droplet checkout, not baked into an image."""
-    wf = _load_workflow()
-    # PyYAML parses the bare `on:` key as the boolean True.
-    trigger = wf.get("on") or wf.get(True)
-    assert trigger is not None, "deploy.yml has no trigger block"
-    push = trigger["push"]
-    assert "scripts/deploy/**" in list(push["paths"]), (
+    paths = trigger_paths()
+    assert paths, "deploy.yml has no on.push.paths trigger block"
+    assert "scripts/deploy/**" in paths, (
         "deploy.yml does not trigger on scripts/deploy/** — an allowlist edit "
         "(e.g. removing the #1479 entry after the recreate) would not deploy"
     )
@@ -408,7 +402,8 @@ _STUBS = {
 }
 
 
-def _prepare(tmp_path: Path) -> tuple[Path, Path]:
+def _prepare(tmp_path: Path) -> tuple[str, Path, Path]:
+    """Lay out a hermetic PROJECT_DIR + stub bin; return (script, project_dir, stub_bin)."""
     project_dir = tmp_path / "repo"
     (project_dir / "docker" / "frontend").mkdir(parents=True)
     # pick_overlay() greps this for `AS production` -> returns "" (base prod).
@@ -421,25 +416,13 @@ def _prepare(tmp_path: Path) -> tuple[Path, Path]:
     drift_stub.write_text(_DRIFT_STUB)
     drift_stub.chmod(0o755)
 
-    script = _extract_deploy_script()
-    assert "${{" not in script
-    script, n = re.subn(r'PROJECT_DIR="[^"]*"', f'PROJECT_DIR="{project_dir}"', script, count=1)
-    assert n == 1
-
-    script_file = project_dir / "_rollout.sh"
-    script_file.write_text(script)
-
-    stub_bin = tmp_path / "stubbin"
-    stub_bin.mkdir()
-    for name, body in _STUBS.items():
-        p = stub_bin / name
-        p.write_text(body)
-        p.chmod(0o755)
-    return script_file, stub_bin
+    script = redirect_project_dir(_extract_deploy_script(), project_dir)
+    stub_bin = write_stub_bin(tmp_path / "stubbin", _STUBS)
+    return script, project_dir, stub_bin
 
 
 def _run(tmp_path: Path, **toggles: str) -> tuple[int, str, list[str]]:
-    script_file, stub_bin = _prepare(tmp_path)
+    script, project_dir, stub_bin = _prepare(tmp_path)
     state = tmp_path / "state"
     state.mkdir()
     call_log = tmp_path / "calls.log"
@@ -455,9 +438,7 @@ def _run(tmp_path: Path, **toggles: str) -> tuple[int, str, list[str]]:
     env.update(toggles)
     for k in ("SUPABASE_DB_URL", "IMAGE_OWNER", "GHCR_USER", "GHCR_TOKEN", "REGISTRY"):
         env.pop(k, None)
-    proc = subprocess.run(
-        ["bash", str(script_file)], env=env, capture_output=True, text=True, timeout=60
-    )
+    proc = bash_run(project_dir, script, set_e=False, env=env, name="_rollout.sh", timeout=60)
     return proc.returncode, proc.stdout + proc.stderr, call_log.read_text().splitlines()
 
 

@@ -39,14 +39,21 @@ warning that sent a human chasing a GHCR auth failure that had not happened.
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 import yaml  # type: ignore[import-untyped]
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+from tests.unit.test_docker.conftest import (
+    ROLLOUT_ID,
+    bash_run,
+    extract_block,
+    extract_shell_function,
+    load_workflow,
+    run_script,
+    ssh_script,
+    write_stub_bin,
+)
 
 ENSURE_JOB = "ensure-main-image"
 HELPER = "running_image_sha"
@@ -55,38 +62,9 @@ HELPER = "running_image_sha"
 # --------------------------------------------------------------------------- #
 # Extraction (the SHIPPED artifact, verbatim)
 # --------------------------------------------------------------------------- #
-def _load_workflow() -> dict:
-    wf: dict = yaml.safe_load(DEPLOY_WORKFLOW.read_text())
-    return wf
-
-
-def _extract_deploy_script() -> str:
-    wf = _load_workflow()
-    for step in wf["jobs"]["deploy"]["steps"]:
-        with_ = step.get("with") or {}
-        if "script" in with_:
-            return str(with_["script"])
-    raise AssertionError("deploy.yml has no ssh-action step carrying a `script:`")
-
-
-def _extract_helper(script: str, name: str) -> str:
-    """Slice ONE shell function out of the deploy script, verbatim.
-
-    Anchored on the function's own opening line and the first line that closes it at
-    column 0 of the (dedented) script body, so the extracted text is the shipped
-    implementation rather than a copy that can drift.
-    """
-    lines = script.splitlines()
-    start = next(
-        (i for i, ln in enumerate(lines) if ln.strip().startswith(f"{name}() {{")),
-        None,
-    )
-    assert start is not None, f"deploy.yml's droplet script defines no {name}() helper"
-    indent = len(lines[start]) - len(lines[start].lstrip())
-    for j in range(start + 1, len(lines)):
-        if lines[j].strip() == "}" and (len(lines[j]) - len(lines[j].lstrip())) == indent:
-            return "\n".join(ln[indent:] for ln in lines[start : j + 1])
-    raise AssertionError(f"{name}() in deploy.yml has no closing brace at its own indent")
+# Extraction is shared (#1796): `ssh_script` addresses the rollout step BY ID, and
+# `extract_shell_function` is the own-indent closing-brace scan this module and
+# test_deploy_branch_ref_safety_1787.py had each written independently.
 
 
 # --------------------------------------------------------------------------- #
@@ -98,7 +76,7 @@ def test_ensure_main_image_job_exists_and_gates_the_deploy() -> None:
     RED before the fix: deploy.yml has no such job, so `origin/main` HEAD could be
     (and on 2026-08-21 was) imageless at the moment the droplet resolved it.
     """
-    wf = _load_workflow()
+    wf = load_workflow()
     jobs = wf["jobs"]
     assert ENSURE_JOB in jobs, (
         f"deploy.yml defines no `{ENSURE_JOB}` job — nothing guarantees that the sha "
@@ -115,7 +93,7 @@ def test_ensure_main_image_job_exists_and_gates_the_deploy() -> None:
 def test_ensure_main_image_pushes_both_app_images() -> None:
     """`image_exists()` on the droplet requires BOTH e2i-api and e2i-frontend at the
     sha tag, so guaranteeing only one of them would not satisfy the walk."""
-    wf = _load_workflow()
+    wf = load_workflow()
     job = wf["jobs"][ENSURE_JOB]
     text = yaml.safe_dump(job)
     assert "e2i-api" in text or "IMAGE_NAME" in text, f"{ENSURE_JOB} never references the api image"
@@ -151,29 +129,19 @@ exit 0
 
 
 def _run_shell(tmp_path: Path, body: str, **env: str) -> tuple[int, str]:
-    """Run a slice of the SHIPPED deploy script against stubbed docker/git."""
-    stub_bin = tmp_path / "bin"
-    stub_bin.mkdir()
-    for name, stub in (("docker", _DOCKER_STUB), ("git", _GIT_STUB)):
-        p = stub_bin / name
-        p.write_text(stub)
-        p.chmod(0o755)
+    """Run a slice of the SHIPPED deploy script against stubbed docker/git.
 
-    runner = tmp_path / "run.sh"
-    runner.write_text("set -e\n" + body)
-    proc = subprocess.run(
-        ["bash", str(runner)],
-        env={"PATH": f"{stub_bin}:/usr/bin:/bin", **env},
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    Returns STDOUT only (stripped), deliberately: these cases read a VALUE the helper
+    echoed, and folding stderr in would let a diagnostic satisfy an equality check.
+    """
+    stub_bin = write_stub_bin(tmp_path / "bin", {"docker": _DOCKER_STUB, "git": _GIT_STUB})
+    proc = bash_run(tmp_path, body, env={"PATH": f"{stub_bin}:/usr/bin:/bin", **env}, name="run.sh")
     return proc.returncode, proc.stdout.strip()
 
 
 def _run_helper(tmp_path: Path, **env: str) -> tuple[int, str]:
     """Execute the SHIPPED running_image_sha() against stubbed docker/git."""
-    helper = _extract_helper(_extract_deploy_script(), HELPER)
+    helper = extract_shell_function(ssh_script(ROLLOUT_ID), HELPER)
     return _run_shell(tmp_path, helper + f"\n{HELPER}\n", **env)
 
 
@@ -255,19 +223,23 @@ def test_running_image_sha_survives_a_docker_failure(tmp_path: Path) -> None:
 
 
 def _extract_anchor_block(script: str) -> str:
-    """The SHIPPED lines that decide what PREV_SHA is, verbatim."""
-    lines = script.splitlines()
-    start = next(
-        (i for i, ln in enumerate(lines) if ln.strip().startswith("CHECKOUT_SHA=")),
-        None,
+    """The SHIPPED lines that decide what PREV_SHA is, verbatim.
+
+    Marker-delimited rather than brace-delimited: this is a run of statements, not a
+    function, so the closer is the echo that announces the resolved value.
+    """
+    return extract_block(
+        script,
+        start="CHECKOUT_SHA=",
+        start_match="prefix",
+        end="==> Pre-deploy SHA:",
+        end_match="contains",
+        own_indent=False,
+        what=(
+            "#1780: deploy.yml's droplet script never records the checkout sha "
+            "separately, so PREV_SHA is still just `git rev-parse HEAD`"
+        ),
     )
-    assert start is not None, (
-        "deploy.yml's droplet script never records the checkout sha separately, so "
-        "PREV_SHA is still just `git rev-parse HEAD` (#1780)"
-    )
-    end = next(i for i, ln in enumerate(lines) if "==> Pre-deploy SHA:" in ln)
-    ind = len(lines[start]) - len(lines[start].lstrip())
-    return "\n".join(ln[ind:] for ln in lines[start : end + 1])
 
 
 @pytest.mark.parametrize(
@@ -298,8 +270,8 @@ def test_prev_sha_is_anchored_on_the_running_image(
     at once. RED before the fix: the block does not exist, and PREV_SHA was
     unconditionally `git rev-parse HEAD`.
     """
-    script = _extract_deploy_script()
-    block = _extract_helper(script, HELPER) + "\n" + _extract_anchor_block(script)
+    script = ssh_script(ROLLOUT_ID)
+    block = extract_shell_function(script, HELPER) + "\n" + _extract_anchor_block(script)
     rc, out = _run_shell(
         tmp_path,
         block + '\nprintf "PREV=%s\\n" "$PREV_SHA"\n',
@@ -320,7 +292,7 @@ def test_rollback_and_diffs_inherit_the_running_anchor() -> None:
     GHCR image, so `rollback_to_prev`'s pull would fail and local-build on an already
     stressed box (the #528-B OOM path the pulled tier exists to avoid).
     """
-    script = _extract_deploy_script()
+    script = ssh_script(ROLLOUT_ID)
     assert HELPER in script, f"PREV_SHA must be derived from {HELPER}()"
     lines = script.splitlines()
     anchor_at = next(i for i, ln in enumerate(lines) if ln.strip() == 'PREV_SHA="$RUNNING_SHA"')
@@ -335,7 +307,7 @@ def test_rollback_and_diffs_inherit_the_running_anchor() -> None:
         "PREV_SHA must be re-anchored before any rollback can fire, or a failed deploy "
         "rolls production back to a tree it was never running"
     )
-    body = _extract_helper(script, "rollback_to_prev")
+    body = extract_shell_function(script, "rollback_to_prev")
     assert 'git reset --hard "$PREV_SHA"' in body, (
         "rollback_to_prev must reset to the shared PREV_SHA anchor"
     )
@@ -363,7 +335,7 @@ def test_fallback_warning_states_the_actual_reason() -> None:
     happened. The message must carry the reason the code actually took, and the three
     causes must be distinguishable.
     """
-    script = _extract_deploy_script()
+    script = ssh_script(ROLLOUT_ID)
     assert "GHCR auth failed or none built in the 30-commit window" not in script, (
         "the fallback warning still offers two hardcoded causes regardless of which "
         "branch was taken (#1780)"
@@ -394,7 +366,7 @@ def test_fallback_warning_states_the_actual_reason() -> None:
 def test_fallback_warning_names_the_local_build_cost() -> None:
     """The blind fallback is the branch that costs ~26 min of droplet build and can
     exceed the 30m SSH command_timeout. Say so where the operator reads it."""
-    script = _extract_deploy_script()
+    script = ssh_script(ROLLOUT_ID)
     fallback = next(
         (
             ln
@@ -473,38 +445,27 @@ def _refs(sha: str, *repos: str) -> str:
     return " ".join(f"ghcr.io/owner/{r}:{sha}" for r in repos)
 
 
-def _extract_probe_run() -> str:
-    """The SHIPPED `run:` body of ensure-main-image's probe step, verbatim."""
-    wf = _load_workflow()
-    steps = wf["jobs"][ENSURE_JOB]["steps"]
-    for step in steps:
-        if step.get("id") == "probe":
-            return str(step["run"])
-    raise AssertionError(f"{ENSURE_JOB} has no step with `id: probe`")
-
-
 def _run_probe(tmp_path: Path, **env: str) -> tuple[int, str, dict[str, str], str]:
     """Execute the shipped probe.
 
     Returns (rc, stdout, parsed $GITHUB_OUTPUT, the args `git fetch` was called with).
     """
-    stub_bin = tmp_path / "bin"
-    stub_bin.mkdir()
-    for name, stub in (("docker", _PROBE_DOCKER_STUB), ("git", _PROBE_GIT_STUB)):
-        p = stub_bin / name
-        p.write_text(stub)
-        p.chmod(0o755)
+    stub_bin = write_stub_bin(
+        tmp_path / "bin", {"docker": _PROBE_DOCKER_STUB, "git": _PROBE_GIT_STUB}
+    )
 
     state = tmp_path / "state"
     state.mkdir()
 
     out_file = tmp_path / "gh_output"
     out_file.touch()
-    runner = tmp_path / "probe.sh"
-    runner.write_text(_extract_probe_run())
 
-    proc = subprocess.run(
-        ["bash", str(runner)],
+    # set_e=False: the probe ships `set -uo pipefail` and NO `-e`, deliberately (see the
+    # section note above). Prepending `set -e` would exercise a script we do not ship.
+    proc = bash_run(
+        tmp_path,
+        run_script("probe", job=ENSURE_JOB),
+        set_e=False,
         env={
             "PATH": f"{stub_bin}:/usr/bin:/bin",
             "GITHUB_OUTPUT": str(out_file),
@@ -514,9 +475,7 @@ def _run_probe(tmp_path: Path, **env: str) -> tuple[int, str, dict[str, str], st
             "IMAGE_NAME_FRONTEND": "owner/e2i-frontend",
             **env,
         },
-        capture_output=True,
-        text=True,
-        timeout=30,
+        name="probe.sh",
     )
     outputs: dict[str, str] = {}
     for line in out_file.read_text().splitlines():

@@ -28,14 +28,16 @@ missing-rollback / non-guaranteed-exit defect (which IS a control-flow defect).
 from __future__ import annotations
 
 import os
-import re
-import subprocess
 from pathlib import Path
 
-import yaml  # type: ignore[import-untyped]
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+from tests.unit.test_docker.conftest import (
+    ROLLOUT_ID,
+    bash_run,
+    extract_shell_function,
+    redirect_project_dir,
+    ssh_script,
+    write_stub_bin,
+)
 
 # Distinct, recognizable sentinels so CALL_LOG lines are unambiguous.
 PREV_SHA = "aaaaaaa000prev"
@@ -52,18 +54,6 @@ SERVICES = {
     "scheduler",
 }
 APP_SERVICES = {"api", "frontend", "worker_light", "worker_medium", "scheduler"}
-
-
-# --------------------------------------------------------------------------- #
-# Extraction (the SHIPPED artifact, verbatim)
-# --------------------------------------------------------------------------- #
-def _extract_deploy_script() -> str:
-    wf = yaml.safe_load(DEPLOY_WORKFLOW.read_text())
-    for step in wf["jobs"]["deploy"]["steps"]:
-        with_ = step.get("with") or {}
-        if "script" in with_:
-            return with_["script"]
-    raise AssertionError("deploy.yml has no ssh-action step carrying a `script:`")
 
 
 # --------------------------------------------------------------------------- #
@@ -133,8 +123,8 @@ _STUBS = {
 # --------------------------------------------------------------------------- #
 # Harness
 # --------------------------------------------------------------------------- #
-def _prepare(tmp_path: Path) -> tuple[Path, Path]:
-    """Lay out a hermetic PROJECT_DIR + stub bin; return (script_file, stub_bin)."""
+def _prepare(tmp_path: Path) -> tuple[str, Path, Path]:
+    """Lay out a hermetic PROJECT_DIR + stub bin; return (script, project_dir, stub_bin)."""
     project_dir = tmp_path / "repo"
     (project_dir / "docker" / "frontend").mkdir(parents=True)
     # pick_overlay() greps this for `AS production` -> returns "" (base prod, #528-B era).
@@ -159,29 +149,16 @@ def _prepare(tmp_path: Path) -> tuple[Path, Path]:
         "import sys\nsys.exit(0)\n"
     )
 
-    script = _extract_deploy_script()
-    assert "${{" not in script, (
-        "deploy `script:` gained GitHub-Actions interpolation; harness extraction is no longer faithful"
-    )
     # Redirect ONLY the hardcoded PROJECT_DIR path to the temp tree (infrastructure
-    # constant; control-flow text is left verbatim). Assert exactly one substitution.
-    script, n = re.subn(r'PROJECT_DIR="[^"]*"', f'PROJECT_DIR="{project_dir}"', script, count=1)
-    assert n == 1, "expected exactly one PROJECT_DIR assignment to redirect"
-
-    script_file = project_dir / "_rollout.sh"
-    script_file.write_text(script)
-
-    stub_bin = tmp_path / "stubbin"
-    stub_bin.mkdir()
-    for name, body in _STUBS.items():
-        p = stub_bin / name
-        p.write_text(body)
-        p.chmod(0o755)
-    return script_file, stub_bin
+    # constant; control-flow text is left verbatim), and refuse the extraction outright
+    # if the shipped `script:` ever gains GitHub-Actions interpolation.
+    script = redirect_project_dir(ssh_script(ROLLOUT_ID), project_dir)
+    stub_bin = write_stub_bin(tmp_path / "stubbin", _STUBS)
+    return script, project_dir, stub_bin
 
 
 def _run(tmp_path: Path, **toggles: str) -> tuple[int, str, list[str]]:
-    script_file, stub_bin = _prepare(tmp_path)
+    script, project_dir, stub_bin = _prepare(tmp_path)
     state = tmp_path / "state"
     state.mkdir()
     call_log = tmp_path / "calls.log"
@@ -200,13 +177,7 @@ def _run(tmp_path: Path, **toggles: str) -> tuple[int, str, list[str]]:
     for k in ("SUPABASE_DB_URL", "IMAGE_OWNER", "GHCR_USER", "GHCR_TOKEN", "REGISTRY"):
         env.pop(k, None)
 
-    proc = subprocess.run(
-        ["bash", str(script_file)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    proc = bash_run(project_dir, script, set_e=False, env=env, name="_rollout.sh", timeout=60)
     calls = call_log.read_text().splitlines()
     return proc.returncode, proc.stdout + proc.stderr, calls
 
@@ -264,7 +235,7 @@ def _app_up_was_invoked(calls: list[str]) -> bool:
 # --------------------------------------------------------------------------- #
 def test_deploy_script_extracts_verbatim_with_no_gha_interpolation() -> None:
     """The harness can only be faithful if the block round-trips with no `${{ }}`."""
-    s = _extract_deploy_script()
+    s = ssh_script(ROLLOUT_ID)
     assert "${{" not in s
     assert "set -e" in s and "COMPOSE_CMD=" in s
     assert "up -d" in s
@@ -341,15 +312,14 @@ def test_health_check_failure_rolls_back_app_services(tmp_path: Path) -> None:
 
 
 def _rollback_helper_body() -> str:
-    """Extract the rollback_to_prev() helper body from the SHIPPED deploy.yml text."""
-    lines = DEPLOY_WORKFLOW.read_text().splitlines()
-    start = next((i for i, ln in enumerate(lines) if "rollback_to_prev()" in ln), None)
-    assert start is not None, "rollback_to_prev() helper not found in deploy.yml"
-    # The helper closes on the first line that is exactly a `}` at the script indent;
-    # `${...}` expansions inside the body never match (they have a `$` prefix + content).
-    end = next((i for i in range(start + 1, len(lines)) if lines[i].strip() == "}"), None)
-    assert end is not None, "rollback_to_prev() closing brace not found"
-    return "\n".join(lines[start : end + 1])
+    """Extract the rollback_to_prev() helper from the SHIPPED droplet script.
+
+    #1796: this used to scan the RAW deploy.yml text and close on the first line that
+    strips to `}` at ANY indent — a weaker spelling of the own-indent scan two other
+    modules had already written. It now shares that one implementation, over the PARSED
+    `script:` rather than the file, so it can only ever see what the droplet runs.
+    """
+    return extract_shell_function(ssh_script(ROLLOUT_ID), "rollback_to_prev")
 
 
 def test_rollback_pulls_app_tier_instead_of_oom_prone_local_build() -> None:
