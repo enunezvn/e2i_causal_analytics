@@ -18,7 +18,6 @@ comparison logic -- a stub would re-implement the bug under test.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import textwrap
 import time
@@ -41,25 +40,6 @@ def _bash(script: str, env: dict[str, str] | None = None) -> subprocess.Complete
         env=full_env,
         timeout=60,
     )
-
-
-def _extract_shell_function(script: str, name: str) -> str:
-    """Slice a shell function out by its own-indent closing brace.
-
-    Same algorithm the deploy guards use (#1796); duplicated here rather than
-    imported because that conftest is scoped to ``tests/unit/test_docker``.
-    """
-    lines = script.splitlines()
-    start = next(
-        (i for i, ln in enumerate(lines) if ln.strip().startswith(f"{name}() {{")),
-        None,
-    )
-    assert start is not None, f"{name}() not found"
-    indent = len(lines[start]) - len(lines[start].lstrip())
-    for j in range(start + 1, len(lines)):
-        if lines[j].strip() == "}" and (len(lines[j]) - len(lines[j].lstrip())) == indent:
-            return "\n".join(ln[indent:] for ln in lines[start : j + 1])
-    raise AssertionError(f"{name}() has no closing brace at its own indent")
 
 
 # --------------------------------------------------------------------------- #
