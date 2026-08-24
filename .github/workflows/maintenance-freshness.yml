@@ -1,0 +1,146 @@
+name: Maintenance Freshness
+
+# Is the e2i-maintenance cron layer on the droplet actually running? (#1798)
+#
+# On 2026-06-30 `/etc/cron.d/e2i-maintenance` silently stopped executing (root's
+# password entered a forced-change state; PAM rejected every job) and nothing said
+# so for EIGHT WEEKS -- including memory_monitor.sh --auto-cleanup, the memory
+# relief valve on a box that runs production and development on the same host.
+#
+# `scripts/maintenance/check_maintenance_freshness.sh` (#1799/#1802) answers the
+# question from the jobs' SUCCESS STAMPS, with each interval derived from the
+# crontab itself. It must NOT run from the crontab it audits (dead exactly when
+# the thing it watches is dead), and its only caller so far, `health_check.sh`
+# (#1803), is manual -- in no crontab, not in deploy.yml. So the next silent stop
+# would still be found only when a human happens to run a script.
+#
+# This workflow is the UNATTENDED caller, independent of the box's cron: it SSHes
+# in with the deploy secrets, runs the check, and on failure files/updates a
+# labelled issue -- the same reporter shape slow-tests.yml uses, which is a
+# surface that is demonstrably read (#1804 reached a human the morning it fired).
+#
+# The check runs the script from the box's checkout, which is also what the
+# crontab invokes -- so the workflow audits the exact code that is scheduled.
+#
+# Live-certifying the alarm without touching the box:
+#   gh workflow run maintenance-freshness.yml                     # expect green, output visible
+#   gh workflow run maintenance-freshness.yml -f tolerance=0      # every job reads STALE -> red
+#   gh workflow run maintenance-freshness.yml -f tolerance=0 -f file_issue=true
+#                                                                 # ...and exercise the reporter
+# A scheduled run always files; a dispatch files only when asked, so a forced-red
+# certification does not spam issues.
+
+on:
+  schedule:
+    # 07:30 UTC daily -- off the midnight-UTC herd, after slow-tests (07:00) has
+    # started so a shared-runner queue cannot make the two contend. Job intervals
+    # are 5m/15m/weekly with 2x tolerance, so daily detection bounds a silent
+    # stop at ~1 day instead of ~8 weeks.
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+    inputs:
+      tolerance:
+        description: 'Override --tolerance (multiples of each interval; default from the script = 2). Use 0 to force every job STALE for certification.'
+        required: false
+        default: ''
+        type: string
+      file_issue:
+        description: 'On failure, file/update the tracking issue as a scheduled run would'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write  # report-failure files/updates the tracking issue
+
+concurrency:
+  group: maintenance-freshness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Maintenance cron freshness (droplet)
+    runs-on: ubuntu-latest
+    # The script itself runs in well under a second; the budget is for SSH setup.
+    timeout-minutes: 5
+    steps:
+      - name: Run check_maintenance_freshness.sh on the droplet
+        uses: appleboy/ssh-action@v1
+        env:
+          # Empty on a scheduled run -> the script's own default (2x) applies.
+          # Pass through env, not inline ${{ }} in the script (expression injection).
+          TOLERANCE: ${{ inputs.tolerance }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          command_timeout: 3m
+          script_stop: true
+          # `env:` does not cross the SSH boundary on its own -- appleboy forwards
+          # only what `envs:` names (deploy.yml learned this with ROLLOUT_OUTCOME).
+          envs: TOLERANCE
+          script: |
+            set -euo pipefail
+            cd /home/enunez/Projects/e2i_causal_analytics
+            # Print what is being audited so a green run is never silent: the
+            # checkout the crontab invokes, and the crontab itself.
+            echo "==> checkout: $(git rev-parse --short HEAD) ($(git branch --show-current))"
+            echo "==> crontab: /etc/cron.d/e2i-maintenance"
+            sed -n '/^[^#]/p' /etc/cron.d/e2i-maintenance | grep -v '^[A-Z_]*=' || true
+            echo "==> stamps:"
+            ls -la --time-style=+%FT%TZ /var/log/e2i/.*.success 2>/dev/null || echo "    (no stamps)"
+            echo "==> check_maintenance_freshness.sh${TOLERANCE:+ --tolerance $TOLERANCE}"
+            # Non-zero (1 = a job is stale/never completed, 2 = crontab unreadable,
+            # i.e. maintenance is uninstalled) fails this job and wakes the reporter.
+            ./scripts/maintenance/check_maintenance_freshness.sh ${TOLERANCE:+--tolerance "$TOLERANCE"}
+
+  # Files/updates a labelled tracking issue when the check fails. Same shape as
+  # slow-tests.yml's report-failure, including its two #615 lessons: no checkout
+  # here, so `gh` needs GH_REPO; and `gh issue create --label` does NOT create a
+  # missing label, so self-heal it first. `if: always()` because a `needs`-
+  # dependent job is otherwise SKIPPED when its dependency fails -- which is the
+  # one moment this job exists for.
+  report-failure:
+    name: Report stale maintenance cron
+    runs-on: ubuntu-latest
+    needs: [check]
+    if: always() && needs.check.result == 'failure' && (github.event_name == 'schedule' || inputs.file_issue == true)
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y-%m-%d)
+
+          gh label create maintenance-freshness-failure \
+            --color B60205 \
+            --description "Auto-filed by maintenance-freshness.yml when a droplet maintenance cron job has not completed on schedule (#1798)" \
+            2>/dev/null || true
+
+          EXISTING=$(gh issue list \
+            --state open \
+            --label maintenance-freshness-failure \
+            --json number \
+            --jq '.[0].number // empty' \
+            --limit 1)
+
+          BODY="$(printf "The maintenance cron freshness check on the droplet FAILED on %s (%s run).\n\nAt least one job in \`/etc/cron.d/e2i-maintenance\` has not completed on schedule, or the crontab is unreadable. The check's output (which job, how stale) is in the run log:\n\n%s\n\nFirst things to look at (#1798): \`grep 'Authentication token is no longer valid' /var/log/syslog\` (PAM refusing the job's account), \`chage -l root\`, and \`ls -la /var/log/e2i/.*.success\`." "$DATE" "$EVENT_NAME" "$RUN_URL")"
+
+          if [ -n "$EXISTING" ]; then
+            echo "Commenting on existing issue #${EXISTING}"
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            echo "Creating new tracking issue"
+            gh issue create \
+              --title "Droplet maintenance cron is stale (${DATE})" \
+              --label maintenance-freshness-failure \
+              --body "$(printf "%s\n\n_Auto-created by .github/workflows/maintenance-freshness.yml. Subsequent failures are added as comments; close manually once the cron is running again (the next green scheduled run is the evidence)._" "$BODY")"
+          fi
