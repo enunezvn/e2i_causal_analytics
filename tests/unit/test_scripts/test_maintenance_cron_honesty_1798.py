@@ -633,3 +633,101 @@ def test_a_real_run_DOES_write_a_success_stamp(tmp_path: Path) -> None:
     assert stamp.exists(), (
         f"a completed real run must leave a success stamp. rc={res.returncode} stdout={res.stdout[-500:]!r}"
     )
+
+
+def test_dry_run_lists_only_what_the_real_prune_would_actually_remove(tmp_path: Path) -> None:
+    """The preview must match the action.
+
+    ``docker volume prune -f`` (no ``--all``) removes ONLY anonymous volumes --
+    confirmed on Docker 29.1.3, where ``-a`` is documented as "Remove all unused
+    volumes, not just anonymous ones", and empirically by a real run that left
+    every named volume intact.
+
+    But the preview listed ``docker volume ls -f dangling=true``, which includes
+    unused NAMED volumes. On this box that meant the dry-run named
+    ``e2i_grafana_data``, ``e2i_loki_data``, ``e2i_prometheus_data`` and
+    ``e2i_promtail_positions`` as removal candidates that the real prune would
+    never touch -- a preview that tells an operator their observability data is
+    about to be deleted when it is not.
+    """
+    bindir = _docker_stub_bin(tmp_path)
+    # A stub whose `volume ls -f dangling=true` returns one anonymous volume
+    # (64 hex chars) and one NAMED volume, the way the real daemon does.
+    anon = "a" * 64
+    (bindir / "docker").write_text(
+        "#!/bin/bash\n"
+        'case "$*" in\n'
+        "  *\"system df\"*--format*) printf 'Build Cache\\t0B\\n' ;;\n"
+        "  *\"system df\"*) printf 'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n' ;;\n"
+        '  *ps*-a*until=*) echo "invalid filter" >&2; exit 1 ;;\n'
+        f"  *\"volume ls\"*dangling*) printf '{anon}\\ne2i_grafana_data\\n' ;;\n"
+        "  *) exit 0 ;;\n"
+        "esac\n"
+        "exit 0\n"
+    )
+    (bindir / "docker").chmod(0o755)
+
+    log = tmp_path / "docker_cleanup.log"
+    res = subprocess.run(
+        ["bash", str(DOCKER_CLEANUP), "--dry-run"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+            "LOG_FILE": str(log),
+            "HOME": str(tmp_path),
+        },
+        timeout=120,
+    )
+    vol_section = res.stdout[res.stdout.find("dangling volumes") :]
+    vol_section = vol_section[: vol_section.find("unused networks")] or vol_section
+
+    assert "e2i_grafana_data" not in vol_section, (
+        "the preview listed a NAMED volume the real `docker volume prune -f` would "
+        f"never remove. section={vol_section!r}"
+    )
+    assert anon[:12] in vol_section, (
+        f"the preview must still list anonymous volumes, which ARE removed. section={vol_section!r}"
+    )
+
+
+def test_dry_run_lists_only_networks_that_have_no_connected_containers(tmp_path: Path) -> None:
+    """Third instance of the same shape in this script's preview.
+
+    ``docker network prune`` removes only networks with NO connected containers,
+    but the preview listed ``docker network ls --filter type=custom`` -- i.e.
+    every custom network. On this box that named ``e2i_network`` and
+    ``supabase-network``, which carry the entire running stack.
+    """
+    bindir = _docker_stub_bin(tmp_path)
+    (bindir / "docker").write_text(
+        "#!/bin/bash\n"
+        'case "$*" in\n'
+        "  *\"system df\"*--format*) printf 'Build Cache\\t0B\\n' ;;\n"
+        "  *\"system df\"*) printf 'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n' ;;\n"
+        '  *ps*-a*until=*) echo "invalid filter" >&2; exit 1 ;;\n'
+        "  *\"network ls\"*) printf 'busy_net\\nidle_net\\n' ;;\n"
+        '  *"network inspect"*busy_net*) echo 2 ;;\n'
+        '  *"network inspect"*idle_net*) echo 0 ;;\n'
+        "  *) exit 0 ;;\n"
+        "esac\n"
+        "exit 0\n"
+    )
+    (bindir / "docker").chmod(0o755)
+
+    res = subprocess.run(
+        ["bash", str(DOCKER_CLEANUP), "--dry-run"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+            "LOG_FILE": str(tmp_path / "docker_cleanup.log"),
+            "HOME": str(tmp_path),
+        },
+        timeout=120,
+    )
+    net = res.stdout[res.stdout.find("unused networks") :]
+    assert "busy_net" not in net, (
+        f"the preview listed a network with connected containers. section={net!r}"
+    )
+    assert "idle_net" in net, f"the preview must list genuinely unused networks. section={net!r}"

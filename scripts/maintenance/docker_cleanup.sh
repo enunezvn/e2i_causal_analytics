@@ -158,24 +158,53 @@ timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 
     # 4. Dangling volumes (anonymous, unreferenced)
     log_step "Pruning dangling volumes..."
-    dangling_vols=$(docker volume ls -f "dangling=true" -q 2>/dev/null | wc -l)
-    if [[ $dangling_vols -gt 0 ]]; then
-        log_info "Found $dangling_vols dangling volume(s)"
+    # #1798: the preview must match the action.
+    #
+    # `docker volume prune -f` (no --all) removes ONLY ANONYMOUS volumes. On
+    # Docker 29.1.3 `-a` is documented as "Remove all unused volumes, not just
+    # anonymous ones", and a real run left every named volume intact. But
+    # `docker volume ls -f dangling=true` lists ALL unused volumes INCLUDING
+    # named ones, so the preview used to name e2i_grafana_data, e2i_loki_data,
+    # e2i_prometheus_data and e2i_promtail_positions as removal candidates that
+    # the prune would never touch -- telling an operator their observability data
+    # was about to be deleted when it was not.
+    #
+    # Anonymous volumes are named with a 64-char hex id; that is the set prune
+    # actually targets, so that is the set we count and show.
+    anon_vols=$(docker volume ls -f "dangling=true" -q 2>/dev/null \
+        | grep -E '^[0-9a-f]{64}$' || true)
+    dangling_vols=$(printf '%s' "$anon_vols" | grep -c . || true)
+    if [[ ${dangling_vols:-0} -gt 0 ]]; then
+        log_info "Found $dangling_vols anonymous volume(s) the prune would remove"
         if [[ "$DRY_RUN" == true ]]; then
-            docker volume ls -f "dangling=true" --format "  {{.Name}}"
+            printf '  %s\n' $anon_vols
         else
             docker volume prune -f 2>&1
         fi
     else
-        log_info "No dangling volumes found"
+        log_info "No anonymous volumes to prune (named volumes are never touched)"
     fi
     echo ""
 
     # 5. Unused networks
     log_step "Pruning unused networks..."
     if [[ "$DRY_RUN" == true ]]; then
-        log_info "[DRY RUN] Would prune networks with no connected containers"
-        docker network ls --filter "type=custom" --format "  {{.Name}}" 2>/dev/null || true
+        # #1798: this listed EVERY custom network, but `docker network prune`
+        # removes only those with NO connected containers. On the prod box that
+        # named e2i_network and supabase-network -- which carry the whole running
+        # stack -- as if they were about to be deleted. Ask each network how many
+        # containers it has, and show only the ones prune would actually take.
+        log_info "[DRY RUN] Networks with no connected containers:"
+        _idle_nets=""
+        for _net in $(docker network ls --filter "type=custom" --format '{{.Name}}' 2>/dev/null || true); do
+            _n=$(docker network inspect -f '{{len .Containers}}' "$_net" 2>/dev/null || echo 1)
+            [[ "${_n:-1}" == "0" ]] && _idle_nets="${_idle_nets}${_net}"$'\n'
+        done
+        if [[ -n "${_idle_nets// }" ]]; then
+            printf '  %s\n' $_idle_nets
+        else
+            log_info "  none"
+        fi
     else
         docker network prune -f 2>&1
     fi
