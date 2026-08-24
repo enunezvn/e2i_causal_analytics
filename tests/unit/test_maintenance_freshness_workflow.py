@@ -8,7 +8,7 @@ crontab and ``deploy.yml`` never invokes it. So the next silent stop is still
 detected only when a human happens to run a script. The alarm needs to fire on
 its own, from somewhere independent of the crontab it audits, into a surface
 that is actually read. ``slow-tests.yml`` already proves that shape: a scheduled
-workflow that files/updates a labelled GitHub issue on failure.
+workflow that files/updates a tracking GitHub issue on failure.
 
 This test pins that contract so a later edit cannot quietly drop the schedule,
 swallow the failure before it reaches the reporter, or re-create the #615 class
@@ -60,6 +60,12 @@ def _script_lines(step: dict) -> list[str]:
         for line in str(step["with"]["script"]).splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+def _code_lines(text: str) -> list[str]:
+    """Non-blank, non-comment lines of a shell script -- prose must not satisfy a code guard."""
+    lines = [line.strip() for line in text.splitlines()]
+    return [line for line in lines if line and not line.startswith("#")]
 
 
 def _invocations(step: dict) -> list[str]:
@@ -249,14 +255,24 @@ def test_reporter_fires_on_check_failure_and_can_write_issues() -> None:
 
 
 def test_reporter_avoids_the_615_class_of_muted_alarm() -> None:
-    """No checkout -> GH_REPO required; `gh issue create --label` needs the label to exist; dedup by label."""
+    """No checkout -> GH_REPO required; the dedup label is self-healed; dedup happens.
+
+    #1807 live cert D3 (2026-08-24): `gh label create ... 2>/dev/null || true` hid a
+    real failure under GITHUB_TOKEN and `gh issue create --label` then died
+    "label not found" -- the alarm filed nothing. An alarm may not discard its
+    own errors. (The executed tests below pin the behaviour; this pins the text.)
+    """
     _, job = _report_job(_load(WORKFLOW_PATH))
     text = str(job)
     assert "GH_REPO" in text, "without a checkout `gh issue` dies 'not a git repository' (#615)"
-    assert f"gh label create {DEDUP_LABEL}" in text, (
+    assert DEDUP_LABEL in text and "gh label create" in text, (
         "the dedup label must be self-healed before create (#615)"
     )
-    assert f"--label {DEDUP_LABEL}" in text, "issues must carry the dedup label"
+    # Code, not prose: the comment explaining D3 is allowed to name the defect.
+    code = _code_lines(str(_reporter_step(job)["run"]))
+    assert not any("2>/dev/null" in line for line in code), (
+        "an alarm must not throw away stderr: that is how D3 filed nothing"
+    )
     assert "gh issue list" in text and "gh issue comment" in text, (
         "must comment on an existing open issue, not pile up duplicates"
     )
@@ -407,3 +423,205 @@ def test_classify_maps_every_outcome_pair_to_the_right_verdict(
     assert (
         github_output.read_text().strip() == f"verdict={_expected_verdict(preflight, freshness)}"
     ), f"preflight={preflight} freshness={freshness}: {github_output.read_text().strip()!r}"
+
+
+# --- The reporter, EXECUTED against a `gh` stand-in (#1807 live cert D3) ---------
+#
+# D3 dispatched the merged workflow with tolerance=0 file_issue=true. The check
+# went red and classify said `stale` (correct), the reporter ran (correct) -- and
+# filed NOTHING: `gh label create` failed, `2>/dev/null || true` hid why, and
+# `gh issue create --label` died "label not found". The hidden error (measured
+# on a branch run) was `HTTP 422: description is too long (maximum is 100
+# characters)` -- the label description was 103 characters. The self-heal had
+# been copied from slow-tests.yml, whose own create path has never run (its
+# label was created by hand on 2026-06-02), so copying it proved nothing.
+#
+# The stand-in models the `gh` behaviours that matter and nothing else:
+#   - `label create` can be forbidden, rejects a >100-char description (the
+#     real API's limit), or succeeds once;
+#   - `issue create --label X` hard-fails when X does not exist (real gh);
+#   - `issue list --label X` tolerates a missing X and returns nothing (real gh,
+#     which is exactly why the defect hid).
+# `--json/--jq` are honoured by handing the real jq the expression the workflow
+# wrote, so the dedup query is executed, not eyeballed.
+
+_GH_SHIM = r"""#!/usr/bin/env bash
+set -u
+STATE="$GH_SHIM_STATE"
+printf '%s\n' "$*" >> "$STATE/calls.log"
+touch "$STATE/labels" "$STATE/issues"
+JQ=""; LABELS=(); TITLE=""; SEARCH=""; DESC=""; POS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --jq) JQ="$2"; shift 2 ;;
+    --label) LABELS+=("$2"); shift 2 ;;
+    --title) TITLE="$2"; shift 2 ;;
+    --search) SEARCH="$2"; shift 2 ;;
+    --description) DESC="$2"; shift 2 ;;
+    --color|--body|--state|--limit|--json) shift 2 ;;
+    *) POS+=("$1"); shift ;;
+  esac
+done
+apply_jq() { if [ -n "$JQ" ]; then jq -r "$JQ"; else cat; fi; }
+case "${POS[0]} ${POS[1]}" in
+  "label create")
+    name="${POS[2]}"
+    if [ "$GH_SHIM_LABEL_CREATE" = "forbid" ]; then
+      echo "HTTP 403: Resource not accessible by integration (https://api.github.com/repos/o/r/labels)" >&2
+      exit 1
+    fi
+    # Measured on the real API (branch run 32755093587): GitHub rejects a label
+    # description over 100 characters. That, not the token, was the D3 miss.
+    if [ "${#DESC}" -gt 100 ]; then
+      echo "HTTP 422: Validation Failed (https://api.github.com/repos/o/r/labels)" >&2
+      echo "description is too long (maximum is 100 characters)" >&2
+      exit 1
+    fi
+    if grep -qxF "$name" "$STATE/labels"; then
+      echo "HTTP 422: Validation Failed (Label already exists)" >&2; exit 1
+    fi
+    echo "$name" >> "$STATE/labels"; exit 0 ;;
+  "label list")
+    grep -F -- "$SEARCH" "$STATE/labels" | jq -R '{name: .}' | jq -s . | apply_jq; exit 0 ;;
+  "issue list")
+    # issues: number<TAB>title<TAB>label ; a missing --label matches nothing, silently
+    want="${LABELS[0]:-}"
+    awk -F'\t' -v want="$want" '($3==want || want=="") {print}' "$STATE/issues" \
+      | jq -R 'split("\t") | {number: (.[0]|tonumber), title: .[1], labels: [{name: .[2]}]}' \
+      | jq -s . | apply_jq; exit 0 ;;
+  "issue create")
+    for l in "${LABELS[@]:-}"; do
+      [ -z "$l" ] && continue
+      grep -qxF "$l" "$STATE/labels" || { echo "could not add label: '$l' not found" >&2; exit 1; }
+    done
+    printf '%s\t%s\t%s\n' 999 "$TITLE" "${LABELS[0]:-}" >> "$STATE/issues"
+    echo "https://github.com/o/r/issues/999"; exit 0 ;;
+  "issue comment")
+    exit 0 ;;
+esac
+echo "gh shim: unmodelled command: ${POS[*]}" >&2; exit 64
+"""
+
+
+def _reporter_step(job: dict) -> dict:
+    return next(s for s in job["steps"] if "gh issue create" in str(s.get("run", "")))
+
+
+def _run_reporter(
+    tmp_path: Path,
+    *,
+    verdict: str,
+    label_create: str,
+    labels: tuple[str, ...] = (),
+    open_issues: tuple[tuple[int, str, str], ...] = (),
+) -> tuple[subprocess.CompletedProcess, list[str], Path]:
+    """Execute the REAL reporter script with `gh` replaced by the stand-in."""
+    _, job = _report_job(_load(WORKFLOW_PATH))
+    step = _reporter_step(job)
+    bindir = tmp_path / "bin"
+    bindir.mkdir(parents=True)
+    gh = bindir / "gh"
+    gh.write_text(_GH_SHIM)
+    gh.chmod(0o755)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "labels").write_text("".join(f"{name}\n" for name in labels))
+    (state / "issues").write_text(
+        "".join(f"{n}\t{title}\t{label}\n" for n, title, label in open_issues)
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "GH_SHIM_STATE": str(state),
+        "GH_SHIM_LABEL_CREATE": label_create,
+        "GH_TOKEN": "shim",
+        "GH_REPO": "o/r",
+        "RUN_URL": "https://github.com/o/r/actions/runs/1",
+        "EVENT_NAME": "schedule",
+        "VERDICT": verdict,
+    }
+    result = subprocess.run(
+        ["bash", "-c", str(step["run"])], env=env, capture_output=True, text=True
+    )
+    calls = (state / "calls.log").read_text().splitlines() if (state / "calls.log").exists() else []
+    return result, calls, state
+
+
+def _issue_creates(calls: list[str]) -> list[str]:
+    return [c for c in calls if c.startswith("issue create ")]
+
+
+def _issue_comments(calls: list[str]) -> list[str]:
+    return [c for c in calls if c.startswith("issue comment ")]
+
+
+def test_reporter_files_the_issue_even_when_it_cannot_create_the_dedup_label(
+    tmp_path: Path,
+) -> None:
+    """D3 as it happened: no label, label create forbidden. The alarm must still land,
+    and the reason the label is missing must be in the log, not in /dev/null."""
+    result, calls, _ = _run_reporter(tmp_path, verdict="stale", label_create="forbid")
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    creates = _issue_creates(calls)
+    assert len(creates) == 1, f"expected exactly one `issue create`, calls={calls}"
+    assert "Droplet maintenance cron is stale" in creates[0]
+    assert f"--label {DEDUP_LABEL}" not in creates[0], (
+        "a label that does not exist must not be passed to `issue create` (it hard-fails)"
+    )
+    assert "Resource not accessible" in result.stdout + result.stderr, (
+        "the label-create error must be visible in the run log"
+    )
+
+
+def test_reporter_creates_and_uses_the_dedup_label_when_it_can(tmp_path: Path) -> None:
+    result, calls, _ = _run_reporter(tmp_path, verdict="unreachable", label_create="allow")
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert any(c.startswith(f"label create {DEDUP_LABEL}") for c in calls), calls
+    creates = _issue_creates(calls)
+    assert len(creates) == 1 and f"--label {DEDUP_LABEL}" in creates[0], calls
+    assert "could not reach the droplet" in creates[0]
+
+
+def test_reporter_does_not_recreate_a_label_that_exists(tmp_path: Path) -> None:
+    """The steady state: label present, create would 422. No create, label used."""
+    result, calls, _ = _run_reporter(
+        tmp_path, verdict="stale", label_create="forbid", labels=(DEDUP_LABEL,)
+    )
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert not any(c.startswith("label create") for c in calls), calls
+    creates = _issue_creates(calls)
+    assert len(creates) == 1 and f"--label {DEDUP_LABEL}" in creates[0], calls
+
+
+def _created_title(state: Path) -> str:
+    rows = [r.split("\t") for r in (state / "issues").read_text().splitlines() if r]
+    assert len(rows) == 1, rows
+    return rows[0][1]
+
+
+@pytest.mark.parametrize(
+    ("first_verdict", "second_verdict"), [("stale", "unreachable"), ("unreachable", "stale")]
+)
+def test_reporter_dedups_on_the_open_issue_even_without_the_label(
+    tmp_path: Path, first_verdict: str, second_verdict: str
+) -> None:
+    """Dedup keyed ONLY on the label is dedup that dies with the label: with it
+    missing, `gh issue list --label` silently returns nothing and every daily run
+    would open a fresh issue. Dedup must find this workflow's own open issue by
+    what the workflow controls -- its title -- across both verdicts. The existing
+    title is whatever the reporter itself filed, not a restatement."""
+    first, _, state = _run_reporter(
+        tmp_path / "first", verdict=first_verdict, label_create="forbid"
+    )
+    assert first.returncode == 0, first.stderr
+    existing_title = _created_title(state)
+    result, calls, _ = _run_reporter(
+        tmp_path / "second",
+        verdict=second_verdict,
+        label_create="forbid",
+        open_issues=((42, existing_title, ""),),
+    )
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert _issue_creates(calls) == [], f"must not open a duplicate: {calls}"
+    comments = _issue_comments(calls)
+    assert len(comments) == 1 and comments[0].startswith("issue comment 42 "), calls
