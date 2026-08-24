@@ -1199,11 +1199,20 @@ services:
   # ===========================================================================
 
   # Prometheus - Metrics Collection & Alerting
+  # --- Observability (optional; profile-gated) --------------------------------
+  # These services are NOT started by a default `up` and no deploy step names
+  # them, so they cannot affect a deployment. Enable with:
+  #     COMPOSE_PROFILES=monitoring docker compose up -d
+  # health_check.sh derives its skip-set from `docker compose config --services`,
+  # so enabling the profile re-arms the probes automatically -- there is no
+  # second list to keep in sync. Follows the falkordb-browser/`debug` precedent.
   prometheus:
     image: prom/prometheus:v3.2.1
     container_name: e2i_prometheus
     restart: unless-stopped
     logging: *default-logging
+    profiles:
+      - monitoring
     ports:
       - "127.0.0.1:9091:9090"  # 9090 taken by Opik MinIO
     volumes:
@@ -1247,6 +1256,8 @@ services:
     container_name: e2i_alertmanager
     restart: unless-stopped
     logging: *default-logging
+    profiles:
+      - monitoring
     ports:
       - "127.0.0.1:9093:9093"
     volumes:
@@ -1282,6 +1293,8 @@ services:
     container_name: e2i_node_exporter
     restart: unless-stopped
     logging: *default-logging
+    profiles:
+      - monitoring
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -1318,6 +1331,8 @@ services:
     container_name: e2i_postgres_exporter
     restart: unless-stopped
     logging: *default-logging
+    profiles:
+      - monitoring
     environment:
       DATA_SOURCE_NAME: "postgresql://supabase_admin:${SUPABASE_POSTGRES_PASSWORD:?SUPABASE_POSTGRES_PASSWORD must be set}@supabase-db:5432/postgres?sslmode=disable"
     networks:
@@ -1343,6 +1358,8 @@ services:
     container_name: e2i_loki
     restart: unless-stopped
     logging: *default-logging
+    profiles:
+      - monitoring
     ports:
       - "127.0.0.1:3101:3100"
     volumes:
@@ -1377,6 +1394,8 @@ services:
     container_name: e2i_promtail
     restart: unless-stopped
     logging: *default-logging
+    profiles:
+      - monitoring
     volumes:
       - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
@@ -1408,6 +1427,8 @@ services:
     container_name: e2i_grafana
     restart: unless-stopped
     logging: *default-logging
+    profiles:
+      - monitoring
     ports:
       - "127.0.0.1:3200:3000"
     volumes:

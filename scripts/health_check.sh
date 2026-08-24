@@ -23,6 +23,34 @@ HEALTHY=0
 UNHEALTHY=0
 SKIPPED=0
 
+# --- Optional (unmanaged) services -------------------------------------------
+# A service that no deploy step starts is not an outage when it is absent -- it
+# is configuration. Every deploy `up` is `--no-deps` with an explicit service
+# list, so anything gated behind a compose profile can never be started by a
+# deploy, and its absence is deliberate.
+#
+# `docker compose config --services` lists exactly the services a default `up`
+# would start (profile-gated ones are excluded), so the skip-set is DERIVED from
+# compose -- there is no second list here to drift, and enabling a profile
+# re-arms the probes automatically.
+#
+# Do NOT add --no-interpolate: it bypasses the profile filter and every service
+# comes back, silently re-arming the probes this gate exists to stand down.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE_MAIN="${COMPOSE_MAIN:-$REPO_DIR/docker/docker-compose.yml}"
+ACTIVE_SERVICES="${ACTIVE_SERVICES-$(docker compose -f "$COMPOSE_MAIN" config --services 2>/dev/null || true)}"
+
+is_optional_service() {
+  local svc="$1"
+  # Fail toward PROBING. An unknown active set means we cannot tell optional from
+  # broken, and silently skipping would hide a real outage -- the exact failure
+  # #1798 was about.
+  [ -n "$svc" ] || return 1
+  [ -n "$ACTIVE_SERVICES" ] || return 1
+  printf '%s\n' "$ACTIVE_SERVICES" | grep -qx -- "$svc" && return 1
+  return 0
+}
+
 echo "=========================================="
 echo "E2I Causal Analytics - Health Check"
 echo "=========================================="
@@ -37,6 +65,13 @@ check_http() {
   local url=$1
   local name=$2
   local timeout=${3:-5}
+  local svc=${4:-}
+
+  if [ -n "$svc" ] && is_optional_service "$svc"; then
+    echo -e "${YELLOW}⏭️  $name - SKIPPED (optional; no deploy starts it)${NC}"
+    ((SKIPPED++)) || true
+    return 0
+  fi
 
   if curl -sfk --max-time "$timeout" "$url" > /dev/null 2>&1; then
     echo -e "${GREEN}✅ $name - HEALTHY${NC}"
@@ -55,8 +90,8 @@ check_http "http://localhost:5000/health" "MLflow" || true
 
 check_http "http://localhost:3000/healthz" "BentoML" 10 || true
 check_http "http://localhost:6567/health" "Feast" || true
-check_http "http://localhost:5173/" "Opik (UI)" 5 || true
-check_http "http://localhost:8084/health-check" "Opik (Backend)" 10 || true
+check_http "http://localhost:5173/" "Opik (UI)" 5 "opik-frontend" || true
+check_http "http://localhost:8084/health-check" "Opik (Backend)" 10 "opik-backend" || true
 
 check_http "http://localhost:3002" "Frontend (Vite Dev)" || true
 
@@ -169,13 +204,21 @@ fi
 
 echo ""
 echo "--- Observability ---"
-check_http "http://localhost:9091/-/healthy" "Prometheus" || true
-check_http "http://localhost:3200/api/health" "Grafana" || true
-check_http "http://localhost:3101/ready" "Loki" || true
+check_http "http://localhost:9091/-/healthy" "Prometheus" 5 "prometheus" || true
+check_http "http://localhost:3200/api/health" "Grafana" 5 "grafana" || true
+check_http "http://localhost:3101/ready" "Loki" 5 "loki" || true
 
 check_container() {
   local name=$1
   local container=$2
+  local svc=${3:-}
+
+  if [ -n "$svc" ] && is_optional_service "$svc"; then
+    echo -e "${YELLOW}⏭️  $name - SKIPPED (optional; no deploy starts it)${NC}"
+    ((SKIPPED++)) || true
+    return 0
+  fi
+
   if docker ps --filter "name=${container}" --filter "status=running" -q | grep -q .; then
     echo -e "${GREEN}✅ $name - RUNNING${NC}"
     ((HEALTHY++)) || true
@@ -185,10 +228,10 @@ check_container() {
   fi
 }
 
-check_container "Alertmanager" "e2i_alertmanager"
-check_container "Promtail" "e2i_promtail"
-check_container "Node Exporter" "e2i_node_exporter"
-check_container "Postgres Exporter" "e2i_postgres_exporter"
+check_container "Alertmanager" "e2i_alertmanager" "alertmanager"
+check_container "Promtail" "e2i_promtail" "promtail"
+check_container "Node Exporter" "e2i_node_exporter" "node-exporter"
+check_container "Postgres Exporter" "e2i_postgres_exporter" "postgres-exporter"
 
 # --- Maintenance cron freshness (#1798) -------------------------------------
 # The freshness check must NOT be installed in the crontab it audits -- it would
@@ -237,7 +280,7 @@ TOTAL=$((HEALTHY + UNHEALTHY + SKIPPED))
 echo "Total Services: $TOTAL"
 echo -e "${GREEN}Healthy: $HEALTHY${NC}"
 echo -e "${RED}Unhealthy: $UNHEALTHY${NC}"
-echo -e "${YELLOW}Skipped (scaled to 0): $SKIPPED${NC}"
+echo -e "${YELLOW}Skipped (optional or scaled to 0): $SKIPPED${NC}"
 echo ""
 
 # Check .env file permissions
