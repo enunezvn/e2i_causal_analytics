@@ -429,13 +429,16 @@ def test_classify_maps_every_outcome_pair_to_the_right_verdict(
 #
 # D3 dispatched the merged workflow with tolerance=0 file_issue=true. The check
 # went red and classify said `stale` (correct), the reporter ran (correct) -- and
-# filed NOTHING: `gh label create` failed under GITHUB_TOKEN, `2>/dev/null || true`
-# hid why, and `gh issue create --label` died "label not found". That is the
-# #615 defect re-created by copying its "fix": the sibling in slow-tests.yml
-# only works because its label was created by hand on 2026-06-02.
+# filed NOTHING: `gh label create` failed, `2>/dev/null || true` hid why, and
+# `gh issue create --label` died "label not found". The hidden error (measured
+# on a branch run) was `HTTP 422: description is too long (maximum is 100
+# characters)` -- the label description was 103 characters. The self-heal had
+# been copied from slow-tests.yml, whose own create path has never run (its
+# label was created by hand on 2026-06-02), so copying it proved nothing.
 #
-# The stand-in models the three `gh` behaviours that matter and nothing else:
-#   - `label create` can be forbidden (what GITHUB_TOKEN did), or succeed once;
+# The stand-in models the `gh` behaviours that matter and nothing else:
+#   - `label create` can be forbidden, rejects a >100-char description (the
+#     real API's limit), or succeeds once;
 #   - `issue create --label X` hard-fails when X does not exist (real gh);
 #   - `issue list --label X` tolerates a missing X and returns nothing (real gh,
 #     which is exactly why the defect hid).
@@ -447,14 +450,15 @@ set -u
 STATE="$GH_SHIM_STATE"
 printf '%s\n' "$*" >> "$STATE/calls.log"
 touch "$STATE/labels" "$STATE/issues"
-JQ=""; LABELS=(); TITLE=""; SEARCH=""; POS=()
+JQ=""; LABELS=(); TITLE=""; SEARCH=""; DESC=""; POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --jq) JQ="$2"; shift 2 ;;
     --label) LABELS+=("$2"); shift 2 ;;
     --title) TITLE="$2"; shift 2 ;;
     --search) SEARCH="$2"; shift 2 ;;
-    --color|--description|--body|--state|--limit|--json) shift 2 ;;
+    --description) DESC="$2"; shift 2 ;;
+    --color|--body|--state|--limit|--json) shift 2 ;;
     *) POS+=("$1"); shift ;;
   esac
 done
@@ -464,6 +468,13 @@ case "${POS[0]} ${POS[1]}" in
     name="${POS[2]}"
     if [ "$GH_SHIM_LABEL_CREATE" = "forbid" ]; then
       echo "HTTP 403: Resource not accessible by integration (https://api.github.com/repos/o/r/labels)" >&2
+      exit 1
+    fi
+    # Measured on the real API (branch run 32755093587): GitHub rejects a label
+    # description over 100 characters. That, not the token, was the D3 miss.
+    if [ "${#DESC}" -gt 100 ]; then
+      echo "HTTP 422: Validation Failed (https://api.github.com/repos/o/r/labels)" >&2
+      echo "description is too long (maximum is 100 characters)" >&2
       exit 1
     fi
     if grep -qxF "$name" "$STATE/labels"; then

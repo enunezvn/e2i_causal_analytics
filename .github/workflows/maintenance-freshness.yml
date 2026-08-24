@@ -198,21 +198,23 @@ jobs:
           esac
 
           # Self-heal the dedup label -- and SAY why when that fails. The #1807
-          # live cert (D3, 2026-08-24) ran this reporter for real: under
-          # GITHUB_TOKEN `gh label create` failed, `2>/dev/null || true` hid it,
-          # and `gh issue create --label` then died "label not found" -- the alarm
-          # filed nothing, the exact #615 failure this was copied to avoid.
-          # (slow-tests.yml's copy only works because its label was created by
-          # hand on 2026-06-02; its create path has never run.) So: use the label
-          # when it exists, create it when we can, and file WITHOUT it otherwise.
-          # The alarm landing matters more than its colour.
+          # live cert (D3, 2026-08-24) ran this reporter for real: `gh label
+          # create` failed, `2>/dev/null || true` hid why, and `gh issue create
+          # --label` then died "label not found" -- the alarm filed nothing, the
+          # exact #615 failure this was copied to avoid. The hidden error was
+          # `HTTP 422: description is too long (maximum is 100 characters)`. The
+          # self-heal was copied from slow-tests.yml, whose create path has never
+          # run (its label was created by hand on 2026-06-02) -- copying it proved
+          # nothing. So: use the label when it exists, create it when we can, and
+          # file WITHOUT it otherwise. The alarm landing matters more than its
+          # colour. Description stays under GitHub's 100-character limit.
           LABEL=maintenance-freshness-failure
           LABEL_ARGS=()
           if gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qxF "$LABEL"; then
             LABEL_ARGS=(--label "$LABEL")
           elif gh label create "$LABEL" \
                  --color B60205 \
-                 --description "Auto-filed by maintenance-freshness.yml when the droplet maintenance cron freshness check fails (#1798)"; then
+                 --description "Auto-filed by maintenance-freshness.yml when the droplet maintenance cron is stale (#1798)"; then
             LABEL_ARGS=(--label "$LABEL")
           else
             echo "::warning::could not create label '$LABEL' (error above) -- filing without it so the alarm still lands"
