@@ -49,9 +49,7 @@ def _bash(script: str) -> subprocess.CompletedProcess[str]:
 
 def _extract_shell_function(script: str, name: str) -> str:
     lines = script.splitlines()
-    start = next(
-        (i for i, ln in enumerate(lines) if ln.strip().startswith(f"{name}() {{")), None
-    )
+    start = next((i for i, ln in enumerate(lines) if ln.strip().startswith(f"{name}() {{")), None)
     assert start is not None, f"{name}() not found"
     indent = len(lines[start]) - len(lines[start].lstrip())
     for j in range(start + 1, len(lines)):
