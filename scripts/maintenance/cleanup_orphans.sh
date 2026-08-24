@@ -128,6 +128,25 @@ kill_orphans 'exec\(eval' "exec(eval) Node.js/esbuild orphan"
 kill_orphans 'esbuild.*service' "orphaned esbuild service"
 
 # 3. Defunct/zombie processes (state Z)
+# #1801: a host-side `kill -SIGCHLD` cannot reap a zombie whose parent is PID 1
+# inside a container. PID 1 in a namespace ignores signals it has no handler for,
+# and the parent here is third-party code (supabase-meta's node server, running
+# without an init shim). All 40 zombies on the prod box are in exactly that
+# shape, so every 15 minutes this script was attempting an impossible reap and --
+# since #1799 made the counter honest -- logging "REAPED 0 of 40" forever. Honest
+# but useless noise, and noise is what trains people to stop reading the log that
+# hid #1798 for eight weeks.
+#
+# PROC_ROOT is overridable so this is testable without a real container.
+# Unreadable cgroup => NOT containerized: fail toward attempting the reap, since
+# a failed signal is harmless and skipping a reap we could have done is not.
+parent_is_containerized() {
+    local ppid="$1"
+    local cg="${PROC_ROOT:-/proc}/${ppid}/cgroup"
+    [[ -r "$cg" ]] || return 1
+    grep -qE 'docker-|/docker/|containerd|kubepods' "$cg" 2>/dev/null
+}
+
 count_zombies() { ps aux | awk '$8 ~ /Z/ {print $2}'; }
 zombie_pids=$(count_zombies || true)
 if [[ -n "$zombie_pids" ]]; then
@@ -136,11 +155,21 @@ if [[ -n "$zombie_pids" ]]; then
     TOTAL_FOUND=$((TOTAL_FOUND + count))
 
     signalled=0
+    unreapable=0
+    _reported_ppids=""
     for pid in $zombie_pids; do
         # Zombies can't be killed directly - signal the parent to reap instead.
         ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || echo "")
         if [[ -n "$ppid" && "$ppid" != "1" ]]; then
-            if $DRY_RUN; then
+            if parent_is_containerized "$ppid"; then
+                # Stand down and say why, rather than signalling into a void and
+                # reporting the failure again on the next tick (#1801).
+                unreapable=$((unreapable + 1))
+                if [[ -z "${_reported_ppids// }" || "$_reported_ppids" != *"|$ppid|"* ]]; then
+                    log "  SKIP: parent $ppid is PID 1 in a container - not host-reapable (#1801)"
+                    _reported_ppids="${_reported_ppids}|$ppid|"
+                fi
+            elif $DRY_RUN; then
                 log "  [DRY RUN] Would signal parent $ppid to reap zombie $pid"
             else
                 log "  Signaling parent $ppid to reap zombie $pid"
@@ -161,6 +190,9 @@ if [[ -n "$zombie_pids" ]]; then
         REAPED=$((count - remaining))
         (( REAPED < 0 )) && REAPED=0
         log "  Signalled $signalled parent(s); REAPED $REAPED of $count zombie(s); $remaining remain"
+        if [[ ${unreapable:-0} -gt 0 ]]; then
+            log "  ($unreapable of those are not host-reapable: containerized PID 1 - see #1801)"
+        fi
         KILLED_COUNT=$((KILLED_COUNT + REAPED))
     fi
 fi
