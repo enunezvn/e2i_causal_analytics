@@ -30,6 +30,7 @@ DEPLOY_PATH = WORKFLOWS / "deploy.yml"
 
 FRESHNESS_SCRIPT = "check_maintenance_freshness.sh"
 FRESHNESS_SCRIPT_PATH = "scripts/maintenance/" + FRESHNESS_SCRIPT
+BOX_CRONTAB = "/etc/cron.d/e2i-maintenance"  # the crontab the check audits on the droplet
 DEDUP_LABEL = "maintenance-freshness-failure"
 DEPLOY_SSH_SECRETS = {"DEPLOY_HOST", "DEPLOY_USER", "DEPLOY_SSH_KEY"}
 
@@ -315,14 +316,19 @@ def _fake_checkout(root: Path, *, git: bool = True, script: bool = True) -> Path
 def _run_preflight(checkout: Path, crontab: Path) -> subprocess.CompletedProcess:
     """Execute the REAL preflight script text with only its two paths substituted."""
     _, job = _check_job(_load(WORKFLOW_PATH))
-    script = str(_preflight_step(job)["with"]["script"])
-    assert (
-        "/home/enunez/Projects/e2i_causal_analytics" in script
-        and "/etc/cron.d/e2i-maintenance" in script
+    step = _preflight_step(job)
+    script = str(step["with"]["script"])
+    # The box checkout is DERIVED from the script's own `cd` line, not restated
+    # here (#410: no developer paths in tests/; and a restated path would drift
+    # silently if the checkout ever moved).
+    cd_lines = [line for line in _script_lines(step) if line.startswith("cd ")]
+    assert len(cd_lines) == 1, f"expected exactly one `cd` in the preflight, got {cd_lines}"
+    box_checkout = cd_lines[0].split(None, 1)[1].strip()
+    assert box_checkout.startswith("/"), (
+        f"the preflight must cd to an absolute path: {cd_lines[0]!r}"
     )
-    substituted = script.replace(
-        "/home/enunez/Projects/e2i_causal_analytics", str(checkout)
-    ).replace("/etc/cron.d/e2i-maintenance", str(crontab))
+    assert BOX_CRONTAB in script, "the preflight must print the crontab the check will read"
+    substituted = script.replace(box_checkout, str(checkout)).replace(BOX_CRONTAB, str(crontab))
     return subprocess.run(["bash", "-c", substituted], capture_output=True, text=True)
 
 
