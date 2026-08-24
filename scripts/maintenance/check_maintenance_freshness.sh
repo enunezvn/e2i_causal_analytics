@@ -25,8 +25,8 @@
 #   ./check_maintenance_freshness.sh --tolerance 3         # allow 3x interval
 #
 # Exit codes:
-#   0  every job with a log is fresh
-#   1  at least one job's log is stale or missing
+#   0  every job has completed successfully within its interval
+#   1  at least one job has not completed on schedule
 #   2  the crontab could not be read
 
 set -uo pipefail
@@ -110,20 +110,49 @@ while IFS= read -r line; do
     checked=$((checked + 1))
     limit=$(( interval * TOLERANCE ))
 
-    if [[ ! -e "$logpath" ]]; then
-        echo "  $logname: MISSING - no log at $logpath (expected every ${interval}s)"
+    # #1798: key on the SUCCESS STAMP, not the log's mtime.
+    #
+    # The log is written by anything that invokes the script -- including a
+    # `--dry-run` and a run that aborts partway. On 2026-08-23 a hand-run
+    # `docker_cleanup.sh --dry-run` wrote four lines, died on an invalid filter,
+    # and reset the log's mtime; this check then reported `docker_cleanup.log: OK`
+    # for a job that had not actually run since 2026-06-28. Log mtime answers
+    # "was this file written", which is not the question.
+    #
+    # Only a real, completed run touches `<logdir>/.<script>.success`. The stamp
+    # path is DERIVED from the crontab line (the script it invokes + the log dir
+    # it writes to), so it cannot drift from what is really scheduled.
+    scriptname=""
+    if [[ "$line" =~ ([A-Za-z0-9_]+)\.sh ]]; then
+        scriptname="${BASH_REMATCH[1]}"
+    fi
+    if [[ -z "$scriptname" ]]; then
+        echo "  $logname: UNKNOWN COMMAND - cannot derive a success stamp - not checked"
+        checked=$((checked - 1))
+        continue
+    fi
+    stamp="$(dirname "$logpath")/.${scriptname}.success"
+
+    if [[ ! -e "$stamp" ]]; then
+        if [[ -e "$logpath" ]]; then
+            echo "  $logname: NEVER COMPLETED - the log exists but there is no success stamp"
+            echo "      ($stamp). Something wrote the log without finishing the job:"
+            echo "      a --dry-run, an aborted run, or a version predating the stamp."
+        else
+            echo "  $logname: MISSING - no log and no success stamp at $stamp"
+        fi
         stale=$((stale + 1))
         continue
     fi
 
-    mtime=$(stat -c %Y "$logpath" 2>/dev/null || echo 0)
+    mtime=$(stat -c %Y "$stamp" 2>/dev/null || echo 0)
     age=$(( now - mtime ))
 
     if (( age > limit )); then
-        echo "  $logname: STALE - last write ${age}s ago, limit ${limit}s (every ${interval}s)"
+        echo "  $logname: STALE - last SUCCESS ${age}s ago, limit ${limit}s (every ${interval}s)"
         stale=$((stale + 1))
     else
-        echo "  $logname: OK (age ${age}s, limit ${limit}s)"
+        echo "  $logname: OK (last success ${age}s ago, limit ${limit}s)"
     fi
 done < "$CRONTAB"
 

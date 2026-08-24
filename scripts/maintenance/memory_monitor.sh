@@ -15,7 +15,21 @@ set -euo pipefail
 MEMORY_THRESHOLD=80          # Alert when memory usage exceeds this percentage
 SWAP_THRESHOLD=50            # Alert when swap usage exceeds this percentage
 AUTO_CLEANUP=false           # Automatically clean up orphan processes
-LOG_FILE="/var/log/e2i/memory_monitor.log"
+LOG_FILE="${LOG_FILE:-/var/log/e2i/memory_monitor.log}"
+
+# #1798: a success stamp is the ONLY honest "this job completed" signal.
+# The log is written by ANYTHING that invokes this script -- a --dry-run, a run
+# that aborts halfway, a human debugging by hand -- so log mtime answers "was
+# this file written", not "did this job complete". Keying the freshness check on
+# log mtime produced a false OK for a job that had not run in 56 days.
+# Only a real, completed run touches this.
+write_success_stamp() {
+    local _dir _name
+    _dir=$(dirname "$LOG_FILE")
+    _name=$(basename "$0" .sh)
+    touch "${_dir}/.${_name}.success" 2>/dev/null || true
+}
+
 ALERT_COOLDOWN_FILE="/tmp/e2i_memory_alert_cooldown"
 ALERT_COOLDOWN_SECONDS=300   # 5 minutes between alerts
 WEBHOOK_URL=""               # Optional: Slack/Discord webhook for alerts
@@ -260,6 +274,7 @@ main() {
         log "INFO" "Memory usage within normal limits"
     fi
 
+    write_success_stamp
     log "INFO" "=== Check Complete ==="
 }
 
