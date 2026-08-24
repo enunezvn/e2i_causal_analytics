@@ -84,9 +84,17 @@ jobs:
           script: |
             set -euo pipefail
             cd /home/enunez/Projects/e2i_causal_analytics
+            # Checkout validation is EXPLICIT, not folded into the echo below: a
+            # failing $(...) used as an echo argument is swallowed by `set -e`
+            # (measured: prints "checkout:  ()" and continues, rc=0). A directory
+            # that is not the checkout, or one the check cannot run from, is
+            # `unreachable` -- it must not fall through to a `stale` diagnosis.
+            CHECKOUT_SHA=$(git rev-parse --short HEAD)
+            CHECKOUT_BRANCH=$(git branch --show-current)
+            test -x ./scripts/maintenance/check_maintenance_freshness.sh
             # A green run must never be silent: show the checkout the crontab
             # invokes, the crontab itself, and the stamps the check will read.
-            echo "==> checkout: $(git rev-parse --short HEAD) ($(git branch --show-current))"
+            echo "==> checkout: ${CHECKOUT_SHA} (${CHECKOUT_BRANCH})"
             echo "==> crontab: /etc/cron.d/e2i-maintenance"
             # Diagnostic only -- NOT fatal. An unreadable crontab is the check's own
             # rc=2 verdict (maintenance uninstalled) and must surface as `stale`,

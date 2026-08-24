@@ -29,6 +29,7 @@ WORKFLOW_PATH = WORKFLOWS / "maintenance-freshness.yml"
 DEPLOY_PATH = WORKFLOWS / "deploy.yml"
 
 FRESHNESS_SCRIPT = "check_maintenance_freshness.sh"
+FRESHNESS_SCRIPT_PATH = "scripts/maintenance/" + FRESHNESS_SCRIPT
 DEDUP_LABEL = "maintenance-freshness-failure"
 DEPLOY_SSH_SECRETS = {"DEPLOY_HOST", "DEPLOY_USER", "DEPLOY_SSH_KEY"}
 
@@ -51,20 +52,6 @@ def _ssh_steps(job: dict) -> list[dict]:
     return [s for s in (job.get("steps") or []) if "appleboy/ssh-action" in str(s.get("uses", ""))]
 
 
-def _check_job(workflow: dict) -> tuple[str, dict]:
-    """The job that actually runs the freshness script over SSH."""
-    for name, job in _jobs(workflow).items():
-        if any(
-            FRESHNESS_SCRIPT in str(s.get("with", {}).get("script", "")) for s in _ssh_steps(job)
-        ):
-            return name, job
-    raise AssertionError(f"no job runs {FRESHNESS_SCRIPT} over SSH")
-
-
-def _freshness_step(job: dict) -> dict:
-    return next(s for s in _ssh_steps(job) if FRESHNESS_SCRIPT in str(s["with"]["script"]))
-
-
 def _script_lines(step: dict) -> list[str]:
     """The remote script's effective lines: no blanks, no comments."""
     return [
@@ -72,6 +59,28 @@ def _script_lines(step: dict) -> list[str]:
         for line in str(step["with"]["script"]).splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+def _invocations(step: dict) -> list[str]:
+    """Lines that EXECUTE the freshness script: its path is the first token.
+
+    Naming the script is not running it -- the freshness step echoes its name, and
+    the preflight `test -x`es it -- so a substring match would pick the wrong step
+    and would call a preflight that merely mentions the script "the check".
+    """
+    return [line for line in _script_lines(step) if line.split()[0].endswith(FRESHNESS_SCRIPT)]
+
+
+def _check_job(workflow: dict) -> tuple[str, dict]:
+    """The job that actually runs the freshness script over SSH."""
+    for name, job in _jobs(workflow).items():
+        if any(_invocations(s) for s in _ssh_steps(job)):
+            return name, job
+    raise AssertionError(f"no job runs {FRESHNESS_SCRIPT} over SSH")
+
+
+def _freshness_step(job: dict) -> dict:
+    return next(s for s in _ssh_steps(job) if _invocations(s))
 
 
 def _report_job(workflow: dict) -> tuple[str, dict]:
@@ -146,7 +155,7 @@ def test_the_freshness_invocation_cannot_be_swallowed_inside_the_ssh_script() ->
         f"the remote script must open with `set -e ... pipefail`; opens with {lines[0]!r}"
     )
     # The line that EXECUTES the script (first token), not the echo that names it.
-    invocation = [line for line in lines if line.split()[0].endswith(FRESHNESS_SCRIPT)]
+    invocation = _invocations(_freshness_step(job))
     assert len(invocation) == 1, f"expected exactly one invocation, got {invocation}"
     for mute in ("|| true", "|| :", "; true", "|| echo", "|| exit 0"):
         assert mute not in invocation[0], (
@@ -176,7 +185,7 @@ def test_reporter_distinguishes_could_not_check_from_stale() -> None:
     assert ssh.index(freshness) >= 1, "a preflight SSH step must run BEFORE the freshness step"
     preflight = ssh[ssh.index(freshness) - 1]
     assert preflight.get("id") and freshness.get("id"), "both SSH steps need ids to be classified"
-    assert FRESHNESS_SCRIPT not in str(preflight["with"]["script"]), (
+    assert not _invocations(preflight), (
         "the preflight must not run the check itself, or its failure is ambiguous again"
     )
 
@@ -266,51 +275,96 @@ def _preflight_step(job: dict) -> dict:
     return ssh[ssh.index(_freshness_step(job)) - 1]
 
 
-def test_preflight_survives_a_missing_crontab_so_the_script_can_report_it(tmp_path: Path) -> None:
-    """codex iter-2 (HIGH): the preflight must be fatal for CONNECT/CHECKOUT only. If it
-    dies on an unreadable crontab, the verdict is `unreachable` and the freshness step
-    -- whose documented rc=2 is exactly 'crontab unreadable' -- never runs.
+def _fake_checkout(root: Path, *, git: bool = True, script: bool = True) -> Path:
+    """A directory standing in for the box checkout the preflight `cd`s into.
 
-    Executes the real preflight script text with only its paths substituted: a
-    throwaway git checkout, and a crontab path that does not exist.
+    `git=False` -> the directory exists but is not a repository; `script=False` ->
+    a repository that does not carry the freshness script. Both are shapes the
+    preflight must refuse, because a freshness-step failure that follows would
+    otherwise be filed as `stale` when the check never ran from the real checkout.
     """
+    checkout = root / "checkout"
+    checkout.mkdir()
+    if git:
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "x",
+            ],
+            check=True,
+        )
+    if script:
+        target = checkout / FRESHNESS_SCRIPT_PATH
+        target.parent.mkdir(parents=True)
+        target.write_text("#!/bin/bash\nexit 0\n")
+        target.chmod(0o755)
+    return checkout
+
+
+def _run_preflight(checkout: Path, crontab: Path) -> subprocess.CompletedProcess:
+    """Execute the REAL preflight script text with only its two paths substituted."""
     _, job = _check_job(_load(WORKFLOW_PATH))
     script = str(_preflight_step(job)["with"]["script"])
-    checkout = tmp_path / "checkout"
-    checkout.mkdir()
-    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(checkout),
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "x",
-        ],
-        check=True,
-    )
-    missing_crontab = tmp_path / "no-such-crontab"
     assert (
         "/home/enunez/Projects/e2i_causal_analytics" in script
         and "/etc/cron.d/e2i-maintenance" in script
     )
     substituted = script.replace(
         "/home/enunez/Projects/e2i_causal_analytics", str(checkout)
-    ).replace("/etc/cron.d/e2i-maintenance", str(missing_crontab))
-    result = subprocess.run(["bash", "-c", substituted], capture_output=True, text=True)
+    ).replace("/etc/cron.d/e2i-maintenance", str(crontab))
+    return subprocess.run(["bash", "-c", substituted], capture_output=True, text=True)
+
+
+def test_preflight_survives_a_missing_crontab_so_the_script_can_report_it(tmp_path: Path) -> None:
+    """codex iter-2 (HIGH): the preflight must be fatal for CONNECT/CHECKOUT only. If it
+    dies on an unreadable crontab, the verdict is `unreachable` and the freshness step
+    -- whose documented rc=2 is exactly 'crontab unreadable' -- never runs.
+    """
+    result = _run_preflight(_fake_checkout(tmp_path), tmp_path / "no-such-crontab")
     assert result.returncode == 0, (
         "the preflight died on a missing crontab (rc="
         f"{result.returncode}) -- that files 'could not reach the droplet' for an uninstalled "
         f"maintenance layer instead of letting the check say rc=2\nstdout={result.stdout}\nstderr={result.stderr}"
     )
     assert "checkout:" in result.stdout, "the preflight went quiet instead of printing the checkout"
+
+
+def test_preflight_fails_when_the_directory_is_not_the_checkout(tmp_path: Path) -> None:
+    """codex iter-3 (MED): `echo "$(git rev-parse ...)"` cannot fail the step under
+    `set -e` -- a failing command substitution used as an echo ARGUMENT is swallowed
+    (measured: prints `==> checkout:  ()` and continues, rc=0). A directory that
+    exists but is not the checkout would pass preflight, and whatever the freshness
+    step then hit would be filed as `stale` -- the wrong diagnosis with the wrong hints.
+    """
+    # The script IS present, so only the explicit git validation can refuse this.
+    result = _run_preflight(_fake_checkout(tmp_path, git=False), tmp_path / "no-such-crontab")
+    assert result.returncode != 0, (
+        "the preflight passed on a directory that is not a git checkout\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+
+
+def test_preflight_fails_when_the_checkout_lacks_the_freshness_script(tmp_path: Path) -> None:
+    """Same seam, other half: a checkout without the script (moved, renamed, exec bit
+    stripped by a `core.fileMode=false` pull -- #1796) is a checkout the check cannot
+    run from, so it is `unreachable`, not `stale`.
+    """
+    result = _run_preflight(_fake_checkout(tmp_path, script=False), tmp_path / "no-such-crontab")
+    assert result.returncode != 0, (
+        "the preflight passed on a checkout with no executable "
+        f"{FRESHNESS_SCRIPT_PATH}\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
 
 
 _OUTCOMES_PREFLIGHT = ("success", "failure", "cancelled")
