@@ -162,6 +162,19 @@ services:
 
   # Meta - Database metadata service for Studio
   meta:
+    # #1801: run under an init shim (tini as PID 1).
+    #
+    # postgres-meta's entrypoint is `node dist/server/server.js`, which becomes PID 1
+    # in this container and installs no SIGCHLD handler. PID 1 in a namespace also
+    # ignores signals it has no handler for, so its exited children become zombies
+    # that NOTHING on the host can reap -- 40 of them had accumulated over 7 weeks,
+    # and the host-side orphan cleanup was attempting an impossible reap every 15
+    # minutes because of it. `init: true` puts tini at PID 1, which reaps.
+    #
+    # NOTE: this takes effect only when the container is CREATED. A plain `up -d`
+    # that finds the container already running will not apply it -- force-recreate
+    # the service, or it is inert.
+    init: true
     networks:
       - default
       - e2i-network

@@ -205,6 +205,41 @@ echo -e "${RED}Unhealthy: $UNHEALTHY${NC}"
 echo -e "${YELLOW}Skipped (scaled to 0): $SKIPPED${NC}"
 echo ""
 
+# --- Maintenance cron freshness (#1798) -------------------------------------
+# The freshness check must NOT be installed in the crontab it audits -- it would
+# be dead exactly when the thing it watches is dead. It needs a caller that runs
+# independently of cron, and this is it. Verified to need no root: the crontab is
+# 644 and the stamps are world-readable.
+FRESHNESS_SCRIPT="${FRESHNESS_SCRIPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/maintenance/check_maintenance_freshness.sh}"
+
+check_maintenance() {
+    if [ ! -x "$FRESHNESS_SCRIPT" ]; then
+        echo -e "${YELLOW}SKIP${NC} Maintenance cron freshness (no $FRESHNESS_SCRIPT)"
+        SKIPPED=$((SKIPPED + 1))
+        return 0
+    fi
+    local out rc
+    out=$("$FRESHNESS_SCRIPT" 2>&1)
+    rc=$?
+    if [ $rc -eq 0 ]; then
+        echo -e "${GREEN}OK${NC}   Maintenance cron freshness"
+        HEALTHY=$((HEALTHY + 1))
+    elif [ $rc -eq 2 ]; then
+        # Could not read the crontab at all -- report, do not fail the box on it.
+        echo -e "${YELLOW}SKIP${NC} Maintenance cron freshness (crontab unreadable)"
+        SKIPPED=$((SKIPPED + 1))
+    else
+        echo -e "${RED}FAIL${NC} Maintenance cron freshness"
+        echo "$out" | sed 's/^/       /'
+        UNHEALTHY=$((UNHEALTHY + 1))
+    fi
+    return 0
+}
+
+echo ""
+echo "--- Maintenance ---"
+check_maintenance
+
 # Check .env file permissions
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_PERMS="$(stat -c '%a' "$PROJECT_DIR/.env" 2>/dev/null || echo "missing")"
