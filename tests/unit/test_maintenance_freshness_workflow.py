@@ -8,7 +8,7 @@ crontab and ``deploy.yml`` never invokes it. So the next silent stop is still
 detected only when a human happens to run a script. The alarm needs to fire on
 its own, from somewhere independent of the crontab it audits, into a surface
 that is actually read. ``slow-tests.yml`` already proves that shape: a scheduled
-workflow that files/updates a labelled GitHub issue on failure.
+workflow that files/updates a tracking GitHub issue on failure.
 
 This test pins that contract so a later edit cannot quietly drop the schedule,
 swallow the failure before it reaches the reporter, or re-create the #615 class

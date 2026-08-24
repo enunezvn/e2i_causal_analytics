@@ -18,7 +18,7 @@
 # from the crontab it is checking is dead exactly when the thing it checks is
 # dead. Call it from somewhere independent of cron. Its callers:
 #   - .github/workflows/maintenance-freshness.yml -- daily, UNATTENDED, over SSH
-#     from GitHub Actions; files/updates a labelled issue on failure.
+#     from GitHub Actions; files/updates a tracking issue on failure.
 #   - scripts/health_check.sh -- on demand, by hand.
 #
 # Usage:

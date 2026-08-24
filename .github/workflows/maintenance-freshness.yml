@@ -16,7 +16,7 @@ name: Maintenance Freshness
 #
 # This workflow is the UNATTENDED caller, independent of the box's cron: it SSHes
 # in with the deploy secrets, runs the check, and on failure files/updates a
-# labelled issue -- the same reporter shape slow-tests.yml uses, which is a
+# tracking issue -- the same reporter shape slow-tests.yml uses, which is a
 # surface that is demonstrably read (#1804 reached a human the morning it fired).
 #
 # The check runs the script from the box's checkout, which is also what the
@@ -150,7 +150,7 @@ jobs:
           echo "preflight=$PREFLIGHT freshness=$FRESHNESS -> verdict=$verdict"
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
-  # Files/updates a labelled tracking issue when the check fails, titled from the
+  # Files/updates a tracking issue (labelled when the label exists or can be created) when the check fails, titled from the
   # check job's verdict (stale vs. unreachable). Same shape as slow-tests.yml's
   # report-failure, including its two #615 lessons: no checkout
   # here, so `gh` needs GH_REPO; and `gh issue create --label` does NOT create a
@@ -226,7 +226,7 @@ jobs:
           # label-keyed dedup dies with the label and files a new issue daily).
           EXISTING=$(gh issue list \
             --state open \
-            --limit 100 \
+            --limit 500 \
             --json number,title \
             --jq "[.[] | select(.title | startswith(\"${TITLE_PREFIX}\"))] | .[0].number // empty")
 
