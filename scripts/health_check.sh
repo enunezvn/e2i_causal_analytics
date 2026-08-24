@@ -190,21 +190,6 @@ check_container "Promtail" "e2i_promtail"
 check_container "Node Exporter" "e2i_node_exporter"
 check_container "Postgres Exporter" "e2i_postgres_exporter"
 
-# =============================================================================
-# SUMMARY
-# =============================================================================
-
-echo ""
-echo "=========================================="
-echo "Summary"
-echo "=========================================="
-TOTAL=$((HEALTHY + UNHEALTHY + SKIPPED))
-echo "Total Services: $TOTAL"
-echo -e "${GREEN}Healthy: $HEALTHY${NC}"
-echo -e "${RED}Unhealthy: $UNHEALTHY${NC}"
-echo -e "${YELLOW}Skipped (scaled to 0): $SKIPPED${NC}"
-echo ""
-
 # --- Maintenance cron freshness (#1798) -------------------------------------
 # The freshness check must NOT be installed in the crontab it audits -- it would
 # be dead exactly when the thing it watches is dead. It needs a caller that runs
@@ -239,6 +224,21 @@ check_maintenance() {
 echo ""
 echo "--- Maintenance ---"
 check_maintenance
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+
+echo ""
+echo "=========================================="
+echo "Summary"
+echo "=========================================="
+TOTAL=$((HEALTHY + UNHEALTHY + SKIPPED))
+echo "Total Services: $TOTAL"
+echo -e "${GREEN}Healthy: $HEALTHY${NC}"
+echo -e "${RED}Unhealthy: $UNHEALTHY${NC}"
+echo -e "${YELLOW}Skipped (scaled to 0): $SKIPPED${NC}"
+echo ""
 
 # Check .env file permissions
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
