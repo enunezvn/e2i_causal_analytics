@@ -189,3 +189,74 @@ def test_zombies_under_a_containerized_parent_are_reported_not_signalled() -> No
     assert "not host-reapable" in text or "NOT HOST-REAPABLE" in text, (
         "standing down must be reported, not silent"
     )
+
+
+# --------------------------------------------------------------------------- #
+# The summary must COUNT the maintenance result, not just print it afterwards
+#
+# The first cut of the #1798 wiring appended check_maintenance AFTER the Summary
+# block. The counters it incremented had already been printed, so a STALE job
+# rendered as "Unhealthy: 0 ... SYSTEM STATUS: DEGRADED" -- a report contradicting
+# its own verdict. The nine tests above all passed, because every one of them
+# harnesses check_maintenance in ISOLATION and reads the counter VARIABLES.
+# Testing a function's effect on state is blind to WHERE that state is rendered.
+# These two assert on the RENDERED OUTPUT instead.
+# --------------------------------------------------------------------------- #
+
+
+def _run_summary_tail(
+    tmp_path: Path, healthy: int, unhealthy: int, skipped: int, stub_rc: int
+) -> subprocess.CompletedProcess[str]:
+    """Run health_check.sh from the SUMMARY banner to EOF with preset counters."""
+    lines = HEALTH_CHECK.read_text().splitlines()
+    # Anchor on whichever of the two blocks comes FIRST, so the harness reproduces
+    # the real relative order in either layout -- that is what is under test.
+    summary = next(i for i, ln in enumerate(lines) if ln.strip() == "# SUMMARY")
+    maint = next(
+        i for i, ln in enumerate(lines) if ln.startswith("# --- Maintenance cron freshness")
+    )
+    tail = "\n".join(lines[min(summary, maint) :])
+
+    stub = tmp_path / "check_maintenance_freshness.sh"
+    stub.write_text(f"#!/bin/bash\necho 'stub'\nexit {stub_rc}\n")
+    stub.chmod(0o755)
+
+    harness = tmp_path / "tail.sh"
+    harness.write_text(
+        "#!/bin/bash\n"
+        "GREEN=''; RED=''; YELLOW=''; NC=''\n"
+        f"HEALTHY={healthy}; UNHEALTHY={unhealthy}; SKIPPED={skipped}\n"
+        f'FRESHNESS_SCRIPT="{stub}"\n' + tail + "\n"
+    )
+    harness.chmod(0o755)
+    return _bash(f'bash "{harness}"')
+
+
+def test_a_stale_job_is_COUNTED_in_the_printed_unhealthy_total(tmp_path: Path) -> None:
+    """The printed summary must not contradict the SYSTEM STATUS verdict."""
+    res = _run_summary_tail(tmp_path, healthy=5, unhealthy=0, skipped=0, stub_rc=1)
+    assert "Unhealthy: 1" in res.stdout, (
+        "a STALE maintenance job printed as 'Unhealthy: 0' while the verdict said "
+        f"DEGRADED -- the summary must count it, not trail it. stdout={res.stdout!r}"
+    )
+    assert "Total Services: 6" in res.stdout, f"stdout={res.stdout!r}"
+    assert "SYSTEM STATUS: DEGRADED" in res.stdout, f"stdout={res.stdout!r}"
+
+
+def test_a_fresh_job_is_COUNTED_in_the_printed_healthy_total(tmp_path: Path) -> None:
+    """Positive control: pinning only the stale case would pass on a hardcoded +1."""
+    res = _run_summary_tail(tmp_path, healthy=5, unhealthy=0, skipped=0, stub_rc=0)
+    assert "Healthy: 6" in res.stdout, f"stdout={res.stdout!r}"
+    assert "Unhealthy: 0" in res.stdout, f"stdout={res.stdout!r}"
+    assert "SYSTEM STATUS: HEALTHY" in res.stdout, f"stdout={res.stdout!r}"
+
+
+def test_the_maintenance_check_runs_BEFORE_the_counts_are_printed() -> None:
+    """Structural companion: names the defect directly if the rendered tests fail."""
+    lines = HEALTH_CHECK.read_text().splitlines()
+    call = next(i for i, ln in enumerate(lines) if ln.strip() == "check_maintenance")
+    printed = next(i for i, ln in enumerate(lines) if "Healthy: $HEALTHY" in ln)
+    assert call < printed, (
+        f"check_maintenance is invoked at line {call + 1} but the counts are printed "
+        f"at line {printed + 1} -- the maintenance result can never appear in them"
+    )
