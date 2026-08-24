@@ -17,8 +17,11 @@ of muted alarm (no GH_REPO without a checkout; a dedup label nobody created).
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
@@ -256,3 +259,91 @@ def test_the_freshness_check_is_still_NOT_installed_as_a_cron_job() -> None:
     """The constraint that motivated the design must survive adding a caller."""
     setup = Path(__file__).resolve().parents[2] / "scripts" / "maintenance" / "setup_cron.sh"
     assert FRESHNESS_SCRIPT not in setup.read_text()
+
+
+def _preflight_step(job: dict) -> dict:
+    ssh = _ssh_steps(job)
+    return ssh[ssh.index(_freshness_step(job)) - 1]
+
+
+def test_preflight_survives_a_missing_crontab_so_the_script_can_report_it(tmp_path: Path) -> None:
+    """codex iter-2 (HIGH): the preflight must be fatal for CONNECT/CHECKOUT only. If it
+    dies on an unreadable crontab, the verdict is `unreachable` and the freshness step
+    -- whose documented rc=2 is exactly 'crontab unreadable' -- never runs.
+
+    Executes the real preflight script text with only its paths substituted: a
+    throwaway git checkout, and a crontab path that does not exist.
+    """
+    _, job = _check_job(_load(WORKFLOW_PATH))
+    script = str(_preflight_step(job)["with"]["script"])
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+        check=True,
+    )
+    missing_crontab = tmp_path / "no-such-crontab"
+    assert (
+        "/home/enunez/Projects/e2i_causal_analytics" in script
+        and "/etc/cron.d/e2i-maintenance" in script
+    )
+    substituted = script.replace(
+        "/home/enunez/Projects/e2i_causal_analytics", str(checkout)
+    ).replace("/etc/cron.d/e2i-maintenance", str(missing_crontab))
+    result = subprocess.run(["bash", "-c", substituted], capture_output=True, text=True)
+    assert result.returncode == 0, (
+        "the preflight died on a missing crontab (rc="
+        f"{result.returncode}) -- that files 'could not reach the droplet' for an uninstalled "
+        f"maintenance layer instead of letting the check say rc=2\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+    assert "checkout:" in result.stdout, "the preflight went quiet instead of printing the checkout"
+
+
+_OUTCOMES_PREFLIGHT = ("success", "failure", "cancelled")
+_OUTCOMES_FRESHNESS = ("success", "failure", "skipped", "cancelled")
+
+
+def _expected_verdict(preflight: str, freshness: str) -> str:
+    if preflight != "success":
+        return "unreachable"
+    return {"success": "fresh", "failure": "stale"}.get(freshness, "unknown")
+
+
+@pytest.mark.parametrize("preflight", _OUTCOMES_PREFLIGHT)
+@pytest.mark.parametrize("freshness", _OUTCOMES_FRESHNESS)
+def test_classify_maps_every_outcome_pair_to_the_right_verdict(
+    preflight: str, freshness: str, tmp_path: Path
+) -> None:
+    """codex iter-2 (MED): the presence of the words 'stale'/'unreachable' in the classify
+    block does not prove the mapping. Execute the real block over the outcome matrix."""
+    _, job = _check_job(_load(WORKFLOW_PATH))
+    classify = next(s for s in job["steps"] if s.get("id") == "classify")
+    github_output = tmp_path / "out"
+    github_output.write_text("")
+    env = {
+        **os.environ,
+        "PREFLIGHT": preflight,
+        "FRESHNESS": freshness,
+        "GITHUB_OUTPUT": str(github_output),
+    }
+    result = subprocess.run(
+        ["bash", "-c", str(classify["run"])], env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        github_output.read_text().strip() == f"verdict={_expected_verdict(preflight, freshness)}"
+    ), f"preflight={preflight} freshness={freshness}: {github_output.read_text().strip()!r}"

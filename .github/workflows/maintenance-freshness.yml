@@ -70,9 +70,9 @@ jobs:
       verdict: ${{ steps.classify.outputs.verdict }}
     steps:
       # Two SSH steps on purpose. If THIS one fails (auth, network, box down,
-      # checkout moved, crontab unreadable to enunez) the check never ran and the
-      # verdict is `unreachable`; only a failure of the NEXT step means the
-      # script itself said STALE. One combined step could not tell them apart.
+      # checkout moved) the check never ran and the verdict is `unreachable`;
+      # only a failure of the NEXT step means the script itself said STALE (or
+      # rc=2, crontab unreadable). One combined step could not tell them apart.
       - name: Preflight -- reach the box and print what is being audited
         id: preflight
         uses: appleboy/ssh-action@v1
@@ -88,7 +88,11 @@ jobs:
             # invokes, the crontab itself, and the stamps the check will read.
             echo "==> checkout: $(git rev-parse --short HEAD) ($(git branch --show-current))"
             echo "==> crontab: /etc/cron.d/e2i-maintenance"
-            sed -n '/^[^#]/p' /etc/cron.d/e2i-maintenance | grep -v '^[A-Z_]*='
+            # Diagnostic only -- NOT fatal. An unreadable crontab is the check's own
+            # rc=2 verdict (maintenance uninstalled) and must surface as `stale`,
+            # not as `unreachable`; only connect/cd/checkout failures are fatal here.
+            sed -n '/^[^#]/p' /etc/cron.d/e2i-maintenance 2>/dev/null | grep -v '^[A-Z_]*=' \
+              || echo "    (crontab missing or unreadable -- the check will report it)"
             echo "==> stamps:"
             ls -la --time-style=+%FT%TZ /var/log/e2i/.*.success 2>/dev/null || echo "    (no stamps)"
 
