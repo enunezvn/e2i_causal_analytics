@@ -176,36 +176,57 @@ jobs:
         run: |
           set -euo pipefail
           DATE=$(date -u +%Y-%m-%d)
+          # Every title this workflow files starts with this; dedup keys on it.
+          TITLE_PREFIX="[maintenance-freshness] "
 
           # Title and diagnosis follow the check job's own classification. A
           # failure to REACH the box is filed as exactly that -- it says nothing
           # about the cron layer, and must not send anyone to PAM and stamps.
           case "$VERDICT" in
             stale)
-              TITLE="Droplet maintenance cron is stale (${DATE})"
+              TITLE="${TITLE_PREFIX}Droplet maintenance cron is stale (${DATE})"
               DETAIL="The check RAN on the box (the SSH preflight had just succeeded) and reported that at least one job in \`/etc/cron.d/e2i-maintenance\` has not completed on schedule, or that the crontab is unreadable. Which job, and how stale, is in the run log. First things to look at (#1798): \`grep 'Authentication token is no longer valid' /var/log/syslog\` (PAM refusing the job's account), \`chage -l root\`, and \`ls -la /var/log/e2i/.*.success\`. A stamp that is MISSING right after a rebuild is expected until that job's first scheduled run."
               ;;
             unreachable)
-              TITLE="Maintenance freshness check could not reach the droplet (${DATE})"
+              TITLE="${TITLE_PREFIX}Maintenance freshness check could not reach the droplet (${DATE})"
               DETAIL="The check DID NOT RUN: the SSH preflight (connect as the deploy user, cd to the checkout, read the crontab) failed. This says nothing about whether the cron layer is running. Look at the preflight step's error in the run log: SSH auth (DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY), the box being down, or the checkout/crontab having moved."
               ;;
             *)
-              TITLE="Maintenance freshness check failed without a verdict (${DATE})"
+              TITLE="${TITLE_PREFIX}Maintenance freshness check failed without a verdict (${DATE})"
               DETAIL="The check job failed but its classify step produced '${VERDICT:-<empty>}' (a cancelled step, or the workflow's own wiring). Read the run log."
               ;;
           esac
 
-          gh label create maintenance-freshness-failure \
-            --color B60205 \
-            --description "Auto-filed by maintenance-freshness.yml when the droplet maintenance cron freshness check fails (#1798)" \
-            2>/dev/null || true
+          # Self-heal the dedup label -- and SAY why when that fails. The #1807
+          # live cert (D3, 2026-08-24) ran this reporter for real: under
+          # GITHUB_TOKEN `gh label create` failed, `2>/dev/null || true` hid it,
+          # and `gh issue create --label` then died "label not found" -- the alarm
+          # filed nothing, the exact #615 failure this was copied to avoid.
+          # (slow-tests.yml's copy only works because its label was created by
+          # hand on 2026-06-02; its create path has never run.) So: use the label
+          # when it exists, create it when we can, and file WITHOUT it otherwise.
+          # The alarm landing matters more than its colour.
+          LABEL=maintenance-freshness-failure
+          LABEL_ARGS=()
+          if gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qxF "$LABEL"; then
+            LABEL_ARGS=(--label "$LABEL")
+          elif gh label create "$LABEL" \
+                 --color B60205 \
+                 --description "Auto-filed by maintenance-freshness.yml when the droplet maintenance cron freshness check fails (#1798)"; then
+            LABEL_ARGS=(--label "$LABEL")
+          else
+            echo "::warning::could not create label '$LABEL' (error above) -- filing without it so the alarm still lands"
+          fi
 
+          # Dedup on this workflow's own open issue, found by TITLE (which the
+          # workflow controls), not by label (which may not exist -- and
+          # `gh issue list --label <missing>` silently returns nothing, so a
+          # label-keyed dedup dies with the label and files a new issue daily).
           EXISTING=$(gh issue list \
             --state open \
-            --label maintenance-freshness-failure \
-            --json number \
-            --jq '.[0].number // empty' \
-            --limit 1)
+            --limit 100 \
+            --json number,title \
+            --jq "[.[] | select(.title | startswith(\"${TITLE_PREFIX}\"))] | .[0].number // empty")
 
           BODY="$(printf "**%s** -- verdict: \`%s\` (%s run, %s)\n\n%s\n\nRun: %s" "$TITLE" "${VERDICT:-unknown}" "$EVENT_NAME" "$DATE" "$DETAIL" "$RUN_URL")"
 
@@ -216,6 +237,6 @@ jobs:
             echo "Creating new tracking issue (verdict=${VERDICT:-unknown})"
             gh issue create \
               --title "$TITLE" \
-              --label maintenance-freshness-failure \
+              "${LABEL_ARGS[@]}" \
               --body "$(printf "%s\n\n_Auto-created by .github/workflows/maintenance-freshness.yml. Later failures of either kind are added as comments with their own verdict; close manually once the next scheduled run is green._" "$BODY")"
           fi
