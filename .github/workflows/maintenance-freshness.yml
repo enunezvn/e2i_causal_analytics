@@ -64,8 +64,36 @@ jobs:
     runs-on: ubuntu-latest
     # The script itself runs in well under a second; the budget is for SSH setup.
     timeout-minutes: 5
+    outputs:
+      # stale | unreachable | fresh | unknown -- read by report-failure so an SSH
+      # outage is never filed as "the cron is stale" (codex iter-1 HIGH).
+      verdict: ${{ steps.classify.outputs.verdict }}
     steps:
+      # Two SSH steps on purpose. If THIS one fails (auth, network, box down,
+      # checkout moved, crontab unreadable to enunez) the check never ran and the
+      # verdict is `unreachable`; only a failure of the NEXT step means the
+      # script itself said STALE. One combined step could not tell them apart.
+      - name: Preflight -- reach the box and print what is being audited
+        id: preflight
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          command_timeout: 2m
+          script: |
+            set -euo pipefail
+            cd /home/enunez/Projects/e2i_causal_analytics
+            # A green run must never be silent: show the checkout the crontab
+            # invokes, the crontab itself, and the stamps the check will read.
+            echo "==> checkout: $(git rev-parse --short HEAD) ($(git branch --show-current))"
+            echo "==> crontab: /etc/cron.d/e2i-maintenance"
+            sed -n '/^[^#]/p' /etc/cron.d/e2i-maintenance | grep -v '^[A-Z_]*='
+            echo "==> stamps:"
+            ls -la --time-style=+%FT%TZ /var/log/e2i/.*.success 2>/dev/null || echo "    (no stamps)"
+
       - name: Run check_maintenance_freshness.sh on the droplet
+        id: freshness
         uses: appleboy/ssh-action@v1
         env:
           # Empty on a scheduled run -> the script's own default (2x) applies.
@@ -75,28 +103,44 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          command_timeout: 3m
-          script_stop: true
+          command_timeout: 2m
           # `env:` does not cross the SSH boundary on its own -- appleboy forwards
           # only what `envs:` names (deploy.yml learned this with ROLLOUT_OUTCOME).
           envs: TOLERANCE
+          # appleboy/ssh-action@v1 has no `script_stop` input any more; `set -e`
+          # below is what stops the script on the first failure.
           script: |
             set -euo pipefail
             cd /home/enunez/Projects/e2i_causal_analytics
-            # Print what is being audited so a green run is never silent: the
-            # checkout the crontab invokes, and the crontab itself.
-            echo "==> checkout: $(git rev-parse --short HEAD) ($(git branch --show-current))"
-            echo "==> crontab: /etc/cron.d/e2i-maintenance"
-            sed -n '/^[^#]/p' /etc/cron.d/e2i-maintenance | grep -v '^[A-Z_]*=' || true
-            echo "==> stamps:"
-            ls -la --time-style=+%FT%TZ /var/log/e2i/.*.success 2>/dev/null || echo "    (no stamps)"
             echo "==> check_maintenance_freshness.sh${TOLERANCE:+ --tolerance $TOLERANCE}"
             # Non-zero (1 = a job is stale/never completed, 2 = crontab unreadable,
-            # i.e. maintenance is uninstalled) fails this job and wakes the reporter.
+            # i.e. maintenance is uninstalled) fails this step and wakes the reporter.
             ./scripts/maintenance/check_maintenance_freshness.sh ${TOLERANCE:+--tolerance "$TOLERANCE"}
 
-  # Files/updates a labelled tracking issue when the check fails. Same shape as
-  # slow-tests.yml's report-failure, including its two #615 lessons: no checkout
+      - name: Classify the outcome
+        id: classify
+        if: always()
+        env:
+          PREFLIGHT: ${{ steps.preflight.outcome }}
+          FRESHNESS: ${{ steps.freshness.outcome }}
+        run: |
+          # Step outcomes are success | failure | cancelled | skipped. The
+          # freshness step is skipped (not failed) when the preflight fails.
+          if [ "$PREFLIGHT" != "success" ]; then
+            verdict=unreachable
+          elif [ "$FRESHNESS" = "success" ]; then
+            verdict=fresh
+          elif [ "$FRESHNESS" = "failure" ]; then
+            verdict=stale
+          else
+            verdict=unknown
+          fi
+          echo "preflight=$PREFLIGHT freshness=$FRESHNESS -> verdict=$verdict"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+  # Files/updates a labelled tracking issue when the check fails, titled from the
+  # check job's verdict (stale vs. unreachable). Same shape as slow-tests.yml's
+  # report-failure, including its two #615 lessons: no checkout
   # here, so `gh` needs GH_REPO; and `gh issue create --label` does NOT create a
   # missing label, so self-heal it first. `if: always()` because a `needs`-
   # dependent job is otherwise SKIPPED when its dependency fails -- which is the
@@ -116,13 +160,32 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EVENT_NAME: ${{ github.event_name }}
+          VERDICT: ${{ needs.check.outputs.verdict }}
         run: |
           set -euo pipefail
           DATE=$(date -u +%Y-%m-%d)
 
+          # Title and diagnosis follow the check job's own classification. A
+          # failure to REACH the box is filed as exactly that -- it says nothing
+          # about the cron layer, and must not send anyone to PAM and stamps.
+          case "$VERDICT" in
+            stale)
+              TITLE="Droplet maintenance cron is stale (${DATE})"
+              DETAIL="The check RAN on the box (the SSH preflight had just succeeded) and reported that at least one job in \`/etc/cron.d/e2i-maintenance\` has not completed on schedule, or that the crontab is unreadable. Which job, and how stale, is in the run log. First things to look at (#1798): \`grep 'Authentication token is no longer valid' /var/log/syslog\` (PAM refusing the job's account), \`chage -l root\`, and \`ls -la /var/log/e2i/.*.success\`. A stamp that is MISSING right after a rebuild is expected until that job's first scheduled run."
+              ;;
+            unreachable)
+              TITLE="Maintenance freshness check could not reach the droplet (${DATE})"
+              DETAIL="The check DID NOT RUN: the SSH preflight (connect as the deploy user, cd to the checkout, read the crontab) failed. This says nothing about whether the cron layer is running. Look at the preflight step's error in the run log: SSH auth (DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY), the box being down, or the checkout/crontab having moved."
+              ;;
+            *)
+              TITLE="Maintenance freshness check failed without a verdict (${DATE})"
+              DETAIL="The check job failed but its classify step produced '${VERDICT:-<empty>}' (a cancelled step, or the workflow's own wiring). Read the run log."
+              ;;
+          esac
+
           gh label create maintenance-freshness-failure \
             --color B60205 \
-            --description "Auto-filed by maintenance-freshness.yml when a droplet maintenance cron job has not completed on schedule (#1798)" \
+            --description "Auto-filed by maintenance-freshness.yml when the droplet maintenance cron freshness check fails (#1798)" \
             2>/dev/null || true
 
           EXISTING=$(gh issue list \
@@ -132,15 +195,15 @@ jobs:
             --jq '.[0].number // empty' \
             --limit 1)
 
-          BODY="$(printf "The maintenance cron freshness check on the droplet FAILED on %s (%s run).\n\nAt least one job in \`/etc/cron.d/e2i-maintenance\` has not completed on schedule, or the crontab is unreadable. The check's output (which job, how stale) is in the run log:\n\n%s\n\nFirst things to look at (#1798): \`grep 'Authentication token is no longer valid' /var/log/syslog\` (PAM refusing the job's account), \`chage -l root\`, and \`ls -la /var/log/e2i/.*.success\`." "$DATE" "$EVENT_NAME" "$RUN_URL")"
+          BODY="$(printf "**%s** -- verdict: \`%s\` (%s run, %s)\n\n%s\n\nRun: %s" "$TITLE" "${VERDICT:-unknown}" "$EVENT_NAME" "$DATE" "$DETAIL" "$RUN_URL")"
 
           if [ -n "$EXISTING" ]; then
-            echo "Commenting on existing issue #${EXISTING}"
+            echo "Commenting on existing issue #${EXISTING} (verdict=${VERDICT:-unknown})"
             gh issue comment "$EXISTING" --body "$BODY"
           else
-            echo "Creating new tracking issue"
+            echo "Creating new tracking issue (verdict=${VERDICT:-unknown})"
             gh issue create \
-              --title "Droplet maintenance cron is stale (${DATE})" \
+              --title "$TITLE" \
               --label maintenance-freshness-failure \
-              --body "$(printf "%s\n\n_Auto-created by .github/workflows/maintenance-freshness.yml. Subsequent failures are added as comments; close manually once the cron is running again (the next green scheduled run is the evidence)._" "$BODY")"
+              --body "$(printf "%s\n\n_Auto-created by .github/workflows/maintenance-freshness.yml. Later failures of either kind are added as comments with their own verdict; close manually once the next scheduled run is green._" "$BODY")"
           fi

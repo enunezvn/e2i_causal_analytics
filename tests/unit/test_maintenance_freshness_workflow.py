@@ -58,6 +58,19 @@ def _check_job(workflow: dict) -> tuple[str, dict]:
     raise AssertionError(f"no job runs {FRESHNESS_SCRIPT} over SSH")
 
 
+def _freshness_step(job: dict) -> dict:
+    return next(s for s in _ssh_steps(job) if FRESHNESS_SCRIPT in str(s["with"]["script"]))
+
+
+def _script_lines(step: dict) -> list[str]:
+    """The remote script's effective lines: no blanks, no comments."""
+    return [
+        line.strip()
+        for line in str(step["with"]["script"]).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
 def _report_job(workflow: dict) -> tuple[str, dict]:
     for name, job in _jobs(workflow).items():
         if "gh issue create" in str(job):
@@ -84,21 +97,26 @@ def test_runs_on_a_schedule_and_can_be_dispatched() -> None:
 def test_check_job_runs_the_script_on_the_box_with_the_deploy_secrets() -> None:
     """Same SSH secrets as deploy.yml, so a secret rename cannot orphan one of them."""
     _, job = _check_job(_load(WORKFLOW_PATH))
-    step = next(s for s in _ssh_steps(job) if FRESHNESS_SCRIPT in str(s["with"]["script"]))
-    with_block = step["with"]
-    used = {
-        key
-        for key in DEPLOY_SSH_SECRETS
-        if f"secrets.{key}"
-        in str(
-            with_block.get(
-                {"DEPLOY_HOST": "host", "DEPLOY_USER": "username", "DEPLOY_SSH_KEY": "key"}[key], ""
+    steps = _ssh_steps(job)
+    assert steps, "the check job has no SSH step"
+    for step in steps:
+        with_block = step["with"]
+        used = {
+            key
+            for key in DEPLOY_SSH_SECRETS
+            if f"secrets.{key}"
+            in str(
+                with_block.get(
+                    {"DEPLOY_HOST": "host", "DEPLOY_USER": "username", "DEPLOY_SSH_KEY": "key"}[
+                        key
+                    ],
+                    "",
+                )
             )
+        }
+        assert used == DEPLOY_SSH_SECRETS, (
+            f"SSH step {step.get('name')!r} must use exactly the deploy secrets; uses {sorted(used)}"
         )
-    }
-    assert used == DEPLOY_SSH_SECRETS, (
-        f"SSH step must use exactly the deploy secrets; uses {sorted(used)}"
-    )
     deploy_text = DEPLOY_PATH.read_text()
     for key in DEPLOY_SSH_SECRETS:
         assert f"secrets.{key}" in deploy_text, f"{key} is not what deploy.yml uses any more"
@@ -113,6 +131,77 @@ def test_check_job_is_bounded_and_does_not_swallow_its_own_failure() -> None:
         assert not step.get("continue-on-error"), (
             f"{name}: SSH step continue-on-error would mute the alarm"
         )
+
+
+def test_the_freshness_invocation_cannot_be_swallowed_inside_the_ssh_script() -> None:
+    """codex iter-1 (MED): `continue-on-error` is not the only mute. A `|| true` on the
+    invocation, or dropping `set -e` above it, silences the alarm with the job green --
+    and the removed appleboy `script_stop` input would not catch either."""
+    _, job = _check_job(_load(WORKFLOW_PATH))
+    lines = _script_lines(_freshness_step(job))
+    assert lines[0].startswith("set -") and "e" in lines[0].split()[1] and "pipefail" in lines[0], (
+        f"the remote script must open with `set -e ... pipefail`; opens with {lines[0]!r}"
+    )
+    # The line that EXECUTES the script (first token), not the echo that names it.
+    invocation = [line for line in lines if line.split()[0].endswith(FRESHNESS_SCRIPT)]
+    assert len(invocation) == 1, f"expected exactly one invocation, got {invocation}"
+    for mute in ("|| true", "|| :", "; true", "|| echo", "|| exit 0"):
+        assert mute not in invocation[0], (
+            f"the invocation is guarded with {mute!r}: {invocation[0]}"
+        )
+
+
+def test_ssh_steps_do_not_rely_on_the_removed_script_stop_input() -> None:
+    """appleboy/ssh-action@v1 has no `script_stop` input (its README: 'removed ... add
+    `set -e`'). Carrying it reads as a safety contract while doing nothing."""
+    _, job = _check_job(_load(WORKFLOW_PATH))
+    for step in _ssh_steps(job):
+        assert "script_stop" not in (step.get("with") or {}), (
+            f"{step.get('name')!r} carries the dead `script_stop` input"
+        )
+
+
+def test_reporter_distinguishes_could_not_check_from_stale() -> None:
+    """codex iter-1 (HIGH): an SSH/auth/network failure must not be filed as
+    'the cron is stale' -- that sends a human to PAM and stamps when the check never
+    ran. The check job classifies its own outcome (preflight SSH step vs. the freshness
+    step) and the reporter titles the issue from that verdict."""
+    workflow = _load(WORKFLOW_PATH)
+    check_name, job = _check_job(workflow)
+    ssh = _ssh_steps(job)
+    freshness = _freshness_step(job)
+    assert ssh.index(freshness) >= 1, "a preflight SSH step must run BEFORE the freshness step"
+    preflight = ssh[ssh.index(freshness) - 1]
+    assert preflight.get("id") and freshness.get("id"), "both SSH steps need ids to be classified"
+    assert FRESHNESS_SCRIPT not in str(preflight["with"]["script"]), (
+        "the preflight must not run the check itself, or its failure is ambiguous again"
+    )
+
+    verdict_ref = str((job.get("outputs") or {}).get("verdict", ""))
+    assert "steps." in verdict_ref and ".outputs.verdict" in verdict_ref, (
+        f"{check_name} must expose outputs.verdict from a step; got {verdict_ref!r}"
+    )
+    classify_id = verdict_ref.split("steps.")[1].split(".")[0]
+    classify = next(s for s in job["steps"] if s.get("id") == classify_id)
+    assert "always()" in str(classify.get("if", "")), (
+        "the classify step must run after a failed step, or the verdict is never set"
+    )
+    classify_text = str(classify)
+    for step in (preflight, freshness):
+        assert f"steps.{step['id']}.outcome" in classify_text, (
+            f"classify must read steps.{step['id']}.outcome"
+        )
+    for verdict in ("unreachable", "stale", "fresh"):
+        assert verdict in str(classify.get("run", "")), f"classify never emits {verdict!r}"
+
+    _, report = _report_job(workflow)
+    report_text = str(report)
+    assert f"needs.{check_name}.outputs.verdict" in report_text, (
+        "the reporter must read the verdict, not infer 'stale' from any failure"
+    )
+    assert "unreachable" in report_text and "stale" in report_text, (
+        "the reporter must branch its title/body on the verdict"
+    )
 
 
 def test_ssh_step_forwards_every_env_it_declares() -> None:
