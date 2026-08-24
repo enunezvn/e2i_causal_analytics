@@ -236,8 +236,11 @@ check_container "Postgres Exporter" "e2i_postgres_exporter" "postgres-exporter"
 # --- Maintenance cron freshness (#1798) -------------------------------------
 # The freshness check must NOT be installed in the crontab it audits -- it would
 # be dead exactly when the thing it watches is dead. It needs a caller that runs
-# independently of cron, and this is it. Verified to need no root: the crontab is
-# 644 and the stamps are world-readable.
+# independently of cron; this is the ON-DEMAND one. The UNATTENDED one is
+# .github/workflows/maintenance-freshness.yml (daily, over SSH, files an issue on
+# failure) -- this script is in no crontab and deploy.yml never runs it, so on
+# its own it only catches a stale cron when a human happens to run it. Verified
+# to need no root: the crontab is 644 and the stamps are world-readable.
 FRESHNESS_SCRIPT="${FRESHNESS_SCRIPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/maintenance/check_maintenance_freshness.sh}"
 
 check_maintenance() {

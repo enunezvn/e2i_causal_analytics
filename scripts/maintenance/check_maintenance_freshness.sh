@@ -16,8 +16,10 @@
 #
 # IMPORTANT -- do NOT install this as a cron job. A staleness check that runs
 # from the crontab it is checking is dead exactly when the thing it checks is
-# dead. Call it from somewhere independent of cron: a deploy step, a health
-# check, or by hand.
+# dead. Call it from somewhere independent of cron. Its callers:
+#   - .github/workflows/maintenance-freshness.yml -- daily, UNATTENDED, over SSH
+#     from GitHub Actions; files/updates a labelled issue on failure.
+#   - scripts/health_check.sh -- on demand, by hand.
 #
 # Usage:
 #   ./check_maintenance_freshness.sh                       # default crontab
@@ -41,7 +43,7 @@ while [[ $# -gt 0 ]]; do
         --tolerance) TOLERANCE="$2"; shift 2 ;;
         --verbose|-v) VERBOSE=true; shift ;;
         --help|-h)
-            sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
