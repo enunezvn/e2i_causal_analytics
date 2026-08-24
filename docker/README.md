@@ -42,10 +42,10 @@ First build pulls PyTorch + ML dependencies — subsequent starts use cached lay
 | FalkorDB | 6381 | redis://localhost:6381 | |
 | BentoML | 3000 | http://localhost:3000 | 127.0.0.1 only |
 | Feast | 6567 | http://localhost:6567 | 127.0.0.1 only |
-| Grafana | 3200 | http://localhost:3200 | 127.0.0.1 only |
-| Prometheus | 9091 | http://localhost:9091 | 127.0.0.1 only |
-| Loki | 3101 | http://localhost:3101 | 127.0.0.1 only |
-| Alertmanager | 9093 | http://localhost:9093 | 127.0.0.1 only |
+| Grafana* | 3200 | http://localhost:3200 | monitoring profile; 127.0.0.1 only |
+| Prometheus* | 9091 | http://localhost:9091 | monitoring profile; 127.0.0.1 only |
+| Loki* | 3101 | http://localhost:3101 | monitoring profile; 127.0.0.1 only |
+| Alertmanager* | 9093 | http://localhost:9093 | monitoring profile; 127.0.0.1 only |
 | Flower* | 5555 | http://localhost:5555 | debug profile |
 | FalkorDB Browser* | 3030 | http://localhost:3030 | debug profile |
 | Redis Commander* | 8081 | http://localhost:8081 | dev-tools profile |
@@ -102,7 +102,17 @@ docker exec -it e2i_api_dev bash
 
 # Start with debug tools (Redis Commander, FalkorDB Browser)
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml --profile dev-tools --profile debug up -d
+
+# Start the observability stack (Prometheus, Grafana, Loki, Alertmanager, Promtail, exporters)
+# Off by default: no deploy step starts these, and they add ~1-1.5GB of RSS.
+COMPOSE_PROFILES=monitoring docker compose -f docker/docker-compose.yml up -d
 ```
+
+> **Observability is opt-in.** The monitoring services are gated behind the
+> `monitoring` profile, so a plain `up -d` does not start them and no deployment
+> can. `scripts/health_check.sh` derives its skip-set from
+> `docker compose config --services`, so enabling the profile re-arms those probes
+> automatically — nothing to toggle in two places.
 
 ## Troubleshooting
 
