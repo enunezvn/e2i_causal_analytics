@@ -64,6 +64,13 @@ jobs:
     # other slow-marked tests. The first PR-#74 validation run hit the
     # original 45-min timeout at the 55-min mark (10-min GH grace).
     timeout-minutes: 90
+    # Published for report-failure's #1804/#1813 routing: on failure the
+    # classify step decides upstream-transient vs real. Empty when the job
+    # passed or the classify step never produced a verdict (fail-safe: the
+    # reporter treats anything but 'upstream-transient' as the red alarm).
+    outputs:
+      outage_classification: ${{ steps.classify.outputs.classification }}
+      outage_detail: ${{ steps.classify.outputs.detail }}
     env:
       E2I_TESTING_MODE: 'true'
       SUPABASE_URL: 'http://localhost:54321'
@@ -214,10 +221,28 @@ jobs:
             --ignore=tests/performance/ \
             --ignore=tests/synthetic/test_synthetic_regimes.py \
             --junitxml=/tmp/slow-tests-junit.xml \
+            -o junit_logging=all \
             -n 2 \
             --dist=loadscope \
             --timeout=300 \
             --tb=short ${EXTRA_ARGS}
+
+      # #1804/#1813: decide whether this red is an upstream provider outage
+      # (the clinical-context live suite hitting a 5xx/timeout — three of those
+      # in five days each cost a triage session) or a real failure. The script
+      # prints its per-test derivation to stderr and a clean GITHUB_OUTPUT
+      # payload to stdout; `tee` keeps the verdict visible in the run log. The
+      # `junit_logging=all` flag above is load-bearing: without it the fan-out
+      # degradation failures carry no HTTP evidence in the XML (measured on run
+      # 32822893174) and a pure fan-out outage would mis-classify as real.
+      # Fail-safe: a missing junit, a crash, or a skipped step all leave the
+      # verdict blank/real, which the reporter treats as the red alarm.
+      - name: Classify the failure (upstream-transient vs real)
+        id: classify
+        if: failure()
+        run: |
+          python scripts/ci/classify_slow_tests_failure.py /tmp/slow-tests-junit.xml \
+            | tee -a "$GITHUB_OUTPUT"
 
       - name: Upload artifacts on failure or cancel
         if: always() && (failure() || cancelled())
@@ -813,6 +838,10 @@ jobs:
   # Auto-create / update issue on ANY job failure (Jobs A/C/D + Job B).
   # De-dups by `nightly-slow-tests-failure` label: comments on existing
   # open issue if one exists, else creates new.
+  # #1804/#1813 distinct outcome: when the ONLY red lane is Job A and its
+  # classify step verdicts upstream-transient (clinical-context live suite
+  # on an upstream 5xx/timeout), the report goes to the low-priority
+  # `[upstream-transient]`-titled rolling issue instead of this red alarm.
   # Job B (excluded-heavy) is BLOCKING since #617 — no longer continue-on-error,
   # so its `.result` is accurate and the alarm keys off it like A/C/D. This also
   # covers a Job B INFRA failure (pip install / mlflow boot) that never reached
@@ -854,11 +883,80 @@ jobs:
           JOB_B_RESULT: ${{ needs.excluded-heavy-tests.result }}
           # Job E (twin effect recovery) is the matrix aggregate across shards.
           JOB_E_RESULT: ${{ needs.twin-effect-recovery.result }}
+          # #1804/#1813: Job A's own verdict on its failure, from the classify
+          # step (scripts/ci/classify_slow_tests_failure.py). Empty unless Job A
+          # failed AND the classifier ran to completion.
+          JOB_A_CLASSIFICATION: ${{ needs.slow-tests.outputs.outage_classification }}
+          JOB_A_CLASSIFY_DETAIL: ${{ needs.slow-tests.outputs.outage_detail }}
         run: |
           set -euo pipefail
           DATE=$(date -u +%Y-%m-%d)
           SHA_SHORT=$(echo "${GIT_SHA}" | cut -c1-7)
           RESULTS="A(tracked)=${JOB_A_RESULT}, C(mem/perf)=${JOB_C_RESULT}, D(regimes)=${JOB_D_RESULT}, B(heavy,blocking)=${JOB_B_RESULT}, E(twin-recovery)=${JOB_E_RESULT}"
+
+          # ── #1804/#1813 routing: upstream provider outage ≠ red alarm ──
+          # When the ONLY red lane is Job A and its classifier says every
+          # failure was the clinical-context live suite hitting an upstream
+          # 5xx/timeout, file into a low-priority rolling issue instead of the
+          # red nightly alarm. The tests still went red (the #1612 signal is
+          # untouched); only the REPORTING is distinct. Any other shape — a
+          # second red lane, a 'real' verdict, or NO verdict (classifier never
+          # ran / crashed / output plumbing broke) — falls through to the red
+          # alarm below: fail-safe is always the alarm.
+          UPSTREAM_TRANSIENT=false
+          if [ "${JOB_A_RESULT}" = "failure" ] \
+             && [ "${JOB_C_RESULT}" != "failure" ] \
+             && [ "${JOB_D_RESULT}" != "failure" ] \
+             && [ "${JOB_B_RESULT}" != "failure" ] \
+             && [ "${JOB_E_RESULT}" != "failure" ] \
+             && [ "${JOB_A_CLASSIFICATION:-}" = "upstream-transient" ]; then
+            UPSTREAM_TRANSIENT=true
+          fi
+          echo "routing: ${RESULTS}; classification='${JOB_A_CLASSIFICATION:-<empty>}' -> upstream_transient=${UPSTREAM_TRANSIENT}"
+
+          if [ "${UPSTREAM_TRANSIENT}" = true ]; then
+            TITLE_PREFIX="[upstream-transient] "
+            TITLE="${TITLE_PREFIX}Nightly clinical-context live suite hit an upstream provider outage"
+
+            # Self-heal the label like maintenance-freshness.yml (#1807 D3):
+            # use it when it exists, create it when we can (description under
+            # GitHub's 100-char limit), and SAY why when we cannot — then file
+            # without it. The record landing matters more than its colour.
+            LABEL=nightly-upstream-transient
+            LABEL_ARGS=()
+            if gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qxF "$LABEL"; then
+              LABEL_ARGS=(--label "$LABEL")
+            elif gh label create "$LABEL" \
+                   --color FBCA04 \
+                   --description "Nightly Job A red auto-classified as an upstream provider outage (5xx/timeout); low priority"; then
+              LABEL_ARGS=(--label "$LABEL")
+            else
+              echo "::warning::could not create label '$LABEL' (error above) -- filing without it"
+            fi
+
+            # Dedup on the title prefix this workflow controls, NOT the label:
+            # `gh issue list --label <missing>` silently returns nothing and a
+            # label-keyed dedup would file a fresh issue per outage (#1807 D3).
+            EXISTING=$(gh issue list \
+              --state open \
+              --limit 500 \
+              --json number,title \
+              --jq "[.[] | select(.title | startswith(\"${TITLE_PREFIX}\"))] | .[0].number // empty")
+
+            BODY="$(printf "Upstream provider outage on %s (commit \`%s\`).\n\nClassifier verdict: %s\n\nJob results: %s\n\nRun: %s\n\nNo action needed for a lone occurrence — the live suite is DESIGNED to go red when a provider is down (#1612), and every failure in this run matched the upstream-outage shape (5xx/timeout, plus its static_fallback echoes). If this fires on many consecutive nights, the transient story stops being credible: check the provider's status page, then the client." "$DATE" "$SHA_SHORT" "${JOB_A_CLASSIFY_DETAIL:-<no detail>}" "$RESULTS" "$RUN_URL")"
+
+            if [ -n "$EXISTING" ]; then
+              echo "Commenting on existing upstream-transient issue #${EXISTING}"
+              gh issue comment "$EXISTING" --body "$BODY"
+            else
+              echo "Creating new upstream-transient rolling issue"
+              gh issue create \
+                --title "$TITLE" \
+                "${LABEL_ARGS[@]}" \
+                --body "$(printf "%s\n\n_Auto-created by .github/workflows/slow-tests.yml (#1813). Later outages are added as comments; close any time — the next occurrence re-files._" "$BODY")"
+            fi
+            exit 0
+          fi
 
           # Self-heal: ensure the dedup label exists BEFORE `gh issue create`.
           # `gh issue create --label <L>` does NOT auto-create the label — if it
