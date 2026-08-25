@@ -190,6 +190,7 @@ export {
   useDigitalTwinInsight,
   useHomeKpiInsight,
   useExperimentsInsight,
+  useClinicalNarrativeInsight,
 } from './use-insights';
 
 // =============================================================================

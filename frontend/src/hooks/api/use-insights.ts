@@ -14,6 +14,7 @@ import {
   getDigitalTwinInsight,
   getHomeKpiInsight,
   getExperimentsInsight,
+  getClinicalNarrativeInsight,
 } from '@/api/insights';
 import type {
   StrategicInsightResponse,
@@ -30,6 +31,7 @@ import type {
   DigitalTwinInsightRequest,
   HomeKpiInsightRequest,
   ExperimentsInsightRequest,
+  ClinicalNarrativeRequest,
 } from '@/types/insights';
 
 export const useKnowledgeGraphInsight = () =>
@@ -95,4 +97,9 @@ export const useHomeKpiInsight = () =>
 export const useExperimentsInsight = () =>
   useMutation<StrategicInsightResponse, ApiError, ExperimentsInsightRequest>({
     mutationFn: getExperimentsInsight,
+  });
+
+export const useClinicalNarrativeInsight = () =>
+  useMutation<StrategicInsightResponse, ApiError, ClinicalNarrativeRequest>({
+    mutationFn: getClinicalNarrativeInsight,
   });

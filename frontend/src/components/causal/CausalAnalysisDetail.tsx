@@ -13,7 +13,7 @@
  * @module components/causal/CausalAnalysisDetail
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
 import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
@@ -28,8 +28,16 @@ import type {
   EstimatorComparison,
   RefutationTestDetail,
 } from '@/types/causal';
-import { useClinicalContext } from '@/hooks/api';
+import { useClinicalContext, useClinicalNarrativeInsight } from '@/hooks/api';
 import { ClinicalContextPanel } from './ClinicalContextPanel';
+
+// The dataset each grain estimates over (mirrors the page's GRAINS list); the
+// narrative endpoint wants the grain word, the result carries the dataset.
+const DATASET_GRAIN: Record<string, string> = {
+  patient_journeys: 'patient',
+  hcp_adoption: 'hcp',
+  nba_triggers: 'trigger',
+};
 
 function formatEffect(ate: number | null | undefined): string {
   if (ate === null || ate === undefined || Number.isNaN(ate)) return 'N/A';
@@ -309,6 +317,36 @@ export function CausalAnalysisDetail({
   // Disabled until brand and outcome are present; never touches the estimate above.
   const clinicalContext = useClinicalContext(brand, result.outcome_var, result.treatment_var);
 
+  // LLM narrative for THIS analysis: auto-fire once the clinical context AND
+  // the result are both in (keyed so one distinct analysis fires exactly once,
+  // not on every re-render). The scope tag suppresses a late response from a
+  // previous analysis (mirrors the page's manualScope stale-scope guard).
+  const narrativeInsight = useClinicalNarrativeInsight();
+  const { mutate: generateNarrative, reset: resetNarrative } = narrativeInsight;
+  const narrativeKeyRef = useRef<string | null>(null);
+  const [narrativeScope, setNarrativeScope] = useState<string | null>(null);
+  const narrativeKey = `${brand ?? ''}|${result.dataset}|${result.treatment_var}|${result.outcome_var}|${result.ate ?? 'null'}`;
+  useEffect(() => {
+    if (!brand || !clinicalContext.data) return;
+    if (narrativeKeyRef.current === narrativeKey) return;
+    narrativeKeyRef.current = narrativeKey;
+    setNarrativeScope(narrativeKey);
+    resetNarrative();
+    generateNarrative({
+      brand,
+      grain: DATASET_GRAIN[result.dataset] ?? result.dataset,
+      treatment: result.treatment_var,
+      outcome: result.outcome_var,
+      ate: result.ate ?? null,
+      ate_ci_lower: result.ate_ci_lower ?? null,
+      ate_ci_upper: result.ate_ci_upper ?? null,
+      gate_decision: result.refutation.gate_decision ?? null,
+    });
+  }, [brand, clinicalContext.data, narrativeKey, result, generateNarrative, resetNarrative]);
+  const narrativeInScope = narrativeScope === narrativeKey;
+  const narrative = narrativeInScope ? narrativeInsight.data ?? null : null;
+  const narrativeLoading = narrativeInScope && narrativeInsight.isPending;
+
   return (
     <div className="space-y-6">
       <div className="grid md:grid-cols-3 gap-6">
@@ -384,7 +422,13 @@ export function CausalAnalysisDetail({
         />
       )}
 
-      {clinicalContext.data && <ClinicalContextPanel context={clinicalContext.data} />}
+      {clinicalContext.data && (
+        <ClinicalContextPanel
+          context={clinicalContext.data}
+          narrative={narrative}
+          narrativeLoading={narrativeLoading}
+        />
+      )}
 
       {(result.executive_summary ||
         result.narrative ||

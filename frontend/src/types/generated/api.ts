@@ -5502,6 +5502,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/insights/clinical-narrative": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clinical Narrative Insight
+         * @description ONE flowing narrative reading THIS causal analysis (treatment -> outcome,
+         *     signed ATE/CI, robustness gate) through the brand's clinical and competitive
+         *     context — server-fetched from the labeled clinical-context sources (spec
+         *     2026-08-24). Fragment provenance stays on the panel; this is the through-line.
+         */
+        post: operations["clinical_narrative_insight_api_insights_clinical_narrative_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alerts/stream": {
         parameters: {
             query?: never;
@@ -7705,6 +7728,32 @@ export interface components {
              * @description Explicit synthetic-estimate / real-context boundary statement.
              */
             honesty_label: string;
+        };
+        /**
+         * ClinicalNarrativeRequest
+         * @description Caller supplies the SCOPE + the RESULT (the same trust model as
+         *     CausalInsightRequest, which accepts caller effects); the clinical FACTS are
+         *     fetched SERVER-side from ClinicalContextService, so a bogus scope can only
+         *     produce an honest 404/absence — never a grounded-looking narrative from
+         *     arbitrary caller data.
+         */
+        ClinicalNarrativeRequest: {
+            /** Brand */
+            brand: string;
+            /** Grain */
+            grain: string;
+            /** Treatment */
+            treatment: string;
+            /** Outcome */
+            outcome: string;
+            /** Ate */
+            ate?: number | null;
+            /** Ate Ci Lower */
+            ate_ci_lower?: number | null;
+            /** Ate Ci Upper */
+            ate_ci_upper?: number | null;
+            /** Gate Decision */
+            gate_decision?: string | null;
         };
         /**
          * CognitivePhase
@@ -30408,6 +30457,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ExperimentsInsightRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategicInsightResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clinical_narrative_insight_api_insights_clinical_narrative_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClinicalNarrativeRequest"];
             };
         };
         responses: {

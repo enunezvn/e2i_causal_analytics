@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { ClinicalContextPanel } from './ClinicalContextPanel';
 import type { ClinicalContext } from '@/types/causal';
@@ -247,6 +248,86 @@ describe('ClinicalContextPanel', () => {
     // The live relevance citation is demoted to "Additional" so it does not read as
     // the brand's own evidence (the reported competitor-paper confusion).
     expect(screen.getByText(/Additional real-world evidence/i)).toBeInTheDocument();
+  });
+
+  const NARRATIVE = {
+    insight:
+      'Ribociclib, a CDK4/6 inhibitor, is approved for HR+/HER2- advanced breast cancer.\n\n' +
+      'The estimate (+0.14, gate: proceed) survived all robustness checks.',
+    key_takeaways: [],
+    grounding: [],
+    is_fallback: false,
+    generated_at: '2026-08-24T00:00:00Z',
+    provenance: 'LLM synthesis of the labeled clinical-context sources; facts drawn only from them.',
+  };
+
+  it('leads with the narrative and collapses fragments under Sources & provenance', () => {
+    render(<ClinicalContextPanel context={FULL} narrative={NARRATIVE} />);
+    // Narrative paragraphs render as the primary read, labeled as synthesized.
+    expect(screen.getByText(/survived all robustness checks/)).toBeInTheDocument();
+    expect(screen.getByText(/LLM-synthesized · sources below/)).toBeInTheDocument();
+    expect(screen.getByText(/facts drawn only from them/)).toBeInTheDocument();
+    // Fragments are collapsed by default: the MoA fragment is not in the DOM.
+    expect(screen.getByRole('button', { name: /Sources & provenance/i })).toBeInTheDocument();
+    expect(screen.queryByText('CDK4/6 inhibitor')).not.toBeInTheDocument();
+    // The honesty label stays visible OUTSIDE the collapse.
+    expect(screen.getByText(/SYNTHETIC/)).toBeInTheDocument();
+  });
+
+  it('expands the fragments when the sources trigger is clicked', async () => {
+    render(<ClinicalContextPanel context={FULL} narrative={NARRATIVE} />);
+    await userEvent.click(screen.getByRole('button', { name: /Sources & provenance/i }));
+    expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
+  });
+
+  it('renders fragments expanded (no chip, no collapse) on a fallback narrative', () => {
+    render(
+      <ClinicalContextPanel context={FULL} narrative={{ ...NARRATIVE, is_fallback: true }} />
+    );
+    expect(screen.queryByText(/LLM-synthesized/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sources & provenance/i })).not.toBeInTheDocument();
+    expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
+  });
+
+  it('renders fragments expanded exactly as before with no narrative at all', () => {
+    render(<ClinicalContextPanel context={FULL} />);
+    expect(screen.queryByText(/LLM-synthesized/)).not.toBeInTheDocument();
+    expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
+  });
+
+  it('shows a loading shimmer while the narrative is pending, fragments still visible', () => {
+    const { container } = render(
+      <ClinicalContextPanel context={FULL} narrativeLoading />
+    );
+    expect(container.querySelector('.animate-pulse')).not.toBeNull();
+    expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
+  });
+
+  it('drops blank paragraphs from the narrative instead of rendering empty <p>s', () => {
+    const { container } = render(
+      <ClinicalContextPanel
+        context={FULL}
+        narrative={{ ...NARRATIVE, insight: '\n\nOnly paragraph' }}
+      />
+    );
+    expect(screen.getByText('Only paragraph')).toBeInTheDocument();
+    expect(container.querySelectorAll('p.whitespace-pre-line').length).toBe(1);
+  });
+
+  it('suppresses the shimmer when a real narrative is already rendered', () => {
+    const { container } = render(
+      <ClinicalContextPanel context={FULL} narrative={NARRATIVE} narrativeLoading />
+    );
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+    expect(screen.getByText(/survived all robustness checks/)).toBeInTheDocument();
+  });
+
+  it('treats a whitespace-only insight as no narrative at all', () => {
+    render(
+      <ClinicalContextPanel context={FULL} narrative={{ ...NARRATIVE, insight: '   ' }} />
+    );
+    expect(screen.queryByText(/LLM-synthesized/)).not.toBeInTheDocument();
+    expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
   });
 });
 

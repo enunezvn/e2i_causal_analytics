@@ -122,6 +122,20 @@ export interface TreatmentEffectInsightRequest {
   estimator?: string | null;
 }
 
+/** POST /insights/clinical-narrative — the caller supplies only the SCOPE +
+ *  RESULT (same trust model as CausalInsightRequest); the clinical facts are
+ *  fetched server-side from the labeled clinical-context sources. */
+export interface ClinicalNarrativeRequest {
+  brand: string;
+  grain: string;
+  treatment: string;
+  outcome: string;
+  ate?: number | null;
+  ate_ci_lower?: number | null;
+  ate_ci_upper?: number | null;
+  gate_decision?: string | null;
+}
+
 export interface ExecutiveBriefInsightRequest {
   /**
    * Brand only: the grounding figures are derived SERVER-SIDE from the latest

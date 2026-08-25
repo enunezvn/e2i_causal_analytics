@@ -8,6 +8,7 @@ import type {
   PredictiveWhatIfInsightRequest,
   ResourceInsightRequest,
   TreatmentEffectInsightRequest,
+  ClinicalNarrativeRequest,
   ExecutiveBriefInsightRequest,
   HTEInsightRequest,
   FeedbackLearningInsightRequest,
@@ -66,5 +67,14 @@ export const getExperimentsInsight = (r: ExperimentsInsightRequest) =>
     `${BASE}/experiments`,
     r,
     // Cold scope = one embed query + LM narration; Redis caches per scope.
+    { timeout: 95000 }
+  );
+
+export const getClinicalNarrativeInsight = (r: ClinicalNarrativeRequest) =>
+  post<StrategicInsightResponse, ClinicalNarrativeRequest>(
+    `${BASE}/clinical-narrative`,
+    r,
+    // Server fetches the clinical-context fan-out (cold: tens of seconds) then
+    // runs the LM; Redis caches per (scope + grounding content). nginx allows 120s.
     { timeout: 95000 }
   );

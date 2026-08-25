@@ -1,15 +1,26 @@
 // frontend/src/components/causal/CausalAnalysisDetail.test.tsx
-import { describe, it, expect, vi } from 'vitest';
+import { StrictMode } from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderWithProviders, screen } from '@/test/utils';
 import { CausalAnalysisDetail } from './CausalAnalysisDetail';
-import { useClinicalContext } from '@/hooks/api';
-import type { AgentCausalAnalysisResponse } from '@/types/causal';
+import { useClinicalContext, useClinicalNarrativeInsight } from '@/hooks/api';
+import type { AgentCausalAnalysisResponse, ClinicalContext } from '@/types/causal';
 
-// The detail panel uses exactly one hook from @/hooks/api. Mock it so the clinical
-// context query is observable: without a `brand` prop it stays disabled, which is
-// exactly what `{ data: undefined }` reproduces for the rest of this suite.
+// The detail panel uses two hooks from @/hooks/api. Mock both so the clinical
+// context query and the narrative mutation are observable: without a `brand`
+// prop the context query stays disabled, which is exactly what
+// `{ data: undefined }` reproduces for the rest of this suite; the narrative
+// mutation is spied via mockNarrativeMutate/mockNarrativeReset.
+const mockNarrativeMutate = vi.fn();
+const mockNarrativeReset = vi.fn();
 vi.mock('@/hooks/api', () => ({
   useClinicalContext: vi.fn(() => ({ data: undefined })),
+  useClinicalNarrativeInsight: vi.fn(() => ({
+    data: undefined,
+    isPending: false,
+    mutate: mockNarrativeMutate,
+    reset: mockNarrativeReset,
+  })),
 }));
 
 // Stub the heavy DAG viz — assert the detail feeds it the agent's graph + refutation.
@@ -91,7 +102,28 @@ const RESULT: AgentCausalAnalysisResponse = {
   latency_ms: 4200,
 };
 
+const CLINICAL: ClinicalContext = {
+  brand: 'Remibrutinib',
+  drug_name: 'remibrutinib',
+  disease: 'Chronic spontaneous urticaria',
+  our_outcome: 'persistent_180d',
+  mapped_endpoint: null,
+  mechanism: { mechanism_of_action: 'BTK inhibitor', source: 'chembl' },
+  pivotal_endpoints: { endpoints: [], source: 'clinicaltrials.gov' },
+  real_world_evidence: null,
+  approved_indications: {
+    indications: [], limitations_of_use: null, boxed_warning: null, source: 'openfda',
+  },
+  competitor_landscape: { competitors: [], count: 0, source: 'curated' },
+  honesty_label: 'Effect estimate = a SYNTHETIC patient cohort.',
+};
+
 describe('CausalAnalysisDetail', () => {
+  beforeEach(() => {
+    mockNarrativeMutate.mockClear();
+    mockNarrativeReset.mockClear();
+  });
+
   it('renders the effect, estimator, gate, and discovered confounders', () => {
     renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
     // ATE renders in the headline AND the selected-estimator comparison row (same value by design) → getAllByText.
@@ -262,5 +294,102 @@ describe('CausalAnalysisDetail — clinical context follows the analysis (#1763)
       'persistent_180d',
       'treatment_arm'
     );
+  });
+});
+
+// The narrative auto-fires exactly once per distinct analysis, gated on both the
+// clinical context having loaded and a brand being in scope (the narrative is
+// brand-scoped, same as the clinical context itself).
+describe('CausalAnalysisDetail — auto-fires the clinical narrative (Task 8)', () => {
+  beforeEach(() => {
+    mockNarrativeMutate.mockClear();
+    mockNarrativeReset.mockClear();
+    // A per-test `mockReturnValue` on useClinicalNarrativeInsight (see the
+    // panel-passthrough test below) otherwise LEAKS into every later test in
+    // this file — `mockClear()` only resets call history, not the return-value
+    // implementation. Restore the module factory's default here so each test
+    // starts from the same "no narrative yet" state and opts in explicitly.
+    vi.mocked(useClinicalNarrativeInsight).mockReturnValue({
+      data: undefined,
+      isPending: false,
+      mutate: mockNarrativeMutate,
+      reset: mockNarrativeReset,
+    } as never);
+  });
+
+  it('does NOT fire the narrative before the clinical context has loaded', () => {
+    vi.mocked(useClinicalContext).mockReturnValue({ data: undefined } as never);
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} brand="Remibrutinib" />);
+    expect(mockNarrativeMutate).not.toHaveBeenCalled();
+  });
+
+  it('fires the narrative exactly once when context + result are both ready', () => {
+    vi.mocked(useClinicalContext).mockReturnValue({ data: CLINICAL } as never);
+    const { rerender } = renderWithProviders(
+      <CausalAnalysisDetail result={RESULT} brand="Remibrutinib" />
+    );
+    expect(mockNarrativeMutate).toHaveBeenCalledTimes(1);
+    expect(mockNarrativeMutate).toHaveBeenCalledWith({
+      brand: 'Remibrutinib',
+      grain: 'patient',
+      treatment: 'treatment_arm',
+      outcome: 'persistent_180d',
+      ate: 0.0875,
+      ate_ci_lower: 0.0867,
+      ate_ci_upper: 0.0884,
+      gate_decision: RESULT.refutation.gate_decision ?? null,
+    });
+    // A re-render with the same result must not re-fire (keyed auto-fire).
+    rerender(<CausalAnalysisDetail result={RESULT} brand="Remibrutinib" />);
+    expect(mockNarrativeMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT fire without a brand (the narrative is brand-scoped)', () => {
+    vi.mocked(useClinicalContext).mockReturnValue({ data: CLINICAL } as never);
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
+    expect(mockNarrativeMutate).not.toHaveBeenCalled();
+  });
+
+  it('passes the in-scope narrative through to the clinical context panel', () => {
+    vi.mocked(useClinicalContext).mockReturnValue({ data: CLINICAL } as never);
+    vi.mocked(useClinicalNarrativeInsight).mockReturnValue({
+      data: {
+        insight: 'DISTINCTIVE NARRATIVE TEXT for the wiring test',
+        key_takeaways: [],
+        grounding: [],
+        is_fallback: false,
+        generated_at: '2026-08-25T00:00:00Z',
+        provenance: 'LLM synthesis of the labeled clinical-context sources; facts drawn only from them.',
+      },
+      isPending: false,
+      mutate: mockNarrativeMutate,
+      reset: mockNarrativeReset,
+    } as never);
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} brand="Remibrutinib" />);
+    expect(screen.getByText(/DISTINCTIVE NARRATIVE TEXT/)).toBeInTheDocument();
+  });
+
+  it('re-fires the narrative when the analysis key changes', () => {
+    vi.mocked(useClinicalContext).mockReturnValue({ data: CLINICAL } as never);
+    const { rerender } = renderWithProviders(
+      <CausalAnalysisDetail result={RESULT} brand="Remibrutinib" />
+    );
+    expect(mockNarrativeMutate).toHaveBeenCalledTimes(1);
+    rerender(<CausalAnalysisDetail result={{ ...RESULT, ate: 0.2 }} brand="Remibrutinib" />);
+    expect(mockNarrativeMutate).toHaveBeenCalledTimes(2);
+    expect(mockNarrativeMutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ate: 0.2 })
+    );
+    expect(mockNarrativeReset).toHaveBeenCalledTimes(2);
+  });
+
+  it('fires exactly once under React StrictMode double-invoked effects', () => {
+    vi.mocked(useClinicalContext).mockReturnValue({ data: CLINICAL } as never);
+    renderWithProviders(
+      <StrictMode>
+        <CausalAnalysisDetail result={RESULT} brand="Remibrutinib" />
+      </StrictMode>
+    );
+    expect(mockNarrativeMutate).toHaveBeenCalledTimes(1);
   });
 });

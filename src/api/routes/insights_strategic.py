@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.api.dependencies.auth import require_analyst
@@ -238,6 +238,23 @@ class TreatmentEffectInsightRequest(BaseModel):
     p_value: float | None = None
     n: int
     estimator: str | None = None
+
+
+class ClinicalNarrativeRequest(BaseModel):
+    """Caller supplies the SCOPE + the RESULT (the same trust model as
+    CausalInsightRequest, which accepts caller effects); the clinical FACTS are
+    fetched SERVER-side from ClinicalContextService, so a bogus scope can only
+    produce an honest 404/absence — never a grounded-looking narrative from
+    arbitrary caller data."""
+
+    brand: str
+    grain: str
+    treatment: str
+    outcome: str
+    ate: float | None = None
+    ate_ci_lower: float | None = None
+    ate_ci_upper: float | None = None
+    gate_decision: str | None = None
 
 
 # ---- Endpoints ----------------------------------------------------------------
@@ -1076,3 +1093,109 @@ async def experiments_portfolio_insight(
     return _finalize(
         payload, provenance="A/B portfolio results grouped by intervention (server-derived)"
     )
+
+
+# Bound the server-side clinical fan-out: with the causal-evidence block the
+# cold-cache path is several live API calls (tens of seconds worst case). On
+# timeout the narrative degrades honestly to the result-only fallback.
+_CLINICAL_NARRATIVE_FETCH_TIMEOUT_S = 30.0
+
+
+@router.post("/clinical-narrative", response_model=StrategicInsightResponse)
+async def clinical_narrative_insight(
+    req: ClinicalNarrativeRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """ONE flowing narrative reading THIS causal analysis (treatment -> outcome,
+    signed ATE/CI, robustness gate) through the brand's clinical and competitive
+    context — server-fetched from the labeled clinical-context sources (spec
+    2026-08-24). Fragment provenance stays on the panel; this is the through-line."""
+    from src.insights import clinical_narrative
+    from src.services.clinical_context.brand_map import resolve_brand_profile
+    from src.services.clinical_context.service import ClinicalContextService
+
+    provenance = (
+        "LLM synthesis of the labeled clinical-context sources; facts drawn only from them."
+    )
+    # Unknown brand -> 404 BEFORE any fan-out (matches GET /causal/clinical-context).
+    try:
+        resolve_brand_profile(req.brand)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown brand '{req.brand}'") from None
+
+    def _fetch() -> dict[str, Any]:
+        # A fresh instance is fine: every cache in the service module is
+        # module-level, so this shares the per-worker warm caches with the
+        # panel's own GET /causal/clinical-context route.
+        return ClinicalContextService().get_context(
+            req.brand, req.outcome, treatment=req.treatment, include_causal_evidence=True
+        )
+
+    def _result_only() -> StrategicInsightResponse:
+        g = clinical_narrative.build_result_only_grounding(
+            brand=req.brand,
+            grain=req.grain,
+            treatment=req.treatment,
+            outcome=req.outcome,
+            ate=req.ate,
+            ate_ci_lower=req.ate_ci_lower,
+            ate_ci_upper=req.ate_ci_upper,
+            gate_decision=req.gate_decision,
+        )
+        return _finalize(clinical_narrative.fallback(g), provenance=provenance)
+
+    try:
+        payload_ctx = await asyncio.wait_for(
+            asyncio.to_thread(_fetch), timeout=_CLINICAL_NARRATIVE_FETCH_TIMEOUT_S
+        )
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning(
+            "clinical-narrative context fetch failed for %s: %r", req.brand, e, exc_info=True
+        )
+        return _result_only()
+
+    try:
+        g = clinical_narrative.build_grounding(
+            payload_ctx,
+            grain=req.grain,
+            ate=req.ate,
+            ate_ci_lower=req.ate_ci_lower,
+            ate_ci_upper=req.ate_ci_upper,
+            gate_decision=req.gate_decision,
+        )
+    except Exception as e:  # noqa: BLE001 — a composition defect, NOT a fetch failure:
+        # the payload arrived; our composer choked on its shape. Same honest
+        # degradation (result-only is all we can render), different incident trail.
+        logger.warning(
+            "clinical-narrative grounding composition failed for %s (context fetched OK): %r",
+            req.brand,
+            e,
+            exc_info=True,
+        )
+        return _result_only()
+
+    # Key on the composed grounding strings: they encode treatment, outcome,
+    # grain, the ATE/CI/gate AND the fragment content — so a narrative written
+    # from a degraded-source payload is never served for the live payload, and
+    # any fact change produces a fresh generation (sibling-route discipline).
+    key = cache_key(
+        "clinical-narrative",
+        f"{req.brand}:{req.grain}",
+        {
+            "a": g["analysis"],
+            "r": g["result"],
+            "cp": g["clinical_position"],
+            "co": g["competitive_position"],
+            "te": g["trial_endpoints"],
+            "ev": g["evidence"],
+        },
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(clinical_narrative.generate_insight, g)
+        # A fallback marks a transient state (LM outage / guard-rejected
+        # sample): cache briefly so the panel self-heals instead of pinning
+        # the factual summary for the hour (exec-brief/HTE precedent).
+        await cache_set(key, payload, ttl_seconds=300 if payload.get("is_fallback") else 3600)
+    return _finalize(payload, provenance=provenance)
