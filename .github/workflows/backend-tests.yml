@@ -351,6 +351,7 @@ jobs:
             tests/unit/test_run_real_pipeline_ragas.py \
             tests/unit/test_run_real_pipeline_ragas_persist_1489.py \
             tests/unit/test_sampling_frame_gate.py \
+            tests/unit/test_slow_tests_upstream_classifier.py \
             tests/unit/test_supabase_client_misuse_guard.py \
             tests/unit/test_workflows_yaml_parse.py \
             tests/api/test_predictions_endpoints.py \
