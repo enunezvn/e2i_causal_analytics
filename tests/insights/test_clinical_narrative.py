@@ -39,9 +39,21 @@ def _payload(**overrides):
         },
         "pivotal_endpoints": {
             "endpoints": [
-                {"measure": "Change from baseline in UAS7 at Week 12", "time_frame": "Week 12", "nct_id": "NCT05030311"},
-                {"measure": "Change from baseline in ISS7 at Week 12", "time_frame": "Week 12", "nct_id": "NCT05030311"},
-                {"measure": "Change from baseline in HSS7 at Week 12", "time_frame": "Week 12", "nct_id": "NCT05030311"},
+                {
+                    "measure": "Change from baseline in UAS7 at Week 12",
+                    "time_frame": "Week 12",
+                    "nct_id": "NCT05030311",
+                },
+                {
+                    "measure": "Change from baseline in ISS7 at Week 12",
+                    "time_frame": "Week 12",
+                    "nct_id": "NCT05030311",
+                },
+                {
+                    "measure": "Change from baseline in HSS7 at Week 12",
+                    "time_frame": "Week 12",
+                    "nct_id": "NCT05030311",
+                },
             ],
             "source": "clinicaltrials.gov",
         },
@@ -83,7 +95,13 @@ def _payload(**overrides):
 
 
 def _grounding(**overrides):
-    kwargs = {"grain": "hcp", "ate": 0.14, "ate_ci_lower": 0.05, "ate_ci_upper": 0.23, "gate_decision": "proceed"}
+    kwargs = {
+        "grain": "hcp",
+        "ate": 0.14,
+        "ate_ci_lower": 0.05,
+        "ate_ci_upper": 0.23,
+        "gate_decision": "proceed",
+    }
     kwargs.update({k: overrides.pop(k) for k in list(overrides) if k in kwargs})
     return clinical_narrative.build_grounding(_payload(**overrides), **kwargs)
 
@@ -131,7 +149,9 @@ class TestBuildGrounding:
     def test_result_string_pins_signed_ate_ci_and_gate_phrase(self):
         g = _grounding()
         assert "ATE +0.1400 [95% CI +0.0500, +0.2300]" in g["result"]
-        assert "Robustness gate: proceed — the estimate survived all robustness checks." in g["result"]
+        assert (
+            "Robustness gate: proceed — the estimate survived all robustness checks." in g["result"]
+        )
         assert "synthetic patient cohort" in g["result"]
 
     def test_gate_phrases_review_block_and_missing(self):
@@ -168,7 +188,12 @@ class TestBuildGrounding:
             }
         )
         g = clinical_narrative.build_grounding(
-            payload, grain="patient", ate=0.05, ate_ci_lower=None, ate_ci_upper=None, gate_decision=None
+            payload,
+            grain="patient",
+            ate=0.05,
+            ate_ci_lower=None,
+            ate_ci_upper=None,
+            gate_decision=None,
         )
         assert (
             "The treatment 'high disease severity' is a patient-state variable "
@@ -186,14 +211,22 @@ class TestBuildGrounding:
             }
         )
         g = clinical_narrative.build_grounding(
-            payload, grain="patient", ate=0.02, ate_ci_lower=None, ate_ci_upper=None, gate_decision="review"
+            payload,
+            grain="patient",
+            ate=0.02,
+            ate_ci_lower=None,
+            ate_ci_upper=None,
+            gate_decision="review",
         )
         assert "commercial (access/promotion) lever" in g["analysis"]
         assert "never this lever" in g["analysis"]
 
     def test_unmapped_outcome_is_stated(self):
         g = _grounding()
-        assert "Our outcome 'adopted' is not mapped to any registered endpoint." in g["trial_endpoints"]
+        assert (
+            "Our outcome 'adopted' is not mapped to any registered endpoint."
+            in g["trial_endpoints"]
+        )
         assert "Change from baseline in UAS7 at Week 12" in g["trial_endpoints"]
 
     def test_mapped_outcome_names_the_endpoint(self):
@@ -204,9 +237,7 @@ class TestBuildGrounding:
         )
 
     def test_endpoint_list_is_capped_with_honest_overflow(self):
-        eps = [
-            {"measure": f"Endpoint {i}", "time_frame": None, "nct_id": None} for i in range(7)
-        ]
+        eps = [{"measure": f"Endpoint {i}", "time_frame": None, "nct_id": None} for i in range(7)]
         g = _grounding(pivotal_endpoints={"endpoints": eps, "source": "clinicaltrials.gov"})
         assert "Endpoint 4" in g["trial_endpoints"]
         assert "Endpoint 5" not in g["trial_endpoints"]
@@ -234,7 +265,10 @@ class TestBuildGrounding:
 
     def test_label_read_vs_unreadable_are_different_claims(self):
         read = _grounding()  # openfda source, no considerations
-        assert "The FDA label was read and carries nothing bearing on this outcome." in read["evidence"]
+        assert (
+            "The FDA label was read and carries nothing bearing on this outcome."
+            in read["evidence"]
+        )
         unreadable = _grounding(
             approved_indications={
                 "indications": ["curated indication text"],
@@ -307,7 +341,10 @@ class TestBuildGrounding:
     def test_competitive_position_carries_framing_and_rivals(self):
         g = _grounding()
         assert "two injectable biologics" in g["competitive_position"]
-        assert "Curated rivals: Xolair (omalizumab); Dupixent (dupilumab)." in g["competitive_position"]
+        assert (
+            "Curated rivals: Xolair (omalizumab); Dupixent (dupilumab)."
+            in g["competitive_position"]
+        )
 
     def test_grounding_chips(self):
         g = _grounding()
@@ -412,7 +449,9 @@ class TestGenerateInsight:
             "Details at https://example.com/made-up.",
         ):
             monkeypatch.setattr(
-                clinical_narrative, "run_signature", lambda *a, _b=bad, **k: SimpleNamespace(narrative=_b)
+                clinical_narrative,
+                "run_signature",
+                lambda *a, _b=bad, **k: SimpleNamespace(narrative=_b),
             )
             assert clinical_narrative.generate_insight(_grounding())["is_fallback"] is True
 
@@ -467,7 +506,9 @@ class TestGenerateInsight:
         g = _grounding_with_citations()
         narrative = "Real-world use is documented (PMID: 35642282) alongside the estimate."
         monkeypatch.setattr(
-            clinical_narrative, "run_signature", lambda *a, **k: SimpleNamespace(narrative=narrative)
+            clinical_narrative,
+            "run_signature",
+            lambda *a, **k: SimpleNamespace(narrative=narrative),
         )
         out = clinical_narrative.generate_insight(g)
         assert out["is_fallback"] is False
@@ -524,7 +565,9 @@ class TestGenerateInsight:
 
         def fake_run_signature(*a, **k):
             calls.append(k.get("lm_cache"))
-            return SimpleNamespace(narrative="A registry study (PMID 99999999) proved adoption doubles.")
+            return SimpleNamespace(
+                narrative="A registry study (PMID 99999999) proved adoption doubles."
+            )
 
         monkeypatch.setattr(clinical_narrative, "run_signature", fake_run_signature)
         out = clinical_narrative.generate_insight(_grounding())

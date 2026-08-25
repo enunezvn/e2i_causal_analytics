@@ -954,10 +954,17 @@ def _clinical_payload():
         },
         "analysis_framing": "This analysis asks what being on remibrutinib does to prescriber adoption.",
         "analysis_grounding": None,
-        "mechanism": {"mechanism_of_action": "Bruton tyrosine kinase (BTK) inhibitor", "source": "chembl"},
+        "mechanism": {
+            "mechanism_of_action": "Bruton tyrosine kinase (BTK) inhibitor",
+            "source": "chembl",
+        },
         "pivotal_endpoints": {
             "endpoints": [
-                {"measure": "Change from baseline in UAS7 at Week 12", "time_frame": "Week 12", "nct_id": "NCT05030311"}
+                {
+                    "measure": "Change from baseline in UAS7 at Week 12",
+                    "time_frame": "Week 12",
+                    "nct_id": "NCT05030311",
+                }
             ],
             "source": "clinicaltrials.gov",
         },
@@ -995,7 +1002,11 @@ def test_clinical_narrative_fallback_grounds_in_server_fetched_facts(test_client
     # Facts are fetched SERVER-side: stub the service, not the request.
     monkeypatch.setattr(
         "src.services.clinical_context.service.ClinicalContextService.get_context",
-        lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
+        lambda self,
+        brand,
+        outcome,
+        treatment=None,
+        include_causal_evidence=False: _clinical_payload(),
     )
     # Redis is LIVE on this box and the grounding-derived key repeats across
     # runs: force a miss so this exercises the generate path, not a payload
@@ -1050,7 +1061,11 @@ def test_clinical_narrative_fallback_is_cached_briefly(test_client, monkeypatch)
     # transient — cache 300s, never the full hour.
     monkeypatch.setattr(
         "src.services.clinical_context.service.ClinicalContextService.get_context",
-        lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
+        lambda self,
+        brand,
+        outcome,
+        treatment=None,
+        include_causal_evidence=False: _clinical_payload(),
     )
 
     async def _no_cached(key):
@@ -1092,7 +1107,11 @@ def test_clinical_narrative_fetch_timeout_degrades(test_client, monkeypatch):
 def test_clinical_narrative_cache_hit_short_circuits_generation(test_client, monkeypatch):
     monkeypatch.setattr(
         "src.services.clinical_context.service.ClinicalContextService.get_context",
-        lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
+        lambda self,
+        brand,
+        outcome,
+        treatment=None,
+        include_causal_evidence=False: _clinical_payload(),
     )
     canned = {
         "insight": "CACHED NARRATIVE",
@@ -1127,7 +1146,11 @@ def test_clinical_narrative_cache_hit_short_circuits_generation(test_client, mon
 def test_clinical_narrative_real_narrative_cached_for_the_hour(test_client, monkeypatch):
     monkeypatch.setattr(
         "src.services.clinical_context.service.ClinicalContextService.get_context",
-        lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
+        lambda self,
+        brand,
+        outcome,
+        treatment=None,
+        include_causal_evidence=False: _clinical_payload(),
     )
     monkeypatch.setattr(
         "src.insights.clinical_narrative.generate_insight",

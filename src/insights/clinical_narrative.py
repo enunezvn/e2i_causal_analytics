@@ -217,7 +217,9 @@ def build_grounding(
     measures = [str(e.get("measure")) for e in (eps.get("endpoints") or []) if e.get("measure")]
     ep_lines: list[str] = []
     if measures:
-        extra = f" (+{len(measures) - _MAX_ENDPOINTS} more)" if len(measures) > _MAX_ENDPOINTS else ""
+        extra = (
+            f" (+{len(measures) - _MAX_ENDPOINTS} more)" if len(measures) > _MAX_ENDPOINTS else ""
+        )
         ep_lines.append(
             "Registered pivotal trial endpoint measures: "
             + "; ".join(measures[:_MAX_ENDPOINTS])
@@ -246,11 +248,15 @@ def build_grounding(
         # "read, nothing bears"; under the fallback it means "could not read".
         ev_lines.append("The FDA label was read and carries nothing bearing on this outcome.")
     else:
-        ev_lines.append("The FDA label could not be read for this analysis (curated fallback in use).")
+        ev_lines.append(
+            "The FDA label could not be read for this analysis (curated fallback in use)."
+        )
     ce = payload.get("causal_evidence") or {}
     edge = ce.get("indication_edge")
     if edge:
-        verb = "an approved therapy for" if edge.get("predicate") == "treats" else "in development for"
+        verb = (
+            "an approved therapy for" if edge.get("predicate") == "treats" else "in development for"
+        )
         ev_lines.append(
             f"Open Targets records {edge.get('drug_name')} as {verb} {edge.get('disease_name')} "
             f"(max clinical stage: {edge.get('max_clinical_stage')})."
@@ -318,7 +324,9 @@ def build_result_only_grounding(
     unavailable = "The clinical-context sources could not be fetched for this analysis."
     return {
         "analysis": f"Causal analysis of {treatment} -> {outcome} for {brand} at the {grain} grain.",
-        "result": _result_sentence(treatment, outcome, ate, ate_ci_lower, ate_ci_upper, gate_decision),
+        "result": _result_sentence(
+            treatment, outcome, ate, ate_ci_lower, ate_ci_upper, gate_decision
+        ),
         "clinical_position": unavailable,
         "competitive_position": unavailable,
         "trial_endpoints": unavailable,
