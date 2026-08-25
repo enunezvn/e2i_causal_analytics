@@ -15,15 +15,23 @@
 import {
   BookText,
   Building2,
+  ChevronRight,
   ClipboardList,
   ExternalLink,
   FlaskConical,
   Microscope,
+  Sparkles,
   Stethoscope,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import type { ClinicalContext } from '@/types/causal';
+import type { StrategicInsightResponse } from '@/types/insights';
 
 // The endpoint list grounds outcome definitions; it is NOT a data table. Cap how
 // many measures we surface so a brand with many registered trial endpoints
@@ -97,7 +105,18 @@ const TREATMENT_KIND_NOTE: Record<string, string> = {
     'an access and promotion lever — the mechanism, endpoints and label below describe the therapy, not this lever. The real-world-evidence search does carry this lever\u2019s own health-services theme when one exists.',
 };
 
-export function ClinicalContextPanel({ context }: { context: ClinicalContext }) {
+export function ClinicalContextPanel({
+  context,
+  narrative,
+  narrativeLoading = false,
+}: {
+  context: ClinicalContext;
+  /** LLM-synthesized single narrative for THIS analysis. A fallback response or
+   *  an absent narrative renders the fragments expanded exactly as before —
+   *  the no-regression path. */
+  narrative?: StrategicInsightResponse | null;
+  narrativeLoading?: boolean;
+}) {
   const {
     mechanism,
     pivotal_endpoints,
@@ -115,29 +134,12 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
   // result and the curated static fallback, so the explanatory text must not claim
   // ClinicalTrials.gov / "verbatim" provenance when the source is the fallback.
   const endpointsFromCtgov = pivotal_endpoints.source === 'clinicaltrials.gov';
-  return (
-    <div className="space-y-4 rounded-md border p-4">
-      <div>
-        <div className="flex items-center gap-2">
-          <Stethoscope className="h-4 w-4 text-muted-foreground" />
-          <p className="text-sm font-medium">Clinical context</p>
-        </div>
-        {/* The mapping claim lives in TWO places in this file and I fixed only the
-            other one. `mapped_endpoint` is nullable, so "the real trial endpoints our
-            outcomes stand in for" is unearned for an outcome we never mapped, exactly
-            as it was sixty lines below (codex iter-14 HIGH). The claim is the unit,
-            not the file — and here, not even the file. */}
-        <p className="mt-1 text-xs text-muted-foreground">
-          The brand&rsquo;s clinical reality alongside this analysis — its mechanism,
-          {mapped_endpoint
-            ? ' the real trial endpoints our outcomes stand in for,'
-            : ' this brand\u2019s real trial endpoints,'}{' '}
-          and the approved labeling. The label describes the therapy and its indication; it
-          makes no claim about a commercial lever, and nothing below reads a commercial
-          result as on-label.
-        </p>
-      </div>
-
+  // A fallback narrative is a factual summary of the same fragments — showing
+  // it ABOVE the fragments would duplicate them, so fallback renders the
+  // fragments expanded, exactly like no narrative at all.
+  const hasNarrative = Boolean(narrative && !narrative.is_fallback && narrative.insight.trim());
+  const fragments = (
+    <>
       {/* The analysis this context is grounding. Absent on the brand-level view,
           where there is no single treatment -> outcome pair in scope. */}
       {analysis_framing && (
@@ -443,8 +445,72 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
           </div>
         </div>
       )}
+    </>
+  );
 
-      {/* The synthetic/real honesty boundary — always shown */}
+  return (
+    <div className="space-y-4 rounded-md border p-4">
+      <div>
+        <div className="flex items-center gap-2">
+          <Stethoscope className="h-4 w-4 text-muted-foreground" />
+          <p className="text-sm font-medium">Clinical context</p>
+        </div>
+        {/* The mapping claim lives in TWO places in this file and I fixed only the
+            other one. `mapped_endpoint` is nullable, so "the real trial endpoints our
+            outcomes stand in for" is unearned for an outcome we never mapped, exactly
+            as it was sixty lines below (codex iter-14 HIGH). The claim is the unit,
+            not the file — and here, not even the file. */}
+        <p className="mt-1 text-xs text-muted-foreground">
+          The brand&rsquo;s clinical reality alongside this analysis — its mechanism,
+          {mapped_endpoint
+            ? ' the real trial endpoints our outcomes stand in for,'
+            : ' this brand\u2019s real trial endpoints,'}{' '}
+          and the approved labeling. The label describes the therapy and its indication; it
+          makes no claim about a commercial lever, and nothing below reads a commercial
+          result as on-label.
+        </p>
+      </div>
+
+      {/* Loading shimmer for the narrative; fragments stay visible so a failed
+          fetch never leaves a hole (additive feature, no regression path). */}
+      {narrativeLoading && !hasNarrative && (
+        <div className="space-y-2">
+          <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
+          <div className="h-4 w-full animate-pulse rounded bg-muted" />
+          <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
+        </div>
+      )}
+
+      {hasNarrative && narrative && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+            <Badge variant="outline" className="text-xs">
+              LLM-synthesized · sources below
+            </Badge>
+          </div>
+          {narrative.insight.split(/\n{2,}/).map((para) => (
+            <p key={para.slice(0, 40)} className="text-sm whitespace-pre-line">
+              {para}
+            </p>
+          ))}
+          <p className="text-xs text-muted-foreground">{narrative.provenance}</p>
+        </div>
+      )}
+
+      {hasNarrative ? (
+        <Collapsible>
+          <CollapsibleTrigger className="group flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+            <ChevronRight className="h-4 w-4 transition-transform group-data-[state=open]:rotate-90" />
+            Sources &amp; provenance
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-3 space-y-4">{fragments}</CollapsibleContent>
+        </Collapsible>
+      ) : (
+        fragments
+      )}
+
+      {/* The synthetic/real honesty boundary — always shown, OUTSIDE the collapse */}
       <p className="border-t pt-3 text-xs text-muted-foreground">{context.honesty_label}</p>
     </div>
   );
