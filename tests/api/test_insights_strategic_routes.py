@@ -7,6 +7,8 @@ externally-grounded endpoints (knowledge-graph, model-performance) are verified
 manually on the droplet (plan Task 12).
 """
 
+import time
+
 import pytest
 
 from src.api.dependencies.auth import require_analyst
@@ -995,6 +997,10 @@ def test_clinical_narrative_fallback_grounds_in_server_fetched_facts(test_client
         "src.services.clinical_context.service.ClinicalContextService.get_context",
         lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
     )
+    # Redis is LIVE on this box and the grounding-derived key repeats across
+    # runs: force a miss so this exercises the generate path, not a payload
+    # cached from a previous run within the 300s TTL (home-kpis precedent).
+    _force_insight_cache_miss(monkeypatch)
     r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
     assert r.status_code == 200, r.text
     data = r.json()
@@ -1004,6 +1010,7 @@ def test_clinical_narrative_fallback_grounds_in_server_fetched_facts(test_client
     assert "survived all robustness checks" in data["insight"]
     assert "Bruton tyrosine kinase (BTK) inhibitor" in data["insight"]
     assert "Xolair (omalizumab)" in data["insight"]
+    assert "Analysis grain: hcp." in data["insight"]
     chips = {c["label"]: c["value"] for c in data["grounding"]}
     assert chips["Analysis"] == "treatment_arm -> adopted"
     assert data["key_takeaways"] == []
@@ -1060,3 +1067,89 @@ def test_clinical_narrative_fallback_is_cached_briefly(test_client, monkeypatch)
     r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
     assert r.status_code == 200, r.text
     assert seen == {"ttl": 300, "is_fallback": True}
+
+
+def test_clinical_narrative_fetch_timeout_degrades(test_client, monkeypatch):
+    # The wait_for bound converts an upstream HANG into result-only degradation.
+    monkeypatch.setattr(
+        "src.api.routes.insights_strategic._CLINICAL_NARRATIVE_FETCH_TIMEOUT_S", 0.05
+    )
+
+    def _slow(self, brand, outcome, treatment=None, include_causal_evidence=False):
+        time.sleep(1.0)
+        return _clinical_payload()
+
+    monkeypatch.setattr(
+        "src.services.clinical_context.service.ClinicalContextService.get_context", _slow
+    )
+    r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "could not be fetched" in data["insight"]
+
+
+def test_clinical_narrative_cache_hit_short_circuits_generation(test_client, monkeypatch):
+    monkeypatch.setattr(
+        "src.services.clinical_context.service.ClinicalContextService.get_context",
+        lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
+    )
+    canned = {
+        "insight": "CACHED NARRATIVE",
+        "key_takeaways": ["cached takeaway"],
+        "grounding": [{"label": "Brand", "value": "Remibrutinib"}],
+        "is_fallback": False,
+    }
+
+    async def _hit(key):
+        return canned
+
+    wrote: dict = {}
+
+    async def _capture(key, value, ttl_seconds=3600):
+        wrote["called"] = True
+
+    def _must_not_generate(g):
+        raise AssertionError("generate_insight must not run on a cache hit")
+
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_get", _hit)
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_set", _capture)
+    monkeypatch.setattr("src.insights.clinical_narrative.generate_insight", _must_not_generate)
+    r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["insight"] == "CACHED NARRATIVE"
+    assert data["is_fallback"] is False
+    assert data["key_takeaways"] == ["cached takeaway"]
+    assert "called" not in wrote
+
+
+def test_clinical_narrative_real_narrative_cached_for_the_hour(test_client, monkeypatch):
+    monkeypatch.setattr(
+        "src.services.clinical_context.service.ClinicalContextService.get_context",
+        lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
+    )
+    monkeypatch.setattr(
+        "src.insights.clinical_narrative.generate_insight",
+        lambda g: {
+            "insight": "REAL NARRATIVE",
+            "key_takeaways": [],
+            "grounding": g["grounding"],
+            "is_fallback": False,
+        },
+    )
+
+    async def _no_cached(key):
+        return None
+
+    seen: dict = {}
+
+    async def _capture(key, value, ttl_seconds=3600):
+        seen["ttl"] = ttl_seconds
+        seen["is_fallback"] = value.get("is_fallback")
+
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_get", _no_cached)
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_set", _capture)
+    r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
+    assert r.status_code == 200, r.text
+    assert seen == {"ttl": 3600, "is_fallback": False}

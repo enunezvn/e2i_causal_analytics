@@ -1130,20 +1130,7 @@ async def clinical_narrative_insight(
             req.brand, req.outcome, treatment=req.treatment, include_causal_evidence=True
         )
 
-    try:
-        payload_ctx = await asyncio.wait_for(
-            asyncio.to_thread(_fetch), timeout=_CLINICAL_NARRATIVE_FETCH_TIMEOUT_S
-        )
-        g = clinical_narrative.build_grounding(
-            payload_ctx,
-            grain=req.grain,
-            ate=req.ate,
-            ate_ci_lower=req.ate_ci_lower,
-            ate_ci_upper=req.ate_ci_upper,
-            gate_decision=req.gate_decision,
-        )
-    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
-        logger.warning("clinical-narrative context fetch failed for %s: %s", req.brand, e)
+    def _result_only() -> StrategicInsightResponse:
         g = clinical_narrative.build_result_only_grounding(
             brand=req.brand,
             grain=req.grain,
@@ -1155,6 +1142,36 @@ async def clinical_narrative_insight(
             gate_decision=req.gate_decision,
         )
         return _finalize(clinical_narrative.fallback(g), provenance=provenance)
+
+    try:
+        payload_ctx = await asyncio.wait_for(
+            asyncio.to_thread(_fetch), timeout=_CLINICAL_NARRATIVE_FETCH_TIMEOUT_S
+        )
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning(
+            "clinical-narrative context fetch failed for %s: %r", req.brand, e, exc_info=True
+        )
+        return _result_only()
+
+    try:
+        g = clinical_narrative.build_grounding(
+            payload_ctx,
+            grain=req.grain,
+            ate=req.ate,
+            ate_ci_lower=req.ate_ci_lower,
+            ate_ci_upper=req.ate_ci_upper,
+            gate_decision=req.gate_decision,
+        )
+    except Exception as e:  # noqa: BLE001 — a composition defect, NOT a fetch failure:
+        # the payload arrived; our composer choked on its shape. Same honest
+        # degradation (result-only is all we can render), different incident trail.
+        logger.warning(
+            "clinical-narrative grounding composition failed for %s (context fetched OK): %r",
+            req.brand,
+            e,
+            exc_info=True,
+        )
+        return _result_only()
 
     # Key on the composed grounding strings: they encode treatment, outcome,
     # grain, the ATE/CI/gate AND the fragment content — so a narrative written
