@@ -5,6 +5,8 @@ tests pin the DERIVED grounding strings — never bare booleans — so a silent
 composition change fails loudly (wave-27: assert the derivation, not the
 decision)."""
 
+from types import SimpleNamespace
+
 from src.insights import clinical_narrative
 
 
@@ -62,7 +64,7 @@ def _payload(**overrides):
         "causal_evidence": {
             "status": "found",
             "indication_edge": {
-                "predicate": "treats",
+                "predicate": "associated_with",
                 "drug_id": "CHEMBL4650485",
                 "drug_name": "remibrutinib",
                 "disease_id": "EFO_0005854",
@@ -221,8 +223,31 @@ class TestBuildGrounding:
     def test_open_targets_edge_is_composed(self):
         g = _grounding()
         assert (
-            "Open Targets records remibrutinib as an approved therapy for "
+            "Open Targets records remibrutinib as in development for "
             "chronic spontaneous urticaria (max clinical stage: PHASE_3)." in g["evidence"]
+        )
+
+    def test_open_targets_approved_edge_says_approved_therapy(self):
+        g = _grounding(
+            causal_evidence={
+                "status": "found",
+                "indication_edge": {
+                    "predicate": "treats",
+                    "drug_id": "CHEMBL4650485",
+                    "drug_name": "remibrutinib",
+                    "disease_id": "EFO_0005854",
+                    "disease_name": "chronic spontaneous urticaria",
+                    "max_clinical_stage": "APPROVED",
+                    "source": "open_targets",
+                },
+                "sources_unavailable": [],
+                "citations": [],
+                "note": None,
+            }
+        )
+        assert (
+            "Open Targets records remibrutinib as an approved therapy for "
+            "chronic spontaneous urticaria (max clinical stage: APPROVED)." in g["evidence"]
         )
 
     def test_clinical_position_carries_moa_indication_and_positioning(self):
@@ -245,6 +270,7 @@ class TestBuildGrounding:
         assert chips["Gate"] == "proceed"
         # chembl + clinicaltrials.gov + openfda live; RWE is None -> 3/4
         assert chips["Live sources"] == "3/4"
+        assert g["context_unavailable"] is False
 
 
 class TestResultOnlyGrounding:
@@ -262,3 +288,106 @@ class TestResultOnlyGrounding:
         assert g["context_unavailable"] is True
         assert "ATE +0.1400 [95% CI +0.0500, +0.2300]" in g["result"]
         assert "Causal analysis of treatment_arm -> adopted for Remibrutinib" in g["analysis"]
+        unavailable = "The clinical-context sources could not be fetched for this analysis."
+        assert g["clinical_position"] == unavailable
+        assert g["competitive_position"] == unavailable
+        assert g["trial_endpoints"] == unavailable
+        assert g["evidence"] == unavailable
+        assert {"label": "Clinical context", "value": "unavailable"} in g["grounding"]
+
+
+class TestFallback:
+    def test_fallback_composes_the_grounding_strings(self):
+        g = _grounding()
+        out = clinical_narrative.fallback(g)
+        assert out["is_fallback"] is True
+        assert out["key_takeaways"] == []
+        assert g["result"] in out["insight"]
+        assert g["clinical_position"] in out["insight"]
+        assert "(Factual summary — LLM narrative unavailable.)" in out["insight"]
+
+    def test_result_only_fallback_says_sources_unfetchable(self):
+        g = clinical_narrative.build_result_only_grounding(
+            brand="Remibrutinib",
+            grain="hcp",
+            treatment="treatment_arm",
+            outcome="adopted",
+            ate=None,
+            ate_ci_lower=None,
+            ate_ci_upper=None,
+            gate_decision=None,
+        )
+        out = clinical_narrative.fallback(g)
+        assert out["is_fallback"] is True
+        assert "could not be fetched" in out["insight"]
+        # The unavailable filler strings must not be repeated as if they were facts.
+        assert out["insight"].count("could not be fetched") == 1
+
+
+class TestGenerateInsight:
+    def test_no_lm_returns_fallback(self):
+        # conftest forces ensure_dspy_configured -> False, so run_signature -> None.
+        out = clinical_narrative.generate_insight(_grounding())
+        assert out["is_fallback"] is True
+
+    def test_good_narrative_passes(self, monkeypatch):
+        monkeypatch.setattr(
+            clinical_narrative,
+            "run_signature",
+            lambda *a, **k: SimpleNamespace(
+                narrative="Remibrutinib, a BTK inhibitor, showed ATE +0.1400 on adoption."
+            ),
+        )
+        out = clinical_narrative.generate_insight(_grounding())
+        assert out["is_fallback"] is False
+        assert out["insight"].startswith("Remibrutinib, a BTK inhibitor")
+        assert out["key_takeaways"] == []
+
+    def test_empty_narrative_falls_back(self, monkeypatch):
+        monkeypatch.setattr(
+            clinical_narrative, "run_signature", lambda *a, **k: SimpleNamespace(narrative="   ")
+        )
+        assert clinical_narrative.generate_insight(_grounding())["is_fallback"] is True
+
+    def test_fabricated_pmid_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            clinical_narrative,
+            "run_signature",
+            lambda *a, **k: SimpleNamespace(
+                narrative="A registry study (PMID 99999999) proved adoption doubles."
+            ),
+        )
+        assert clinical_narrative.generate_insight(_grounding())["is_fallback"] is True
+
+    def test_fabricated_nct_and_url_are_rejected(self, monkeypatch):
+        for bad in (
+            "See trial NCT99999999 for confirmation.",
+            "Details at https://example.com/made-up.",
+        ):
+            monkeypatch.setattr(
+                clinical_narrative, "run_signature", lambda *a, _b=bad, **k: SimpleNamespace(narrative=_b)
+            )
+            assert clinical_narrative.generate_insight(_grounding())["is_fallback"] is True
+
+    def test_grounded_pmid_passes_the_guard(self, monkeypatch):
+        g = _grounding(
+            real_world_evidence={
+                "pmid": "35642282",
+                "title": "CDK4/6 inhibitor treatment use in women with advanced breast cancer.",
+                "journal": None,
+                "pubdate": None,
+                "doi": None,
+                "url": "https://pubmed.ncbi.nlm.nih.gov/35642282/",
+                "source": "pubmed",
+                "search_term": None,
+            }
+        )
+        monkeypatch.setattr(
+            clinical_narrative,
+            "run_signature",
+            lambda *a, **k: SimpleNamespace(
+                narrative="Real-world use is documented (PMID 35642282) alongside the estimate."
+            ),
+        )
+        out = clinical_narrative.generate_insight(g)
+        assert out["is_fallback"] is False

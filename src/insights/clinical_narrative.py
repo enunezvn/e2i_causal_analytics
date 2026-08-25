@@ -15,9 +15,11 @@ figures (the causal-discovery insight precedent) — digits are allowed.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 from src.insights.clinical_context import format_clinical_positioning
+from src.insights.common import run_signature
 
 logger = logging.getLogger(__name__)
 
@@ -324,4 +326,83 @@ def build_result_only_grounding(
             {"label": "Clinical context", "value": "unavailable"},
         ],
         "context_unavailable": True,
+    }
+
+
+# The cheapest fabrication tell for this content type: a citation-shaped
+# identifier (PMID / NCT id / DOI / URL) the grounding never contained.
+# Plain numbers are NOT scanned — the ATE/CI digits are legitimate here.
+_IDENTIFIER_PATTERNS = (
+    re.compile(r"\bNCT\d{7,8}\b", re.IGNORECASE),
+    re.compile(r"\bPMID[:\s]*\d{6,9}\b", re.IGNORECASE),
+    re.compile(r"\b10\.\d{4,9}/[^\s\)\]]+"),
+    re.compile(r"https?://\S+", re.IGNORECASE),
+)
+
+_GROUNDING_STRING_KEYS = (
+    "analysis",
+    "result",
+    "clinical_position",
+    "competitive_position",
+    "trial_endpoints",
+    "evidence",
+)
+
+
+def _fabricated_identifiers(narrative: str, g: dict[str, Any]) -> list[str]:
+    grounding_text = " ".join(str(g.get(k, "")) for k in _GROUNDING_STRING_KEYS)
+    return [
+        m
+        for pat in _IDENTIFIER_PATTERNS
+        for m in pat.findall(narrative)
+        if m not in grounding_text
+    ]
+
+
+def fallback(g: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic factual summary of the grounding strings. Public because
+    the route calls it directly on the fetch-failed (result-only) path."""
+    parts = [g["analysis"], g["result"]]
+    if g.get("context_unavailable"):
+        parts.append(
+            "The clinical-context sources could not be fetched for this analysis, so no "
+            "clinical or competitive read can be offered right now."
+        )
+    else:
+        parts.extend(
+            [g["clinical_position"], g["competitive_position"], g["trial_endpoints"], g["evidence"]]
+        )
+    parts.append("(Factual summary — LLM narrative unavailable.)")
+    return {
+        "insight": "\n\n".join(parts),
+        "key_takeaways": [],
+        "grounding": g["grounding"],
+        "is_fallback": True,
+    }
+
+
+def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
+    pred = run_signature(
+        ClinicalNarrativeSignature,
+        analysis=g["analysis"],
+        result=g["result"],
+        clinical_position=g["clinical_position"],
+        competitive_position=g["competitive_position"],
+        trial_endpoints=g["trial_endpoints"],
+        evidence=g["evidence"],
+    )
+    if pred is None:
+        return fallback(g)
+    narrative = str(getattr(pred, "narrative", "")).strip()
+    if not narrative:
+        return fallback(g)
+    fabricated = _fabricated_identifiers(narrative, g)
+    if fabricated:
+        logger.warning("clinical narrative rejected — fabricated identifiers: %s", fabricated)
+        return fallback(g)
+    return {
+        "insight": narrative,
+        "key_takeaways": [],
+        "grounding": g["grounding"],
+        "is_fallback": False,
     }
