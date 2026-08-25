@@ -1271,6 +1271,7 @@ from src.api.errors import (
     E2IError,
     EndpointNotFoundError,
     ErrorSeverity,
+    NotFoundError,
     RateLimitError,
     error_response,
     wrap_exception,
@@ -1415,6 +1416,21 @@ async def validation_error_handler(request, exc: RequestValidationError):
     )
 
 
+def _e2i_404_error(request, exc) -> E2IError:
+    # In-app HTTPException(404)s carry deliberate client-facing details
+    # ("Unknown brand 'X'", "KPI not found: Y") that FastAPI's default handler
+    # would return verbatim; rewriting them to EndpointNotFoundError said the
+    # ROUTE was missing and discarded the message (#1814). Only an unmatched
+    # route — Starlette's default "Not Found" detail — gets the generic
+    # endpoint envelope.
+    detail = str(exc.detail) if getattr(exc, "detail", None) else ""
+    if not detail or detail == "Not Found":
+        return EndpointNotFoundError(request.url.path)
+    e2i_error = NotFoundError("Resource")
+    e2i_error.message = detail
+    return e2i_error
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request, exc: StarletteHTTPException):
     """
@@ -1423,7 +1439,7 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
     # Map status codes to appropriate E2IError types
     e2i_error: E2IError
     if exc.status_code == 404:
-        e2i_error = EndpointNotFoundError(request.url.path)
+        e2i_error = _e2i_404_error(request, exc)
     elif exc.status_code == 401:
         e2i_error = AuthenticationError(
             str(exc.detail) if exc.detail else "Authentication required"
@@ -1472,8 +1488,13 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
 
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
-    """Custom 404 handler with structured response."""
-    e2i_error = EndpointNotFoundError(request.url.path)
+    """Custom 404 handler with structured response.
+
+    Starlette resolves status-code handlers BEFORE class handlers for
+    HTTPException, so this — not http_exception_handler's 404 branch —
+    is the live path for every HTTPException(404).
+    """
+    e2i_error = _e2i_404_error(request, exc)
 
     return JSONResponse(
         status_code=404,

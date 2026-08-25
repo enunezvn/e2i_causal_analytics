@@ -1029,15 +1029,15 @@ def test_clinical_narrative_fallback_grounds_in_server_fetched_facts(test_client
 
 
 def test_clinical_narrative_unknown_brand_404(test_client):
-    # The app's global http_exception_handler (src/api/main.py) rewrites EVERY
-    # HTTPException(404) into a generic EndpointNotFoundError body — same
-    # behavior the sibling GET /causal/clinical-context route hits (its own
-    # test bypasses the app and calls the route function directly, so it never
-    # exercises this handler) — so only the status code is checkable here.
+    # The app's global 404 handlers preserve in-app details since #1814, so
+    # the route's own message is checkable through the full app stack (the
+    # sibling GET /causal/clinical-context test bypasses the app and calls
+    # the route function directly, so it never exercises the handler).
     r = test_client.post(
         "/api/insights/clinical-narrative", json={**_NARRATIVE_BODY, "brand": "NotABrand"}
     )
     assert r.status_code == 404
+    assert "Unknown brand 'NotABrand'" in r.text
 
 
 def test_clinical_narrative_fetch_failure_degrades_to_result_only(test_client, monkeypatch):
