@@ -34,7 +34,12 @@ from __future__ import annotations
 
 import re
 import sys
-import xml.etree.ElementTree as ET
+
+# The junit XML is written by pytest in this same job seconds earlier (embedded
+# text is XML-escaped by pytest), so XXE does not apply — and this must stay
+# stdlib-only: a missing dep in this `if: failure()` step would blank the
+# verdict silently.
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 from pathlib import Path
 
 # Both id styles: junit classname dots and file-path prefixes.
@@ -91,7 +96,7 @@ def classify(junit_path: Path) -> tuple[str, str]:
     if not junit_path.exists():
         return "real", f"no junit at {junit_path} — Job A died before pytest reported (fail-safe)"
     try:
-        root = ET.parse(junit_path).getroot()
+        root = ET.parse(junit_path).getroot()  # nosemgrep — see import comment
     except ET.ParseError as exc:
         return "real", f"junit unparseable ({exc}) — treating as real (fail-safe)"
 
