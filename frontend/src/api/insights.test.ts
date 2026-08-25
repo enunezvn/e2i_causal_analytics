@@ -4,6 +4,7 @@ import {
   getCausalDiscoveryInsight,
   getHomeKpiInsight,
   getTreatmentEffectInsight,
+  getClinicalNarrativeInsight,
 } from './insights';
 
 describe('insights api', () => {
@@ -48,5 +49,27 @@ describe('insights api', () => {
       { timeout: 95000 }
     );
     expect(out.is_fallback).toBe(true);
+  });
+
+  it('POSTs scope+result to /insights/clinical-narrative with the extended timeout', async () => {
+    const resp = {
+      insight: 'x', key_takeaways: [], grounding: [], is_fallback: false,
+      generated_at: 't', provenance: 'p',
+    };
+    const spy = vi.spyOn(apiClient, 'post').mockResolvedValue(resp as never);
+    const out = await getClinicalNarrativeInsight({
+      brand: 'Remibrutinib', grain: 'hcp', treatment: 'treatment_arm', outcome: 'adopted',
+      ate: 0.14, ate_ci_lower: 0.05, ate_ci_upper: 0.23, gate_decision: 'proceed',
+    });
+    expect(spy).toHaveBeenCalledWith(
+      '/insights/clinical-narrative',
+      {
+        brand: 'Remibrutinib', grain: 'hcp', treatment: 'treatment_arm', outcome: 'adopted',
+        ate: 0.14, ate_ci_lower: 0.05, ate_ci_upper: 0.23, gate_decision: 'proceed',
+      },
+      // Cold scope = clinical fan-out server-side + LM; Redis caches per grounding.
+      { timeout: 95000 }
+    );
+    expect(out.is_fallback).toBe(false);
   });
 });
