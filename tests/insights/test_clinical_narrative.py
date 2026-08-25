@@ -88,6 +88,45 @@ def _grounding(**overrides):
     return clinical_narrative.build_grounding(_payload(**overrides), **kwargs)
 
 
+def _grounding_with_citations(**overrides):
+    """Grounding whose ``evidence`` string carries a real PMID (via real-world
+    evidence) and a real NCT id (via the causal-evidence note) — for the
+    fabrication-guard normalization tests, which need a grounded identifier to
+    truncate/reformat/reject-alongside."""
+    overrides.setdefault(
+        "real_world_evidence",
+        {
+            "pmid": "35642282",
+            "title": "CDK4/6 inhibitor treatment use in women with advanced breast cancer.",
+            "journal": None,
+            "pubdate": None,
+            "doi": None,
+            "url": "https://pubmed.ncbi.nlm.nih.gov/35642282/",
+            "source": "pubmed",
+            "search_term": None,
+        },
+    )
+    overrides.setdefault(
+        "causal_evidence",
+        {
+            "status": "found",
+            "indication_edge": {
+                "predicate": "associated_with",
+                "drug_id": "CHEMBL4650485",
+                "drug_name": "remibrutinib",
+                "disease_id": "EFO_0005854",
+                "disease_name": "chronic spontaneous urticaria",
+                "max_clinical_stage": "PHASE_3",
+                "source": "open_targets",
+            },
+            "sources_unavailable": [],
+            "citations": [],
+            "note": "Registered at ClinicalTrials.gov as NCT04109313.",
+        },
+    )
+    return _grounding(**overrides)
+
+
 class TestBuildGrounding:
     def test_result_string_pins_signed_ate_ci_and_gate_phrase(self):
         g = _grounding()
@@ -391,3 +430,64 @@ class TestGenerateInsight:
         )
         out = clinical_narrative.generate_insight(g)
         assert out["is_fallback"] is False
+
+    def test_truncated_grounded_pmid_is_rejected(self, monkeypatch):
+        g = _grounding_with_citations()
+        assert "(PMID 35642282)" in g["evidence"]
+        monkeypatch.setattr(
+            clinical_narrative,
+            "run_signature",
+            lambda *a, **k: SimpleNamespace(
+                narrative="A separate study (PMID 3564228) reports a similar effect."
+            ),
+        )
+        out = clinical_narrative.generate_insight(g)
+        assert out["is_fallback"] is True
+
+    def test_truncated_grounded_nct_is_rejected(self, monkeypatch):
+        g = _grounding_with_citations()
+        assert "NCT04109313" in g["evidence"]
+        monkeypatch.setattr(
+            clinical_narrative,
+            "run_signature",
+            lambda *a, **k: SimpleNamespace(narrative="See trial NCT0410931 for confirmation."),
+        )
+        out = clinical_narrative.generate_insight(g)
+        assert out["is_fallback"] is True
+
+    def test_reformatted_grounded_pmid_passes(self, monkeypatch):
+        g = _grounding_with_citations()
+        narrative = "Real-world use is documented (PMID: 35642282) alongside the estimate."
+        monkeypatch.setattr(
+            clinical_narrative, "run_signature", lambda *a, **k: SimpleNamespace(narrative=narrative)
+        )
+        out = clinical_narrative.generate_insight(g)
+        assert out["is_fallback"] is False
+        assert out["insight"] == narrative
+
+    def test_lowercase_grounded_pmid_passes(self, monkeypatch):
+        g = _grounding_with_citations()
+        monkeypatch.setattr(
+            clinical_narrative,
+            "run_signature",
+            lambda *a, **k: SimpleNamespace(
+                narrative="Real-world use is documented (pmid 35642282) alongside the estimate."
+            ),
+        )
+        out = clinical_narrative.generate_insight(g)
+        assert out["is_fallback"] is False
+
+    def test_mixed_grounded_and_fabricated_is_rejected(self, monkeypatch):
+        g = _grounding_with_citations()
+        monkeypatch.setattr(
+            clinical_narrative,
+            "run_signature",
+            lambda *a, **k: SimpleNamespace(
+                narrative=(
+                    "Real-world use is documented (PMID 35642282), and trial "
+                    "NCT99999999 confirms a doubled response rate."
+                )
+            ),
+        )
+        out = clinical_narrative.generate_insight(g)
+        assert out["is_fallback"] is True

@@ -332,11 +332,18 @@ def build_result_only_grounding(
 # The cheapest fabrication tell for this content type: a citation-shaped
 # identifier (PMID / NCT id / DOI / URL) the grounding never contained.
 # Plain numbers are NOT scanned — the ATE/CI digits are legitimate here.
+# Comparison is on NORMALIZED (scheme, value) tokens, never raw substrings:
+# substring membership passed truncated ids (a prefix of a grounded id) and
+# rejected legitimate reformattings ("PMID: n" vs the grounded "(PMID n)").
 _IDENTIFIER_PATTERNS = (
-    re.compile(r"\bNCT\d{7,8}\b", re.IGNORECASE),
-    re.compile(r"\bPMID[:\s]*\d{6,9}\b", re.IGNORECASE),
-    re.compile(r"\b10\.\d{4,9}/[^\s\)\]]+"),
-    re.compile(r"https?://\S+", re.IGNORECASE),
+    ("NCT", re.compile(r"\bNCT(\d{7,8})\b", re.IGNORECASE)),
+    ("PMID", re.compile(r"\bPMID[:\s]*(\d{6,9})\b", re.IGNORECASE)),
+    ("DOI", re.compile(r"\b(10\.\d{4,9}/[^\s\)\]]+)")),
+    # build_grounding composes real-world evidence as title + PMID only, so no
+    # URL ever reaches the grounding strings — today any URL in a narrative is
+    # fabricated by construction. If a future change composes URLs into the
+    # grounding, revisit the trailing-punctuation greediness of \S+.
+    ("URL", re.compile(r"(https?://\S+)", re.IGNORECASE)),
 )
 
 _GROUNDING_STRING_KEYS = (
@@ -349,14 +356,18 @@ _GROUNDING_STRING_KEYS = (
 )
 
 
+def _identifier_tokens(text: str) -> set[tuple[str, str]]:
+    return {
+        (scheme, match.casefold())
+        for scheme, pat in _IDENTIFIER_PATTERNS
+        for match in pat.findall(text)
+    }
+
+
 def _fabricated_identifiers(narrative: str, g: dict[str, Any]) -> list[str]:
     grounding_text = " ".join(str(g.get(k, "")) for k in _GROUNDING_STRING_KEYS)
-    return [
-        m
-        for pat in _IDENTIFIER_PATTERNS
-        for m in pat.findall(narrative)
-        if m not in grounding_text
-    ]
+    fabricated = _identifier_tokens(narrative) - _identifier_tokens(grounding_text)
+    return sorted(f"{scheme} {value}" for scheme, value in fabricated)
 
 
 def fallback(g: dict[str, Any]) -> dict[str, Any]:
