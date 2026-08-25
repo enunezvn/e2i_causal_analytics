@@ -489,11 +489,15 @@ export function ClinicalContextPanel({
               LLM-synthesized · sources below
             </Badge>
           </div>
-          {narrative.insight.split(/\n{2,}/).map((para) => (
-            <p key={para.slice(0, 40)} className="text-sm whitespace-pre-line">
-              {para}
-            </p>
-          ))}
+          {narrative.insight
+            .split(/\n{2,}/)
+            .map((p) => p.trim())
+            .filter(Boolean)
+            .map((para, i) => (
+              <p key={i} className="text-sm whitespace-pre-line">
+                {para}
+              </p>
+            ))}
           <p className="text-xs text-muted-foreground">{narrative.provenance}</p>
         </div>
       )}

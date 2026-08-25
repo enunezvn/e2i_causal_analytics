@@ -302,6 +302,33 @@ describe('ClinicalContextPanel', () => {
     expect(container.querySelector('.animate-pulse')).not.toBeNull();
     expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
   });
+
+  it('drops blank paragraphs from the narrative instead of rendering empty <p>s', () => {
+    const { container } = render(
+      <ClinicalContextPanel
+        context={FULL}
+        narrative={{ ...NARRATIVE, insight: '\n\nOnly paragraph' }}
+      />
+    );
+    expect(screen.getByText('Only paragraph')).toBeInTheDocument();
+    expect(container.querySelectorAll('p.whitespace-pre-line').length).toBe(1);
+  });
+
+  it('suppresses the shimmer when a real narrative is already rendered', () => {
+    const { container } = render(
+      <ClinicalContextPanel context={FULL} narrative={NARRATIVE} narrativeLoading />
+    );
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+    expect(screen.getByText(/survived all robustness checks/)).toBeInTheDocument();
+  });
+
+  it('treats a whitespace-only insight as no narrative at all', () => {
+    render(
+      <ClinicalContextPanel context={FULL} narrative={{ ...NARRATIVE, insight: '   ' }} />
+    );
+    expect(screen.queryByText(/LLM-synthesized/)).not.toBeInTheDocument();
+    expect(screen.getByText('CDK4/6 inhibitor')).toBeInTheDocument();
+  });
 });
 
 // #1763: the panel was accurate but read as unrelated to the analysis on screen.
