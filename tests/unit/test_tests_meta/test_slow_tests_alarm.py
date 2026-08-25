@@ -240,8 +240,12 @@ def test_alarm_self_heals_missing_label() -> None:
         f"--label {LABEL}`, else a missing label silently mutes the alarm "
         "('could not add label: not found' under set -euo pipefail)."
     )
-    # Ordering: ensure the label BEFORE the issue is created.
-    assert script.index(f"gh label create {LABEL}") < script.index("gh issue create"), (
+    # Ordering: ensure the label BEFORE the red alarm's issue creation. Since
+    # #1813 the script has TWO create sites — the upstream-transient branch
+    # files its own rolling issue earlier (with its own label self-heal, pinned
+    # by tests/unit/test_slow_tests_upstream_classifier.py) — so anchor on the
+    # red alarm's create, the LAST one in the script.
+    assert script.index(f"gh label create {LABEL}") < script.rindex("gh issue create"), (
         "the label must be ensured BEFORE `gh issue create` so the create succeeds."
     )
     # Idempotency: an already-existing label must not fail the step.
