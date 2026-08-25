@@ -932,3 +932,131 @@ def test_home_kpi_insight_degrades_on_backend_error(test_client, monkeypatch):
     assert "unavailable" in data["insight"]
     assert data["provenance"] == "Registry KPIs for this scope (unavailable)"
     assert data["grounding"] == []
+
+
+def _clinical_payload():
+    """Real-shaped ClinicalContextService payload (remibrutinib, trimmed)."""
+    return {
+        "brand": "Remibrutinib",
+        "drug_name": "remibrutinib",
+        "disease": "Chronic spontaneous urticaria",
+        "our_outcome": "adopted",
+        "our_treatment": "treatment_arm",
+        "mapped_endpoint": None,
+        "treatment_context": {
+            "column": "treatment_arm",
+            "label": "on remibrutinib therapy",
+            "framing": "being on remibrutinib",
+            "kind": "drug_therapy",
+            "source": "curated",
+        },
+        "analysis_framing": "This analysis asks what being on remibrutinib does to prescriber adoption.",
+        "analysis_grounding": None,
+        "mechanism": {"mechanism_of_action": "Bruton tyrosine kinase (BTK) inhibitor", "source": "chembl"},
+        "pivotal_endpoints": {
+            "endpoints": [
+                {"measure": "Change from baseline in UAS7 at Week 12", "time_frame": "Week 12", "nct_id": "NCT05030311"}
+            ],
+            "source": "clinicaltrials.gov",
+        },
+        "real_world_evidence": None,
+        "seminal_real_world_evidence": None,
+        "approved_indications": {
+            "indications": ["RHAPSIDO is indicated for chronic spontaneous urticaria in adults."],
+            "limitations_of_use": None,
+            "boxed_warning": None,
+            "source": "openfda",
+        },
+        "competitor_landscape": {
+            "competitors": ["Xolair (omalizumab)", "Dupixent (dupilumab)"],
+            "count": 2,
+            "source": "curated",
+        },
+        "causal_evidence": None,
+        "honesty_label": "Effect estimate = a SYNTHETIC patient cohort ...",
+    }
+
+
+_NARRATIVE_BODY = {
+    "brand": "Remibrutinib",
+    "grain": "hcp",
+    "treatment": "treatment_arm",
+    "outcome": "adopted",
+    "ate": 0.14,
+    "ate_ci_lower": 0.05,
+    "ate_ci_upper": 0.23,
+    "gate_decision": "proceed",
+}
+
+
+def test_clinical_narrative_fallback_grounds_in_server_fetched_facts(test_client, monkeypatch):
+    # Facts are fetched SERVER-side: stub the service, not the request.
+    monkeypatch.setattr(
+        "src.services.clinical_context.service.ClinicalContextService.get_context",
+        lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
+    )
+    r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True  # conftest forces the no-LM path
+    # Pin the DERIVED grounding, not booleans: the fallback composes the strings.
+    assert "ATE +0.1400 [95% CI +0.0500, +0.2300]" in data["insight"]
+    assert "survived all robustness checks" in data["insight"]
+    assert "Bruton tyrosine kinase (BTK) inhibitor" in data["insight"]
+    assert "Xolair (omalizumab)" in data["insight"]
+    chips = {c["label"]: c["value"] for c in data["grounding"]}
+    assert chips["Analysis"] == "treatment_arm -> adopted"
+    assert data["key_takeaways"] == []
+    assert data["provenance"].startswith("LLM synthesis of the labeled clinical-context sources")
+
+
+def test_clinical_narrative_unknown_brand_404(test_client):
+    # The app's global http_exception_handler (src/api/main.py) rewrites EVERY
+    # HTTPException(404) into a generic EndpointNotFoundError body — same
+    # behavior the sibling GET /causal/clinical-context route hits (its own
+    # test bypasses the app and calls the route function directly, so it never
+    # exercises this handler) — so only the status code is checkable here.
+    r = test_client.post(
+        "/api/insights/clinical-narrative", json={**_NARRATIVE_BODY, "brand": "NotABrand"}
+    )
+    assert r.status_code == 404
+
+
+def test_clinical_narrative_fetch_failure_degrades_to_result_only(test_client, monkeypatch):
+    def _boom(self, brand, outcome, treatment=None, include_causal_evidence=False):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(
+        "src.services.clinical_context.service.ClinicalContextService.get_context", _boom
+    )
+    r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "could not be fetched" in data["insight"]
+    # The result the caller supplied is still honestly summarized.
+    assert "ATE +0.1400 [95% CI +0.0500, +0.2300]" in data["insight"]
+
+
+def test_clinical_narrative_fallback_is_cached_briefly(test_client, monkeypatch):
+    # Pin the degraded-TTL discipline (exec-brief/HTE precedent): a fallback is
+    # transient — cache 300s, never the full hour.
+    monkeypatch.setattr(
+        "src.services.clinical_context.service.ClinicalContextService.get_context",
+        lambda self, brand, outcome, treatment=None, include_causal_evidence=False: _clinical_payload(),
+    )
+
+    async def _no_cached(key):
+        return None
+
+    seen: dict = {}
+
+    async def _capture(key, value, ttl_seconds=3600):
+        seen["ttl"] = ttl_seconds
+        seen["is_fallback"] = value.get("is_fallback")
+
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_get", _no_cached)
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_set", _capture)
+    r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
+    assert r.status_code == 200, r.text
+    assert seen == {"ttl": 300, "is_fallback": True}
