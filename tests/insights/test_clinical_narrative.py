@@ -139,6 +139,14 @@ class TestBuildGrounding:
         assert "failed robustness checks" in _grounding(gate_decision="block")["result"]
         assert "Robustness gate: not reported." in _grounding(gate_decision=None)["result"]
 
+    def test_unmapped_gate_verdict_is_reported_raw(self):
+        # An unmapped verdict string (e.g. an API caller sending "pass") must be
+        # reported raw, never claimed absent — the Gate chip echoes the same
+        # raw value, so "not reported" here would be a false absence claim.
+        g = _grounding(gate_decision="pass")
+        assert "Robustness gate: pass." in g["result"]
+        assert "not reported" not in g["result"]
+
     def test_missing_ate_is_reported_not_invented(self):
         g = _grounding(ate=None, ate_ci_lower=None, ate_ci_upper=None)
         assert "No effect estimate was provided for treatment_arm -> adopted." in g["result"]
@@ -491,3 +499,46 @@ class TestGenerateInsight:
         )
         out = clinical_narrative.generate_insight(g)
         assert out["is_fallback"] is True
+
+    def test_guard_rejection_retries_once_uncached(self, monkeypatch):
+        calls: list[bool] = []
+
+        def fake_run_signature(*a, **k):
+            calls.append(k.get("lm_cache"))
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    narrative="A registry study (PMID 99999999) proved adoption doubles."
+                )
+            return SimpleNamespace(
+                narrative="Remibrutinib, a BTK inhibitor, showed ATE +0.1400 on adoption."
+            )
+
+        monkeypatch.setattr(clinical_narrative, "run_signature", fake_run_signature)
+        out = clinical_narrative.generate_insight(_grounding())
+        assert out["is_fallback"] is False
+        assert out["insight"].startswith("Remibrutinib, a BTK inhibitor")
+        assert calls == [True, False]
+
+    def test_guard_rejection_twice_falls_back(self, monkeypatch):
+        calls: list[bool] = []
+
+        def fake_run_signature(*a, **k):
+            calls.append(k.get("lm_cache"))
+            return SimpleNamespace(narrative="A registry study (PMID 99999999) proved adoption doubles.")
+
+        monkeypatch.setattr(clinical_narrative, "run_signature", fake_run_signature)
+        out = clinical_narrative.generate_insight(_grounding())
+        assert out["is_fallback"] is True
+        assert calls == [True, False]
+
+    def test_lm_unavailable_does_not_retry(self, monkeypatch):
+        calls: list[bool] = []
+
+        def fake_run_signature(*a, **k):
+            calls.append(k.get("lm_cache"))
+            return None
+
+        monkeypatch.setattr(clinical_narrative, "run_signature", fake_run_signature)
+        out = clinical_narrative.generate_insight(_grounding())
+        assert out["is_fallback"] is True
+        assert calls == [True]

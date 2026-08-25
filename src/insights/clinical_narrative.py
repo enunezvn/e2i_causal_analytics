@@ -134,6 +134,10 @@ def _result_sentence(
     phrase = _GATE_PHRASES.get((gate or "").lower())
     if phrase:
         est += f" Robustness gate: {gate} — the estimate {phrase}."
+    elif gate:
+        # An unmapped verdict is reported raw, never claimed absent — the
+        # Gate chip echoes the same raw value (omit-or-report discipline).
+        est += f" Robustness gate: {gate}."
     else:
         est += " Robustness gate: not reported."
     return est + " " + _SYNTHETIC_NOTE
@@ -393,27 +397,37 @@ def fallback(g: dict[str, Any]) -> dict[str, Any]:
 
 
 def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
-    pred = run_signature(
-        ClinicalNarrativeSignature,
-        analysis=g["analysis"],
-        result=g["result"],
-        clinical_position=g["clinical_position"],
-        competitive_position=g["competitive_position"],
-        trial_endpoints=g["trial_endpoints"],
-        evidence=g["evidence"],
-    )
-    if pred is None:
-        return fallback(g)
-    narrative = str(getattr(pred, "narrative", "")).strip()
-    if not narrative:
-        return fallback(g)
-    fabricated = _fabricated_identifiers(narrative, g)
-    if fabricated:
-        logger.warning("clinical narrative rejected — fabricated identifiers: %s", fabricated)
-        return fallback(g)
-    return {
-        "insight": narrative,
-        "key_takeaways": [],
-        "grounding": g["grounding"],
-        "is_fallback": False,
-    }
+    # Attempt 2 forces a fresh sample (lm_cache=False) — the long-lived API
+    # process's in-memory DSPy cache would otherwise replay the identical
+    # rejected completion on the retry (home_kpi/exec-brief precedent).
+    for attempt in (1, 2):
+        pred = run_signature(
+            ClinicalNarrativeSignature,
+            lm_cache=attempt == 1,
+            analysis=g["analysis"],
+            result=g["result"],
+            clinical_position=g["clinical_position"],
+            competitive_position=g["competitive_position"],
+            trial_endpoints=g["trial_endpoints"],
+            evidence=g["evidence"],
+        )
+        if pred is None:
+            return fallback(g)
+        narrative = str(getattr(pred, "narrative", "")).strip()
+        if not narrative:
+            return fallback(g)
+        fabricated = _fabricated_identifiers(narrative, g)
+        if not fabricated:
+            return {
+                "insight": narrative,
+                "key_takeaways": [],
+                "grounding": g["grounding"],
+                "is_fallback": False,
+            }
+        logger.warning(
+            "clinical narrative rejected — fabricated identifiers: %s (attempt %d; %s)",
+            fabricated,
+            attempt,
+            "retrying with a fresh sample" if attempt == 1 else "serving factual fallback",
+        )
+    return fallback(g)
