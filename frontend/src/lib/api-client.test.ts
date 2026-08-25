@@ -459,6 +459,12 @@ describe('Request Helpers', () => {
 
       expect(apiClient.post).toHaveBeenCalledWith('/trigger', undefined, undefined);
     });
+
+    it('forwards a per-call timeout into the axios config', async () => {
+      vi.mocked(apiClient.post).mockResolvedValueOnce({ data: { ok: true } } as never);
+      await post('/heavy', { a: 1 }, { timeout: 95000 });
+      expect(apiClient.post).toHaveBeenCalledWith('/heavy', { a: 1 }, { timeout: 95000 });
+    });
   });
 
   describe('put', () => {
