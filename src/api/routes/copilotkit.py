@@ -7,9 +7,16 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.32.0
+Version: 1.33.0
 
 Changelog:
+    1.33.0 - (#1819) Readables enter graph state as plain dicts. The SDK's
+             merge_state copied RunAgentInput.context — ag_ui Context pydantic
+             objects — verbatim into the checkpointed state["copilotkit"]
+             channel, so every readable-carrying run logged jsonplus's
+             "Deserializing unregistered type ag_ui.core.types.Context …
+             will be blocked in a future version". LangGraphAgent now
+             overrides langgraph_default_merge_state to model_dump() them.
     1.32.0 - The frontend's useCopilotReadable values now reach the chat graph.
              Measured 2026-08-26 (live wire capture, react-core 1.51.2): every
              readable arrives in the agent/run body as ``context`` — the handler
@@ -950,6 +957,34 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         if self._graph_factory:
             return self._graph_factory()
         return self.graph
+
+    def langgraph_default_merge_state(self, state, messages, input):  # type: ignore[override]
+        """Merge the AG-UI run input into graph state — with the readables as
+        plain dicts (#1819).
+
+        The SDK chain (ag_ui_langgraph 0.0.23 → copilotkit 0.1.76) copies
+        ``RunAgentInput.context`` — pydantic ``ag_ui.core.types.Context``
+        objects — verbatim into ``state["copilotkit"]["context"]`` (tools get
+        ``model_dump()``-ed on the same path; context does not). ``copilotkit``
+        is a checkpointed E2IAgentState channel, so every readable-carrying run
+        (since v1.32.0) serialised those objects and tripped jsonplus on the
+        read-back: "Deserializing unregistered type ag_ui.core.types.Context
+        from checkpoint. This will be blocked in a future version." Coerce to
+        ``{description, value}`` dicts — the shape the wire had and the shape
+        ``_readables_context_note`` already accepts — so the checkpoint holds
+        only msgpack-native types.
+        """
+        merged = super().langgraph_default_merge_state(state, messages, input)
+        copilotkit_state = merged.get("copilotkit")
+        if isinstance(copilotkit_state, dict) and isinstance(copilotkit_state.get("context"), list):
+            merged["copilotkit"] = {
+                **copilotkit_state,
+                "context": [
+                    item.model_dump() if hasattr(item, "model_dump") else item
+                    for item in copilotkit_state["context"]
+                ],
+            }
+        return merged
 
     @staticmethod
     def _is_tool_internal_llm_event(event: Any) -> bool:

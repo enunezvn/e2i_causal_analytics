@@ -27,15 +27,27 @@ Contract under test (backend half):
    accepts ``readables`` so a tool-calling turn keeps the on-screen context.
 5. The route handler reads ``context`` from the agent/run body (source pin —
    the handler is a closure, the established pattern for this route).
+6. (#1819) The merged ``state["copilotkit"]["context"]`` holds plain
+   ``{description, value}`` dicts, never ``ag_ui.core.types.Context`` pydantic
+   objects: ``copilotkit`` is a checkpointed state channel, and the SDK's
+   merge_state passes ``input.context`` through untouched (tools get
+   ``model_dump()``-ed on the same path, context did not) — every readable-
+   carrying run tripped jsonplus's "Deserializing unregistered type
+   ag_ui.core.types.Context from checkpoint … will be blocked in a future
+   version" on the per-request MemorySaver read-back.
 """
 
 from __future__ import annotations
 
 import inspect
 import json
+from typing import Annotated, Any, Dict, TypedDict
 
 import pytest
 from ag_ui.core import Context, RunAgentInput
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 
 from src.api.routes.copilotkit import (
     _READABLE_ITEM_MAX_CHARS,
@@ -232,3 +244,97 @@ class TestSynthesisPromptReadables:
         assert base == build_synthesis_prompt(*self.ARGS, readables=None)
         assert base == build_synthesis_prompt(*self.ARGS, readables={})
         assert base == build_synthesis_prompt(*self.ARGS, readables={"context": []})
+
+
+# ---------------------------------------------------------------------------
+# 6. (#1819) merged copilotkit.context is checkpoint-clean: dicts, not pydantic
+# ---------------------------------------------------------------------------
+
+
+def _readables_run_input(context: list[dict[str, str]]) -> RunAgentInput:
+    return RunAgentInput(
+        thread_id="t-1819",
+        run_id="r-1819",
+        state={},
+        messages=[],
+        tools=[],
+        context=context,  # type: ignore[arg-type]  # validated into Context objects
+        forwarded_props={},
+    )
+
+
+def _copilotkit_channel_graph():
+    """A real compiled StateGraph declaring the same ``copilotkit`` channel as
+    E2IAgentState — the channel the per-request MemorySaver checkpoints."""
+
+    class _State(TypedDict):
+        messages: Annotated[list, add_messages]
+        copilotkit: Dict[str, Any]
+
+    async def chat(state: _State) -> dict:
+        return {}
+
+    workflow = StateGraph(_State)
+    workflow.add_node("chat", chat)
+    workflow.add_edge(START, "chat")
+    workflow.add_edge("chat", END)
+    return workflow.compile(checkpointer=MemorySaver())
+
+
+class TestMergedContextIsCheckpointClean:
+    def _merged(self) -> dict:
+        from src.api.routes.copilotkit import LangGraphAgent
+
+        agent = LangGraphAgent(
+            name="default", description="#1819 stub", graph=_copilotkit_channel_graph()
+        )
+        return agent.langgraph_default_merge_state({}, [], _readables_run_input(WIRE_CONTEXT))
+
+    def test_context_items_are_plain_dicts_matching_the_wire(self):
+        items = self._merged()["copilotkit"]["context"]
+        assert items == WIRE_CONTEXT, items
+        assert all(type(item) is dict for item in items), [type(i).__name__ for i in items]
+        assert not any(isinstance(item, Context) for item in items)
+
+    def test_checkpoint_round_trip_emits_no_unregistered_type_warning(self, caplog, monkeypatch):
+        """Faithful to the prod symptom: the checkpointer's jsonplus serde
+        round-trips the merged channel without the unregistered-type warning.
+        ``_warn_once`` is keyed on a module-global set, so reset it — an
+        earlier round-trip in this process must not mask a regression."""
+        import logging
+
+        from langgraph.checkpoint.serde import jsonplus
+
+        monkeypatch.setattr(jsonplus, "_warned_unregistered_types", set())
+        serde = jsonplus.JsonPlusSerializer()
+        merged = self._merged()
+        with caplog.at_level(logging.WARNING, logger="langgraph.checkpoint.serde.jsonplus"):
+            restored = serde.loads_typed(serde.dumps_typed(merged["copilotkit"]))
+        offending = [
+            r.getMessage() for r in caplog.records if "unregistered type" in r.getMessage()
+        ]
+        assert offending == [], offending
+        assert restored["context"] == WIRE_CONTEXT
+
+    def test_actions_channel_is_untouched_by_the_coercion(self):
+        """Regression guard: the override must only touch ``context`` — the
+        frontend-action schemas (already dicts via the SDK) still ride
+        ``copilotkit.actions`` for chat_node's tool binding (v1.30.0)."""
+        from src.api.routes.copilotkit import LangGraphAgent
+
+        tool = {"name": "renderKpiTrend", "description": "chart", "parameters": {"type": "object"}}
+        run_input = RunAgentInput(
+            thread_id="t",
+            run_id="r",
+            state={},
+            messages=[],
+            tools=[tool],  # type: ignore[arg-type]
+            context=WIRE_CONTEXT,  # type: ignore[arg-type]
+            forwarded_props={},
+        )
+        agent = LangGraphAgent(
+            name="default", description="#1819 stub", graph=_copilotkit_channel_graph()
+        )
+        merged = agent.langgraph_default_merge_state({}, [], run_input)
+        assert [a["name"] for a in merged["copilotkit"]["actions"]] == ["renderKpiTrend"]
+        assert merged["copilotkit"]["context"] == WIRE_CONTEXT
