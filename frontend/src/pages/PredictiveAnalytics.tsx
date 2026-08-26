@@ -19,6 +19,7 @@
  */
 
 import * as React from 'react';
+import { useCopilotReadable } from '@copilotkit/react-core';
 import { Brain, Sparkles, TrendingUp, Loader2, Users, Target } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -36,7 +37,7 @@ import { Progress } from '@/components/ui/progress';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { StatusBadge } from '@/components/visualizations/dashboard/StatusBadge';
 import { StrategicInsightCard } from '@/components/insights';
-import { usePageChatContext } from '@/providers/E2ICopilotProvider';
+import { usePageChatContext, useCopilotEnabled } from '@/providers/E2ICopilotProvider';
 import {
   useModelsStatus,
   useModelInfo,
@@ -303,6 +304,33 @@ function CohortDistribution({
       </div>
     </div>
   );
+}
+
+/**
+ * Registers the on-screen cohort as an AG-UI readable. Rendered by the page
+ * only when useCopilotEnabled() is true: the underlying hook throws outside a
+ * <CopilotKit> provider, which is exactly how CI's e2e build
+ * (VITE_COPILOT_ENABLED=false) runs. Renders nothing.
+ */
+function CohortReadable({
+  cohortReadable,
+}: {
+  cohortReadable: Record<string, unknown> | null;
+}): null {
+  useCopilotReadable(
+    {
+      description:
+        'Predictive Analytics page: the scored holdout cohort currently on screen. ' +
+        'top_rows = the ranked targets shown in the table (probability desc, capped at top_rows_shown); ' +
+        'distribution.bin_edges/bin_counts = probability histogram over ALL n_scored rows ' +
+        '(use it for "how many above X%" questions — the table only shows the top rows); ' +
+        'top_drivers = cohort-level mean |SHAP| drivers.',
+      value: cohortReadable ?? { page: 'predictive-analytics', status: 'no cohort scored yet' },
+      available: cohortReadable ? 'enabled' : 'disabled',
+    },
+    [cohortReadable]
+  );
+  return null;
 }
 
 // =============================================================================
@@ -577,8 +605,45 @@ function PredictiveAnalytics() {
   }, [selectedModel, cohort, facets]);
   usePageChatContext(pageChatSummary);
 
+  // Share the scored cohort with the chat agent over AG-UI (useCopilotReadable
+  // → agent/run body.context → backend ON-SCREEN APP CONTEXT). 2026-08-26
+  // (trace session_1787762049084_4psbqsx): the user asked how many ranked
+  // targets score above 90% and the chat could not see the page at all — the
+  // pill summary above only feeds POST /chat/suggestions, never an agent run.
+  // The table shows top_n rows, but `distribution` is computed over ALL
+  // n_scored rows, so the histogram answers threshold questions the table
+  // cannot. Covariates (per-row drill-down payload) stay off the wire.
+  const cohortReadable = React.useMemo(() => {
+    if (cohort?.status !== 'completed') return null;
+    return {
+      page: 'predictive-analytics',
+      model_name: cohort.model_name || selectedModel,
+      cohort_job_id: cohort.job_id,
+      brand: cohort.brand ?? null,
+      cohort: cohort.cohort ?? null,
+      entity_kind: facets.plural,
+      predicted_outcome: facets.outcome,
+      split: cohort.split,
+      out_of_sample: cohort.out_of_sample,
+      feature_source: cohort.feature_source,
+      n_scored: cohort.n_scored,
+      top_rows_shown: cohort.top_rows?.length ?? 0,
+      distribution: cohort.distribution ?? null,
+      top_drivers: (cohort.top_drivers ?? []).slice(0, 5),
+      top_rows: (cohort.top_rows ?? []).map((row, i) => ({
+        rank: i + 1,
+        entity_id: row.entity_id,
+        probability: row.probability,
+      })),
+    };
+  }, [cohort, selectedModel, facets.plural, facets.outcome]);
+  // useCopilotReadable THROWS with no <CopilotKit> above it, and the e2e build
+  // runs with VITE_COPILOT_ENABLED=false — mount it only behind the gate.
+  const copilotEnabled = useCopilotEnabled();
+
   return (
     <div className="container mx-auto px-4 py-8">
+      {copilotEnabled && <CohortReadable cohortReadable={cohortReadable} />}
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
         <div>

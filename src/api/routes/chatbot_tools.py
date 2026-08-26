@@ -125,7 +125,13 @@ class E2IDataQueryInput(BaseModel):
     """Input schema for e2i_data_query_tool."""
 
     query_type: E2IQueryType = Field(
-        description="Type of E2I data to query: kpi, causal_chain, agent_analysis, triggers, experiments, predictions, recommendations, drift_reports"
+        description=(
+            "Type of E2I data to query. Direct table reads: kpi, causal_chain, "
+            "agent_analysis, triggers. experiments / predictions / recommendations / "
+            "drift_reports are a SEMANTIC (hybrid-RAG) search over stored analysis "
+            "memories — NOT a live read of the predictions service or of any scored "
+            "model; hits may be unrelated to the question (check the result's caveat)."
+        )
     )
     brand: Optional[str] = Field(
         default=None,
@@ -938,6 +944,13 @@ async def _query_via_rag(
                 for r in results
             ],
             "retrieval_method": "hybrid_rag",
+            # 2026-08-26: this branch answered "how many ranked targets are above
+            # 90%?" with success:true + 63 unrelated KPI memories. Say what it is.
+            "caveat": (
+                f"'{query_type}' is a semantic (hybrid-RAG) search over stored analysis "
+                "memories, not a live data read — hits may be unrelated to the question; "
+                "verify each item's content before using it as an answer."
+            ),
         }
     except Exception as e:
         logger.error(f"RAG query for {query_type} failed: {e}")
@@ -972,10 +985,13 @@ async def e2i_data_query_tool(
     - Causal chains: Discovered cause-effect relationships
     - Agent analyses: Outputs from the 22-agent system
     - Triggers: Alerts and explanations for metric changes
-    - Experiments: A/B test designs and results
-    - Predictions: ML model predictions
-    - Recommendations: Generated recommendations
-    - Drift reports: Data/model drift detection results
+    - Experiments / Predictions / Recommendations / Drift reports: a SEMANTIC
+      (hybrid-RAG) search over stored analysis memories — NOT a live read of the
+      predictions service or of a scored model, and hits may be unrelated to the
+      question (the result carries a ``caveat``). For the ranked targets / scored
+      cohort the user is viewing on the Predictive Analytics page, answer from the
+      ON-SCREEN APP CONTEXT in the system prompt instead of calling this; for a
+      fresh single-entity score use the predict_* tools.
 
     Use this tool when users ask about E2I business metrics, causal relationships,
     agent outputs, or any analytical data from the platform.

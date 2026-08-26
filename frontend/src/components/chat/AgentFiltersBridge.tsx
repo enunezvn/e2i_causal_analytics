@@ -3,14 +3,17 @@
  * ==================
  *
  * Pushes the dashboard's active filters into the "default" agent's CoAgent
- * shared state — the ONLY channel that reaches the backend chat graph for
- * agent runs (2026-08-19 review: the CopilotChat `instructions` prop and
- * `useCopilotReadable` never leave the browser; the wire carries only
- * {threadId, state, messages, actions}, and the backend hard-codes
- * `context: []`). The backend declares a matching `filters` state channel
+ * shared state. The backend declares a matching `filters` state channel
  * (E2IAgentState) and folds it into the chat/synthesis prompts so an
  * ambiguous question resolves brand/period from the UI instead of asking
- * "which brand?" with the filter already set.
+ * "which brand?" with the filter already set (2026-08-19 review).
+ *
+ * History: the 08-19 review believed `useCopilotReadable` never left the
+ * browser. Measured 2026-08-26: readables DO ride the agent/run body as
+ * `context` — the backend had been zeroing them (fixed; they now reach the
+ * prompt as ON-SCREEN APP CONTEXT). This typed channel stays because the
+ * backend's filters note knows the "All"/"All US" sentinels; a raw readable
+ * does not. The CopilotChat `instructions` prop genuinely is not on the wire.
  */
 
 import { useEffect, useRef } from 'react';

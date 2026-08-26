@@ -25,6 +25,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
 import PredictiveAnalytics from './PredictiveAnalytics';
+import { CopilotKitWrapper } from '@/providers/E2ICopilotProvider';
 
 vi.mock('@/hooks/api/use-predictions', () => ({
   useModelsStatus: vi.fn(),
@@ -62,6 +63,27 @@ vi.mock('@/hooks/api', () => ({
   })),
 }));
 
+// AG-UI readable harness (2026-08-26): capture every useCopilotReadable call so
+// tests can assert WHAT the page shares with the chat agent, not just what it
+// renders. The real hook THROWS outside <CopilotKit> ("Remember to wrap your
+// app…") — CI's e2e build runs with VITE_COPILOT_ENABLED=false, so the page
+// must only mount it behind useCopilotEnabled(); the harness records calls.
+type ReadableCall = { description: string; value: unknown; available?: 'enabled' | 'disabled' };
+const readableHarness = vi.hoisted(() => ({ calls: [] as ReadableCall[] }));
+// No importOriginal: the real package drags katex CSS into jsdom. The provider
+// module (imported for usePageChatContext) never renders here, so stubs suffice.
+vi.mock('@copilotkit/react-core', () => ({
+  useCopilotReadable: (opts: ReadableCall) => {
+    readableHarness.calls.push(opts);
+    return undefined;
+  },
+  useCopilotAction: () => undefined,
+  useCoAgent: () => ({ state: {}, setState: () => undefined, running: false }),
+  useCopilotChat: () => ({}),
+  useCopilotContext: () => ({}),
+  CopilotKit: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 import {
   useModelsStatus,
   useModelInfo,
@@ -70,15 +92,20 @@ import {
   usePollCohortScore,
 } from '@/hooks/api/use-predictions';
 
-function createWrapper() {
+function createWrapper({ copilot = false }: { copilot?: boolean } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
       mutations: { retry: false },
     },
   });
+  // copilot=true mounts the REAL CopilotKitWrapper (enabled) so
+  // useCopilotEnabled() is true, as in the VITE_COPILOT_ENABLED=true prod
+  // build; the CopilotKit element itself is the passthrough stub above.
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      {copilot ? <CopilotKitWrapper enabled>{children}</CopilotKitWrapper> : children}
+    </QueryClientProvider>
   );
 }
 
@@ -522,5 +549,72 @@ describe('PredictiveAnalytics (cohort scoring)', () => {
     });
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
     expect(screen.getByText(/no models available/i)).toBeInTheDocument();
+  });
+
+  // 2026-08-26 (trace session_1787762049084_4psbqsx): asked "how many ranked
+  // targets are above 90%?" then "the data is on the GUI", the chat had no
+  // idea — the page published only a 3-line opener-pill summary (to
+  // POST /chat/suggestions), never a readable. The AG-UI channel for "what the
+  // user is looking at" is useCopilotReadable → agent/run body.context.
+  describe('AG-UI cohort readable', () => {
+    const lastCohortReadable = () => {
+      const cohortCalls = readableHarness.calls.filter((c) => /cohort/i.test(c.description));
+      return cohortCalls[cohortCalls.length - 1];
+    };
+
+    beforeEach(() => {
+      readableHarness.calls.length = 0;
+    });
+
+    // CI's e2e job builds with VITE_COPILOT_ENABLED=false (no <CopilotKit>
+    // mounted) and the real hook throws there — the first cut of this readable
+    // took every Predictive Analytics e2e spec down (PR #1818 run 32996738185).
+    it('renders without a CopilotKit provider and does not register the readable there', () => {
+      (usePollCohortScore as ReturnType<typeof vi.fn>).mockReturnValue({ data: mockCohort });
+      render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+      expect(screen.getByText('Predictive Analytics')).toBeInTheDocument();
+      expect(lastCohortReadable()).toBeUndefined();
+    });
+
+    it('publishes the scored cohort — ranked rows + the FULL-cohort histogram — as a readable', () => {
+      (usePollCohortScore as ReturnType<typeof vi.fn>).mockReturnValue({ data: mockCohort });
+      render(<PredictiveAnalytics />, { wrapper: createWrapper({ copilot: true }) });
+
+      const readable = lastCohortReadable();
+      expect(readable).toBeDefined();
+      expect(readable!.available).toBe('enabled');
+      // The description must tell the model the histogram covers ALL scored
+      // rows (that is how "how many above 90%" is answerable beyond the table).
+      expect(readable!.description).toMatch(/full|all/i);
+
+      const value = readable!.value as Record<string, unknown>;
+      expect(value.model_name).toBe('initiation_kisqali_goldstd_lr_v1');
+      expect(value.cohort_job_id).toBe('job-1');
+      expect(value.brand).toBe('Kisqali');
+      expect(value.n_scored).toBe(1234);
+      expect(value.top_rows_shown).toBe(2);
+      expect(value.distribution).toEqual(mockCohort.distribution);
+      expect(value.top_rows).toEqual([
+        { rank: 1, entity_id: 'patient-001', probability: 0.91 },
+        { rank: 2, entity_id: 'patient-002', probability: 0.55 },
+      ]);
+      // Raw covariates are per-row drill-down payload — never on the wire.
+      expect(JSON.stringify(value)).not.toContain('covariates');
+    });
+
+    it('marks the readable unavailable until a cohort is scored', () => {
+      render(<PredictiveAnalytics />, { wrapper: createWrapper({ copilot: true }) });
+      const readable = lastCohortReadable();
+      expect(readable).toBeDefined();
+      expect(readable!.available).toBe('disabled');
+    });
+
+    it('does not share a failed job as if it were a scored cohort', () => {
+      (usePollCohortScore as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { ...mockCohort, status: 'failed', error: 'boom', top_rows: [], distribution: null },
+      });
+      render(<PredictiveAnalytics />, { wrapper: createWrapper({ copilot: true }) });
+      expect(lastCohortReadable()!.available).toBe('disabled');
+    });
   });
 });

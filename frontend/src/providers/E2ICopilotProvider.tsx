@@ -1294,8 +1294,9 @@ const CopilotHooksInner: React.FC = () => {
   });
 
   // Renders no UI — registers hooks, plus the bridge that pushes the
-  // dashboard filters into the "default" agent's CoAgent state (the only
-  // channel that reaches the backend graph for agent runs; 2026-08-19).
+  // dashboard filters into the "default" agent's CoAgent state (typed
+  // channel the backend's filters note understands; readables ride the
+  // agent/run body.context as ON-SCREEN APP CONTEXT since 2026-08-26).
   return <AgentFiltersBridge filters={context?.filters || DEFAULT_FILTERS} />;
 };
 

@@ -1127,6 +1127,46 @@ class TestQueryViaRag:
         assert result["count"] == 1
 
 
+class TestPredictionsQueryTypeIsHonest:
+    """2026-08-26 (trace session_1787762049084_4psbqsx): asked about the ranked
+    targets on the Predictive Analytics page, the agent called
+    ``e2i_data_query_tool(query_type="predictions")`` twice — a hybrid-RAG
+    fallback over episodic memories that answered ``success: True`` with 63
+    unrelated KPI rows. The schema/tool text advertised "ML model predictions";
+    the contract must say what it actually does and point page questions at
+    the on-screen context."""
+
+    def test_schema_description_says_predictions_is_a_memory_search(self):
+        desc = E2IDataQueryInput.model_fields["query_type"].description
+        assert "predictions" in desc
+        assert "memor" in desc.lower() or "semantic" in desc.lower()
+        assert "not" in desc.lower()
+
+    def test_tool_description_points_page_questions_at_on_screen_context(self):
+        desc = e2i_data_query_tool.description.lower()
+        assert "predictions" in desc
+        assert "on-screen" in desc or "on screen" in desc
+        assert "live" in desc  # 'NOT a live read of the predictions service'
+
+    @pytest.mark.asyncio
+    async def test_rag_result_carries_a_caveat(self):
+        mock_result = MagicMock()
+        mock_result.source_id = "doc-1"
+        mock_result.content = "TRx snapshot"
+        mock_result.score = 0.4
+        mock_result.source = "episodic"
+        mock_result.metadata = {}
+        with patch(
+            "src.api.routes.chatbot_tools.hybrid_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = [mock_result]
+            result = await _query_via_rag("predictions", "recent", None, 5)
+        assert result["retrieval_method"] == "hybrid_rag"
+        caveat = result["caveat"].lower()
+        assert "semantic" in caveat or "memor" in caveat
+        assert "unrelated" in caveat
+
+
 # =============================================================================
 # e2i_data_query_tool Tests
 # =============================================================================
