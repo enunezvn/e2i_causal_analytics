@@ -62,6 +62,25 @@ vi.mock('@/hooks/api', () => ({
   })),
 }));
 
+// AG-UI readable harness (2026-08-26): capture every useCopilotReadable call so
+// tests can assert WHAT the page shares with the chat agent, not just what it
+// renders. The real hook is a no-op outside <CopilotKit>; the harness records.
+type ReadableCall = { description: string; value: unknown; available?: 'enabled' | 'disabled' };
+const readableHarness = vi.hoisted(() => ({ calls: [] as ReadableCall[] }));
+// No importOriginal: the real package drags katex CSS into jsdom. The provider
+// module (imported for usePageChatContext) never renders here, so stubs suffice.
+vi.mock('@copilotkit/react-core', () => ({
+  useCopilotReadable: (opts: ReadableCall) => {
+    readableHarness.calls.push(opts);
+    return undefined;
+  },
+  useCopilotAction: () => undefined,
+  useCoAgent: () => ({ state: {}, setState: () => undefined, running: false }),
+  useCopilotChat: () => ({}),
+  useCopilotContext: () => ({}),
+  CopilotKit: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 import {
   useModelsStatus,
   useModelInfo,
@@ -522,5 +541,62 @@ describe('PredictiveAnalytics (cohort scoring)', () => {
     });
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
     expect(screen.getByText(/no models available/i)).toBeInTheDocument();
+  });
+
+  // 2026-08-26 (trace session_1787762049084_4psbqsx): asked "how many ranked
+  // targets are above 90%?" then "the data is on the GUI", the chat had no
+  // idea — the page published only a 3-line opener-pill summary (to
+  // POST /chat/suggestions), never a readable. The AG-UI channel for "what the
+  // user is looking at" is useCopilotReadable → agent/run body.context.
+  describe('AG-UI cohort readable', () => {
+    const lastCohortReadable = () => {
+      const cohortCalls = readableHarness.calls.filter((c) => /cohort/i.test(c.description));
+      return cohortCalls[cohortCalls.length - 1];
+    };
+
+    beforeEach(() => {
+      readableHarness.calls.length = 0;
+    });
+
+    it('publishes the scored cohort — ranked rows + the FULL-cohort histogram — as a readable', () => {
+      (usePollCohortScore as ReturnType<typeof vi.fn>).mockReturnValue({ data: mockCohort });
+      render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+      const readable = lastCohortReadable();
+      expect(readable).toBeDefined();
+      expect(readable!.available).toBe('enabled');
+      // The description must tell the model the histogram covers ALL scored
+      // rows (that is how "how many above 90%" is answerable beyond the table).
+      expect(readable!.description).toMatch(/full|all/i);
+
+      const value = readable!.value as Record<string, unknown>;
+      expect(value.model_name).toBe('initiation_kisqali_goldstd_lr_v1');
+      expect(value.cohort_job_id).toBe('job-1');
+      expect(value.brand).toBe('Kisqali');
+      expect(value.n_scored).toBe(1234);
+      expect(value.top_rows_shown).toBe(2);
+      expect(value.distribution).toEqual(mockCohort.distribution);
+      expect(value.top_rows).toEqual([
+        { rank: 1, entity_id: 'patient-001', probability: 0.91 },
+        { rank: 2, entity_id: 'patient-002', probability: 0.55 },
+      ]);
+      // Raw covariates are per-row drill-down payload — never on the wire.
+      expect(JSON.stringify(value)).not.toContain('covariates');
+    });
+
+    it('marks the readable unavailable until a cohort is scored', () => {
+      render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+      const readable = lastCohortReadable();
+      expect(readable).toBeDefined();
+      expect(readable!.available).toBe('disabled');
+    });
+
+    it('does not share a failed job as if it were a scored cohort', () => {
+      (usePollCohortScore as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { ...mockCohort, status: 'failed', error: 'boom', top_rows: [], distribution: null },
+      });
+      render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+      expect(lastCohortReadable()!.available).toBe('disabled');
+    });
   });
 });
