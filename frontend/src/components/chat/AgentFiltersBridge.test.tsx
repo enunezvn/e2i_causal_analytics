@@ -3,13 +3,13 @@
  * ========================
  *
  * 2026-08-19 review: the dashboard's brand filter had NO channel to the chat
- * backend — the CopilotChat `instructions` prop and `useCopilotReadable`
- * never leave the browser for agent runs (the wire carries only
- * {threadId, state, messages, actions}). Measured: filter set to
+ * backend (the route zeroed the readables' `context`; the CopilotChat
+ * `instructions` prop is not on the wire). Measured: filter set to
  * Remibrutinib at 09:44:45, chat still asked "which brand?" at 09:51.
+ * (2026-08-26 correction: readables DO reach the backend as body.context and
+ * are now folded in; this typed channel is kept for its sentinel semantics.)
  *
- * AgentFiltersBridge closes the gap through the ONE channel that reaches the
- * graph: CoAgent shared state. It must (1) register the "default" agent with
+ * AgentFiltersBridge closes the gap through CoAgent shared state. It must (1) register the "default" agent with
  * the filters in initialState, (2) push filter changes into agent state via
  * setState, (3) merge — never clobber — other keys living in agent state
  * (progress fields, the `copilotkit` actions channel), and (4) not re-push

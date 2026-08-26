@@ -3,10 +3,10 @@
 Measured defect: the UI's brand filter had NO channel to the chat graph — the
 filter was set to Remibrutinib at 09:44:45 (KPI summary log) yet the 09:51
 chat turn still asked "which brand?". The frontend sent brand only via the
-CopilotChat ``instructions`` prop and ``useCopilotReadable``, neither of which
-leaves the browser for agent runs (the wire carries only
-``{threadId, state, messages, actions}``); the route hard-codes ``context=[]``
-and the chat node builds a static system prompt.
+CopilotChat ``instructions`` prop (not on the wire) and ``useCopilotReadable``
+(on the wire as ``context`` — but the route hard-coded ``context=[]``, see
+test_copilotkit_readables_context.py for the 2026-08-26 correction); the chat
+node built a static system prompt.
 
 Fix contract (this file pins the backend half):
 

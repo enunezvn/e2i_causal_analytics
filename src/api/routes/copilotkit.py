@@ -7,9 +7,20 @@ Exposes backend actions for querying KPIs, running analyses,
 and interacting with the E2I agent system.
 
 Author: E2I Causal Analytics Team
-Version: 1.31.0
+Version: 1.32.0
 
 Changelog:
+    1.32.0 - The frontend's useCopilotReadable values now reach the chat graph.
+             Measured 2026-08-26 (live wire capture, react-core 1.51.2): every
+             readable arrives in the agent/run body as ``context`` — the handler
+             ignored it and execute() hard-coded RunAgentInput(context=[]), so the
+             chat had no page awareness ("I don't have access to your current
+             page") while the trace's user said "the data is on the GUI". The
+             2026-08-19 comments claiming readables "never leave the browser"
+             read the RUN_STARTED echo of that zeroed value. Fix: forward
+             body.context (sanitised by _coerce_agui_context) into RunAgentInput;
+             the SDK merges it to state["copilotkit"]["context"], which chat_node
+             and build_synthesis_prompt fold in via _readables_context_note.
     1.31.0 - Fixed the frontend-action follow-up run 400 ("This model does not
              support assistant message prefill"). After the client executes a
              frontend action (e.g. renderKpiTrend), CopilotKit starts a follow-up
@@ -575,10 +586,12 @@ def _filters_context_note(filters: Any) -> str:
     """Render the dashboard's active filters as a system-prompt suffix.
 
     2026-08-19 review: the UI's brand filter had NO channel to the chat graph
-    (instructions/readables never leave the browser for agent runs; the route
-    hard-codes ``context=[]``) — the chat asked "which brand?" with the filter
-    set to Remibrutinib. The frontend now sends filters in the CoAgent state;
-    this note is how the nodes actually USE them.
+    (the route hard-coded ``context=[]``, dropping the readables — measured
+    2026-08-26: they DO arrive in the agent/run body; see
+    ``_readables_context_note``) — the chat asked "which brand?" with the
+    filter set to Remibrutinib. The frontend sends filters in the CoAgent
+    state; this note is how the nodes actually USE them (typed, sentinel-aware:
+    ``brand="All"`` is not a constraint — the raw readable can't say that).
 
     Semantics: resolve-don't-ask for fields the user's message leaves
     unspecified, but explicit user wording always wins. ``brand="All"`` is not
@@ -617,6 +630,106 @@ def _filters_context_note(filters: Any) -> str:
         "territory, or segment, resolve it from these filters instead of asking for "
         "clarification — and say which filter value you used. If the user names "
         "one explicitly in their message, the user's wording wins over the filter."
+    )
+
+
+# Per-readable and total budget for the ON-SCREEN APP CONTEXT block. The
+# Predictive Analytics cohort readable (100 ranked rows + a 10-bin histogram)
+# is ~8 KB; the agent roster readable ~3 KB. Hard caps keep a runaway readable
+# from blowing the prompt.
+_READABLE_ITEM_MAX_CHARS = 12_000
+_READABLES_TOTAL_MAX_CHARS = 32_000
+
+
+def _coerce_agui_context(raw: Any) -> list[dict[str, str]]:
+    """Normalise the agent/run body's ``context`` (the browser's
+    ``useCopilotReadable`` values) into ag_ui ``Context``-shaped dicts.
+
+    Measured 2026-08-26 (react-core 1.51.2 → ``@copilotkitnext/core``): every
+    readable rides ``body.context`` as ``{"description": str, "value": str}``
+    (the client JSON-stringifies ``value``). Anything else is dropped rather
+    than forwarded — a malformed item would fail ``RunAgentInput`` validation
+    and 500 the whole run. Non-string values are stringified for older /
+    hand-rolled callers.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        description = item.get("description")
+        value = item.get("value")
+        if not isinstance(description, str) or value is None:
+            continue
+        if not isinstance(value, str):
+            try:
+                value = json.dumps(value, default=str)
+            except (TypeError, ValueError):
+                continue
+        out.append({"description": description, "value": value})
+    return out
+
+
+def _readables_context_note(copilotkit_state: Any) -> str:
+    """Render the frontend's readables (``state["copilotkit"]["context"]``) as a
+    system-prompt suffix — the AG-UI "what the user is looking at" channel.
+
+    Why (2026-08-26, trace session_1787762049084_4psbqsx): on the Predictive
+    Analytics page the user asked "how many ranked targets are above 90%?",
+    then "the data is on the GUI" — and the chat had no page awareness at all:
+    the route zeroed ``context`` and nothing read the SDK-merged key. The
+    2026-08-19 comments claiming readables "never leave the browser" were
+    reading the RUN_STARTED echo of that zeroed value, not the request.
+
+    Accepts the SDK's ``ag_ui.core.Context`` pydantic objects AND plain dicts
+    (checkpoint round-trips), skips junk, caps per-item and total size, and
+    returns "" when nothing usable — readable-less runs keep the prompt
+    byte-identical.
+    """
+    if not isinstance(copilotkit_state, dict):
+        return ""
+    items = copilotkit_state.get("context")
+    if not isinstance(items, list):
+        return ""
+
+    rendered: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            description, value = item.get("description"), item.get("value")
+        else:
+            description = getattr(item, "description", None)
+            value = getattr(item, "value", None)
+        if not isinstance(description, str) or not isinstance(value, str) or not value.strip():
+            continue
+        if len(value) > _READABLE_ITEM_MAX_CHARS:
+            value = value[:_READABLE_ITEM_MAX_CHARS] + f" … [truncated: {len(value)} chars total]"
+        rendered.append(f"- {description}: {value}")
+    if not rendered:
+        return ""
+
+    lines: list[str] = []
+    used = 0
+    omitted = 0
+    for line in rendered:
+        if used + len(line) > _READABLES_TOTAL_MAX_CHARS:
+            omitted += 1
+            continue
+        lines.append(line)
+        used += len(line) + 1
+    if omitted:
+        lines.append(f"- [{omitted} readable(s) omitted: context budget exceeded]")
+
+    return (
+        "\n\nON-SCREEN APP CONTEXT (what the user is currently looking at, shared "
+        "live by the dashboard via AG-UI readables; values are JSON):\n"
+        + "\n".join(lines)
+        + "\n\nWhen the user asks about 'the data on the page/screen/GUI', 'these "
+        "results', or the analysis they are viewing, answer from this context "
+        "first — compute counts, ranks and percentages directly from it (a "
+        "histogram's bin_counts cover the FULL scored cohort; top_rows are only "
+        "the rows shown on screen) and say which on-screen values you used. "
+        "Call tools only for data that is not on screen."
     )
 
 
@@ -940,6 +1053,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         actions: Optional[List[Any]] = None,
         node_name: Optional[str] = None,
         meta_events: Optional[List[Any]] = None,
+        context: Optional[List[Any]] = None,
         **kwargs,
     ) -> AsyncGenerator[str, None]:
         """
@@ -1028,17 +1142,21 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         set_chat_attribution(persistent_session_id, run_id)
         dbg(f"Set session_id in state and context var: {persistent_session_id[:20]}...")
 
+        agui_context = _coerce_agui_context(context)
         run_input = RunAgentInput(
             thread_id=thread_id,
             run_id=run_id,
             state=state_with_session,
             messages=agui_messages,  # type: ignore[arg-type]
             tools=actions,  # type: ignore[arg-type]  # CopilotKit actions become tools
-            context=[],
+            # useCopilotReadable values (2026-08-26): the SDK's merge_state lands
+            # these at state["copilotkit"]["context"]; chat/synthesis fold them
+            # into the prompt via _readables_context_note. Was hard-coded [].
+            context=agui_context,  # type: ignore[arg-type]
             forwarded_props={"node_name": node_name} if node_name else {},
         )
 
-        dbg("Created RunAgentInput, calling self.run()")
+        dbg(f"Created RunAgentInput ({len(agui_context)} readable(s)), calling self.run()")
 
         # CRITICAL FIX (v1.6.8): Use fresh graph with new checkpointer to avoid
         # "Message ID not found in history" error. The SDK's prepare_stream()
@@ -3077,6 +3195,7 @@ def build_synthesis_prompt(
     tool_results: list[dict],
     history: Optional[List[Dict[str, str]]] = None,
     filters: Optional[Dict[str, Any]] = None,
+    readables: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Frame the prior conversation + the user's question + the tool calls (with args)
     + the tool results so the synthesizer answers the ACTUAL question, resolves
@@ -3085,7 +3204,10 @@ def build_synthesis_prompt(
     for a brand it already used' and 'missing the preceding conversation' bugs.
     ``filters`` (2026-08-19): the dashboard's active filters from CoAgent state —
     framed so the synthesizer resolves an unspecified brand/period from the UI
-    instead of re-asking; omitted entirely when absent (prompt stays byte-identical)."""
+    instead of re-asking; omitted entirely when absent (prompt stays byte-identical).
+    ``readables`` (2026-08-26): ``state["copilotkit"]`` — the frontend's
+    useCopilotReadable values (on-screen page context), so a tool-calling turn
+    keeps what the user is looking at; same omit-when-absent contract."""
     import json as _json
 
     calls = _json.dumps(tool_calls, indent=2, default=str)
@@ -3104,8 +3226,17 @@ def build_synthesis_prompt(
     filters_note = _filters_context_note(filters)
     if filters_note:
         filters_block = filters_note.strip() + "\n\n"
+    readables_block = ""
+    readables_note = _readables_context_note(readables)
+    if readables_note:
+        readables_block = readables_note.strip() + "\n\n"
     return (
-        history_block + filters_block + "User question:\n" + (original_query or "(none)") + "\n\n"
+        history_block
+        + filters_block
+        + readables_block
+        + "User question:\n"
+        + (original_query or "(none)")
+        + "\n\n"
         "Tool calls the assistant made (note the brand/window/args already chosen):\n"
         + calls
         + "\n\n"
@@ -3285,10 +3416,13 @@ class E2IAgentState(TypedDict, total=False):
     copilotkit: Dict[str, Any]
 
     # Dashboard filters sent by the frontend via useCoAgent shared state
-    # (2026-08-19 review: the ONLY channel that reaches the graph is state —
-    # instructions/readables never leave the browser for agent runs). Same
-    # declare-or-be-dropped trap as `copilotkit` above. Shape mirrors the UI's
-    # E2IFilters: {brand, territory, dateRange: {start, end}, hcpSegment}.
+    # (2026-08-19 review). Typed channel kept alongside the readables: the
+    # filters note knows the "All"/"All US" sentinels, a raw readable does not.
+    # (The 08-19 claim that readables "never leave the browser" was wrong —
+    # measured 2026-08-26 they arrive in body.context; the route had zeroed
+    # them. They now ride `copilotkit["context"]` above.) Same
+    # declare-or-be-dropped trap as `copilotkit`. Shape mirrors the UI's
+    # E2IFilters: {brand, region, territory, dateRange: {start, end}, hcpSegment}.
     filters: Dict[str, Any]
 
 
@@ -3470,8 +3604,13 @@ def create_e2i_chat_agent(
             # state) ride the system prompt so an ambiguous question resolves
             # brand/period from the UI instead of asking for clarification
             # (2026-08-19 review; suffix is "" when no filters arrived).
+            # The frontend's readables (what is on screen — page path, the
+            # scored cohort on Predictive Analytics, …) ride the same prompt
+            # (2026-08-26; suffix is "" when none arrived).
             system_msg = SystemMessage(
-                content=E2I_COPILOT_SYSTEM_PROMPT + _filters_context_note(state.get("filters"))
+                content=E2I_COPILOT_SYSTEM_PROMPT
+                + _filters_context_note(state.get("filters"))
+                + _readables_context_note(state.get("copilotkit"))
             )
             llm_messages: list[BaseMessage] = [system_msg]
 
@@ -3860,6 +3999,7 @@ def create_e2i_chat_agent(
                 tool_results,
                 history=_extract_synthesis_history(messages),
                 filters=state.get("filters"),
+                readables=state.get("copilotkit"),
             )
 
             # STREAMING (v1.22.0): Stream synthesis response token-by-token
@@ -4506,9 +4646,14 @@ async def copilotkit_custom_handler(
                     body_data.get("tools") or body_json.get("tools") or []
                 )  # AG-UI uses "tools"
                 node_name = body_data.get("nodeName") or body_json.get("nodeName")
+                # useCopilotReadable values ride ``context`` (measured 2026-08-26 on
+                # react-core 1.51.2; previously ignored here and zeroed in execute()).
+                context = body_data.get("context") or body_json.get("context") or []
 
                 logger.debug(
-                    f"agent/run: thread_id={thread_id[:8]}..., messages={len(messages)}, actions={len(actions)}, node={node_name}"
+                    f"agent/run: thread_id={thread_id[:8]}..., messages={len(messages)}, "
+                    f"actions={len(actions)}, context={len(context) if isinstance(context, list) else 0}, "
+                    f"node={node_name}"
                 )
 
                 # CUSTOM STREAMING HANDLER: Bypass SDK's handle_execute_agent to fix
@@ -4566,6 +4711,7 @@ async def copilotkit_custom_handler(
                             config=None,
                             actions=actions,
                             node_name=node_name,
+                            context=context,
                         ):
                             event_count += 1
                             sdbg(f"Streaming event #{event_count}")
