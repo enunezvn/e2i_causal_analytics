@@ -66,7 +66,7 @@ function PlaceboIllustration({ outcome }: { outcome: Outcome }) {
       />
       <text x="173" y={base + 14} fontSize="10" textAnchor="middle" className={TXT}>shuffled (noise)</text>
       <text x="118" y="40" fontSize="14" textAnchor="middle" className={MUTED}>→</text>
-      <Verdict x="173" y={base - placeboH - 6} outcome={outcome} pass="≈ 0" fail="still an effect" />
+      <Verdict x={173} y={base - placeboH - 6} outcome={outcome} pass="≈ 0" fail="still an effect" />
     </>
   );
 }
@@ -97,7 +97,7 @@ function RandomCommonCauseIllustration({ outcome }: { outcome: Outcome }) {
       <rect x="126" y={base - afterH} width="22" height={afterH} rx="2" fill={ok ? TREATMENT : FAIL} fillOpacity={ok ? 0.5 : 1} className={ANIM} />
       <text x="103" y={base + 12} fontSize="9" textAnchor="middle" className={MUTED}>before</text>
       <text x="137" y={base + 12} fontSize="9" textAnchor="middle" className={MUTED}>after</text>
-      <Verdict x="200" y="100" outcome={outcome} pass="Δ < 20 %" fail="Δ > 30 %" />
+      <Verdict x={200} y={100} outcome={outcome} pass="Δ < 20 %" fail="Δ > 30 %" />
     </>
   );
 }
@@ -142,7 +142,7 @@ function DataSubsetIllustration({ outcome }: { outcome: Outcome }) {
         return <circle key={i} cx={x} cy={43} r="4" fill={inside ? OUTCOME : FAIL} className={ANIM} />;
       })}
       <text x={cx0} y="74" fontSize="9" textAnchor="middle" className={MUTED}>subset estimates</text>
-      <Verdict x={cx0} y="100" outcome={outcome} pass="5 of 5 inside" fail="3 of 5 outside" />
+      <Verdict x={cx0} y={100} outcome={outcome} pass="5 of 5 inside" fail="3 of 5 outside" />
     </>
   );
 }
@@ -181,7 +181,7 @@ function BootstrapIllustration({ outcome }: { outcome: Outcome }) {
       <line x1={ciR} y1={base + 6} x2={ciR} y2={base + 14} className="stroke-[var(--color-foreground)]" strokeWidth="1.5" />
       <text x={cxCentre} y={base + 22} fontSize="9" textAnchor="middle" className={MUTED}>bootstrap CI (50×)</text>
       <text x="120" y="12" fontSize="9" textAnchor="middle" className={MUTED}>distribution of resampled effects</text>
-      <Verdict x="120" y="114" outcome={outcome} pass="CI ≤ 1.5× original" fail="CI > 1.75× original" />
+      <Verdict x={120} y={114} outcome={outcome} pass="CI ≤ 1.5× original" fail="CI > 1.75× original" />
     </>
   );
 }
@@ -213,7 +213,7 @@ function EValueIllustration({ outcome }: { outcome: Outcome }) {
         className={ANIM}
         style={{ transitionProperty: 'd, fill' }}
       />
-      <Verdict x={Math.min(176, Math.max(64, px(marker)))} y="110" outcome={outcome} pass="above the 2.0 threshold" fail="below 1.5 — fragile" />
+      <Verdict x={Math.min(176, Math.max(64, px(marker)))} y={110} outcome={outcome} pass="above the 2.0 threshold" fail="below 1.5 — fragile" />
     </>
   );
 }
