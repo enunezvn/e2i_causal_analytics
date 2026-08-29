@@ -173,6 +173,26 @@ describe('CorrelationCausationToggle', () => {
     await userEvent.click(screen.getByRole('button', { name: /reveal the confounder/i }));
     expect(screen.getAllByText(/specialty drives both/i).length).toBeGreaterThan(0);
   });
+
+  it('centres both illustrations in a width-capped column', async () => {
+    // Regression: the SVGs used to be `max-w-xl` with no `mx-auto`, so on wide
+    // screens they hugged the card's left edge with empty space on the right.
+    renderPage();
+    const scatter = screen.getByRole('img', { name: /illustrative scatter plot/i });
+    const scatterCol = screen.getByTestId('correlation-view');
+    expect(scatterCol).toContainElement(scatter);
+    expect(scatterCol.className).toMatch(/\bmx-auto\b/);
+    expect(scatterCol.className).toMatch(/\bmax-w-xl\b/);
+    expect(scatter.getAttribute('class')).toMatch(/\bw-full\b/);
+
+    await userEvent.click(screen.getByRole('button', { name: /reveal the confounder/i }));
+    const dag = screen.getByRole('img', { name: /illustrative dag: physician specialty/i });
+    const dagCol = screen.getByTestId('causation-view');
+    expect(dagCol).toContainElement(dag);
+    expect(dagCol.className).toMatch(/\bmx-auto\b/);
+    expect(dagCol.className).toMatch(/\bmax-w-xl\b/);
+    expect(dag.getAttribute('class')).toMatch(/\bw-full\b/);
+  });
 });
 
 describe('CapabilityIndex', () => {
