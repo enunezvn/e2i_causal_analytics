@@ -49,10 +49,11 @@ describe('Documentation page shell', () => {
     expect(screen.getByRole('heading', { name: /understanding e2i/i })).toBeInTheDocument();
   });
 
-  it('renders all five sections', () => {
+  it('renders all six sections', () => {
     renderPage();
     expect(screen.getByRole('heading', { name: /^purpose/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^causal impact/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^quality gate/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^methodology/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^best practices/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^expected impact/i })).toBeInTheDocument();
@@ -151,30 +152,36 @@ describe('CapabilityIndex', () => {
 });
 
 describe('CausalPipeline', () => {
+  // The Quality Gate section also names "Estimate…" buttons, "Placebo Treatment"
+  // and "E-value", so every query is scoped to the Methodology section.
+  const methodology = () => screen.getByRole('region', { name: /^methodology/i });
+
   it('renders the five stages', () => {
     renderPage();
     for (const name of ['Frame', 'Identify', 'Estimate', 'Refute', 'Act']) {
-      expect(screen.getByRole('button', { name: new RegExp(`^${name}`, 'i') })).toBeInTheDocument();
+      expect(within(methodology()).getByRole('button', { name: new RegExp(`^${name}`, 'i') })).toBeInTheDocument();
     }
   });
 
   it('expands a stage with plain language and a "For analysts" collapsible', async () => {
     renderPage();
-    await userEvent.click(screen.getByRole('button', { name: /^refute/i }));
-    expect(screen.getByText(/attack the estimate before believing it/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /for analysts/i }));
-    expect(screen.getByText(/placebo treatment/i)).toBeInTheDocument();
-    expect(screen.getByText(/e-value/i)).toBeInTheDocument();
+    const region = methodology();
+    await userEvent.click(within(region).getByRole('button', { name: /^refute/i }));
+    expect(within(region).getByText(/attack the estimate before believing it/i)).toBeInTheDocument();
+    await userEvent.click(within(region).getByRole('button', { name: /for analysts/i }));
+    expect(within(region).getByText(/placebo treatment \(fake treatment/i)).toBeInTheDocument();
+    expect(within(region).getByText(/e-value/i)).toBeInTheDocument();
   });
 
   it('resets the "For analysts" layer when switching stages', async () => {
     renderPage();
-    await userEvent.click(screen.getByRole('button', { name: /^refute/i }));
-    await userEvent.click(screen.getByRole('button', { name: /for analysts/i }));
-    expect(screen.getByText(/placebo treatment/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /^estimate/i }));
-    expect(screen.getByRole('button', { name: /for analysts/i })).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByText(/econml/i)).not.toBeInTheDocument();
+    const region = methodology();
+    await userEvent.click(within(region).getByRole('button', { name: /^refute/i }));
+    await userEvent.click(within(region).getByRole('button', { name: /for analysts/i }));
+    expect(within(region).getByText(/placebo treatment \(fake treatment/i)).toBeInTheDocument();
+    await userEvent.click(within(region).getByRole('button', { name: /^estimate/i }));
+    expect(within(region).getByRole('button', { name: /for analysts/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(within(region).queryByText(/econml/i)).not.toBeInTheDocument();
   });
 });
 
@@ -312,6 +319,64 @@ describe('CausalImpactDag', () => {
       'true'
     );
     expect(figure.querySelectorAll('[data-edge][data-selected="true"]').length).toBe(0);
+  });
+});
+
+describe('RefutationGate', () => {
+  it('renders the five refutation tests with illustrations, criteria, and the gate bands', () => {
+    renderPage();
+    const region = screen.getByRole('region', { name: /five refutation tests/i });
+    expect(within(region).getByText(/illustrative example/i)).toBeInTheDocument();
+    const items = within(region).getAllByRole('listitem');
+    expect(items.length).toBe(5);
+    const names = [
+      'Placebo Treatment',
+      'Random Common Cause',
+      'Data Subset',
+      'Bootstrap',
+      'Sensitivity (E-value)',
+    ];
+    for (const name of names) {
+      expect(within(region).getByRole('heading', { name })).toBeInTheDocument();
+    }
+    // Three tests are critical (a single failure blocks the estimate).
+    expect(region.querySelectorAll('[data-critical="true"]').length).toBe(3);
+    // One illustration per test.
+    expect(within(region).getAllByRole('img').length).toBe(5);
+    // The user-facing criteria and the production defaults.
+    expect(within(region).getByText(/effect must vanish/i)).toBeInTheDocument();
+    expect(within(region).getByText(/effect must hold stable/i)).toBeInTheDocument();
+    expect(within(region).getByText(/effect must reproduce/i)).toBeInTheDocument();
+    expect(within(region).getByText(/variance must stay bounded/i)).toBeInTheDocument();
+    expect(within(region).getByText(/robustness to unmeasured confounding/i)).toBeInTheDocument();
+    expect(within(region).getByText(/50 resamples/i)).toBeInTheDocument();
+    expect(within(region).getByText(/E-value ≥ 2\.0/i)).toBeInTheDocument();
+    // Gate bands.
+    for (const band of ['Proceed', 'Review', 'Block']) {
+      expect(within(region).getByText(band, { selector: 'dt' })).toBeInTheDocument();
+    }
+  });
+
+  it('switches every illustration to its failing state and lights the Block band', async () => {
+    renderPage();
+    const region = screen.getByRole('region', { name: /five refutation tests/i });
+    const survives = within(region).getByRole('button', { name: /estimate survives/i });
+    const fails = within(region).getByRole('button', { name: /estimate fails/i });
+    expect(survives).toHaveAttribute('aria-pressed', 'true');
+    expect(fails).toHaveAttribute('aria-pressed', 'false');
+    expect(region.querySelectorAll('[data-outcome="pass"]').length).toBe(5);
+    expect(region.querySelector('[data-gate-active="true"]')).toHaveAttribute('data-gate', 'proceed');
+
+    await userEvent.click(fails);
+    expect(fails).toHaveAttribute('aria-pressed', 'true');
+    expect(survives).toHaveAttribute('aria-pressed', 'false');
+    expect(region.querySelectorAll('[data-outcome="fail"]').length).toBe(5);
+    expect(region.querySelectorAll('[data-outcome="pass"]').length).toBe(0);
+    expect(region.querySelector('[data-gate-active="true"]')).toHaveAttribute('data-gate', 'block');
+
+    await userEvent.click(survives);
+    expect(region.querySelectorAll('[data-outcome="pass"]').length).toBe(5);
+    expect(region.querySelector('[data-gate-active="true"]')).toHaveAttribute('data-gate', 'proceed');
   });
 });
 

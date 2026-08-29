@@ -620,6 +620,128 @@ export const DAG_PATHS: DagPath[] = [
 
 // ── Section nav ─────────────────────────────────────────────────────────────
 
+// ---------------------------------------------------------------------------
+// Quality gate — the five refutation tests (Documentation §Quality Gate).
+// Defaults and pass rules mirror src/causal_engine/refutation_runner.py
+// (RefutationRunner.DEFAULT_CONFIG / PASS_THRESHOLDS / GATE_THRESHOLDS and
+// _determine_gate_decision). Keep them in sync when the runner changes.
+// ---------------------------------------------------------------------------
+
+export type RefutationTestId =
+  | 'placebo_treatment'
+  | 'random_common_cause'
+  | 'data_subset'
+  | 'bootstrap'
+  | 'sensitivity_e_value';
+
+export interface RefutationTestDef {
+  id: RefutationTestId;
+  name: string;
+  /** What the test does to the estimate (one line). */
+  action: string;
+  /** What must be true for the estimate to survive. */
+  mustHold: string;
+  /** Production default from RefutationRunner.DEFAULT_CONFIG. */
+  defaults: string;
+  /** Pass rule from RefutationRunner.PASS_THRESHOLDS. */
+  passRule: string;
+  /** A failing result on its own blocks the estimate. */
+  critical: boolean;
+  /** What a failing result means, in plain language. */
+  failSign: string;
+}
+
+export const REFUTATION_INTRO =
+  'No causal estimate is reported until it survives five refutation tests — adversarial attacks that try to break it. Three are critical: a single failure blocks the estimate outright. All five feed a weighted confidence score that decides the gate.';
+
+export const REFUTATION_TESTS: RefutationTestDef[] = [
+  {
+    id: 'placebo_treatment',
+    name: 'Placebo Treatment',
+    action: 'Replace treatment with noise',
+    mustHold: 'effect must vanish',
+    defaults: '30 permutations of the treatment column',
+    passRule: 'placebo p-value > 0.05',
+    critical: true,
+    failSign:
+      'A shuffled treatment still "moves" the outcome — the estimator is reading structure that has nothing to do with the treatment.',
+  },
+  {
+    id: 'random_common_cause',
+    name: 'Random Common Cause',
+    action: 'Add a random confounder',
+    mustHold: 'effect must hold stable',
+    defaults: '20 simulations, confounder strength 0.1',
+    passRule: 'effect moves by < 20 %',
+    critical: true,
+    failSign:
+      'The estimate swings with a confounder that carries no information — the adjustment is fragile.',
+  },
+  {
+    id: 'data_subset',
+    name: 'Data Subset',
+    action: '80 % subset replications',
+    mustHold: 'effect must reproduce',
+    defaults: '5 subsets, each 80 % of the rows',
+    passRule: '≥ 80 % of subset effects inside the original CI',
+    critical: false,
+    failSign:
+      'Subset estimates scatter outside the original interval — the effect depends on which rows were used.',
+  },
+  {
+    id: 'bootstrap',
+    name: 'Bootstrap',
+    action: 'Resample the data with replacement',
+    mustHold: 'variance must stay bounded',
+    defaults: '50 resamples',
+    passRule: 'bootstrap CI ≤ 1.5× the original width',
+    critical: false,
+    failSign:
+      'Resampled estimates spread far wider than the reported interval — the stated precision is overstated.',
+  },
+  {
+    id: 'sensitivity_e_value',
+    name: 'Sensitivity (E-value)',
+    action: 'How strong would a hidden confounder have to be to explain the effect away?',
+    mustHold: 'robustness to unmeasured confounding',
+    defaults: 'E-value on the point estimate and on the CI bound',
+    passRule: 'E-value ≥ 2.0',
+    critical: true,
+    failSign:
+      'A weak unmeasured confounder could produce the whole effect — nothing in the data rules it out.',
+  },
+];
+
+export type GateDecision = 'proceed' | 'review' | 'block';
+
+export interface GateBand {
+  decision: GateDecision;
+  label: string;
+  rule: string;
+  consequence: string;
+}
+
+export const GATE_BANDS: GateBand[] = [
+  {
+    decision: 'proceed',
+    label: 'Proceed',
+    rule: 'Confidence ≥ 0.70 and no critical test failed',
+    consequence: 'The estimate is validated and flows into recommendations.',
+  },
+  {
+    decision: 'review',
+    label: 'Review',
+    rule: 'Confidence between 0.50 and 0.70',
+    consequence: 'Borderline — surfaced with a caveat and queued for expert review.',
+  },
+  {
+    decision: 'block',
+    label: 'Block',
+    rule: 'Any critical test failed, or confidence < 0.50',
+    consequence: 'The estimate is marked refuted and never reaches a decision.',
+  },
+];
+
 export interface DocSection {
   id: string;
   label: string;
@@ -628,6 +750,7 @@ export interface DocSection {
 export const DOC_SECTIONS: DocSection[] = [
   { id: 'purpose', label: 'Purpose' },
   { id: 'causal-impact', label: 'Causal Impact' },
+  { id: 'refutation-gate', label: 'Quality Gate' },
   { id: 'methodology', label: 'Methodology' },
   { id: 'practices', label: 'Best Practices' },
   { id: 'impact', label: 'Expected Impact' },

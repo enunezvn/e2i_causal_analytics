@@ -53,6 +53,33 @@ test.describe('Documentation Page', () => {
       await expect(docPage.causalDag.getByText(/back-door paths the estimator must close/i)).toBeVisible()
     })
 
+    test('quality gate section: five refutation tests and the fail-state toggle', async () => {
+      await docPage.qualityGateNavLink.click()
+      await expect(docPage.refutationGate).toBeVisible()
+      for (const name of [
+        'Placebo Treatment',
+        'Random Common Cause',
+        'Data Subset',
+        'Bootstrap',
+        'Sensitivity (E-value)',
+      ]) {
+        await expect(docPage.refutationGate.getByRole('heading', { name })).toBeVisible()
+      }
+      await expect(docPage.refutationGate.getByText(/illustrative example/i)).toBeVisible()
+      await expect(docPage.refutationOutcomeButton(/estimate survives/i)).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+      await expect(docPage.activeGateBand).toHaveAttribute('data-gate', 'proceed')
+
+      await docPage.refutationOutcomeButton(/estimate fails/i).click()
+      await expect(docPage.refutationOutcomeButton(/estimate fails/i)).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+      await expect(docPage.activeGateBand).toHaveAttribute('data-gate', 'block')
+    })
+
     test('capability index links to live pages', async () => {
       await expect(docPage.capabilityIndex).toBeVisible()
       await expect(

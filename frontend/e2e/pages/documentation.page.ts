@@ -55,4 +55,20 @@ export class DocumentationPage extends BasePage {
   get dagSelectedEdges(): Locator {
     return this.causalDag.locator('[data-edge][data-selected="true"]')
   }
+
+  get qualityGateNavLink(): Locator {
+    return this.sectionNav.getByRole('button', { name: /^Quality Gate$/i })
+  }
+
+  get refutationGate(): Locator {
+    return this.page.getByRole('region', { name: /five refutation tests/i })
+  }
+
+  refutationOutcomeButton(name: RegExp): Locator {
+    return this.refutationGate.getByRole('button', { name })
+  }
+
+  get activeGateBand(): Locator {
+    return this.refutationGate.locator('[data-gate-active="true"]')
+  }
 }

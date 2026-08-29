@@ -2,9 +2,10 @@
  * Documentation Page — "Understanding E2I"
  * ========================================
  *
- * Scroll narrative in five sections: Purpose, Causal Impact (variable-role
- * explainer + the CausalImpactAgent DAG), Methodology, Best Practices,
- * Expected Impact. Spec: docs/superpowers/specs/2026-07-10-documentation-page-design.md
+ * Scroll narrative in six sections: Purpose, Causal Impact (variable-role
+ * explainer + the CausalImpactAgent DAG), Quality Gate (the five refutation
+ * tests + proceed/review/block bands), Methodology, Best Practices, Expected
+ * Impact. Spec: docs/superpowers/specs/2026-07-10-documentation-page-design.md
  *
  * Honesty constraints (platform-wide):
  * - ONE network call (useKPIList) for the live KPI-count chip; on error the
@@ -19,6 +20,7 @@ import {
   CorrelationCausationToggle,
   CausalVariableTypes,
   CausalImpactDag,
+  RefutationGate,
   CapabilityIndex,
   CausalPipeline,
   AgentTierStack,
@@ -98,6 +100,10 @@ export function Documentation() {
       <Section id="causal-impact" title="Causal Impact — the variables and the DAG">
         <CausalVariableTypes />
         <CausalImpactDag />
+      </Section>
+
+      <Section id="refutation-gate" title="Quality Gate — refutation tests">
+        <RefutationGate />
       </Section>
 
       <Section id="methodology" title="Methodology — how it works">
