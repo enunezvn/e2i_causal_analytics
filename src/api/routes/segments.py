@@ -27,7 +27,17 @@ import logging
 import math
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    cast,
+)
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -1564,6 +1574,9 @@ _SEGMENT_HTE_NUMERIC_COLUMNS = {
     "proteinuria_g_day",
     "ldh_ratio",
     "urticaria_severity_uas7",
+    # copay_support's DGP backdoor (treatment_arm.ARM_REGISTRY): routed as W when
+    # the registry edge names it (_segment_question_adjustment) — must float-coerce.
+    "insurance_access_score",
 }
 
 # Raw categorical columns kept as strings for post-hoc segmentation.
@@ -1572,6 +1585,117 @@ _SEGMENT_HTE_CATEGORICAL_COLUMNS = {"geographic_region"}
 # Max rows pulled for the gold-standard cohort (whole synthetic cohort fits well
 # under this; mirrors the generous causal-loader ceiling).
 _SEGMENT_HTE_ROW_LIMIT = 100_000
+
+
+class _SegmentQuestionAdjustment(NamedTuple):
+    """Resolved nuisance controls (W) for one segment-analysis question."""
+
+    confounders: List[str]
+    # True: a causal_paths edge backs the pair; False: none does; None: the
+    # registry could not be read (fail-soft on the default W).
+    modeled: Optional[bool]
+    warnings: List[str]
+
+
+_SEGMENT_UNMODELED_QUESTION_WARNING = (
+    "'{treatment} -> {outcome}' is not a modeled causal question in the causal_paths "
+    "registry for {scope}: no validated causal edge backs it, so the estimates below "
+    "may reflect confounding rather than a real effect and cross-library validation "
+    "is likely to fail. Choose a registered pair (GET /segments/datasets?brand=...)."
+)
+_SEGMENT_REGISTRY_UNAVAILABLE_WARNING = (
+    "Could not verify '{treatment} -> {outcome}' against the causal_paths registry "
+    "(registry unavailable); using the default adjustment set {confounders}."
+)
+
+
+async def _segment_question_adjustment(
+    *,
+    treatment_var: str,
+    outcome_var: str,
+    brand: Optional[str],
+    effect_modifiers: List[str],
+) -> _SegmentQuestionAdjustment:
+    """Derive W for (treatment, outcome, brand) from the causal_paths registry.
+
+    Why: the page's W used to be the FIXED ``_SEGMENT_HTE_CONFOUNDERS``. That is
+    complete for the arms whose DGP backdoor is covered by X ∪ W (psp / rep /
+    sample / trigger / treatment_arm) but NOT for copay_support, whose assignment
+    depends on ``insurance_access_score`` (treatment_arm.ARM_REGISTRY) — a column
+    in neither X nor W, so its estimate reported the confounded diff (measured
+    2026-08-29 on Remibrutinib: raw +0.2pp vs +2.7pp within insurance-access
+    bins). The registry stores each modeled edge's ``confounders_controlled``;
+    this reads it — the SAME enumeration the discovery leaderboard uses
+    (``causal._discover_candidate_questions``) — and routes the members that are
+    numeric allowlisted covariates and NOT already in X (no X/W overlap, codex
+    MED-2). Categoricals the segment loader keeps RAW for post-hoc grouping
+    (``geographic_region``) are excluded: the nuisance models would only see a
+    label-encoded ordinal, and no DGP arm is assigned on region.
+
+    A pair with NO registry edge (e.g. treatment_initiated -> persistent_180d: no
+    planted effect) stays allowlisted for programmatic callers, so it keeps the
+    default W and carries an explicit warning — the case that used to surface
+    only as an unexplained "cross-library validation FAILED".
+
+    Fail-soft: if the registry cannot be read the default W is used and the run
+    says so (the frame loader remains the fail-closed gate for the substrate).
+    """
+    from src.api.routes.causal import (
+        _CAUSAL_DATASET_SPECS,
+        _CAUSAL_NUMERIC_COLUMNS,
+        _brand_scoped_covariates,
+        _get_causal_path_repo,
+    )
+
+    default_w = list(_SEGMENT_HTE_CONFOUNDERS)
+    try:
+        repo = await _get_causal_path_repo()
+        rows = await repo.get_distinct_questions(brand=brand, include_synthetic=True)
+    except Exception as exc:
+        logger.warning(
+            f"causal_paths registry unavailable for segment question "
+            f"{treatment_var}->{outcome_var}: {exc}; using default W {default_w}"
+        )
+        return _SegmentQuestionAdjustment(
+            confounders=default_w,
+            modeled=None,
+            warnings=[
+                _SEGMENT_REGISTRY_UNAVAILABLE_WARNING.format(
+                    treatment=treatment_var, outcome=outcome_var, confounders=default_w
+                )
+            ],
+        )
+
+    modeled_rows = [
+        r for r in rows if r.get("treatment") == treatment_var and r.get("outcome") == outcome_var
+    ]
+    if not modeled_rows:
+        return _SegmentQuestionAdjustment(
+            confounders=default_w,
+            modeled=False,
+            warnings=[
+                _SEGMENT_UNMODELED_QUESTION_WARNING.format(
+                    treatment=treatment_var,
+                    outcome=outcome_var,
+                    scope=brand or "any brand",
+                )
+            ],
+        )
+
+    spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
+    numeric_allowlisted = set(spec["covariate"]) & _CAUSAL_NUMERIC_COLUMNS.get(
+        _SEGMENT_HTE_DATASET, set()
+    )
+    excluded = (
+        set(effect_modifiers) | {treatment_var, outcome_var} | set(_SEGMENT_HTE_CATEGORICAL_COLUMNS)
+    )
+    registry_w: List[str] = []
+    for row in modeled_rows:
+        for col in row.get("confounders") or []:
+            if col in numeric_allowlisted and col not in excluded and col not in registry_w:
+                registry_w.append(col)
+    confounders = _brand_scoped_covariates(list(dict.fromkeys(default_w + registry_w)), brand)
+    return _SegmentQuestionAdjustment(confounders=confounders, modeled=True, warnings=[])
 
 
 def _band_disease_severity(value: Any) -> Optional[str]:
@@ -1612,6 +1736,7 @@ async def _load_segment_hte_frame(
     treatment_var: str,
     outcome_var: str,
     effect_modifiers: Optional[List[str]] = None,
+    confounders: Optional[List[str]] = None,
 ) -> "pd.DataFrame":  # type: ignore[name-defined] # noqa: F821
     """Load the REAL gold-standard ``patient_journeys`` frame for the HTE agent.
 
@@ -1669,10 +1794,18 @@ async def _load_segment_hte_frame(
         if effect_modifiers is not None
         else list(_SEGMENT_HTE_EFFECT_MODIFIERS)
     )
-    base_cols = (
-        [treatment_var, outcome_var] + modifiers + _SEGMENT_HTE_CONFOUNDERS + ["geographic_region"]
-    )
+    # W: the run's resolved adjustment set (registry-derived via
+    # _segment_question_adjustment) — default to the fixed control so direct callers
+    # keep today's behaviour.
+    controls = list(confounders) if confounders is not None else list(_SEGMENT_HTE_CONFOUNDERS)
+    base_cols = [treatment_var, outcome_var] + modifiers + controls + ["geographic_region"]
     select_cols = [c for c in dict.fromkeys(base_cols) if c in allowed]
+    # Every W column is numeric (categoricals are excluded from W upstream), so
+    # a registry-derived control outside the curated numeric list still gets
+    # float-coerced rather than reaching EconML as an object column.
+    numeric_cols = _SEGMENT_HTE_NUMERIC_COLUMNS | {
+        c for c in controls if c not in _SEGMENT_HTE_CATEGORICAL_COLUMNS
+    }
 
     from src.memory.services.factories import get_async_supabase_client
 
@@ -1706,7 +1839,7 @@ async def _load_segment_hte_frame(
             select_cols=select_cols,
             treatment_var=treatment_var,
             outcome_var=outcome_var,
-            numeric_cols=_SEGMENT_HTE_NUMERIC_COLUMNS,
+            numeric_cols=numeric_cols,
             # geographic_region passes through as a raw string (not float-coerced).
             categorical_cols=frozenset(_SEGMENT_HTE_CATEGORICAL_COLUMNS),
         )
@@ -1833,11 +1966,27 @@ async def _execute_segment_analysis(
 
     effect_modifiers = _segment_effect_modifiers(request.brand)
     segment_vars = _brand_scoped_covariates(list(_SEGMENT_HTE_SEGMENT_VARS), request.brand)
+    # W (nuisance controls) come from the causal_paths registry edge for this
+    # question (copay_support needs insurance_access_score; no other registered
+    # pair adds to the default). The SAME list drives the loader's column
+    # selection and the graph state so the frame and the DML W stay in lock-step.
+    # An unmodeled pair keeps the default W and is warned about on the run.
+    adjustment = await _segment_question_adjustment(
+        treatment_var=treatment_var,
+        outcome_var=outcome_var,
+        brand=request.brand,
+        effect_modifiers=effect_modifiers,
+    )
+    logger.info(
+        f"Segment analysis {treatment_var}->{outcome_var} ({request.brand or 'all brands'}): "
+        f"W={adjustment.confounders} modeled={adjustment.modeled}"
+    )
     tier0_frame = await _load_segment_hte_frame(
         brand=request.brand,
         treatment_var=treatment_var,
         outcome_var=outcome_var,
         effect_modifiers=effect_modifiers,
+        confounders=adjustment.confounders,
     )
 
     # The heterogeneous-optimizer graph fit — EconML CATE + CausalML uplift
@@ -1890,8 +2039,8 @@ async def _execute_segment_analysis(
                         "effect_modifiers": list(effect_modifiers),
                         # Explicit confounders take precedence-1 in cate_estimator's
                         # _resolve_confounders and are residualized as the DML W (issue
-                        # #237).
-                        "confounders": list(_SEGMENT_HTE_CONFOUNDERS),
+                        # #237). Registry-derived per question (see above).
+                        "confounders": list(adjustment.confounders),
                         # Handle to the prepared, banded gold-standard frame —
                         # resolved as tier0 priority-1 by cate_estimator /
                         # hierarchical / uplift via resolve_state_frame().
@@ -1909,7 +2058,10 @@ async def _execute_segment_analysis(
                         "label_segmentation": request.label_segmentation,
                         "status": "pending",
                         "errors": [],
-                        "warnings": [],
+                        # Seeded FIRST so an unmodeled-question warning precedes the
+                        # validator's FAILED line in the persisted run (the
+                        # append_unique channel keeps seeded items and order).
+                        "warnings": list(adjustment.warnings),
                         "estimation_latency_ms": 0,
                         "analysis_latency_ms": 0,
                         "total_latency_ms": 0,
@@ -1996,7 +2148,11 @@ async def _execute_segment_analysis(
             from src.api.utils.agent_import_guard import guard_or_raise
 
             guard_or_raise(e, agent_name="Heterogeneous Optimizer")
-            return _generate_mock_response(request, start_time)
+            mock = _generate_mock_response(request, start_time)
+            # "Using mock data" stays warnings[0] (test_import_error_fail_closed);
+            # the question warning still rides along.
+            mock.warnings.extend(adjustment.warnings)
+            return mock
 
         except Exception as e:
             logger.error(f"Segment analysis execution failed: {e}")
