@@ -183,17 +183,21 @@ export async function getSegmentHealth(): Promise<SegmentHealthResponse> {
  * SSOT) and the data-driven brand list (distinct brands in the live cohort).
  * Drives the page's config dropdowns.
  *
- * @returns Curated treatment/outcome options + brand filter list
+ * @param brand - Brand to scope the options to (omit = all brands). Treatments are
+ *   brand-scoped (a brand-distinct clinical axis only on its own cohort) and each
+ *   treatment lists only the outcomes it has a modeled causal edge to.
+ * @returns Brand-scoped treatment/outcome options + brand filter list
  *
  * @example
  * ```typescript
- * const { treatments, outcomes, brands } = await getSegmentDatasets();
- * // treatments: ['treatment_arm', 'treatment_initiated']
- * // outcomes: ['persistent_180d', 'discontinued_180d', 'treatment_initiated']
+ * const { treatments, outcomes_by_treatment, brands } = await getSegmentDatasets('Remibrutinib');
+ * // treatments: ['treatment_arm', 'copay_support', ..., 'urticaria_severity_uas7']
+ * // outcomes_by_treatment.rep_detailing_high: ['treatment_initiated']
  * ```
  */
-export async function getSegmentDatasets(): Promise<SegmentDatasetsResponse> {
-  return get<SegmentDatasetsResponse>(`${SEGMENTS_BASE}/datasets`);
+export async function getSegmentDatasets(brand?: string): Promise<SegmentDatasetsResponse> {
+  const qs = brand ? `?brand=${encodeURIComponent(brand)}` : '';
+  return get<SegmentDatasetsResponse>(`${SEGMENTS_BASE}/datasets${qs}`);
 }
 
 // =============================================================================

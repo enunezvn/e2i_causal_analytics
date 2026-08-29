@@ -2363,7 +2363,7 @@ export interface paths {
         };
         /**
          * Curated segment-analysis config options
-         * @description Curated treatment/outcome options + data-driven brand list for the agent-driven Segment Analysis page (patient_journeys substrate).
+         * @description Brand-scoped treatment/outcome options (causal_paths SSOT: only pairs with a modeled causal edge on the selected brand's cohort) + data-driven brand list for the agent-driven Segment Analysis page (patient_journeys substrate). Falls back to the flat curated allowlists when the registry is unavailable (options_source tells which).
          */
         get: operations["get_segment_datasets"];
         put?: never;
@@ -17255,12 +17255,12 @@ export interface components {
         SegmentDatasetsResponse: {
             /**
              * Treatments
-             * @description Curated selectable treatment columns
+             * @description Selectable treatment columns, scoped to `brand` (curated spec order)
              */
             treatments: string[];
             /**
              * Outcomes
-             * @description Curated selectable outcome columns
+             * @description Union of selectable outcome columns over `outcomes_by_treatment`
              */
             outcomes: string[];
             /**
@@ -17275,6 +17275,24 @@ export interface components {
             labels?: {
                 [key: string]: string;
             };
+            /**
+             * Outcomes By Treatment
+             * @description Outcomes with a modeled causal edge from each offered treatment (causal_paths SSOT, brand-scoped). Empty when options_source is the curated fallback — the FE then offers the flat `outcomes` list.
+             */
+            outcomes_by_treatment?: {
+                [key: string]: string[];
+            };
+            /**
+             * Brand
+             * @description Brand the options are scoped to (None = all brands)
+             */
+            brand?: string | null;
+            /**
+             * Options Source
+             * @description 'causal_paths' when derived from the causal-path registry; 'curated_fallback' when the registry was unavailable and the flat curated allowlists were returned instead
+             * @default causal_paths
+             */
+            options_source: string;
         };
         /**
          * SegmentHealthResponse
@@ -23783,7 +23801,10 @@ export interface operations {
     };
     get_segment_datasets: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Brand the analysis will be scoped to. Treatment options are brand-scoped (a brand-distinct clinical axis is offered only on its own cohort) and each treatment lists only the outcomes it has a modeled causal edge to. Omitted = all brands (universal arms only). */
+                brand?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;

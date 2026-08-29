@@ -24,7 +24,7 @@
  * @module pages/SegmentAnalysis
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart,
   Bar,
@@ -589,7 +589,14 @@ export default function SegmentAnalysis() {
 
   // API hooks
   const { data: healthData, isLoading: healthLoading, error: healthError, refetch: refetchHealth, isRefetching: isRefetchingHealth } = useSegmentHealth();
-  const { data: datasets, isError: datasetsError } = useSegmentDatasets();
+  // Options are BRAND-SCOPED (causal_paths SSOT pairs): a brand-distinct clinical
+  // axis is offered only on its own cohort, and each treatment lists only the
+  // outcomes it has a modeled causal edge to. Before this the flat allowlists
+  // offered Fabhalta's axis on a Remibrutinib cohort (503 "No usable rows"),
+  // listed treatment_initiated in BOTH dropdowns, and let a user pose a pair
+  // with no modeled effect whose cross-library check then honestly FAILED.
+  const brandArg = selectedBrand === ALL_BRANDS ? undefined : selectedBrand;
+  const { data: datasets, isError: datasetsError } = useSegmentDatasets({ brand: brandArg });
   const { data: _policiesData, error: policiesError } = usePolicies({ limit: 10 });
   const onMutationError = useMutationError({ context: 'running segment analysis' });
   // Use the polling variant: async_mode=true returns a PENDING stub first and
@@ -627,9 +634,40 @@ export default function SegmentAnalysis() {
     (healthData?.econml_available || healthData?.causalml_available);
 
   // Dropdown options (fall back to the curated defaults if /datasets is loading).
-  const treatmentOptions = datasets?.treatments?.length ? datasets.treatments : [DEFAULT_TREATMENT];
-  const outcomeOptions = datasets?.outcomes?.length ? datasets.outcomes : [DEFAULT_OUTCOME];
+  const treatmentOptions = useMemo(
+    () => (datasets?.treatments?.length ? datasets.treatments : [DEFAULT_TREATMENT]),
+    [datasets]
+  );
+  // Outcomes scoped to the selected treatment when the backend provides the SSOT
+  // pairing; the flat list only on the curated fallback (options_source tells).
+  const outcomeOptions = useMemo(() => {
+    const scoped = datasets?.outcomes_by_treatment?.[selectedTreatment];
+    if (scoped?.length) return scoped;
+    return datasets?.outcomes?.length ? datasets.outcomes : [DEFAULT_OUTCOME];
+  }, [datasets, selectedTreatment]);
   const brandOptions = datasets?.brands ?? [];
+  const optionsFellBack = datasets?.options_source === 'curated_fallback';
+
+  // Keep the selection valid as the scope changes (brand -> treatments,
+  // treatment -> outcomes): a choice the new options no longer offer is reset to
+  // the curated default when offered, else the first option — so the run can
+  // never send a stale off-scope column. Only acts once real options exist.
+  useEffect(() => {
+    if (!datasets) return;
+    if (!treatmentOptions.includes(selectedTreatment)) {
+      setSelectedTreatment(
+        treatmentOptions.includes(DEFAULT_TREATMENT) ? DEFAULT_TREATMENT : treatmentOptions[0]
+      );
+    }
+  }, [datasets, treatmentOptions, selectedTreatment]);
+  useEffect(() => {
+    if (!datasets) return;
+    if (!outcomeOptions.includes(selectedOutcome)) {
+      setSelectedOutcome(
+        outcomeOptions.includes(DEFAULT_OUTCOME) ? DEFAULT_OUTCOME : outcomeOptions[0]
+      );
+    }
+  }, [datasets, outcomeOptions, selectedOutcome]);
   // Render the backend's human-readable label (e.g. low_gap_180d -> "Low refill gap
   // (≤30d)") when present; otherwise fall back to a title-cased column name. The
   // dropdowns previously always title-cased the raw column, so the curated labels
@@ -657,7 +695,6 @@ export default function SegmentAnalysis() {
 
   // Handle analysis run. AGENT-DRIVEN: only the cohort filter + curated pair.
   // The backend fixes the clinical contract + substrate server-side.
-  const brandArg = selectedBrand === ALL_BRANDS ? undefined : selectedBrand;
   const handleRunAnalysis = () => {
     runAnalysis.mutate({
       request: {
@@ -849,6 +886,22 @@ export default function SegmentAnalysis() {
               Couldn&apos;t load the full analysis options from the segment
               service — showing defaults. Brand, treatment, and outcome choices
               may be incomplete.
+            </div>
+          )}
+          {/* The registry of modeled causal questions was unavailable, so the
+              backend returned the flat curated allowlists: treatments are still
+              brand-gated, but outcomes are NOT paired to the selected treatment.
+              Say so rather than let an unmodeled pair look endorsed. */}
+          {!datasetsError && optionsFellBack && (
+            <div
+              data-testid="datasets-fallback-notice"
+              role="status"
+              className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+            >
+              The causal-question registry is unavailable — showing the full curated
+              treatment and outcome lists. Outcomes aren&apos;t paired to the selected
+              treatment right now, so some combinations may have no modeled causal
+              effect.
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

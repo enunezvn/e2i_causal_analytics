@@ -639,3 +639,364 @@ async def test_background_task_records_failed_on_saturation(stub_request):
     assert not any("internal error" in w.lower() for w in stored.warnings)
     # The heavy fit was bounded out — the task rejected before invoking the graph.
     mock_graph.ainvoke.assert_not_called()
+
+
+# =============================================================================
+# Registry-derived adjustment set + unmodeled-question warning (2026-08-29,
+# /segment-analysis review follow-ups). The page's W was a FIXED
+# ["engagement_score"]; copay_support's DGP backdoor (treatment_arm.ARM_REGISTRY)
+# is {insurance_access_score, disease_severity} and insurance_access_score is in
+# neither X nor W -> the copay estimate reported the confounded diff. causal_paths
+# stores each modeled edge's ``confounders_controlled``; derive W from it (minus X,
+# minus categoricals the segment loader keeps raw) and warn when the requested
+# (treatment, outcome) has no registry edge at all — that is exactly the case where
+# cross-library validation "FAILED" without saying why.
+# =============================================================================
+
+from src.api.routes.segments import (  # noqa: E402
+    _segment_effect_modifiers,
+    _segment_question_adjustment,
+)
+
+
+def _registry_rows(brand: str = "Remibrutinib") -> list[dict]:
+    """Rows shaped like CausalPathRepository.get_distinct_questions()."""
+    return [
+        {
+            "treatment": "copay_support",
+            "outcome": "persistent_180d",
+            "brand": brand,
+            "confounders": ["insurance_access_score", "disease_severity"],
+        },
+        {
+            "treatment": "treatment_arm",
+            "outcome": "persistent_180d",
+            "brand": brand,
+            "confounders": ["disease_severity", "academic_hcp", "geographic_region"],
+        },
+        {
+            "treatment": "psp_enrolled",
+            "outcome": "persistent_180d",
+            "brand": brand,
+            "confounders": ["disease_severity", "engagement_score", "academic_hcp"],
+        },
+    ]
+
+
+def _patch_registry(rows: Any = None, *, error: Exception | None = None):
+    """Patch the causal_paths repo factory (function-locally imported from
+    src.api.routes.causal) so no Supabase read happens."""
+    repo = MagicMock()
+    if error is not None:
+        repo.get_distinct_questions = AsyncMock(side_effect=error)
+    else:
+        repo.get_distinct_questions = AsyncMock(return_value=rows or [])
+    return patch(
+        "src.api.routes.causal._get_causal_path_repo",
+        new=AsyncMock(return_value=repo),
+    )
+
+
+@pytest.mark.asyncio
+async def test_adjustment_adds_registry_backdoor_outside_x_to_default_w():
+    """copay_support -> persistent_180d: the registry backdoor is
+    {insurance_access_score, disease_severity}; disease_severity is already in X, so
+    W = default control + insurance_access_score (no X/W overlap)."""
+    modifiers = _segment_effect_modifiers("Remibrutinib")
+    with _patch_registry(_registry_rows()):
+        adj = await _segment_question_adjustment(
+            treatment_var="copay_support",
+            outcome_var="persistent_180d",
+            brand="Remibrutinib",
+            effect_modifiers=modifiers,
+        )
+    assert adj.confounders == ["engagement_score", "insurance_access_score"]
+    assert adj.modeled is True
+    assert adj.warnings == []
+    assert not set(adj.confounders) & set(modifiers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("treatment", ["psp_enrolled", "treatment_arm"])
+async def test_adjustment_pairs_already_covered_keep_default_w(treatment: str):
+    """A registry set fully covered by X ∪ default-W (psp_enrolled) — or whose only
+    extra member is a categorical the segment loader keeps RAW for segmentation
+    (treatment_arm: geographic_region) — leaves W byte-identical to today."""
+    with _patch_registry(_registry_rows()):
+        adj = await _segment_question_adjustment(
+            treatment_var=treatment,
+            outcome_var="persistent_180d",
+            brand="Remibrutinib",
+            effect_modifiers=_segment_effect_modifiers("Remibrutinib"),
+        )
+    assert adj.confounders == ["engagement_score"]
+    assert adj.modeled is True
+    assert adj.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_adjustment_ignores_off_allowlist_off_brand_and_self_columns():
+    """Registry columns that are not numeric allowlisted covariates, are another
+    brand's clinical column, or are the treatment/outcome itself never enter W."""
+    rows = [
+        {
+            "treatment": "copay_support",
+            "outcome": "persistent_180d",
+            "brand": "Kisqali",
+            "confounders": [
+                "insurance_access_score",
+                "urticaria_severity_uas7",  # Remibrutinib-only -> NULL for Kisqali
+                "not_a_column",
+                "copay_support",
+                "persistent_180d",
+            ],
+        }
+    ]
+    with _patch_registry(rows):
+        adj = await _segment_question_adjustment(
+            treatment_var="copay_support",
+            outcome_var="persistent_180d",
+            brand="Kisqali",
+            effect_modifiers=_segment_effect_modifiers("Kisqali"),
+        )
+    assert adj.confounders == ["engagement_score", "insurance_access_score"]
+
+
+@pytest.mark.asyncio
+async def test_adjustment_all_brands_unions_registry_rows():
+    rows = [
+        {
+            "treatment": "copay_support",
+            "outcome": "persistent_180d",
+            "brand": "Fabhalta",
+            "confounders": ["disease_severity"],
+        },
+        {
+            "treatment": "copay_support",
+            "outcome": "persistent_180d",
+            "brand": "Kisqali",
+            "confounders": ["insurance_access_score"],
+        },
+    ]
+    with _patch_registry(rows) as factory:
+        adj = await _segment_question_adjustment(
+            treatment_var="copay_support",
+            outcome_var="persistent_180d",
+            brand=None,
+            effect_modifiers=_segment_effect_modifiers(None),
+        )
+    repo = factory.return_value
+    repo.get_distinct_questions.assert_awaited_once_with(brand=None, include_synthetic=True)
+    assert adj.confounders == ["engagement_score", "insurance_access_score"]
+    assert adj.modeled is True
+
+
+@pytest.mark.asyncio
+async def test_adjustment_unmodeled_pair_warns_and_keeps_default_w():
+    """The user's original run: treatment_initiated -> persistent_180d has NO
+    registry edge (no planted effect). The API still accepts it (allowlisted), so
+    the run must carry a self-explanatory warning instead of a bare
+    'cross-library validation FAILED'."""
+    with _patch_registry(_registry_rows()):
+        adj = await _segment_question_adjustment(
+            treatment_var="treatment_initiated",
+            outcome_var="persistent_180d",
+            brand="Remibrutinib",
+            effect_modifiers=_segment_effect_modifiers("Remibrutinib"),
+        )
+    assert adj.confounders == ["engagement_score"]
+    assert adj.modeled is False
+    assert len(adj.warnings) == 1
+    warning = adj.warnings[0]
+    assert "not a modeled causal question" in warning
+    assert "treatment_initiated" in warning and "persistent_180d" in warning
+    assert "Remibrutinib" in warning
+    assert "/segments/datasets" in warning
+
+
+@pytest.mark.asyncio
+async def test_adjustment_registry_unavailable_fails_soft_with_warning():
+    with _patch_registry(error=ConnectionError("no supabase in unit test")):
+        adj = await _segment_question_adjustment(
+            treatment_var="copay_support",
+            outcome_var="persistent_180d",
+            brand="Remibrutinib",
+            effect_modifiers=_segment_effect_modifiers("Remibrutinib"),
+        )
+    assert adj.confounders == ["engagement_score"]
+    assert adj.modeled is None
+    assert len(adj.warnings) == 1
+    assert "registry unavailable" in adj.warnings[0]
+    assert "engagement_score" in adj.warnings[0]
+
+
+def _copay_stub_frame(n: int = 120) -> pd.DataFrame:
+    frame = _make_stub_frame(n)
+    frame["copay_support"] = [i % 2 for i in range(n)]
+    frame["insurance_access_score"] = [0.1 + 0.05 * (i % 10) for i in range(n)]
+    return frame
+
+
+@pytest.mark.asyncio
+async def test_execute_routes_registry_w_into_state_and_loader(rich_graph_result):
+    """The derived W must reach BOTH consumers in lock-step: the loader (so the
+    column is selected + float-coerced) and the graph state (cate_estimator's
+    explicit-confounders source)."""
+    request = RunSegmentAnalysisRequest(
+        query="Which Remibrutinib segments benefit most from copay support?",
+        brand="Remibrutinib",
+        treatment_var="copay_support",
+        outcome_var="persistent_180d",
+    )
+    captured: dict = {}
+    mock_graph = MagicMock()
+
+    async def _capture(initial_state):
+        captured.update(initial_state)
+        return rich_graph_result
+
+    mock_graph.ainvoke = AsyncMock(side_effect=_capture)
+    loader = AsyncMock(return_value=_copay_stub_frame())
+    with (
+        _patch_registry(_registry_rows()),
+        patch("src.api.routes.segments._load_segment_hte_frame", new=loader),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        response = await _execute_segment_analysis(request)
+
+    assert captured["confounders"] == ["engagement_score", "insurance_access_score"]
+    assert loader.await_args.kwargs["confounders"] == [
+        "engagement_score",
+        "insurance_access_score",
+    ]
+    assert captured["warnings"] == []
+    assert response.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_execute_seeds_unmodeled_question_warning_before_graph_warnings(
+    rich_graph_result,
+):
+    """An unmodeled pair's warning is seeded into the initial graph state so it
+    lands FIRST in the persisted warnings, ahead of the validator's FAILED line
+    (which then reads as the consequence, not the cause)."""
+    request = RunSegmentAnalysisRequest(
+        query="Does initiation drive persistence?",
+        brand="Remibrutinib",
+        treatment_var="treatment_initiated",
+        outcome_var="persistent_180d",
+    )
+    failed = "Cross-library validation FAILED: EconML and CausalML agree only 42%"
+    mock_graph = MagicMock()
+
+    async def _echo(initial_state):
+        # Faithful to the append_unique channel: seeded warnings survive, the
+        # uplift node appends its own.
+        return {**rich_graph_result, "warnings": [*initial_state["warnings"], failed]}
+
+    mock_graph.ainvoke = AsyncMock(side_effect=_echo)
+    with (
+        _patch_registry(_registry_rows()),
+        _patch_loader(_make_stub_frame()),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        response = await _execute_segment_analysis(request)
+
+    assert len(response.warnings) == 2
+    assert "not a modeled causal question" in response.warnings[0]
+    assert response.warnings[1] == failed
+
+
+@pytest.mark.asyncio
+async def test_execute_mock_fallback_keeps_mock_warning_first(monkeypatch):
+    """Mock fallback (dev-only) keeps 'Using mock data' as warnings[0] (locked by
+    test_import_error_fail_closed) and still carries the question warning."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
+    request = RunSegmentAnalysisRequest(
+        query="q",
+        brand="Remibrutinib",
+        treatment_var="treatment_initiated",
+        outcome_var="persistent_180d",
+    )
+    with (
+        _patch_registry(_registry_rows()),
+        _patch_loader(_make_stub_frame()),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            side_effect=ImportError,
+        ),
+    ):
+        response = await _execute_segment_analysis(request)
+
+    assert "mock data" in response.warnings[0].lower()
+    assert any("not a modeled causal question" in w for w in response.warnings[1:])
+
+
+class _FakeQuery:
+    """Chainable supabase-py query stub recording the select() column list."""
+
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+        self.select_cols: list[str] = []
+
+    def select(self, cols: str):
+        self.select_cols = cols.split(",")
+        return self
+
+    def eq(self, *_a):
+        return self
+
+    def limit(self, _n):
+        return self
+
+    async def execute(self):
+        return MagicMock(data=self.rows)
+
+
+@pytest.mark.asyncio
+async def test_loader_selects_and_float_coerces_registry_confounders():
+    """The loader must SELECT the derived W columns and float-coerce them (the
+    numeric-column set is the fixed curated list ∪ the run's confounders), so a
+    registry-derived confounder never reaches EconML as a string/object column."""
+    n = 120
+    rows = [
+        {
+            "copay_support": i % 2,
+            "persistent_180d": (i + 1) % 2,
+            "disease_severity": i % 10,
+            "age_at_diagnosis": 40 + (i % 40),
+            "academic_hcp": i % 2,
+            "urticaria_severity_uas7": i % 7,
+            "engagement_score": float(i % 5),
+            # PostgREST can hand numerics back as strings — must be coerced.
+            "insurance_access_score": str(0.1 + 0.05 * (i % 10)),
+            "geographic_region": ["midwest", "south"][i % 2],
+            "brand": "Remibrutinib",
+        }
+        for i in range(n)
+    ]
+    query = _FakeQuery(rows)
+    client = MagicMock()
+    client.table = MagicMock(return_value=query)
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=client),
+    ):
+        frame = await _load_segment_hte_frame(
+            brand="Remibrutinib",
+            treatment_var="copay_support",
+            outcome_var="persistent_180d",
+            effect_modifiers=_segment_effect_modifiers("Remibrutinib"),
+            confounders=["engagement_score", "insurance_access_score"],
+        )
+
+    assert "insurance_access_score" in query.select_cols
+    assert "engagement_score" in query.select_cols
+    assert frame["insurance_access_score"].dtype.kind == "f"
+    assert frame["insurance_access_score"].iloc[1] == pytest.approx(0.15)

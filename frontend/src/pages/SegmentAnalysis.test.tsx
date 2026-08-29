@@ -637,4 +637,166 @@ describe('SegmentAnalysis — T2: robust options + durable-run timeout', () => {
     await user.click(screen.getByRole('combobox', { name: 'Treatment variable' }));
     expect(await screen.findByRole('option', { name: 'Treatment arm' })).toBeInTheDocument();
   });
+  // ---------------------------------------------------------------------------
+  // Brand-scoped, SSOT-derived options (2026-08-29 /segment-analysis review).
+  // The flat allowlists offered Fabhalta's complement_inhibitor_status on a
+  // Remibrutinib cohort (503 "No usable rows"), listed treatment_initiated in
+  // BOTH dropdowns, and let a user pose a pair with no modeled causal edge
+  // (treatment_initiated -> persistent_180d) whose cross-library check then
+  // honestly FAILED. The page must ask the backend for options scoped to the
+  // selected brand and scope the Outcome dropdown to the selected treatment.
+  // ---------------------------------------------------------------------------
+
+  const scopedDatasets = {
+    treatments: ['treatment_arm', 'rep_detailing_high', 'urticaria_severity_uas7'],
+    outcomes: ['persistent_180d', 'discontinued_180d', 'treatment_initiated'],
+    outcomes_by_treatment: {
+      treatment_arm: ['persistent_180d', 'discontinued_180d', 'treatment_initiated'],
+      rep_detailing_high: ['treatment_initiated'],
+      urticaria_severity_uas7: ['persistent_180d'],
+    },
+    brands: ['Remibrutinib', 'Kisqali'],
+    brand: null,
+    options_source: 'causal_paths',
+    labels: {
+      treatment_arm: 'Treatment arm',
+      rep_detailing_high: 'High rep detailing',
+      urticaria_severity_uas7: 'Uncontrolled CSU (UAS7 ≥ 28)',
+      persistent_180d: 'Persistent at 180d',
+      discontinued_180d: 'Discontinued at 180d',
+      treatment_initiated: 'Treatment initiated',
+    },
+  };
+
+  it('requests options scoped to the selected brand (re-queries /segments/datasets with brand)', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useSegmentDatasets).mockReturnValue({ data: scopedDatasets, isLoading: false, error: null });
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    // Default cohort: all brands -> no brand scope.
+    expect(mockHook(useSegmentDatasets)).toHaveBeenLastCalledWith({ brand: undefined });
+
+    await user.click(screen.getByRole('combobox', { name: 'Brand' }));
+    await user.click(await screen.findByRole('option', { name: 'Remibrutinib' }));
+
+    await waitFor(() =>
+      expect(mockHook(useSegmentDatasets)).toHaveBeenLastCalledWith({ brand: 'Remibrutinib' })
+    );
+  });
+
+  it('scopes the Outcome dropdown to the selected treatment and never lists the treatment itself', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useSegmentDatasets).mockReturnValue({ data: scopedDatasets, isLoading: false, error: null });
+    const mutate = vi.fn();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate,
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    // Default treatment_arm -> its three modeled outcomes.
+    await user.click(screen.getByRole('combobox', { name: 'Outcome variable' }));
+    expect(await screen.findByRole('option', { name: 'Persistent at 180d' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Treatment initiated' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    // Switch to a treatment whose only modeled outcome is treatment_initiated.
+    await user.click(screen.getByRole('combobox', { name: 'Treatment variable' }));
+    await user.click(await screen.findByRole('option', { name: 'High rep detailing' }));
+
+    await user.click(screen.getByRole('combobox', { name: 'Outcome variable' }));
+    expect(await screen.findByRole('option', { name: 'Treatment initiated' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Persistent at 180d' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'High rep detailing' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    // The previously selected outcome (persistent_180d) is no longer valid for
+    // this treatment, so the run must send the scoped outcome, not a stale one.
+    fireEvent.click(screen.getByRole('button', { name: /Run Analysis/i }));
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const arg = mutate.mock.calls[0][0] as {
+      request: { treatment_var?: string; outcome_var?: string };
+    };
+    expect(arg.request.treatment_var).toBe('rep_detailing_high');
+    expect(arg.request.outcome_var).toBe('treatment_initiated');
+  });
+
+  it('resets a selected treatment that the newly scoped options no longer offer', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    // All-brands options include Fabhalta's axis for this test's purposes.
+    const allBrands = {
+      ...scopedDatasets,
+      treatments: ['treatment_arm', 'complement_inhibitor_status'],
+      outcomes_by_treatment: {
+        treatment_arm: ['persistent_180d'],
+        complement_inhibitor_status: ['persistent_180d'],
+      },
+      labels: { ...scopedDatasets.labels, complement_inhibitor_status: 'Prior C5-inhibitor (switch)' },
+    };
+    mockHook(useSegmentDatasets).mockReturnValue({ data: allBrands, isLoading: false, error: null });
+    const mutate = vi.fn();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate,
+      isPending: false,
+      error: null,
+    });
+
+    const { rerender } = render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('combobox', { name: 'Treatment variable' }));
+    await user.click(await screen.findByRole('option', { name: 'Prior C5-inhibitor (switch)' }));
+    expect(screen.getByRole('combobox', { name: 'Treatment variable' })).toHaveTextContent(
+      'Prior C5-inhibitor (switch)'
+    );
+
+    // The backend now returns Remibrutinib-scoped options (no Fabhalta axis).
+    mockHook(useSegmentDatasets).mockReturnValue({
+      data: { ...scopedDatasets, brand: 'Remibrutinib' },
+      isLoading: false,
+      error: null,
+    });
+    rerender(<SegmentAnalysis />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Treatment variable' })).toHaveTextContent(
+        'Treatment arm'
+      )
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Run Analysis/i }));
+    const arg = mutate.mock.calls[0][0] as { request: { treatment_var?: string } };
+    expect(arg.request.treatment_var).toBe('treatment_arm');
+  });
+
+  it('tells the user when options fell back to the flat curated lists (not brand/pair-scoped)', () => {
+    primeBaseHooks();
+    mockHook(useSegmentDatasets).mockReturnValue({
+      data: { ...scopedDatasets, outcomes_by_treatment: {}, options_source: 'curated_fallback' },
+      isLoading: false,
+      error: null,
+    });
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    expect(screen.getByTestId('datasets-fallback-notice')).toBeInTheDocument();
+  });
 });

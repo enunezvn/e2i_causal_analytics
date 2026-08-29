@@ -9,7 +9,7 @@
  * @module hooks/api/use-segments
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import type { UseQueryOptions, UseMutationOptions } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-client';
 import { ApiError } from '@/lib/api-client';
@@ -119,26 +119,33 @@ export function useSegmentHealth(
 /**
  * Hook to fetch the curated config options for the Segment Analysis page.
  *
- * Returns the curated treatment/outcome columns and the data-driven brand
- * list. Drives the agent-driven config dropdowns (brand / treatment / outcome).
- * Long-lived (curated allowlist + cohort brands rarely change).
+ * Returns the brand-scoped treatment/outcome options (causal_paths SSOT pairs)
+ * and the data-driven brand list. Drives the agent-driven config dropdowns
+ * (brand / treatment / outcome). Long-lived (registry + cohort brands rarely
+ * change); keyed by brand, and the previous brand's options are kept as
+ * placeholder while the next scope loads so the dropdowns never flash back to
+ * the single curated defaults (which would also reset the user's selection).
  *
+ * @param params - `brand` to scope the options to (undefined = all brands)
  * @param options - Additional query options
- * @returns Query result with curated treatment/outcome options + brands
+ * @returns Query result with brand-scoped treatment/outcome options + brands
  *
  * @example
  * ```tsx
- * const { data: datasets } = useSegmentDatasets();
- * // datasets?.treatments, datasets?.outcomes, datasets?.brands
+ * const { data: datasets } = useSegmentDatasets({ brand: 'Remibrutinib' });
+ * // datasets?.treatments, datasets?.outcomes_by_treatment, datasets?.brands
  * ```
  */
 export function useSegmentDatasets(
+  params?: { brand?: string },
   options?: Omit<UseQueryOptions<SegmentDatasetsResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
+  const brand = params?.brand;
   return useQuery<SegmentDatasetsResponse, ApiError>({
-    queryKey: queryKeys.segments.datasets(),
-    queryFn: () => getSegmentDatasets(),
+    queryKey: queryKeys.segments.datasets(brand),
+    queryFn: () => getSegmentDatasets(brand),
     staleTime: 5 * 60 * 1000,
+    placeholderData: keepPreviousData,
     ...options,
   });
 }

@@ -2243,9 +2243,243 @@ def test_patient_journeys_allowlist_exposes_adherence_outcomes():
 async def test_get_segment_datasets_returns_human_labels():
     from src.api.routes.segments import get_segment_datasets
 
-    resp = await get_segment_datasets()
+    # Direct handler call: FastAPI does not resolve Query() defaults here, so
+    # the scope must be passed explicitly (None = all brands).
+    resp = await get_segment_datasets(brand=None)
     assert resp.labels.get("adherent_180d") == "Adherent at 180d"
     assert resp.labels.get("treatment_arm") == "Treatment arm"
     # every offered treatment/outcome has a label
     for col in resp.treatments + resp.outcomes:
         assert col in resp.labels, f"{col} has no display label"
+
+
+# =============================================================================
+# GET /segments/datasets — SSOT-derived, brand-scoped treatment/outcome options
+# (2026-08-29 /segment-analysis review)
+# =============================================================================
+#
+# Before: the endpoint returned the FLAT patient_journeys allowlists, brand-blind.
+# So a Remibrutinib cohort was offered Fabhalta's complement_inhibitor_status
+# (100% NULL off-brand -> 503 "No usable rows"), the dual-role column
+# treatment_initiated sat in BOTH dropdowns at once, and pairs with no modeled
+# causal edge (treatment_initiated -> persistent_180d: no DGP effect, no
+# causal_paths row) could be run — where the EconML/CausalML cross-check then
+# honestly FAILED (42%). The options now come from the causal_paths SSOT
+# (distinct (treatment, outcome, brand) — the same source the discovery
+# leaderboard enumerates), gated per brand like the covariates.
+
+# Mirrors the live causal_paths patient-grain edges (verified 2026-08-29):
+# universal edges are replicated per brand; one brand-DISTINCT axis each.
+_SSOT_UNIVERSAL_PAIRS = [
+    ("treatment_arm", "persistent_180d"),
+    ("treatment_arm", "discontinued_180d"),
+    ("treatment_arm", "treatment_initiated"),
+    ("copay_support", "adherent_180d"),
+    ("copay_support", "low_gap_180d"),
+    ("copay_support", "persistent_180d"),
+    ("psp_enrolled", "adherent_180d"),
+    ("psp_enrolled", "persistent_180d"),
+    ("rep_detailing_high", "treatment_initiated"),
+    ("sample_dropped", "treatment_initiated"),
+    ("trigger_accepted", "treatment_initiated"),
+]
+_SSOT_BRAND_AXES = {
+    "Fabhalta": ("complement_inhibitor_status", "persistent_180d"),
+    "Kisqali": ("disease_stage", "persistent_180d"),
+    "Remibrutinib": ("urticaria_severity_uas7", "persistent_180d"),
+}
+_SSOT_BRANDS = ["Remibrutinib", "Fabhalta", "Kisqali"]
+
+
+def _ssot_rows(brand):
+    rows = []
+    for b in _SSOT_BRANDS:
+        if brand and b != brand:
+            continue
+        for t, o in [*_SSOT_UNIVERSAL_PAIRS, _SSOT_BRAND_AXES[b]]:
+            rows.append({"treatment": t, "outcome": o, "brand": b, "confounders": []})
+    # A commercial-grain edge that must be filtered out by the grain guard.
+    rows.append(
+        {
+            "treatment": "treatment_initiated",
+            "outcome": "nrx_volume",
+            "brand": brand,
+            "confounders": [],
+        }
+    )
+    return rows
+
+
+def _fake_repo(rows_for_brand=_ssot_rows):
+    repo = MagicMock()
+
+    async def _questions(*, brand=None, include_synthetic=True, **_kw):
+        return rows_for_brand(brand)
+
+    repo.get_distinct_questions = _questions
+    return repo
+
+
+def _patch_ssot(repo=None, brands=None):
+    return patch.multiple(
+        "src.api.routes.causal",
+        _get_causal_path_repo=AsyncMock(return_value=repo or _fake_repo()),
+        _list_dataset_brands=AsyncMock(return_value=_SSOT_BRANDS if brands is None else brands),
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_scopes_treatments_to_selected_brand():
+    from src.api.routes.segments import get_segment_datasets
+
+    with _patch_ssot():
+        resp = await get_segment_datasets(brand="Remibrutinib")
+
+    assert resp.brand == "Remibrutinib"
+    assert resp.options_source == "causal_paths"
+    # Remibrutinib's own axis is offered; the other brands' axes are not.
+    assert "urticaria_severity_uas7" in resp.treatments
+    assert "complement_inhibitor_status" not in resp.treatments
+    assert "disease_stage" not in resp.treatments
+    # treatment_initiated has no patient-grain edge AS A TREATMENT (only as an
+    # outcome), so it is no longer offered on the treatment side.
+    assert "treatment_initiated" not in resp.treatments
+    assert "treatment_initiated" in resp.outcomes
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_outcomes_are_scoped_per_treatment():
+    from src.api.routes.segments import get_segment_datasets
+
+    with _patch_ssot():
+        resp = await get_segment_datasets(brand="Remibrutinib")
+
+    by_t = resp.outcomes_by_treatment
+    assert set(by_t) == set(resp.treatments)
+    assert by_t["rep_detailing_high"] == ["treatment_initiated"]
+    assert by_t["urticaria_severity_uas7"] == ["persistent_180d"]
+    # Spec order (persistent, discontinued, treatment_initiated), not row order.
+    assert by_t["treatment_arm"] == ["persistent_180d", "discontinued_180d", "treatment_initiated"]
+    # A column is never offered on both sides of the same question.
+    for t, outs in by_t.items():
+        assert t not in outs
+    # The commercial-grain edge (-> nrx_volume) never leaks in.
+    assert all("nrx_volume" not in outs for outs in by_t.values())
+    assert "nrx_volume" not in resp.outcomes
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_all_brands_drops_brand_distinct_axes():
+    from src.api.routes.segments import get_segment_datasets
+
+    with _patch_ssot():
+        resp = await get_segment_datasets(brand=None)
+
+    assert resp.brand is None
+    for axis, _ in _SSOT_BRAND_AXES.values():
+        assert axis not in resp.treatments, f"{axis} is NULL for 2/3 of the all-brands cohort"
+    # Universal arms survive, in curated spec order.
+    assert resp.treatments[0] == "treatment_arm"
+    assert {"copay_support", "psp_enrolled", "rep_detailing_high"} <= set(resp.treatments)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_treatment_order_follows_curated_spec():
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.segments import get_segment_datasets
+
+    spec_order = {
+        c: i for i, c in enumerate(_CAUSAL_DATASET_SPECS["patient_journeys"]["treatment"])
+    }
+    with _patch_ssot():
+        resp = await get_segment_datasets(brand="Kisqali")
+
+    assert resp.treatments == sorted(resp.treatments, key=spec_order.__getitem__)
+    assert "disease_stage" in resp.treatments
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_falls_back_to_curated_lists_when_ssot_unavailable():
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.segments import get_segment_datasets
+
+    broken = MagicMock()
+
+    async def _raise(**_kw):
+        raise RuntimeError("causal_paths unavailable")
+
+    broken.get_distinct_questions = _raise
+    with _patch_ssot(repo=broken):
+        resp = await get_segment_datasets(brand="Remibrutinib")
+
+    spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
+    assert resp.options_source == "curated_fallback"
+    assert resp.outcomes_by_treatment == {}
+    assert resp.outcomes == list(spec["outcome"])
+    # Even the fallback is brand-gated: no off-brand axis for Remibrutinib.
+    assert "urticaria_severity_uas7" in resp.treatments
+    assert "complement_inhibitor_status" not in resp.treatments
+    assert "disease_stage" not in resp.treatments
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_empty_ssot_falls_back_not_empty_dropdowns():
+    from src.api.routes.segments import get_segment_datasets
+
+    with _patch_ssot(repo=_fake_repo(lambda brand: [])):
+        resp = await get_segment_datasets(brand="Remibrutinib")
+
+    assert resp.options_source == "curated_fallback"
+    assert resp.treatments and resp.outcomes
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_unknown_brand_is_400():
+    from src.api.routes.segments import get_segment_datasets
+
+    with _patch_ssot(), pytest.raises(HTTPException) as exc:
+        await get_segment_datasets(brand="Cosentyx")
+    assert exc.value.status_code == 400
+    assert "Cosentyx" in str(exc.value.detail)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_labels_cover_every_scoped_option():
+    from src.api.routes.segments import get_segment_datasets
+
+    with _patch_ssot():
+        resp = await get_segment_datasets(brand="Fabhalta")
+
+    offered = set(resp.treatments) | set(resp.outcomes)
+    for outs in resp.outcomes_by_treatment.values():
+        offered |= set(outs)
+    for col in offered:
+        assert col in resp.labels, f"{col} has no display label"
+
+
+def test_segment_datasets_route_accepts_brand_query_param():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.routes.segments import router
+
+    app = FastAPI()
+    app.include_router(router)
+    with _patch_ssot():
+        client = TestClient(app)
+        resp = client.get("/segments/datasets", params={"brand": "Fabhalta"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["brand"] == "Fabhalta"
+    assert "complement_inhibitor_status" in body["treatments"]
+    assert "urticaria_severity_uas7" not in body["treatments"]
+    assert body["outcomes_by_treatment"]["complement_inhibitor_status"] == ["persistent_180d"]
