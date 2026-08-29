@@ -49,9 +49,10 @@ describe('Documentation page shell', () => {
     expect(screen.getByRole('heading', { name: /understanding e2i/i })).toBeInTheDocument();
   });
 
-  it('renders all four sections', () => {
+  it('renders all five sections', () => {
     renderPage();
     expect(screen.getByRole('heading', { name: /^purpose/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^causal impact/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^methodology/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^best practices/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^expected impact/i })).toBeInTheDocument();
@@ -262,6 +263,55 @@ describe('ImpactPathways', () => {
     expect(within(region).getByRole('link', { name: /see your allocation/i })).toHaveAttribute('href', '/resource-optimization');
     expect(within(region).getByRole('link', { name: /run a simulation/i })).toHaveAttribute('href', '/digital-twin');
     expect(within(region).getByRole('link', { name: /open the dashboard/i })).toHaveAttribute('href', '/');
+  });
+});
+
+describe('CausalVariableTypes', () => {
+  it('renders the four color-coded variable types with their definitions', () => {
+    renderPage();
+    const region = screen.getByRole('region', { name: /four types of causal variables/i });
+    // <dt> has role "term", which takes no name from content — query by text.
+    for (const term of ['Treatment', 'Mediator', 'Outcome', 'Confounder']) {
+      expect(within(region).getByText(term, { selector: 'dt' })).toBeInTheDocument();
+    }
+    expect(within(region).getByText(/opening a back-door path/i)).toBeInTheDocument();
+    expect(within(region).getByText(/transmits part of the effect/i)).toBeInTheDocument();
+  });
+});
+
+describe('CausalImpactDag', () => {
+  it('renders the DAG labeled illustrative, with "All paths" pressed by default', () => {
+    renderPage();
+    const figure = screen.getByRole('figure', { name: /acceptance .* action .* revenue impact/i });
+    expect(within(figure).getByText(/illustrative example/i)).toBeInTheDocument();
+    expect(within(figure).getByRole('button', { name: /^all paths$/i })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(figure.querySelectorAll('[data-edge]').length).toBe(18);
+    expect(figure.querySelectorAll('[data-edge][data-selected="true"]').length).toBe(0);
+  });
+
+  it('highlights exactly the edges of the chosen path and toggles back to all paths', async () => {
+    renderPage();
+    const figure = screen.getByRole('figure', { name: /acceptance .* action .* revenue impact/i });
+    const confounders = within(figure).getByRole('button', { name: /backdoor confounders/i });
+    await userEvent.click(confounders);
+    expect(confounders).toHaveAttribute('aria-pressed', 'true');
+    expect(within(figure).getByRole('button', { name: /^all paths$/i })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    const selected = figure.querySelectorAll('[data-edge][data-selected="true"]');
+    expect(selected.length).toBe(4);
+    for (const el of selected) expect(el.getAttribute('data-group')).toBe('confounders');
+    // Clicking the pressed path again returns to the unfiltered view.
+    await userEvent.click(confounders);
+    expect(within(figure).getByRole('button', { name: /^all paths$/i })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(figure.querySelectorAll('[data-edge][data-selected="true"]').length).toBe(0);
   });
 });
 

@@ -2,7 +2,8 @@
  * Documentation Page — "Understanding E2I"
  * ========================================
  *
- * Scroll narrative in four sections: Purpose, Methodology, Best Practices,
+ * Scroll narrative in five sections: Purpose, Causal Impact (variable-role
+ * explainer + the CausalImpactAgent DAG), Methodology, Best Practices,
  * Expected Impact. Spec: docs/superpowers/specs/2026-07-10-documentation-page-design.md
  *
  * Honesty constraints (platform-wide):
@@ -16,6 +17,8 @@ import {
   SectionNav,
   CausalScopeMap,
   CorrelationCausationToggle,
+  CausalVariableTypes,
+  CausalImpactDag,
   CapabilityIndex,
   CausalPipeline,
   AgentTierStack,
@@ -90,6 +93,11 @@ export function Documentation() {
         <CausalScopeMap />
         <CorrelationCausationToggle />
         <CapabilityIndex />
+      </Section>
+
+      <Section id="causal-impact" title="Causal Impact — the variables and the DAG">
+        <CausalVariableTypes />
+        <CausalImpactDag />
       </Section>
 
       <Section id="methodology" title="Methodology — how it works">
