@@ -74,11 +74,105 @@ export interface StatChip {
   label: string;
 }
 
-/** Static structural chips. The live KPI-count chip is fetched on the page. */
+// ── Predictive cohorts ──────────────────────────────────────────────────────
+// SSOT: src/api/schemas/causal.py CohortName — order and ids mirror the enum;
+// each cohort selects ONE outcome column as the model's label. Pinned by
+// tests/unit/test_docs/test_documentation_cohorts_channels_ssot.py.
+
+export type PredictiveCohortId = 'initiation' | 'persistence' | 'discontinuation' | 'hcp_adoption';
+export type CohortEntity = 'patients' | 'prescribers (HCPs)';
+
+export interface PredictiveCohortDef {
+  id: PredictiveCohortId;
+  name: string;
+  /** Who gets a score. */
+  entity: CohortEntity;
+  /** The outcome the model predicts, in plain words. */
+  outcome: string;
+  /** The backend label column (table.column) the cohort is defined by. */
+  labelColumn: string;
+}
+
+export const PREDICTIVE_COHORT_INTRO =
+  'A predictive cohort is a population the platform scores one member at a time. A model trained on the cohort gives every patient or prescriber a probability of one specific outcome, and SHAP explains which features drove each score — so a team knows not just who to target, but why. Four cohorts are evaluated, one per outcome:';
+
+export const PREDICTIVE_COHORTS: PredictiveCohortDef[] = [
+  {
+    id: 'initiation',
+    name: 'Treatment initiation',
+    entity: 'patients',
+    outcome: 'starting treatment',
+    labelColumn: 'patient_journeys.treatment_initiated',
+  },
+  {
+    id: 'persistence',
+    name: 'Persistence',
+    entity: 'patients',
+    outcome: 'staying on therapy at 180 days',
+    labelColumn: 'patient_journeys.persistent_180d',
+  },
+  {
+    id: 'discontinuation',
+    name: 'Discontinuation',
+    entity: 'patients',
+    outcome: 'discontinuing therapy within 180 days',
+    labelColumn: 'patient_journeys.discontinued_180d',
+  },
+  {
+    id: 'hcp_adoption',
+    name: 'HCP adoption',
+    entity: 'prescribers (HCPs)',
+    outcome: 'adopting the brand (intent to prescribe)',
+    labelColumn: 'hcp_brand_adoption.adopted',
+  },
+];
+
+// ── Intervention channels ───────────────────────────────────────────────────
+// SSOT: src/digital_twin/effect/provider.py INTERVENTION_CATALOG (value + label,
+// same order) and INTERVENTION_TREATMENT_MAP (the lever = treatment column).
+// Six channel-level HCP interventions + two program-level levers modeled as
+// HCP-level proxies (user-approved taxonomy, 2026-07-08).
+
+export type InterventionChannelKind = 'hcp' | 'program';
+
+export interface InterventionChannelDef {
+  id: string;
+  name: string;
+  kind: InterventionChannelKind;
+  /** What is actually varied — the treatment variable the engine estimates on. */
+  lever: string;
+}
+
+export const INTERVENTION_CHANNEL_INTRO =
+  'An intervention channel is a lever the commercial team can actually pull. Each one is a treatment the causal engine estimates and the Digital Twin simulates; where a channel\'s exposure is not recorded in the data, the platform reports it as unavailable rather than inventing an effect. Eight channels are modeled — six at the HCP level, plus two program-level levers represented as HCP-level proxies:';
+
+export const INTERVENTION_CHANNELS: InterventionChannelDef[] = [
+  { id: 'email_campaign', name: 'Email Campaign', kind: 'hcp', lever: 'email campaign count' },
+  { id: 'call_frequency_increase', name: 'Increased Call Frequency', kind: 'hcp', lever: 'rep call frequency' },
+  { id: 'speaker_program_invitation', name: 'Speaker Program Invitation', kind: 'hcp', lever: 'speaker program count' },
+  { id: 'sample_distribution', name: 'Sample Distribution', kind: 'hcp', lever: 'sample volume' },
+  { id: 'peer_influence_activation', name: 'Peer Influence Activation', kind: 'hcp', lever: 'peer influence score' },
+  { id: 'digital_engagement', name: 'Digital Engagement', kind: 'hcp', lever: 'digital engagement score' },
+  {
+    id: 'patient_support_program',
+    name: 'Patient Support Program',
+    kind: 'program',
+    lever: 'share of the HCP\'s patients enrolled in patient-support programs',
+  },
+  {
+    id: 'rep_training_quality',
+    name: 'Rep Training Quality',
+    kind: 'program',
+    lever: 'territory rep-training quality experienced by the HCP',
+  },
+];
+
+/** Static structural chips. The live KPI-count chip is fetched on the page.
+ * Cohort and channel counts are DERIVED from the lists above, never typed. */
 export const STAT_CHIPS: StatChip[] = [
   { value: '3 / 4', label: 'brands / indications' },
-  { value: '4', label: 'predictive cohorts' },
-  { value: '8', label: 'intervention channels' },
+  { value: String(PREDICTIVE_COHORTS.length), label: 'predictive cohorts' },
+  { value: String(INTERVENTION_CHANNELS.length), label: 'intervention channels' },
   { value: '5', label: 'refutation tests' },
 ];
 

@@ -89,10 +89,30 @@ test.describe('Documentation Page', () => {
   })
 
   test.describe('Footer entry point', () => {
-    test('footer Documentation link navigates here', async ({ page }) => {
+    test('footer "How E2I Works" link navigates here', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('contentinfo').getByRole('link', { name: /^Documentation$/i }).click()
+      await page.getByRole('contentinfo').getByRole('link', { name: /^How E2I Works$/i }).click()
       await expect(docPage.pageHeader).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
+    })
+  })
+
+  test.describe('How E2I Works: naming and the Purpose explainer', () => {
+    test('sidebar lists "How E2I Works" directly under Home and it is the page title', async () => {
+      const labels = (await docPage.sidebarLinks.allTextContents()).map((t) => t.trim())
+      const home = labels.indexOf('Home')
+      expect(home).toBeGreaterThanOrEqual(0)
+      expect(labels[home + 1]).toBe('How E2I Works')
+      expect(labels).not.toContain('Documentation')
+      await expect(docPage.pageHeader).toHaveText('How E2I Works')
+    })
+
+    test('purpose names the four predictive cohorts and the eight intervention channels', async () => {
+      await expect(docPage.cohortItems).toHaveCount(4)
+      await expect(docPage.channelItems).toHaveCount(8)
+      await expect(docPage.purposeRegion.getByText(/a predictive cohort is a population/i)).toBeVisible()
+      await expect(docPage.purposeRegion.getByText(/an intervention channel is a lever/i)).toBeVisible()
+      await expect(docPage.purposeRegion.getByText('HCP adoption')).toBeVisible()
+      await expect(docPage.purposeRegion.getByText('Rep Training Quality')).toBeVisible()
     })
   })
 })

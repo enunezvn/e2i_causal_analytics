@@ -76,6 +76,14 @@ export const routeConfigs: RouteConfig[] = [
     section: 'main',
     showInNav: true,
   },
+  {
+    path: '/documentation',
+    title: 'How E2I Works',
+    description: 'Purpose, the causal DAG, the refutation quality gate, methodology, and best practices',
+    icon: 'graduation-cap',
+    section: 'main',
+    showInNav: true,
+  },
 
   // ── Causal Analytics — understand cause → effect ─────────────────────────
   {
@@ -193,14 +201,6 @@ export const routeConfigs: RouteConfig[] = [
     title: 'KPI Dictionary',
     description: 'KPI reference across 6 workstreams',
     icon: 'book-open',
-    section: 'data',
-    showInNav: true,
-  },
-  {
-    path: '/documentation',
-    title: 'Documentation',
-    description: 'Platform purpose, methodology, and best practices',
-    icon: 'graduation-cap',
     section: 'data',
     showInNav: true,
   },
