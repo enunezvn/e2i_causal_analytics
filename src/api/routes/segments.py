@@ -1258,11 +1258,20 @@ async def get_segment_health() -> SegmentHealthResponse:
 # test_get_segment_datasets_route_not_shadowed_by_analysis_id.)
 
 
+# Provenance of the /datasets option lists (see get_segment_datasets).
+_SEGMENT_OPTIONS_SOURCE_SSOT = "causal_paths"
+_SEGMENT_OPTIONS_SOURCE_FALLBACK = "curated_fallback"
+
+
 class SegmentDatasetsResponse(BaseModel):
     """Curated config options for the Segment Analysis page (data-driven FE)."""
 
-    treatments: List[str] = Field(..., description="Curated selectable treatment columns")
-    outcomes: List[str] = Field(..., description="Curated selectable outcome columns")
+    treatments: List[str] = Field(
+        ..., description="Selectable treatment columns, scoped to `brand` (curated spec order)"
+    )
+    outcomes: List[str] = Field(
+        ..., description="Union of selectable outcome columns over `outcomes_by_treatment`"
+    )
     brands: List[str] = Field(
         default_factory=list,
         description="Distinct brands present in the gold-standard cohort (filter)",
@@ -1271,6 +1280,83 @@ class SegmentDatasetsResponse(BaseModel):
         default_factory=dict,
         description="Human-readable display labels keyed by column name",
     )
+    outcomes_by_treatment: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Outcomes with a modeled causal edge from each offered treatment "
+            "(causal_paths SSOT, brand-scoped). Empty when options_source is the "
+            "curated fallback — the FE then offers the flat `outcomes` list."
+        ),
+    )
+    brand: Optional[str] = Field(
+        default=None, description="Brand the options are scoped to (None = all brands)"
+    )
+    options_source: str = Field(
+        default=_SEGMENT_OPTIONS_SOURCE_SSOT,
+        description=(
+            f"'{_SEGMENT_OPTIONS_SOURCE_SSOT}' when derived from the causal-path registry; "
+            f"'{_SEGMENT_OPTIONS_SOURCE_FALLBACK}' when the registry was unavailable and "
+            "the flat curated allowlists were returned instead"
+        ),
+    )
+
+
+async def _segment_question_options(
+    brand: Optional[str],
+) -> tuple[List[str], List[str], Dict[str, List[str]]]:
+    """SSOT-derived ``treatment -> [outcomes]`` options for the HTE page.
+
+    Reads the distinct ``(treatment, outcome, brand)`` questions from the
+    ``causal_paths`` registry — the SAME enumeration the discovery leaderboard
+    uses (``causal._discover_candidate_questions``) — restricted to this page's
+    patient_journeys grain (treatment AND outcome in the curated spec, t != o),
+    then gates the treatment axis per brand through ``_brand_scoped_covariates``:
+    a brand-DISTINCT axis (complement_inhibitor_status / disease_stage /
+    urticaria_severity_uas7) is offered only on its own brand's cohort and never
+    for all-brands, exactly like the covariates (the column is NULL off-brand,
+    so an off-brand run fails closed with "No usable rows").
+
+    Why SSOT pairs and not the flat allowlists (2026-08-29 /segment-analysis
+    review): the flat lists offered treatment_initiated on BOTH sides (it is a
+    treatment only in the commercial grain; on the patient grain it is an
+    outcome) and let a user pose treatment_initiated -> persistent_180d — a pair
+    with no DGP effect and no registry edge, where the EconML/CausalML
+    cross-check then honestly FAILED at 42%. Offering only modeled questions
+    removes the ill-posed pairs at the source; the run-time allowlist gate in
+    ``_load_segment_hte_frame`` is unchanged (security), and the API still
+    accepts any allowlisted pair for programmatic callers.
+
+    Lists follow the curated spec order (stable dropdowns). Raises on registry
+    unavailability — the caller falls back to the flat curated lists.
+    """
+    from src.api.routes.causal import (
+        _CAUSAL_DATASET_SPECS,
+        _brand_scoped_covariates,
+        _get_causal_path_repo,
+    )
+
+    spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
+    t_order = {c: i for i, c in enumerate(spec["treatment"])}
+    o_order = {c: i for i, c in enumerate(spec["outcome"])}
+
+    repo = await _get_causal_path_repo()
+    rows = await repo.get_distinct_questions(brand=brand, include_synthetic=True)
+
+    pairs: Dict[str, set] = {}
+    for r in rows:
+        t, o = r.get("treatment"), r.get("outcome")
+        # Grain-scope guard (same as the leaderboard): commercial-grain edges such
+        # as treatment_initiated -> nrx_volume share the table and must not leak.
+        if t == o or t not in t_order or o not in o_order:
+            continue
+        pairs.setdefault(t, set()).add(o)
+
+    treatments = _brand_scoped_covariates(sorted(pairs, key=t_order.__getitem__), brand)
+    outcomes_by_treatment = {t: sorted(pairs[t], key=o_order.__getitem__) for t in treatments}
+    outcomes = sorted(
+        {o for outs in outcomes_by_treatment.values() for o in outs}, key=o_order.__getitem__
+    )
+    return treatments, outcomes, outcomes_by_treatment
 
 
 @router.get(
@@ -1279,20 +1365,41 @@ class SegmentDatasetsResponse(BaseModel):
     summary="Curated segment-analysis config options",
     operation_id="get_segment_datasets",
     description=(
-        "Curated treatment/outcome options + data-driven brand list for the "
-        "agent-driven Segment Analysis page (patient_journeys substrate)."
+        "Brand-scoped treatment/outcome options (causal_paths SSOT: only pairs "
+        "with a modeled causal edge on the selected brand's cohort) + data-driven "
+        "brand list for the agent-driven Segment Analysis page (patient_journeys "
+        "substrate). Falls back to the flat curated allowlists when the registry "
+        "is unavailable (options_source tells which)."
     ),
 )
-async def get_segment_datasets() -> SegmentDatasetsResponse:
-    """Return the curated treatment/outcome options and the live brand list.
+async def get_segment_datasets(
+    brand: Optional[str] = Query(
+        None,
+        description=(
+            "Brand the analysis will be scoped to. Treatment options are brand-scoped "
+            "(a brand-distinct clinical axis is offered only on its own cohort) and "
+            "each treatment lists only the outcomes it has a modeled causal edge to. "
+            "Omitted = all brands (universal arms only)."
+        ),
+    ),
+) -> SegmentDatasetsResponse:
+    """Return brand-scoped treatment/outcome options and the live brand list.
 
-    Treatment/outcome come from the patient_journeys allowlist SSOT in causal.py.
-    Brands are data-driven (distinct brands in the live cohort); fail-soft to an
-    empty list (FE shows "All brands") if the store / import is unavailable.
+    Treatment/outcome pairs come from the causal_paths SSOT via
+    ``_segment_question_options``; brands are data-driven (distinct brands in
+    the live cohort). Both are fail-soft: an unavailable registry returns the
+    flat patient_journeys allowlists (brand-gated) with
+    ``options_source="curated_fallback"``; an unavailable brand list returns
+    ``[]`` (FE shows "All brands"). An unknown brand is a 400.
     """
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _COLUMN_LABELS
+    from src.api.routes.causal import (
+        _CAUSAL_DATASET_SPECS,
+        _COLUMN_LABELS,
+        _brand_scoped_covariates,
+    )
 
     spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
+    brand = brand or None
 
     brands: List[str] = []
     try:
@@ -1303,14 +1410,40 @@ async def get_segment_datasets() -> SegmentDatasetsResponse:
         logger.warning(f"Segment datasets: brand list unavailable, returning []: {e}")
         brands = []
 
-    offered = list(spec["treatment"]) + list(spec["outcome"])
+    if brand is not None and brands and brand not in brands:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown brand '{brand}' for dataset '{_SEGMENT_HTE_DATASET}'. Known: {brands}",
+        )
+
+    options_source = _SEGMENT_OPTIONS_SOURCE_SSOT
+    try:
+        treatments, outcomes, outcomes_by_treatment = await _segment_question_options(brand)
+        if not treatments:
+            raise RuntimeError("registry returned no patient-grain questions")
+    except Exception as e:
+        logger.warning(
+            "Segment datasets: causal_paths options unavailable (%s); "
+            "returning the flat curated allowlists for brand=%s",
+            e,
+            brand,
+        )
+        options_source = _SEGMENT_OPTIONS_SOURCE_FALLBACK
+        treatments = _brand_scoped_covariates(list(spec["treatment"]), brand)
+        outcomes = list(spec["outcome"])
+        outcomes_by_treatment = {}
+
+    offered = list(dict.fromkeys(treatments + outcomes))
     labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in offered}
 
     return SegmentDatasetsResponse(
-        treatments=list(spec["treatment"]),
-        outcomes=list(spec["outcome"]),
+        treatments=treatments,
+        outcomes=outcomes,
         brands=brands,
         labels=labels,
+        outcomes_by_treatment=outcomes_by_treatment,
+        brand=brand,
+        options_source=options_source,
     )
 
 

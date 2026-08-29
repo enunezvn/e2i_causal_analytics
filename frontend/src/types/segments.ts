@@ -364,4 +364,18 @@ export interface SegmentDatasetsResponse {
    * instead of a raw title-cased column name; absent keys fall back to titleCase.
    */
   labels?: Record<string, string>;
+  /**
+   * Outcomes with a modeled causal edge from each offered treatment (causal_paths
+   * SSOT, scoped to `brand`). The Outcome dropdown must offer ONLY these for the
+   * selected treatment. Empty/absent when `options_source` is the curated
+   * fallback — then the flat `outcomes` list applies.
+   */
+  outcomes_by_treatment?: Record<string, string[]>;
+  /** Brand the options are scoped to (null/absent = all brands). */
+  brand?: string | null;
+  /**
+   * 'causal_paths' when derived from the causal-path registry; 'curated_fallback'
+   * when the registry was unavailable and the flat allowlists were returned.
+   */
+  options_source?: 'causal_paths' | 'curated_fallback';
 }

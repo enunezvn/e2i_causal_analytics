@@ -3,7 +3,6 @@
 This module defines the LangGraph state structure for segment-level CATE analysis.
 """
 
-import operator
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -14,11 +13,34 @@ from typing import (
     NotRequired,
     Optional,
     TypedDict,
+    TypeVar,
 )
 from uuid import UUID
 
 if TYPE_CHECKING:
     pass
+
+
+_T = TypeVar("_T")
+
+
+def append_unique(existing: Optional[List[_T]], incoming: Optional[List[_T]]) -> List[_T]:
+    """Order-preserving append of items not already present (reducer).
+
+    Used for the ``warnings`` / ``errors`` channels instead of ``operator.add``.
+    Several nodes return ``{**state, ...}`` (the full state, these lists
+    included) — ``profile_generator`` even rebuilds ``[*existing_warnings, new]``
+    itself — so a plain concatenation re-appended the existing list at every
+    downstream node: one uplift FAILED warning was persisted 4× on every
+    /segment-analysis run (1 → learn_policy 2 → generate_profiles 4). Appending
+    only what is new makes the channel correct under both a partial update and
+    a full-state spread. Equality (not hashing) decides, so dict errors work.
+    """
+    merged: List[_T] = list(existing or [])
+    for item in incoming or []:
+        if item not in merged:
+            merged.append(item)
+    return merged
 
 
 class CATEResult(TypedDict):
@@ -182,8 +204,8 @@ class HeterogeneousOptimizerState(TypedDict):
     total_latency_ms: int
 
     # === ERROR HANDLING (3 fields) ===
-    errors: Annotated[List[Dict[str, Any]], operator.add]
-    warnings: Annotated[List[str], operator.add]
+    errors: Annotated[List[Dict[str, Any]], append_unique]
+    warnings: Annotated[List[str], append_unique]
     status: Literal["pending", "estimating", "analyzing", "optimizing", "completed", "failed"]
 
     # === CONTRACT-REQUIRED FIELDS (3 fields) ===
