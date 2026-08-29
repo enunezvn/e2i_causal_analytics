@@ -4,6 +4,8 @@
  * View B: the confounder (specialty) revealed as a small DAG.
  * All coordinates are hand-authored and labeled "illustrative example" —
  * they are NOT real metrics (platform honesty discipline).
+ * Both views sit in a centred, width-capped column (`mx-auto max-w-xl`) so the
+ * illustration doesn't hug the card's left edge on wide screens.
  */
 import { useState } from 'react';
 
@@ -44,8 +46,8 @@ export function CorrelationCausationToggle() {
       </div>
 
       {!revealed ? (
-        <div>
-          <svg viewBox="0 0 240 130" role="img" aria-label="Illustrative scatter plot: HCP calls versus TRx, trending upward" className="w-full max-w-xl">
+        <div className="mx-auto max-w-xl" data-testid="correlation-view">
+          <svg viewBox="0 0 240 130" role="img" aria-label="Illustrative scatter plot: HCP calls versus TRx, trending upward" className="block h-auto w-full">
             <line x1="20" y1="115" x2="230" y2="115" className="stroke-[var(--color-border)]" strokeWidth="1" />
             <line x1="20" y1="115" x2="20" y2="10" className="stroke-[var(--color-border)]" strokeWidth="1" />
             <text x="125" y="128" textAnchor="middle" className="fill-[var(--color-muted-foreground)] text-[8px]">HCP calls →</text>
@@ -61,8 +63,8 @@ export function CorrelationCausationToggle() {
           </p>
         </div>
       ) : (
-        <div>
-          <svg viewBox="0 0 240 130" role="img" aria-label="Illustrative DAG: physician specialty causes both call targeting and TRx" className="w-full max-w-xl">
+        <div className="mx-auto max-w-xl" data-testid="causation-view">
+          <svg viewBox="0 0 240 130" role="img" aria-label="Illustrative DAG: physician specialty causes both call targeting and TRx" className="block h-auto w-full">
             <defs>
               <marker id="dag-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                 <path d="M 0 0 L 10 5 L 0 10 z" className="fill-[var(--color-muted-foreground)]" />
