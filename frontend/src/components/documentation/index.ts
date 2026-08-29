@@ -9,6 +9,7 @@ export { CausalScopeMap } from './CausalScopeMap';
 export { CorrelationCausationToggle } from './CorrelationCausationToggle';
 export { CausalVariableTypes } from './CausalVariableTypes';
 export { CausalImpactDag } from './CausalImpactDag';
+export { RefutationGate } from './RefutationGate';
 export { CapabilityIndex } from './CapabilityIndex';
 export { CausalPipeline } from './CausalPipeline';
 export { AgentTierStack } from './AgentTierStack';

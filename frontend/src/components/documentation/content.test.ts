@@ -17,6 +17,9 @@ import {
   PRACTICES,
   SCOPE_LEVELS,
   STAT_CHIPS,
+  REFUTATION_TESTS,
+  GATE_BANDS,
+  DOC_SECTIONS,
 } from './content';
 
 describe('content invariants', () => {
@@ -65,5 +68,31 @@ describe('content invariants', () => {
       expect(p.mechanism).not.toMatch(/\d/);
       expect(p.title).not.toMatch(/\d/);
     }
+  });
+});
+
+describe('refutation gate content', () => {
+  it('has five tests with unique ids, exactly three critical, each with a default and a pass rule', () => {
+    expect(REFUTATION_TESTS).toHaveLength(5);
+    expect(new Set(REFUTATION_TESTS.map((t) => t.id)).size).toBe(5);
+    expect(REFUTATION_TESTS.filter((t) => t.critical).map((t) => t.id)).toEqual([
+      'placebo_treatment',
+      'random_common_cause',
+      'sensitivity_e_value',
+    ]);
+    for (const t of REFUTATION_TESTS) {
+      expect(t.defaults.length).toBeGreaterThan(0);
+      expect(t.passRule.length).toBeGreaterThan(0);
+      expect(t.mustHold.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('describes the three gate bands in order', () => {
+    expect(GATE_BANDS.map((b) => b.decision)).toEqual(['proceed', 'review', 'block']);
+  });
+
+  it('lists the quality gate section right after causal impact in the nav', () => {
+    const ids = DOC_SECTIONS.map((s) => s.id);
+    expect(ids.indexOf('refutation-gate')).toBe(ids.indexOf('causal-impact') + 1);
   });
 });
