@@ -35,4 +35,24 @@ export class DocumentationPage extends BasePage {
   get capabilityIndex(): Locator {
     return this.page.getByRole('region', { name: /where to go for each question/i })
   }
+
+  get causalImpactNavLink(): Locator {
+    return this.sectionNav.getByRole('button', { name: /^Causal Impact$/i })
+  }
+
+  get variableTypes(): Locator {
+    return this.page.getByRole('region', { name: /four types of causal variables/i })
+  }
+
+  get causalDag(): Locator {
+    return this.page.getByRole('figure', { name: /Multi-path Revenue Impact/i })
+  }
+
+  dagPathButton(name: RegExp): Locator {
+    return this.causalDag.getByRole('button', { name })
+  }
+
+  get dagSelectedEdges(): Locator {
+    return this.causalDag.locator('[data-edge][data-selected="true"]')
+  }
 }

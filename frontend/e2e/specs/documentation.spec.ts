@@ -33,6 +33,26 @@ test.describe('Documentation Page', () => {
       await expect(page.getByText(/Attack the estimate before believing it/i)).toBeVisible()
     })
 
+    test('causal impact section: variable-type key and a DAG path spotlight', async () => {
+      await docPage.causalImpactNavLink.click()
+      await expect(docPage.variableTypes).toBeVisible()
+      for (const term of ['Treatment', 'Mediator', 'Outcome', 'Confounder']) {
+        await expect(docPage.variableTypes.getByText(term, { exact: true })).toBeVisible()
+      }
+      await expect(docPage.causalDag).toBeVisible()
+      await expect(docPage.causalDag.getByText(/illustrative example/i)).toBeVisible()
+      await expect(docPage.dagPathButton(/^All paths$/i)).toHaveAttribute('aria-pressed', 'true')
+      await expect(docPage.dagSelectedEdges).toHaveCount(0)
+
+      await docPage.dagPathButton(/Backdoor confounders/i).click()
+      await expect(docPage.dagPathButton(/Backdoor confounders/i)).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+      await expect(docPage.dagSelectedEdges).toHaveCount(4)
+      await expect(docPage.causalDag.getByText(/back-door paths the estimator must close/i)).toBeVisible()
+    })
+
     test('capability index links to live pages', async () => {
       await expect(docPage.capabilityIndex).toBeVisible()
       await expect(

@@ -442,6 +442,182 @@ export const IMPACT_PATHWAYS: ImpactPathway[] = [
   },
 ];
 
+// ── Causal Impact — variable types + the illustrative DAG ───────────────────
+// Ported from docs/Archive/CausalImpactAgent.html ("CausalImpactAgent — Visual
+// Explainer"): the color key, the Acceptance → Action → Revenue DAG and its
+// path toggles. Edge labels are that explainer's own hand-authored figures —
+// the figure is labeled "illustrative example" on the page; nothing here is a
+// measured effect.
+
+export type CausalVariableType = 'treatment' | 'mediator' | 'outcome' | 'confounder';
+
+export interface CausalVariableDef {
+  type: CausalVariableType;
+  label: string;
+  definition: string;
+  /** One color per role, shared by the explainer chips and the DAG nodes. */
+  color: string;
+  /** DAG node shape — confounders are diamonds, everything else circles. */
+  shape: 'circle' | 'diamond';
+}
+
+export const CAUSAL_EFFECTS_INTRO =
+  'Causal effects quantify the impact of a treatment by comparing outcomes across different treatment levels.';
+
+export const CAUSAL_VARIABLES_LEAD =
+  'When thinking about questions of cause and effect, it is helpful to distinguish 4 types of variables:';
+
+export const CAUSAL_VARIABLE_TYPES: CausalVariableDef[] = [
+  {
+    type: 'treatment',
+    label: 'Treatment',
+    definition: 'Variable whose causal effect you want to estimate.',
+    color: '#0ea5e9',
+    shape: 'circle',
+  },
+  {
+    type: 'mediator',
+    label: 'Mediator',
+    definition: 'Transmits part of the effect from exposure to outcome.',
+    color: '#a855f7',
+    shape: 'circle',
+  },
+  {
+    type: 'outcome',
+    label: 'Outcome',
+    definition: 'The result whose causal determinants you are studying.',
+    color: '#22c55e',
+    shape: 'circle',
+  },
+  {
+    type: 'confounder',
+    label: 'Confounder',
+    definition:
+      'Pre-exposure variable that affects both exposure and outcome, opening a back-door path.',
+    color: '#f59e0b',
+    shape: 'diamond',
+  },
+];
+
+export type DagPathGroup =
+  | 'core'
+  | 'mediation'
+  | 'path1'
+  | 'path2'
+  | 'path3'
+  | 'confounders'
+  | 'loop';
+
+export interface DagNode {
+  id: string;
+  label: string;
+  type: CausalVariableType;
+  x: number;
+  y: number;
+  /** Put the caption above the node (top-row nodes whose edge below is captioned). */
+  labelAbove?: boolean;
+}
+
+export interface DagEdge {
+  from: string;
+  to: string;
+  label: string;
+  group: DagPathGroup;
+  dashed?: boolean;
+  /** Where along the edge (0 → 1) the caption sits; default midpoint. Used to
+   *  keep the captions of crossing edges apart. */
+  labelT?: number;
+}
+
+export interface DagPath {
+  group: DagPathGroup;
+  label: string;
+  description: string;
+}
+
+export const DAG_TITLE = 'Acceptance → Action → Multi-path Revenue Impact';
+
+// Coordinates are in the SVG's 1100 × 400 viewBox.
+export const DAG_NODES: DagNode[] = [
+  { id: 'acceptance', label: 'Acceptance Rate', type: 'treatment', x: 140, y: 120 },
+  { id: 'engagement', label: 'Engagement Quality', type: 'mediator', x: 340, y: 80, labelAbove: true },
+  { id: 'action', label: 'Action Rate', type: 'mediator', x: 340, y: 160 },
+  { id: 'patient_id', label: 'Patient Identification', type: 'mediator', x: 540, y: 110 },
+  { id: 'hcp_sat', label: 'HCP Satisfaction', type: 'mediator', x: 540, y: 190 },
+  { id: 'treat_init', label: 'Treatment Initiation', type: 'mediator', x: 740, y: 110 },
+  { id: 'brand_adopt', label: 'Brand Adoption', type: 'mediator', x: 740, y: 190 },
+  { id: 'revenue', label: 'Revenue', type: 'outcome', x: 940, y: 150 },
+  { id: 'feedback', label: 'Data Feedback', type: 'mediator', x: 540, y: 280 },
+  { id: 'model_improve', label: 'Model Improvement', type: 'mediator', x: 740, y: 280 },
+  { id: 'future_precision', label: 'Future Precision', type: 'mediator', x: 940, y: 280 },
+  { id: 'seasonality', label: 'Seasonality', type: 'confounder', x: 140, y: 270 },
+  { id: 'channel_mix', label: 'Channel Mix', type: 'confounder', x: 340, y: 270 },
+];
+
+export const DAG_EDGES: DagEdge[] = [
+  { from: 'acceptance', to: 'action', label: '+12pp / 10pp', group: 'core' },
+  { from: 'acceptance', to: 'engagement', label: 'mediates ~30%', group: 'mediation' },
+  { from: 'engagement', to: 'action', label: '+quality → +action', group: 'mediation' },
+  { from: 'action', to: 'patient_id', label: '', group: 'path1' },
+  { from: 'patient_id', to: 'treat_init', label: '42%', group: 'path1' },
+  { from: 'treat_init', to: 'revenue', label: '', group: 'path1' },
+  { from: 'action', to: 'hcp_sat', label: '', group: 'path2' },
+  { from: 'hcp_sat', to: 'brand_adopt', label: '28%', group: 'path2' },
+  { from: 'brand_adopt', to: 'revenue', label: '', group: 'path2' },
+  { from: 'action', to: 'feedback', label: '', group: 'path3' },
+  { from: 'feedback', to: 'model_improve', label: '', group: 'path3' },
+  { from: 'model_improve', to: 'future_precision', label: '15%', group: 'path3' },
+  { from: 'future_precision', to: 'revenue', label: '', group: 'path3' },
+  { from: 'seasonality', to: 'acceptance', label: 'confounds', group: 'confounders' },
+  { from: 'seasonality', to: 'action', label: 'confounds', group: 'confounders', labelT: 0.25 },
+  { from: 'channel_mix', to: 'acceptance', label: 'confounds', group: 'confounders', labelT: 0.75 },
+  { from: 'channel_mix', to: 'action', label: 'confounds', group: 'confounders' },
+  { from: 'revenue', to: 'feedback', label: 'learning loop', group: 'loop', dashed: true },
+];
+
+export const DAG_PATHS: DagPath[] = [
+  {
+    group: 'core',
+    label: 'Core: Acceptance → Action',
+    description:
+      'The direct effect the agent estimates: does accepting a trigger raise the action rate?',
+  },
+  {
+    group: 'mediation',
+    label: 'Mediation branch',
+    description:
+      'Part of the acceptance effect travels through engagement quality before it reaches action.',
+  },
+  {
+    group: 'path1',
+    label: 'Path 1: Patient → Treat → Revenue',
+    description: 'Actions identify patients, some of whom go on to initiate treatment.',
+  },
+  {
+    group: 'path2',
+    label: 'Path 2: HCP → Brand → Revenue',
+    description: 'Actions build HCP satisfaction, which feeds brand adoption.',
+  },
+  {
+    group: 'path3',
+    label: 'Path 3: Feedback → Precision → Revenue',
+    description:
+      'Actions generate data that improves the model and sharpens the precision of future triggers.',
+  },
+  {
+    group: 'confounders',
+    label: 'Backdoor confounders',
+    description:
+      'Seasonality and channel mix affect both acceptance and action — the back-door paths the estimator must close before the core effect can be read.',
+  },
+  {
+    group: 'loop',
+    label: 'Reinforcing loop',
+    description:
+      'Revenue funds the data feedback that improves future precision — a learning loop, not a one-shot effect.',
+  },
+];
+
 // ── Section nav ─────────────────────────────────────────────────────────────
 
 export interface DocSection {
@@ -451,6 +627,7 @@ export interface DocSection {
 
 export const DOC_SECTIONS: DocSection[] = [
   { id: 'purpose', label: 'Purpose' },
+  { id: 'causal-impact', label: 'Causal Impact' },
   { id: 'methodology', label: 'Methodology' },
   { id: 'practices', label: 'Best Practices' },
   { id: 'impact', label: 'Expected Impact' },
