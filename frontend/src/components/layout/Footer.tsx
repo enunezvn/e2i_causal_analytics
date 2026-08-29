@@ -96,7 +96,7 @@ export function Footer({ className = '' }: FooterProps) {
               to="/documentation"
               className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] transition-colors"
             >
-              Documentation
+              How E2I Works
             </Link>
             <a
               href="/api/docs"

@@ -29,10 +29,11 @@ describe('navigation sections (IA grouping)', () => {
     ]);
   });
 
-  it('puts Home alone at the top (main, no header)', () => {
+  it('puts Home then "How E2I Works" at the top (main, no header)', () => {
     const main = getNavigationSections().find((s) => s.key === 'main');
     expect(main?.label).toBeNull();
-    expect(main?.routes.map((r) => r.title)).toEqual(['Home']);
+    expect(main?.routes.map((r) => r.title)).toEqual(['Home', 'How E2I Works']);
+    expect(main?.routes.map((r) => r.path)).toEqual(['/', '/documentation']);
   });
 
   it('orders Causal Analytics by the analytical workflow', () => {

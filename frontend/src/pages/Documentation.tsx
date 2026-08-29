@@ -1,6 +1,6 @@
 /**
- * Documentation Page — "Understanding E2I"
- * ========================================
+ * "How E2I Works" page (route /documentation; nav: Main, under Home)
+ * ==================================================================
  *
  * Scroll narrative in six sections: Purpose, Causal Impact (variable-role
  * explainer + the CausalImpactAgent DAG), Quality Gate (the five refutation
@@ -17,6 +17,7 @@ import { useKPIList } from '@/hooks/api/use-kpi';
 import {
   SectionNav,
   CausalScopeMap,
+  CohortsAndChannels,
   CorrelationCausationToggle,
   CausalVariableTypes,
   CausalImpactDag,
@@ -61,7 +62,7 @@ export function Documentation() {
   return (
     <div className="space-y-6 px-1">
       <div>
-        <h1 className="text-2xl font-bold text-[var(--color-foreground)]">Understanding E2I</h1>
+        <h1 className="text-2xl font-bold text-[var(--color-foreground)]">How E2I Works</h1>
         <p className="text-[var(--color-muted-foreground)]">
           What this platform is for, how its causal methodology works, how to use it well, and what
           impact to expect.
@@ -92,6 +93,7 @@ export function Documentation() {
           ))}
           {showLiveChip && <StatChipView value={String(kpiTotal)} label="governed KPIs" />}
         </div>
+        <CohortsAndChannels />
         <CausalScopeMap />
         <CorrelationCausationToggle />
         <CapabilityIndex />

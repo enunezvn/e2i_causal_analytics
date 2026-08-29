@@ -46,7 +46,7 @@ function renderPage() {
 describe('Documentation page shell', () => {
   it('renders the page header', () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /understanding e2i/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^how e2i works$/i })).toBeInTheDocument();
   });
 
   it('renders all six sections', () => {
@@ -65,6 +65,62 @@ describe('Documentation page shell', () => {
     expect(nav).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /^methodology$/i }));
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+});
+
+describe('CohortsAndChannels (Purpose)', () => {
+  const purpose = () => screen.getByRole('region', { name: /^purpose/i });
+
+  it('defines a predictive cohort and names the four the platform evaluates', () => {
+    renderPage();
+    const cohorts = within(purpose()).getByRole('region', { name: /four predictive cohorts/i });
+    expect(within(cohorts).getByText(/a predictive cohort is a population/i)).toBeInTheDocument();
+    const items = cohorts.querySelectorAll('[data-cohort]');
+    expect(Array.from(items).map((li) => li.getAttribute('data-cohort'))).toEqual([
+      'initiation',
+      'persistence',
+      'discontinuation',
+      'hcp_adoption',
+    ]);
+    expect(within(cohorts).getByText('Treatment initiation')).toBeInTheDocument();
+    expect(within(cohorts).getByText('Persistence')).toBeInTheDocument();
+    expect(within(cohorts).getByText('Discontinuation')).toBeInTheDocument();
+    expect(within(cohorts).getByText('HCP adoption')).toBeInTheDocument();
+    // each cohort says WHO is scored and for WHICH outcome
+    expect(within(cohorts).getAllByText(/^patients$/i)).toHaveLength(3);
+    expect(within(cohorts).getAllByText(/^prescribers \(HCPs\)$/i)).toHaveLength(1);
+    expect(within(cohorts).getByText(/staying on therapy at 180 days/i)).toBeInTheDocument();
+  });
+
+  it('defines an intervention channel and names the eight, split 6 HCP-level + 2 program-level', () => {
+    renderPage();
+    const channels = within(purpose()).getByRole('region', { name: /eight intervention channels/i });
+    expect(within(channels).getByText(/an intervention channel is a lever/i)).toBeInTheDocument();
+    const items = Array.from(channels.querySelectorAll('[data-channel]'));
+    expect(items).toHaveLength(8);
+    expect(items.filter((li) => li.getAttribute('data-kind') === 'hcp')).toHaveLength(6);
+    expect(items.filter((li) => li.getAttribute('data-kind') === 'program')).toHaveLength(2);
+    for (const name of [
+      'Email Campaign',
+      'Increased Call Frequency',
+      'Speaker Program Invitation',
+      'Sample Distribution',
+      'Peer Influence Activation',
+      'Digital Engagement',
+      'Patient Support Program',
+      'Rep Training Quality',
+    ]) {
+      expect(within(channels).getByText(name)).toBeInTheDocument();
+    }
+    expect(within(channels).getByRole('heading', { name: /hcp-level channels/i })).toBeInTheDocument();
+    expect(within(channels).getByRole('heading', { name: /program-level levers/i })).toBeInTheDocument();
+  });
+
+  it('keeps the stat chips consistent with the lists (4 cohorts, 8 channels)', () => {
+    renderPage();
+    const region = purpose();
+    expect(within(region).getByText('predictive cohorts').previousSibling?.textContent).toBe('4');
+    expect(within(region).getByText('intervention channels').previousSibling?.textContent).toBe('8');
   });
 });
 

@@ -6,6 +6,7 @@
  */
 export { SectionNav } from './SectionNav';
 export { CausalScopeMap } from './CausalScopeMap';
+export { CohortsAndChannels } from './CohortsAndChannels';
 export { CorrelationCausationToggle } from './CorrelationCausationToggle';
 export { CausalVariableTypes } from './CausalVariableTypes';
 export { CausalImpactDag } from './CausalImpactDag';

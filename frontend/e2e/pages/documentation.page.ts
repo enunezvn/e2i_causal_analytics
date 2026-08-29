@@ -3,7 +3,7 @@ import { BasePage } from './base.page'
 import { ROUTES } from '../fixtures/test-data'
 
 /**
- * Page Object Model for the Documentation page ("Understanding E2I").
+ * Page Object Model for the "How E2I Works" page (route /documentation).
  */
 export class DocumentationPage extends BasePage {
   readonly url = ROUTES.DOCUMENTATION
@@ -21,7 +21,7 @@ export class DocumentationPage extends BasePage {
   }
 
   get pageHeader(): Locator {
-    return this.page.getByRole('heading', { name: /Understanding E2I/i }).first()
+    return this.page.getByRole('heading', { name: /^How E2I Works$/i }).first()
   }
 
   get sectionNav(): Locator {
@@ -70,5 +70,23 @@ export class DocumentationPage extends BasePage {
 
   get activeGateBand(): Locator {
     return this.refutationGate.locator('[data-gate-active="true"]')
+  }
+
+  /** Purpose section — the cohort / channel explainer. */
+  get purposeRegion(): Locator {
+    return this.page.getByRole('region', { name: /^purpose/i })
+  }
+
+  get cohortItems(): Locator {
+    return this.purposeRegion.locator('[data-cohort]')
+  }
+
+  get channelItems(): Locator {
+    return this.purposeRegion.locator('[data-channel]')
+  }
+
+  /** Sidebar links in render order (Home first). */
+  get sidebarLinks(): Locator {
+    return this.page.getByRole('complementary', { name: /main navigation/i }).getByRole('link')
   }
 }

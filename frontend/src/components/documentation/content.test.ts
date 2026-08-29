@@ -20,6 +20,8 @@ import {
   REFUTATION_TESTS,
   GATE_BANDS,
   DOC_SECTIONS,
+  PREDICTIVE_COHORTS,
+  INTERVENTION_CHANNELS,
 } from './content';
 
 describe('content invariants', () => {
@@ -94,5 +96,48 @@ describe('refutation gate content', () => {
   it('lists the quality gate section right after causal impact in the nav', () => {
     const ids = DOC_SECTIONS.map((s) => s.id);
     expect(ids.indexOf('refutation-gate')).toBe(ids.indexOf('causal-impact') + 1);
+  });
+});
+
+// Backend SSOT: src/api/schemas/causal.py CohortName (4) and
+// src/digital_twin/effect/provider.py INTERVENTION_CATALOG (8). The Python-side
+// pin tests/unit/test_docs/test_documentation_cohorts_channels_ssot.py compares
+// these lists against those sources, so a backend change fails HERE.
+describe('purpose: predictive cohorts and intervention channels', () => {
+  it('names the four cohorts in CohortName order, each with who is scored and which outcome', () => {
+    expect(PREDICTIVE_COHORTS.map((c) => c.id)).toEqual([
+      'initiation',
+      'persistence',
+      'discontinuation',
+      'hcp_adoption',
+    ]);
+    for (const c of PREDICTIVE_COHORTS) {
+      expect(c.name.length).toBeGreaterThan(0);
+      expect(['patients', 'prescribers (HCPs)']).toContain(c.entity);
+      expect(c.outcome.length).toBeGreaterThan(0);
+      expect(c.labelColumn).toMatch(/^[a-z_]+\.[a-z_0-9]+$/);
+    }
+  });
+
+  it('names the eight channels in catalog order: six HCP-level, two program-level', () => {
+    expect(INTERVENTION_CHANNELS.map((c) => c.id)).toEqual([
+      'email_campaign',
+      'call_frequency_increase',
+      'speaker_program_invitation',
+      'sample_distribution',
+      'peer_influence_activation',
+      'digital_engagement',
+      'patient_support_program',
+      'rep_training_quality',
+    ]);
+    expect(INTERVENTION_CHANNELS.filter((c) => c.kind === 'hcp')).toHaveLength(6);
+    expect(INTERVENTION_CHANNELS.filter((c) => c.kind === 'program')).toHaveLength(2);
+    for (const c of INTERVENTION_CHANNELS) expect(c.lever.length).toBeGreaterThan(0);
+  });
+
+  it('derives the cohort and channel stat chips from the lists (never a transcribed digit)', () => {
+    const chip = (label: string) => STAT_CHIPS.find((c) => c.label === label)?.value;
+    expect(chip('predictive cohorts')).toBe(String(PREDICTIVE_COHORTS.length));
+    expect(chip('intervention channels')).toBe(String(INTERVENTION_CHANNELS.length));
   });
 });
