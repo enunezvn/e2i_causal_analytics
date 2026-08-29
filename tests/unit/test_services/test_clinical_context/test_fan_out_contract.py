@@ -8,7 +8,7 @@ dropping the fan-out from five fragments to four. The only caller that unpacks
 ``tests/integration/test_clinical_context/test_fan_out_degradation_signal.py``
 — the #1612 AC4 degradation signal — and that module is ``slow`` +
 ``requires_network``, so the PR-blocking lane deselects it (``-m "not slow"``)
-and only the 07:00 UTC ``slow-tests.yml`` Job A ever executes it. The #1763 train
+and only the 05:00 UTC ``slow-tests.yml`` Job A ever executes it. The #1763 train
 therefore went green on every PR while leaving a five-way unpack against a
 four-tuple, and main was red on the very next nightly (#1766).
 
@@ -473,7 +473,7 @@ def test_every_fan_out_call_site_reads_the_declared_arity() -> None:
 
     THIS is the guard for #1766. It reads the nightly ``slow`` +
     ``requires_network`` degradation signal statically, so a signature change lands
-    red on the PR that makes it rather than on main at 07:00 UTC the next morning.
+    red on the PR that makes it rather than on main at 05:00 UTC the next morning.
     """
     arity = len(get_args(_BrandFragmentTuple))
     scanned: List[Path] = []

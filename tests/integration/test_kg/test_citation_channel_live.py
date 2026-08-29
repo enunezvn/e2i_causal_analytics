@@ -15,7 +15,7 @@ lane because no workflow sets that secret, so gating these on it would have made
 them dead on arrival.
 
 Marked ``slow`` so they run in ``slow-tests.yml`` Job A (``pytest tests/ -m
-slow``) on the 07:00 UTC schedule rather than on every PR — third-party
+slow``) on the 05:00 UTC schedule rather than on every PR — third-party
 endpoints do not belong on the PR-blocking lane.
 
 Fixtures below were all measured live on 2026-08-14:

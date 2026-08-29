@@ -2,7 +2,7 @@
 
 These tests hit real third-party endpoints. They are ``slow``-marked so the
 PR-blocking ``integration-tests`` lane (``-m "not slow"``) deselects them and
-``slow-tests.yml`` Job A (``pytest tests/ -m slow``) runs them on the 07:00 UTC
+``slow-tests.yml`` Job A (``pytest tests/ -m slow``) runs them on the 05:00 UTC
 schedule — the routing issue #1612 AC3 asks for, using the marker contract
 already guarded by ``tests/integration/test_slow_marker_discipline.py``.
 
