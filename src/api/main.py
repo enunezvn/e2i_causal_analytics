@@ -1267,12 +1267,15 @@ from src.api.errors import (
     SAFE_503_DETAIL_PREFIX,
     AuthenticationError,
     AuthorizationError,
+    ConflictError,
     DependencyError,
     E2IError,
     EndpointNotFoundError,
+    ErrorCategory,
     ErrorSeverity,
     NotFoundError,
     RateLimitError,
+    ValidationError,
     error_response,
     wrap_exception,
 )
@@ -1431,6 +1434,37 @@ def _e2i_404_error(request, exc) -> E2IError:
     return e2i_error
 
 
+def _generic_http_error(exc: StarletteHTTPException) -> E2IError:
+    """Wrap an HTTPException with no dedicated branch above.
+
+    The bare ``E2IError`` defaults (``category=INTERNAL``, ``severity=MEDIUM``)
+    are the 5xx truth, but until #1831 every in-app ``HTTPException(400|409|422)``
+    fell through here too and was labelled a server error. Client codes get
+    the client classes: 400/422 -> ValidationError (the same ``validation``
+    category the RequestValidationError handler answers 422 with), 409 ->
+    ConflictError, any other 4xx (Starlette's own 405/415-style rejections —
+    no in-app raise site) keeps the generic class but a client category and
+    LOW severity. The detail is preserved verbatim as the message, as #1814
+    does for 404: it is the deliberate client-facing text.
+    """
+    message = str(exc.detail) if exc.detail else f"HTTP {exc.status_code} error"
+    e2i_error: E2IError
+    if exc.status_code in (400, 422):
+        e2i_error = ValidationError(message)
+    elif exc.status_code == 409:
+        e2i_error = ConflictError(message)
+    else:
+        e2i_error = E2IError(
+            message,
+            suggested_action="Check the API documentation for valid request format.",
+        )
+        if 400 <= exc.status_code < 500:
+            e2i_error.category = ErrorCategory.VALIDATION
+            e2i_error.severity = ErrorSeverity.LOW
+    e2i_error.status_code = exc.status_code
+    return e2i_error
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request, exc: StarletteHTTPException):
     """
@@ -1473,12 +1507,7 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
             timeout_seconds=30.0,
         )
     else:
-        # Generic HTTP error - wrap in E2IError
-        e2i_error = E2IError(
-            str(exc.detail) if exc.detail else f"HTTP {exc.status_code} error",
-            suggested_action="Check the API documentation for valid request format.",
-        )
-        e2i_error.status_code = exc.status_code
+        e2i_error = _generic_http_error(exc)
 
     return JSONResponse(
         status_code=exc.status_code,

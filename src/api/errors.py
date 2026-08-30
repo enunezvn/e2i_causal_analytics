@@ -380,6 +380,36 @@ class RateLimitError(E2IError):
 
 
 # =============================================================================
+# CONFLICT ERRORS (409)
+# =============================================================================
+
+
+class ConflictError(E2IError):
+    """
+    Raised when a request conflicts with the current state of a resource.
+
+    Examples:
+    - An experiment or job is already running for the same key
+    - A resource was created concurrently by another request
+
+    Gives ``ErrorCategory.CONFLICT`` (defined since the Phase-3 error hierarchy
+    but classless until #1831) a concrete type so the global HTTPException
+    handler can map in-app ``HTTPException(409)``s onto it.
+    """
+
+    status_code = 409
+    category = ErrorCategory.CONFLICT
+    severity = ErrorSeverity.LOW
+
+    def __init__(self, message: str, **kwargs):
+        kwargs.setdefault(
+            "suggested_action",
+            "Retry once the conflicting operation has finished, or use the existing resource.",
+        )
+        super().__init__(message, **kwargs)
+
+
+# =============================================================================
 # AGENT ERRORS (500)
 # =============================================================================
 
