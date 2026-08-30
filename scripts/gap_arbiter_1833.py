@@ -8,8 +8,14 @@ the REAL gap arithmetic and the REAL ROI ranking over that frame for every
 brand at the current frontier and the next six monthly frontier positions:
 
 * ``SupabaseDataConnector.fetch_performance_data`` / ``fetch_prior_period``
-  (the production 90-day current window and the 90-day prior window, exactly
-  as ``_parse_time_period``'s ``current_quarter`` fallback computes them),
+  with the API default ``time_period="current_quarter"`` resolved ONCE through
+  the shared grammar (``src.utils.gap_time_period``, #1834) exactly as
+  ``GapDetectorNode.execute`` does, and the SAME ``ResolvedTimePeriod``
+  threaded into both reads: current = quarter start → frontier
+  (quarter-to-date), prior = the preceding FULL calendar quarter. The grammar's
+  clock (``_today``) is pinned to the frontier position, so a frontier such as
+  2026-10-30 compares a ONE-row October against a three-row Q3 — whatever the
+  grammar says prod will do, never a hand-computed range,
 * ``BenchmarkStore.get_targets`` / ``get_peer_benchmarks`` / ``get_top_decile``
   (all-history per-region means, P75, P90 — un-windowed, as in production),
 * ``GapDetectorNode._detect_segment_gaps`` -> ``_calculate_gap`` with the
@@ -19,8 +25,10 @@ brand at the current frontier and the next six monthly frontier positions:
   config/agents/gap_analyzer.yaml) and ``PrioritizerNode.execute`` (rank by
   expected_roi, low-value suppression) — ranking is by ROI, not gap %.
 
-Nothing in the arithmetic is mocked. The ONLY substitution is the storage
-layer: ``FrameRepository`` serves the generated frame with the same filter
+Nothing in the arithmetic is mocked. Two seams are substituted, both of them
+environment, not logic: the grammar's clock (``gap_time_period._today`` is
+pinned to the frontier — the seam lane #1834's own tests freeze) and the
+storage layer: ``FrameRepository`` serves the generated frame with the same filter
 semantics as ``BusinessMetricRepository`` (metric_name / brand / region
 equality, inclusive metric_date bounds, ``.limit(1000)`` on the time series),
 and only rows dated on or before the frontier are visible — the DB at frontier
@@ -40,13 +48,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, cast
 
 import pandas as pd
 
+import src.utils.gap_time_period as tp
 from src.agents.gap_analyzer.connectors.benchmark_store import BenchmarkStore
 from src.agents.gap_analyzer.connectors.supabase_connector import SupabaseDataConnector
 from src.agents.gap_analyzer.nodes.gap_detector import GapDetectorNode
@@ -63,6 +73,7 @@ from src.ml.synthetic.generators.business_metrics_generator import BusinessMetri
 METRICS = ["trx", "market_share"]
 SEGMENTS = ["region"]
 MIN_GAP_THRESHOLD = 5.0
+TIME_PERIOD = "current_quarter"  # resolved through the #1834 grammar, never hand-computed
 MAX_OPPORTUNITIES = 10
 BRANDS = ("Kisqali", "Fabhalta", "Remibrutinib")
 NEXT_POSITIONS = 6
@@ -135,10 +146,29 @@ def build_frame(last_month: date) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def production_time_period(frontier: date) -> str:
-    """The window ``_parse_time_period`` derives for the ``current_quarter``
-    default: last 90 days ending today."""
-    return f"{(frontier - timedelta(days=90)).isoformat()}_{frontier.isoformat()}"
+@contextlib.contextmanager
+def pinned_clock(frontier: date) -> Iterator[None]:
+    """Pin the grammar's production clock to ``frontier`` for the block.
+
+    ``resolve_time_period`` reads ``gap_time_period._today()`` when no
+    ``today`` is passed — which is how ``GapDetectorNode.execute`` and the
+    connector shim call it. Pinning that seam (the same one #1834's tests
+    freeze) is what lets the arbiter walk future frontier positions through
+    the UNMODIFIED production call path."""
+    original = tp._today
+    tp._today = lambda: frontier
+    try:
+        yield
+    finally:
+        tp._today = original
+
+
+def resolve_production_window(frontier: date) -> tp.ResolvedTimePeriod:
+    """The windows prod compares at ``frontier``: the API default label,
+    resolved through the grammar with the clock pinned — no hand-computed
+    range, no window semantics of our own."""
+    with pinned_clock(frontier):
+        return tp.resolve_time_period(TIME_PERIOD)
 
 
 @dataclass
@@ -171,19 +201,28 @@ async def rank_one(
     store = BenchmarkStore(include_synthetic=True)
     cast(Any, store)._repository = repo
 
-    time_period = production_time_period(frontier)
-    current = await connector.fetch_performance_data(
-        brand=brand, metrics=METRICS, segments=SEGMENTS, time_period=time_period, filters=None
-    )
-    comparison = await detector._get_comparison_data(
-        gap_type="all",
-        brand=brand,
-        metrics=METRICS,
-        segments=SEGMENTS,
-        time_period=time_period,
-        data_connector=connector,
-        benchmark_store=store,
-    )
+    # Mirror GapDetectorNode.execute: resolve the label ONCE under the pinned
+    # clock and thread the same ResolvedTimePeriod into both reads (#1834).
+    with pinned_clock(frontier):
+        resolved = tp.resolve_time_period(TIME_PERIOD)
+        current = await connector.fetch_performance_data(
+            brand=brand,
+            metrics=METRICS,
+            segments=SEGMENTS,
+            time_period=TIME_PERIOD,
+            filters=None,
+            period=resolved,
+        )
+        comparison = await detector._get_comparison_data(
+            gap_type="all",
+            brand=brand,
+            metrics=METRICS,
+            segments=SEGMENTS,
+            time_period=TIME_PERIOD,
+            data_connector=connector,
+            benchmark_store=store,
+            period=resolved,
+        )
     _, gaps = await detector._detect_segment_gaps(
         current_data=current,
         comparison_data=comparison,

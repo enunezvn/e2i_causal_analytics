@@ -9,34 +9,54 @@ repository has the repository's filter semantics, and the frontier positions
 are the ones the acceptance criterion names.
 """
 
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 import pytest
 
+import src.utils.gap_time_period as tp
 from scripts.gap_arbiter_1833 import (
     METRICS,
     MIN_GAP_THRESHOLD,
     SEGMENTS,
+    TIME_PERIOD,
     FrameRepository,
     frontier_positions,
+    pinned_clock,
     planted_region,
-    production_time_period,
+    resolve_production_window,
 )
 from src.agents.gap_analyzer.connectors.supabase_connector import SupabaseDataConnector
+from src.utils.gap_time_period import resolve_time_period
 
 
-def test_window_matches_the_connectors_current_quarter_fallback():
-    # The production request default ``time_period="current_quarter"`` is not a
-    # format _parse_time_period knows, so it falls through to "last 90 days".
-    today = date.today()
-    start, end = SupabaseDataConnector()._parse_time_period("current_quarter")
-    assert production_time_period(today) == f"{start}_{end}"
-    # and the explicit form round-trips through the connector unchanged
-    assert SupabaseDataConnector()._parse_time_period(production_time_period(today)) == (
-        (today - timedelta(days=90)).isoformat(),
-        today.isoformat(),
-    )
+@pytest.mark.parametrize(
+    "frontier",
+    [date(2026, 8, 30), date(2026, 10, 30), date(2027, 1, 30), date(2027, 2, 28)],
+)
+def test_window_is_the_grammars_resolution_of_the_api_default_at_the_frontier(frontier):
+    # No hand-computed range anywhere: the arbiter's window IS what the shared
+    # grammar (#1834) resolves for the API default label with the clock pinned
+    # to the frontier — current AND prior — so quarter boundaries (2026-10-30:
+    # a one-row October vs a three-row Q3 prior) are whatever prod does.
+    assert resolve_production_window(frontier) == resolve_time_period(TIME_PERIOD, today=frontier)
+
+
+def test_window_does_not_depend_on_the_wall_clock():
+    # The frontier, not date.today(), drives the resolution (the arbiter walks
+    # six months into the future).
+    far = date(2031, 5, 17)
+    assert resolve_production_window(far).period_end == far
+    assert resolve_production_window(far) != resolve_time_period(TIME_PERIOD)
+
+
+def test_pinned_clock_is_scoped_to_the_block():
+    before = tp._today
+    with pinned_clock(date(2030, 3, 3)):
+        assert tp._today() == date(2030, 3, 3)
+        # the real connector shim reads the same seam
+        assert SupabaseDataConnector()._parse_time_period(TIME_PERIOD)[1] == "2030-03-03"
+    assert tp._today is before
 
 
 def test_request_defaults_match_the_api_model():
@@ -46,7 +66,7 @@ def test_request_defaults_match_the_api_model():
     assert req.metrics == METRICS
     assert req.segments == SEGMENTS
     assert req.min_gap_threshold == MIN_GAP_THRESHOLD
-    assert req.time_period == "current_quarter"
+    assert req.time_period == TIME_PERIOD == "current_quarter"
 
 
 def test_frontier_positions_are_current_plus_next_six_months():
