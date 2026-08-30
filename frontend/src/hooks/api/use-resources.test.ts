@@ -4,8 +4,8 @@
  *
  * Sibling of the `useRunSegmentAnalysisAndWait` fix (#1836): the mutationFn is
  * "POST /resources/optimize, then poll the durable record". The app's
- * QueryClient retries mutations once by default (src/lib/query-client.ts,
- * `mutations.retry = 1`), so a poll-ceiling timeout on a still-running
+ * QueryClient retried mutations once by default until #1846
+ * (src/lib/query-client.ts, `mutations.retry = 1`; now `0`), so a poll-ceiling timeout on a still-running
  * optimization would make react-query silently re-run the whole mutation — a
  * SECOND heavy optimization submitted while the first still holds the worker's
  * single heavy-compute slot (#1839). A timed-out poll is not a transport
@@ -33,8 +33,10 @@ import { runOptimizationAndWait, optimizeBudget, optimizeWithScenarios } from '@
 import { ResourceType } from '@/types/resources';
 
 /**
- * Mirror the PRODUCTION mutation default (retry once). With `retry: false`
- * here the test would be vacuous — it must fail on the unfixed hook.
+ * Mirror the pre-#1846 PRODUCTION mutation default (retry once). The app
+ * default is `retry: 0` since #1846, but the hook's own `retry: false` must
+ * hold under ANY client default; with `retry: false` here the test would be
+ * vacuous — it must fail on the unfixed hook.
  */
 function createAppLikeWrapper() {
   const queryClient = new QueryClient({

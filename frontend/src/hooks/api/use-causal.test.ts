@@ -148,8 +148,8 @@ describe('useDiscoverEffects — scope reset', () => {
  *
  * Sibling of the `useRunSegmentAnalysisAndWait` fix (#1836): the mutationFn is
  * "POST /causal/hierarchical, then poll the record". The app's QueryClient
- * retries mutations once by default (src/lib/query-client.ts,
- * `mutations.retry = 1`), so a poll-ceiling timeout on a still-running
+ * retried mutations once by default until #1846 (src/lib/query-client.ts,
+ * `mutations.retry = 1`; now `0`), so a poll-ceiling timeout on a still-running
  * analysis would make react-query silently re-run the whole mutation — a
  * SECOND heavy CATE analysis submitted while the first still holds the
  * worker's single heavy-compute slot (#1839). The `retry: false` on the
@@ -159,8 +159,10 @@ describe('useDiscoverEffects — scope reset', () => {
  */
 
 /**
- * Mirror the PRODUCTION mutation default (retry once). `createWrapper` above
- * uses `mutations: { retry: false }`, which would make this test vacuous — it
+ * Mirror the pre-#1846 PRODUCTION mutation default (retry once). The app
+ * default is `retry: 0` since #1846, but the hook's own `retry: false` must
+ * hold under ANY client default. `createWrapper` above uses
+ * `mutations: { retry: false }`, which would make this test vacuous — it
  * must fail on the unfixed hook.
  */
 function createAppLikeWrapper() {

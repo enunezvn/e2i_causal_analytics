@@ -11,7 +11,9 @@
  * surfaces as the ordinary failure.
  *
  * Faithful seams: the REAL `useRunSegmentAnalysisAndWait` mutation (real
- * react-query state machine, app-like `retry: 1` default) drives the page;
+ * react-query state machine under a `retry: 1` client default — the app
+ * default until #1846, kept here so the hook's own `retry: false` is what is
+ * exercised) drives the page;
  * only the API module's POST+poll / poll-only functions are mocked, and the
  * poll loop itself is covered by src/api/segments.wait.test.ts.
  */
@@ -72,7 +74,7 @@ const SINGLE_BRAND_CEILING_MS = 300_000;
 
 const mockFn = (fn: unknown) => fn as ReturnType<typeof vi.fn>;
 
-/** Mirror the PRODUCTION mutation default (retry once) so the hook's `retry: false` is exercised. */
+/** Mirror the pre-#1846 PRODUCTION mutation default (retry once; the app default is now `retry: 0`) so the hook's `retry: false` is exercised. */
 function createAppLikeWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: {
