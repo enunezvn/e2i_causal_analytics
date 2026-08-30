@@ -3,10 +3,12 @@
 The full arbiter (scripts/gap_arbiter_1833.py) regenerates 2013..2027 and runs
 the real gap/ROI/prioritizer code at 21 (brand, frontier) positions — ~2-3 min,
 so it ships as a script with its output in the PR. These tests pin the parts
-that make its verdict transferable to the live site: the window arithmetic
-matches the connector's ``current_quarter`` fallback, the frame-backed
-repository has the repository's filter semantics, and the frontier positions
-are the ones the acceptance criterion names.
+that make its verdict transferable to the live site: the current AND prior
+windows are whatever the shared #1834 grammar resolves for the API default
+label with its clock pinned to the frontier (helper AND call site), the
+frame-backed repository has the repository's filter semantics, and the frontier
+positions are the ones the acceptance criterion names.
+
 """
 
 from datetime import date
@@ -57,6 +59,56 @@ def test_pinned_clock_is_scoped_to_the_block():
         # the real connector shim reads the same seam
         assert SupabaseDataConnector()._parse_time_period(TIME_PERIOD)[1] == "2030-03-03"
     assert tp._today is before
+
+
+async def test_rank_one_reads_through_the_grammars_windows_at_a_quarter_boundary():
+    """codex iter-3 LOW: pin the CALL SITE, not just the helper. A tiny Kisqali
+    frame Jul..Oct 2026 where only midwest/October drops; at frontier
+    2026-10-30 the grammar's current window is the single October row and the
+    prior is the full Q3, so the temporal gap must read current=50,000 vs
+    prior-mean=100,000 (50%). A regression to the old hand-computed
+    (frontier-90d) window would read a three-row Aug..Oct mean of ~83,333
+    against a one-row July prior and could not produce these numbers."""
+    from scripts.gap_arbiter_1833 import rank_one
+    from src.agents.gap_analyzer.nodes.gap_detector import GapDetectorNode
+    from src.agents.gap_analyzer.nodes.prioritizer import PrioritizerNode
+    from src.agents.gap_analyzer.nodes.roi_calculator import ROICalculatorNode
+
+    rows = []
+    for month in ("2026-07-01", "2026-08-01", "2026-09-01", "2026-10-01"):
+        for region in ("northeast", "south", "midwest", "west"):
+            trx = 50_000.0 if (region == "midwest" and month == "2026-10-01") else 100_000.0
+            for metric, value in (("trx", trx), ("market_share", 0.2)):
+                rows.append(
+                    {
+                        "metric_id": f"{month}-{region}-{metric}",
+                        "metric_date": month,
+                        "metric_type": metric,
+                        "metric_name": metric,
+                        "brand": "Kisqali",
+                        "region": region,
+                        "value": value,
+                        "target": value,  # vs_target is zero everywhere by construction
+                    }
+                )
+    frame = pd.DataFrame(rows)
+    frontier = date(2026, 10, 30)
+
+    ranked = await rank_one(
+        frame,
+        "Kisqali",
+        frontier,
+        GapDetectorNode(use_mock=False),
+        ROICalculatorNode(),
+        PrioritizerNode(),
+    )
+
+    assert ranked.window == resolve_time_period(TIME_PERIOD, today=frontier)
+    current, reference = ranked.gaps["region_midwest_trx_temporal"]
+    assert current == pytest.approx(50_000.0)  # the ONE October row
+    assert reference == pytest.approx(100_000.0)  # mean of the three Q3 rows
+    # and the planted shortfall is what gets ranked
+    assert ranked.segment == "midwest"
 
 
 def test_request_defaults_match_the_api_model():

@@ -50,7 +50,7 @@ import argparse
 import asyncio
 import contextlib
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, cast
 
@@ -183,6 +183,10 @@ class Ranked:
     best_other: Optional[str]  # highest-ROI opportunity in a NON-planted region
     best_other_roi: Optional[float]
     n_gaps: int
+    # The windows the reads actually used (codex iter-3 LOW: pin the call site,
+    # not just the helper) and every ranked gap's (current, reference) pair.
+    window: Optional[tp.ResolvedTimePeriod] = None
+    gaps: Dict[str, Tuple[float, float]] = field(default_factory=dict)
 
 
 async def rank_one(
@@ -245,7 +249,13 @@ async def rank_one(
         raise RuntimeError(f"prioritizer failed: {result.get('errors')}")
     opps = result["prioritized_opportunities"]
     if not opps:
-        return Ranked(brand, frontier, None, None, None, None, None, None, None, len(gaps))
+        return Ranked(
+            brand, frontier, None, None, None, None, None, None, None, len(gaps), resolved, {}
+        )
+    ranked_gaps = {
+        o["gap"]["gap_id"]: (float(o["gap"]["current_value"]), float(o["gap"]["target_value"]))
+        for o in opps
+    }
     top = opps[0]
     planted = planted_region(brand)
     other = next((o for o in opps if o["gap"]["segment_value"] != planted), None)
@@ -264,6 +274,8 @@ async def rank_one(
         ),
         best_other_roi=(other["roi_estimate"]["expected_roi"] if other else None),
         n_gaps=len(gaps),
+        window=resolved,
+        gaps=ranked_gaps,
     )
 
 
