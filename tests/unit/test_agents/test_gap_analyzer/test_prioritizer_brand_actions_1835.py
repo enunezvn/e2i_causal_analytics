@@ -41,10 +41,22 @@ DIFFICULTIES = ("low", "medium", "high")
 GAP_TYPES = ("vs_target", "vs_benchmark", "vs_potential", "temporal")
 # Every metric the templates know about PLUS one they don't (default template).
 METRICS = tuple(ACTION_METRICS) + ("unknown_metric",)
-# Longest segment value the node can ever see: the DB ``region_type`` enum is
-# the only substrate dimension (gap_detector #851), and the detector's mock
-# path emits at most "Rheumatology" (12 chars).
+# Longest (segment, segment_value) pair the node can ever see. The DB
+# ``region_type`` enum is the only substrate dimension backed by real data
+# (gap_detector #851); the detector's OWN mock-fallback path
+# (``_fetch_mock_current/target_performance``, gap_detector.py:769/842) also
+# fabricates "specialty" (Oncology/Cardiology/Rheumatology/Neurology) and
+# "hcp_tier" (Tier 1/2/3) when the caller requests those segments — so both
+# the segment NAME and the segment VALUE vary, and they are NOT independent:
+# "Rheumatology" only ever appears together with segment="specialty" (never
+# with segment="region"). #1835's codex iter-1 audit caught exactly this —
+# an earlier version of this test paired the longest VALUE with the
+# ("region") default segment, missing the ("specialty") pairing that is
+# actually 1 char over budget (161 > 160) because "specialty" is longer than
+# "region" and the brand-aware trx/low template names the segment dimension.
+LONGEST_SEGMENT_NAME = "specialty"
 LONGEST_SEGMENT_VALUE = max([*(r.value for r in RegionEnum), "Rheumatology"], key=len)
+assert LONGEST_SEGMENT_VALUE == "Rheumatology"  # the pairing partner of LONGEST_SEGMENT_NAME
 
 
 def _gap(
@@ -109,8 +121,15 @@ def _state(brand: str, gaps: List[PerformanceGap], rois: List[ROIEstimate]) -> G
     }
 
 
-def _render(brand, metric="trx", difficulty="high", segment_value="west", gap_type="temporal"):
-    gap = _gap(metric=metric, segment_value=segment_value, gap_type=gap_type)
+def _render(
+    brand,
+    metric="trx",
+    difficulty="high",
+    segment_value="west",
+    gap_type="temporal",
+    segment="region",
+):
+    gap = _gap(metric=metric, segment_value=segment_value, gap_type=gap_type, segment=segment)
     return PrioritizerNode()._generate_action(gap, _roi(gap["gap_id"]), difficulty, brand)
 
 
@@ -182,7 +201,23 @@ class TestLengthBudget:
     @pytest.mark.parametrize("difficulty", DIFFICULTIES)
     @pytest.mark.parametrize("gap_type", GAP_TYPES)
     def test_longest_rendering_fits(self, brand, metric, difficulty, gap_type):
-        text = _render(brand, metric, difficulty, LONGEST_SEGMENT_VALUE, gap_type)
+        text = _render(
+            brand,
+            metric,
+            difficulty,
+            LONGEST_SEGMENT_VALUE,
+            gap_type,
+            segment=LONGEST_SEGMENT_NAME,
+        )
+        assert len(text) <= MAX_ACTION_CHARS, f"{len(text)} chars: {text}"
+
+    @pytest.mark.parametrize("brand", [b.value for b in Brand])
+    def test_longest_rendering_fits_region_segment_too(self, brand):
+        """The segment actually backed by real data (gap_detector #851) is
+        shorter ("region") but every RegionEnum value must still fit — kept
+        as a distinct case so a future region rename can't silently regress
+        without also touching LONGEST_SEGMENT_NAME above."""
+        text = _render(brand, "trx", "low", LONGEST_SEGMENT_VALUE, "temporal", segment="region")
         assert len(text) <= MAX_ACTION_CHARS, f"{len(text)} chars: {text}"
 
 

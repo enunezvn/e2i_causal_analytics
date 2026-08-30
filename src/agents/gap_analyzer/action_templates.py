@@ -104,12 +104,17 @@ _DEFAULT = "_default"
 
 # Placeholders: {brand} display name, {audience} singular attributive noun(s)
 # ("oncologist", "dermatologist/allergist"), {audiences} plural, {segment_value},
-# {segment}, plus one per ACTION_CHANNELS entry (already lower-cased prose).
+# plus one per ACTION_CHANNELS entry (already lower-cased prose). {segment} (the
+# dimension name, e.g. "specialty") is deliberately NOT interpolated here — the
+# longest dimension name ("specialty", 9 chars) paired with its longest value
+# ("Rheumatology", 12 chars) pushed trx/low 1 char over MAX_ACTION_CHARS for
+# Remibrutinib (#1835 codex iter-1); NEUTRAL_TEMPLATES below still uses it,
+# preserved verbatim from the pre-#1835 wording.
 BRAND_TEMPLATES: Mapping[str, Mapping[str, str]] = {
     "trx": {
         "low": (
             "Launch a {sample_distribution} campaign for {brand} with {audiences} in "
-            "{segment_value} ({segment}) to drive TRx growth"
+            "{segment_value} to drive TRx growth"
         ),
         "medium": (
             "Implement a multichannel {audience} engagement strategy for {brand} in "
