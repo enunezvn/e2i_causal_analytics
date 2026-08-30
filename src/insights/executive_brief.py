@@ -132,16 +132,40 @@ def _opportunity_line(o: dict[str, Any]) -> str:
     )
 
 
+# A parenthesised gap-type qualifier that may follow the segment (#1850):
+# "(benchmark-driven)", "(top-decile target)", "(restore prior performance)" —
+# one level of nested parentheses is tolerated so a qualifier such as
+# "(restore prior (Q2) performance)" survives intact.
+_QUALIFIER_RE = r"\((?:[^()]|\([^()]*\))*\)"
+
+
 def _strip_segment_suffix(action: str, segment: str) -> str:
-    """Drop a trailing "in [the] <segment>" from the action prose.
+    """Drop a trailing "in [the] <segment>" from the action prose, keeping any
+    parenthesised qualifier that follows it.
 
     The LM-facing opportunity line appends "in {SEG_n}" itself; leaving the
     real segment name in the action would both read twice and hand the LM a
     prose alias that bypasses the token-index attribution check.
+
+    Since #1835 ``render_action`` emits "… in <segment> (benchmark-driven)" for
+    vs_benchmark / vs_potential / temporal gaps, so the segment is no longer
+    at end-of-string; the qualifier is kept attached to the action ("… among
+    oncologists (benchmark-driven)") and the LM line then reads "… (benchmark-
+    driven) in {SEG_n}". Mid-sentence mentions ("in west channels now") are
+    still left alone — this seam only owns the trailing shape.
     """
     if len(segment) < 3:
         return action
-    return re.sub(rf"\s+in\s+(?:the\s+)?{re.escape(segment)}\s*$", "", action, flags=re.IGNORECASE)
+    pattern = (
+        rf"\s+in\s+(?:the\s+)?{re.escape(segment)}"
+        rf"(?:\s*(?P<qualifier>{_QUALIFIER_RE}))?\s*$"
+    )
+
+    def _keep_qualifier(m: re.Match[str]) -> str:
+        qualifier = m.group("qualifier")
+        return f" {qualifier}" if qualifier else ""
+
+    return re.sub(pattern, _keep_qualifier, action, count=1, flags=re.IGNORECASE)
 
 
 def _lm_opportunity_line(pos: int, o: dict[str, Any]) -> str:
