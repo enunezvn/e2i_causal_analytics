@@ -134,9 +134,19 @@ def _render(
 
 
 # The sentence measured identical across brands on prod (issue #1835).
+# HISTORICAL pin: #1854 moved every segment mention to the trailing strippable
+# position, so the LIVE neutral text is NEUTRAL_TRX_HIGH_TEMPORAL below; this
+# constant stays as the incident-repro reference the brand texts must differ from.
 PROD_IDENTICAL_SENTENCE = (
     "Execute comprehensive market access and HCP engagement program in west "
     "to close TRx gap (restore prior performance)"
+)
+
+# Today's exact neutral fail-open text (trx/high/west/temporal, post-#1854):
+# same pre-#1835 neutral voice (no brand, no audience), segment moved trailing.
+NEUTRAL_TRX_HIGH_TEMPORAL = (
+    "Execute comprehensive market access and HCP engagement program to close "
+    "TRx gap in west (restore prior performance)"
 )
 
 
@@ -200,7 +210,8 @@ class TestLengthBudget:
     # codex iter-2 found the exhaustive length test covered only the 3 real
     # brands, leaving the fallback path's budget unverified (its own worst
     # case, NEUTRAL_TEMPLATES["trx"]["low"], is the one template that still
-    # embeds "({segment})" — see test_neutral_path_worst_case_fits below).
+    # interpolates {segment}, as "{segment}-targeted" since #1854 — see
+    # test_neutral_path_worst_case_fits below).
     @pytest.mark.parametrize("brand", [b.value for b in Brand] + [None])
     @pytest.mark.parametrize("metric", METRICS)
     @pytest.mark.parametrize("difficulty", DIFFICULTIES)
@@ -218,9 +229,10 @@ class TestLengthBudget:
 
     def test_neutral_path_worst_case_fits(self):
         """NEUTRAL_TEMPLATES["trx"]["low"] is the one template that still
-        interpolates {segment} (the pre-#1835 wording, preserved verbatim for
-        the fail-open path) — exercise its worst real (segment, value) pairing
-        explicitly rather than relying on it being swept up by
+        interpolates {segment} — inline as "{segment}-targeted" since #1854
+        moved the segment value trailing (pre-#1854 it was a trailing
+        "({segment})" parenthetical) — exercise its worst real (segment, value)
+        pairing explicitly rather than relying on it being swept up by
         test_longest_rendering_fits' LONGEST_SEGMENT_NAME default."""
         text = _render(None, "trx", "low", LONGEST_SEGMENT_VALUE, "temporal", segment="specialty")
         assert len(text) <= MAX_ACTION_CHARS, f"{len(text)} chars: {text}"
@@ -259,17 +271,20 @@ class TestUnknownBrandFallsOpen:
 
     @pytest.mark.parametrize("brand", [None, "", "competitor", "other", "acme-brand"])
     def test_neutral_template_is_todays_exact_text(self, brand):
-        assert _render(brand) == PROD_IDENTICAL_SENTENCE
+        assert _render(brand) == NEUTRAL_TRX_HIGH_TEMPORAL
 
-    def test_neutral_trx_low_keeps_segment_dimension_in_parentheses(self):
+    def test_neutral_trx_low_keeps_segment_dimension_inline(self):
+        # #1854: the pre-#1835 trailing "({segment})" moved inline as
+        # "{segment}-targeted" — a paren group between the segment value and the
+        # gap-type qualifier would defeat the brief's suffix strip entirely.
         assert _render(None, "trx", "low", "Northeast", "vs_target") == (
-            "Launch targeted sampling campaign in Northeast (region) to drive TRx growth"
+            "Launch a region-targeted sampling campaign to drive TRx growth in Northeast"
         )
 
     def test_missing_brand_argument_keeps_todays_signature(self):
         gap = _gap()
         assert PrioritizerNode()._generate_action(gap, _roi(gap["gap_id"]), "high") == (
-            PROD_IDENTICAL_SENTENCE
+            NEUTRAL_TRX_HIGH_TEMPORAL
         )
 
     def test_unknown_brand_context_is_none(self):
@@ -320,9 +335,10 @@ class TestNodeWiring:
         result = await PrioritizerNode().execute(_state("competitor", [gap], [_roi(gap["gap_id"])]))
         assert result["status"] == "completed", result
         assert result["prioritized_opportunities"][0]["implementation_difficulty"] == "medium"
-        # Pre-#1835 medium wording, verbatim (also observed on prod for Fabhalta/south).
+        # Neutral medium wording: pre-#1835 voice (no brand, no audience), the
+        # segment moved trailing by #1854.
         assert result["prioritized_opportunities"][0]["recommended_action"] == (
-            "Implement multichannel engagement strategy for HCPs in west to increase TRx "
+            "Implement multichannel engagement strategy for HCPs to increase TRx in west "
             "(restore prior performance)"
         )
 
