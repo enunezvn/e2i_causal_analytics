@@ -16433,14 +16433,20 @@ export interface components {
             brand?: string | null;
             /**
              * Treatment Var
-             * @description Treatment variable (curated). Defaults to 'treatment_arm' when omitted. Must be in the patient_journeys allowlist (treatment_arm | treatment_initiated) — enforced server-side.
+             * @description Treatment variable (curated). Defaults to 'treatment_arm' when omitted. Must be in the patient_journeys allowlist AND, unless allow_unmodeled=true, the (treatment, outcome) pair must be a modeled causal_paths edge for the brand scope — GET /segments/datasets?brand= enumerates the offered pairs. Enforced server-side.
              */
             treatment_var?: string | null;
             /**
              * Outcome Var
-             * @description Outcome variable (curated). Defaults to 'persistent_180d' when omitted. Must be in the patient_journeys allowlist (persistent_180d | discontinued_180d | treatment_initiated) — enforced server-side.
+             * @description Outcome variable (curated). Defaults to 'persistent_180d' when omitted. Must be in the patient_journeys allowlist; GET /segments/datasets?brand= lists the outcomes each treatment has a modeled causal edge to. Enforced server-side.
              */
             outcome_var?: string | null;
+            /**
+             * Allow Unmodeled
+             * @description Exploratory opt-in (#1827). By default a (treatment, outcome) pair with NO modeled causal_paths edge for the brand scope is refused with 400 before any compute runs — its estimate would reflect confounding, not an effect. Set true to run it anyway on the default adjustment set; the result then carries an explicit not-a-modeled-question warning.
+             * @default false
+             */
+            allow_unmodeled: boolean;
             /**
              * Segment Vars
              * @description Variables to segment by. FIXED server-side to the clinical allowlist for the patient_journeys path; any value supplied here is overridden. Optional (the route sets it).

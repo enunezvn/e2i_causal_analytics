@@ -36,6 +36,7 @@ from typing import (
     List,
     NamedTuple,
     Optional,
+    Tuple,
     cast,
 )
 from uuid import uuid4
@@ -139,17 +140,29 @@ class RunSegmentAnalysisRequest(BaseModel):
         default=None,
         description=(
             "Treatment variable (curated). Defaults to 'treatment_arm' when "
-            "omitted. Must be in the patient_journeys allowlist "
-            "(treatment_arm | treatment_initiated) — enforced server-side."
+            "omitted. Must be in the patient_journeys allowlist AND, unless "
+            "allow_unmodeled=true, the (treatment, outcome) pair must be a modeled "
+            "causal_paths edge for the brand scope — GET /segments/datasets?brand= "
+            "enumerates the offered pairs. Enforced server-side."
         ),
     )
     outcome_var: Optional[str] = Field(
         default=None,
         description=(
             "Outcome variable (curated). Defaults to 'persistent_180d' when "
-            "omitted. Must be in the patient_journeys allowlist "
-            "(persistent_180d | discontinued_180d | treatment_initiated) — "
-            "enforced server-side."
+            "omitted. Must be in the patient_journeys allowlist; "
+            "GET /segments/datasets?brand= lists the outcomes each treatment has a "
+            "modeled causal edge to. Enforced server-side."
+        ),
+    )
+    allow_unmodeled: bool = Field(
+        default=False,
+        description=(
+            "Exploratory opt-in (#1827). By default a (treatment, outcome) pair with "
+            "NO modeled causal_paths edge for the brand scope is refused with 400 "
+            "before any compute runs — its estimate would reflect confounding, not "
+            "an effect. Set true to run it anyway on the default adjustment set; the "
+            "result then carries an explicit not-a-modeled-question warning."
         ),
     )
     segment_vars: Optional[List[str]] = Field(
@@ -1073,6 +1086,23 @@ async def run_segment_analysis(
     """
     analysis_id = f"seg_{uuid4().hex[:12]}"
 
+    # #1827: resolve the question and refuse an UNMODELED pair here, BEFORE the
+    # record is created or the task queued — both async modes get an immediate
+    # 400 naming the modeled alternatives, and no heavy compute is spent producing
+    # a plausible-looking confounded estimate (live 2026-08-30:
+    # treatment_initiated -> persistent_180d ran ~40 s to an ATE of +0.076 with
+    # nothing but a warning string guarding it). The resolved adjustment is
+    # handed to the run so the registry is read once per request.
+    treatment_var = request.treatment_var or _SEGMENT_HTE_DEFAULT_TREATMENT
+    outcome_var = request.outcome_var or _SEGMENT_HTE_DEFAULT_OUTCOME
+    adjustment = await _segment_question_adjustment(
+        treatment_var=treatment_var,
+        outcome_var=outcome_var,
+        brand=request.brand,
+        effect_modifiers=_segment_effect_modifiers(request.brand),
+    )
+    _refuse_unmodeled_question(request, adjustment, treatment_var, outcome_var)
+
     # Create initial response
     response = SegmentAnalysisResponse(
         analysis_id=analysis_id,
@@ -1092,6 +1122,7 @@ async def run_segment_analysis(
             _run_segment_analysis_task,
             analysis_id=analysis_id,
             request=request,
+            adjustment=adjustment,
         )
 
         logger.info(f"Segment analysis {analysis_id} queued for background execution")
@@ -1099,7 +1130,7 @@ async def run_segment_analysis(
 
     # Synchronous execution
     try:
-        result = await _execute_segment_analysis(request)
+        result = await _execute_segment_analysis(request, adjustment=adjustment)
         result.analysis_id = analysis_id
         await _analyses_store.set(analysis_id, result)
         return result
@@ -1595,6 +1626,10 @@ class _SegmentQuestionAdjustment(NamedTuple):
     # registry could not be read (fail-soft on the default W).
     modeled: Optional[bool]
     warnings: List[str]
+    # Outcomes the registry DOES model for this treatment in scope (allowlisted
+    # for this dataset) — only populated for an unmodeled pair, to name the
+    # alternatives in the #1827 refusal.
+    modeled_outcomes: Tuple[str, ...] = ()
 
 
 _SEGMENT_UNMODELED_QUESTION_WARNING = (
@@ -1607,6 +1642,49 @@ _SEGMENT_REGISTRY_UNAVAILABLE_WARNING = (
     "Could not verify '{treatment} -> {outcome}' against the causal_paths registry "
     "(registry unavailable); using the default adjustment set {confounders}."
 )
+_SEGMENT_UNMODELED_QUESTION_REFUSAL = (
+    "'{treatment} -> {outcome}' is not a modeled causal question in the causal_paths "
+    "registry for {scope}: no validated causal edge backs it, so an estimate would "
+    "reflect confounding rather than a real effect. {alternatives} "
+    "(GET /segments/datasets?brand=...). Pass allow_unmodeled=true to run it anyway "
+    "(exploratory; the result carries a not-a-modeled-question warning)."
+)
+
+
+def _refuse_unmodeled_question(
+    request: RunSegmentAnalysisRequest,
+    adjustment: "_SegmentQuestionAdjustment",
+    treatment_var: str,
+    outcome_var: str,
+) -> None:
+    """#1827: 400 on a pair with NO registry edge unless the caller opted in.
+
+    ``modeled is None`` (registry unreadable) is deliberately NOT refused — that
+    path is fail-soft on the default W with its own warning, so a registry
+    outage never takes the page down. ``modeled is True`` runs normally.
+    """
+    if adjustment.modeled is not False or request.allow_unmodeled:
+        return
+    scope = request.brand or "any brand"
+    if adjustment.modeled_outcomes:
+        alternatives = (
+            f"Modeled outcomes for '{treatment_var}' on {scope}: "
+            f"{', '.join(adjustment.modeled_outcomes)}"
+        )
+    else:
+        alternatives = (
+            f"'{treatment_var}' has no modeled outcome on {scope} at this grain "
+            "(it may be an outcome, not a treatment)"
+        )
+    raise HTTPException(
+        status_code=400,
+        detail=_SEGMENT_UNMODELED_QUESTION_REFUSAL.format(
+            treatment=treatment_var,
+            outcome=outcome_var,
+            scope=scope,
+            alternatives=alternatives,
+        ),
+    )
 
 
 async def _segment_question_adjustment(
@@ -1633,9 +1711,12 @@ async def _segment_question_adjustment(
     label-encoded ordinal, and no DGP arm is assigned on region.
 
     A pair with NO registry edge (e.g. treatment_initiated -> persistent_180d: no
-    planted effect) stays allowlisted for programmatic callers, so it keeps the
-    default W and carries an explicit warning — the case that used to surface
-    only as an unexplained "cross-library validation FAILED".
+    planted effect) resolves to the default W, ``modeled=False`` and an explicit
+    warning, plus the outcomes the registry DOES model for that treatment. The
+    route refuses such a pair with 400 unless ``allow_unmodeled`` is set (#1827,
+    :func:`_refuse_unmodeled_question`); opted-in runs carry the warning — the
+    case that used to surface only as an unexplained "cross-library validation
+    FAILED".
 
     Fail-soft: if the registry cannot be read the default W is used and the run
     says so (the frame loader remains the fail-closed gate for the substrate).
@@ -1669,7 +1750,22 @@ async def _segment_question_adjustment(
     modeled_rows = [
         r for r in rows if r.get("treatment") == treatment_var and r.get("outcome") == outcome_var
     ]
+    spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
     if not modeled_rows:
+        # Name the alternatives: outcomes this treatment IS modeled against in
+        # scope, restricted to this dataset's outcome allowlist (the registry
+        # also holds HCP-grain edges such as treatment_initiated -> nrx_volume
+        # that this endpoint cannot run).
+        allowed_outcomes = set(spec["outcome"])
+        modeled_outcomes = tuple(
+            sorted(
+                {
+                    str(r.get("outcome"))
+                    for r in rows
+                    if r.get("treatment") == treatment_var and r.get("outcome") in allowed_outcomes
+                }
+            )
+        )
         return _SegmentQuestionAdjustment(
             confounders=default_w,
             modeled=False,
@@ -1680,9 +1776,9 @@ async def _segment_question_adjustment(
                     scope=brand or "any brand",
                 )
             ],
+            modeled_outcomes=modeled_outcomes,
         )
 
-    spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
     numeric_allowlisted = set(spec["covariate"]) & _CAUSAL_NUMERIC_COLUMNS.get(
         _SEGMENT_HTE_DATASET, set()
     )
@@ -1874,8 +1970,13 @@ async def _load_segment_hte_frame(
 async def _run_segment_analysis_task(
     analysis_id: str,
     request: RunSegmentAnalysisRequest,
+    adjustment: Optional[_SegmentQuestionAdjustment] = None,
 ) -> None:
-    """Background task to run segment analysis."""
+    """Background task to run segment analysis.
+
+    ``adjustment`` is the question adjustment the POST handler already resolved
+    (and gated, #1827); passing it through avoids a second registry read.
+    """
     try:
         logger.info(f"Starting segment analysis task {analysis_id}")
 
@@ -1886,7 +1987,7 @@ async def _run_segment_analysis_task(
             await _analyses_store.set(analysis_id, pending)
 
         # Execute analysis
-        result = await _execute_segment_analysis(request)
+        result = await _execute_segment_analysis(request, adjustment=adjustment)
         result.analysis_id = analysis_id
 
         # Store result
@@ -1933,6 +2034,7 @@ async def _run_segment_analysis_task(
 
 async def _execute_segment_analysis(
     request: RunSegmentAnalysisRequest,
+    adjustment: Optional[_SegmentQuestionAdjustment] = None,
 ) -> SegmentAnalysisResponse:
     """
     Execute segment analysis using Heterogeneous Optimizer agent.
@@ -1970,13 +2072,18 @@ async def _execute_segment_analysis(
     # question (copay_support needs insurance_access_score; no other registered
     # pair adds to the default). The SAME list drives the loader's column
     # selection and the graph state so the frame and the DML W stay in lock-step.
-    # An unmodeled pair keeps the default W and is warned about on the run.
-    adjustment = await _segment_question_adjustment(
-        treatment_var=treatment_var,
-        outcome_var=outcome_var,
-        brand=request.brand,
-        effect_modifiers=effect_modifiers,
-    )
+    # An unmodeled pair is refused (400) unless the caller opted in via
+    # allow_unmodeled, in which case it keeps the default W and is warned about on
+    # the run (#1827). The POST handler resolves + gates before queuing and hands
+    # the result in; direct callers resolve here and are gated identically.
+    if adjustment is None:
+        adjustment = await _segment_question_adjustment(
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
+            brand=request.brand,
+            effect_modifiers=effect_modifiers,
+        )
+        _refuse_unmodeled_question(request, adjustment, treatment_var, outcome_var)
     logger.info(
         f"Segment analysis {treatment_var}->{outcome_var} ({request.brand or 'all brands'}): "
         f"W={adjustment.confounders} modeled={adjustment.modeled}"

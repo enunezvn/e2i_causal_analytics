@@ -888,6 +888,7 @@ async def test_execute_seeds_unmodeled_question_warning_before_graph_warnings(
         brand="Remibrutinib",
         treatment_var="treatment_initiated",
         outcome_var="persistent_180d",
+        allow_unmodeled=True,  # #1827: the warn-and-run path is opt-in
     )
     failed = "Cross-library validation FAILED: EconML and CausalML agree only 42%"
     mock_graph = MagicMock()
@@ -923,6 +924,7 @@ async def test_execute_mock_fallback_keeps_mock_warning_first(monkeypatch):
         brand="Remibrutinib",
         treatment_var="treatment_initiated",
         outcome_var="persistent_180d",
+        allow_unmodeled=True,  # #1827: the warn-and-run path is opt-in
     )
     with (
         _patch_registry(_registry_rows()),
@@ -1000,3 +1002,239 @@ async def test_loader_selects_and_float_coerces_registry_confounders():
     assert "engagement_score" in query.select_cols
     assert frame["insurance_access_score"].dtype.kind == "f"
     assert frame["insurance_access_score"].iloc[1] == pytest.approx(0.15)
+
+
+# =============================================================================
+# #1827: an UNMODELED pair is refused (400) before any compute unless the caller
+# opts in with allow_unmodeled. Live 2026-08-30: treatment_initiated ->
+# persistent_180d ran ~40 s to a plausible-looking ATE of +0.076 (confounding —
+# the DGP plants no such effect) with nothing but a warning string guarding it.
+# =============================================================================
+
+from fastapi import BackgroundTasks  # noqa: E402
+
+from src.api.routes.segments import (  # noqa: E402
+    _refuse_unmodeled_question,
+    _SegmentQuestionAdjustment,
+    run_segment_analysis,
+)
+
+
+def _mock_store() -> MagicMock:
+    store = MagicMock()
+    store.set = AsyncMock()
+    store.get = AsyncMock(return_value=None)
+    return store
+
+
+@pytest.mark.asyncio
+async def test_adjustment_names_modeled_outcomes_for_an_unmodeled_pair():
+    """The refusal must name the alternatives: outcomes the registry DOES model for
+    the requested treatment in scope, restricted to this dataset's outcome
+    allowlist (an HCP-grain edge such as copay_support -> roi is not runnable
+    here and must not be offered)."""
+    rows = _registry_rows() + [
+        {
+            "treatment": "copay_support",
+            "outcome": "adherent_180d",
+            "brand": "Remibrutinib",
+            "confounders": [],
+        },
+        {
+            "treatment": "copay_support",
+            "outcome": "roi",
+            "brand": "Remibrutinib",
+            "confounders": [],
+        },
+    ]
+    with _patch_registry(rows):
+        adj = await _segment_question_adjustment(
+            treatment_var="copay_support",
+            outcome_var="treatment_initiated",  # no such edge
+            brand="Remibrutinib",
+            effect_modifiers=_segment_effect_modifiers("Remibrutinib"),
+        )
+    assert adj.modeled is False
+    assert adj.modeled_outcomes == ("adherent_180d", "persistent_180d")
+
+    with _patch_registry(_registry_rows()):
+        modeled = await _segment_question_adjustment(
+            treatment_var="copay_support",
+            outcome_var="persistent_180d",
+            brand="Remibrutinib",
+            effect_modifiers=_segment_effect_modifiers("Remibrutinib"),
+        )
+    assert modeled.modeled is True
+    assert modeled.modeled_outcomes == ()
+
+
+def test_refusal_gate_only_fires_on_modeled_false_without_opt_in():
+    request = RunSegmentAnalysisRequest(query="q", brand="Remibrutinib")
+    for modeled in (True, None):  # modeled / registry unavailable (fail-soft) run
+        _refuse_unmodeled_question(
+            request,
+            _SegmentQuestionAdjustment(
+                confounders=["engagement_score"], modeled=modeled, warnings=[]
+            ),
+            "treatment_arm",
+            "persistent_180d",
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _refuse_unmodeled_question(
+            request,
+            _SegmentQuestionAdjustment(
+                confounders=["engagement_score"],
+                modeled=False,
+                warnings=[],
+                modeled_outcomes=("adherent_180d", "persistent_180d"),
+            ),
+            "copay_support",
+            "treatment_initiated",
+        )
+    assert exc_info.value.status_code == 400
+    detail = str(exc_info.value.detail)
+    assert "'copay_support -> treatment_initiated' is not a modeled causal question" in detail
+    assert (
+        "Modeled outcomes for 'copay_support' on Remibrutinib: adherent_180d, persistent_180d"
+        in detail
+    )
+    assert "allow_unmodeled=true" in detail
+
+    # No modeled outcome at all -> say so (treatment_initiated is an outcome here).
+    with pytest.raises(HTTPException) as exc_info:
+        _refuse_unmodeled_question(
+            request,
+            _SegmentQuestionAdjustment(
+                confounders=["engagement_score"], modeled=False, warnings=[]
+            ),
+            "treatment_initiated",
+            "persistent_180d",
+        )
+    assert "'treatment_initiated' has no modeled outcome on Remibrutinib" in str(
+        exc_info.value.detail
+    )
+
+    # Explicit opt-in bypasses the gate.
+    _refuse_unmodeled_question(
+        request.model_copy(update={"allow_unmodeled": True}),
+        _SegmentQuestionAdjustment(confounders=["engagement_score"], modeled=False, warnings=[]),
+        "treatment_initiated",
+        "persistent_180d",
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_refuses_unmodeled_pair_with_400_before_any_load():
+    """Direct callers of _execute_segment_analysis are gated identically, and the
+    refusal fires BEFORE the frame load (no Supabase read, no fit)."""
+    request = RunSegmentAnalysisRequest(
+        query="Does initiation drive persistence?",
+        brand="Remibrutinib",
+        treatment_var="treatment_initiated",
+        outcome_var="persistent_180d",
+    )
+    loader = AsyncMock(return_value=_make_stub_frame())
+    with (
+        _patch_registry(_registry_rows()),
+        patch("src.api.routes.segments._load_segment_hte_frame", new=loader),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _execute_segment_analysis(request)
+    assert exc_info.value.status_code == 400
+    assert "not a modeled causal question" in str(exc_info.value.detail)
+    loader.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_route_refuses_unmodeled_pair_before_queuing():
+    """POST in async mode must 400 immediately: no pending record persisted and
+    no background task queued (the client never gets an id that only fails)."""
+    request = RunSegmentAnalysisRequest(
+        query="q",
+        brand="Remibrutinib",
+        treatment_var="treatment_initiated",
+        outcome_var="persistent_180d",
+    )
+    tasks = BackgroundTasks()
+    store = _mock_store()
+    with (
+        _patch_registry(_registry_rows()),
+        patch("src.api.routes.segments._analyses_store", store),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await run_segment_analysis(request, tasks, async_mode=True, user={})
+    assert exc_info.value.status_code == 400
+    assert tasks.tasks == []
+    store.set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_route_hands_resolved_adjustment_to_the_background_task():
+    """A modeled pair is queued WITH the handler's adjustment, so the registry is
+    read exactly once per request (handler), never again by the task."""
+    request = RunSegmentAnalysisRequest(
+        query="q",
+        brand="Remibrutinib",
+        treatment_var="copay_support",
+        outcome_var="persistent_180d",
+    )
+    tasks = BackgroundTasks()
+    store = _mock_store()
+    with (
+        _patch_registry(_registry_rows()) as factory,
+        patch("src.api.routes.segments._analyses_store", store),
+    ):
+        response = await run_segment_analysis(request, tasks, async_mode=True, user={})
+    assert response.status == SegmentAnalysisStatus.PENDING
+    assert len(tasks.tasks) == 1
+    handed = tasks.tasks[0].kwargs["adjustment"]
+    assert handed.modeled is True
+    assert "insurance_access_score" in handed.confounders
+    factory.return_value.get_distinct_questions.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_background_task_uses_handed_adjustment_without_registry_read(
+    rich_graph_result,
+):
+    request = RunSegmentAnalysisRequest(
+        query="q",
+        brand="Remibrutinib",
+        treatment_var="copay_support",
+        outcome_var="persistent_180d",
+    )
+    store = _DurableAnalysesStore(redis_factory=_failing_redis_factory)
+    analysis_id = "seg_handed_adjustment"
+    await store.set(
+        analysis_id,
+        SegmentAnalysisResponse(
+            analysis_id=analysis_id,
+            status=SegmentAnalysisStatus.PENDING,
+            question_type=request.question_type,
+        ),
+    )
+    handed = _SegmentQuestionAdjustment(
+        confounders=["engagement_score", "insurance_access_score"], modeled=True, warnings=[]
+    )
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value=rich_graph_result)
+    with (
+        patch("src.api.routes.segments._analyses_store", store),
+        _patch_registry(error=RuntimeError("registry must not be read by the task")),
+        _patch_loader(_make_stub_frame()),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        await _run_segment_analysis_task(
+            analysis_id=analysis_id, request=request, adjustment=handed
+        )
+
+    stored = await store.get(analysis_id)
+    assert stored is not None
+    assert stored.status == SegmentAnalysisStatus.COMPLETED
+    assert not any("registry unavailable" in w for w in stored.warnings)
+    initial_state = mock_graph.ainvoke.call_args.args[0]
+    assert initial_state["confounders"] == ["engagement_score", "insurance_access_score"]
