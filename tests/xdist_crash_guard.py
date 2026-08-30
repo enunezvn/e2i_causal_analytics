@@ -169,7 +169,8 @@ def _render_report(*, crashed: list[str], collected: int, finished: int, exitsta
     lines = [
         "",
         "=" * 78,
-        f"{BANNER}: refusing a green exit -- an xdist worker crashed and tests never ran (#1848)",
+        f"{BANNER}: refusing a green exit -- an xdist worker crashed and not every "
+        f"collected test reported (#1848)",
         "=" * 78,
         f"{BANNER}: {finished} of {collected} collected test(s) reported; "
         f"pytest was about to exit {exitstatus}. Crashed worker(s):",
