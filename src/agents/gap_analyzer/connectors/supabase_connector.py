@@ -8,12 +8,12 @@ table via BusinessMetricRepository.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import pandas as pd
 
 from src.memory.services.factories import ServiceConnectionError
+from src.utils.gap_time_period import resolve_time_period
 
 logger = logging.getLogger(__name__)
 
@@ -231,15 +231,19 @@ class SupabaseDataConnector:
             DataFrame with prior period data
         """
         # FAIL-CLOSED: no broad swallow — read errors propagate (see
-        # fetch_performance_data). Calculate prior period date range.
-        start_date, end_date = self._parse_time_period(time_period)
-        period_days = (datetime.fromisoformat(end_date) - datetime.fromisoformat(start_date)).days
-
-        # Shift dates back by period length (YoY comparison)
-        prior_end = datetime.fromisoformat(start_date) - timedelta(days=1)
-        prior_start = prior_end - timedelta(days=period_days)
-
-        prior_period = f"{prior_start.strftime('%Y-%m-%d')}_{prior_end.strftime('%Y-%m-%d')}"
+        # fetch_performance_data), and an unparseable ``time_period`` raises
+        # ``TimePeriodError`` (a ValueError) from the shared grammar before any read.
+        #
+        # #1834: the prior window comes from the grammar, not a day-count shift.
+        # ``business_metrics`` rows sit on the 1st of each month, so shifting a
+        # quarter-to-date window (Jul 1–Aug 30) back by its day count produced a
+        # prior of May 2–Jun 30 with ONE monthly row instead of three. Calendar
+        # quarters now compare against the preceding FULL quarter, MTD against the
+        # preceding full month, YTD against the same span of the previous year, and
+        # explicit ranges keep their length-shift aligned to the monthly grain
+        # (see src.utils.gap_time_period for the exact rules).
+        resolved = resolve_time_period(time_period)
+        prior_period = f"{resolved.prior_start.isoformat()}_{resolved.prior_end.isoformat()}"
 
         # Fetch prior period using same logic (propagates read errors). Tag the role
         # so an empty YoY window is logged as a benign INFO, not a false alarm (#929).
@@ -270,57 +274,26 @@ class SupabaseDataConnector:
             logger.warning(f"Health check failed: {e}")
             return False
 
-    def _parse_time_period(self, time_period: str) -> tuple:
+    def _parse_time_period(self, time_period: str) -> Tuple[str, str]:
         """
-        Parse time period string to date range.
+        Resolve a ``time_period`` label to the CURRENT window's inclusive date range.
+
+        Thin shim over the shared grammar (``src.utils.gap_time_period``) — the same
+        one the API request model validates against and the gap_detector node
+        surfaces in state. Before #1834 this method had its own four-form parser and
+        a silent "last 90 days" default that swallowed the request DEFAULT
+        ``current_quarter`` (measured on prod 2026-08-30: every persisted analysis
+        compared Jun 1–Aug 30 against Mar 2–May 31 under a "current quarter" label).
 
         Args:
-            time_period: Period string like 'Q4_2024', 'YTD', '2024-01-01_2024-03-31'
+            time_period: 'current_quarter', 'previous_quarter'/'last_quarter',
+                'Q3_2026', '2026-Q3', 'YTD', 'MTD' or '2026-07-01_2026-08-30'
 
         Returns:
             Tuple of (start_date, end_date) in YYYY-MM-DD format
+
+        Raises:
+            TimePeriodError: (a ValueError) for any other form — no fallback window.
         """
-        today = datetime.now()
-
-        # Handle direct date range format
-        if "_" in time_period and len(time_period) == 21:  # YYYY-MM-DD_YYYY-MM-DD
-            parts = time_period.split("_")
-            return parts[0], parts[1]
-
-        # Handle quarter format (Q1_2024, Q2_2024, etc.)
-        if time_period.startswith("Q") and "_" in time_period:
-            parts = time_period.split("_")
-            quarter = int(parts[0][1])
-            year = int(parts[1])
-
-            quarter_starts = {
-                1: f"{year}-01-01",
-                2: f"{year}-04-01",
-                3: f"{year}-07-01",
-                4: f"{year}-10-01",
-            }
-            quarter_ends = {
-                1: f"{year}-03-31",
-                2: f"{year}-06-30",
-                3: f"{year}-09-30",
-                4: f"{year}-12-31",
-            }
-            return quarter_starts[quarter], quarter_ends[quarter]
-
-        # Handle YTD
-        if time_period.upper() == "YTD":
-            start = f"{today.year}-01-01"
-            end = today.strftime("%Y-%m-%d")
-            return start, end
-
-        # Handle MTD (month to date)
-        if time_period.upper() == "MTD":
-            start = f"{today.year}-{today.month:02d}-01"
-            end = today.strftime("%Y-%m-%d")
-            return start, end
-
-        # Default: last 90 days
-        logger.warning(f"Unknown time period format: {time_period}, using last 90 days")
-        end = today.strftime("%Y-%m-%d")
-        start = (today - timedelta(days=90)).strftime("%Y-%m-%d")
-        return start, end
+        resolved = resolve_time_period(time_period)
+        return resolved.period_start.isoformat(), resolved.period_end.isoformat()

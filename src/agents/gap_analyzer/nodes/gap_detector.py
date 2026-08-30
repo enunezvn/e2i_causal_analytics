@@ -22,6 +22,7 @@ import pandas as pd
 import yaml
 
 from src.repositories.provenance import coerce_provenance_flag
+from src.utils.gap_time_period import resolve_time_period
 
 from ..connectors import get_benchmark_store, get_data_connector
 from ..state import GapAnalyzerState, PerformanceGap
@@ -169,6 +170,15 @@ class GapDetectorNode:
         start_time = time.time()
 
         try:
+            # #1834: resolve the analysis window ONCE, up front, from the shared
+            # grammar. An unparseable ``time_period`` raises here (TimePeriodError,
+            # a ValueError) and lands in the broad ``except`` below exactly like a
+            # connector read error — status='failed' + an errors entry — instead of
+            # the connector's former silent "last 90 days" fallback. The resolved
+            # window is returned in state so the API/agent output can show what was
+            # actually compared (the "current quarter" label vs the arithmetic).
+            resolved_period = resolve_time_period(state["time_period"]).to_dict()
+
             # Retrieve memory context for informed gap detection
             memory_context = await self._get_memory_context(state)
 
@@ -278,6 +288,7 @@ class GapDetectorNode:
                 "segments_analyzed": len(state["segments"]),
                 "detection_latency_ms": detection_latency_ms,
                 "memory_context": memory_context,
+                "resolved_period": resolved_period,
                 "status": "calculating",
             }
 

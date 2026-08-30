@@ -431,6 +431,11 @@ class GapAnalyzerAgent(SkillsMixin):
             "warnings": state.get("warnings", []),
             "status": status,
             "errors": errors,
+            # #1834: the concrete window gap_detector compared (ISO dates:
+            # period_start/period_end vs prior_start/prior_end), so chat/dispatcher
+            # consumers can show what "current_quarter" actually resolved to.
+            # None when the run failed before the window was resolved.
+            "resolved_period": state.get("resolved_period"),
             "requires_further_analysis": requires_further_analysis,
             "suggested_next_agent": suggested_next_agent,
         }
