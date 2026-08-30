@@ -566,10 +566,12 @@ describe('SegmentAnalysis — T2: robust options + durable-run timeout', () => {
 
     expect(mutate).toHaveBeenCalledTimes(1);
     const arg = mutate.mock.calls[0][0] as { maxWaitMs?: number };
-    // All-brands runs scan the full cohort (~90s+); the old 120s FE cap raced a
-    // still-running, server-side-durable analysis and threw "timed out" on a run
-    // that actually completed. The page must give the poll a generous ceiling.
-    expect(arg.maxWaitMs).toBeGreaterThan(120000);
+    // All-brands runs scan the full cohort; the old 120s (then 240s) FE cap raced
+    // a still-running, server-side-durable analysis and threw "timed out" on a run
+    // that actually completed. Pin the all-brands ceiling at >= 600s: 2x the
+    // single-brand ceiling (measured 153-208s solo on prod) since the cohort is
+    // larger and a mutation retry no longer masks a late finish.
+    expect(arg.maxWaitMs).toBeGreaterThanOrEqual(600_000);
   });
 
   it('surfaces a degraded-options notice when GET /segments/datasets fails (no silent single-defaults)', () => {
