@@ -276,13 +276,29 @@ export async function getFeedbackHealth(): Promise<FeedbackHealthResponse> {
 // =============================================================================
 
 /**
+ * Poll ceiling (ms) for the durable async learning cycle
+ * (`runLearningCycleAndWait`). The backend persists the batch and the cycle
+ * completes server-side whether or not the client is still polling, so this
+ * only decides how long a caller waits before giving up on a cycle that may
+ * be genuinely stuck.
+ *
+ * Measured on prod from the durable `feedback_learning_batches` rows (n=163
+ * completed, 2026-06-08..2026-08-30): `total_latency_ms` avg 0.45 s, p95
+ * 0.85 s, worst 23.1 s (a UI-driven 2026-08-26 cycle; the 6-hourly beat
+ * cycles are sub-second). 120 s is >5x the worst sample, so it is kept — a
+ * ceiling is a measurement, not a constant (#1839). No page consumes the
+ * helper, so `feedback.test.ts` pins this export directly.
+ */
+export const LEARNING_CYCLE_POLL_CEILING_MS = 120_000;
+
+/**
  * Run learning cycle and poll until complete.
  *
  * Convenience function that handles async polling automatically.
  *
  * @param request - Learning parameters
  * @param pollIntervalMs - Polling interval in milliseconds (default: 2000)
- * @param maxWaitMs - Maximum wait time in milliseconds (default: 120000)
+ * @param maxWaitMs - Maximum wait time in milliseconds (default: LEARNING_CYCLE_POLL_CEILING_MS)
  * @returns Completed learning results
  * @throws Error if learning fails or times out
  *
@@ -302,7 +318,7 @@ export async function getFeedbackHealth(): Promise<FeedbackHealthResponse> {
 export async function runLearningCycleAndWait(
   request: RunLearningRequest,
   pollIntervalMs: number = 2000,
-  maxWaitMs: number = 120000
+  maxWaitMs: number = LEARNING_CYCLE_POLL_CEILING_MS
 ): Promise<LearningResponse> {
   // Start learning asynchronously
   const initial = await runLearningCycle(request, true);
