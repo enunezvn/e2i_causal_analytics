@@ -137,6 +137,11 @@ def test_four_and_five_way_runs_spell_the_count():
         eb._collapse_same_value_seg_runs("{SEG_1}, {SEG_2}, {SEG_3}, and {SEG_4}", _INJ)
         == "{SEG_1} (four initiatives)"
     )
+    inj5 = {f"{{SEG_{i}}}": "south" for i in range(1, 6)}
+    assert (
+        eb._collapse_same_value_seg_runs("{SEG_1}, {SEG_2}, {SEG_3}, {SEG_4}, and {SEG_5}", inj5)
+        == "{SEG_1} (five initiatives)"
+    )
 
 
 # ---- end-to-end through generate_insight ------------------------------------------
