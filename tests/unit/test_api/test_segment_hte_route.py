@@ -1024,6 +1024,10 @@ def _mock_store() -> MagicMock:
     store = MagicMock()
     store.set = AsyncMock()
     store.get = AsyncMock(return_value=None)
+    # #1840: the handler claims an in-flight dedup marker before queuing; a
+    # None claim means "no identical run in flight — queue this one".
+    store.claim_inflight = AsyncMock(return_value=None)
+    store.release_inflight = AsyncMock()
     return store
 
 

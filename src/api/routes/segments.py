@@ -22,9 +22,13 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
+import hashlib
 import json
 import logging
 import math
+import os
+import time
 from datetime import datetime, timezone
 from enum import Enum
 from typing import (
@@ -566,6 +570,97 @@ ANALYSES_STORE_TTL_SECONDS = 7 * 24 * 60 * 60
 _REDIS_KEY_PREFIX = "segments:analysis:"
 _REDIS_INDEX_KEY = "segments:analysis:index"
 
+# #1840 in-flight dedup marker: ``segments:inflight:<dedup_key>`` -> analysis_id
+# of the run currently pending/estimating for that RESOLVED question (see
+# ``_segment_analysis_dedup_key``). Written with ``SET NX EX`` so two identical
+# POSTs racing on different gunicorn workers cannot both win; released when the
+# run reaches a terminal state and bounded by a TTL (run budget + grace) so a
+# crashed worker's marker self-heals.
+_REDIS_INFLIGHT_KEY_PREFIX = "segments:inflight:"
+_INFLIGHT_MARKER_GRACE_SECONDS = 120
+_INFLIGHT_STATUSES = frozenset({SegmentAnalysisStatus.PENDING, SegmentAnalysisStatus.ESTIMATING})
+
+# #1840 run budget for the heterogeneous-optimizer graph fit held under the
+# per-worker ``heavy_compute_slot()``. Without it a hung / pathological run
+# held the worker's ONLY slot forever and every later analysis on that worker
+# was rejected "compute capacity saturated" until the worker restarted.
+#
+# Default 900 s (15 min), chosen from the measured deployed runtime and the
+# page contract:
+#   * single-brand runs measured 73-208 s (#1836) and 109-121 s (e2i_api logs
+#     2026-08-30, Fabhalta copay_support -> persistent_180d); the CausalML
+#     uplift fit is ~80% of it and scales with host load. 900 s is >4x the
+#     slowest observed run, leaving room for an all-brands cohort (unmeasured,
+#     more rows) and a loaded host.
+#   * the page waits up to 300 s single-brand / 600 s all-brands
+#     (SegmentAnalysis.tsx poll ceilings). The backend must never fail a run
+#     the page is still willing to wait for, so the budget is bounded BELOW by
+#     600 s; the margin above lets a run the page gave up on still land as a
+#     durable COMPLETED record (a later GET can show it).
+# Override with ``SEGMENT_ANALYSIS_BUDGET_SECONDS`` (float seconds > 0).
+SEGMENT_ANALYSIS_BUDGET_SECONDS_DEFAULT = 900.0
+_SEGMENT_ANALYSIS_BUDGET_ENV = "SEGMENT_ANALYSIS_BUDGET_SECONDS"
+
+
+def _segment_analysis_budget_seconds() -> float:
+    """Run budget (seconds) for one graph fit; env-overridable, read per call.
+
+    Invalid / non-positive values fall back to the default with a warning,
+    mirroring ``compute._max_concurrency_from_env``.
+    """
+    raw = os.environ.get(_SEGMENT_ANALYSIS_BUDGET_ENV)
+    if raw is None or raw.strip() == "":
+        return SEGMENT_ANALYSIS_BUDGET_SECONDS_DEFAULT
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; falling back to %.0f s",
+            _SEGMENT_ANALYSIS_BUDGET_ENV,
+            raw,
+            SEGMENT_ANALYSIS_BUDGET_SECONDS_DEFAULT,
+        )
+        return SEGMENT_ANALYSIS_BUDGET_SECONDS_DEFAULT
+    if not math.isfinite(value) or value <= 0:
+        logger.warning(
+            "%s=%r must be > 0; falling back to %.0f s",
+            _SEGMENT_ANALYSIS_BUDGET_ENV,
+            raw,
+            SEGMENT_ANALYSIS_BUDGET_SECONDS_DEFAULT,
+        )
+        return SEGMENT_ANALYSIS_BUDGET_SECONDS_DEFAULT
+    return value
+
+
+class SegmentAnalysisBudgetExceeded(Exception):
+    """The graph fit did not finish within ``SEGMENT_ANALYSIS_BUDGET_SECONDS``.
+
+    Raised by :func:`_execute_segment_analysis` AFTER the run has been
+    cancelled and the heavy-compute slot released. The background task records
+    a FAILED analysis naming the budget; the sync route maps it to HTTP 504.
+
+    Honest limit: cancelling the graph coroutine cannot stop a fit thread the
+    nodes already handed to ``asyncio.to_thread`` — that thread runs to the end
+    of its current sklearn/causalml call. What IS restored is the slot, so the
+    worker accepts the next request instead of rejecting everything until a
+    restart. The default budget sits >4x above the slowest measured run, so
+    this path is the pathological-run escape hatch, not a routine event.
+    """
+
+    def __init__(self, budget_seconds: float) -> None:
+        self.budget_seconds = budget_seconds
+        super().__init__(f"segment analysis exceeded its {budget_seconds:g} s run budget")
+
+
+def _budget_exceeded_warning(budget_seconds: float) -> str:
+    """User-facing FAILED-record warning that NAMES the budget applied."""
+    return (
+        f"Segment analysis exceeded its run budget of {budget_seconds:g} s and was "
+        "cancelled; the worker's compute slot was released. Retry later or narrow "
+        f"the scope (budget: {_SEGMENT_ANALYSIS_BUDGET_ENV})."
+    )
+
+
 # Redis errors that should trigger graceful degradation rather than a 500.
 #
 # CRITICAL: the app's Redis client is ``redis.asyncio`` (see
@@ -685,6 +780,11 @@ class _DurableAnalysesStore:
         self.ttl_seconds = ttl_seconds
         # In-process fallback used when Redis is unavailable.
         self._memory: _BoundedAnalysesStore = _BoundedAnalysesStore(max_entries=max_entries)
+        # #1840 in-process mirror of the in-flight dedup markers:
+        # dedup_key -> (analysis_id, monotonic expiry). Serves the same role as
+        # ``_memory`` for records: the fallback when Redis is unavailable, and a
+        # same-process backstop when Redis drops between two identical POSTs.
+        self._inflight: Dict[str, Tuple[str, float]] = {}
         # Last-observed storage mode, so /health can surface silent per-worker
         # degradation (a process serving from the in-memory fallback re-creates
         # the exact cross-worker 404 this store exists to fix). ``None`` until a
@@ -1025,6 +1125,133 @@ class _DurableAnalysesStore:
                 logger.warning(f"Segments store: Redis enumerate failed, degraded: {e}")
         return list(self._memory.values())
 
+    # ------------------------------------------------------------------ #
+    # #1840 in-flight dedup markers
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _inflight_key(dedup_key: str) -> str:
+        return f"{_REDIS_INFLIGHT_KEY_PREFIX}{dedup_key}"
+
+    def _memory_inflight_owner(self, dedup_key: str) -> Optional[str]:
+        """Owner from the in-process mirror, honouring the marker's TTL."""
+        entry = self._inflight.get(dedup_key)
+        if entry is None:
+            return None
+        analysis_id, expires_at = entry
+        if time.monotonic() >= expires_at:
+            self._inflight.pop(dedup_key, None)
+            return None
+        return analysis_id
+
+    def _memory_inflight_set(self, dedup_key: str, analysis_id: str, ttl_seconds: int) -> None:
+        now = time.monotonic()
+        # Prune expired markers so the mirror stays bounded without a sweeper;
+        # cap it like ``_memory`` in case TTLs are long and traffic is bursty.
+        for key, (_owner, expires_at) in list(self._inflight.items()):
+            if now >= expires_at:
+                self._inflight.pop(key, None)
+        while len(self._inflight) >= self.max_entries:
+            self._inflight.pop(next(iter(self._inflight)), None)
+        self._inflight[dedup_key] = (analysis_id, now + ttl_seconds)
+
+    async def inflight_owner(self, dedup_key: str) -> Optional[str]:
+        """Return the analysis_id currently marked in flight for ``dedup_key``.
+
+        This is the raw marker (Redis first, mirror second); it may point at a
+        record that has since finished — :meth:`claim_inflight` is what decides
+        whether a marker is LIVE.
+        """
+        client = await self._redis()
+        if client is not None:
+            try:
+                owner = await client.get(self._inflight_key(dedup_key))
+            except _REDIS_DEGRADE_ERRORS as e:
+                logger.warning(f"Segments store: Redis in-flight read failed, degraded: {e}")
+            else:
+                if owner is not None:
+                    return str(owner)
+        return self._memory_inflight_owner(dedup_key)
+
+    async def _is_inflight_record(self, analysis_id: str) -> bool:
+        record = await self.get(analysis_id)
+        return record is not None and record.status in _INFLIGHT_STATUSES
+
+    async def claim_inflight(
+        self, dedup_key: str, analysis_id: str, *, ttl_seconds: int
+    ) -> Optional[str]:
+        """Mark ``analysis_id`` as THE in-flight run for ``dedup_key``.
+
+        Returns ``None`` when the claim succeeded (caller should queue its run),
+        or the analysis_id of an EXISTING run that is still pending/estimating
+        (caller should hand that record back instead of queuing a duplicate).
+
+        A marker is honoured only while its record is in flight: a marker whose
+        record has completed/failed — or vanished (evicted, TTL-expired, never
+        written) — is STALE and is overwritten, so a finished twin never
+        swallows a legitimate re-run and a lost record never blocks submissions
+        until the marker's TTL.
+
+        Redis path: ``SET NX EX`` is the atomic cross-worker arbiter. Only when
+        NX loses do we read the owner and check its record; a stale owner is
+        replaced with a plain ``SET`` (the residual race — two claimants both
+        replacing the same stale marker — reproduces today's behaviour of two
+        runs, never a lost run). Degrades to the in-process mirror like every
+        other store operation.
+        """
+        redis_key = self._inflight_key(dedup_key)
+        client = await self._redis()
+        if client is not None:
+            try:
+                claimed = await client.set(redis_key, analysis_id, ex=ttl_seconds, nx=True)
+                if not claimed:
+                    owner = await client.get(redis_key)
+                    if owner is not None and str(owner) != analysis_id:
+                        if await self._is_inflight_record(str(owner)):
+                            return str(owner)
+                        logger.info(
+                            "Segments store: in-flight marker for %s points at %s which is "
+                            "no longer in flight; replacing it with %s.",
+                            dedup_key[:12],
+                            owner,
+                            analysis_id,
+                        )
+                    await client.set(redis_key, analysis_id, ex=ttl_seconds)
+                self._memory_inflight_set(dedup_key, analysis_id, ttl_seconds)
+                return None
+            except _REDIS_DEGRADE_ERRORS as e:
+                logger.warning(f"Segments store: Redis in-flight claim failed, degraded: {e}")
+
+        # In-process fallback. Single-threaded loop: no await between the read
+        # and the write below, so two coroutines cannot both claim the key.
+        owner = self._memory_inflight_owner(dedup_key)
+        if owner is not None and owner != analysis_id:
+            if await self._is_inflight_record(owner):
+                return owner
+        self._memory_inflight_set(dedup_key, analysis_id, ttl_seconds)
+        return None
+
+    async def release_inflight(self, dedup_key: str, analysis_id: str) -> None:
+        """Drop the marker for ``dedup_key`` IF it still points at ``analysis_id``.
+
+        Best-effort and never raises: the status check in :meth:`claim_inflight`
+        plus the marker TTL already guarantee correctness; releasing just lets a
+        re-run start without first reading a stale marker.
+        """
+        entry = self._inflight.get(dedup_key)
+        if entry is not None and entry[0] == analysis_id:
+            self._inflight.pop(dedup_key, None)
+        client = await self._redis()
+        if client is None:
+            return
+        redis_key = self._inflight_key(dedup_key)
+        try:
+            owner = await client.get(redis_key)
+            if owner is not None and str(owner) == analysis_id:
+                await client.delete(redis_key)
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(f"Segments store: Redis in-flight release failed, degraded: {e}")
+
     def clear(self) -> None:
         """Clear the in-process fallback (used by tests).
 
@@ -1032,6 +1259,7 @@ class _DurableAnalysesStore:
         exercise Redis behaviour use a fresh fake client per test.
         """
         self._memory.clear()
+        self._inflight.clear()
 
 
 _analyses_store: _DurableAnalysesStore = _DurableAnalysesStore()
@@ -1095,11 +1323,12 @@ async def run_segment_analysis(
     # handed to the run so the registry is read once per request.
     treatment_var = request.treatment_var or _SEGMENT_HTE_DEFAULT_TREATMENT
     outcome_var = request.outcome_var or _SEGMENT_HTE_DEFAULT_OUTCOME
+    effect_modifiers = _segment_effect_modifiers(request.brand)
     adjustment = await _segment_question_adjustment(
         treatment_var=treatment_var,
         outcome_var=outcome_var,
         brand=request.brand,
-        effect_modifiers=_segment_effect_modifiers(request.brand),
+        effect_modifiers=effect_modifiers,
     )
     _refuse_unmodeled_question(request, adjustment, treatment_var, outcome_var)
 
@@ -1114,6 +1343,33 @@ async def run_segment_analysis(
     )
 
     if async_mode:
+        # #1840 in-flight dedup: an identical question (same body AND same
+        # resolved X/W) that is still pending/estimating gets the EXISTING
+        # record back — 200 with its analysis_id and current status — instead
+        # of a new id whose run the slot guard would reject (#1836: the page
+        # then polled the duplicate's FAILED record while the original
+        # completed unseen). The page's POST-then-poll flow polls whatever id
+        # it is given, so no response-shape change is needed. Only in-flight
+        # twins collapse; a completed/failed twin never swallows a re-run.
+        # The marker's TTL covers the run budget plus grace so a crashed
+        # worker's marker self-heals.
+        dedup_key = _segment_analysis_dedup_key(request, adjustment, effect_modifiers)
+        marker_ttl = int(_segment_analysis_budget_seconds()) + _INFLIGHT_MARKER_GRACE_SECONDS
+        existing_id = await _analyses_store.claim_inflight(
+            dedup_key, analysis_id, ttl_seconds=marker_ttl
+        )
+        if existing_id is not None:
+            existing = await _analyses_store.get(existing_id)
+            if existing is not None and existing.status in _INFLIGHT_STATUSES:
+                logger.info(
+                    f"Segment analysis request deduplicated onto in-flight {existing_id} "
+                    f"(status={existing.status.value}); not queuing {analysis_id}"
+                )
+                return existing
+            # The owner finished between claim and read: take the marker for our
+            # own run (the owner is terminal now, so this claim overwrites it).
+            await _analyses_store.claim_inflight(dedup_key, analysis_id, ttl_seconds=marker_ttl)
+
         # Store pending analysis
         await _analyses_store.set(analysis_id, response)
 
@@ -1123,6 +1379,7 @@ async def run_segment_analysis(
             analysis_id=analysis_id,
             request=request,
             adjustment=adjustment,
+            dedup_key=dedup_key,
         )
 
         logger.info(f"Segment analysis {analysis_id} queued for background execution")
@@ -1144,6 +1401,16 @@ async def run_segment_analysis(
         # — must precede the broad handler below or it becomes a 500. Nothing was
         # started, so we store no FAILED record; the client simply retries.
         raise
+    except SegmentAnalysisBudgetExceeded as e:
+        # #1840: the run was cancelled at the budget and the slot released.
+        # Persist an honest FAILED record naming the budget and answer 504 (the
+        # server gave up on the upstream computation), not a generic 500.
+        detail = _budget_exceeded_warning(e.budget_seconds)
+        logger.warning(f"Segment analysis {analysis_id} {detail}")
+        response.status = SegmentAnalysisStatus.FAILED
+        response.warnings.append(detail)
+        await _analyses_store.set(analysis_id, response)
+        raise HTTPException(status_code=504, detail=detail) from e
     except Exception as e:
         logger.error(f"Segment analysis failed: {e}", exc_info=True)
         response.status = SegmentAnalysisStatus.FAILED
@@ -1794,6 +2061,35 @@ async def _segment_question_adjustment(
     return _SegmentQuestionAdjustment(confounders=confounders, modeled=True, warnings=[])
 
 
+def _segment_analysis_dedup_key(
+    request: RunSegmentAnalysisRequest,
+    adjustment: "_SegmentQuestionAdjustment",
+    effect_modifiers: List[str],
+) -> str:
+    """Identity of ONE resolved segment-analysis question (#1840 dedup key).
+
+    Two POSTs are "identical" when the whole wire body matches (brand,
+    treatment, outcome, query, filters, estimator settings, opt-ins — every
+    field of the request model) AND the scoping the run will actually use
+    matches: the registry-derived adjustment set W (``_segment_question_
+    adjustment``) and the brand-scoped effect modifiers X (``_segment_effect_
+    modifiers``). Keying on the raw body alone would collapse two submissions
+    that resolve to different W (e.g. the registry gained an edge between them)
+    into one run; keying on the resolved sets never does.
+
+    Sets are order-normalised; the request is dumped in JSON mode with sorted
+    keys so the digest is stable across processes.
+    """
+    payload = {
+        "request": request.model_dump(mode="json"),
+        "effect_modifiers": sorted(effect_modifiers),
+        "confounders": sorted(adjustment.confounders),
+        "modeled": adjustment.modeled,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:32]
+
+
 def _band_disease_severity(value: Any) -> Optional[str]:
     """Band disease_severity into low/medium/high matching the DGP segments.
 
@@ -1971,12 +2267,28 @@ async def _run_segment_analysis_task(
     analysis_id: str,
     request: RunSegmentAnalysisRequest,
     adjustment: Optional[_SegmentQuestionAdjustment] = None,
+    dedup_key: Optional[str] = None,
 ) -> None:
     """Background task to run segment analysis.
 
     ``adjustment`` is the question adjustment the POST handler already resolved
     (and gated, #1827); passing it through avoids a second registry read.
+    ``dedup_key`` is the in-flight marker the handler claimed for this run
+    (#1840); it is released once the run reaches a terminal state, whatever
+    the outcome.
     """
+    try:
+        await _run_segment_analysis_task_body(analysis_id, request, adjustment)
+    finally:
+        if dedup_key is not None:
+            await _analyses_store.release_inflight(dedup_key, analysis_id)
+
+
+async def _run_segment_analysis_task_body(
+    analysis_id: str,
+    request: RunSegmentAnalysisRequest,
+    adjustment: Optional[_SegmentQuestionAdjustment],
+) -> None:
     try:
         logger.info(f"Starting segment analysis task {analysis_id}")
 
@@ -2020,6 +2332,19 @@ async def _run_segment_analysis_task(
             existing.warnings.append(
                 "Segment analysis rejected: compute capacity saturated; retry later."
             )
+            await _analyses_store.set(analysis_id, existing)
+    except SegmentAnalysisBudgetExceeded as e:
+        # #1840: the graph run overran its budget, was cancelled, and the slot
+        # was released inside _execute_segment_analysis. Record an honest FAILED
+        # that NAMES the budget (not "internal error", not "capacity saturated"
+        # — nothing rejected this run; it was stopped). Must precede the broad
+        # handler below.
+        detail = _budget_exceeded_warning(e.budget_seconds)
+        logger.warning(f"Segment analysis {analysis_id} {detail}")
+        existing = await _analyses_store.get(analysis_id)
+        if existing is not None:
+            existing.status = SegmentAnalysisStatus.FAILED
+            existing.warnings.append(detail)
             await _analyses_store.set(analysis_id, existing)
     except Exception as e:
         logger.error(f"Segment analysis {analysis_id} failed: {e}")
@@ -2184,7 +2509,22 @@ async def _execute_segment_analysis(
                 # fallback contract — and the unit tests that patch the factory — stay
                 # intact.
                 graph = create_heterogeneous_optimizer_graph()
-                result = await graph.ainvoke(initial_state)
+                # #1840 run budget. wait_for cancels the graph coroutine at the
+                # deadline; the exception then unwinds through stashed_frame and
+                # heavy_compute_slot, so the frame handle AND the worker's slot
+                # are released — the next analysis on this worker is accepted
+                # instead of being rejected until a restart. A fit thread the
+                # nodes already handed to asyncio.to_thread cannot be stopped
+                # (see SegmentAnalysisBudgetExceeded); the default budget sits
+                # >4x above the slowest measured run so this is the
+                # pathological-run escape hatch, not a routine event.
+                budget_seconds = _segment_analysis_budget_seconds()
+                try:
+                    result = await asyncio.wait_for(
+                        graph.ainvoke(initial_state), timeout=budget_seconds
+                    )
+                except asyncio.TimeoutError as timeout_exc:
+                    raise SegmentAnalysisBudgetExceeded(budget_seconds) from timeout_exc
 
             # Convert agent output to API response
             total_latency = int((time.time() - start_time) * 1000)
@@ -2261,6 +2601,10 @@ async def _execute_segment_analysis(
             mock.warnings.extend(adjustment.warnings)
             return mock
 
+        except SegmentAnalysisBudgetExceeded:
+            # #1840: already an expected, handled outcome — the callers log it
+            # with the budget; do not also log it as an execution ERROR.
+            raise
         except Exception as e:
             logger.error(f"Segment analysis execution failed: {e}")
             raise
