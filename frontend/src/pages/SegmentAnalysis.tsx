@@ -72,6 +72,7 @@ import {
   useCausalVariables,
 } from '@/hooks/api';
 import { useQueryErrorToast, useMutationError } from '@/hooks/use-query-error';
+import { SegmentAnalysisTimeoutError } from '@/api/segments';
 import type {
   CATEResult,
   SegmentProfile,
@@ -102,8 +103,9 @@ const ALL_BRANDS = '__all__';
  * "~30 s" runs and threw "timed out" on runs that then completed unseen; with
  * the app's mutation retry that timeout even re-submitted the analysis. The
  * all-brands run scans the full cohort (~2.8x the rows), so it gets a
- * proportionally larger ceiling. A user-facing cancel/resume path during the
- * wait remains a tracked follow-up.
+ * proportionally larger ceiling. When it expires the record's analysis_id is
+ * kept and the page offers Keep waiting (re-attach by GET, no second POST —
+ * #1841); cancelling the server-side run has no endpoint and stays out of scope.
  */
 const SINGLE_BRAND_POLL_CEILING_MS = 300_000;
 const ALL_BRANDS_POLL_CEILING_MS = 600_000;
@@ -621,7 +623,19 @@ export default function SegmentAnalysis() {
   // Use the polling variant: async_mode=true returns a PENDING stub first and
   // the result is computed in a background task. This polls the analysis_id to
   // COMPLETED before exposing cate_by_segment.
-  const runAnalysis = useRunSegmentAnalysisAndWait({ onError: onMutationError });
+  const runAnalysis = useRunSegmentAnalysisAndWait({
+    onError: (error) => {
+      // A poll-ceiling expiry is not a failure: the record is durable and
+      // usually still running (or already done). It gets the "Still running"
+      // state with Keep waiting below, not a destructive toast (#1841).
+      if (error instanceof SegmentAnalysisTimeoutError) return;
+      onMutationError(error);
+    },
+  });
+  // The ceiling expired on a still-running record: its analysis_id lives on
+  // the typed error until the user re-attaches (Keep waiting) or runs anew.
+  const stillRunning =
+    runAnalysis.error instanceof SegmentAnalysisTimeoutError ? runAnalysis.error : null;
 
   // Automatic error toasts for query errors
   useQueryErrorToast(healthError, { context: 'loading segment health' });
@@ -724,6 +738,17 @@ export default function SegmentAnalysis() {
       },
       // Durable record; see the ceiling constants for the measured basis.
       maxWaitMs: brandArg ? SINGLE_BRAND_POLL_CEILING_MS : ALL_BRANDS_POLL_CEILING_MS,
+    });
+  };
+
+  // Keep waiting: re-attach to the SAME durable record with GET polling for
+  // another ceiling window. Never a second POST — the duplicate would land on
+  // the worker whose single heavy-compute slot the original still holds.
+  const handleKeepWaiting = () => {
+    if (!stillRunning) return;
+    runAnalysis.mutate({
+      resumeAnalysisId: stillRunning.analysisId,
+      maxWaitMs: stillRunning.maxWaitMs,
     });
   };
 
@@ -978,9 +1003,35 @@ export default function SegmentAnalysis() {
             patient cohort. The agent fixes the segment variables, effect
             modifiers, and confounders server-side.
           </p>
+          {/* Poll ceiling expired on a still-running durable record (#1841):
+              non-destructive, keeps the analysis_id, offers Keep waiting. */}
+          {stillRunning && (
+            <div
+              role="status"
+              data-testid="segment-analysis-still-running"
+              className="mt-4 rounded-lg border border-border bg-muted/40 p-4"
+            >
+              <p className="text-sm font-medium">Still running</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                The analysis has not finished after{' '}
+                {Math.round(stillRunning.maxWaitMs / 1000)} s, but it keeps computing on
+                the server under <span className="font-mono">{stillRunning.analysisId}</span>.
+                Keep waiting to re-attach to it; Run Analysis would start a second run.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={handleKeepWaiting}
+                disabled={runAnalysis.isPending}
+              >
+                Keep waiting
+              </Button>
+            </div>
+          )}
           {/* Mutation Error Display */}
           <QueryErrorState
-            error={runAnalysis.error}
+            error={stillRunning ? null : runAnalysis.error}
             onRetry={handleRunAnalysis}
             isRetrying={runAnalysis.isPending}
             title="Analysis failed"

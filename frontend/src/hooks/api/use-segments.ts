@@ -20,6 +20,7 @@ import {
   getSegmentHealth,
   getSegmentDatasets,
   runSegmentAnalysisAndWait,
+  waitForSegmentAnalysis,
   getHighResponders,
   getOptimalPolicy,
 } from '@/api/segments';
@@ -201,31 +202,62 @@ export function useRunSegmentAnalysis(
   });
 }
 
+/** Submit a new analysis (POST), then poll its durable record. */
+export interface RunSegmentAnalysisAndWaitVariables {
+  request: RunSegmentAnalysisRequest;
+  pollIntervalMs?: number;
+  maxWaitMs?: number;
+}
+
+/**
+ * Re-attach to an existing analysis by id — GET polling only, never a POST.
+ * The page's "Keep waiting" action after a poll-ceiling expiry (#1841).
+ */
+export interface ResumeSegmentAnalysisVariables {
+  resumeAnalysisId: string;
+  pollIntervalMs?: number;
+  maxWaitMs?: number;
+}
+
+export type SegmentAnalysisWaitVariables =
+  | RunSegmentAnalysisAndWaitVariables
+  | ResumeSegmentAnalysisVariables;
+
 /**
  * Hook to run segment analysis and wait for completion.
+ *
+ * One mutation, two entry points: `{ request }` POSTs a new analysis and polls
+ * it; `{ resumeAnalysisId }` re-attaches to a durable record that is still
+ * running after the poll ceiling expired (the mutation error is then a
+ * `SegmentAnalysisTimeoutError` carrying that id). Both land the completed
+ * record in the same `data` slot, so a resumed completion renders exactly like
+ * a normal one, and `error` may be an `ApiError` (transport), a
+ * `SegmentAnalysisTimeoutError` (ceiling), or a plain `Error` (failed record).
  *
  * @param options - Mutation options
  * @returns Mutation object for running analysis with polling
  */
 export function useRunSegmentAnalysisAndWait(
   options?: Omit<
-    UseMutationOptions<
-      SegmentAnalysisResponse,
-      ApiError,
-      { request: RunSegmentAnalysisRequest; pollIntervalMs?: number; maxWaitMs?: number }
-    >,
+    UseMutationOptions<SegmentAnalysisResponse, Error, SegmentAnalysisWaitVariables>,
     'mutationFn'
   >
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    SegmentAnalysisResponse,
-    ApiError,
-    { request: RunSegmentAnalysisRequest; pollIntervalMs?: number; maxWaitMs?: number }
-  >({
-    mutationFn: ({ request, pollIntervalMs, maxWaitMs }) =>
-      runSegmentAnalysisAndWait(request, pollIntervalMs, maxWaitMs),
+  return useMutation<SegmentAnalysisResponse, Error, SegmentAnalysisWaitVariables>({
+    mutationFn: (variables) =>
+      'resumeAnalysisId' in variables
+        ? waitForSegmentAnalysis(
+            variables.resumeAnalysisId,
+            variables.pollIntervalMs,
+            variables.maxWaitMs
+          )
+        : runSegmentAnalysisAndWait(
+            variables.request,
+            variables.pollIntervalMs,
+            variables.maxWaitMs
+          ),
     // Never let react-query re-run this mutation. The app default retries
     // mutations once (src/lib/query-client.ts), but this mutationFn is "POST a
     // heavy analysis, then poll its durable record": once the POST has landed,

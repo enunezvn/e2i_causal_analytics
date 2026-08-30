@@ -205,6 +205,71 @@ export async function getSegmentDatasets(brand?: string): Promise<SegmentDataset
 // =============================================================================
 
 /**
+ * Poll ceiling expired while the analysis was still running.
+ *
+ * Not a failure: `POST /segments/analyze` (async_mode) creates a durable
+ * server-side record that keeps computing after the client stops polling
+ * (measured 2026-08-30: 153–208 s single-brand runs completed unseen after a
+ * 120 s ceiling). The error carries the `analysis_id` so the caller can
+ * re-attach with `waitForSegmentAnalysis(analysisId, …)` instead of POSTing a
+ * second heavy analysis (#1841).
+ */
+export class SegmentAnalysisTimeoutError extends Error {
+  readonly analysisId: string;
+  readonly maxWaitMs: number;
+
+  constructor(analysisId: string, maxWaitMs: number) {
+    super(
+      `Segment analysis ${analysisId} is still running after ${maxWaitMs}ms; it continues server-side`
+    );
+    this.name = 'SegmentAnalysisTimeoutError';
+    this.analysisId = analysisId;
+    this.maxWaitMs = maxWaitMs;
+    Object.setPrototypeOf(this, SegmentAnalysisTimeoutError.prototype);
+  }
+}
+
+/**
+ * Poll an existing segment analysis record until it is terminal.
+ *
+ * GET-only: never submits a new analysis. Used by `runSegmentAnalysisAndWait`
+ * after its POST and by the page's "Keep waiting" action to re-attach to a
+ * record whose poll ceiling expired.
+ *
+ * @param analysisId - Durable analysis identifier from `POST /segments/analyze`
+ * @param pollIntervalMs - Polling interval in milliseconds (default: 2000)
+ * @param maxWaitMs - Maximum wait time in milliseconds (default: 120000)
+ * @returns Completed segment analysis results
+ * @throws SegmentAnalysisTimeoutError (carrying `analysisId`) if the ceiling expires first
+ * @throws Error if the record reports `failed`
+ */
+export async function waitForSegmentAnalysis(
+  analysisId: string,
+  pollIntervalMs: number = 2000,
+  maxWaitMs: number = 120000
+): Promise<SegmentAnalysisResponse> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWaitMs) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+
+    const result = await getSegmentAnalysis(analysisId);
+
+    if (result.status === 'completed') {
+      return result;
+    }
+
+    if (result.status === 'failed') {
+      throw new Error(
+        `Segment analysis failed: ${result.warnings.join(', ') || 'Unknown error'}`
+      );
+    }
+  }
+
+  throw new SegmentAnalysisTimeoutError(analysisId, maxWaitMs);
+}
+
+/**
  * Run segment analysis and poll until complete.
  *
  * Convenience function that handles async polling automatically.
@@ -213,7 +278,9 @@ export async function getSegmentDatasets(brand?: string): Promise<SegmentDataset
  * @param pollIntervalMs - Polling interval in milliseconds (default: 2000)
  * @param maxWaitMs - Maximum wait time in milliseconds (default: 120000)
  * @returns Completed segment analysis results
- * @throws Error if analysis fails or times out
+ * @throws SegmentAnalysisTimeoutError if the ceiling expires — the record is
+ *   still running server-side; resume with `waitForSegmentAnalysis(error.analysisId)`
+ * @throws Error if the analysis fails
  *
  * @example
  * ```typescript
@@ -244,27 +311,8 @@ export async function runSegmentAnalysisAndWait(
     return initial;
   }
 
-  // Poll until complete or timeout
-  const startTime = Date.now();
-  const analysisId = initial.analysis_id;
-
-  while (Date.now() - startTime < maxWaitMs) {
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-
-    const result = await getSegmentAnalysis(analysisId);
-
-    if (result.status === 'completed') {
-      return result;
-    }
-
-    if (result.status === 'failed') {
-      throw new Error(
-        `Segment analysis failed: ${result.warnings.join(', ') || 'Unknown error'}`
-      );
-    }
-  }
-
-  throw new Error(`Segment analysis timed out after ${maxWaitMs}ms`);
+  // Poll the durable record until terminal or ceiling
+  return waitForSegmentAnalysis(initial.analysis_id, pollIntervalMs, maxWaitMs);
 }
 
 /**

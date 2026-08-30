@@ -23,10 +23,16 @@ import * as React from 'react';
 vi.mock('@/api/segments', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/segments')>()),
   runSegmentAnalysisAndWait: vi.fn(),
+  waitForSegmentAnalysis: vi.fn(),
 }));
 
 import { useRunSegmentAnalysisAndWait } from './use-segments';
-import { runSegmentAnalysisAndWait } from '@/api/segments';
+import {
+  runSegmentAnalysisAndWait,
+  waitForSegmentAnalysis,
+  SegmentAnalysisTimeoutError,
+} from '@/api/segments';
+import type { SegmentAnalysisResponse } from '@/types/segments';
 
 /**
  * Mirror the PRODUCTION mutation default (retry once). With `retry: false`
@@ -67,5 +73,85 @@ describe('useRunSegmentAnalysisAndWait — a timed-out poll must not re-submit t
     await waitFor(() => expect(result.current.isError).toBe(true));
     // One POST+poll. A second call here is a duplicate heavy analysis.
     expect(runSegmentAnalysisAndWait).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * #1841 — a ceiling expiry is not the end of the run. The record is durable and
+ * usually still computing, so the mutation must (a) surface the typed timeout
+ * with its analysis_id and (b) accept a `resumeAnalysisId` variant that
+ * re-attaches with GET polling only. The resumed completion lands in the same
+ * `data` slot a normal completion does, so the page renders it identically.
+ */
+describe('useRunSegmentAnalysisAndWait — Keep waiting resumes the same analysis_id (#1841)', () => {
+  const completed = { analysis_id: 'seg_1841', status: 'completed' } as SegmentAnalysisResponse;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('exposes the typed timeout (with analysis_id) as the mutation error', async () => {
+    (runSegmentAnalysisAndWait as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new SegmentAnalysisTimeoutError('seg_1841', 300_000)
+    );
+    const { result } = renderHook(() => useRunSegmentAnalysisAndWait(), {
+      wrapper: createAppLikeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({ request: { query: 'q', brand: 'Fabhalta' }, maxWaitMs: 300_000 });
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toBeInstanceOf(SegmentAnalysisTimeoutError);
+    expect((result.current.error as SegmentAnalysisTimeoutError).analysisId).toBe('seg_1841');
+    expect(runSegmentAnalysisAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumeAnalysisId polls the same id via waitForSegmentAnalysis and never re-POSTs', async () => {
+    (runSegmentAnalysisAndWait as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new SegmentAnalysisTimeoutError('seg_1841', 300_000)
+    );
+    (waitForSegmentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue(completed);
+    const { result } = renderHook(() => useRunSegmentAnalysisAndWait(), {
+      wrapper: createAppLikeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({ request: { query: 'q', brand: 'Fabhalta' }, maxWaitMs: 300_000 });
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    act(() => {
+      result.current.mutate({ resumeAnalysisId: 'seg_1841', pollIntervalMs: 2_000, maxWaitMs: 300_000 });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(completed);
+    expect(result.current.error).toBeNull();
+    expect(waitForSegmentAnalysis).toHaveBeenCalledTimes(1);
+    expect(waitForSegmentAnalysis).toHaveBeenCalledWith('seg_1841', 2_000, 300_000);
+    // Still exactly one POST+poll across the whole expire → resume cycle.
+    expect(runSegmentAnalysisAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed record during resume surfaces as the ordinary failure error', async () => {
+    (waitForSegmentAnalysis as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('Segment analysis failed: estimator blew up')
+    );
+    const { result } = renderHook(() => useRunSegmentAnalysisAndWait(), {
+      wrapper: createAppLikeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({ resumeAnalysisId: 'seg_1841' });
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).not.toBeInstanceOf(SegmentAnalysisTimeoutError);
+    expect(result.current.error?.message).toBe('Segment analysis failed: estimator blew up');
+    // retry: false applies to the resume variant too (no duplicate re-attach).
+    expect(waitForSegmentAnalysis).toHaveBeenCalledTimes(1);
+    expect(runSegmentAnalysisAndWait).not.toHaveBeenCalled();
   });
 });
