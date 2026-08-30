@@ -33,14 +33,21 @@ logger = logging.getLogger(__name__)
 #: What ``business_metrics.value`` actually is (#1640).
 #:
 #: Measured against the live DB 2026-08-15: the national ``business_metrics``
-#: TRx total for 2026-08 is 825,242, against 11,298 trailing-30-day
+#: TRx total for 2026-08 was 825,242, against 11,298 trailing-30-day
 #: ``treatment_events`` prescription events for the same brand — **73.0x**, and
-#: stable month over month (2026-07: 830,103; 2026-06: 812,266). Not a window,
-#: grain or bucket-width artifact: ``BusinessMetricsGenerator`` draws Kisqali
-#: TRx from a base of 50,000 per region per month with ``REGION_FACTORS``
-#: northeast 1.15 and 2% monthly trend, so national 50,000 x 4.00 x 4.26 =
-#: 852,000 against the measured 825,242. An event count cannot be fractional;
-#: these values are (min 5,923.95, max 307,229.18).
+#: stable month over month (2026-07: 830,103; 2026-06: 812,266). Re-measured
+#: 2026-08-30 for the #1833 reseed (value-only brand x region execution
+#: matrix + anchored step events; ``scripts/reseed_business_metrics_aggregate.py
+#: --dry-run`` prints the same figures): 2026-08 national Kisqali TRx 800,349
+#: (x0.970 — the planted -12% midwest step), i.e. **~71x** the same 11,298
+#: events. Not a window, grain or bucket-width artifact:
+#: ``BusinessMetricsGenerator`` draws Kisqali TRx from a base of 50,000 per
+#: region per month with ``REGION_FACTORS`` northeast 1.15, 2% monthly trend
+#: and (#1833) a market-size-weighted-mean-1 execution matrix, so national
+#: 50,000 x 4.26 x 3.90 (region x execution, incl. the midwest step) = 830,000
+#: against the measured 800,349 (pre-#1833: 50,000 x 4.00 x 4.26 = 852,000 vs
+#: 825,242). An event count cannot be fractional; these values are (min
+#: 5,923.95, max 307,229.18).
 #:
 #: So the two numbers are different QUANTITIES sharing the name "TRx", and no
 #: window or grain conversion maps one onto the other.
@@ -54,9 +61,10 @@ BUSINESS_METRICS_BASIS: Dict[str, Any] = {
         "business_metrics.value is a MODELED market-scale level, not a count of "
         "observed events. Do NOT compare it with, sum it against, or divide it by a "
         "figure computed from treatment_events (which is what kpi_calculate_tool "
-        "returns for volume KPIs): measured 2026-08-15, the national business_metrics "
-        "TRx total is ~73x the trailing-30-day treatment_events prescription count for "
-        "the same brand. If both appear in one answer, say plainly that they measure "
+        "returns for volume KPIs): measured 2026-08-15 (re-measured 2026-08-30 after "
+        "the #1833 reseed), the national business_metrics TRx total is ~71-73x the "
+        "trailing-30-day treatment_events prescription count for the same brand. If "
+        "both appear in one answer, say plainly that they measure "
         "different things and never present one as a check on the other."
     ),
 }
