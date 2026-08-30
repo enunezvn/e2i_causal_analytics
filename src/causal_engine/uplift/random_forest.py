@@ -67,6 +67,9 @@ class UpliftRandomForest(BaseUpliftModel):
             random_state=self.config.random_state,
             honesty=self.config.honesty,
             evaluationFunction=self.config.evaluationFunction,
+            # Never causalml's cpu_count() default: GIL-bound threads only
+            # contend (see UpliftConfig.n_jobs for the measurement).
+            n_jobs=self.config.n_jobs,
         )
 
     def fit(

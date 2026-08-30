@@ -226,6 +226,15 @@ export function useRunSegmentAnalysisAndWait(
   >({
     mutationFn: ({ request, pollIntervalMs, maxWaitMs }) =>
       runSegmentAnalysisAndWait(request, pollIntervalMs, maxWaitMs),
+    // Never let react-query re-run this mutation. The app default retries
+    // mutations once (src/lib/query-client.ts), but this mutationFn is "POST a
+    // heavy analysis, then poll its durable record": once the POST has landed,
+    // a retry — after a poll-ceiling timeout or a transient GET error — submits
+    // a SECOND heavy analysis while the first still holds the worker's single
+    // heavy-compute slot, and the OOM guard rejects it ("compute capacity
+    // saturated; retry later") while the original completes unseen (live
+    // 2026-08-30). Re-running is an explicit user action.
+    retry: false,
     onSuccess: (data) => {
       queryClient.setQueryData(queryKeys.segments.analysis(data.analysis_id), data);
       queryClient.invalidateQueries({ queryKey: queryKeys.segments.policies() });

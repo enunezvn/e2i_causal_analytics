@@ -273,3 +273,42 @@ class TestUpliftTree:
             predictions = model.predict(X)
 
             assert isinstance(predictions, np.ndarray)
+
+
+# =============================================================================
+# THREAD PINNING (segment-analysis runtime, 2026-08-30)
+# =============================================================================
+
+
+def test_create_model_pins_causalml_to_a_single_thread(
+    default_config, mock_causalml_modules, mock_classifier
+):
+    """The uplift forest must be built with ``n_jobs=1``.
+
+    causalml's ``UpliftRandomForestClassifier`` defaults to ``n_jobs=-1`` ->
+    ``multiprocessing.cpu_count()`` joblib THREADS — the host's core count (8),
+    not the api container's 2-CPU quota — and its tree builder
+    (``growDecisionTreeFrom``) holds the GIL, so the threads cannot run the fit
+    in parallel; they only contend. Measured with the hierarchical analyzer's
+    config (100 trees, depth 10, n_reg 100) on 8,808 rows pinned to 2 CPUs:
+    8 threads 89.9 s, 2 threads 64.9 s, 1 thread 55.3 s. One thread per worker
+    process is also the container-wide agent-compute budget
+    (``src/api/dependencies/compute.py``).
+    """
+    with patch.dict(sys.modules, mock_causalml_modules):
+        model = UpliftRandomForest(default_config)
+        model._create_model()
+
+    clf_cls = mock_causalml_modules["causalml.inference.tree"].UpliftRandomForestClassifier
+    clf_cls.assert_called_once()
+    assert clf_cls.call_args.kwargs["n_jobs"] == 1
+
+
+def test_create_model_forwards_a_configured_n_jobs(mock_causalml_modules, mock_classifier):
+    """A caller that opts into more threads gets exactly what it configured."""
+    with patch.dict(sys.modules, mock_causalml_modules):
+        model = UpliftRandomForest(UpliftConfig(n_jobs=2))
+        model._create_model()
+
+    clf_cls = mock_causalml_modules["causalml.inference.tree"].UpliftRandomForestClassifier
+    assert clf_cls.call_args.kwargs["n_jobs"] == 2

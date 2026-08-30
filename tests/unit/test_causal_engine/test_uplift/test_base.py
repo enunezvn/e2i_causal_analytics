@@ -284,3 +284,17 @@ class TestBaseUpliftModel:
 
         assert model.config.n_estimators == 200
         assert model.config.max_depth == 15
+
+
+# =============================================================================
+# THREAD PINNING (segment-analysis runtime, 2026-08-30)
+# =============================================================================
+
+
+def test_default_config_runs_the_fit_single_threaded(default_config):
+    """See test_random_forest.py::test_create_model_pins_causalml_to_a_single_thread."""
+    assert default_config.n_jobs == 1
+
+
+def test_to_dict_carries_n_jobs(default_config):
+    assert default_config.to_dict()["n_jobs"] == 1

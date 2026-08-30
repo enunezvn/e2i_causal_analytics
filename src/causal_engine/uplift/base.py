@@ -58,6 +58,7 @@ class UpliftConfig:
         random_state: Random seed for reproducibility
         normalize_scores: Whether to normalize uplift scores
         normalization_method: Method for score normalization
+        n_jobs: joblib workers for the forest fit. Default 1 — see the field.
     """
 
     n_estimators: int = 100
@@ -72,6 +73,15 @@ class UpliftConfig:
     honesty: bool = False
     inference: bool = False
     evaluationFunction: str = "KL"  # KL divergence, ED, Chi, CTS, DDP
+    # Thread count for the forest fit. causalml's own default is ``-1`` ->
+    # ``multiprocessing.cpu_count()`` joblib THREADS — the host's core count, not
+    # the api container's 2-CPU quota — and its tree builder holds the GIL, so
+    # the threads cannot build trees in parallel; they only contend for the GIL.
+    # Measured with the hierarchical analyzer's config (100 trees, depth 10,
+    # n_reg 100) on 8,808 rows pinned to 2 CPUs: 8 threads 89.9 s, 2 threads
+    # 64.9 s, 1 thread 55.3 s. One thread per worker process is also the
+    # container-wide agent-compute budget (src/api/dependencies/compute.py).
+    n_jobs: int = 1
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -88,6 +98,7 @@ class UpliftConfig:
             "honesty": self.honesty,
             "inference": self.inference,
             "evaluationFunction": self.evaluationFunction,
+            "n_jobs": self.n_jobs,
         }
 
 

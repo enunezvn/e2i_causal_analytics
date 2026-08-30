@@ -89,6 +89,25 @@ import { ResponderType } from '@/types/segments';
 // sent to the API (cohort spans all brands).
 const ALL_BRANDS = '__all__';
 
+/**
+ * Poll ceilings (ms) for the durable async run. The backend persists the
+ * analysis record and the run completes server-side whether or not the FE is
+ * still polling, so these only decide how long the page waits before giving up
+ * on a run that may be genuinely stuck (the backend puts no budget on the graph).
+ *
+ * Measured on prod (2026-08-29/30): the single-brand Fabhalta
+ * copay_support -> persistent_180d run completed in 73 s, 125 s, 153 s and
+ * 208 s — the hierarchical CausalML uplift forest is ~80% of it and its
+ * duration scales with host load. The previous 120 s single-brand cap rested on
+ * "~30 s" runs and threw "timed out" on runs that then completed unseen; with
+ * the app's mutation retry that timeout even re-submitted the analysis. The
+ * all-brands run scans the full cohort (~2.8x the rows), so it gets a
+ * proportionally larger ceiling. A user-facing cancel/resume path during the
+ * wait remains a tracked follow-up.
+ */
+const SINGLE_BRAND_POLL_CEILING_MS = 300_000;
+const ALL_BRANDS_POLL_CEILING_MS = 600_000;
+
 // Curated defaults (match the backend's patient_journeys allowlist defaults).
 // These are fallbacks only — the real options come from GET /segments/datasets.
 const DEFAULT_TREATMENT = 'treatment_arm';
@@ -703,15 +722,8 @@ export default function SegmentAnalysis() {
         treatment_var: selectedTreatment,
         outcome_var: selectedOutcome,
       },
-      // The backend persists a DURABLE analysis record — the run completes
-      // server-side even if the FE stops polling. Single-brand runs (~30s) never
-      // raced the 120s default; only the all-brands run (scans the full
-      // gold-standard cohort, ~90s+ and load-variable) did, throwing "timed out"
-      // on an analysis that had actually completed. Scale the ceiling by scope:
-      // keep 120s for single-brand, give all-brands ~2.6x margin (bounded at 240s
-      // so a genuinely stuck run can't hold the UI forever). A user-facing cancel
-      // path during the wait is a tracked follow-up (see PR notes).
-      maxWaitMs: brandArg ? 120_000 : 240_000,
+      // Durable record; see the ceiling constants for the measured basis.
+      maxWaitMs: brandArg ? SINGLE_BRAND_POLL_CEILING_MS : ALL_BRANDS_POLL_CEILING_MS,
     });
   };
 

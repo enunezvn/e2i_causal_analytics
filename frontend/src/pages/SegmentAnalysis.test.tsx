@@ -566,10 +566,12 @@ describe('SegmentAnalysis — T2: robust options + durable-run timeout', () => {
 
     expect(mutate).toHaveBeenCalledTimes(1);
     const arg = mutate.mock.calls[0][0] as { maxWaitMs?: number };
-    // All-brands runs scan the full cohort (~90s+); the old 120s FE cap raced a
-    // still-running, server-side-durable analysis and threw "timed out" on a run
-    // that actually completed. The page must give the poll a generous ceiling.
-    expect(arg.maxWaitMs).toBeGreaterThan(120000);
+    // All-brands runs scan the full cohort; the old 120s (then 240s) FE cap raced
+    // a still-running, server-side-durable analysis and threw "timed out" on a run
+    // that actually completed. Pin the all-brands ceiling at >= 600s: 2x the
+    // single-brand ceiling (measured 153-208s solo on prod) since the cohort is
+    // larger and a mutation retry no longer masks a late finish.
+    expect(arg.maxWaitMs).toBeGreaterThanOrEqual(600_000);
   });
 
   it('surfaces a degraded-options notice when GET /segments/datasets fails (no silent single-defaults)', () => {
@@ -798,5 +800,46 @@ describe('SegmentAnalysis — T2: robust options + durable-run timeout', () => {
     render(<SegmentAnalysis />, { wrapper: createWrapper() });
 
     expect(screen.getByTestId('datasets-fallback-notice')).toBeInTheDocument();
+  });
+});
+
+describe('SegmentAnalysis — poll ceiling covers the measured single-brand runtime', () => {
+  it('gives a single-brand run at least 300s (Fabhalta copay run measured 73/125/153/208s, not ~30s)', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useSegmentDatasets).mockReturnValue({
+      data: {
+        treatments: ['treatment_arm', 'copay_support'],
+        outcomes: ['persistent_180d'],
+        outcomes_by_treatment: { treatment_arm: ['persistent_180d'], copay_support: ['persistent_180d'] },
+        brands: ['Fabhalta', 'Kisqali'],
+        brand: null,
+        options_source: 'causal_paths',
+        labels: {},
+      },
+      isLoading: false,
+      error: null,
+    });
+    const mutate = vi.fn();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate,
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('combobox', { name: 'Brand' }));
+    await user.click(await screen.findByRole('option', { name: 'Fabhalta' }));
+    fireEvent.click(screen.getByRole('button', { name: /Run Analysis/i }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const arg = mutate.mock.calls[0][0] as { request: { brand?: string }; maxWaitMs?: number };
+    expect(arg.request.brand).toBe('Fabhalta');
+    // The old 120s single-brand cap rested on "~30s" runs; the live run is
+    // load-variable and already reached 208s solo. Below the measured runtime
+    // the FE throws "timed out" on a durable run that then completes unseen.
+    expect(arg.maxWaitMs).toBeGreaterThanOrEqual(300_000);
   });
 });
