@@ -62,7 +62,14 @@ export interface RunGapAnalysisRequest {
   metrics?: string[];
   /** Segmentation dimensions */
   segments?: string[];
-  /** Analysis period (e.g., 'current_quarter', '2024-Q3') */
+  /**
+   * Analysis period. Accepted forms (anything else is a 422): 'current_quarter'
+   * (quarter start to today), 'previous_quarter' / 'last_quarter' (the preceding
+   * full calendar quarter), 'Q3_2026' or '2026-Q3' (an explicit calendar quarter),
+   * 'YTD', 'MTD', or an explicit inclusive range 'YYYY-MM-DD_YYYY-MM-DD'. Relative
+   * forms resolve on the SERVER's UTC calendar date, not the browser's; the window
+   * actually compared comes back as `resolved_period` (#1834).
+   */
   time_period?: string;
   /** Type of gaps to detect */
   gap_type?: GapType;
@@ -222,7 +229,8 @@ export interface PrioritizedOpportunity {
 /**
  * The concrete inclusive windows a gap analysis compared (#1834).
  * `time_period` is the label that was requested (e.g. 'current_quarter');
- * the four ISO dates are what it resolved to on the day the analysis ran.
+ * the four ISO dates are what it resolved to on the server's UTC calendar date
+ * when the analysis ran (relative forms roll over at 00:00 UTC).
  */
 export interface ResolvedPeriod {
   /** The requested time_period label */
