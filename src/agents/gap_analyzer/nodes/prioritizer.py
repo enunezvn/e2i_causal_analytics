@@ -16,6 +16,7 @@ import logging
 import time
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
+from ..action_templates import render_action
 from ..opportunity_classification import classify_bucket, is_low_value
 from ..state import (
     GapAnalyzerState,
@@ -104,8 +105,9 @@ class PrioritizerNode:
                 difficulty = self._assess_difficulty(gap, roi_estimate)
                 difficulty_rationale = self._explain_difficulty(gap, roi_estimate, difficulty)
 
-                # Generate recommended action
-                action = self._generate_action(gap, roi_estimate, difficulty)
+                # Generate recommended action (#1835: brand-aware — the same gap
+                # for Kisqali and Remibrutinib must not read identically).
+                action = self._generate_action(gap, roi_estimate, difficulty, state.get("brand"))
 
                 # Estimate time to impact
                 time_to_impact = self._estimate_time_to_impact(difficulty)
@@ -383,72 +385,32 @@ class PrioritizerNode:
         gap: PerformanceGap,
         roi_estimate: ROIEstimate,
         difficulty: Literal["low", "medium", "high"],
+        brand: Optional[str] = None,
     ) -> str:
-        """Generate recommended action for closing the gap.
+        """Generate the recommended action for closing the gap (#1835: brand-aware).
+
+        The wording names the brand and its SSOT-derived HCP audience (see
+        ``action_templates``) so two brands never share a sentence for the same
+        gap; an unknown / missing brand falls open to the neutral templates.
 
         Args:
             gap: Performance gap
-            roi_estimate: ROI estimate
+            roi_estimate: ROI estimate (unused by the templates; kept for the
+                call-site contract)
             difficulty: Implementation difficulty
+            brand: ``state["brand"]`` as the API received it (any casing)
 
         Returns:
-            Specific action recommendation
+            Specific action recommendation, <= 160 chars (executive-brief budget)
         """
-        metric = gap["metric"]
-        segment = gap["segment"]
-        segment_value = gap["segment_value"]
-        gap_type = gap["gap_type"]
-
-        # Metric-specific action templates
-        action_templates = {
-            "trx": {
-                "low": f"Launch targeted sampling campaign in {segment_value} ({segment}) to drive TRx growth",
-                "medium": f"Implement multichannel engagement strategy for HCPs in {segment_value} to increase TRx",
-                "high": f"Execute comprehensive market access and HCP engagement program in {segment_value} to close TRx gap",
-            },
-            "nrx": {
-                "low": f"Deploy HCP educational webinars in {segment_value} to boost new prescriptions",
-                "medium": f"Launch new prescriber acquisition campaign targeting {segment_value} specialists",
-                "high": f"Develop strategic partnership program with KOLs in {segment_value} for NRx growth",
-            },
-            "market_share": {
-                "low": f"Increase rep frequency in {segment_value} to capture share",
-                "medium": f"Launch competitive positioning campaign in {segment_value}",
-                "high": f"Execute full-scale market penetration strategy in {segment_value} with expanded resources",
-            },
-            "conversion_rate": {
-                "low": f"Optimize patient starter program messaging for {segment_value}",
-                "medium": f"Redesign patient journey touchpoints for {segment_value} segment",
-                "high": f"Implement comprehensive patient support and HCP enablement program in {segment_value}",
-            },
-            "hcp_engagement_score": {
-                "low": f"Increase digital touchpoints with HCPs in {segment_value}",
-                "medium": f"Launch omnichannel engagement initiative for {segment_value} providers",
-                "high": f"Build strategic HCP partnership program with personalized engagement for {segment_value}",
-            },
-        }
-
-        # Get action template
-        templates = action_templates.get(
-            metric,
-            {
-                "low": f"Address performance gap in {segment_value}",
-                "medium": f"Implement targeted intervention in {segment_value}",
-                "high": f"Execute strategic initiative in {segment_value}",
-            },
+        return render_action(
+            metric=gap["metric"],
+            difficulty=difficulty,
+            segment=gap["segment"],
+            segment_value=gap["segment_value"],
+            gap_type=gap["gap_type"],
+            brand=brand,
         )
-
-        action = templates.get(difficulty, templates["medium"])
-
-        # Add gap type context
-        if gap_type == "vs_benchmark":
-            action += " (benchmark-driven)"
-        elif gap_type == "vs_potential":
-            action += " (top-decile target)"
-        elif gap_type == "temporal":
-            action += " (restore prior performance)"
-
-        return action
 
     def _estimate_time_to_impact(self, difficulty: Literal["low", "medium", "high"]) -> str:
         """Estimate time to see results.

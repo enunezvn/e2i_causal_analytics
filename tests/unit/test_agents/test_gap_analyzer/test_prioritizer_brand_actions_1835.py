@@ -1,0 +1,286 @@
+"""#1835 — recommended_action must be brand-aware.
+
+Measured 2026-08-30 on prod (gap_analyses payloads): Kisqali's #1 and
+Remibrutinib's #1 opportunity carried the VERBATIM identical sentence
+("Execute comprehensive market access and HCP engagement program in west to
+close TRx gap (restore prior performance)"). The Strategic Brief grounds on
+this text, so an oncology brand and a CSU brand got the same recommendation.
+
+Brand identity and HCP audience are derived from existing SSOTs — never
+invented here:
+- ``SUPPORTED_BRANDS`` (cohort_constructor.constants) — brand identity
+- ``Brand`` / ``SpecialtyEnum`` (ml.synthetic.config) — DB-enum display names
+- ``HCPGenerator.BRAND_SPECIALTY_DIST`` (ml.synthetic.generators.hcp_generator)
+  — the targeted specialties per brand (mirrored + pinned, see
+  ``TestSsotPins``)
+- ``INTERVENTION_CATALOG`` (digital_twin.effect.provider) — channel labels
+"""
+
+from itertools import combinations
+from typing import Dict, List
+
+import pytest
+
+from src.agents.cohort_constructor.constants import SUPPORTED_BRANDS
+from src.agents.gap_analyzer.action_templates import (
+    ACTION_CHANNELS,
+    ACTION_METRICS,
+    BRAND_TARGET_SPECIALTIES,
+    GAP_TYPE_SUFFIXES,
+    MAX_ACTION_CHARS,
+    SPECIALTY_PRACTITIONER,
+    brand_action_context,
+)
+from src.agents.gap_analyzer.nodes.prioritizer import PrioritizerNode
+from src.agents.gap_analyzer.state import GapAnalyzerState, PerformanceGap, ROIEstimate
+from src.digital_twin.effect.provider import SUPPORTED_INTERVENTIONS
+from src.ml.synthetic.config import Brand, RegionEnum, SpecialtyEnum
+from src.ml.synthetic.generators.hcp_generator import HCPGenerator
+
+DIFFICULTIES = ("low", "medium", "high")
+GAP_TYPES = ("vs_target", "vs_benchmark", "vs_potential", "temporal")
+# Every metric the templates know about PLUS one they don't (default template).
+METRICS = tuple(ACTION_METRICS) + ("unknown_metric",)
+# Longest segment value the node can ever see: the DB ``region_type`` enum is
+# the only substrate dimension (gap_detector #851), and the detector's mock
+# path emits at most "Rheumatology" (12 chars).
+LONGEST_SEGMENT_VALUE = max([*(r.value for r in RegionEnum), "Rheumatology"], key=len)
+
+
+def _gap(
+    metric: str = "trx",
+    segment_value: str = "west",
+    gap_type: str = "temporal",
+    segment: str = "region",
+) -> PerformanceGap:
+    return {
+        "gap_id": f"{segment}_{segment_value}_{metric}_{gap_type}",
+        "metric": metric,
+        "segment": segment,
+        "segment_value": segment_value,
+        "current_value": 400.0,
+        "target_value": 500.0,
+        "gap_size": 100.0,
+        "gap_percentage": 20.0,
+        "gap_type": gap_type,  # type: ignore[typeddict-item]
+    }
+
+
+def _roi(gap_id: str, cost: float = 100_000.0) -> ROIEstimate:
+    return {
+        "gap_id": gap_id,
+        "estimated_revenue_impact": cost * 4,
+        "estimated_cost_to_close": cost,
+        "expected_roi": 3.0,
+        "payback_period_months": 6,
+        "confidence": 0.8,
+        "assumptions": [],
+    }
+
+
+def _state(brand: str, gaps: List[PerformanceGap], rois: List[ROIEstimate]) -> GapAnalyzerState:
+    return {  # type: ignore[typeddict-item]
+        "query": "test",
+        "metrics": ["trx"],
+        "segments": ["region"],
+        "brand": brand,
+        "time_period": "current_quarter",
+        "filters": None,
+        "gap_type": "temporal",
+        "min_gap_threshold": 5.0,
+        "max_opportunities": 10,
+        "gaps_detected": gaps,
+        "gaps_by_segment": None,
+        "total_gap_value": 1000.0,
+        "roi_estimates": rois,
+        "total_addressable_value": 100000.0,
+        "prioritized_opportunities": None,
+        "quick_wins": None,
+        "strategic_bets": None,
+        "executive_summary": None,
+        "key_insights": None,
+        "detection_latency_ms": 100,
+        "roi_latency_ms": 50,
+        "total_latency_ms": 0,
+        "segments_analyzed": 1,
+        "errors": [],
+        "warnings": [],
+        "status": "prioritizing",
+    }
+
+
+def _render(brand, metric="trx", difficulty="high", segment_value="west", gap_type="temporal"):
+    gap = _gap(metric=metric, segment_value=segment_value, gap_type=gap_type)
+    return PrioritizerNode()._generate_action(gap, _roi(gap["gap_id"]), difficulty, brand)
+
+
+# The sentence measured identical across brands on prod (issue #1835).
+PROD_IDENTICAL_SENTENCE = (
+    "Execute comprehensive market access and HCP engagement program in west "
+    "to close TRx gap (restore prior performance)"
+)
+
+
+class TestBrandDistinctness:
+    """Same metric / difficulty / segment, different brand -> different text."""
+
+    def test_prod_repro_kisqali_vs_remibrutinib_differ(self):
+        kisqali = _render("Kisqali")
+        remi = _render("Remibrutinib")
+        assert kisqali != remi
+        assert kisqali != PROD_IDENTICAL_SENTENCE
+        assert remi != PROD_IDENTICAL_SENTENCE
+
+    @pytest.mark.parametrize("metric", METRICS)
+    @pytest.mark.parametrize("difficulty", DIFFICULTIES)
+    def test_every_template_is_pairwise_distinct_across_brands(self, metric, difficulty):
+        rendered = {b.value: _render(b.value, metric, difficulty) for b in Brand}
+        for a, b in combinations(rendered, 2):
+            assert rendered[a] != rendered[b], f"{metric}/{difficulty}: {a} == {b}"
+
+
+class TestBrandAndAudienceNamed:
+    """Each brand's text names the brand and its SSOT-derived HCP audience."""
+
+    @pytest.mark.parametrize("brand", [b.value for b in Brand])
+    @pytest.mark.parametrize("metric", METRICS)
+    @pytest.mark.parametrize("difficulty", DIFFICULTIES)
+    def test_names_brand_and_audience(self, brand, metric, difficulty):
+        text = _render(brand, metric, difficulty)
+        ctx = brand_action_context(brand)
+        assert ctx is not None
+        assert ctx.name in text, text
+        # Every practitioner noun of the audience appears (singular attributive
+        # "oncologist engagement" or plural "with oncologists").
+        for noun in ctx.audience.split("/"):
+            assert noun in text, f"{noun!r} missing from {text!r}"
+        assert "west" in text
+
+    def test_kisqali_audience_is_oncologist(self):
+        assert brand_action_context("kisqali").audience == "oncologist"
+
+    def test_remibrutinib_audience_is_dermatologist_and_allergist(self):
+        assert brand_action_context("remibrutinib").audience == "dermatologist/allergist"
+
+    def test_fabhalta_audience_is_hematologist_and_internist(self):
+        assert brand_action_context("fabhalta").audience == "hematologist/internist"
+
+    def test_display_name_is_db_enum_casing_regardless_of_request_casing(self):
+        for raw in ("kisqali", "Kisqali", "KISQALI", "  kisqali "):
+            assert brand_action_context(raw).name == Brand.KISQALI.value
+
+
+class TestLengthBudget:
+    """Every metric x difficulty x gap_type x brand x LONGEST segment value
+    renders within the brief's 160-char truncation budget (exhaustive)."""
+
+    def test_budget_constant_matches_executive_brief_truncation(self):
+        assert MAX_ACTION_CHARS == 160
+
+    @pytest.mark.parametrize("brand", [b.value for b in Brand])
+    @pytest.mark.parametrize("metric", METRICS)
+    @pytest.mark.parametrize("difficulty", DIFFICULTIES)
+    @pytest.mark.parametrize("gap_type", GAP_TYPES)
+    def test_longest_rendering_fits(self, brand, metric, difficulty, gap_type):
+        text = _render(brand, metric, difficulty, LONGEST_SEGMENT_VALUE, gap_type)
+        assert len(text) <= MAX_ACTION_CHARS, f"{len(text)} chars: {text}"
+
+
+class TestUnknownBrandFallsOpen:
+    """Unknown / None brand -> today's neutral template, never a KeyError."""
+
+    @pytest.mark.parametrize("brand", [None, "", "competitor", "other", "acme-brand"])
+    def test_neutral_template_is_todays_exact_text(self, brand):
+        assert _render(brand) == PROD_IDENTICAL_SENTENCE
+
+    def test_neutral_trx_low_keeps_segment_dimension_in_parentheses(self):
+        assert _render(None, "trx", "low", "Northeast", "vs_target") == (
+            "Launch targeted sampling campaign in Northeast (region) to drive TRx growth"
+        )
+
+    def test_missing_brand_argument_keeps_todays_signature(self):
+        gap = _gap()
+        assert PrioritizerNode()._generate_action(gap, _roi(gap["gap_id"]), "high") == (
+            PROD_IDENTICAL_SENTENCE
+        )
+
+    def test_unknown_brand_context_is_none(self):
+        assert brand_action_context("competitor") is None
+        assert brand_action_context(None) is None
+
+
+class TestGapTypeSuffixes:
+    """The gap-type suffix semantics survive the brand-aware rewrite."""
+
+    @pytest.mark.parametrize("brand", [None, "Kisqali", "Fabhalta", "Remibrutinib"])
+    @pytest.mark.parametrize("gap_type", GAP_TYPES)
+    def test_suffix_preserved(self, brand, gap_type):
+        text = _render(brand, gap_type=gap_type)
+        suffix = GAP_TYPE_SUFFIXES.get(gap_type, "")
+        assert text.endswith(suffix)
+        for other, other_suffix in GAP_TYPE_SUFFIXES.items():
+            if other != gap_type:
+                assert other_suffix not in text
+
+    def test_suffix_table_is_todays_three(self):
+        assert GAP_TYPE_SUFFIXES == {
+            "vs_benchmark": " (benchmark-driven)",
+            "vs_potential": " (top-decile target)",
+            "temporal": " (restore prior performance)",
+        }
+
+
+class TestNodeWiring:
+    """The node passes state['brand'] through — the prod-observed identical
+    top action must differ once two brands run the same gap."""
+
+    @pytest.mark.asyncio
+    async def test_execute_uses_state_brand(self):
+        gap = _gap()
+        roi = _roi(gap["gap_id"])
+        actions = {}
+        for brand in ("Kisqali", "Remibrutinib", "Fabhalta"):
+            result = await PrioritizerNode().execute(_state(brand, [gap], [roi]))
+            assert result["status"] == "completed", result
+            actions[brand] = result["prioritized_opportunities"][0]["recommended_action"]
+        assert len(set(actions.values())) == 3, actions
+        assert "Kisqali" in actions["Kisqali"] and "oncologist" in actions["Kisqali"]
+
+    @pytest.mark.asyncio
+    async def test_execute_with_unknown_brand_completes_with_neutral_text(self):
+        gap = _gap()  # cost 100k / 20% gap -> the node rates it "medium"
+        result = await PrioritizerNode().execute(_state("competitor", [gap], [_roi(gap["gap_id"])]))
+        assert result["status"] == "completed", result
+        assert result["prioritized_opportunities"][0]["implementation_difficulty"] == "medium"
+        # Pre-#1835 medium wording, verbatim (also observed on prod for Fabhalta/south).
+        assert result["prioritized_opportunities"][0]["recommended_action"] == (
+            "Implement multichannel engagement strategy for HCPs in west to increase TRx "
+            "(restore prior performance)"
+        )
+
+
+class TestSsotPins:
+    """The audience mirror and vocab maps drift-fail loudly against the SSOTs."""
+
+    def test_target_specialties_mirror_hcp_generator_ordered_by_share(self):
+        expected: Dict[Brand, tuple] = {}
+        for brand, dist in HCPGenerator.BRAND_SPECIALTY_DIST.items():
+            ordered = sorted(dist.items(), key=lambda kv: -kv[1])  # stable: ties keep SSOT order
+            expected[brand] = tuple(spec for spec, _share in ordered)
+        assert BRAND_TARGET_SPECIALTIES == expected
+
+    def test_every_supported_brand_has_a_target_audience(self):
+        assert {b.value.lower() for b in BRAND_TARGET_SPECIALTIES} == set(SUPPORTED_BRANDS)
+
+    def test_every_specialty_enum_member_has_a_practitioner_noun(self):
+        assert set(SPECIALTY_PRACTITIONER) == set(SpecialtyEnum)
+        for noun in SPECIALTY_PRACTITIONER.values():
+            assert noun and noun == noun.strip() and noun.islower() and "/" not in noun
+
+    def test_template_channels_are_catalog_interventions(self):
+        assert ACTION_CHANNELS
+        assert set(ACTION_CHANNELS) <= SUPPORTED_INTERVENTIONS
+
+    @pytest.mark.parametrize("brand", list(Brand))
+    def test_brand_enum_and_supported_brands_agree(self, brand):
+        assert brand.value.lower() in SUPPORTED_BRANDS
