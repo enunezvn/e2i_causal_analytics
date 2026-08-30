@@ -31,8 +31,11 @@ Prior window (what "temporal" gaps compare against):
   would contain zero monthly rows).
 * explicit ranges: the length-shift is kept, but ALIGNED TO THE DATA GRAIN —
   a range that starts on the 1st shifts back by the same number of whole
-  months (Feb 1–28 → Jan 1–31, not Jan 4–31); any other range shifts back by
-  its inclusive day count, ending the day before the range starts.
+  months it touches (Feb 1–28 → Jan 1–31, not Jan 4–31; a partial month such
+  as Jul 1–15 → ALL of June, because June's single monthly row sits on the
+  1st and a day-shift to Jun 16–30 would contain no rows); any other range
+  shifts back by its inclusive day count, ending the day before the range
+  starts.
 
 Anything else raises :class:`TimePeriodError` (a ``ValueError``) naming the
 accepted forms. There is no fallback: an unparseable period is an error, not
@@ -42,6 +45,16 @@ The clock is injected: ``resolve_time_period(label, today=...)``. Production
 callers omit ``today`` and get ``date.today()`` via :func:`_today`, which is
 the one seam tests may freeze when they cannot pass the parameter (the node
 and connector read ``state["time_period"]`` and have no clock argument).
+
+Clock semantics: ``date.today()`` is the SERVER's calendar date — the api
+container runs with TZ unset (UTC), so relative forms (current_quarter,
+previous_quarter, YTD, MTD) roll over at 00:00 UTC, not at a business-market
+midnight (a request at 20:30 EDT on Aug 31 resolves MTD as Sep 1..Sep 1).
+There is no business-timezone contract in this codebase to bind to; the
+resolved dates are returned to the caller so the window is visible, and an
+explicit ``YYYY-MM-DD_YYYY-MM-DD`` range is the escape hatch for an exact
+as-of window. Binding relative forms to a market timezone is a product
+decision, deliberately not taken here (see #1834 codex iter-1 MEDIUM-2).
 """
 
 from __future__ import annotations

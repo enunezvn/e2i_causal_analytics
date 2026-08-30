@@ -237,3 +237,12 @@ def test_production_default_clock_is_today():
     real_today = date.today()
     assert resolved.period_end == real_today
     assert resolved.period_start == real_today.replace(day=1)
+
+
+@pytest.mark.unit
+def test_explicit_partial_month_range_starting_on_the_first_priors_the_whole_previous_month():
+    """codex iter-1 LOW: intent pin. A range that starts on the 1st is month-grain
+    even when it ends mid-month — Jul 1–15 compares against ALL of June (the one
+    monthly row that exists), not against Jun 16–30 (zero rows)."""
+    resolved = resolve_time_period("2026-07-01_2026-07-15", today=TODAY)
+    assert _iso(resolved) == ("2026-07-01", "2026-07-15", "2026-06-01", "2026-06-30")

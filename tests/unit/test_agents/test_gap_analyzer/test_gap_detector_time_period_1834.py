@@ -133,3 +133,75 @@ def test_agent_output_carries_the_resolved_window():
     output = agent._build_output(state)
 
     assert output["resolved_period"] == EXPECTED_WINDOW
+
+
+# ---------------------------------------------------------------------------
+# codex iter-1 MEDIUM: the node's resolved window must be the window QUERIED.
+# ---------------------------------------------------------------------------
+
+
+class _WindowRecordingRepo:
+    """Replays monthly rows (1st of each month) and records every window asked for."""
+
+    ROWS = {
+        "2026-04-01": 66412.17,
+        "2026-05-01": 49893.14,
+        "2026-06-01": 34561.03,
+        "2026-07-01": 49585.25,
+        "2026-08-01": 60885.99,
+        "2026-09-01": 52000.00,
+        "2026-10-01": 58000.00,
+    }
+
+    def __init__(self) -> None:
+        self.windows: list[tuple[str, str]] = []
+
+    async def get_time_series(self, kpi_name, brand, start_date, end_date, include_synthetic=False):
+        self.windows.append((start_date, end_date))
+        return [
+            {"metric_date": d, "value": v, "target": None, "region": "west"}
+            for d, v in self.ROWS.items()
+            if start_date <= d <= end_date
+        ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_connector_queries_the_window_the_node_resolved_even_across_midnight(
+    monkeypatch,
+):
+    """Resolve ONCE. If the clock flips from Sep 30 to Oct 1 between the node's
+    resolution and the connector's reads, the persisted ``resolved_period`` must
+    still be the window that was actually queried (Q3 vs Q2), not Q4-to-date vs Q3."""
+    from unittest.mock import MagicMock
+
+    import src.utils.gap_time_period as tp
+    from src.agents.gap_analyzer.connectors.supabase_connector import SupabaseDataConnector
+
+    clock = iter([date(2026, 9, 30)])  # first read: Sep 30; every later read: Oct 1
+
+    def _flipping_today() -> date:
+        return next(clock, date(2026, 10, 1))
+
+    monkeypatch.setattr(tp, "_today", _flipping_today)
+
+    repo = _WindowRecordingRepo()
+    connector = SupabaseDataConnector(supabase_client=MagicMock(), include_synthetic=True)
+    connector._repository = repo
+    node = GapDetectorNode(use_mock=True)
+    node._connector_pairs = {False: (connector, node.benchmark_store)}
+
+    state = _state("current_quarter", gap_type="temporal")
+    state["metrics"] = ["trx"]
+    result = await node.execute(state)
+
+    assert result["status"] == "calculating", result.get("errors")
+    assert result["resolved_period"] == {
+        "time_period": "current_quarter",
+        "period_start": "2026-07-01",
+        "period_end": "2026-09-30",
+        "prior_start": "2026-04-01",
+        "prior_end": "2026-06-30",
+    }
+    # The windows the repository was actually asked for == the resolved window.
+    assert repo.windows == [("2026-07-01", "2026-09-30"), ("2026-04-01", "2026-06-30")]

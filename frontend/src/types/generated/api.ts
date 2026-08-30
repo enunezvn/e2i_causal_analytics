@@ -16274,7 +16274,7 @@ export interface components {
             segments: string[];
             /**
              * Time Period
-             * @description Analysis period. Accepted forms: current_quarter (quarter start to today), previous_quarter / last_quarter (the preceding full calendar quarter), Q#_YYYY or YYYY-Q# (an explicit calendar quarter, e.g. 'Q3_2026' or '2026-Q3'), YTD, MTD, or an explicit inclusive range 'YYYY-MM-DD_YYYY-MM-DD'. Anything else is rejected with 422. The window actually compared is returned as ``resolved_period``.
+             * @description Analysis period. Accepted forms: current_quarter (quarter start to today), previous_quarter / last_quarter (the preceding full calendar quarter), Q#_YYYY or YYYY-Q# (an explicit calendar quarter, e.g. 'Q3_2026' or '2026-Q3'), YTD, MTD, or an explicit inclusive range 'YYYY-MM-DD_YYYY-MM-DD'. Anything else is rejected with 422. Relative forms resolve on the server's UTC calendar date; use an explicit range for an exact as-of window. The window actually compared is returned as ``resolved_period``.
              * @default current_quarter
              */
             time_period: string;

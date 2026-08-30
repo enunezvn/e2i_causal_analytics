@@ -368,6 +368,9 @@ GapAnalyzerOutput = TypedDict(
         "total_latency_ms": int,
         "confidence": float,
         "warnings": List[str],
+        # #1834: the window gap_detector actually compared (ISO dates), always
+        # emitted by _build_output (None when the run failed before resolution).
+        "resolved_period": Optional[Dict[str, str]],
         "requires_further_analysis": bool,
         "suggested_next_agent": Optional[str],
         # B7.4: Multi-Library Support Output

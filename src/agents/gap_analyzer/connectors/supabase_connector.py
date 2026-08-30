@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 import pandas as pd
 
 from src.memory.services.factories import ServiceConnectionError
-from src.utils.gap_time_period import resolve_time_period
+from src.utils.gap_time_period import ResolvedTimePeriod, resolve_time_period
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,7 @@ class SupabaseDataConnector:
         time_period: str,
         filters: Optional[Dict[str, Any]] = None,
         period_role: Literal["current", "prior"] = "current",
+        period: Optional[ResolvedTimePeriod] = None,
     ) -> pd.DataFrame:
         """
         Fetch current period performance data from business_metrics.
@@ -109,11 +110,17 @@ class SupabaseDataConnector:
             brand: Brand name (e.g., 'Remibrutinib', 'Fabhalta', 'Kisqali')
             metrics: List of KPI names to fetch
             segments: List of segment dimensions (e.g., ['region', 'specialty'])
-            time_period: Time period string (e.g., 'Q4_2024', 'YTD')
+            time_period: Time period label (e.g., 'current_quarter', 'Q3_2026', 'YTD')
             filters: Optional additional filters
             period_role: ``"current"`` (default) or ``"prior"`` — labels the empty-fetch
                 log so a benign YoY-window miss is not reported as a current-period
                 alarm (#929 observability). See the empty-fetch branch below.
+            period: #1834 — the window ALREADY resolved by the caller (gap_detector
+                resolves once, up front, and reports it in state). When given, its
+                ``period_start``/``period_end`` are used verbatim so the reported
+                window and the queried window cannot diverge (e.g. across a midnight
+                clock flip between resolution and this read). When omitted (direct
+                callers), ``time_period`` is resolved here.
 
         Returns:
             DataFrame with performance data indexed by segment
@@ -124,7 +131,11 @@ class SupabaseDataConnector:
         # records it (status='failed') rather than laundering it into "no data / no
         # gaps" (#845/#851 fail-OPEN family). An EMPTY frame here means genuinely no
         # matching rows, never a swallowed error.
-        start_date, end_date = self._parse_time_period(time_period)
+        if period is not None:
+            start_date = period.period_start.isoformat()
+            end_date = period.period_end.isoformat()
+        else:
+            start_date, end_date = self._parse_time_period(time_period)
 
         repository = await self._ensure_repository()
 
@@ -217,6 +228,7 @@ class SupabaseDataConnector:
         metrics: List[str],
         segments: List[str],
         time_period: str,
+        period: Optional[ResolvedTimePeriod] = None,
     ) -> pd.DataFrame:
         """
         Fetch prior period data for comparison.
@@ -225,7 +237,10 @@ class SupabaseDataConnector:
             brand: Brand name
             metrics: List of KPI names
             segments: List of segment dimensions
-            time_period: Current time period (prior will be calculated)
+            time_period: Current time period label (the prior window is derived)
+            period: #1834 — the caller's already-resolved window; when given, its
+                ``prior_start``/``prior_end`` are used verbatim instead of resolving
+                ``time_period`` again (see ``fetch_performance_data``).
 
         Returns:
             DataFrame with prior period data
@@ -242,7 +257,8 @@ class SupabaseDataConnector:
         # preceding full month, YTD against the same span of the previous year, and
         # explicit ranges keep their length-shift aligned to the monthly grain
         # (see src.utils.gap_time_period for the exact rules).
-        resolved = resolve_time_period(time_period)
+        resolved = period if period is not None else resolve_time_period(time_period)
+        # The prior window travels as an EXPLICIT range — absolute, clock-independent.
         prior_period = f"{resolved.prior_start.isoformat()}_{resolved.prior_end.isoformat()}"
 
         # Fetch prior period using same logic (propagates read errors). Tag the role
