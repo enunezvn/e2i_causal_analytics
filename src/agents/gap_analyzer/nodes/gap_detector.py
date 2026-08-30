@@ -22,6 +22,7 @@ import pandas as pd
 import yaml
 
 from src.repositories.provenance import coerce_provenance_flag
+from src.utils.gap_time_period import resolve_time_period
 
 from ..connectors import get_benchmark_store, get_data_connector
 from ..state import GapAnalyzerState, PerformanceGap
@@ -169,6 +170,20 @@ class GapDetectorNode:
         start_time = time.time()
 
         try:
+            # #1834: resolve the analysis window ONCE, up front, from the shared
+            # grammar. An unparseable ``time_period`` raises here (TimePeriodError,
+            # a ValueError) and lands in the broad ``except`` below exactly like a
+            # connector read error — status='failed' + an errors entry — instead of
+            # the connector's former silent "last 90 days" fallback. The resolved
+            # window is returned in state so the API/agent output can show what was
+            # actually compared (the "current quarter" label vs the arithmetic). The
+            # SAME resolved object is threaded to the connector reads below so the
+            # reported window and the queried window cannot diverge (codex iter-1:
+            # a midnight clock flip between resolution and read would otherwise
+            # persist "Q3 vs Q2" while querying Q4-to-date vs Q3).
+            resolved = resolve_time_period(state["time_period"])
+            resolved_period = resolved.to_dict()
+
             # Retrieve memory context for informed gap detection
             memory_context = await self._get_memory_context(state)
 
@@ -213,6 +228,7 @@ class GapDetectorNode:
                     time_period=state["time_period"],
                     filters=state.get("filters"),
                     data_connector=data_connector,
+                    period=resolved,
                 )
 
             # Get comparison data based on gap type
@@ -234,6 +250,7 @@ class GapDetectorNode:
                     time_period=state["time_period"],
                     data_connector=data_connector,
                     benchmark_store=benchmark_store,
+                    period=resolved,
                 )
 
             # Detect gaps in parallel across segments
@@ -278,6 +295,7 @@ class GapDetectorNode:
                 "segments_analyzed": len(state["segments"]),
                 "detection_latency_ms": detection_latency_ms,
                 "memory_context": memory_context,
+                "resolved_period": resolved_period,
                 "status": "calculating",
             }
 
@@ -463,6 +481,7 @@ class GapDetectorNode:
         time_period: str,
         filters: Optional[Dict[str, Any]],
         data_connector: Optional[Any] = None,
+        period: Optional[Any] = None,
     ) -> pd.DataFrame:
         """Fetch current performance data from data connectors.
 
@@ -470,9 +489,11 @@ class GapDetectorNode:
             brand: Brand identifier
             metrics: List of KPIs to analyze
             segments: Segmentation dimensions
-            time_period: Analysis period
+            time_period: Analysis period label
             filters: Additional filters
             data_connector: Per-run connector (#874); defaults to the constructed one.
+            period: #1834 — the ``ResolvedTimePeriod`` already resolved by ``execute``;
+                forwarded so the connector queries exactly the reported window.
 
         Returns:
             DataFrame with current performance data
@@ -484,6 +505,7 @@ class GapDetectorNode:
             segments=segments,
             time_period=time_period,
             filters=filters,
+            period=period,
         )
 
     async def _get_comparison_data(
@@ -495,6 +517,7 @@ class GapDetectorNode:
         time_period: str,
         data_connector: Optional[Any] = None,
         benchmark_store: Optional[Any] = None,
+        period: Optional[Any] = None,
     ) -> Dict[str, pd.DataFrame]:
         """Get comparison data based on gap type.
 
@@ -503,9 +526,12 @@ class GapDetectorNode:
             brand: Brand identifier
             metrics: List of KPIs
             segments: Segmentation dimensions
-            time_period: Analysis period
+            time_period: Analysis period label
             data_connector: Per-run connector (#874); defaults to the constructed one.
             benchmark_store: Per-run benchmark store (#874); same default rule.
+            period: #1834 — the ``ResolvedTimePeriod`` already resolved by ``execute``;
+                forwarded to ``fetch_prior_period`` so the temporal comparison reads
+                exactly the reported prior window.
 
         Returns:
             Dictionary mapping gap type to comparison DataFrames
@@ -539,6 +565,7 @@ class GapDetectorNode:
                     metrics=metrics,
                     segments=segments,
                     time_period=time_period,
+                    period=period,
                 )
 
         return comparison_data
@@ -753,10 +780,13 @@ class MockDataConnector:
         segments: List[str],
         time_period: str,
         filters: Optional[Dict[str, Any]],
+        period: Optional[Any] = None,
     ) -> pd.DataFrame:
         """Fetch mock current performance data.
 
-        Returns realistic pharmaceutical commercial data.
+        Returns realistic pharmaceutical commercial data. ``period`` (#1834) is
+        accepted for interface parity with SupabaseDataConnector and ignored — the
+        mock has no time axis.
         """
         await asyncio.sleep(0.05)  # Simulate I/O
 
@@ -800,8 +830,9 @@ class MockDataConnector:
         metrics: List[str],
         segments: List[str],
         time_period: str,
+        period: Optional[Any] = None,
     ) -> pd.DataFrame:
-        """Fetch mock prior period data."""
+        """Fetch mock prior period data (``period`` accepted for parity, ignored)."""
         await asyncio.sleep(0.05)
 
         # Similar to current, but with slight variations
@@ -811,6 +842,7 @@ class MockDataConnector:
             segments=segments,
             time_period=time_period,
             filters=None,
+            period=period,
         )
 
         # Adjust values to simulate temporal change

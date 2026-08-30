@@ -10525,6 +10525,13 @@ export interface components {
          *         "trx",
          *         "market_share"
          *       ],
+         *       "resolved_period": {
+         *         "period_end": "2026-08-30",
+         *         "period_start": "2026-07-01",
+         *         "prior_end": "2026-06-30",
+         *         "prior_start": "2026-04-01",
+         *         "time_period": "current_quarter"
+         *       },
          *       "segments_analyzed": 12,
          *       "status": "completed",
          *       "total_addressable_value": 2500000,
@@ -10555,6 +10562,8 @@ export interface components {
              * @description Number of segments
              */
             segments_analyzed: number;
+            /** @description The concrete current/prior windows the requested time_period resolved to (#1834). None while pending or when the run failed before resolution. */
+            resolved_period?: components["schemas"]["ResolvedPeriod"] | null;
             /**
              * Prioritized Opportunities
              * @description All opportunities ranked by ROI
@@ -15854,6 +15863,42 @@ export interface components {
             success: boolean;
         };
         /**
+         * ResolvedPeriod
+         * @description The concrete inclusive windows a gap analysis compared (#1834).
+         *
+         *     ``time_period`` is the label the caller sent (e.g. ``current_quarter``); the
+         *     four dates are what it resolved to on the day the analysis ran, so the page
+         *     and the brief can state what was actually compared instead of trusting the
+         *     label.
+         */
+        ResolvedPeriod: {
+            /**
+             * Time Period
+             * @description The requested time_period label
+             */
+            time_period: string;
+            /**
+             * Period Start
+             * @description Current window start (YYYY-MM-DD, inclusive)
+             */
+            period_start: string;
+            /**
+             * Period End
+             * @description Current window end (YYYY-MM-DD, inclusive)
+             */
+            period_end: string;
+            /**
+             * Prior Start
+             * @description Comparison window start (YYYY-MM-DD, inclusive)
+             */
+            prior_start: string;
+            /**
+             * Prior End
+             * @description Comparison window end (YYYY-MM-DD, inclusive)
+             */
+            prior_end: string;
+        };
+        /**
          * ResourceHealthResponse
          * @description Health check response for resource optimization service.
          */
@@ -16229,7 +16274,7 @@ export interface components {
             segments: string[];
             /**
              * Time Period
-             * @description Analysis period (e.g., 'current_quarter', '2024-Q3')
+             * @description Analysis period. Accepted forms: current_quarter (quarter start to today), previous_quarter / last_quarter (the preceding full calendar quarter), Q#_YYYY or YYYY-Q# (an explicit calendar quarter, e.g. 'Q3_2026' or '2026-Q3'), YTD, MTD, or an explicit inclusive range 'YYYY-MM-DD_YYYY-MM-DD'. Anything else is rejected with 422. Relative forms resolve on the server's UTC calendar date; use an explicit range for an exact as-of window. The window actually compared is returned as ``resolved_period``.
              * @default current_quarter
              */
             time_period: string;
