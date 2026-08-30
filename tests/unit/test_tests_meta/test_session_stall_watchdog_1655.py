@@ -77,9 +77,10 @@ So every nested session goes through :func:`_spawn_nested`, which
 * starts it in its own session and process group, so
   :func:`_end_nested_session` can ``killpg`` the controller *and* its workers
   in every Python-level exit path and then prove that nothing is left;
-* sets ``PR_SET_PDEATHSIG`` so the kernel SIGKILLs the controller the instant
-  its parent dies for any reason -- the path no ``finally`` can reach. The
-  workers then exit on stdin EOF (measured: 0.47s).
+* execs the controller through a tiny wrapper that arms ``PR_SET_PDEATHSIG``
+  first, so the kernel SIGKILLs the controller the instant its parent dies
+  for any reason -- the path no ``finally`` can reach. The workers then exit
+  on stdin EOF (measured: 0.47s).
   :func:`test_the_nested_session_dies_when_its_parent_is_hard_killed` forces
   exactly that path.
 """
@@ -87,7 +88,6 @@ So every nested session goes through :func:`_spawn_nested`, which
 from __future__ import annotations
 
 import ast
-import ctypes
 import os
 import re
 import shlex
@@ -96,7 +96,6 @@ import subprocess
 import sys
 import textwrap
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -216,41 +215,58 @@ def _nested_env(stall_seconds: int | str) -> dict[str, str]:
 # Spawning: nothing this file starts may outlive it (#1842)
 # =============================================================================
 
-#: ``linux/prctl.h``: SIGKILL this process when the thread that forked it dies.
-_PR_SET_PDEATHSIG = 1
-
 #: How long a SIGKILLed process group is given to drain. Reaping is init's job
 #: and takes milliseconds; the execnet workers of a killed controller exit on
 #: stdin EOF in ~0.5s (measured).
 REAP_GRACE_SECONDS = 10.0
 
+#: ``PR_SET_PDEATHSIG`` is a Linux ``prctl``. Elsewhere the nested session is
+#: spawned bare and only the process-group teardown applies.
+_PDEATHSIG_SUPPORTED = sys.platform.startswith("linux")
 
-def _load_prctl() -> Callable[..., int] | None:
-    """``libc.prctl`` on Linux, ``None`` elsewhere (``PDEATHSIG`` is Linux-only)."""
-    if not sys.platform.startswith("linux"):
-        return None
-    try:
-        prctl = ctypes.CDLL(None, use_errno=True).prctl
-    except (OSError, AttributeError):  # pragma: no cover - no libc symbol table
-        return None
-    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
-    prctl.restype = ctypes.c_int
-    return prctl
+#: Exit status of the wrapper when it cannot arm PDEATHSIG. It refuses to
+#: start an unguarded nested session, loudly, rather than run one that can
+#: leak -- ``sysexits.h`` EX_OSERR, outside pytest's own 0-5 range.
+WRAPPER_UNGUARDED_EXIT = 71
 
-
-_PRCTL = _load_prctl()
-
-
-def _die_with_parent() -> None:
-    """``preexec_fn``: runs in the forked child, before ``exec``.
-
-    Asks the kernel to SIGKILL this child the moment the parent thread that
-    forked it dies -- the one path no ``finally`` in the parent can cover.
-    Deliberately a single C call through a pointer resolved at import time,
-    so nothing here can block on a lock another parent thread held at fork.
+# The nested controller is started through this single-purpose wrapper, not
+# a ``preexec_fn``. ``preexec_fn`` runs Python in the forked child *before*
+# ``exec`` while the parent is multithreaded -- ``timeout_method = "thread"``
+# has a pytest-timeout Timer running for every test here -- which the
+# subprocess docs call unsafe: a child deadlocked before exec leaves the parent
+# stuck inside ``Popen()`` with PDEATHSIG never installed, which is the very
+# orphan this file guards against. The wrapper does its work in a fresh,
+# single-threaded process *after* exec, then replaces itself with the real
+# command: same pid, same session and group, same command line. It also closes
+# the fork->prctl race, which ``preexec_fn`` could not: PDEATHSIG cannot fire
+# for a parent that died before it was armed, so the wrapper checks that its
+# parent is still the process that spawned it. ``PR_SET_PDEATHSIG`` survives a
+# non-setuid ``exec``, so the controller inherits it.
+_PDEATHSIG_WRAPPER = textwrap.dedent(
     """
-    if _PRCTL is not None:
-        _PRCTL(_PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
+    import ctypes
+    import os
+    import signal
+    import sys
+
+    expected_parent = int(sys.argv[1])
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl.argtypes = [ctypes.c_int] + [ctypes.c_ulong] * 4
+    libc.prctl.restype = ctypes.c_int
+    if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:  # 1 == PR_SET_PDEATHSIG
+        print(
+            "PR_SET_PDEATHSIG failed (errno %d); refusing to start an unguarded "
+            "nested pytest" % ctypes.get_errno(),
+            file=sys.stderr,
+        )
+        sys.exit({unguarded_exit})
+    if os.getppid() != expected_parent:
+        # The parent died between fork and prctl. Nothing will ever kill us
+        # for that death, so end here instead of running orphaned.
+        sys.exit({unguarded_exit})
+    os.execvp(sys.argv[2], sys.argv[2:])
+    """
+).format(unguarded_exit=WRAPPER_UNGUARDED_EXIT)
 
 
 def _spawn_nested(cmd: list[str], *, cwd: str | Path, env: dict[str, str]) -> subprocess.Popen[str]:
@@ -258,9 +274,13 @@ def _spawn_nested(cmd: list[str], *, cwd: str | Path, env: dict[str, str]) -> su
 
     ``start_new_session`` makes the child the leader of a fresh session and
     process group, which its xdist workers inherit -- so one ``killpg`` on
-    ``proc.pid`` reaches the controller and every worker. ``preexec_fn``
-    covers the parent dying hard; see the module docstring.
+    ``proc.pid`` reaches the controller and every worker. On Linux the child
+    is :data:`_PDEATHSIG_WRAPPER`, which arms PDEATHSIG and then ``exec``s
+    ``cmd`` in place, so the kernel ends the controller the instant its
+    parent dies; see the module docstring.
     """
+    if _PDEATHSIG_SUPPORTED:
+        cmd = [sys.executable, "-c", _PDEATHSIG_WRAPPER, str(os.getpid()), *cmd]
     return subprocess.Popen(
         cmd,
         cwd=str(cwd),
@@ -269,7 +289,6 @@ def _spawn_nested(cmd: list[str], *, cwd: str | Path, env: dict[str, str]) -> su
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
-        preexec_fn=_die_with_parent,
     )
 
 
@@ -879,9 +898,10 @@ def test_the_nested_session_dies_when_its_parent_is_hard_killed(tmp_path: Path) 
     the scenario itself: spawn the wedged session through the same helper from
     a stand-in parent, SIGKILL that parent (the pid only, not its group), and
     require the whole nested session -- controller and both workers -- to be
-    gone. Remove the ``preexec_fn`` and this fails, listing the survivors.
+    gone. Remove the wrapper's ``prctl`` call and this fails, listing the
+    survivors.
     """
-    if _PRCTL is None:
+    if not _PDEATHSIG_SUPPORTED:
         pytest.skip("PR_SET_PDEATHSIG is Linux-only")
     _write_nested_project(tmp_path)
     script = _STAND_IN_PARENT.format(
