@@ -884,7 +884,11 @@ _STAND_IN_PARENT = textwrap.dedent(
 )
 
 
-@pytest.mark.timeout(60)
+# 180, matching the other nested-session tests above: the marker must clear the
+# startup wait (NESTED_BUDGET_SECONDS, 90s) plus the settle, drain and reap
+# slack below, or a slow start ends in pytest-timeout's os._exit before the
+# explicit assertion and the ``finally`` cleanup ever run. Measured cost: ~7s.
+@pytest.mark.timeout(180)
 def test_the_nested_session_dies_when_its_parent_is_hard_killed(tmp_path: Path) -> None:
     """#1842: the leak path that no ``finally`` can cover.
 
