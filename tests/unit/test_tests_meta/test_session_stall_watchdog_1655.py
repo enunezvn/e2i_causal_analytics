@@ -59,18 +59,44 @@ CI-derived (``slow-tests.yml`` runs ``--timeout=900`` serially and collects a
 ``@pytest.mark.timeout(2700)``), and why
 :func:`test_every_lane_that_opts_in_is_sized_above_its_own_longest_test` checks
 each opted-in lane's window against its own ceiling, read out of the workflow.
+
+Nothing spawned here may outlive the test (#1842)
+------------------------------------------------
+Every arm spawns a nested pytest, and the RED arm spawns one that is *designed*
+never to end. ``subprocess.run(timeout=...)`` kills that child only on the
+Python-level ``TimeoutExpired`` path. If the outer test process dies hard while
+blocked in ``communicate()`` -- SIGKILL, SIGTERM (Python installs no handler),
+pytest-timeout's ``os._exit`` -- no ``except`` or ``finally`` runs, and the
+nested controller reparents to init and spins in ``pbkdf2_hmac`` at 100% of a
+host core until someone notices. On the droplet that was pid 3420168, 22 hours
+in, on the shared PROD==DEV box. Reproduced by SIGKILLing the outer pytest
+mid-wedge: the controller survived at 92% CPU with both execnet workers.
+
+So every nested session goes through :func:`_spawn_nested`, which
+
+* starts it in its own session and process group, so
+  :func:`_end_nested_session` can ``killpg`` the controller *and* its workers
+  in every Python-level exit path and then prove that nothing is left;
+* sets ``PR_SET_PDEATHSIG`` so the kernel SIGKILLs the controller the instant
+  its parent dies for any reason -- the path no ``finally`` can reach. The
+  workers then exit on stdin EOF (measured: 0.47s).
+  :func:`test_the_nested_session_dies_when_its_parent_is_hard_killed` forces
+  exactly that path.
 """
 
 from __future__ import annotations
 
 import ast
+import ctypes
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import textwrap
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -186,15 +212,170 @@ def _nested_env(stall_seconds: int | str) -> dict[str, str]:
     return env
 
 
+# =============================================================================
+# Spawning: nothing this file starts may outlive it (#1842)
+# =============================================================================
+
+#: ``linux/prctl.h``: SIGKILL this process when the thread that forked it dies.
+_PR_SET_PDEATHSIG = 1
+
+#: How long a SIGKILLed process group is given to drain. Reaping is init's job
+#: and takes milliseconds; the execnet workers of a killed controller exit on
+#: stdin EOF in ~0.5s (measured).
+REAP_GRACE_SECONDS = 10.0
+
+
+def _load_prctl() -> Callable[..., int] | None:
+    """``libc.prctl`` on Linux, ``None`` elsewhere (``PDEATHSIG`` is Linux-only)."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (OSError, AttributeError):  # pragma: no cover - no libc symbol table
+        return None
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    return prctl
+
+
+_PRCTL = _load_prctl()
+
+
+def _die_with_parent() -> None:
+    """``preexec_fn``: runs in the forked child, before ``exec``.
+
+    Asks the kernel to SIGKILL this child the moment the parent thread that
+    forked it dies -- the one path no ``finally`` in the parent can cover.
+    Deliberately a single C call through a pointer resolved at import time,
+    so nothing here can block on a lock another parent thread held at fork.
+    """
+    if _PRCTL is not None:
+        _PRCTL(_PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
+
+
+def _spawn_nested(cmd: list[str], *, cwd: str | Path, env: dict[str, str]) -> subprocess.Popen[str]:
+    """Start a nested pytest so that it can always be torn down.
+
+    ``start_new_session`` makes the child the leader of a fresh session and
+    process group, which its xdist workers inherit -- so one ``killpg`` on
+    ``proc.pid`` reaches the controller and every worker. ``preexec_fn``
+    covers the parent dying hard; see the module docstring.
+    """
+    return subprocess.Popen(
+        cmd,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        preexec_fn=_die_with_parent,
+    )
+
+
+def _group_members(pgid: int) -> list[str]:
+    """Live (non-zombie) processes in process group ``pgid``, read from ``/proc``.
+
+    One line per process -- pid, ppid, state, command -- so a failed guard
+    prints what it computed rather than just "something survived".
+    """
+    members: list[str] = []
+    for entry in Path("/proc").glob("[0-9]*"):
+        try:
+            stat = (entry / "stat").read_text()
+            # ``comm`` may itself contain spaces or ')': split after its close.
+            state, ppid, pgrp = stat.rsplit(")", 1)[1].split()[:3]
+            if int(pgrp) != pgid or state in "ZX":
+                continue
+            cmd = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except (OSError, ValueError):
+            continue  # raced with the process exiting
+        members.append(f"pid {entry.name} ppid {ppid} state {state}: {cmd.strip()[:200]}")
+    return members
+
+
+def _drain_group(pgid: int, grace: float = REAP_GRACE_SECONDS) -> list[str]:
+    """Wait up to ``grace`` seconds for the group to empty; return what is left."""
+    deadline = time.monotonic() + grace
+    survivors = _group_members(pgid)
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.1)
+        survivors = _group_members(pgid)
+    return survivors
+
+
+def _kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # nothing left in the group
+
+
+def _reap(proc: subprocess.Popen[str]) -> None:
+    """Bounded wait for the group leader.
+
+    Never unbounded: this file exists because of hangs, and a teardown that
+    can hang on the very process it failed to kill would hide that failure
+    behind the per-test timeout's ``os._exit``. The survivor scan reports
+    anything still alive after the grace period.
+    """
+    try:
+        proc.wait(timeout=REAP_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _end_nested_session(proc: subprocess.Popen[str]) -> None:
+    """SIGKILL the whole nested session and prove that none of it survived."""
+    _kill_group(proc.pid)
+    _reap(proc)
+    survivors = _drain_group(proc.pid)
+    assert not survivors, (
+        f"{len(survivors)} process(es) of the nested pytest session (pgid {proc.pid}) "
+        f"outlived the test after SIGKILL to the group -- the leak of #1842:\n  "
+        + "\n  ".join(survivors)
+    )
+
+
+def _run_guarded(
+    cmd: list[str], *, cwd: str | Path, env: dict[str, str], timeout: float
+) -> subprocess.CompletedProcess[str]:
+    """``subprocess.run`` semantics with the nested session torn down on every exit path.
+
+    Raises :class:`subprocess.TimeoutExpired` exactly as ``subprocess.run``
+    does (partial output attached, as bytes) -- but only after the whole
+    process group is dead and proven gone, so the RED arm can still observe
+    its hang without leaving it behind.
+
+    Not a ``with Popen(...)`` block on purpose: ``Popen.__exit__`` waits on
+    the leader with no bound, which is the hang :func:`_reap` refuses.
+    """
+    proc = _spawn_nested(cmd, cwd=cwd, env=env)
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _end_nested_session(proc)
+            raise
+        except BaseException:
+            _kill_group(proc.pid)  # do not mask the original error; just do not leak
+            _reap(proc)
+            raise
+        _end_nested_session(proc)
+    finally:
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 def _run_nested(
     root: Path, *, stall_seconds: int | str, timeout: float
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    return _run_guarded(
         [sys.executable, "-m", "pytest", str(root), "-p", "no:cacheprovider"],
-        cwd=str(root),
+        cwd=root,
         env=_nested_env(stall_seconds),
-        capture_output=True,
-        text=True,
         timeout=timeout,
     )
 
@@ -226,6 +407,11 @@ def test_a_controller_side_stall_hangs_with_the_watchdog_disabled(tmp_path: Path
     ``--timeout=5`` is armed, ``--max-worker-restart=0`` is set, and there is no
     worker crash anywhere. The session still runs until something external ends
     it -- in CI that "something external" is the job cap, 30 minutes later.
+
+    Here that "something external" is :func:`_run_guarded`: the hang is
+    observed for ``HANG_PROOF_SECONDS``, then the whole nested process group
+    is SIGKILLed and proven gone before ``TimeoutExpired`` reaches this test
+    (#1842 -- the wedged controller used to outlive the test).
     """
     _write_nested_project(tmp_path)
 
@@ -315,7 +501,7 @@ def test_the_repo_conftest_arms_the_watchdog_on_the_controller_only() -> None:
     env[ENV_TIMEOUT] = "600"
     env.pop("PYTEST_ADDOPTS", None)
 
-    result = subprocess.run(
+    result = _run_guarded(
         [
             sys.executable,
             "-m",
@@ -328,10 +514,8 @@ def test_the_repo_conftest_arms_the_watchdog_on_the_controller_only() -> None:
             "-p",
             "no:cacheprovider",
         ],
-        cwd=str(REPO_ROOT),
+        cwd=REPO_ROOT,
         env=env,
-        capture_output=True,
-        text=True,
         timeout=240,
     )
     output = _as_text(result.stdout) + _as_text(result.stderr)
@@ -629,17 +813,117 @@ def test_install_refuses_a_window_that_cannot_clear_one_test(tmp_path: Path) -> 
         )
     )
 
-    env = _nested_env(60)  # 60 <= the 120s per-test timeout
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", str(tmp_path), "-p", "no:cacheprovider"],
-        cwd=str(tmp_path),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    # 60 <= the 120s per-test timeout
+    result = _run_nested(tmp_path, stall_seconds=60, timeout=120)
     output = _as_text(result.stdout) + _as_text(result.stderr)
 
     assert result.returncode == 0, output[-3000:]
     assert f"{BANNER}: NOT armed" in output, output[-3000:]
     assert "the session fails if the controller" not in output, output[-3000:]
+
+
+# =============================================================================
+# #1842: the RED arm's wedged session must not outlive the test -- ever
+# =============================================================================
+
+
+def test_the_group_scanner_sees_a_live_process() -> None:
+    """Positive control for the survivor guard.
+
+    ``_end_nested_session`` passes when :func:`_group_members` returns nothing.
+    That has to mean "nothing is alive", never "the scan is broken" (``/proc``
+    layout drift, a parse slip) -- so the scanner must at least see us.
+    """
+    if not Path("/proc/self/stat").exists():
+        pytest.skip("the /proc-based scan is Linux-only")
+    members = _group_members(os.getpgid(0))
+    assert any(line.startswith(f"pid {os.getpid()} ") for line in members), members
+
+
+# A stand-in for the outer test process: spawn the wedged session through the
+# real helper, report its pid, then block in ``communicate()`` exactly where
+# the RED arm blocks. The test SIGKILLs this process while it sits there.
+_STAND_IN_PARENT = textwrap.dedent(
+    """
+    import sys
+
+    sys.path.insert(0, {repo_root!r})
+
+    from tests.unit.test_tests_meta.test_session_stall_watchdog_1655 import (
+        _nested_env,
+        _spawn_nested,
+    )
+
+    nested = _spawn_nested(
+        [sys.executable, "-m", "pytest", {root!r}, "-p", "no:cacheprovider"],
+        cwd={root!r},
+        env=_nested_env(0),
+    )
+    print(nested.pid, flush=True)
+    nested.communicate(timeout={budget})
+    """
+)
+
+
+@pytest.mark.timeout(60)
+def test_the_nested_session_dies_when_its_parent_is_hard_killed(tmp_path: Path) -> None:
+    """#1842: the leak path that no ``finally`` can cover.
+
+    The orphan on the droplet was the RED arm's nested *controller*: the outer
+    test process was killed while blocked in ``communicate()``, so
+    ``subprocess.run``'s ``except TimeoutExpired: process.kill()`` never ran,
+    and nothing kernel-side tied the child to its parent. It reparented to
+    init and kept spinning in ``pbkdf2_hmac`` -- 22 hours at 100% of a core.
+
+    :func:`_spawn_nested` closes that with ``PR_SET_PDEATHSIG``. This test is
+    the scenario itself: spawn the wedged session through the same helper from
+    a stand-in parent, SIGKILL that parent (the pid only, not its group), and
+    require the whole nested session -- controller and both workers -- to be
+    gone. Remove the ``preexec_fn`` and this fails, listing the survivors.
+    """
+    if _PRCTL is None:
+        pytest.skip("PR_SET_PDEATHSIG is Linux-only")
+    _write_nested_project(tmp_path)
+    script = _STAND_IN_PARENT.format(
+        repo_root=str(REPO_ROOT), root=str(tmp_path), budget=NESTED_BUDGET_SECONDS
+    )
+
+    nested_pgid = 0
+    with _spawn_nested([sys.executable, "-c", script], cwd=tmp_path, env=_nested_env(0)) as parent:
+        try:
+            assert parent.stdout is not None
+            first_line = parent.stdout.readline().strip()
+            if not first_line.isdigit():
+                _, stderr = parent.communicate(timeout=REAP_GRACE_SECONDS)
+                pytest.fail(
+                    f"stand-in parent did not report the nested pid: {first_line!r}\n{stderr}"
+                )
+            nested_pgid = int(first_line)
+
+            # Positive control before killing anything: the scanner must see the
+            # nested controller AND its two workers, i.e. the session came up.
+            deadline = time.monotonic() + NESTED_BUDGET_SECONDS
+            while len(_group_members(nested_pgid)) < 3 and time.monotonic() < deadline:
+                time.sleep(0.1)
+            before = _group_members(nested_pgid)
+            assert len(before) >= 3, "nested session never came up:\n  " + "\n  ".join(before)
+            # Let the controller reach the wedge, so the kill lands on the
+            # observed shape (a controller spinning in native code).
+            time.sleep(2)
+
+            # The hard death. ``kill()`` signals this one pid, not its group --
+            # exactly what took the outer test process down on 2026-08-29.
+            parent.kill()
+            parent.wait()
+
+            survivors = _drain_group(nested_pgid)
+            assert not survivors, (
+                f"{len(survivors)} process(es) of the nested session (pgid {nested_pgid}) "
+                "outlived their hard-killed parent -- PR_SET_PDEATHSIG is not in effect "
+                "(#1842):\n  " + "\n  ".join(survivors)
+            )
+        finally:
+            # Whatever happened above, leave nothing behind.
+            if nested_pgid:
+                _kill_group(nested_pgid)
+            _kill_group(parent.pid)
