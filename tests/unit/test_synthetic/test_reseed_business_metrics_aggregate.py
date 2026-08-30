@@ -14,7 +14,51 @@ from scripts.reseed_business_metrics_aggregate import (
     AGGREGATE_METRIC_NAMES,
     build_reseed_frame,
     diff_summary,
+    execute_refusal,
 )
+
+
+class TestExecuteGuard:
+    """``--execute`` must FAIL CLOSED on id drift in EITHER direction (codex
+    iter-1 BLOCKER: the first cut refused only stale DB ids, so running after
+    a month boundary but before the Mon-3AM cron would silently INSERT the
+    not-yet-appended cohort rows instead of doing an in-place reseed)."""
+
+    @staticmethod
+    def _summary(**over):
+        base = {"ids_only_in_regen": [], "ids_only_in_db": [], "target_changed": 0}
+        base.update(over)
+        return base
+
+    def test_clean_summary_is_allowed(self):
+        assert execute_refusal(self._summary()) is None
+
+    def test_regen_ids_absent_from_db_refuse_by_default(self):
+        # the codex scenario: --frontier 2026-09-01 before the cron appended m2609_*
+        reason = execute_refusal(self._summary(ids_only_in_regen=["m2609_0000", "m2609_0001"]))
+        assert reason is not None
+        assert "2 regenerated ids" in reason and "cron" in reason
+        assert "--allow-new-cohorts" in reason
+
+    def test_regen_ids_absent_from_db_need_the_explicit_opt_in(self):
+        s = self._summary(ids_only_in_regen=["m2609_0000"])
+        assert execute_refusal(s, allow_id_drift=True) is not None  # wrong flag
+        assert execute_refusal(s, allow_new_cohorts=True) is None
+
+    def test_stale_db_ids_refuse_by_default(self):
+        reason = execute_refusal(self._summary(ids_only_in_db=["metric_deadbeef0000"]))
+        assert reason is not None
+        assert "1 aggregate ids in the DB" in reason and "--allow-id-drift" in reason
+
+    def test_stale_db_ids_need_the_explicit_opt_in(self):
+        s = self._summary(ids_only_in_db=["metric_deadbeef0000"])
+        assert execute_refusal(s, allow_new_cohorts=True) is not None  # wrong flag
+        assert execute_refusal(s, allow_id_drift=True) is None
+
+    def test_target_drift_is_never_allowed(self):
+        s = self._summary(target_changed=3)
+        assert execute_refusal(s, allow_id_drift=True, allow_new_cohorts=True) is not None
+        assert "3 targets" in execute_refusal(s)
 
 
 class TestBuildReseedFrame:

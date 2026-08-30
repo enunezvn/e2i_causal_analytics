@@ -25,10 +25,12 @@ touched because only regenerated ids are written.
 DEFAULT is ``--dry-run``: reads the live aggregate rows, regenerates the frame,
 and prints the diff summary (rows to upsert, id-set drift, values changed /
 unchanged, per-brand national TRx scale before -> after). ``--execute``
-performs the upsert and then re-reads the rows to verify. If the id sets
-drift (regenerated ids missing from the DB or vice versa) the execute path
-REFUSES unless ``--allow-id-drift`` — that would mean the identity assumption
-no longer holds and the delete+reinsert path in the issue applies instead.
+performs the upsert and then re-reads the rows to verify. The execute path
+FAILS CLOSED on id drift in either direction (see ``execute_refusal``): stale
+DB ids need ``--allow-id-drift`` (the identity assumption no longer holds for
+them — consider the issue's delete+reinsert path); regenerated cohort ids the
+Mon-3AM cron has not appended yet need ``--allow-new-cohorts`` (or run after
+the cron / with an earlier ``--frontier``); target drift is never allowed.
 
 Usage (from the checkout root, with the project env)::
 
@@ -163,6 +165,45 @@ def diff_summary(db: pd.DataFrame, regen: pd.DataFrame, scale_month: str) -> Dic
     }
 
 
+def execute_refusal(
+    summary: Dict[str, Any], allow_id_drift: bool = False, allow_new_cohorts: bool = False
+) -> Optional[str]:
+    """Why ``--execute`` must NOT proceed, or None. Fails closed on id drift in
+    EITHER direction — each direction has its own explicit opt-in, because
+    they mean different things — and always on target drift.
+
+    * ids only in the DB: the in-place identity assumption (#1833 Step 0) no
+      longer holds for those rows; upserting would leave them stale beside
+      the regenerated ones. ``--allow-id-drift`` leaves them in place.
+    * ids only in the regeneration: cohort months the Mon-3AM cron has not
+      appended yet (e.g. ``--frontier 2026-09-01`` before the first September
+      cron). Upserting would INSERT them — byte-identical to what the cron
+      will emit, but not the in-place reseed this script promises.
+      ``--allow-new-cohorts`` inserts them now.
+    * targets differ: the RNG stream moved; this is not a value-only reseed.
+      No flag — the delete+reinsert path in the issue applies instead.
+    """
+    only_db, only_regen = summary["ids_only_in_db"], summary["ids_only_in_regen"]
+    if summary["target_changed"]:
+        return (
+            f"{summary['target_changed']} targets differ — the RNG stream moved; this is not "
+            "the value-only reseed this script is for (see the issue's delete+reinsert path)."
+        )
+    if only_db and not allow_id_drift:
+        return (
+            f"{len(only_db)} aggregate ids in the DB are not reproduced by the regeneration "
+            f"(e.g. {only_db[:3]}); the in-place identity assumption (#1833 Step 0) no longer "
+            "holds for them. Investigate, or pass --allow-id-drift to leave them in place."
+        )
+    if only_regen and not allow_new_cohorts:
+        return (
+            f"{len(only_regen)} regenerated ids are absent from the DB (e.g. {only_regen[:3]}): "
+            "cohort months the Mon-3AM cron has not appended yet. Run after the cron, use an "
+            "earlier --frontier, or pass --allow-new-cohorts to insert them now."
+        )
+    return None
+
+
 def print_summary(summary: Dict[str, Any]) -> None:
     print(f"rows to upsert            : {summary['rows_to_upsert']}")
     print(f"db aggregate rows         : {summary['db_aggregate_rows']}")
@@ -204,6 +245,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="execute even if the DB holds aggregate ids the regeneration does not (stale rows stay)",
     )
+    parser.add_argument(
+        "--allow-new-cohorts",
+        action="store_true",
+        help=(
+            "execute even if the regeneration holds cohort ids the DB does not yet (a month "
+            "the Mon-3AM cron has not appended); they are INSERTED, byte-identical to what "
+            "the cron will upsert"
+        ),
+    )
     parser.add_argument("--batch-size", type=int, default=500)
     args = parser.parse_args(argv)
 
@@ -235,20 +285,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("\nDRY RUN — nothing written. Re-run with --execute to upsert.")
         return 0
 
-    if summary["ids_only_in_db"] and not args.allow_id_drift:
-        logger.error(
-            "REFUSING: %d aggregate ids in the DB are not reproduced by the regeneration; "
-            "the in-place identity assumption (#1833 Step 0) no longer holds. Investigate "
-            "(delete+reinsert path?) or pass --allow-id-drift to leave them in place.",
-            len(summary["ids_only_in_db"]),
-        )
-        return 3
-    if summary["target_changed"]:
-        logger.error(
-            "REFUSING: %d targets differ — the RNG stream moved; this is not the value-only "
-            "reseed this script is for.",
-            summary["target_changed"],
-        )
+    refusal = execute_refusal(
+        summary, allow_id_drift=args.allow_id_drift, allow_new_cohorts=args.allow_new_cohorts
+    )
+    if refusal is not None:
+        logger.error("REFUSING: %s", refusal)
         return 3
 
     logger.info("upserting %d rows on metric_id via BatchLoader.load_table ...", len(regen))
