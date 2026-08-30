@@ -43,7 +43,7 @@ import asyncio
 import sys
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 import pandas as pd
 
@@ -72,7 +72,7 @@ REQUIRED_NEXT_PASSES = 5
 def planted_region(brand: str) -> str:
     """The brand's weakest execution region — the planted story."""
     row = BusinessMetricsGenerator.BRAND_REGION_PERFORMANCE[brand]
-    return min(row, key=row.get)
+    return min(row, key=lambda region: row[region])
 
 
 class FrameRepository:
@@ -96,7 +96,10 @@ class FrameRepository:
             d = d[d["metric_date"] >= start_date]
         if end_date:
             d = d[d["metric_date"] <= end_date]
-        return d.sort_values("metric_date", kind="stable").head(1000).to_dict("records")
+        records: List[Dict[str, Any]] = (
+            d.sort_values("metric_date", kind="stable").head(1000).to_dict("records")
+        )
+        return records
 
     async def get_distinct_values(
         self, column: str, brand: Optional[str] = None, include_synthetic: bool = False, **_: Any
@@ -117,7 +120,8 @@ class FrameRepository:
         d = self.df[self.df["region"] == region]
         if brand is not None:
             d = d[d["brand"] == brand]
-        return d.to_dict("records")
+        records: List[Dict[str, Any]] = d.to_dict("records")
+        return records
 
 
 def build_frame(last_month: date) -> pd.DataFrame:
@@ -160,10 +164,12 @@ async def rank_one(
     prioritizer: PrioritizerNode,
 ) -> Ranked:
     repo = FrameRepository(frame, loaded_through=frontier)
+    # Storage substitution only (see module docstring): the connector and the
+    # store resolve ``_repository`` lazily; pre-seeding it is the one seam.
     connector = SupabaseDataConnector(include_synthetic=True)
-    connector._repository = repo  # storage substitution only (see module docstring)
+    cast(Any, connector)._repository = repo
     store = BenchmarkStore(include_synthetic=True)
-    store._repository = repo
+    cast(Any, store)._repository = repo
 
     time_period = production_time_period(frontier)
     current = await connector.fetch_performance_data(
