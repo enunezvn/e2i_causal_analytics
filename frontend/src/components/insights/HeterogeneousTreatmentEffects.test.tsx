@@ -16,6 +16,7 @@ import userEvent from '@testing-library/user-event';
 import { HeterogeneousTreatmentEffects } from './HeterogeneousTreatmentEffects';
 import * as useSegments from '@/hooks/api/use-segments';
 import * as useInsights from '@/hooks/api/use-insights';
+import { SegmentAnalysisTimeoutError } from '@/api/segments';
 
 vi.mock('@/hooks/api/use-segments');
 vi.mock('@/hooks/api/use-insights');
@@ -247,5 +248,56 @@ describe('HeterogeneousTreatmentEffects — dedicated HTE strategic insight', ()
     render(<HeterogeneousTreatmentEffects />);
 
     expect(screen.queryByText(/stale interpretation/i)).not.toBeInTheDocument();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// #1841 — poll-ceiling expiry on this card. The card passes maxWaitMs 300 s and
+// its default (no brand) request is the all-brands workload, which
+// /segment-analysis gives 600 s (single-brand runs measured 153–208 s), so the
+// ceiling is reachable. The record is durable and still running: the card must
+// NOT render the rose "failed" card (whose only action, Refresh, is a NEW POST)
+// but a non-destructive still-running state with Keep waiting that re-attaches
+// to the SAME analysis_id via the GET-only resume branch.
+// -----------------------------------------------------------------------------
+describe('HeterogeneousTreatmentEffects — poll-ceiling expiry keeps the analysis_id (#1841)', () => {
+  const timeout = () => new SegmentAnalysisTimeoutError('seg_hte_1841', 300_000);
+
+  it('renders a non-destructive still-running state, not "CATE analysis failed"', () => {
+    mockSegments({ error: timeout() } as unknown as Partial<Mutation>);
+    render(<HeterogeneousTreatmentEffects />);
+
+    expect(screen.queryByText(/cate analysis failed/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/still running/i)).toBeInTheDocument();
+    expect(screen.getByText('seg_hte_1841')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /keep waiting/i })).toBeInTheDocument();
+    // Still no fabricated numbers.
+    expect(screen.queryByText('severe')).not.toBeInTheDocument();
+  });
+
+  it('Keep waiting resumes the SAME id via the GET-only branch — never a second POST', async () => {
+    const mutate = vi.fn();
+    mockSegments({ mutate, error: timeout() } as unknown as Partial<Mutation>);
+    const user = userEvent.setup();
+    render(<HeterogeneousTreatmentEffects />);
+
+    await user.click(screen.getByRole('button', { name: /keep waiting/i }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const arg = mutate.mock.calls[0][0];
+    expect(arg).toMatchObject({ resumeAnalysisId: 'seg_hte_1841', maxWaitMs: 300_000 });
+    expect(arg.request).toBeUndefined();
+  });
+
+  it('keeps Refresh as a genuine re-run (new POST) for real failures', async () => {
+    const mutate = vi.fn();
+    mockSegments({ mutate, error: new Error('CATE estimation failed') } as unknown as Partial<Mutation>);
+    const user = userEvent.setup();
+    render(<HeterogeneousTreatmentEffects />);
+
+    expect(screen.getByText(/cate analysis failed/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /keep waiting/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /refresh segment analysis/i }));
+    expect(mutate.mock.calls[0][0].request).toBeDefined();
   });
 });

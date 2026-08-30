@@ -40,6 +40,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useRunSegmentAnalysisAndWait } from '@/hooks/api/use-segments';
+import { SegmentAnalysisTimeoutError } from '@/api/segments';
 import { useHTEInsight } from '@/hooks/api/use-insights';
 import { StrategicInsightCard } from './StrategicInsightCard';
 import type { CATEResult, RunSegmentAnalysisRequest } from '@/types/segments';
@@ -218,6 +219,20 @@ export function HeterogeneousTreatmentEffects({
     runAnalysis({ request, pollIntervalMs: 3000, maxWaitMs: 300000 });
   }, [runAnalysis, treatmentVar, outcomeVar, brand]);
 
+  // Poll ceiling expired on a still-running durable record (#1841). The 300 s
+  // ceiling is reachable here — with no brand this is the all-brands workload
+  // that /segment-analysis gives 600 s (single-brand runs measured 153–208 s).
+  // Keep the analysis_id and re-attach by GET; Refresh stays a genuine re-run.
+  const stillRunning = error instanceof SegmentAnalysisTimeoutError ? error : null;
+  const handleKeepWaiting = useCallback(() => {
+    if (!stillRunning) return;
+    runAnalysis({
+      resumeAnalysisId: stillRunning.analysisId,
+      pollIntervalMs: 3000,
+      maxWaitMs: stillRunning.maxWaitMs,
+    });
+  }, [runAnalysis, stillRunning]);
+
   // Dedicated HTE strategic insight (user-requested): auto-generate once a
   // completed run lands, keyed on analysis_id so it fires once per distinct
   // run. The request carries ONLY the analysis_id — the endpoint derives every
@@ -297,8 +312,27 @@ export function HeterogeneousTreatmentEffects({
           </div>
         )}
 
+        {/* Still running server-side: ceiling expired, record retained (#1841) */}
+        {!isPending && stillRunning && (
+          <div
+            role="status"
+            className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]"
+          >
+            <p className="text-xs text-[var(--color-muted-foreground)]">
+              <span className="font-medium text-[var(--color-foreground)]">Still running:</span>{' '}
+              the analysis has not finished after {Math.round(stillRunning.maxWaitMs / 1000)} s
+              but keeps computing on the server under{' '}
+              <span className="font-mono">{stillRunning.analysisId}</span>. Keep waiting to
+              re-attach; Refresh would start a second run.
+            </p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={handleKeepWaiting}>
+              Keep waiting
+            </Button>
+          </div>
+        )}
+
         {/* Error State (genuine failures only — no silent fallback) */}
-        {!isPending && (error || failed) && (
+        {!isPending && !stillRunning && (error || failed) && (
           <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/5 border border-rose-500/20">
             <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
             <div className="text-xs text-[var(--color-muted-foreground)]">
