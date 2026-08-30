@@ -583,6 +583,11 @@ export function useRunCausalAgentAnalysis(
     // Submit -> poll: the agent run takes minutes; `isPending` stays true for the
     // whole wait, and `data` is the final response (including honest `failed`).
     mutationFn: (request) => runCausalAgentAnalysisAndWait(request),
+    // This is an *AndWait mutation (POST + poll, 900 s ceiling): the app's
+    // default mutation retry (retry: 1) would re-run the whole mutationFn after
+    // a poll-ceiling timeout — a SECOND agent run submitted while the first is
+    // still executing (#1839). Re-running is an explicit user action.
+    retry: false,
     ...options,
   });
 }

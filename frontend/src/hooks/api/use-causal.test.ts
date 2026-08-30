@@ -18,13 +18,19 @@ vi.mock('@/api/causal', () => ({
   discoverCausalEffects: vi.fn(),
   getDiscoverCausalEffects: vi.fn(),
   runHierarchicalAnalysisAndWait: vi.fn(),
+  runCausalAgentAnalysisAndWait: vi.fn(),
 }));
 
-import { useDiscoverEffects, useRunHierarchicalAnalysisAndWait } from './use-causal';
+import {
+  useDiscoverEffects,
+  useRunHierarchicalAnalysisAndWait,
+  useRunCausalAgentAnalysis,
+} from './use-causal';
 import {
   discoverCausalEffects,
   getDiscoverCausalEffects,
   runHierarchicalAnalysisAndWait,
+  runCausalAgentAnalysisAndWait,
 } from '@/api/causal';
 
 function createWrapper() {
@@ -195,5 +201,39 @@ describe('useRunHierarchicalAnalysisAndWait — a timed-out poll must not re-sub
     await waitFor(() => expect(result.current.isError).toBe(true));
     // One POST+poll. A second call here is a duplicate heavy analysis.
     expect(runHierarchicalAnalysisAndWait).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * useRunCausalAgentAnalysis is an *AndWait hook in everything but name: its
+ * mutationFn is `runCausalAgentAnalysisAndWait` (POST /causal/agent-analyze,
+ * then poll for up to 900 s — "the agent run takes minutes"), and it is the
+ * hook the Causal Analysis page runs (CausalAnalysis.tsx). Same re-submit
+ * defect as the named siblings (#1839).
+ */
+describe('useRunCausalAgentAnalysis — a timed-out poll must not re-submit the agent run', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('submits exactly once when the poll ceiling expires (no react-query mutation retry)', async () => {
+    (runCausalAgentAnalysisAndWait as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('Causal agent analysis timed out after 900000ms')
+    );
+
+    const { result } = renderHook(() => useRunCausalAgentAnalysis(), {
+      wrapper: createAppLikeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({
+        treatment_var: 'copay_support',
+        outcome_var: 'persistent_180d',
+        brand: 'Fabhalta',
+      });
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(runCausalAgentAnalysisAndWait).toHaveBeenCalledTimes(1);
   });
 });

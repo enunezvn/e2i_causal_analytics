@@ -19,10 +19,11 @@ import * as React from 'react';
 vi.mock('@/api/feedback', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/feedback')>()),
   runLearningCycleAndWait: vi.fn(),
+  quickLearningCycle: vi.fn(),
 }));
 
-import { useRunLearningCycleAndWait } from './use-feedback';
-import { runLearningCycleAndWait } from '@/api/feedback';
+import { useRunLearningCycleAndWait, useQuickLearningCycle } from './use-feedback';
+import { runLearningCycleAndWait, quickLearningCycle } from '@/api/feedback';
 
 /**
  * Mirror the PRODUCTION mutation default (retry once). With `retry: false`
@@ -63,5 +64,41 @@ describe('useRunLearningCycleAndWait — a timed-out poll must not re-submit the
     await waitFor(() => expect(result.current.isError).toBe(true));
     // One POST+poll. A second call here is a duplicate learning cycle.
     expect(runLearningCycleAndWait).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * useQuickLearningCycle is the hook the Feedback Learning page actually runs
+ * (FeedbackLearning.tsx `runQuickCycle`). It is NOT a poll: it is a single
+ * synchronous `POST /feedback/learn?async_mode=false` that the backend
+ * executes inline — new batch_id, patterns/updates persisted, then the
+ * response. The UI-driven cycles measured 18.8 s and 23.1 s on prod
+ * (`feedback_learning_batches`, 2026-07-29 / 2026-08-26) against the
+ * api-client's 30 s axios timeout, and a failing cycle is a 500 after the
+ * FAILED batch was persisted. Either way the request rejects AFTER the server
+ * started a batch, so a react-query retry is a second full cycle with a
+ * second batch and duplicated artifacts.
+ */
+describe('useQuickLearningCycle — a rejected synchronous cycle must not be re-POSTed', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('POSTs exactly once when the request times out client-side (no react-query mutation retry)', async () => {
+    (quickLearningCycle as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('timeout of 30000ms exceeded')
+    );
+
+    const { result } = renderHook(() => useQuickLearningCycle(), {
+      wrapper: createAppLikeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate(undefined);
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    // The server already started (or finished) a batch for the first POST.
+    expect(quickLearningCycle).toHaveBeenCalledTimes(1);
   });
 });

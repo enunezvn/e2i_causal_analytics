@@ -244,6 +244,9 @@ export function useOptimizeBudget(
       queryClient.setQueryData(queryKeys.resources.optimization(data.optimization_id), data);
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.scenarios() });
     },
+    // `optimizeBudget` wraps `runOptimizationAndWait` (POST + poll): same
+    // re-submit-on-timeout defect as useRunOptimizationAndWait (#1839).
+    retry: false,
     ...options,
   });
 }
@@ -276,6 +279,9 @@ export function useOptimizeWithScenarios(
       queryClient.setQueryData(queryKeys.resources.optimization(data.optimization_id), data);
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.scenarios() });
     },
+    // `optimizeWithScenarios` wraps `runOptimizationAndWait` (POST + poll):
+    // same re-submit-on-timeout defect as useRunOptimizationAndWait (#1839).
+    retry: false,
     ...options,
   });
 }
