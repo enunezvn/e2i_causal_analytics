@@ -17,10 +17,15 @@ import * as React from 'react';
 vi.mock('@/api/causal', () => ({
   discoverCausalEffects: vi.fn(),
   getDiscoverCausalEffects: vi.fn(),
+  runHierarchicalAnalysisAndWait: vi.fn(),
 }));
 
-import { useDiscoverEffects } from './use-causal';
-import { discoverCausalEffects, getDiscoverCausalEffects } from '@/api/causal';
+import { useDiscoverEffects, useRunHierarchicalAnalysisAndWait } from './use-causal';
+import {
+  discoverCausalEffects,
+  getDiscoverCausalEffects,
+  runHierarchicalAnalysisAndWait,
+} from '@/api/causal';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -128,5 +133,67 @@ describe('useDiscoverEffects — scope reset', () => {
 
     // The Patient job must NOT surface under the HCP grain.
     expect(result.current.job).toBeNull();
+  });
+});
+
+/**
+ * useRunHierarchicalAnalysisAndWait — no client-side retry
+ * ========================================================
+ *
+ * Sibling of the `useRunSegmentAnalysisAndWait` fix (#1836): the mutationFn is
+ * "POST /causal/hierarchical, then poll the record". The app's QueryClient
+ * retries mutations once by default (src/lib/query-client.ts,
+ * `mutations.retry = 1`), so a poll-ceiling timeout on a still-running
+ * analysis would make react-query silently re-run the whole mutation — a
+ * SECOND heavy CATE analysis submitted while the first still holds the
+ * worker's single heavy-compute slot (#1839). The `retry: false` on the
+ * clinical-context / treatment-effects QUERIES in this module does not cover
+ * this MUTATION. A timed-out poll is not a transport failure; re-running is an
+ * explicit user action.
+ */
+
+/**
+ * Mirror the PRODUCTION mutation default (retry once). `createWrapper` above
+ * uses `mutations: { retry: false }`, which would make this test vacuous — it
+ * must fail on the unfixed hook.
+ */
+function createAppLikeWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: 1, retryDelay: 0 },
+    },
+  });
+  return ({ children }: { children: React.ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+}
+
+describe('useRunHierarchicalAnalysisAndWait — a timed-out poll must not re-submit the analysis', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('submits exactly once when the poll ceiling expires (no react-query mutation retry)', async () => {
+    (runHierarchicalAnalysisAndWait as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('Analysis timed out after 180000ms')
+    );
+
+    const { result } = renderHook(() => useRunHierarchicalAnalysisAndWait(), {
+      wrapper: createAppLikeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({
+        request: {
+          treatment_var: 'copay_support',
+          outcome_var: 'persistent_180d',
+        },
+        maxWaitMs: 1,
+      });
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    // One POST+poll. A second call here is a duplicate heavy analysis.
+    expect(runHierarchicalAnalysisAndWait).toHaveBeenCalledTimes(1);
   });
 });

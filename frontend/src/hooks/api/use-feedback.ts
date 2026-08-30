@@ -323,6 +323,13 @@ export function useRunLearningCycleAndWait(
       queryClient.invalidateQueries({ queryKey: queryKeys.feedback.patterns() });
       queryClient.invalidateQueries({ queryKey: queryKeys.feedback.updates() });
     },
+    // The mutationFn is POST + poll-to-completion. The app's QueryClient
+    // retries mutations once by default (src/lib/query-client.ts), so a
+    // retry — after a poll-ceiling timeout or a transient GET error — queues
+    // a SECOND learning cycle behind the first (#1839; same defect as the
+    // segment hook, #1836). Re-running is an explicit user action, never a
+    // silent retry.
+    retry: false,
     ...options,
   });
 }

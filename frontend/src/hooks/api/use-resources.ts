@@ -192,6 +192,13 @@ export function useRunOptimizationAndWait(
       queryClient.setQueryData(queryKeys.resources.optimization(data.optimization_id), data);
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.scenarios() });
     },
+    // The mutationFn is POST + poll-to-completion. The app's QueryClient
+    // retries mutations once by default (src/lib/query-client.ts), so a
+    // retry — after a poll-ceiling timeout or a transient GET error — submits
+    // a SECOND heavy optimization while the first still holds the worker's
+    // single heavy-compute slot (#1839; same defect as the segment hook,
+    // #1836). Re-running is an explicit user action, never a silent retry.
+    retry: false,
     ...options,
   });
 }
