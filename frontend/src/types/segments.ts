@@ -72,6 +72,13 @@ export interface RunSegmentAnalysisRequest {
    */
   outcome_var?: string;
   /**
+   * Exploratory opt-in (#1827). By default the backend refuses (400) a
+   * treatment→outcome pair with no modeled causal_paths edge for the brand
+   * scope before any compute runs; `true` runs it anyway on the default
+   * adjustment set and the result carries a not-a-modeled-question warning.
+   */
+  allow_unmodeled?: boolean;
+  /**
    * Variables to segment by. Optional — for the patient_journeys path the
    * backend FIXES the clinical segment set server-side; any value here is
    * overridden.
