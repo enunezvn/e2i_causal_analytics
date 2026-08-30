@@ -4,8 +4,8 @@
  *
  * Sibling of the `useRunSegmentAnalysisAndWait` fix (#1836): the mutationFn is
  * "POST /feedback/learn, then poll the durable batch". The app's QueryClient
- * retries mutations once by default (src/lib/query-client.ts,
- * `mutations.retry = 1`), so a poll-ceiling timeout on a still-running cycle
+ * retried mutations once by default until #1846 (src/lib/query-client.ts,
+ * `mutations.retry = 1`; now `0`), so a poll-ceiling timeout on a still-running cycle
  * would make react-query silently re-run the whole mutation — a SECOND learning
  * cycle queued behind the first (#1839). A timed-out poll is not a transport
  * failure; re-running is an explicit user action.
@@ -26,8 +26,10 @@ import { useRunLearningCycleAndWait, useQuickLearningCycle } from './use-feedbac
 import { runLearningCycleAndWait, quickLearningCycle } from '@/api/feedback';
 
 /**
- * Mirror the PRODUCTION mutation default (retry once). With `retry: false`
- * here the test would be vacuous — it must fail on the unfixed hook.
+ * Mirror the pre-#1846 PRODUCTION mutation default (retry once). The app
+ * default is `retry: 0` since #1846, but the hook's own `retry: false` must
+ * hold under ANY client default; with `retry: false` here the test would be
+ * vacuous — it must fail on the unfixed hook.
  */
 function createAppLikeWrapper() {
   const queryClient = new QueryClient({

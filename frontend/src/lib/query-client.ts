@@ -102,8 +102,19 @@ function createQueryClient(): QueryClient {
         networkMode: 'online',
       },
       mutations: {
-        // Retry mutations only once
-        retry: 1,
+        // Never replay a mutation automatically (#1846). Mutations are POSTs
+        // and almost none are idempotent: a client-side timeout (axios
+        // ECONNABORTED) or a 5xx arrives AFTER the server may have queued the
+        // job / written the row, so a blind re-run is a duplicate — on the
+        // heavy-compute endpoints it lands on the slot the first run still
+        // holds and is rejected as "compute capacity saturated" (#1836,
+        // #1839). A pure network error (ERR_NETWORK) is not proof the request
+        // never arrived either (the xhr onerror path also fires for a reset
+        // after the body was sent), and the offline case is already handled by
+        // `networkMode: 'online'` pausing the mutation rather than failing it.
+        // Hooks whose POST is provably idempotent opt in with their own
+        // `retry`; the retryDelay stays so an opt-in keeps the backoff.
+        retry: 0,
         retryDelay: getRetryDelay,
 
         // Error handling

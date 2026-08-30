@@ -258,8 +258,9 @@ export function useRunSegmentAnalysisAndWait(
             variables.pollIntervalMs,
             variables.maxWaitMs
           ),
-    // Never let react-query re-run this mutation. The app default retries
-    // mutations once (src/lib/query-client.ts), but this mutationFn is "POST a
+    // Never let react-query re-run this mutation. The app default retried
+    // mutations once until #1846 (src/lib/query-client.ts, now retry: 0); this
+    // stays explicit because under ANY client default this mutationFn is "POST a
     // heavy analysis, then poll its durable record": once the POST has landed,
     // a retry — after a poll-ceiling timeout or a transient GET error — submits
     // a SECOND heavy analysis while the first still holds the worker's single

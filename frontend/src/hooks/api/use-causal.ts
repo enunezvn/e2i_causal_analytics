@@ -459,7 +459,8 @@ export function useRunHierarchicalAnalysisAndWait(
       queryClient.setQueryData(queryKeys.causal.hierarchicalAnalysis(data.analysis_id), data);
     },
     // The mutationFn is POST + poll-to-completion. The app's QueryClient
-    // retries mutations once by default (src/lib/query-client.ts), so a
+    // retried mutations once by default until #1846 (src/lib/query-client.ts,
+    // now retry: 0); this stays explicit because under ANY client default a
     // retry — after a poll-ceiling timeout or a transient GET error — submits
     // a SECOND heavy CATE analysis while the first still holds the worker's
     // single heavy-compute slot (#1839; same defect as the segment hook,
@@ -583,8 +584,8 @@ export function useRunCausalAgentAnalysis(
     // Submit -> poll: the agent run takes minutes; `isPending` stays true for the
     // whole wait, and `data` is the final response (including honest `failed`).
     mutationFn: (request) => runCausalAgentAnalysisAndWait(request),
-    // This is an *AndWait mutation (POST + poll, 900 s ceiling): the app's
-    // default mutation retry (retry: 1) would re-run the whole mutationFn after
+    // This is an *AndWait mutation (POST + poll, 900 s ceiling): a mutation
+    // retry (the app default until #1846) would re-run the whole mutationFn after
     // a poll-ceiling timeout — a SECOND agent run submitted while the first is
     // still executing (#1839). Re-running is an explicit user action.
     retry: false,

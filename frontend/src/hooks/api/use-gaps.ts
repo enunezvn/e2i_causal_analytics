@@ -264,7 +264,8 @@ export function useRunGapAnalysisAndWait(
       queryClient.invalidateQueries({ queryKey: queryKeys.gaps.opportunities() });
     },
     // The mutationFn is POST + poll-to-completion. The app's QueryClient
-    // retries mutations once by default (src/lib/query-client.ts), so a
+    // retried mutations once by default until #1846 (src/lib/query-client.ts,
+    // now retry: 0); this stays explicit because under ANY client default a
     // retry — after a poll-ceiling timeout or a transient GET error — submits
     // a SECOND heavy analysis while the first still holds the worker's single
     // heavy-compute slot (#1839; same defect as the segment hook, #1836).
