@@ -219,6 +219,24 @@ export interface PrioritizedOpportunity {
 /**
  * Response from gap analysis
  */
+/**
+ * The concrete inclusive windows a gap analysis compared (#1834).
+ * `time_period` is the label that was requested (e.g. 'current_quarter');
+ * the four ISO dates are what it resolved to on the day the analysis ran.
+ */
+export interface ResolvedPeriod {
+  /** The requested time_period label */
+  time_period: string;
+  /** Current window start (YYYY-MM-DD, inclusive) */
+  period_start: string;
+  /** Current window end (YYYY-MM-DD, inclusive) */
+  period_end: string;
+  /** Comparison window start (YYYY-MM-DD, inclusive) */
+  prior_start: string;
+  /** Comparison window end (YYYY-MM-DD, inclusive) */
+  prior_end: string;
+}
+
 export interface GapAnalysisResponse {
   /** Unique analysis identifier */
   analysis_id: string;
@@ -230,6 +248,12 @@ export interface GapAnalysisResponse {
   metrics_analyzed: string[];
   /** Number of segments */
   segments_analyzed: number;
+  /**
+   * The current/prior windows the requested time_period resolved to (#1834).
+   * Absent/null while pending, when the run failed before resolution, or on
+   * analyses persisted before the field existed.
+   */
+  resolved_period?: ResolvedPeriod | null;
 
   /** All opportunities ranked by ROI */
   prioritized_opportunities: PrioritizedOpportunity[];
