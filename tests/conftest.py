@@ -43,6 +43,7 @@ import pytest_asyncio
 from dotenv import load_dotenv
 
 from tests.stall_watchdog import install as _install_stall_watchdog
+from tests.xdist_crash_guard import install as _install_xdist_crash_guard
 
 # =============================================================================
 # LOAD ENVIRONMENT VARIABLES from .env file IMMEDIATELY
@@ -660,6 +661,7 @@ def pytest_configure(config: pytest.Config) -> None:
     5. Store results for skip decision making.
     6. Print service status to console.
     7. Arm the session stall watchdog on the xdist controller (issue #1655).
+    8. Arm the xdist crash guard on the controller (issue #1848).
     """
     global SERVICES_AVAILABLE
 
@@ -744,6 +746,15 @@ def pytest_configure(config: pytest.Config) -> None:
     # a worker holding the GIL in native code, has no timer at all and burns the
     # job's whole timeout-minutes cap with no diagnosis.
     _install_stall_watchdog(config)
+
+    # Issue #1848: refuse a green exit when an xdist worker crashed before the
+    # collected tests reported. A worker that dies DURING COLLECTION was running
+    # no item, so xdist synthesises no failure for it (that synthesised report
+    # is the only thing that makes a run-phase crash red) and, once the peer's
+    # collection has been counted, pytest returns 0 with nothing run. Measured:
+    # rc=0, "4 warnings in 18s", 0 of 2 tests reported. Controller only; inert
+    # without xdist; fires only on a crash, so healthy runs are untouched.
+    _install_xdist_crash_guard(config)
 
 
 # =============================================================================
