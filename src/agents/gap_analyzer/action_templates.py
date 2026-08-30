@@ -24,8 +24,20 @@ already declares — no brand fact is invented here:
   channel vocabulary wherever a template names a channel.
 
 Unknown / missing brand (``competitor``, ``other``, None, a typo) falls OPEN to
-the pre-#1835 neutral templates — never a KeyError — so the node keeps
-completing for any brand string the API accepts.
+the brand-agnostic neutral templates — never a KeyError — so the node keeps
+completing for any brand string the API accepts. (The neutral table kept the
+pre-#1835 wording verbatim until #1854; the fail-open INTENT is unchanged, the
+prose is not.)
+
+Since #1854 EVERY template (both tables) ends with ``in {segment_value}``: the
+gap-type suffix appended by :func:`render_action` then yields exactly the
+trailing ``… in <segment> (qualifier)`` shape that the Strategic Brief's
+``_strip_segment_suffix`` (``src/insights/executive_brief.py``) owns. A
+MID-SENTENCE segment mention would survive that strip into the LM-facing
+opportunity line — the brief would narrate the segment twice and hand the LM a
+prose alias the ``{SEG_n}`` token-index attribution check cannot see. Pinned
+exhaustively by ``tests/unit/test_agents/test_gap_analyzer/
+test_action_templates_midsentence_1854.py``.
 
 Every rendering must stay within ``MAX_ACTION_CHARS`` (the brief truncates the
 action at 160 chars); the test enumerates metric x difficulty x gap_type x
@@ -108,27 +120,29 @@ _DEFAULT = "_default"
 # dimension name, e.g. "specialty") is deliberately NOT interpolated here — the
 # longest dimension name ("specialty", 9 chars) paired with its longest value
 # ("Rheumatology", 12 chars) pushed trx/low 1 char over MAX_ACTION_CHARS for
-# Remibrutinib (#1835 codex iter-1); NEUTRAL_TEMPLATES below still uses it,
-# preserved verbatim from the pre-#1835 wording.
+# Remibrutinib (#1835 codex iter-1); NEUTRAL_TEMPLATES below still uses it in
+# trx/low, as "{segment}-targeted" since #1854 (a trailing "({segment})" after
+# the value would sit between the segment and the gap-type qualifier and defeat
+# the brief's suffix strip entirely — measured, see PR #1854 lane notes).
 BRAND_TEMPLATES: Mapping[str, Mapping[str, str]] = {
     "trx": {
         "low": (
-            "Launch a {sample_distribution} campaign for {brand} with {audiences} in "
-            "{segment_value} to drive TRx growth"
+            "Launch a {sample_distribution} campaign to drive {brand} TRx growth with "
+            "{audiences} in {segment_value}"
         ),
         "medium": (
-            "Implement a multichannel {audience} engagement strategy for {brand} in "
-            "{segment_value} to increase TRx"
+            "Implement a multichannel {audience} engagement strategy to increase {brand} "
+            "TRx in {segment_value}"
         ),
         "high": (
-            "Execute a market-access and {audience} engagement program for {brand} in "
-            "{segment_value} to close the TRx gap"
+            "Execute a market-access and {audience} engagement program to close the "
+            "{brand} TRx gap in {segment_value}"
         ),
     },
     "nrx": {
         "low": (
-            "Deploy {brand} educational webinars for {audiences} in {segment_value} to "
-            "boost new prescriptions"
+            "Deploy {brand} educational webinars for {audiences} to boost new "
+            "prescriptions in {segment_value}"
         ),
         "medium": (
             "Launch a new-prescriber acquisition campaign for {brand} targeting "
@@ -136,13 +150,13 @@ BRAND_TEMPLATES: Mapping[str, Mapping[str, str]] = {
         ),
         "high": (
             "Develop a {peer_influence_activation} program with {audience} KOLs for "
-            "{brand} in {segment_value} for NRx growth"
+            "{brand} NRx growth in {segment_value}"
         ),
     },
     "market_share": {
         "low": (
-            "Drive {call_frequency_increase} with {audiences} for {brand} in "
-            "{segment_value} to capture share"
+            "Drive {call_frequency_increase} with {audiences} to capture {brand} share "
+            "in {segment_value}"
         ),
         "medium": (
             "Launch a competitive positioning campaign for {brand} among {audiences} in "
@@ -159,8 +173,7 @@ BRAND_TEMPLATES: Mapping[str, Mapping[str, str]] = {
             "{segment_value}"
         ),
         "medium": (
-            "Redesign {brand} patient journey touchpoints with {audiences} for the "
-            "{segment_value} segment"
+            "Redesign {brand} patient journey touchpoints with {audiences} in {segment_value}"
         ),
         "high": (
             "Implement a {patient_support_program} and {audience} enablement program for "
@@ -188,43 +201,45 @@ BRAND_TEMPLATES: Mapping[str, Mapping[str, str]] = {
     },
 }
 
-# Pre-#1835 wording, verbatim — the fail-open path for an unknown brand.
+# The fail-open path for an unknown brand: the pre-#1835 neutral voice (no
+# brand, no audience), with every segment mention moved to the trailing
+# strippable position by #1854.
 NEUTRAL_TEMPLATES: Mapping[str, Mapping[str, str]] = {
     "trx": {
-        "low": "Launch targeted sampling campaign in {segment_value} ({segment}) to drive TRx growth",
+        "low": "Launch a {segment}-targeted sampling campaign to drive TRx growth in {segment_value}",
         "medium": (
-            "Implement multichannel engagement strategy for HCPs in {segment_value} to increase TRx"
+            "Implement multichannel engagement strategy for HCPs to increase TRx in {segment_value}"
         ),
         "high": (
-            "Execute comprehensive market access and HCP engagement program in {segment_value} "
-            "to close TRx gap"
+            "Execute comprehensive market access and HCP engagement program to close "
+            "TRx gap in {segment_value}"
         ),
     },
     "nrx": {
-        "low": "Deploy HCP educational webinars in {segment_value} to boost new prescriptions",
-        "medium": "Launch new prescriber acquisition campaign targeting {segment_value} specialists",
-        "high": "Develop strategic partnership program with KOLs in {segment_value} for NRx growth",
+        "low": "Deploy HCP educational webinars to boost new prescriptions in {segment_value}",
+        "medium": "Launch new prescriber acquisition campaign targeting specialists in {segment_value}",
+        "high": "Develop strategic partnership program with KOLs for NRx growth in {segment_value}",
     },
     "market_share": {
-        "low": "Increase rep frequency in {segment_value} to capture share",
+        "low": "Increase rep frequency to capture share in {segment_value}",
         "medium": "Launch competitive positioning campaign in {segment_value}",
         "high": (
-            "Execute full-scale market penetration strategy in {segment_value} with expanded "
-            "resources"
+            "Execute full-scale market penetration strategy with expanded resources in "
+            "{segment_value}"
         ),
     },
     "conversion_rate": {
-        "low": "Optimize patient starter program messaging for {segment_value}",
-        "medium": "Redesign patient journey touchpoints for {segment_value} segment",
+        "low": "Optimize patient starter program messaging in {segment_value}",
+        "medium": "Redesign patient journey touchpoints in {segment_value}",
         "high": (
             "Implement comprehensive patient support and HCP enablement program in {segment_value}"
         ),
     },
     "hcp_engagement_score": {
         "low": "Increase digital touchpoints with HCPs in {segment_value}",
-        "medium": "Launch omnichannel engagement initiative for {segment_value} providers",
+        "medium": "Launch omnichannel engagement initiative for providers in {segment_value}",
         "high": (
-            "Build strategic HCP partnership program with personalized engagement for "
+            "Build strategic HCP partnership program with personalized engagement in "
             "{segment_value}"
         ),
     },
@@ -285,8 +300,9 @@ def render_action(
     """Render the recommended action for one gap.
 
     Brand-aware when ``brand`` resolves via :func:`brand_action_context`;
-    otherwise the pre-#1835 neutral wording. The gap-type suffix is appended in
-    both cases.
+    otherwise the brand-agnostic neutral wording. The gap-type suffix is
+    appended in both cases, landing after the trailing ``in {segment_value}``
+    every template ends with (#1854).
     """
     context = brand_action_context(brand)
     table = BRAND_TEMPLATES if context is not None else NEUTRAL_TEMPLATES
