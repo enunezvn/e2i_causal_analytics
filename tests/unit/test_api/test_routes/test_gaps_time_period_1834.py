@@ -7,8 +7,16 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+# Module-level on purpose (same pattern as test_route_shadow_regression.py and
+# test_cors_configuration.py): importing src.api.main costs ~12-13 s warm and
+# more on a cold cache; at module level it is paid once at collection, outside
+# pytest-timeout's per-test budget (CI Unit Tests: --timeout=30,
+# timeout_method=thread, which os._exit()s the xdist worker on overrun).
+from src.api.dependencies.auth import require_analyst
+from src.api.main import app
 from src.api.routes.gaps import (
     GapAnalysisResponse,
     GapAnalysisStatus,
@@ -74,18 +82,20 @@ def test_request_default_is_current_quarter_and_valid():
 
 @pytest.mark.unit
 def test_http_422_on_bogus_time_period_names_the_field_and_the_accepted_forms():
-    from fastapi.testclient import TestClient
-
-    from src.api.dependencies.auth import require_analyst
-    from src.api.main import app
-
     app.dependency_overrides[require_analyst] = lambda: {"user_id": "t", "role": "analyst"}
     try:
-        with TestClient(app, raise_server_exceptions=True) as client:
-            resp = client.post(
-                "/api/gaps/analyze",
-                json={"query": "q", "brand": "kisqali", "time_period": "bogus"},
-            )
+        # Deliberately NOT `with TestClient(app)`: the context manager runs main.py's
+        # full lifespan (BentoML/Redis/FalkorDB connection retries), which measured
+        # ~23 s with no reachable services — past the CI Unit Tests job's
+        # `--timeout=30` with `timeout_method=thread`, which os._exit()s the xdist
+        # worker instead of failing (CI job 99277685267). The 422 envelope under
+        # test is produced by the REAL app's RequestValidationError handler before
+        # any endpoint or startup state is touched, so the lifespan is not needed.
+        client = TestClient(app, raise_server_exceptions=True)
+        resp = client.post(
+            "/api/gaps/analyze",
+            json={"query": "q", "brand": "kisqali", "time_period": "bogus"},
+        )
     finally:
         app.dependency_overrides.pop(require_analyst, None)
 
