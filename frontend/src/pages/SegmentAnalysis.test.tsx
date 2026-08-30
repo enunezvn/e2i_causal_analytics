@@ -800,3 +800,44 @@ describe('SegmentAnalysis — T2: robust options + durable-run timeout', () => {
     expect(screen.getByTestId('datasets-fallback-notice')).toBeInTheDocument();
   });
 });
+
+describe('SegmentAnalysis — poll ceiling covers the measured single-brand runtime', () => {
+  it('gives a single-brand run at least 300s (Fabhalta copay run measured 73/125/153/208s, not ~30s)', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useSegmentDatasets).mockReturnValue({
+      data: {
+        treatments: ['treatment_arm', 'copay_support'],
+        outcomes: ['persistent_180d'],
+        outcomes_by_treatment: { treatment_arm: ['persistent_180d'], copay_support: ['persistent_180d'] },
+        brands: ['Fabhalta', 'Kisqali'],
+        brand: null,
+        options_source: 'causal_paths',
+        labels: {},
+      },
+      isLoading: false,
+      error: null,
+    });
+    const mutate = vi.fn();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate,
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('combobox', { name: 'Brand' }));
+    await user.click(await screen.findByRole('option', { name: 'Fabhalta' }));
+    fireEvent.click(screen.getByRole('button', { name: /Run Analysis/i }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const arg = mutate.mock.calls[0][0] as { request: { brand?: string }; maxWaitMs?: number };
+    expect(arg.request.brand).toBe('Fabhalta');
+    // The old 120s single-brand cap rested on "~30s" runs; the live run is
+    // load-variable and already reached 208s solo. Below the measured runtime
+    // the FE throws "timed out" on a durable run that then completes unseen.
+    expect(arg.maxWaitMs).toBeGreaterThanOrEqual(300_000);
+  });
+});
