@@ -240,6 +240,11 @@ class GapAnalyzerState(TypedDict):
     roi_latency_ms: int  # ROI calculation time
     total_latency_ms: int  # Total workflow time
     segments_analyzed: int  # Number of segments analyzed
+    # #1834: the concrete window the analysis compared, resolved by gap_detector from
+    # ``time_period`` via the shared grammar (src.utils.gap_time_period):
+    # {"time_period", "period_start", "period_end", "prior_start", "prior_end"} as
+    # ISO dates. Absent/None when gap_detector failed before resolving it.
+    resolved_period: NotRequired[Optional[Dict[str, str]]]
 
     # === ERROR HANDLING ===
     errors: Annotated[List[Dict[str, Any]], operator.add]  # Accumulated errors
@@ -363,6 +368,9 @@ GapAnalyzerOutput = TypedDict(
         "total_latency_ms": int,
         "confidence": float,
         "warnings": List[str],
+        # #1834: the window gap_detector actually compared (ISO dates), always
+        # emitted by _build_output (None when the run failed before resolution).
+        "resolved_period": Optional[Dict[str, str]],
         "requires_further_analysis": bool,
         "suggested_next_agent": Optional[str],
         # B7.4: Multi-Library Support Output

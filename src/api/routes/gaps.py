@@ -29,10 +29,15 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.api.dependencies.auth import require_analyst
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
+# #1834: the ONE time_period grammar, shared with the gap_detector node and the
+# Supabase connector. It lives in src.utils (stdlib-only) rather than under
+# src.agents.gap_analyzer so this module keeps its lazy, #429-guarded agent import.
+from src.utils.gap_time_period import TimePeriodError, resolve_time_period
 
 if TYPE_CHECKING:
     from src.api.repositories.gaps_repository import GapsRepository
@@ -104,7 +109,16 @@ class RunGapAnalysisRequest(BaseModel):
     )
     time_period: str = Field(
         default="current_quarter",
-        description="Analysis period (e.g., 'current_quarter', '2024-Q3')",
+        description=(
+            "Analysis period. Accepted forms: current_quarter (quarter start to today), "
+            "previous_quarter / last_quarter (the preceding full calendar quarter), "
+            "Q#_YYYY or YYYY-Q# (an explicit calendar quarter, e.g. 'Q3_2026' or "
+            "'2026-Q3'), YTD, MTD, or an explicit inclusive range "
+            "'YYYY-MM-DD_YYYY-MM-DD'. Anything else is rejected with 422. Relative forms "
+            "resolve on the server's UTC calendar date; use an explicit range for an "
+            "exact as-of window. The window actually compared is returned as "
+            "``resolved_period``."
+        ),
     )
     indication: Optional[str] = Field(
         default=None,
@@ -137,6 +151,22 @@ class RunGapAnalysisRequest(BaseModel):
         default=None,
         description="Additional filters (e.g., {'region': 'Northeast'})",
     )
+
+    @field_validator("time_period")
+    @classmethod
+    def _validate_time_period(cls, value: str) -> str:
+        """#1834: enforce the shared grammar at the HTTP boundary (422, forms listed).
+
+        Before this validator the DEFAULT ``current_quarter`` and the documented
+        ``2024-Q3`` reached the connector, which silently analysed the trailing 90
+        days. The grammar is resolved here only to VALIDATE; the gap_detector node
+        resolves it again at run time (same clock seam) and surfaces the window.
+        """
+        try:
+            resolve_time_period(value)
+        except TimePeriodError as exc:
+            raise ValueError(str(exc)) from exc
+        return value.strip()
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -264,6 +294,22 @@ class PrioritizedOpportunity(BaseModel):
     )
 
 
+class ResolvedPeriod(BaseModel):
+    """The concrete inclusive windows a gap analysis compared (#1834).
+
+    ``time_period`` is the label the caller sent (e.g. ``current_quarter``); the
+    four dates are what it resolved to on the day the analysis ran, so the page
+    and the brief can state what was actually compared instead of trusting the
+    label.
+    """
+
+    time_period: str = Field(..., description="The requested time_period label")
+    period_start: str = Field(..., description="Current window start (YYYY-MM-DD, inclusive)")
+    period_end: str = Field(..., description="Current window end (YYYY-MM-DD, inclusive)")
+    prior_start: str = Field(..., description="Comparison window start (YYYY-MM-DD, inclusive)")
+    prior_end: str = Field(..., description="Comparison window end (YYYY-MM-DD, inclusive)")
+
+
 class GapAnalysisResponse(BaseModel):
     """Response from gap analysis."""
 
@@ -272,6 +318,16 @@ class GapAnalysisResponse(BaseModel):
     brand: str = Field(..., description="Brand analyzed")
     metrics_analyzed: List[str] = Field(..., description="KPIs analyzed")
     segments_analyzed: int = Field(..., description="Number of segments")
+    # #1834: the window the analysis actually compared. None while pending, on a
+    # run that failed before gap_detector resolved it, and on rows persisted
+    # before this field existed.
+    resolved_period: Optional[ResolvedPeriod] = Field(
+        default=None,
+        description=(
+            "The concrete current/prior windows the requested time_period resolved to "
+            "(#1834). None while pending or when the run failed before resolution."
+        ),
+    )
 
     # Prioritized results
     prioritized_opportunities: List[PrioritizedOpportunity] = Field(
@@ -326,6 +382,13 @@ class GapAnalysisResponse(BaseModel):
                 "brand": "kisqali",
                 "metrics_analyzed": ["trx", "market_share"],
                 "segments_analyzed": 12,
+                "resolved_period": {
+                    "time_period": "current_quarter",
+                    "period_start": "2026-07-01",
+                    "period_end": "2026-08-30",
+                    "prior_start": "2026-04-01",
+                    "prior_end": "2026-06-30",
+                },
                 "total_addressable_value": 2500000.0,
                 "total_gap_value": 15.3,
                 "executive_summary": "Identified 8 high-value opportunities...",
@@ -877,6 +940,8 @@ async def _execute_gap_analysis(
             brand=request.brand,
             metrics_analyzed=request.metrics,
             segments_analyzed=result.get("segments_analyzed", 0),
+            # #1834: the window gap_detector resolved (None if it failed first).
+            resolved_period=result.get("resolved_period"),
             prioritized_opportunities=_convert_opportunities(
                 result.get("prioritized_opportunities", [])
             ),
@@ -1026,6 +1091,9 @@ def _generate_mock_response(
         brand=request.brand,
         metrics_analyzed=request.metrics,
         segments_analyzed=len(request.segments) * 4,  # Mock 4 values per segment
+        # #1834: even the dev-only mock response states the window it claims to
+        # cover (the request model already validated the label).
+        resolved_period=ResolvedPeriod(**resolve_time_period(request.time_period).to_dict()),
         prioritized_opportunities=[mock_opp],
         quick_wins=[mock_opp],
         strategic_bets=[],
