@@ -323,6 +323,13 @@ export function useRunLearningCycleAndWait(
       queryClient.invalidateQueries({ queryKey: queryKeys.feedback.patterns() });
       queryClient.invalidateQueries({ queryKey: queryKeys.feedback.updates() });
     },
+    // The mutationFn is POST + poll-to-completion. The app's QueryClient
+    // retries mutations once by default (src/lib/query-client.ts), so a
+    // retry — after a poll-ceiling timeout or a transient GET error — queues
+    // a SECOND learning cycle behind the first (#1839; same defect as the
+    // segment hook, #1836). Re-running is an explicit user action, never a
+    // silent retry.
+    retry: false,
     ...options,
   });
 }
@@ -351,6 +358,15 @@ export function useQuickLearningCycle(
       queryClient.invalidateQueries({ queryKey: queryKeys.feedback.patterns() });
       queryClient.invalidateQueries({ queryKey: queryKeys.feedback.updates() });
     },
+    // A single synchronous POST (`async_mode=false`) that the backend runs
+    // inline: it mints a batch_id and persists the patterns/updates before
+    // responding, and a failed cycle is a 500 AFTER the FAILED batch was
+    // persisted. UI-driven cycles measured 18.8 s and 23.1 s on prod against
+    // the api-client's 30 s timeout, so a client-side timeout is a live
+    // possibility — and the app's default mutation retry (retry: 1) would then
+    // run a SECOND full cycle with a second batch (#1839). Re-running is an
+    // explicit user action, never a silent retry.
+    retry: false,
     ...options,
   });
 }

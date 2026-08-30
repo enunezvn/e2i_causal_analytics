@@ -119,7 +119,10 @@ describe('ResourceOptimization', () => {
     expect(arg.request.allocation_targets).toEqual([]);
     // Polling must be configured (fire-and-forget was the original "does nothing" bug).
     expect(arg.pollIntervalMs).toBeGreaterThan(0);
-    expect(arg.maxWaitMs).toBeGreaterThan(0);
+    // Ceiling pinned to its measured basis (OPTIMIZATION_POLL_CEILING_MS,
+    // measured prod run 0.66 s): `>=` so a later lift keeps passing and only a
+    // cut below the measurement fails (#1839).
+    expect(arg.maxWaitMs).toBeGreaterThanOrEqual(120_000);
   });
 
   it('shows a running indicator while the optimization is pending', () => {

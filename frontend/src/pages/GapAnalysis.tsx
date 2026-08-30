@@ -79,6 +79,22 @@ import { BUCKET_META, bucketMeta } from '@/lib/gaps/interpret';
 // (which needs a concrete brand) is disabled while it is selected.
 const ALL_BRANDS = 'all';
 
+/**
+ * Poll ceiling (ms) for the durable async gap-analysis run. The backend
+ * persists the analysis record and the run completes server-side whether or
+ * not the page is still polling, so this only decides how long the page waits
+ * before giving up on a run that may be genuinely stuck.
+ *
+ * Measured on prod from the durable `gap_analyses` rows (n=28 completed,
+ * 2026-06-08..2026-08-26): `total_latency_ms` avg 4.5 s, p95 10.8 s, worst
+ * 35.3 s (a single 2026-06-19 outlier); end-to-end submit->complete
+ * (`updated_at - created_at`) worst 12.6 s. 120 s is >3x the worst sample, so
+ * it is kept — a ceiling is a measurement, not a constant (#1839). The hook no
+ * longer retries a timed-out poll (use-gaps.ts), so reaching this ceiling can
+ * not re-submit the analysis.
+ */
+const GAP_ANALYSIS_POLL_CEILING_MS = 120_000;
+
 const BRANDS = [
   { value: ALL_BRANDS, label: 'All Brands' },
   { value: 'Kisqali', label: 'Kisqali' },
@@ -281,7 +297,8 @@ function GapAnalysis() {
         segments: ['region', 'specialty', 'account_type'],
       },
       pollIntervalMs: 3000,
-      maxWaitMs: 120000,
+      // Durable record; see the ceiling constant for the measured basis.
+      maxWaitMs: GAP_ANALYSIS_POLL_CEILING_MS,
     });
   };
 

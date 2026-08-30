@@ -72,6 +72,22 @@ const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444'];
 // events — both clearly-labelled synthetic sources.
 const BRAND_OPTIONS = ['All Brands', 'Remibrutinib', 'Fabhalta', 'Kisqali'];
 
+/**
+ * Poll ceiling (ms) for the durable async optimization run (Redis-backed
+ * store, 7-day TTL). The run completes server-side whether or not the page is
+ * still polling, so this only decides how long the page waits before giving up
+ * on a run that may be genuinely stuck.
+ *
+ * Measured on prod from the durable store (the only record inside the TTL,
+ * 2026-08-26: rep_time, 3 scenarios — the shape this page submits):
+ * `total_latency_ms` = 656 ms (optimization 404 ms). Each solve is bounded
+ * server-side by `time_limit_seconds` (default 60 s). 120 s is >100x the
+ * measured run, so it is kept — a ceiling is a measurement, not a constant
+ * (#1839). The hook no longer retries a timed-out poll (use-resources.ts), so
+ * reaching this ceiling can not re-submit the optimization.
+ */
+const OPTIMIZATION_POLL_CEILING_MS = 120_000;
+
 // With every territory in the optimization universe (~40), the comparison
 // bar chart caps at the biggest movers to stay readable; the table below
 // lists everything.
@@ -418,7 +434,8 @@ export default function ResourceOptimization() {
         scenario_count: 3,
       },
       pollIntervalMs: 3000,
-      maxWaitMs: 120000,
+      // Durable record; see the ceiling constant for the measured basis.
+      maxWaitMs: OPTIMIZATION_POLL_CEILING_MS,
     });
   };
 

@@ -222,7 +222,10 @@ describe('GapAnalysis — Run Analysis wiring (poll-to-completion)', () => {
     expect(arg.request.segments).toContain('region');
     // The fix: poll-to-completion, NOT the old fire-and-forget async shape.
     expect(arg.pollIntervalMs).toBeGreaterThan(0);
-    expect(arg.maxWaitMs).toBeGreaterThan(0);
+    // Ceiling pinned to its measured basis (GAP_ANALYSIS_POLL_CEILING_MS,
+    // worst prod sample 35 s): `>=` so a later lift keeps passing and only a
+    // cut below the measurement fails (#1839).
+    expect(arg.maxWaitMs).toBeGreaterThanOrEqual(120_000);
     expect(arg.asyncMode).toBeUndefined();
   });
 
