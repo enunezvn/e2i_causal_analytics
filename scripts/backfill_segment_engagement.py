@@ -64,7 +64,10 @@ PLANTED TRUE PER-REGION CATE PER CHANNEL (verifiable; effect of above-median T)
 engagement_score taus are UNCHANGED from revision 1 (/segments/analyze
 coherence). All channels are monotone in the region-richness ordering
 (northeast > west > south > midwest, mirroring
-BusinessMetricsGenerator.REGION_FACTORS) with distinct headline magnitudes so
+BusinessMetricsGenerator.REGION_FACTORS — the brand-independent MARKET-SIZE
+factor, unchanged by #1833; the #1833 brand x region execution matrix and
+step events are value-only terms in business_metrics and do not enter this
+ordering) with distinct headline magnitudes so
 the Digital Twin page differentiates channels. Adjacent-region gaps are sized
 for recoverability at per-brand n (~4k rows); the dry-run recovery probe is the
 acceptance arbiter for every channel.

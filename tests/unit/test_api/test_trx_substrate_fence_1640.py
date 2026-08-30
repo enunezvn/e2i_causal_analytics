@@ -6,15 +6,21 @@ and two of them come from genuinely different substrates:
     11,298      kpi_calculate_tool  -> COUNT(*) over treatment_events
                                        where event_type='prescription', 30d
     207,270.27  e2i_data_query_tool -> business_metrics.value, northeast, 2026-08
+                (225,924.59 after the #1833 reseed: northeast execution x1.09)
 
 Measured against the live DB (2026-08-15): the national business_metrics TRx
-total for 2026-08 is 825,242 against 11,298 trailing-30-day prescription events
+total for 2026-08 was 825,242 against 11,298 trailing-30-day prescription events
 — **73.0x**, and stable month over month (2026-07: 830,103; 2026-06: 812,266).
+Re-measured 2026-08-30 for the #1833 reseed (value-only brand x region
+execution matrix + anchored step events, RNG untouched): 800,349 (x0.970, the
+planted -12% Kisqali/midwest step) — **~71x** the same 11,298 events.
 That is not a window or grain artifact. ``business_metrics.value`` is a MODELED
 market-scale level: BusinessMetricsGenerator draws Kisqali from a base of
-50,000 per region per month with REGION_FACTORS northeast 1.15 and 2% monthly
-trend, so national 50,000 x 4.00 x 4.26 = 852,000 against a measured 825,242.
-An event count cannot be fractional, and these values are (min 5,923.95).
+50,000 per region per month with REGION_FACTORS northeast 1.15, 2% monthly
+trend and (#1833) a market-size-weighted-mean-1 execution matrix, so national
+50,000 x 4.26 x 3.90 = 830,000 against a measured 800,349 (pre-#1833:
+50,000 x 4.00 x 4.26 = 852,000 vs 825,242). An event count cannot be
+fractional, and these values are (min 5,923.95).
 
 So the scales cannot be reconciled by arithmetic, and the issue's own
 acceptance criterion resolves to its second branch: cross-substrate figures

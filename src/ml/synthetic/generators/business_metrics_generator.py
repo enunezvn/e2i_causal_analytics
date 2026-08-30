@@ -5,14 +5,34 @@ Generates synthetic business metrics for Gap Analyzer agent.
 Produces time-series metrics per brand/region combination.
 """
 
+from dataclasses import dataclass
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
 from ..config import Brand, RegionEnum
 from .base import BaseGenerator, GeneratorConfig
+
+
+@dataclass(frozen=True)
+class BrandRegionEvent:
+    """A calendar-anchored STEP shock on ``value`` only (#1833).
+
+    From ``start`` (a month start) onward every row of ``brand`` x ``region``
+    whose metric_type is in ``metric_types`` is multiplied by ``factor``. Steps
+    never revert: while the gap analyzer's 90-day current/prior windows
+    straddle ``start`` the shock is a *temporal* story, afterwards it persists
+    as a *level* story. Events on the same (brand, region, metric) compound.
+    """
+
+    brand: str
+    region: str
+    metric_types: Tuple[str, ...]
+    start: date
+    factor: float
+    label: str
 
 
 class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
@@ -48,6 +68,57 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
     (that inconsistency is exactly what #1566 observed). Closed-form
     derivation from the value series is deferred (issue #1566, D2 in the
     local plans backlog).
+
+    Brand x region geography (#1833). ``value`` (never ``target``) carries two
+    deterministic, RNG-free terms so each brand has its OWN weakest region
+    and the gap analyzer can rank it (before #1833 the only regional term was
+    the market-size ``REGION_FACTORS`` on both value and target, which
+    cancels in every gap, leaving i.i.d. noise — all three brands' #1 gap was
+    "west" by coincidence). Planted matrix (``BRAND_REGION_PERFORMANCE``,
+    execution factors on value; market-size-weighted mean 1.0 per brand so
+    national scale is unchanged: Kisqali 0.997 / Fabhalta 0.996 /
+    Remibrutinib 0.998)::
+
+                       northeast  south  midwest  west    weakest (planted)
+        Kisqali          1.09     0.97    0.86    1.04    midwest
+        Fabhalta         1.03     0.86    0.98    1.10    south
+        Remibrutinib     1.00     1.08    1.04    0.88    west
+
+    Anchored step events (``BRAND_REGION_EVENTS``; trx + nrx + market_share;
+    value only; never revert; compound) with their true effects::
+
+        Kisqali/midwest      x0.88 from 2026-05-01, x0.85 from 2026-10-01
+                             (compounded 0.748; x0.86 execution = 0.643 of
+                             the market-size line from 2026-10)
+        Fabhalta/south       x0.88 from 2026-06-01, x0.85 from 2026-11-01
+        Remibrutinib/west    x0.88 from 2026-06-01, x0.85 from 2026-11-01
+
+    Measured national TRx effect (regenerated vs the pre-#1833 DB, 2026-08):
+    Kisqali x0.970, Fabhalta x0.975, Remibrutinib x0.980; all months x0.996 /
+    x0.995 / x0.998. The pre-#1833 frozen base (seed 42, n=10000, start
+    2013-01-01) reproduces the DB byte-for-byte on every non-value column,
+    so the reseed is an in-place upsert on ``metric_id``
+    (``scripts/reseed_business_metrics_aggregate.py``).
+
+    Empirical arbiter (``scripts/gap_arbiter_1833.py``, real connector /
+    benchmark-store / gap_detector / ROI / prioritizer code over the
+    regenerated frame, production request defaults): the #1 opportunity is
+    the planted region for all three brands at the 2026-08-30 frontier and at
+    each of the next six monthly positions (also on the 5th/15th of the
+    month). Winning gap types: Kisqali midwest market_share vs_benchmark
+    (20-30%, ROI 62-88x), Fabhalta south market_share vs_benchmark (10-32%,
+    ROI 11-43x), Remibrutinib west trx vs_target (13%) then market_share
+    vs_target (8.5-25%, ROI 5.7-25x); the best non-planted opportunity never
+    exceeds ROI 15x (northeast trx temporal noise). Two measured facts shape
+    the design: (1) the production benchmark store is UN-windowed (all-history
+    per-region means / P75 / P90), so under the 2%/month trx trend the
+    current 90-day level sits ~1.6x above every historical bar and a level
+    factor cannot surface on trx — it surfaces through market_share (trend
+    0.005/month) and, while the 90+90-day windows straddle a step, as a
+    temporal gap; (2) the matrix alone and the events alone each FAIL
+    Remibrutinib (0 gaps at two positions, then noise regions win); both
+    together pass, and the second step re-arms the temporal story once the
+    first is absorbed into both windows.
     """
 
     # Metric configurations by type
@@ -84,13 +155,119 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         },
     }
 
-    # Regional adjustment factors
+    # Regional MARKET-SIZE factors — brand-independent, applied to BOTH value
+    # and target (so they cancel in every gap the analyzer computes). This is
+    # the region-richness ordering scripts/backfill_segment_engagement.py mirrors.
     REGION_FACTORS: Dict[str, float] = {
         "northeast": 1.15,
         "south": 0.95,
         "midwest": 0.90,
         "west": 1.00,
     }
+
+    # #1833: brand x region EXECUTION factors, applied to ``value`` ONLY (targets
+    # stay on the market-size trend line). Deterministic lookup — consumes no
+    # RNG draws, so metric_ids / dates / targets / every other column reproduce
+    # byte-identically and a reseed is an in-place upsert on metric_id.
+    # Each row is market-size-weighted mean 1.0 (+-1%) under REGION_FACTORS so
+    # per-brand national scale is unchanged (pinned by test). The weakest
+    # region differs per brand — that is the planted per-brand geography:
+    #   Kisqali      (HR+/HER2- breast cancer): midwest   (community-oncology
+    #                 pathway adherence lag; NE academic centers over-index)
+    #   Fabhalta     (PNH, rare disease):       south     (thin hematology
+    #                 referral network; west/NE centers of excellence over-index)
+    #   Remibrutinib (CSU):                     west      (late Kaiser/IDN
+    #                 formulary access; south allergy-practice density over-index)
+    BRAND_REGION_PERFORMANCE: Dict[str, Dict[str, float]] = {
+        "Kisqali": {"northeast": 1.09, "south": 0.97, "midwest": 0.86, "west": 1.04},
+        "Fabhalta": {"northeast": 1.03, "south": 0.86, "midwest": 0.98, "west": 1.10},
+        "Remibrutinib": {"northeast": 1.00, "south": 1.08, "midwest": 1.04, "west": 0.88},
+    }
+
+    # #1833: calendar-anchored STEP shocks on ``value`` only (see
+    # BrandRegionEvent). A level factor cancels in the temporal gap (both 90-day
+    # windows carry it) and the production benchmark store aggregates ALL
+    # history (un-windowed), so with the +2%/month trend the current window is
+    # always above the historical target/P75/P90 bars — the anchored events are
+    # what actually reach the gap analyzer's ranking. Two staggered steps per
+    # brand keep a temporal shortfall visible across ~7 consecutive monthly
+    # frontier positions (a single step is straddled by the 90+90-day windows
+    # for only ~6 months). True effects are documented per event; the arbiter
+    # (scripts/gap_arbiter_1833.py) is what tuned the magnitudes.
+    # First steps are -12% (a step in a region that is <=25% of national moves
+    # the brand's frontier-month national scale by <=3.0%, the #1640 substrate
+    # note's tolerance); the later compounding steps are -15%.
+    BRAND_REGION_EVENTS: Tuple[BrandRegionEvent, ...] = (
+        BrandRegionEvent(
+            brand="Kisqali",
+            region="midwest",
+            metric_types=("trx", "nrx", "market_share"),
+            start=date(2026, 5, 1),
+            factor=0.88,
+            label="midwest IDN/PBM formulary exclusion (step -12% from 2026-05)",
+        ),
+        BrandRegionEvent(
+            brand="Kisqali",
+            region="midwest",
+            metric_types=("trx", "nrx", "market_share"),
+            start=date(2026, 10, 1),
+            factor=0.85,
+            label="oral-SERD competitor launch in midwest community oncology (step -15% from 2026-10)",
+        ),
+        BrandRegionEvent(
+            brand="Fabhalta",
+            region="south",
+            metric_types=("trx", "nrx", "market_share"),
+            start=date(2026, 6, 1),
+            factor=0.88,
+            label="south PNH center-of-excellence referral pathway loss (step -12% from 2026-06)",
+        ),
+        BrandRegionEvent(
+            brand="Fabhalta",
+            region="south",
+            metric_types=("trx", "nrx", "market_share"),
+            start=date(2026, 11, 1),
+            factor=0.85,
+            label="south Medicaid prior-authorization tightening (step -15% from 2026-11)",
+        ),
+        BrandRegionEvent(
+            brand="Remibrutinib",
+            region="west",
+            metric_types=("trx", "nrx", "market_share"),
+            start=date(2026, 6, 1),
+            factor=0.88,
+            label="west Kaiser/IDN formulary step-edit (step -12% from 2026-06)",
+        ),
+        BrandRegionEvent(
+            brand="Remibrutinib",
+            region="west",
+            metric_types=("trx", "nrx", "market_share"),
+            start=date(2026, 11, 1),
+            factor=0.85,
+            label="west biologic competitor copay program (step -15% from 2026-11)",
+        ),
+    )
+
+    @classmethod
+    def brand_region_factor(
+        cls, brand: str, region: str, metric_type: str, metric_date: date
+    ) -> float:
+        """The deterministic value-only multiplier for one row (#1833).
+
+        Persistent execution factor times every planted step event active on
+        ``metric_date`` for this brand/region/metric. Unknown brands or
+        regions (e.g. ``competitor``) are identity. NO RNG.
+        """
+        factor = cls.BRAND_REGION_PERFORMANCE.get(brand, {}).get(region, 1.0)
+        for event in cls.BRAND_REGION_EVENTS:
+            if (
+                event.brand == brand
+                and event.region == region
+                and metric_type in event.metric_types
+                and metric_date >= event.start
+            ):
+                factor *= event.factor
+        return factor
 
     @property
     def entity_type(self) -> str:
@@ -247,10 +424,18 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         # Apply regional adjustment
         region_factor = self.REGION_FACTORS.get(region, 1.0)
 
-        # Calculate value with trend and noise
+        # Calculate value with trend and noise. #1833: the brand x region
+        # execution factor and anchored events multiply VALUE only (targets
+        # below stay on the market-size line) and consume no RNG.
         trend_factor = 1 + (trend * month_idx)
         noise = self._rng.normal(0, volatility)
-        value = base_value * region_factor * trend_factor * (1 + noise)
+        value = (
+            base_value
+            * region_factor
+            * trend_factor
+            * (1 + noise)
+            * self.brand_region_factor(brand, region, metric_type, metric_date)
+        )
 
         # Ensure non-negative values
         value = max(0, value)

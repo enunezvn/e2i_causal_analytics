@@ -105,6 +105,14 @@ BM_EPOCH = date(2026, 8, 1)  # base bm rows exist through 2026-07-01
 # (2026-08) index 163. Without it, a single-date cohort run resets the
 # positional month_idx to 0 and collapses to the 2013 baseline (~24% of July).
 BM_TREND_ORIGIN = date(2013, 1, 1)
+# #1833: the frozen base's generation identity, for regenerating it IN-MEMORY
+# (reseed script, gap arbiter) — never for the cron, which only emits cohort
+# months from BM_EPOCH. scripts/load_synthetic_data.py loads it with the
+# DEFAULT start (re-anchored to the run month); pinning start_date to the
+# 2026-07-03 load's first month reproduces that load exactly (Step 0 of #1833
+# measured all 9,780 rows byte-identical to the DB on 16 columns).
+BM_BASE_N = 10000
+BM_BASE_START = BM_TREND_ORIGIN
 TRAIL_WEEKS = 26  # covers the max measured derived-date overshoot (~+89d) with margin
 
 # Base-substrate generation identity (scripts/load_synthetic_data.py defaults:
@@ -332,6 +340,26 @@ def generate_week_cohort(week_start: date, hcp_df: pd.DataFrame) -> Dict[str, pd
         "feature_values": feature_values,
         "agent_activities": agent_activities,
     }
+
+
+def base_business_metrics_frame() -> pd.DataFrame:
+    """Regenerate the frozen business_metrics base (2013-01..2026-07, 9,780
+    rows, unprefixed ``metric_<12hex>`` ids) in-memory under the CURRENT DGP.
+
+    Same seed / size as the loader (BASE_SEED, BM_BASE_N) with the date range
+    pinned to BM_BASE_START, so ids, dates, targets and every RNG-drawn column
+    match the DB rows byte-for-byte; only ``value`` (and its derived
+    achievement_rate / CI columns) moves when the value-only brand x region
+    terms are retuned — which is what makes a reseed an in-place upsert on
+    ``metric_id`` (#1833). NOT part of append runs."""
+    return BusinessMetricsGenerator(
+        GeneratorConfig(
+            id_prefix=BASE_TAG,
+            seed=BASE_SEED,
+            n_records=BM_BASE_N,
+            start_date=BM_BASE_START,
+        )
+    ).generate()
 
 
 def generate_month_cohort(month_start: date) -> Dict[str, pd.DataFrame]:

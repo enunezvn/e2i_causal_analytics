@@ -47,10 +47,38 @@ from src.ml.synthetic.generators import (
 # code edits — if someone retunes the generator config, appended cohorts WOULD
 # diverge from the frozen base, and this test should break.
 TRX_BASE = {"Remibrutinib": 15000.0, "Fabhalta": 8000.0, "Kisqali": 50000.0}
+# Market-size factor (value AND target) — unchanged by #1833.
 REGION_FACTORS = {"northeast": 1.15, "south": 0.95, "midwest": 0.90, "west": 1.00}
+# #1833: the base in the DB is RESEEDED under the brand x region formula
+# (value only; scripts/reseed_business_metrics_aggregate.py), so appended
+# cohorts must carry the SAME execution matrix and the SAME anchored events —
+# pinned literally here for the same reason as REGION_FACTORS: a retune that
+# is not accompanied by a base reseed puts cohorts on a different line than
+# the base, and this test must break.
+BRAND_REGION_PERFORMANCE = {
+    "Kisqali": {"northeast": 1.09, "south": 0.97, "midwest": 0.86, "west": 1.04},
+    "Fabhalta": {"northeast": 1.03, "south": 0.86, "midwest": 0.98, "west": 1.10},
+    "Remibrutinib": {"northeast": 1.00, "south": 1.08, "midwest": 1.04, "west": 0.88},
+}
+# Step events active on 2026-08-01 for trx: (brand, region) -> compounded factor.
+EVENTS_ACTIVE_AUG_2026 = {
+    ("Kisqali", "midwest"): 0.88,
+    ("Fabhalta", "south"): 0.88,
+    ("Remibrutinib", "west"): 0.88,
+}
 TRX_TREND = 0.02  # 2%/month
 # (2026-08 - 2013-01) in calendar months: (2026-2013)*12 + (8-1) = 163.
 AUG_2026_IDX = 163
+
+
+def _expected_trx(brand: str, region: str, month_idx: int, events: dict) -> float:
+    return (
+        TRX_BASE[brand]
+        * REGION_FACTORS[region]
+        * (1 + TRX_TREND * month_idx)
+        * BRAND_REGION_PERFORMANCE[brand][region]
+        * events.get((brand, region), 1.0)
+    )
 
 
 def _cohort_config(**overrides) -> GeneratorConfig:
@@ -77,9 +105,7 @@ class TestMonthCohortContinuity:
         assert len(trx) == 12
 
         expected = trx.apply(
-            lambda r: (
-                TRX_BASE[r["brand"]] * REGION_FACTORS[r["region"]] * (1 + TRX_TREND * AUG_2026_IDX)
-            ),
+            lambda r: _expected_trx(r["brand"], r["region"], AUG_2026_IDX, EVENTS_ACTIVE_AUG_2026),
             axis=1,
         )
         ratio = float((trx["value"] / expected).mean())
@@ -95,6 +121,77 @@ class TestMonthCohortContinuity:
         # month 2026-08 = index 163. NOT re-derivable by re-running the base
         # generator (its default date range re-anchors to the run date).
         assert fa.BM_TREND_ORIGIN == date(2013, 1, 1)
+
+    def test_cohort_months_sit_on_the_regenerated_base_line(self):
+        """#1833 acceptance (d): the 2026-08 / 2026-09 cohorts continue the
+        RESEEDED base — same market-size line, same brand x region execution
+        matrix, same anchored events — not the pre-#1833 flat line.
+
+        Per (brand, region) the cohort row and the base's last 6 months are
+        divided by their deterministic expectation (which carries the planted
+        factor); the noise-only residuals must then sit on the same level. A
+        cohort still on the flat formula would read ~1/0.86 for Kisqali/midwest
+        against a base residual of ~1.
+        """
+
+        def residual(row) -> float:
+            d = date.fromisoformat(row["metric_date"])
+            idx = (d.year - 2013) * 12 + (d.month - 1)
+            line = (
+                TRX_BASE[row["brand"]]
+                * REGION_FACTORS[row["region"]]
+                * (1 + TRX_TREND * idx)
+                * BusinessMetricsGenerator.brand_region_factor(
+                    row["brand"], row["region"], "trx", d
+                )
+            )
+            return row["value"] / line
+
+        base = fa.base_business_metrics_frame()
+        base_trx = base[(base["metric_type"] == "trx") & (base["metric_date"] >= "2026-02-01")]
+        for month_start in (date(2026, 8, 1), date(2026, 9, 1)):
+            cohort = fa.generate_month_cohort(month_start)["business_metrics"]
+            trx = cohort[cohort["metric_type"] == "trx"]
+            assert len(trx) == 12
+            for brand, region in EVENTS_ACTIVE_AUG_2026:
+                row = trx[(trx["brand"] == brand) & (trx["region"] == region)].iloc[0]
+                b = base_trx[(base_trx["brand"] == brand) & (base_trx["region"] == region)]
+                base_resid = float(b.apply(residual, axis=1).mean())
+                # noise N(0, 0.15) per row: one cohort row vs a 6-row base mean
+                assert abs(residual(row) - base_resid) < 0.45, (
+                    month_start,
+                    brand,
+                    region,
+                    residual(row),
+                    base_resid,
+                )
+
+
+class TestBaseBusinessMetricsFrame:
+    """#1833: the frozen-base regeneration identity, shared by the reseed
+    script and the gap arbiter. Step 0 measured it byte-identical to the DB."""
+
+    def test_regenerates_the_frozen_base_identity(self):
+        base = fa.base_business_metrics_frame()
+        assert len(base) == 9780
+        assert base["metric_date"].min() == "2013-01-01"
+        assert base["metric_date"].max() == "2026-07-01"
+        # literal DB fingerprint (metric_id is a seeded draw; target is on the
+        # market-size line — neither moves under the #1833 value-only terms)
+        row = base[
+            (base["metric_date"] == "2026-07-01")
+            & (base["brand"] == "Kisqali")
+            & (base["region"] == "midwest")
+            & (base["metric_name"] == "trx")
+        ].iloc[0]
+        assert row["metric_id"] == "metric_2ca0d492f13b"
+        assert row["target"] == 219010.90
+        # base ids are the unprefixed generator namespace, disjoint from cohorts
+        assert base["metric_id"].str.startswith("metric_").all()
+
+    def test_base_constants_match_the_loader(self):
+        assert fa.BM_BASE_N == 10000
+        assert fa.BM_BASE_START == fa.BM_TREND_ORIGIN == date(2013, 1, 1)
 
 
 class TestMonthCohortDeterminism:

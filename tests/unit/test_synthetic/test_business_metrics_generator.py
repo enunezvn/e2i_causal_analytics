@@ -521,3 +521,211 @@ class TestMetricNameContract:
         df = BusinessMetricsGenerator(GeneratorConfig(n_records=2000, seed=42)).generate()
         years = {d[:4] for d in df["metric_date"].astype(str)}
         assert "2022" not in years, "metric_date still anchored to the 2022 staleness root"
+
+
+# ---------------------------------------------------------------------------
+# #1833: brand x region structure planted on VALUE only (targets stay on the
+# market-size trend line); both terms are deterministic lookups that consume
+# no RNG, so metric_ids / dates / every other column reproduce byte-for-byte.
+# ---------------------------------------------------------------------------
+
+# The frozen-base identity (scripts/load_synthetic_data.py: seed 42, n=10000;
+# start pinned to the 2026-07-03 load's first month). #1833 Step 0 measured this
+# config byte-identical to all 9,780 DB base rows (16 columns, 0 mismatches).
+BASE_CONFIG = {
+    "id_prefix": "scv",
+    "seed": 42,
+    "n_records": 10000,
+    "start_date": date(2013, 1, 1),
+}
+BRANDS = ("Remibrutinib", "Fabhalta", "Kisqali")
+REGIONS = ("northeast", "south", "midwest", "west")
+
+# Literal pre-change fingerprints read from the live DB (2026-08-30). metric_id
+# is a seeded RNG draw and target is a seeded draw on the market-size line:
+# neither may move when brand x region terms are planted on value.
+DB_FINGERPRINTS = [
+    # (metric_date, brand, region, metric_name, metric_id, target)
+    ("2013-01-01", "Remibrutinib", "northeast", "trx", "metric_f9b7c98320d6", 18869.57),
+    ("2020-06-01", "Fabhalta", "south", "market_share", "metric_b40527712eab", 0.13),
+    ("2026-06-01", "Remibrutinib", "west", "trx", "metric_fccbf69412a6", 72161.66),
+    ("2026-07-01", "Kisqali", "midwest", "trx", "metric_2ca0d492f13b", 219010.90),
+]
+
+
+def _flat_frame(monkeypatch) -> pd.DataFrame:
+    """The pre-#1833 formula: every brand x region term at identity, no events.
+
+    Patches only the planted lookup TABLES (class constants); the generator code
+    path — and therefore its RNG consumption — is the real one.
+    """
+    monkeypatch.setattr(
+        BusinessMetricsGenerator,
+        "BRAND_REGION_PERFORMANCE",
+        {b: dict.fromkeys(REGIONS, 1.0) for b in BRANDS},
+    )
+    monkeypatch.setattr(BusinessMetricsGenerator, "BRAND_REGION_EVENTS", ())
+    return BusinessMetricsGenerator(GeneratorConfig(**BASE_CONFIG)).generate()
+
+
+def _later_events_product(brand, region, metric, after) -> float:
+    """Product of the factors of events on (brand, region, metric) starting
+    strictly after ``after`` — compounding steps are allowed."""
+    prod = 1.0
+    for ev in BusinessMetricsGenerator.BRAND_REGION_EVENTS:
+        if (
+            ev.brand == brand
+            and ev.region == region
+            and metric in ev.metric_types
+            and ev.start > after
+        ):
+            prod *= ev.factor
+    return prod
+
+
+class TestBrandRegionStructure1833:
+    def test_value_carries_brand_region_factor_and_target_does_not(self, monkeypatch):
+        planted = BusinessMetricsGenerator(GeneratorConfig(**BASE_CONFIG)).generate()
+        # Resolve the planted factors BEFORE _flat_frame patches the tables away.
+        mask = planted["metric_type"].isin(["trx", "nrx"])
+        expected = planted[mask].apply(
+            lambda r: BusinessMetricsGenerator.brand_region_factor(
+                r["brand"], r["region"], r["metric_type"], date.fromisoformat(r["metric_date"])
+            ),
+            axis=1,
+        )
+        flat = _flat_frame(monkeypatch)
+        assert list(planted["metric_id"]) == list(flat["metric_id"])
+        # target: byte-identical (market-size line only)
+        pd.testing.assert_series_equal(planted["target"], flat["target"])
+        # value: planted / flat == the deterministic brand x region factor, on
+        # the uncapped prescription metrics (market_share / conversion_rate /
+        # engagement carry caps that re-quantize the ratio).
+        mask &= flat["value"] > 0
+        expected = expected[mask.loc[expected.index]]
+        ratio = planted.loc[mask, "value"] / flat.loc[mask, "value"]
+        assert np.allclose(ratio, expected, rtol=1e-3), "value does not carry the planted factor"
+        # The plant is real: at least one brand x region pair differs from 1.
+        assert (expected != 1.0).any()
+
+    def test_rng_stream_untouched_literal_db_fingerprints(self):
+        df = BusinessMetricsGenerator(GeneratorConfig(**BASE_CONFIG)).generate()
+        assert len(df) == 9780
+        for metric_date, brand, region, metric_name, metric_id, target in DB_FINGERPRINTS:
+            row = df[
+                (df["metric_date"] == metric_date)
+                & (df["brand"] == brand)
+                & (df["region"] == region)
+                & (df["metric_name"] == metric_name)
+            ]
+            assert len(row) == 1, (metric_date, brand, region, metric_name)
+            assert row["metric_id"].iloc[0] == metric_id, "metric_id moved: RNG stream consumed"
+            assert row["target"].iloc[0] == pytest.approx(target, abs=0.005), "target moved"
+
+    def test_rng_only_columns_identical_to_flat_formula(self, monkeypatch):
+        planted = BusinessMetricsGenerator(GeneratorConfig(**BASE_CONFIG)).generate()
+        flat = _flat_frame(monkeypatch)
+        for col in (
+            "metric_id",
+            "metric_date",
+            "target",
+            "year_over_year_change",
+            "month_over_month_change",
+            "roi",
+            "statistical_significance",
+            "sample_size",
+            "data_split",
+        ):
+            pd.testing.assert_series_equal(planted[col], flat[col]), col
+
+    def test_per_brand_national_scale_within_3pct(self, monkeypatch):
+        planted = BusinessMetricsGenerator(GeneratorConfig(**BASE_CONFIG)).generate()
+        flat = _flat_frame(monkeypatch)
+        last = planted["metric_date"].max()
+        for brand in BRANDS:
+            for metric in ("trx", "nrx"):
+                p = planted[(planted["brand"] == brand) & (planted["metric_type"] == metric)]
+                f = flat[(flat["brand"] == brand) & (flat["metric_type"] == metric)]
+                ratio_all = p["value"].sum() / f["value"].sum()
+                assert 0.97 <= ratio_all <= 1.03, (brand, metric, "all", ratio_all)
+                # The frontier month carries each brand's FIRST planted step
+                # (-12% in a region that is <=25% of national under
+                # REGION_FACTORS -> <=-3.0% national by design); the #1640
+                # substrate note re-measures this magnitude. On a single
+                # month the planted region's share of national swings with
+                # its own row noise (N(0, 0.15) trx / N(0, 0.20) nrx), so the
+                # realised step effect reads -2..-4.5% (measured: Fabhalta
+                # nrx 2026-07 at 0.957).
+                ratio_last = (
+                    p[p["metric_date"] == last]["value"].sum()
+                    / f[f["metric_date"] == last]["value"].sum()
+                )
+                assert 0.95 <= ratio_last <= 1.03, (brand, metric, last, ratio_last)
+
+    def test_performance_matrix_is_market_size_weighted_mean_one(self):
+        # National scale stays ~unchanged BY CONSTRUCTION: each brand's execution
+        # factors average to 1 under the REGION_FACTORS market-size weights.
+        w = BusinessMetricsGenerator.REGION_FACTORS
+        assert set(BusinessMetricsGenerator.BRAND_REGION_PERFORMANCE) == set(BRANDS)
+        for brand, row in BusinessMetricsGenerator.BRAND_REGION_PERFORMANCE.items():
+            assert set(row) == set(w), brand
+            weighted = sum(row[r] * w[r] for r in w) / sum(w.values())
+            assert abs(weighted - 1.0) <= 0.01, (brand, weighted)
+
+    def test_each_brand_has_a_distinct_planted_region(self):
+        # The point of #1833: the weakest execution region differs per brand.
+        weakest = {
+            brand: min(row, key=row.get)
+            for brand, row in BusinessMetricsGenerator.BRAND_REGION_PERFORMANCE.items()
+        }
+        assert len(set(weakest.values())) == 3, weakest
+        # and every event lands in its brand's weakest region
+        for ev in BusinessMetricsGenerator.BRAND_REGION_EVENTS:
+            assert ev.region == weakest[ev.brand], ev
+
+    def test_event_is_a_step_that_never_reverts(self):
+        events = BusinessMetricsGenerator.BRAND_REGION_EVENTS
+        assert events, "no planted events"
+        for ev in events:
+            assert 0 < ev.factor < 1, ev  # a shortfall the gap analyzer can rank
+            assert ev.start.day == 1, ev  # rows sit on month starts
+            day_before = date.fromordinal(ev.start.toordinal() - 1)
+            for metric in ev.metric_types:
+                f_before = BusinessMetricsGenerator.brand_region_factor(
+                    ev.brand, ev.region, metric, day_before
+                )
+                f_at = BusinessMetricsGenerator.brand_region_factor(
+                    ev.brand, ev.region, metric, ev.start
+                )
+                f_far = BusinessMetricsGenerator.brand_region_factor(
+                    ev.brand, ev.region, metric, date(2099, 1, 1)
+                )
+                assert f_at == pytest.approx(f_before * ev.factor)
+                assert f_far == pytest.approx(
+                    f_at * _later_events_product(ev.brand, ev.region, metric, ev.start)
+                )
+
+    def test_events_do_not_touch_other_metrics(self):
+        for ev in BusinessMetricsGenerator.BRAND_REGION_EVENTS:
+            for metric in BusinessMetricsGenerator.METRIC_CONFIGS:
+                if metric in ev.metric_types:
+                    continue
+                perf = BusinessMetricsGenerator.BRAND_REGION_PERFORMANCE[ev.brand][ev.region]
+                got = BusinessMetricsGenerator.brand_region_factor(
+                    ev.brand, ev.region, metric, date(2099, 1, 1)
+                )
+                assert got == pytest.approx(
+                    perf * _later_events_product(ev.brand, ev.region, metric, date(1900, 1, 1))
+                )
+
+    def test_unknown_brand_or_region_is_identity(self):
+        assert (
+            BusinessMetricsGenerator.brand_region_factor(
+                "competitor", "west", "trx", date(2099, 1, 1)
+            )
+            == 1.0
+        )
+        assert (
+            BusinessMetricsGenerator.brand_region_factor("Kisqali", "mars", "trx", date(2099, 1, 1))
+            == 1.0
+        )
