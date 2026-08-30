@@ -193,6 +193,38 @@ describe('CorrelationCausationToggle', () => {
     expect(dagCol.className).toMatch(/\bmax-w-xl\b/);
     expect(dag.getAttribute('class')).toMatch(/\bw-full\b/);
   });
+
+  it('keeps the dashed-arrow caption clear of the node boxes (#1828)', async () => {
+    // Regression: the single caption "much weaker, adjusted" (~90px at 8px) sat
+    // at y=97 between node boxes only 70px apart, so both of its ends rendered
+    // inside the HCP calls / TRx boxes. jsdom does no text layout, so estimate
+    // each glyph at an upper-bound 0.55em and require every caption's box to be
+    // disjoint from every node rect (SVG user units, viewBox 0 0 240 130).
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: /reveal the confounder/i }));
+    const dag = screen.getByRole('img', { name: /illustrative dag: physician specialty/i });
+    const rects = Array.from(dag.querySelectorAll('rect')).map((r) => {
+      const x = Number(r.getAttribute('x'));
+      const y = Number(r.getAttribute('y'));
+      return { x1: x, y1: y, x2: x + Number(r.getAttribute('width')), y2: y + Number(r.getAttribute('height')) };
+    });
+    expect(rects).toHaveLength(3);
+    const captions = Array.from(dag.querySelectorAll('text')).filter((el) =>
+      /weaker|adjusted/i.test(el.textContent ?? ''),
+    );
+    expect(captions.length).toBeGreaterThan(0);
+    const FONT_PX = 8;
+    for (const caption of captions) {
+      const cx = Number(caption.getAttribute('x'));
+      const baseline = Number(caption.getAttribute('y'));
+      const halfWidth = ((caption.textContent ?? '').length * FONT_PX * 0.55) / 2;
+      const box = { x1: cx - halfWidth, x2: cx + halfWidth, y1: baseline - FONT_PX, y2: baseline };
+      for (const rect of rects) {
+        const overlaps = box.x1 < rect.x2 && box.x2 > rect.x1 && box.y1 < rect.y2 && box.y2 > rect.y1;
+        expect({ caption: caption.textContent, box, rect, overlaps }).toMatchObject({ overlaps: false });
+      }
+    }
+  });
 });
 
 describe('CapabilityIndex', () => {

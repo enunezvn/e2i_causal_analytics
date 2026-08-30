@@ -79,7 +79,11 @@ export function CorrelationCausationToggle() {
             <line x1="100" y1="36" x2="58" y2="88" className="stroke-[var(--color-muted-foreground)]" strokeWidth="1.5" markerEnd="url(#dag-arrow)" />
             <line x1="140" y1="36" x2="182" y2="88" className="stroke-[var(--color-muted-foreground)]" strokeWidth="1.5" markerEnd="url(#dag-arrow)" />
             <line x1="87" y1="102" x2="153" y2="102" className="stroke-[var(--color-border)]" strokeWidth="1.5" strokeDasharray="4 3" markerEnd="url(#dag-arrow)" />
-            <text x="120" y="97" textAnchor="middle" className="fill-[var(--color-muted-foreground)] text-[8px]">much weaker, adjusted</text>
+            {/* Caption for the dashed arrow, split into two short lines so each fits
+                the 70px gap between the node boxes (x 85–155): the old single line
+                "much weaker, adjusted" (~90px at 8px) overlapped both boxes (#1828). */}
+            <text x="120" y="98" textAnchor="middle" className="fill-[var(--color-muted-foreground)] text-[8px]">much weaker</text>
+            <text x="120" y="112" textAnchor="middle" className="fill-[var(--color-muted-foreground)] text-[8px]">once adjusted</text>
           </svg>
           <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">
             Specialty drives both: specialists get more calls AND their patients need this therapy
