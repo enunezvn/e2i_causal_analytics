@@ -196,7 +196,12 @@ class TestLengthBudget:
     def test_budget_constant_matches_executive_brief_truncation(self):
         assert MAX_ACTION_CHARS == 160
 
-    @pytest.mark.parametrize("brand", [b.value for b in Brand])
+    # brand=None exercises the NEUTRAL/unknown-brand fallback path too — #1835
+    # codex iter-2 found the exhaustive length test covered only the 3 real
+    # brands, leaving the fallback path's budget unverified (its own worst
+    # case, NEUTRAL_TEMPLATES["trx"]["low"], is the one template that still
+    # embeds "({segment})" — see test_neutral_path_worst_case_fits below).
+    @pytest.mark.parametrize("brand", [b.value for b in Brand] + [None])
     @pytest.mark.parametrize("metric", METRICS)
     @pytest.mark.parametrize("difficulty", DIFFICULTIES)
     @pytest.mark.parametrize("gap_type", GAP_TYPES)
@@ -211,14 +216,42 @@ class TestLengthBudget:
         )
         assert len(text) <= MAX_ACTION_CHARS, f"{len(text)} chars: {text}"
 
-    @pytest.mark.parametrize("brand", [b.value for b in Brand])
-    def test_longest_rendering_fits_region_segment_too(self, brand):
-        """The segment actually backed by real data (gap_detector #851) is
-        shorter ("region") but every RegionEnum value must still fit — kept
-        as a distinct case so a future region rename can't silently regress
-        without also touching LONGEST_SEGMENT_NAME above."""
-        text = _render(brand, "trx", "low", LONGEST_SEGMENT_VALUE, "temporal", segment="region")
+    def test_neutral_path_worst_case_fits(self):
+        """NEUTRAL_TEMPLATES["trx"]["low"] is the one template that still
+        interpolates {segment} (the pre-#1835 wording, preserved verbatim for
+        the fail-open path) — exercise its worst real (segment, value) pairing
+        explicitly rather than relying on it being swept up by
+        test_longest_rendering_fits' LONGEST_SEGMENT_NAME default."""
+        text = _render(None, "trx", "low", LONGEST_SEGMENT_VALUE, "temporal", segment="specialty")
         assert len(text) <= MAX_ACTION_CHARS, f"{len(text)} chars: {text}"
+
+    @pytest.mark.parametrize("brand", [b.value for b in Brand])
+    @pytest.mark.parametrize("metric", METRICS)
+    @pytest.mark.parametrize("difficulty", DIFFICULTIES)
+    @pytest.mark.parametrize("gap_type", GAP_TYPES)
+    def test_brand_aware_rendering_is_insensitive_to_segment_name(
+        self, brand, metric, difficulty, gap_type
+    ):
+        """The #1835 codex iter-1 fix dropped "({segment})" from
+        BRAND_TEMPLATES["trx"]["low"] (the only brand-aware template that
+        ever referenced {segment}) to close a 161-char overflow, so — unlike
+        NEUTRAL_TEMPLATES — the brand-resolved rendering no longer depends on
+        WHICH segment dimension the gap came from, only on segment_value.
+        #1835 codex iter-2 found a superseded version of this test asserted
+        only "fits the budget" for segment="region", which was already
+        implied by (and byte-identical to) the segment="specialty" case
+        covered above — a redundant, not-actually-distinct assertion. This
+        pins the real invariant (identity, not just length) so a future
+        change that re-adds {segment} to only SOME brand templates — the
+        exact shape of bug that caused the overflow — breaks this test
+        first, before a length budget is even at risk."""
+        region_text = _render(
+            brand, metric, difficulty, LONGEST_SEGMENT_VALUE, gap_type, segment="region"
+        )
+        specialty_text = _render(
+            brand, metric, difficulty, LONGEST_SEGMENT_VALUE, gap_type, segment="specialty"
+        )
+        assert region_text == specialty_text
 
 
 class TestUnknownBrandFallsOpen:
