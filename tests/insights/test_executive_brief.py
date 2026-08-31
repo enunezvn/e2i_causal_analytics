@@ -61,7 +61,7 @@ def test_build_grounding_derives_scope_opportunities_and_chips():
     assert "2 quick win(s)" in g["scope"]
     assert "3.2x ROI" in g["opportunities"]
     assert "$1.2M revenue impact" in g["opportunities"]
-    assert "42% TRX gap in Northeast" in g["opportunities"]
+    assert "42% TRx gap in Northeast" in g["opportunities"]
     assert "medium effort" in g["opportunities"]
     assert "3 low-value opportunities were suppressed" in g["caveats"]
     assert any(c["label"] == "Brand" and c["value"] == "Remibrutinib" for c in g["grounding"])
@@ -155,8 +155,8 @@ def test_lm_inputs_carry_tokens_not_figures():
         assert real not in lm_text
     for token in ("{TOTAL}", "{QUICK}", "{ROI_1}", "{IMPACT_1}", "{GAP_1}", "{SEG_1}"):
         assert token in lm_text
-    assert "42% TRX gap" not in g["lm_opportunities"]
-    assert "{GAP_1} TRX gap" in g["lm_opportunities"]
+    assert "42% TRx gap" not in g["lm_opportunities"]
+    assert "{GAP_1} TRx gap" in g["lm_opportunities"]
     assert "{SUPPRESSED} low-value opportunities were suppressed" in g["lm_caveats"]
 
 

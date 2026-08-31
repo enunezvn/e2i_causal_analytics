@@ -115,6 +115,21 @@ def _truncate(s: str, max_len: int) -> str:
     return s if len(s) <= max_len else s[: max_len - 1] + "…"
 
 
+# Industry casing for Rx-count KPIs; everything else reads as hyphenated
+# lowercase prose ("market_share" -> "market-share") — #1863: uppercasing the
+# raw name put "closing a 21% MARKET_SHARE gap" in front of the LM, which
+# echoed the enum token into executive prose on every brand.
+_METRIC_CASING = {"trx": "TRx", "nrx": "NRx", "nbrx": "NBRx"}
+
+
+def _humanize_metric(name: Any) -> str:
+    """Render a gap-metric KPI name as prose, never as a raw enum token."""
+    key = str(name or "").strip().lower()
+    if not key:
+        return "—"
+    return _METRIC_CASING.get(key, key.replace("_", "-"))
+
+
 def _opportunity_line(o: dict[str, Any]) -> str:
     rank = o.get("rank", "?")
     action = _truncate(str(o.get("recommended_action", "")).strip() or "(no action text)", 160)
@@ -123,7 +138,7 @@ def _opportunity_line(o: dict[str, Any]) -> str:
     rev = _money(o.get("revenue_impact"))
     gap_pct = o.get("gap_percentage")
     gap_str = f"{float(gap_pct):.0f}%" if gap_pct is not None else "—"
-    metric = str(o.get("gap_metric", "")).upper() or "—"
+    metric = _humanize_metric(o.get("gap_metric", ""))
     seg = _truncate(str(o.get("segment_value", "")).strip() or "—", 60)
     effort = str(o.get("implementation_difficulty") or "unknown")
     return (
@@ -173,11 +188,16 @@ def _lm_opportunity_line(pos: int, o: dict[str, Any]) -> str:
     seg = _truncate(str(o.get("segment_value", "")).strip() or "—", 60)
     action = _truncate(str(o.get("recommended_action", "")).strip() or "(no action text)", 160)
     action = _strip_segment_suffix(action, seg)
-    metric = str(o.get("gap_metric", "")).upper() or "—"
+    metric = _humanize_metric(o.get("gap_metric", ""))
+    # Digit-bearing metric names stay OUT of the LM prompt: the placeholder
+    # guard fails closed on ANY digit in LM output (same rationale as the
+    # causal-lever filter below), so an echoed "persistence-180d" would poison
+    # every sample into fallback. The gap then reads as a plain "gap".
+    metric_part = f" {metric}" if metric != "—" and not any(ch.isdigit() for ch in metric) else ""
     effort = str(o.get("implementation_difficulty") or "unknown")
     return (
         f"Rank {pos}: {action} in {{SEG_{pos}}} — {{ROI_{pos}}} ROI, "
-        f"{{IMPACT_{pos}}} revenue impact, closing a {{GAP_{pos}}} {metric} gap "
+        f"{{IMPACT_{pos}}} revenue impact, closing a {{GAP_{pos}}}{metric_part} gap "
         f"({effort} effort)."
     )
 
@@ -404,8 +424,12 @@ def _inject(text: str, injection: dict[str, str]) -> str:
 
 
 # An enumeration run of segment tokens: two or more {SEG_n} joined by commas
-# and/or "and"/"or" ("{SEG_2}, {SEG_3}, and {SEG_4}", "{SEG_1} and {SEG_2}").
-_SEG_ENUM_SEP = r"(?:\s*,\s*(?:and\s+|or\s+)?|\s+(?:and|or)\s+)"
+# and/or "and"/"or" ("{SEG_2}, {SEG_3}, and {SEG_4}", "{SEG_1} and {SEG_2}"),
+# or by the range joiners "to"/"through" ("from {SEG_1} to {SEG_2}") — #1862:
+# a same-valued range read "from midwest to midwest" live, and a range
+# endpoint adjoining a comma run split the run so only half collapsed
+# ("from south through south (three initiatives)").
+_SEG_ENUM_SEP = r"(?:\s*,\s*(?:and\s+|or\s+)?|\s+(?:and|or|to|through)\s+)"
 _SEG_ENUM_RUN_RE = re.compile(rf"\{{SEG_\d+\}}(?:{_SEG_ENUM_SEP}\{{SEG_\d+\}})+")
 _SEG_ONLY_RE = re.compile(r"\{SEG_\d+\}")
 _COUNT_WORDS = {2: "two", 3: "three", 4: "four", 5: "five"}
