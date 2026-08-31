@@ -1,8 +1,8 @@
 /**
- * AI Agent Insights Page E2E Tests
+ * Executive Insights Page E2E Tests
  * =================================
  *
- * Tests for the AI Agent Insights page functionality.
+ * Tests for the Executive Insights page (route /ai-insights) functionality.
  *
  * Auth + API mocks are intentionally inlined here (not pulled from the shared
  * `fixtures/api-mocks.ts`) so this spec stays decoupled from the larger mock
@@ -228,7 +228,7 @@ async function mockInsightsEndpoints(page: Page): Promise<void> {
   });
 }
 
-test.describe('AI Agent Insights Page', () => {
+test.describe('Executive Insights Page', () => {
   test.beforeEach(async ({ page }) => {
     // Seed auth BEFORE registering route handlers; ProtectedRoute would
     // otherwise redirect us to /login the moment the SPA boots when
@@ -246,7 +246,7 @@ test.describe('AI Agent Insights Page', () => {
     // the SPA-level ErrorBoundary catches and renders "Something went
     // wrong" with a "Try Again" button. We give it up to two chances
     // before failing so the spec isn't pinned to a transient asset fetch.
-    const heading = page.getByRole('heading', { name: /AI Agent Insights/i });
+    const heading = page.getByRole('heading', { name: /Executive Insights/i });
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         await expect(heading).toBeVisible({ timeout: 6000 });
@@ -271,7 +271,7 @@ test.describe('AI Agent Insights Page', () => {
     });
 
     test('should display page title', async ({ page }) => {
-      await expect(page.getByRole('heading', { name: /AI Agent Insights/i })).toBeVisible();
+      await expect(page.getByRole('heading', { name: /Executive Insights/i })).toBeVisible();
     });
 
     test('should display page description', async ({ page }) => {
@@ -390,7 +390,7 @@ test.describe('AI Agent Insights Page', () => {
       });
       await page.reload();
       await expect(
-        page.getByRole('heading', { name: /AI Agent Insights/i }),
+        page.getByRole('heading', { name: /Executive Insights/i }),
       ).toBeVisible({ timeout: 10000 });
     });
 
@@ -405,17 +405,17 @@ test.describe('AI Agent Insights Page', () => {
   test.describe('Responsive Design', () => {
     test('should work on mobile viewport', async ({ page }) => {
       await page.setViewportSize({ width: 375, height: 812 });
-      await expect(page.getByRole('heading', { name: /AI Agent Insights/i })).toBeVisible();
+      await expect(page.getByRole('heading', { name: /Executive Insights/i })).toBeVisible();
     });
 
     test('should work on tablet viewport', async ({ page }) => {
       await page.setViewportSize({ width: 768, height: 1024 });
-      await expect(page.getByRole('heading', { name: /AI Agent Insights/i })).toBeVisible();
+      await expect(page.getByRole('heading', { name: /Executive Insights/i })).toBeVisible();
     });
 
     test('should work on desktop viewport', async ({ page }) => {
       await page.setViewportSize({ width: 1920, height: 1080 });
-      await expect(page.getByRole('heading', { name: /AI Agent Insights/i })).toBeVisible();
+      await expect(page.getByRole('heading', { name: /Executive Insights/i })).toBeVisible();
     });
   });
 });

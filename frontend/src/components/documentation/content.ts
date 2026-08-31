@@ -323,7 +323,7 @@ export const PIPELINE_STAGES: PipelineStage[] = [
     plain:
       'Only gated, refutation-tested effects flow into recommendations: budget allocation, segment targeting, experiment designs, and executive insights.',
     analyst:
-      'Downstream surfaces (Resource Optimization, Gap Analysis, Digital Twin simulation, AI Insights) consume gated estimates with provenance labels. Narrative insight surfaces are digit-guarded: language models never invent figures, they interpret server-injected validated numbers.',
+      'Downstream surfaces (Resource Optimization, Gap Analysis, Digital Twin simulation, Executive Insights) consume gated estimates with provenance labels. Narrative insight surfaces are digit-guarded: language models never invent figures, they interpret server-injected validated numbers.',
   },
 ];
 

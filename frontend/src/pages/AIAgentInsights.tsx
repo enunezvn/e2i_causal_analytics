@@ -103,7 +103,7 @@ export function AIAgentInsights() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-[var(--color-foreground)]">
-              AI Agent Insights
+              Executive Insights
             </h1>
             <p className="text-sm text-[var(--color-muted-foreground)]">
               GPT-powered executive summaries, recommendations, and predictive alerts

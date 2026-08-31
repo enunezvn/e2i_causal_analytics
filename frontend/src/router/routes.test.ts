@@ -29,11 +29,18 @@ describe('navigation sections (IA grouping)', () => {
     ]);
   });
 
-  it('puts Home then "How E2I Works" at the top (main, no header)', () => {
+  it('puts Home, "How E2I Works", then "Executive Insights" at the top (main, no header)', () => {
+    // #1864: the value-payoff page is promoted into the onboarding funnel —
+    // Home (the numbers) -> How E2I Works (the method) -> Executive Insights
+    // (what the platform concludes). Path stays /ai-insights for #304 links.
     const main = getNavigationSections().find((s) => s.key === 'main');
     expect(main?.label).toBeNull();
-    expect(main?.routes.map((r) => r.title)).toEqual(['Home', 'How E2I Works']);
-    expect(main?.routes.map((r) => r.path)).toEqual(['/', '/documentation']);
+    expect(main?.routes.map((r) => r.title)).toEqual([
+      'Home',
+      'How E2I Works',
+      'Executive Insights',
+    ]);
+    expect(main?.routes.map((r) => r.path)).toEqual(['/', '/documentation', '/ai-insights']);
   });
 
   it('orders Causal Analytics by the analytical workflow', () => {
