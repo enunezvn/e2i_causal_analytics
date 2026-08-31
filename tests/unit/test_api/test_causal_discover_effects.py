@@ -203,10 +203,71 @@ def test_effect_from_agent_response_maps_gate_and_impact():
     assert eff.status == "completed"
     # Plain-language one-liner so the leaderboard reads as more than numbers:
     # direction (negative ATE -> "lowers"), robustness verdict, significance.
+    # #1868: without per-test data a proceed gate reads "passed the robustness
+    # gate" — "survived all" is reserved for an all-PASSED suite (below).
     assert eff.summary
     assert "lowers" in eff.summary
-    assert "survived all robustness checks" in eff.summary
+    assert "passed the robustness gate" in eff.summary
+    assert "survived all" not in eff.summary
     assert "not statistically significant" not in eff.summary
+
+
+@pytest.mark.unit
+def test_effect_summary_is_warning_aware():
+    """#1868: a proceed gate with a WARNING test must not claim 'survived all
+    robustness checks' — the phrase follows the per-test verdicts."""
+    from src.api.schemas.causal import RefutationTestDetail
+
+    def _resp(tests):
+        return AgentCausalAnalysisResponse(
+            analysis_id="x3",
+            status="completed",
+            treatment_var="acceptance_status",
+            outcome_var="conversion_flag",
+            dataset="trigger_events",
+            n_rows=1500,
+            data_source="synthetic",
+            dag=CausalDAGModel(),
+            ate=0.0754,
+            statistical_significance=True,
+            selected_estimator="LinearDML",
+            refutation=RefutationSummary(gate_decision="proceed", passed=True, tests=tests),
+            latency_ms=4000,
+        )
+
+    warned = _effect_from_agent_response(
+        "acceptance_status",
+        "conversion_flag",
+        _resp(
+            [
+                RefutationTestDetail(test_name="placebo_treatment", passed=True, status="passed"),
+                RefutationTestDetail(test_name="random_common_cause", passed=True, status="passed"),
+                RefutationTestDetail(
+                    test_name="unobserved_common_cause",
+                    passed=False,
+                    status="warning",
+                    details="E-value (CI bound) 1.51 suggests moderate sensitivity to confounding",
+                ),
+            ]
+        ),
+        "x3",
+    )
+    assert "survived all" not in warned.summary
+    assert "2 of 3" in warned.summary
+    assert "raised a warning" in warned.summary
+
+    clean = _effect_from_agent_response(
+        "acceptance_status",
+        "conversion_flag",
+        _resp(
+            [
+                RefutationTestDetail(test_name="placebo_treatment", passed=True, status="passed"),
+                RefutationTestDetail(test_name="random_common_cause", passed=True, status="passed"),
+            ]
+        ),
+        "x3",
+    )
+    assert "survived all 2 robustness checks" in clean.summary
 
 
 @pytest.mark.asyncio

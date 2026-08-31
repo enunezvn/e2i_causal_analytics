@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from src.insights.clinical_context import format_clinical_positioning
 from src.insights.common import run_signature
+from src.insights.robustness_phrase import gate_verdict_phrase, test_label
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +104,6 @@ except ImportError:
     ClinicalNarrativeSignature = None  # type: ignore[assignment,misc]
 
 
-_GATE_PHRASES = {
-    "proceed": "survived all robustness checks",
-    "review": "needs review (mixed robustness)",
-    "block": "failed robustness checks",
-}
 # Mirrors the panel's MAX_ENDPOINTS_SHOWN: the endpoint list grounds outcome
 # definitions, it is not a data table.
 _MAX_ENDPOINTS = 5
@@ -125,15 +121,27 @@ def _result_sentence(
     lo: Optional[float],
     hi: Optional[float],
     gate: Optional[str],
+    tests: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> str:
     if ate is None:
         est = f"No effect estimate was provided for {treatment} -> {outcome}."
     else:
         ci = f" [95% CI {lo:+.4f}, {hi:+.4f}]" if lo is not None and hi is not None else ""
         est = f"Estimated effect of {treatment} on {outcome}: ATE {ate:+.4f}{ci}."
-    phrase = _GATE_PHRASES.get((gate or "").lower())
+    # #1868: the verdict phrase follows the per-test outcomes — "survived all"
+    # is reserved for an all-PASSED suite; warnings/non-critical failures are
+    # named, and their own detail messages are grounded so the LM can weave
+    # the caveat in honestly.
+    phrase = gate_verdict_phrase(gate, tests)
     if phrase:
         est += f" Robustness gate: {gate} — the estimate {phrase}."
+        for t in tests or []:
+            if not isinstance(t, Mapping):
+                continue
+            status = str(t.get("status") or "").lower()
+            if status in ("warning", "failed") and t.get("details"):
+                label = test_label(str(t.get("test_name") or ""))
+                est += f" {label.capitalize()} check detail: {t['details']}."
     elif gate:
         # An unmapped verdict is reported raw, never claimed absent — the
         # Gate chip echoes the same raw value (omit-or-report discipline).
@@ -151,6 +159,7 @@ def build_grounding(
     ate_ci_lower: Optional[float],
     ate_ci_upper: Optional[float],
     gate_decision: Optional[str],
+    refutation_tests: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Compose the six grounding strings from a ClinicalContextService payload
     + the caller-supplied result. Every string is honest about absences — the
@@ -183,7 +192,9 @@ def build_grounding(
     analysis = " ".join(parts)
 
     # -- result ----------------------------------------------------------
-    result = _result_sentence(treatment, outcome, ate, ate_ci_lower, ate_ci_upper, gate_decision)
+    result = _result_sentence(
+        treatment, outcome, ate, ate_ci_lower, ate_ci_upper, gate_decision, refutation_tests
+    )
 
     # -- clinical_position ----------------------------------------------
     ind = payload.get("approved_indications") or {}
@@ -318,6 +329,7 @@ def build_result_only_grounding(
     ate_ci_lower: Optional[float],
     ate_ci_upper: Optional[float],
     gate_decision: Optional[str],
+    refutation_tests: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Grounding for the fetch-failed path: the result is all we can honestly
     say. The route renders it through fallback() — never through the LM."""
@@ -325,7 +337,7 @@ def build_result_only_grounding(
     return {
         "analysis": f"Causal analysis of {treatment} -> {outcome} for {brand} at the {grain} grain.",
         "result": _result_sentence(
-            treatment, outcome, ate, ate_ci_lower, ate_ci_upper, gate_decision
+            treatment, outcome, ate, ate_ci_lower, ate_ci_upper, gate_decision, refutation_tests
         ),
         "clinical_position": unavailable,
         "competitive_position": unavailable,

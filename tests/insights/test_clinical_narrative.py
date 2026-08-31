@@ -101,6 +101,7 @@ def _grounding(**overrides):
         "ate_ci_lower": 0.05,
         "ate_ci_upper": 0.23,
         "gate_decision": "proceed",
+        "refutation_tests": None,
     }
     kwargs.update({k: overrides.pop(k) for k in list(overrides) if k in kwargs})
     return clinical_narrative.build_grounding(_payload(**overrides), **kwargs)
@@ -147,12 +148,46 @@ def _grounding_with_citations(**overrides):
 
 class TestBuildGrounding:
     def test_result_string_pins_signed_ate_ci_and_gate_phrase(self):
+        # #1868: without per-test data a proceed gate reads "passed the
+        # robustness gate" — "survived all robustness checks" is reserved for
+        # a suite whose every executed test PASSED (asserted below).
         g = _grounding()
         assert "ATE +0.1400 [95% CI +0.0500, +0.2300]" in g["result"]
-        assert (
-            "Robustness gate: proceed — the estimate survived all robustness checks." in g["result"]
-        )
+        assert "Robustness gate: proceed — the estimate passed the robustness gate." in g["result"]
+        assert "survived all" not in g["result"]
         assert "synthetic patient cohort" in g["result"]
+
+    def test_proceed_with_all_tests_passed_says_survived_all(self):
+        g = _grounding(
+            refutation_tests=[
+                {"test_name": "placebo_treatment", "status": "passed", "passed": True},
+                {"test_name": "random_common_cause", "status": "passed", "passed": True},
+            ]
+        )
+        assert "survived all 2 robustness checks" in g["result"]
+
+    def test_proceed_with_warning_weaves_the_warning_and_its_detail(self):
+        """The prod contradiction (#1868): the E-value warning must reach the
+        grounding so the LLM weaves the caveat in — never 'survived all'."""
+        g = _grounding(
+            refutation_tests=[
+                {"test_name": "placebo_treatment", "status": "passed", "passed": True},
+                {"test_name": "random_common_cause", "status": "passed", "passed": True},
+                {
+                    "test_name": "unobserved_common_cause",
+                    "status": "warning",
+                    "passed": False,
+                    "details": (
+                        "E-value (CI bound) 1.51 suggests moderate sensitivity to confounding"
+                    ),
+                },
+            ]
+        )
+        assert "survived all" not in g["result"]
+        assert "2 of 3" in g["result"]
+        assert "raised a warning" in g["result"]
+        # The warning test's own message is grounded verbatim for the LLM.
+        assert "E-value (CI bound) 1.51" in g["result"]
 
     def test_gate_phrases_review_block_and_missing(self):
         assert "needs review (mixed robustness)" in _grounding(gate_decision="review")["result"]

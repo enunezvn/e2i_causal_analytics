@@ -1017,8 +1017,11 @@ def test_clinical_narrative_fallback_grounds_in_server_fetched_facts(test_client
     data = r.json()
     assert data["is_fallback"] is True  # conftest forces the no-LM path
     # Pin the DERIVED grounding, not booleans: the fallback composes the strings.
+    # #1868: without per-test data a proceed gate reads "passed the robustness
+    # gate" — "survived all" is reserved for an all-PASSED suite.
     assert "ATE +0.1400 [95% CI +0.0500, +0.2300]" in data["insight"]
-    assert "survived all robustness checks" in data["insight"]
+    assert "passed the robustness gate" in data["insight"]
+    assert "survived all" not in data["insight"]
     assert "Bruton tyrosine kinase (BTK) inhibitor" in data["insight"]
     assert "Xolair (omalizumab)" in data["insight"]
     assert "Analysis grain: hcp." in data["insight"]
@@ -1038,6 +1041,41 @@ def test_clinical_narrative_unknown_brand_404(test_client):
     )
     assert r.status_code == 404
     assert "Unknown brand 'NotABrand'" in r.text
+
+
+def test_clinical_narrative_threads_refutation_warning_into_the_grounding(test_client, monkeypatch):
+    """#1868: posted per-test verdicts reach the result grounding — a proceed
+    gate with an E-value WARNING must name the warning (and its detail), never
+    claim the estimate survived all robustness checks."""
+    monkeypatch.setattr(
+        "src.services.clinical_context.service.ClinicalContextService.get_context",
+        lambda self,
+        brand,
+        outcome,
+        treatment=None,
+        include_causal_evidence=False: _clinical_payload(),
+    )
+    _force_insight_cache_miss(monkeypatch)
+    body = {
+        **_NARRATIVE_BODY,
+        "refutation_tests": [
+            {"test_name": "placebo_treatment", "passed": True, "status": "passed"},
+            {"test_name": "random_common_cause", "passed": True, "status": "passed"},
+            {
+                "test_name": "unobserved_common_cause",
+                "passed": False,
+                "status": "warning",
+                "details": "E-value (CI bound) 1.51 suggests moderate sensitivity to confounding",
+            },
+        ],
+    }
+    r = test_client.post("/api/insights/clinical-narrative", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "survived all" not in data["insight"]
+    assert "2 of 3" in data["insight"]
+    assert "raised a warning" in data["insight"]
+    assert "E-value (CI bound) 1.51" in data["insight"]
 
 
 def test_clinical_narrative_fetch_failure_degrades_to_result_only(test_client, monkeypatch):

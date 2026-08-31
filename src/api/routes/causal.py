@@ -113,6 +113,7 @@ from src.causal_engine.pipeline.state import (
     PipelineOutput,
     PipelineState,
 )
+from src.insights.robustness_phrase import gate_verdict_phrase
 
 # #931: the health check's analysis-activity fields and the Analysis History tab
 # read REAL completed causal-analysis events from episodic_memories (the
@@ -1694,21 +1695,23 @@ def _effect_status_from_gate(ate: Optional[float], gate: Optional[str], resp_sta
     return resp_status
 
 
-_GATE_VERDICT_PHRASE = {
-    "proceed": "survived all robustness checks",
-    "review": "needs review (mixed robustness)",
-    "block": "failed robustness checks",
-}
-
-
 def _effect_summary(
-    treatment: str, outcome: str, ate: Optional[float], gate: Optional[str], significant: bool
+    treatment: str,
+    outcome: str,
+    ate: Optional[float],
+    gate: Optional[str],
+    significant: bool,
+    tests: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[str]:
-    """One-line plain-language reading of a validated effect. None until estimated."""
+    """One-line plain-language reading of a validated effect. None until estimated.
+
+    #1868: the verdict phrase follows the per-test outcomes — "survived all"
+    is reserved for an all-PASSED suite; a proceed gate with warnings or
+    non-critical failures says so."""
     if ate is None:
         return None
     direction = "raises" if ate > 0 else "lowers" if ate < 0 else "does not change"
-    verdict = _GATE_VERDICT_PHRASE.get(gate or "", "robustness unknown")
+    verdict = gate_verdict_phrase(gate, tests) or "robustness unknown"
     sig = "statistically significant" if significant else "not statistically significant"
     return f"{treatment} {direction} {outcome} by {ate:+.3f} — {verdict}, {sig}."
 
@@ -1721,6 +1724,11 @@ def _effect_from_agent_response(
     question: Optional[_CandidateQuestion] = None,
 ) -> DiscoveredEffect:
     gate = resp.refutation.gate_decision if resp.refutation else None
+    gate_tests = (
+        [t.model_dump() for t in resp.refutation.tests]
+        if resp.refutation and resp.refutation.tests
+        else None
+    )
     return DiscoveredEffect(
         treatment=treatment,
         outcome=outcome,
@@ -1738,7 +1746,7 @@ def _effect_from_agent_response(
         impact=abs(resp.ate) if resp.ate is not None else None,
         n_rows=resp.n_rows,
         summary=_effect_summary(
-            treatment, outcome, resp.ate, gate, bool(resp.statistical_significance)
+            treatment, outcome, resp.ate, gate, bool(resp.statistical_significance), gate_tests
         ),
         analysis_id=analysis_id,
     )
