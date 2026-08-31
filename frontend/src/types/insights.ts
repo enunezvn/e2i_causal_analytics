@@ -134,6 +134,17 @@ export interface ClinicalNarrativeRequest {
   ate_ci_lower?: number | null;
   ate_ci_upper?: number | null;
   gate_decision?: string | null;
+  /**
+   * Per-test refutation verdicts (#1868) so the narrative can name a warning
+   * honestly instead of claiming "survived all robustness checks" on every
+   * proceed gate.
+   */
+  refutation_tests?: Array<{
+    test_name: string;
+    passed: boolean;
+    status?: string | null;
+    details?: string | null;
+  }> | null;
 }
 
 export interface ExecutiveBriefInsightRequest {

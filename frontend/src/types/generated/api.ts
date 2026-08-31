@@ -7754,6 +7754,8 @@ export interface components {
             ate_ci_upper?: number | null;
             /** Gate Decision */
             gate_decision?: string | null;
+            /** Refutation Tests */
+            refutation_tests?: components["schemas"]["NarrativeRefutationTest"][] | null;
         };
         /**
          * CognitivePhase
@@ -13705,6 +13707,25 @@ export interface components {
             total_runs: number;
             /** Runs */
             runs: components["schemas"]["MonitoringRunItem"][];
+        };
+        /**
+         * NarrativeRefutationTest
+         * @description One refutation test's verdict, as the analysis response carried it
+         *     (#1868). Part of the caller-supplied RESULT — same trust model as the
+         *     ATE/gate fields beside it.
+         */
+        NarrativeRefutationTest: {
+            /** Test Name */
+            test_name: string;
+            /**
+             * Passed
+             * @default false
+             */
+            passed: boolean;
+            /** Status */
+            status?: string | null;
+            /** Details */
+            details?: string | null;
         };
         /**
          * NestedCIResult

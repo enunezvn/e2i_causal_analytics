@@ -347,6 +347,13 @@ export function CausalAnalysisDetail({
       ate_ci_lower: result.ate_ci_lower ?? null,
       ate_ci_upper: result.ate_ci_upper ?? null,
       gate_decision: result.refutation.gate_decision ?? null,
+      // #1868: per-test verdicts so the narrative names warnings honestly.
+      refutation_tests: (result.refutation.tests ?? []).map((t) => ({
+        test_name: t.test_name,
+        passed: t.passed,
+        status: t.status ?? null,
+        details: t.details ?? null,
+      })),
     });
   }, [brand, clinicalContext.data, narrativeKey, result, generateNarrative, resetNarrative]);
   const narrativeInScope = narrativeScope === narrativeKey;

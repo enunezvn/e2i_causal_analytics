@@ -240,6 +240,17 @@ class TreatmentEffectInsightRequest(BaseModel):
     estimator: str | None = None
 
 
+class NarrativeRefutationTest(BaseModel):
+    """One refutation test's verdict, as the analysis response carried it
+    (#1868). Part of the caller-supplied RESULT — same trust model as the
+    ATE/gate fields beside it."""
+
+    test_name: str
+    passed: bool = False
+    status: str | None = None
+    details: str | None = None
+
+
 class ClinicalNarrativeRequest(BaseModel):
     """Caller supplies the SCOPE + the RESULT (the same trust model as
     CausalInsightRequest, which accepts caller effects); the clinical FACTS are
@@ -255,6 +266,9 @@ class ClinicalNarrativeRequest(BaseModel):
     ate_ci_lower: float | None = None
     ate_ci_upper: float | None = None
     gate_decision: str | None = None
+    # #1868: per-test verdicts so the narrative can name warnings honestly
+    # instead of claiming "survived all robustness checks" on every proceed.
+    refutation_tests: list[NarrativeRefutationTest] | None = None
 
 
 # ---- Endpoints ----------------------------------------------------------------
@@ -1130,6 +1144,12 @@ async def clinical_narrative_insight(
             req.brand, req.outcome, treatment=req.treatment, include_causal_evidence=True
         )
 
+    # #1868: per-test verdicts thread into the result grounding string so the
+    # narrative names warnings instead of over-claiming "survived all checks".
+    refutation_tests = (
+        [t.model_dump() for t in req.refutation_tests] if req.refutation_tests else None
+    )
+
     def _result_only() -> StrategicInsightResponse:
         g = clinical_narrative.build_result_only_grounding(
             brand=req.brand,
@@ -1140,6 +1160,7 @@ async def clinical_narrative_insight(
             ate_ci_lower=req.ate_ci_lower,
             ate_ci_upper=req.ate_ci_upper,
             gate_decision=req.gate_decision,
+            refutation_tests=refutation_tests,
         )
         return _finalize(clinical_narrative.fallback(g), provenance=provenance)
 
@@ -1161,6 +1182,7 @@ async def clinical_narrative_insight(
             ate_ci_lower=req.ate_ci_lower,
             ate_ci_upper=req.ate_ci_upper,
             gate_decision=req.gate_decision,
+            refutation_tests=refutation_tests,
         )
     except Exception as e:  # noqa: BLE001 — a composition defect, NOT a fetch failure:
         # the payload arrived; our composer choked on its shape. Same honest

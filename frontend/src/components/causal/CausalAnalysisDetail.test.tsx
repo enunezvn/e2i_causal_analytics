@@ -360,6 +360,13 @@ describe('CausalAnalysisDetail — auto-fires the clinical narrative (Task 8)', 
       ate_ci_lower: 0.0867,
       ate_ci_upper: 0.0884,
       gate_decision: RESULT.refutation.gate_decision ?? null,
+      // #1868: per-test verdicts ride along so the narrative can name a
+      // warning honestly instead of claiming "survived all robustness checks".
+      refutation_tests: [
+        { test_name: 'placebo_treatment', passed: true, status: null, details: null },
+        { test_name: 'random_common_cause', passed: true, status: null, details: null },
+        { test_name: 'unobserved_common_cause', passed: true, status: null, details: null },
+      ],
     });
     // A re-render with the same result must not re-fire (keyed auto-fire).
     rerender(<CausalAnalysisDetail result={RESULT} brand="Remibrutinib" />);
