@@ -512,6 +512,46 @@ def test_refutation_sensitivity_test_surfaced_under_contract_key_not_raw_enum():
     assert "sensitivity_e_value" not in names
 
 
+@pytest.mark.unit
+def test_refutation_three_state_status_surfaced_and_optional():
+    """#1867: the engine's three-state ``status`` must survive to the response
+    so the FE can render a WARNING distinctly from a FAILURE (the two-state
+    ``passed`` collapsed both to a red X). Absent status (legacy cached
+    payloads) -> None, and the FE falls back to ``passed``."""
+    from src.api.routes.causal import _refutation_tests_from_state
+
+    out = _refutation_tests_from_state(
+        {
+            "individual_tests": {
+                "unobserved_common_cause": {
+                    "test_name": "sensitivity_e_value",
+                    "passed": False,
+                    "status": "warning",
+                    "p_value": 0.0,
+                    "details": "E-value (CI bound) 1.51 suggests moderate sensitivity",
+                },
+                "placebo_treatment": {
+                    "test_name": "placebo_treatment",
+                    "passed": True,
+                    "status": "passed",
+                    "p_value": 0.4,
+                },
+                # Legacy payload without a status field.
+                "random_common_cause": {
+                    "test_name": "random_common_cause",
+                    "passed": True,
+                    "p_value": 0.4,
+                },
+            }
+        }
+    )
+    by_name = {t.test_name: t for t in out}
+    assert by_name["unobserved_common_cause"].status == "warning"
+    assert by_name["unobserved_common_cause"].passed is False
+    assert by_name["placebo_treatment"].status == "passed"
+    assert by_name["random_common_cause"].status is None
+
+
 @pytest.mark.asyncio
 async def test_agent_analyze_passes_expanded_geo_dummies_as_covariates():
     """run_causal_agent_analysis must hand _run_agent_analysis_task the EXPANDED

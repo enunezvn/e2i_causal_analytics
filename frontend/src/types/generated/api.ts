@@ -15779,6 +15779,11 @@ export interface components {
              */
             passed: boolean;
             /**
+             * Status
+             * @description Three-state verdict: passed / warning / failed. A warning is a soft caveat that does not fail the robustness gate (#1867). None on legacy payloads — consumers fall back to `passed`.
+             */
+            status?: string | null;
+            /**
              * Original Effect
              * @description The estimated effect before the refutation perturbation
              */

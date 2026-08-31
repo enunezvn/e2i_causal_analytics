@@ -93,3 +93,65 @@ describe('RefutationTests — inverted refutation p-value semantics (Fix A)', ()
     ).toBeInTheDocument();
   });
 });
+
+// A WARNING is a soft caveat that does NOT fail the robustness gate (e.g. the
+// E-value sensitivity check landing in its [1.5, 2.0) warning band). The
+// two-state `passed` collapsed it into a red Failed X, contradicting the
+// PROCEED gate chip beside it (#1867). `status` is the honest three-state;
+// absent status (legacy cached payloads) falls back to `passed`.
+describe('RefutationTests — three-state status (#1867)', () => {
+  const withWarning: RefutationResult[] = [
+    {
+      id: 'plc',
+      method: 'placebo_treatment',
+      originalEstimate: 0.075,
+      refutedEstimate: 0.002,
+      pValue: 0.38,
+      passed: true,
+      status: 'passed',
+    },
+    {
+      id: 'ucc',
+      method: 'add_unobserved_common_cause',
+      originalEstimate: 0.075,
+      refutedEstimate: 0.075,
+      pValue: 0,
+      passed: false, // legacy two-state collapse
+      status: 'warning', // the honest verdict
+      description: 'E-value (CI bound) 1.51 suggests moderate sensitivity to confounding',
+    },
+    {
+      id: 'boot',
+      method: 'bootstrap',
+      originalEstimate: 0.075,
+      refutedEstimate: 0.02,
+      pValue: 0.02,
+      passed: false,
+      status: 'failed',
+    },
+  ];
+
+  it('renders a warning row as Warning, not Failed', () => {
+    render(<RefutationTests results={withWarning} />);
+    expect(screen.getByLabelText('Warning')).toBeInTheDocument();
+    expect(screen.getByText('Warning')).toBeInTheDocument();
+    // The genuinely failed bootstrap row still reads Failed.
+    expect(screen.getByLabelText('Failed')).toBeInTheDocument();
+    expect(screen.getByText('Fail')).toBeInTheDocument();
+  });
+
+  it('counts a warning separately from failures in the summary', () => {
+    render(<RefutationTests results={withWarning} showSummary />);
+    expect(screen.getByText('Warnings')).toBeInTheDocument();
+    // 1 passed, 1 warning, 1 failed — the failed tile must show 1, not 2.
+    const failedTile = screen.getByText('Tests Failed').parentElement;
+    expect(failedTile).toHaveTextContent('1');
+  });
+
+  it('falls back to the two-state passed flag when status is absent (legacy payloads)', () => {
+    render(<RefutationTests results={results} />);
+    // The legacy fixture has no status: passed:false must still read Failed.
+    expect(screen.getByLabelText('Failed')).toBeInTheDocument();
+    expect(screen.queryByText('Warning')).not.toBeInTheDocument();
+  });
+});

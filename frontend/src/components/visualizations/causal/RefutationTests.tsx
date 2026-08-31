@@ -57,6 +57,13 @@ export interface RefutationResult {
   pValue: number;
   /** Whether the refutation test passed */
   passed: boolean;
+  /**
+   * Three-state verdict (#1867): a 'warning' is a soft caveat that does NOT
+   * fail the robustness gate (e.g. the E-value sensitivity check in its
+   * [1.5, 2.0) warning band). Absent on legacy payloads — rendering falls
+   * back to the two-state `passed`.
+   */
+  status?: 'passed' | 'warning' | 'failed' | null;
   /** Description of what this test validates */
   description?: string;
   /** Additional metadata */
@@ -152,6 +159,17 @@ function getMethodDescription(result: RefutationResult): string {
 function calculateChangePercent(original: number, refuted: number): number {
   if (original === 0) return refuted === 0 ? 0 : 100;
   return ((refuted - original) / Math.abs(original)) * 100;
+}
+
+/**
+ * The row's display verdict: the three-state `status` when present, else the
+ * legacy two-state `passed` (old cached payloads carry no status).
+ */
+function verdictOf(result: RefutationResult): 'passed' | 'warning' | 'failed' {
+  if (result.status === 'passed' || result.status === 'warning' || result.status === 'failed') {
+    return result.status;
+  }
+  return result.passed ? 'passed' : 'failed';
 }
 
 // =============================================================================
@@ -267,9 +285,13 @@ function ComparisonChart({ results, decimalPlaces }: ComparisonChartProps) {
           const groupCenter = marginLeft + index * barGroupWidth + barGroupWidth / 2;
           const origX = groupCenter - barWidth - intraGap / 2;
           const refX = groupCenter + intraGap / 2;
-          const refColor = result.passed
-            ? 'var(--color-success)'
-            : 'var(--color-destructive)';
+          const rowVerdict = verdictOf(result);
+          const refColor =
+            rowVerdict === 'passed'
+              ? 'var(--color-success)'
+              : rowVerdict === 'warning'
+                ? 'var(--color-warning)'
+                : 'var(--color-destructive)';
 
           // Bar rectangles anchored at the zero line.
           const origHeight = Math.max((Math.abs(result.originalEstimate) / yRange) * chartHeight, 1);
@@ -358,6 +380,22 @@ function ComparisonChart({ results, decimalPlaces }: ComparisonChartProps) {
           <text x={203} y={9} fontSize={10} fill="var(--color-foreground)">
             Refuted (Fail)
           </text>
+          {results.some((r) => verdictOf(r) === 'warning') && (
+            <>
+              <rect
+                x={288}
+                y={0}
+                width={11}
+                height={11}
+                rx={2}
+                fill="var(--color-warning)"
+                opacity={0.85}
+              />
+              <text x={303} y={9} fontSize={10} fill="var(--color-foreground)">
+                Refuted (Warning)
+              </text>
+            </>
+          )}
         </g>
       </svg>
     </div>
@@ -372,11 +410,15 @@ interface SummaryCardProps {
  * Summary statistics card showing overall test results
  */
 function SummaryCard({ results }: SummaryCardProps) {
-  const { passed, failed, total } = useMemo(() => {
-    const passed = results.filter((r) => r.passed).length;
+  const { passed, warnings, failed, total } = useMemo(() => {
+    // Three-state (#1867): a WARNING is a soft caveat, not a failure — it must
+    // not inflate the failed count (which contradicted the PROCEED gate chip).
+    const passed = results.filter((r) => verdictOf(r) === 'passed').length;
+    const warnings = results.filter((r) => verdictOf(r) === 'warning').length;
     return {
       passed,
-      failed: results.length - passed,
+      warnings,
+      failed: results.length - passed - warnings,
       total: results.length,
     };
   }, [results]);
@@ -384,7 +426,7 @@ function SummaryCard({ results }: SummaryCardProps) {
   const passRate = total > 0 ? (passed / total) * 100 : 0;
 
   return (
-    <div className="grid grid-cols-3 gap-4">
+    <div className={cn('grid gap-4', warnings > 0 ? 'grid-cols-4' : 'grid-cols-3')}>
       <Card>
         <CardContent className="pt-6">
           <div className="flex items-center justify-between">
@@ -400,6 +442,23 @@ function SummaryCard({ results }: SummaryCardProps) {
           </div>
         </CardContent>
       </Card>
+      {warnings > 0 && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-[var(--color-muted-foreground)]">
+                  Warnings
+                </p>
+                <p className="text-2xl font-bold text-[var(--color-warning)]">
+                  {warnings}
+                </p>
+              </div>
+              <AlertCircle className="h-8 w-8 text-[var(--color-warning)]/20" />
+            </div>
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardContent className="pt-6">
           <div className="flex items-center justify-between">
@@ -597,6 +656,7 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                 <TableBody>
                   {results.map((result) => {
                     const isSelected = selectedResultId === result.id;
+                    const verdict = verdictOf(result);
                     const changePercent = calculateChangePercent(
                       result.originalEstimate,
                       result.refutedEstimate
@@ -613,10 +673,15 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                         data-state={isSelected ? 'selected' : undefined}
                       >
                         <TableCell>
-                          {result.passed ? (
+                          {verdict === 'passed' ? (
                             <CheckCircle
                               className="h-5 w-5 text-[var(--color-success)]"
                               aria-label="Passed"
+                            />
+                          ) : verdict === 'warning' ? (
+                            <AlertCircle
+                              className="h-5 w-5 text-[var(--color-warning)]"
+                              aria-label="Warning"
                             />
                           ) : (
                             <XCircle
@@ -642,12 +707,14 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                         <TableCell
                           className={cn(
                             'text-right font-mono text-xs',
-                            // Color follows the test's PASS/FAIL verdict, never the raw
+                            // Color follows the test's verdict, never the raw
                             // change magnitude — a passing placebo legitimately shows a
                             // large change and must not read as a failure.
-                            result.passed
+                            verdict === 'passed'
                               ? 'text-[var(--color-muted-foreground)]'
-                              : 'text-[var(--color-destructive)]'
+                              : verdict === 'warning'
+                                ? 'text-[var(--color-warning)]'
+                                : 'text-[var(--color-destructive)]'
                           )}
                         >
                           {changePercent >= 0 ? '+' : ''}
@@ -658,10 +725,16 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                         </TableCell>
                         <TableCell className="text-center">
                           <Badge
-                            variant={result.passed ? 'success' : 'destructive'}
+                            variant={
+                              verdict === 'passed'
+                                ? 'success'
+                                : verdict === 'warning'
+                                  ? 'warning'
+                                  : 'destructive'
+                            }
                             className="text-xs"
                           >
-                            {result.passed ? 'Pass' : 'Fail'}
+                            {verdict === 'passed' ? 'Pass' : verdict === 'warning' ? 'Warning' : 'Fail'}
                           </Badge>
                         </TableCell>
                       </TableRow>

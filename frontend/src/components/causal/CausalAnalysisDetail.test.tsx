@@ -39,6 +39,11 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
       data-nodes={nodes.length}
       data-edges={edges.length}
       data-refutations={refutationResults?.length ?? 0}
+      data-refutation-warnings={
+        (refutationResults as Array<{ status?: string | null }> | undefined)?.filter(
+          (r) => r.status === 'warning'
+        ).length ?? 0
+      }
     />
   ),
 }));
@@ -138,6 +143,23 @@ describe('CausalAnalysisDetail', () => {
     const dag = screen.getByTestId('causal-dag');
     expect(dag).toHaveAttribute('data-edges', '2');
     expect(dag).toHaveAttribute('data-refutations', '3');
+  });
+
+  it('maps the three-state refutation status through to the viz (#1867)', () => {
+    const withWarning: AgentCausalAnalysisResponse = {
+      ...RESULT,
+      refutation: {
+        ...RESULT.refutation!,
+        tests: [
+          { test_name: 'placebo_treatment', passed: true, status: 'passed', original_effect: 0.0875, new_effect: 0.001, p_value: 0.6 },
+          // The prod contradiction: E-value in the warning band arrives with
+          // passed:false but status:'warning' — the warning must survive mapping.
+          { test_name: 'unobserved_common_cause', passed: false, status: 'warning', original_effect: 0.0875, new_effect: 0.0875, p_value: 0 },
+        ],
+      },
+    };
+    renderWithProviders(<CausalAnalysisDetail result={withWarning} />);
+    expect(screen.getByTestId('causal-dag')).toHaveAttribute('data-refutation-warnings', '1');
   });
 
   it('renders the estimator-comparison panel (the #1030 data-driven evaluation)', () => {

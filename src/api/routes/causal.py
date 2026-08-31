@@ -3032,6 +3032,7 @@ def _refutation_tests_from_state(refutation: Dict[str, Any]) -> List[RefutationT
             RefutationTestDetail(
                 test_name=name,
                 passed=bool(t.get("passed", False)),
+                status=(str(t["status"]) if t.get("status") else None),
                 original_effect=_opt_float(t.get("original_effect")),
                 new_effect=_opt_float(t.get("new_effect")),
                 p_value=_opt_float(t.get("p_value")),

@@ -541,6 +541,14 @@ class RefutationTestDetail(BaseModel):
         ),
     )
     passed: bool = Field(default=False, description="Did the estimate survive this refuter?")
+    status: Optional[str] = Field(
+        default=None,
+        description=(
+            "Three-state verdict: passed / warning / failed. A warning is a soft "
+            "caveat that does not fail the robustness gate (#1867). None on "
+            "legacy payloads — consumers fall back to `passed`."
+        ),
+    )
     original_effect: Optional[float] = Field(
         default=None, description="The estimated effect before the refutation perturbation"
     )
