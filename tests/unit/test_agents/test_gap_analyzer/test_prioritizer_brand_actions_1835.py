@@ -79,12 +79,21 @@ def _gap(
 
 
 def _roi(gap_id: str, cost: float = 100_000.0) -> ROIEstimate:
+    # risk_adjusted_roi == expected_roi because total_risk_adjustment is the
+    # risk REDUCTION amount (roi_calculation.py feeds 1 - total_risk_adj into
+    # the simulator), so 0.0 means no adjustment was applied.
     return {
         "gap_id": gap_id,
         "estimated_revenue_impact": cost * 4,
         "estimated_cost_to_close": cost,
         "expected_roi": 3.0,
+        "risk_adjusted_roi": 3.0,
         "payback_period_months": 6,
+        "confidence_interval": None,
+        "attribution_level": "full",
+        "attribution_rate": 1.0,
+        "total_risk_adjustment": 0.0,
+        "value_by_driver": None,
         "confidence": 0.8,
         "assumptions": [],
     }
