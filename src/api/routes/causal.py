@@ -1592,7 +1592,13 @@ async def propose_causal_questions(
     pairs = [(t, o) for t in spec["treatment"] for o in spec["outcome"] if t != o]
 
     async def _score(t: str, o: str) -> Optional[ProposedQuestion]:
-        cov = [c for c in covariates_all if c not in (t, o)]
+        # #1872 (codex iter-1): mirror the submit endpoint's per-treatment
+        # default — a RANDOMIZED pair screens UNADJUSTED on the single-table
+        # path (adjusting is unnecessary post-randomization, and riding the
+        # patient JOIN would make the RCT proposal join-dependent: droppable
+        # on missing patient columns).
+        per_treatment = [] if _is_randomized_treatment(dataset, t) else covariates_all
+        cov = [c for c in per_treatment if c not in (t, o)]
         try:
             df, _ = await _load_agent_estimation_frame(
                 dataset=dataset,

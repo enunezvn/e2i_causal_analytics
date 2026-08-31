@@ -308,3 +308,42 @@ async def test_estimation_data_rejects_patient_joined_covariates():
         )
     assert exc.value.status_code == 400
     assert "join" in str(exc.value.detail).lower()
+
+
+# ---------------------------------------------------------------------------
+# Propose-questions screening: per-treatment covariates (codex iter-1 MED)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_propose_questions_screens_rct_unadjusted():
+    """The screening endpoint must mirror the submit endpoint's per-treatment
+    default: the RANDOMIZED pair screens with NO covariates (single-table path,
+    never join-dependent), while the observational acceptance pair screens with
+    the SSOT backdoor set."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(7)
+
+    async def _fake_loader(*, dataset, treatment_var, outcome_var, covariates, limit, **_kw):
+        cols = [treatment_var, outcome_var, *covariates]
+        return (
+            pd.DataFrame({c: rng.normal(size=50) for c in cols}),
+            list(cols),
+        )
+
+    loader = AsyncMock(side_effect=_fake_loader)
+    with patch.object(causal_routes, "_load_agent_estimation_frame", loader):
+        resp = await causal_routes.propose_causal_questions(
+            dataset="nba_triggers", user={"sub": "t"}
+        )
+
+    by_treatment = {
+        call.kwargs["treatment_var"]: call.kwargs["covariates"] for call in loader.await_args_list
+    }
+    assert by_treatment["control_group_flag"] == []
+    assert by_treatment["acceptance_status"] == ["disease_severity", "engagement_score"]
+    # Both treatments' pairs still make it into the ranked proposals.
+    proposed_treatments = {c.treatment for c in resp.candidates}
+    assert {"control_group_flag", "acceptance_status"} <= proposed_treatments
