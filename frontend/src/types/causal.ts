@@ -207,6 +207,12 @@ export interface RefutationTestDetail {
   /** placebo_treatment / random_common_cause / data_subset / unobserved_common_cause / bootstrap */
   test_name: string;
   passed: boolean;
+  /**
+   * Three-state verdict: passed / warning / failed (#1867). A warning is a
+   * soft caveat that does not fail the robustness gate. Absent on legacy
+   * payloads — consumers fall back to `passed`.
+   */
+  status?: string | null;
   original_effect?: number | null;
   new_effect?: number | null;
   p_value?: number | null;

@@ -310,6 +310,9 @@ class RefutationSuite:
             individual_tests[key] = {
                 "test_name": t.test_name.value,
                 "passed": t.status == RefutationStatus.PASSED,
+                # #1867: the three-state verdict (passed/warning/failed) — the
+                # two-state ``passed`` collapses WARNING into FAILED for display.
+                "status": t.status.value,
                 "new_effect": t.refuted_effect,
                 "original_effect": t.original_effect,
                 "p_value": t.p_value or 0.0,

@@ -446,6 +446,67 @@ class TestLegacyFormatSkippedTestsField:
 
 
 # ============================================================================
+# LEGACY FORMAT THREE-STATE status FIELD (#1867)
+# ============================================================================
+
+
+class TestLegacyFormatStatusField:
+    """#1867: each ``individual_tests`` entry carries the engine's three-state
+    ``status`` alongside the legacy two-state ``passed``.
+
+    The pass/fail-shaped dict collapsed WARNING to ``passed: False``, so the FE
+    rendered a soft warning (e.g. E-value 1.51 in the [1.5, 2.0) warning band)
+    identically to a hard failure — contradicting the PROCEED gate shown next
+    to it. ``passed`` stays for backward compatibility; ``status`` is the
+    honest signal.
+    """
+
+    def _suite(self, tests):
+        return RefutationSuite(
+            passed=True,
+            confidence_score=0.85,
+            tests=tests,
+            gate_decision=GateDecision.PROCEED,
+        )
+
+    def test_warning_entry_carries_status_warning_and_passed_false(self):
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                status=RefutationStatus.WARNING,
+                original_effect=0.075,
+                refuted_effect=0.075,
+                details={"message": "E-value (CI bound) 1.51 suggests moderate sensitivity"},
+            )
+        ]
+        legacy = self._suite(tests).to_legacy_format()
+        entry = legacy["individual_tests"]["unobserved_common_cause"]
+        assert entry["status"] == "warning"
+        assert entry["passed"] is False  # legacy two-state unchanged
+
+    def test_passed_and_failed_entries_carry_matching_status(self):
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.075,
+                refuted_effect=0.001,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.DATA_SUBSET,
+                status=RefutationStatus.FAILED,
+                original_effect=0.075,
+                refuted_effect=0.02,
+            ),
+        ]
+        legacy = self._suite(tests).to_legacy_format()
+        assert legacy["individual_tests"]["placebo_treatment"]["status"] == "passed"
+        assert legacy["individual_tests"]["placebo_treatment"]["passed"] is True
+        assert legacy["individual_tests"]["data_subset"]["status"] == "failed"
+        assert legacy["individual_tests"]["data_subset"]["passed"] is False
+
+
+# ============================================================================
 # RefutationRunner INITIALIZATION TESTS
 # ============================================================================
 

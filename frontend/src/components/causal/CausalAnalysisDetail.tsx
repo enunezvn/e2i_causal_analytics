@@ -79,6 +79,12 @@ function toRefutationResults(tests: RefutationTestDetail[] | undefined | null): 
     refutedEstimate: t.new_effect ?? 0,
     pValue: t.p_value ?? 0,
     passed: t.passed,
+    // #1867: three-state verdict — a 'warning' must not render as a failure.
+    // Unknown/absent values are dropped so the viz falls back to `passed`.
+    status:
+      t.status === 'passed' || t.status === 'warning' || t.status === 'failed'
+        ? t.status
+        : undefined,
     description: t.details ?? undefined,
   }));
 }

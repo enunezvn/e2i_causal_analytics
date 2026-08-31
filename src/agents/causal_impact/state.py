@@ -118,6 +118,7 @@ class RefutationTest(TypedDict, total=False):
         "unobserved_common_cause",  # Contract key for sensitivity test
     ]
     passed: bool  # Whether effect survived refutation
+    status: Literal["passed", "warning", "failed"]  # #1867: three-state verdict
     new_effect: float  # Effect after refutation
     original_effect: float  # Original ATE for comparison
     p_value: float
