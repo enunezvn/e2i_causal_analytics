@@ -84,6 +84,14 @@ export const routeConfigs: RouteConfig[] = [
     section: 'main',
     showInNav: true,
   },
+  {
+    path: '/ai-insights',
+    title: 'Executive Insights',
+    description: 'GPT-powered briefs, recommendations & alerts',
+    icon: 'brain',
+    section: 'main',
+    showInNav: true,
+  },
 
   // ── Causal Analytics — understand cause → effect ─────────────────────────
   {
@@ -183,14 +191,6 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Experiments',
     description: 'A/B testing, randomization, and experiment monitoring',
     icon: 'flask',
-    section: 'decisions',
-    showInNav: true,
-  },
-  {
-    path: '/ai-insights',
-    title: 'AI Insights',
-    description: 'GPT-powered briefs, recommendations & alerts',
-    icon: 'brain',
     section: 'decisions',
     showInNav: true,
   },

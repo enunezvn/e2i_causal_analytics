@@ -90,7 +90,7 @@ describe('AIAgentInsights', () => {
   describe('Page rendering', () => {
     it('renders page header', () => {
       render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
-      expect(screen.getByText('AI Agent Insights')).toBeInTheDocument();
+      expect(screen.getByText('Executive Insights')).toBeInTheDocument();
     });
 
     it('renders all six insight components', () => {
@@ -309,7 +309,7 @@ describe('AIAgentInsights', () => {
         render(<Page />, { wrapper: createWrapperWithUrl('/ai-insights') });
 
         // Page header still renders.
-        expect(screen.getByText('AI Agent Insights')).toBeInTheDocument();
+        expect(screen.getByText('Executive Insights')).toBeInTheDocument();
 
         // All other insights mount.
         for (const testid of survivors) {
