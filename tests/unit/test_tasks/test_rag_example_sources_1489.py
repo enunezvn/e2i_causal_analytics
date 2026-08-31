@@ -25,6 +25,7 @@ filtering run, per the ``test_business_metric_region_paged_931`` idiom.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
@@ -116,13 +117,25 @@ class _FakeClient:
         return _FakeTable(self._rows, self.log)
 
 
+def _days_ago(n: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=n)).isoformat()
+
+
+# One shared "recent" timestamp: computed ONCE so default rows stay tied (the
+# fake table's sort is stable, same as the old shared literal). Never seed an
+# absolute created_at here — db_batch bounds the read by ``now - lookback``, so
+# absolute seeds age out of the window on the calendar (#1860: the 2026-08-01
+# seed died at midnight UTC on 2026-08-31 and took CI with it).
+_FRESH_CREATED_AT = _days_ago(1)
+
+
 def _row(
     query: str = "How did Kisqali TRx trend?",
     answer: str = "Kisqali TRx rose 4% over the quarter.",
     chunks: Any = None,
     *,
     is_synthetic: bool = False,
-    created_at: str = "2026-08-05T12:00:00+00:00",
+    created_at: str = _FRESH_CREATED_AT,
 ) -> Dict[str, Any]:
     if chunks is None:
         chunks = [{"content": "Kisqali TRx by week, Northeast, 2026-Q2."}]
@@ -503,13 +516,18 @@ class TestDbSource:
         ``.order(..., desc=True)`` leaves them in that order and fails — an
         earlier version of this test asserted only the logged chain and passed
         with the ordering deleted.
+
+        The stale row pins the lookback cutoff on the OUTPUT too (#1860): seeds
+        are relative to now because the window is relative to now.
         """
         import asyncio
 
         from src.tasks import rag_example_sources as mod
 
+        stale = _days_ago(mod._db_lookback_days() + 10)
         client = _FakeClient(
-            [_row(f"q{i}", created_at=f"2026-08-0{i}T00:00:00+00:00") for i in (1, 2, 3)]
+            [_row("q0-stale", created_at=stale)]
+            + [_row(f"q{i}", created_at=_days_ago(4 - i)) for i in (1, 2, 3)]
         )
         batch = asyncio.run(mod.db_batch(client=client))
         assert client.log["table"] == mod.FEEDSTOCK_TABLE

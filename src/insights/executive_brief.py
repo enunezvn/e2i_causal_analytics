@@ -403,6 +403,44 @@ def _inject(text: str, injection: dict[str, str]) -> str:
     return _PLACEHOLDER_RE.sub(lambda m: injection.get(m.group(0), m.group(0)), text)
 
 
+# An enumeration run of segment tokens: two or more {SEG_n} joined by commas
+# and/or "and"/"or" ("{SEG_2}, {SEG_3}, and {SEG_4}", "{SEG_1} and {SEG_2}").
+_SEG_ENUM_SEP = r"(?:\s*,\s*(?:and\s+|or\s+)?|\s+(?:and|or)\s+)"
+_SEG_ENUM_RUN_RE = re.compile(rf"\{{SEG_\d+\}}(?:{_SEG_ENUM_SEP}\{{SEG_\d+\}})+")
+_SEG_ONLY_RE = re.compile(r"\{SEG_\d+\}")
+_COUNT_WORDS = {2: "two", 3: "three", 4: "four", 5: "five"}
+
+
+def _collapse_same_value_seg_runs(text: str, injection: dict[str, str]) -> str:
+    """Collapse an enumeration run of {SEG_n} tokens that all inject the SAME
+    value into one mention plus a count of the distinct opportunities (#1856:
+    "across {SEG_2}, {SEG_3}, and {SEG_4}" read "across south, south, and
+    south" live whenever ranked opportunities shared a segment).
+
+    The LM cannot do this itself — it never sees the values, so it cannot know
+    they are equal. Runs over distinct or mixed values are left untouched
+    (enumerating different segments is good prose), as is any run containing a
+    token the server didn't define. The count is DISTINCT token indices, not
+    run length: "{SEG_1} and {SEG_1}" is one opportunity stuttered and
+    collapses to "{SEG_1}" with no count. Applied between validation (which
+    must see the raw token text — the attribution rule pairs metric indices
+    with the segment indices the LM actually wrote) and injection.
+    """
+
+    def _collapse(m: re.Match[str]) -> str:
+        tokens: list[str] = _SEG_ONLY_RE.findall(m.group(0))
+        values = {injection.get(t) for t in tokens}
+        if len(values) != 1 or None in values:
+            return m.group(0)
+        distinct = len(set(tokens))
+        if distinct == 1:
+            return tokens[0]
+        count = _COUNT_WORDS.get(distinct, str(distinct))
+        return f"{tokens[0]} ({count} initiatives)"
+
+    return _SEG_ENUM_RUN_RE.sub(_collapse, text)
+
+
 def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
     # No real signal -> the honest factual answer, never an LLM riff on nothing.
     if not g["has_signal"]:
@@ -435,9 +473,12 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
             v for v in (_placeholder_violation(u, vocab) for u in [interpretation, *takeaways]) if v
         ]
         if interpretation and not violations:
+            inj = g["injection"]
             return {
-                "insight": _inject(interpretation, g["injection"]),
-                "key_takeaways": [_inject(t, g["injection"]) for t in takeaways],
+                "insight": _inject(_collapse_same_value_seg_runs(interpretation, inj), inj),
+                "key_takeaways": [
+                    _inject(_collapse_same_value_seg_runs(t, inj), inj) for t in takeaways
+                ],
                 "grounding": g["grounding"],
                 "is_fallback": False,
             }
