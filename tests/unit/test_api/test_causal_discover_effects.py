@@ -312,10 +312,13 @@ def test_effect_summary_none_until_estimated():
 
 
 @pytest.mark.asyncio
-async def test_trigger_questions_from_ssot_have_empty_adjustment_set():
-    """The nba_triggers grain enumerates the RCT + effect-modifier questions from
-    the SSOT, each with an EMPTY modeled adjustment set (randomized / effect
-    modifier). Reuses P1's _discover_candidate_questions verbatim."""
+async def test_trigger_questions_keep_ssot_backdoor_for_acceptance_edge():
+    """#1872: the nba_triggers enumeration keeps the SSOT-modeled backdoor set
+    for the OBSERVATIONAL acceptance edge (Phase 4: confounded on
+    disease_severity + engagement_score) instead of intersecting it away
+    against an empty covariate offer — the pre-fix behavior shipped the naive
+    difference. The RCT edge (empty registry backdoor) stays empty. Fake rows
+    mirror the REAL causal_paths rows (_TRIGGER_EDGES)."""
     from unittest.mock import AsyncMock, patch
 
     fake = [
@@ -329,7 +332,7 @@ async def test_trigger_questions_from_ssot_have_empty_adjustment_set():
             "treatment": "acceptance_status",
             "outcome": "conversion_flag",
             "brand": "Kisqali",
-            "confounders": [],
+            "confounders": ["disease_severity", "engagement_score"],
         },
     ]
     with patch.object(causal_routes, "_get_causal_path_repo") as mk:
@@ -341,7 +344,10 @@ async def test_trigger_questions_from_ssot_have_empty_adjustment_set():
     assert by_outcome["action_taken"].adjustment_set == []
     assert by_outcome["action_taken"].brand == "Kisqali"
     assert by_outcome["conversion_flag"].treatment == "acceptance_status"
-    assert by_outcome["conversion_flag"].adjustment_set == []
+    assert by_outcome["conversion_flag"].adjustment_set == [
+        "disease_severity",
+        "engagement_score",
+    ]
 
 
 @pytest.mark.asyncio

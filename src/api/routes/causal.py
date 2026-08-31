@@ -946,12 +946,24 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
         # Treatments: the randomized holdout flag (control_group_flag) and the
         # "trigger accepted" indicator (acceptance_status). Outcomes: action_taken
         # (an action was taken) and conversion_flag (the DB STORED-GENERATED
-        # outcome_value>0). No covariates: the RCT is randomized (empty backdoor)
-        # and acceptance->conversion is a designed effect with priority as an
-        # effect MODIFIER (surfaced, not adjusted), so no confounder is offered.
+        # outcome_value>0).
         "treatment": ["control_group_flag", "acceptance_status"],
         "outcome": ["action_taken", "conversion_flag"],
-        "covariate": [],
+        # #1872: the OBSERVATIONAL acceptance_status -> conversion_flag edge
+        # carries a REAL backdoor since COMM-ARMS Phase 4 (the trigger_accepted
+        # arm is confounded on disease_severity + engagement_score —
+        # treatment_arm.ARM_REGISTRY, mirrored on the causal_paths SSOT edge).
+        # The pre-P4 "no confounder is offered" comment survived the semantics
+        # change and silently emptied every registry-derived adjustment set:
+        # measured +0.0145 upward bias on Kisqali (naive +0.0676 vs OLS-adjusted
+        # +0.0531, prod DB 2026-08-31). Both are patient_journeys columns riding
+        # the #1188 patient JOIN — NOT triggers columns. engagement_score is
+        # pre-treatment HERE (the DGP draws it once, before arm assignment); its
+        # #1188 baseline-role exclusion below guards the RCT edge's ANCOVA
+        # channel, a different concern. The RCT edge's default stays UNADJUSTED
+        # via the randomized_treatment guard at the submit endpoint — this offer
+        # never leaks into a randomized design by default.
+        "covariate": ["disease_severity", "engagement_score"],
         # #1188: curated PRE-TREATMENT baselines, joined from patient_journeys
         # via triggers.patient_id, for OPT-IN variance reduction (ANCOVA-style
         # efficiency adjustment — NOT de-confounding; the empty backdoor above
@@ -978,6 +990,13 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
     },
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
+
+# #1872: every nba_triggers covariate is JOINED from patient_journeys via
+# triggers.patient_id (the triggers table itself carries NO covariate columns).
+# Consumers that read exactly one physical table (the raw estimation-data
+# endpoint, the /variables physical-table probe) must treat these like the
+# #1188 baselines: never probe/select them off the triggers table.
+_NBA_JOINED_COVARIATES: frozenset = frozenset(_CAUSAL_DATASET_SPECS["nba_triggers"]["covariate"])
 
 # Row cap for the discovery leaderboard's per-question estimate (2026-07-23). The
 # patient outcomes are quantile-thresholded binaries whose latent CATE attenuates
@@ -1167,6 +1186,11 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "action_taken",
         "conversion_flag",
         "acceptance_status",
+        # #1872: patient-JOINED backdoor confounders of the acceptance edge —
+        # membership here keeps them through the discovery-path intersection
+        # (spec covariate ∩ numeric∪categorical in _discover_candidate_questions).
+        "disease_severity",
+        "engagement_score",
     },
 }
 
@@ -1436,7 +1460,13 @@ async def list_causal_variables(
             return list(spec[role])
         return [c for c in spec[role] if c in present]
 
-    covariate_candidates = _brand_scoped_covariates(_available("covariate"), brand)
+    # #1872: nba_triggers covariates are JOINED from patient_journeys (like the
+    # #1188 baselines below) — the physical-table probe would filter every one
+    # of them out, so the curated list bypasses the probe for this dataset.
+    if dataset == "nba_triggers":
+        covariate_candidates = _brand_scoped_covariates(list(spec["covariate"]), brand)
+    else:
+        covariate_candidates = _brand_scoped_covariates(_available("covariate"), brand)
 
     # #1188: baselines are JOINED from patient_journeys, not columns of this
     # dataset's physical table — the probe cannot vet them, so the curated
@@ -2125,6 +2155,22 @@ async def get_causal_estimation_data(
             ),
         )
 
+    # #1872: the nba_triggers covariates live on patient_journeys, not on the
+    # triggers table this endpoint reads — selecting them here would be a raw
+    # PostgREST 42703. Honest 400 pointing at the join-aware agent path.
+    if dataset == "nba_triggers":
+        joined = [c for c in covs if c in _NBA_JOINED_COVARIATES]
+        if joined:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Covariate(s) {joined} are patient-joined on nba_triggers "
+                    "(patient_journeys columns, not triggers columns); this raw "
+                    "single-table endpoint cannot serve them — use the join-aware "
+                    "POST /causal/agent-analyze or POST /causal/discover-effects."
+                ),
+            )
+
     # De-duplicate while preserving order (treatment/outcome may also be covariates).
     select_cols = list(dict.fromkeys(requested))
 
@@ -2472,23 +2518,26 @@ async def _load_patient_baseline_rows(
     return rows
 
 
-async def _load_nba_triggers_baseline_frame(
+async def _load_nba_triggers_join_frame(
     *,
     treatment_var: str,
     outcome_var: str,
     baseline_covariates: List[str],
     limit: int,
     brand: Optional[str],
+    covariates: Optional[List[str]] = None,
 ) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
-    """#1188: build the nba_triggers estimation frame WITH pre-treatment
-    baselines — triggers (question columns, patient_id) JOIN patient_journeys
-    (curated baseline columns) on patient_id.
+    """#1188/#1872: build the nba_triggers estimation frame WITH patient-joined
+    columns — triggers (question columns, patient_id) JOIN patient_journeys on
+    patient_id. Two channels ride the same join: opt-in pre-treatment BASELINES
+    (#1188 ANCOVA efficiency role) and the acceptance edge's BACKDOOR
+    covariates (#1872 de-confounding role, curated in ``spec["covariate"]``).
 
     Same fail-closed discipline as every grain loader: 400 on any column
     outside the curated allowlists, 503 on no store / no usable rows; rows
     missing a treatment/outcome value are dropped (designed-NULL outcomes fill
-    to 0 first), and rows missing a REQUESTED baseline are dropped too — a
-    partially-observed baseline row would silently degrade the adjustment.
+    to 0 first), and rows missing a REQUESTED joined column are dropped too — a
+    partially-observed row would silently degrade the adjustment.
     geographic_region is one-hot expanded. Never fabricates rows.
     """
     import pandas as pd
@@ -2502,6 +2551,17 @@ async def _load_nba_triggers_baseline_frame(
             detail=(
                 f"Column(s) {not_allowed_q} are not permitted for dataset "
                 f"'nba_triggers'. Allowed: {sorted(allowed_questions)}"
+            ),
+        )
+    covariates = list(covariates or [])
+    allowed_covs = set(spec["covariate"])
+    not_allowed_c = [c for c in covariates if c not in allowed_covs]
+    if not_allowed_c:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column(s) {not_allowed_c} are not permitted as nba_triggers "
+                f"covariates. Allowed: {sorted(allowed_covs)}"
             ),
         )
     allowed_baselines = set(spec.get("baseline_covariate", []))
@@ -2529,24 +2589,26 @@ async def _load_nba_triggers_baseline_frame(
                 f"({treatment_var} -> {outcome_var}) in dataset 'nba_triggers'."
             ),
         )
-    baseline_cols = list(dict.fromkeys(baseline_covariates))
-    patient_rows = await _load_patient_baseline_rows(client, baseline_cols)
+    # #1872: covariates first (backdoor role leads the resolved order), then the
+    # baselines that are not already covariates — one fetch, one value per column.
+    joined_cols = list(dict.fromkeys([*covariates, *baseline_covariates]))
+    patient_rows = await _load_patient_baseline_rows(client, joined_cols)
     if not patient_rows:
         raise HTTPException(
-            status_code=503, detail="patient_journeys baseline covariates unavailable"
+            status_code=503, detail="patient_journeys joined covariates unavailable"
         )
 
     trigger_df = pd.DataFrame(trigger_rows)
     patient_df = pd.DataFrame(patient_rows).drop_duplicates(subset="patient_id")
     merged = trigger_df.merge(patient_df, on="patient_id", how="inner")
     if merged.empty:
-        raise HTTPException(status_code=503, detail="nba_triggers baseline JOIN produced no rows")
+        raise HTTPException(status_code=503, detail="nba_triggers patient JOIN produced no rows")
 
     numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get("nba_triggers", set())
     derivations = _CAUSAL_NUMERIC_DERIVATIONS.get("nba_triggers")
     fill_zero = frozenset(_CAUSAL_FILL_ZERO_OUTCOMES.get("nba_triggers", set()))
-    numeric_baselines = [c for c in baseline_cols if c not in _NBA_BASELINE_CATEGORICALS]
-    categorical_baselines = [c for c in baseline_cols if c in _NBA_BASELINE_CATEGORICALS]
+    numeric_joined = [c for c in joined_cols if c not in _NBA_BASELINE_CATEGORICALS]
+    categorical_joined = [c for c in joined_cols if c in _NBA_BASELINE_CATEGORICALS]
 
     records: List[Dict[str, Any]] = []
     for _, row in merged.iterrows():
@@ -2562,17 +2624,17 @@ async def _load_nba_triggers_baseline_frame(
         if rec is None:
             continue
         usable = True
-        for col in baseline_cols:
+        for col in joined_cols:
             value = row.get(col)
             if value is not None and pd.isna(value):
                 value = None
-            if col in numeric_baselines and value is not None:
+            if col in numeric_joined and value is not None:
                 try:
                     value = float(value)
                 except (TypeError, ValueError):
                     value = None
             if value is None:
-                usable = False  # missing baseline -> row cannot be adjusted
+                usable = False  # missing joined column -> row cannot be adjusted
                 break
             rec[col] = value
         if not usable:
@@ -2586,14 +2648,14 @@ async def _load_nba_triggers_baseline_frame(
             status_code=503,
             detail=(
                 "No usable estimation rows for the requested variables "
-                f"({treatment_var} -> {outcome_var}) with baseline covariates "
-                f"{baseline_cols} in dataset 'nba_triggers'."
+                f"({treatment_var} -> {outcome_var}) with joined columns "
+                f"{joined_cols} in dataset 'nba_triggers'."
             ),
         )
 
     frame = pd.DataFrame(records)
-    frame, dummy_names = _one_hot_categoricals(frame, categorical_baselines)
-    select_cols = [*question_cols, *numeric_baselines, *dummy_names]
+    frame, dummy_names = _one_hot_categoricals(frame, categorical_joined)
+    select_cols = [*question_cols, *numeric_joined, *dummy_names]
     return frame, select_cols
 
 
@@ -2627,14 +2689,16 @@ async def _load_agent_estimation_frame(
             brand=brand,
         )
 
-    # #1188: nba_triggers becomes JOIN-aware ONLY when baselines were
-    # explicitly requested (opt-in ANCOVA efficiency adjustment). The default
-    # single-table RCT path below is untouched.
-    if dataset == "nba_triggers" and baseline_covariates:
-        return await _load_nba_triggers_baseline_frame(
+    # #1188/#1872: nba_triggers becomes JOIN-aware whenever any patient-joined
+    # column is requested — opt-in baselines (ANCOVA) or backdoor covariates
+    # (the acceptance edge's de-confounding set). The bare RCT question keeps
+    # the single-table path below.
+    if dataset == "nba_triggers" and (covariates or baseline_covariates):
+        return await _load_nba_triggers_join_frame(
             treatment_var=treatment_var,
             outcome_var=outcome_var,
-            baseline_covariates=baseline_covariates,
+            covariates=covariates,
+            baseline_covariates=list(baseline_covariates or []),
             limit=limit,
             brand=brand,
         )
@@ -2789,6 +2853,16 @@ async def run_causal_agent_analysis(
                 f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
             ),
         )
+    # #1872: the spec-level covariate OFFER must not leak into a RANDOMIZED
+    # treatment by default — randomization already closes every backdoor, and
+    # the #1188 design keeps the RCT default-unadjusted (baselines stay a
+    # separate opt-in efficiency role). An analyst's EXPLICIT picks are still
+    # honored (pre-treatment adjustment of an RCT is legitimate when asked for).
+    default_covariates = (
+        []
+        if _is_randomized_treatment(request.dataset, request.treatment_var)
+        else spec["covariate"]
+    )
     # Brand-aware adjustment set (Phase 2): drop indication-specific clinical
     # covariates that are NULL for this brand cohort so a gated off-brand column
     # never reaches EconML as NaN. Applies to BOTH the analyst's explicit picks and
@@ -2796,7 +2870,7 @@ async def run_causal_agent_analysis(
     covariates = [
         c
         for c in _brand_scoped_covariates(
-            (request.covariates if request.covariates is not None else spec["covariate"]),
+            (request.covariates if request.covariates is not None else default_covariates),
             request.brand,
         )
         if c not in (request.treatment_var, request.outcome_var)
@@ -2823,9 +2897,13 @@ async def run_causal_agent_analysis(
     # one-hot dummies; the agent needs the resolved frame columns (the dummy
     # names), not the raw categorical. Baselines (#1188) are split OUT of the
     # confounders — they are efficiency controls on a randomized design, never
-    # part of the backdoor adjustment set.
+    # part of the backdoor adjustment set. #1872: a column requested as a
+    # BACKDOOR covariate keeps the confounder role even when adjust_baselines
+    # also selects it (disease_severity holds both curated roles) — demoting a
+    # backdoor variable to efficiency-only would silently unadjust the edge.
     _question_vars = (request.treatment_var, request.outcome_var)
-    _baseline_roots = set(baseline_covariates)
+    _covariate_roots = set(covariates)
+    _baseline_roots = set(baseline_covariates) - _covariate_roots
     resolved_baselines = [
         c
         for c in select_cols
