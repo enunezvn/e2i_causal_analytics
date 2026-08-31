@@ -2164,8 +2164,11 @@ async def get_causal_estimation_data(
     # #1872: the nba_triggers covariates live on patient_journeys, not on the
     # triggers table this endpoint reads — selecting them here would be a raw
     # PostgREST 42703. Honest 400 pointing at the join-aware agent path.
+    # Checked over ALL requested slots (codex iter-2): the union allowlist
+    # above is role-insensitive, so a joined column could otherwise ride in as
+    # treatment_var/outcome_var.
     if dataset == "nba_triggers":
-        joined = [c for c in covs if c in _NBA_JOINED_COVARIATES]
+        joined = [c for c in requested if c in _NBA_JOINED_COVARIATES]
         if joined:
             raise HTTPException(
                 status_code=400,
@@ -2730,6 +2733,23 @@ async def _load_agent_estimation_frame(
                 f"'{dataset}'. Allowed: {sorted(allowed)}"
             ),
         )
+
+    # #1872 (codex iter-2): the union allowlist above is role-insensitive, so a
+    # patient-JOINED covariate could ride a question slot into this
+    # single-table path (only reachable with an empty covariate set — non-empty
+    # routes to the join loader, which validates questions by role). It is not
+    # a triggers column: fail closed before the read, never a PostgREST 42703.
+    if dataset == "nba_triggers":
+        joined_req = [c for c in requested if c in _NBA_JOINED_COVARIATES]
+        if joined_req:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Column(s) {joined_req} are patient-joined on nba_triggers "
+                    "(patient_journeys columns) and cannot serve as single-table "
+                    "treatment/outcome columns."
+                ),
+            )
 
     select_cols = list(dict.fromkeys(requested))
 

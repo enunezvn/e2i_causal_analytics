@@ -347,3 +347,42 @@ async def test_propose_questions_screens_rct_unadjusted():
     # Both treatments' pairs still make it into the ranked proposals.
     proposed_treatments = {c.treatment for c in resp.candidates}
     assert {"control_group_flag", "acceptance_status"} <= proposed_treatments
+
+
+# ---------------------------------------------------------------------------
+# Joined columns in question slots (codex iter-2 MED): the role-insensitive
+# union allowlist admits the patient-joined covariates into treatment/outcome
+# slots — both single-table readers must fail closed before any DB read.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_estimation_data_rejects_joined_column_in_question_slot():
+    with pytest.raises(HTTPException) as exc:
+        await causal_routes.get_causal_estimation_data(
+            treatment_var="disease_severity",
+            outcome_var="conversion_flag",
+            dataset="nba_triggers",
+            covariates=None,
+            limit=1500,
+            user={"sub": "t"},
+        )
+    assert exc.value.status_code == 400
+    assert "patient-joined" in str(exc.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_single_table_loader_rejects_joined_column_in_question_slot():
+    """covariates=[] routes to the default single-table path — a joined column
+    riding a question slot must 400 there too, never reach triggers.select."""
+    with pytest.raises(HTTPException) as exc:
+        await causal_routes._load_agent_estimation_frame(
+            dataset="nba_triggers",
+            treatment_var="disease_severity",
+            outcome_var="conversion_flag",
+            covariates=[],
+            limit=1500,
+            brand=None,
+        )
+    assert exc.value.status_code == 400
+    assert "patient-joined" in str(exc.value.detail).lower()
