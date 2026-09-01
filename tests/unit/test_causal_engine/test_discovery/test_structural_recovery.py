@@ -29,6 +29,10 @@ is a confounder, and a correct structure learner must NOT place them as common c
 
 WHAT THE BENCHMARK ESTABLISHED (2026-09-01, seeds pinned below)
 ---------------------------------------------------------------
+Measured under the requirements.txt pins — causal-learn 0.1.4.3, numpy 2.3.5,
+pandas 2.3.3, networkx 3.6.1. The bands below are properties of THOSE versions:
+a dependency bump that shifts them should update these numbers, not loosen the
+assertions.
 1. CAPABILITY (asserted, ``TestGuidedRecoveryWithHonestPriors``): when the declared
    confounders are the true ones, guided PC recovers the DAG essentially correctly.
    Over a 20-run sweep (n = 500 and n = 2000, seeds 1-10):
