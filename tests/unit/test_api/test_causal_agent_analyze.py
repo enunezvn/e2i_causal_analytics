@@ -329,6 +329,79 @@ def test_dag_source_discovered_surfaces_confounders():
 
 
 @pytest.mark.unit
+def test_dag_source_prior_asserted_when_every_edge_is_prior_implied():
+    """The agent endpoints declare EVERY covariate a confounder, and guided
+    discovery seeds the estimand edge plus both common-cause edges for each of
+    them as REQUIRED. When the shipped DAG contains nothing else, the data cannot
+    be credited with the structure: the same graph comes back from a pure-noise
+    frame. Provenance must say 'prior_asserted', and no declared covariate may be
+    echoed back as a discovered confounder."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 3}
+    state["causal_graph"]["discovery_gate_decision"] = "accept"
+    state["modeled_confounders"] = ["disease_severity"]
+    # Exactly the prior-implied edge set: estimand + both common-cause edges.
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("disease_severity", "treatment_arm"),
+        ("disease_severity", "persistent_180d"),
+    ]
+    resp = _agent_state_to_response(
+        analysis_id="p1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "prior_asserted"
+    assert resp.discovered_confounders == []
+    # The adjustment set itself is NOT hidden — it still ships on the DAG, so the
+    # estimate's adjustment stays inspectable even when nothing was discovered.
+    assert resp.dag.adjustment_sets == [["disease_severity"]]
+
+
+@pytest.mark.unit
+def test_discovered_confounders_excludes_the_declared_ones():
+    """A confounder the caller declared is not a finding. Only the part of the
+    backdoor set the data added beyond the declaration is reported."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 5}
+    state["causal_graph"]["discovery_gate_decision"] = "accept"
+    state["modeled_confounders"] = ["disease_severity"]
+    # The data contributed an edge the priors do not imply -> genuinely discovered.
+    state["causal_graph"]["nodes"] = [
+        "treatment_arm",
+        "persistent_180d",
+        "disease_severity",
+        "academic_hcp",
+    ]
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("disease_severity", "treatment_arm"),
+        ("disease_severity", "persistent_180d"),
+        ("academic_hcp", "treatment_arm"),
+        ("academic_hcp", "persistent_180d"),
+    ]
+    state["causal_graph"]["adjustment_sets"] = [["disease_severity", "academic_hcp"]]
+    resp = _agent_state_to_response(
+        analysis_id="p2",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "discovered"
+    # academic_hcp was NOT declared -> it is the only genuine finding.
+    assert resp.discovered_confounders == ["academic_hcp"]
+
+
+@pytest.mark.unit
 def test_dag_source_domain_knowledge_when_accept_overridden_by_fallback():
     """Discovery ran and the gate ACCEPTED, but the accepted DAG contradicted a
     curated confounder so graph_builder DISCARDED it and fell back to the manual
@@ -370,6 +443,112 @@ def test_dag_source_domain_knowledge_when_discovery_absent():
     )
     assert resp.dag_source == "domain_knowledge"
     assert resp.discovered_confounders == []
+
+
+@pytest.mark.unit
+def test_dag_source_prior_asserted_when_augment_ships_only_prior_implied_edges():
+    """The AUGMENT gate path claims 'domain DAG + high-confidence discovered
+    edges' — but when the shipped DAG carries nothing beyond the prior-implied
+    set, that label overstates the data's contribution exactly the way
+    'discovered' did on the ACCEPT path (fixed in #1879). Same rule, same
+    label: prior_asserted."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 3}
+    state["causal_graph"]["discovery_gate_decision"] = "augment"
+    state["modeled_confounders"] = ["disease_severity"]
+    # Exactly the prior-implied edge set: estimand + both common-cause edges.
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("disease_severity", "treatment_arm"),
+        ("disease_severity", "persistent_180d"),
+    ]
+    resp = _agent_state_to_response(
+        analysis_id="p3",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "prior_asserted"
+    assert resp.discovered_confounders == []
+
+
+@pytest.mark.unit
+def test_dag_source_augmented_when_augment_carries_edges_beyond_priors():
+    """Positive control for the augment collapse: an augment-gate DAG that DOES
+    carry edges beyond the priors keeps the 'augmented' label and reports the
+    genuinely data-added confounder."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 5}
+    state["causal_graph"]["discovery_gate_decision"] = "augment"
+    state["modeled_confounders"] = ["disease_severity"]
+    state["causal_graph"]["nodes"] = [
+        "treatment_arm",
+        "persistent_180d",
+        "disease_severity",
+        "academic_hcp",
+    ]
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("disease_severity", "treatment_arm"),
+        ("disease_severity", "persistent_180d"),
+        ("academic_hcp", "treatment_arm"),
+        ("academic_hcp", "persistent_180d"),
+    ]
+    state["causal_graph"]["adjustment_sets"] = [["disease_severity", "academic_hcp"]]
+    resp = _agent_state_to_response(
+        analysis_id="p4",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "augmented"
+    assert resp.discovered_confounders == ["academic_hcp"]
+
+
+@pytest.mark.unit
+def test_discovered_confounders_are_sorted_and_deduplicated():
+    """The reported findings list is deterministic: sorted, no duplicates —
+    regardless of adjustment-set order or repeats. Pins the contract change
+    from #1879 (was insertion-ordered) so stored-response diffs stay stable."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 6}
+    state["causal_graph"]["discovery_gate_decision"] = "accept"
+    # Nothing declared -> the whole backdoor set is a data finding.
+    state["causal_graph"]["nodes"] = [
+        "treatment_arm",
+        "persistent_180d",
+        "zeta_cov",
+        "alpha_cov",
+    ]
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("zeta_cov", "treatment_arm"),
+        ("zeta_cov", "persistent_180d"),
+        ("alpha_cov", "treatment_arm"),
+        ("alpha_cov", "persistent_180d"),
+    ]
+    # Reverse-alphabetical with a duplicate: output must normalize both.
+    state["causal_graph"]["adjustment_sets"] = [["zeta_cov", "alpha_cov", "zeta_cov"]]
+    resp = _agent_state_to_response(
+        analysis_id="p5",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "discovered"
+    assert resp.discovered_confounders == ["alpha_cov", "zeta_cov"]
 
 
 # ---------------------------------------------------------------------------

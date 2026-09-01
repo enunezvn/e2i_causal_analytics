@@ -5921,13 +5921,13 @@ export interface components {
             dag: components["schemas"]["CausalDAGModel"];
             /**
              * Dag Source
-             * @description How the DAG was built: 'discovered' (learned from data via guided structure discovery), 'augmented' (domain DAG + data-discovered edges), or 'domain_knowledge' (the agent's curated DAG — discovery skipped or not accepted).
+             * @description How the DAG was built: 'discovered' (accepted, and the DAG carries edges BEYOND the declared priors), 'prior_asserted' (discovery's DAG was used — accept or augment gate — but every shipped edge is implied by the declared priors: guided discovery seeds them as required edges, so agreement by the data is indistinguishable from assertion and no data contribution is claimed), 'augmented' (domain DAG + high-confidence discovered edges beyond the priors), or 'domain_knowledge' (the agent's curated DAG — discovery skipped, rejected, or its DAG discarded).
              * @default domain_knowledge
              */
             dag_source: string;
             /**
              * Discovered Confounders
-             * @description Covariates the data identified as confounders (the adjustment set).
+             * @description Confounders the DATA identified: the backdoor adjustment set minus the covariates declared to discovery up front. Empty when the adjustment set only echoes what the caller declared — read dag.adjustment_sets for the full set the estimate adjusted on.
              */
             discovered_confounders?: string[];
             /**

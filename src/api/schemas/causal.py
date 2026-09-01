@@ -654,15 +654,25 @@ class AgentCausalAnalysisResponse(BaseModel):
     dag_source: str = Field(
         default="domain_knowledge",
         description=(
-            "How the DAG was built: 'discovered' (learned from data via guided "
-            "structure discovery), 'augmented' (domain DAG + data-discovered "
-            "edges), or 'domain_knowledge' (the agent's curated DAG — discovery "
-            "skipped or not accepted)."
+            "How the DAG was built: 'discovered' (accepted, and the DAG carries "
+            "edges BEYOND the declared priors), 'prior_asserted' (discovery's "
+            "DAG was used — accept or augment gate — but every shipped edge is "
+            "implied by the declared priors: guided discovery seeds them as "
+            "required edges, so agreement by the data is indistinguishable from "
+            "assertion and no data contribution is claimed), 'augmented' "
+            "(domain DAG + high-confidence discovered edges beyond the priors), "
+            "or 'domain_knowledge' (the agent's curated DAG — discovery "
+            "skipped, rejected, or its DAG discarded)."
         ),
     )
     discovered_confounders: List[str] = Field(
         default_factory=list,
-        description="Covariates the data identified as confounders (the adjustment set).",
+        description=(
+            "Confounders the DATA identified: the backdoor adjustment set minus "
+            "the covariates declared to discovery up front. Empty when the "
+            "adjustment set only echoes what the caller declared — read "
+            "dag.adjustment_sets for the full set the estimate adjusted on."
+        ),
     )
     ate: Optional[float] = Field(
         default=None, description="Average treatment effect (ADJUSTED for confounders)"
