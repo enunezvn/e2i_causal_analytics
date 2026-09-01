@@ -31,7 +31,7 @@ try:
 
         Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
         no underscore emphasis, no backticks, no # heading markers, no
-        bullet-list markers; plain numbered enumeration like "1." is fine."""
+        bullet-list markers, no numbered-list markers — write flowing prose."""
 
         scope: str = dspy.InputField(desc="Brand scope of this twin program view")
         model_summary: str = dspy.InputField(desc="Trained twin models available")

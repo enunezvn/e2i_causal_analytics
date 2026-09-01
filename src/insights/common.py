@@ -55,6 +55,21 @@ def flatten_markdown(text: str | None) -> str | None:
     return _MD_INLINE_CODE_RE.sub(r"\1", flat)
 
 
+# #1880: a leading list index ("5. ", "2) ") is prose structure the LM mints
+# without grounding — the fail-closed numeric guards would otherwise read it as
+# an ungrounded figure and reject the whole output (live 2026-09-01: every
+# home-KPI sample numbered its takeaways and the '5' rejection served the
+# factual fallback). Matches ONLY a line-leading 1-3 digit integer followed by
+# "."/")" and whitespace: "5.2%", "-0.02", a sentence-final "4.", and mid-line
+# "ranked 1." are never touched.
+_ENUM_MARKER_RE = re.compile(r"^[ \t]*\d{1,3}[.)][ \t]+", re.MULTILINE)
+
+
+def strip_enum_markers(text: str) -> str:
+    """Remove leading numbered-list markers from each line (#1880)."""
+    return _ENUM_MARKER_RE.sub("", text)
+
+
 def normalize_list(value: Any, cap: int = 5) -> list[str]:
     """DSPy list outputs may arrive as a real list or a newline/`-`-delimited str."""
     if isinstance(value, str):

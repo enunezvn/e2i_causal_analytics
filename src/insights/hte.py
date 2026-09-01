@@ -27,7 +27,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from src.insights.common import normalize_list, run_signature
+from src.insights.common import normalize_list, run_signature, strip_enum_markers
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ try:
 
         Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
         no underscore emphasis, no backticks, no # heading markers, no
-        bullet-list markers; plain numbered enumeration like "1." is fine."""
+        bullet-list markers, no numbered-list markers — write flowing prose."""
 
         scope: str = dspy.InputField(desc="Treatment -> outcome, brand filter, cohort size")
         effect_summary: str = dspy.InputField(
@@ -767,8 +767,12 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
     significant or total count; a figure tied to the lift/ATE wording must be
     that metric's value; and a sentence naming one segment may only carry
     that segment's figures (plus globals).
+
+    Leading numbered-list markers are stripped first (#1880): a list index
+    ("3)") is prose structure the LM mints without grounding — unstripped it
+    binds to a metric anchor as that metric's claimed value and rejects.
     """
-    norm = _normalize(candidate)
+    norm = _normalize(strip_enum_markers(candidate))
     metric_nums: dict[str, str | None] = g["metric_nums"]
     # The heterogeneity score is a legal annotation next to either metric
     # ("+11.1pp overall, heterogeneity 0.26"); unit-strict vouching still

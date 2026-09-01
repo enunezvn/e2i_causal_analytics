@@ -29,7 +29,13 @@ from src.insights import (
 from src.insights import (
     experiments as experiments_insight_mod,
 )
-from src.insights.common import cache_get, cache_key, cache_set, flatten_markdown
+from src.insights.common import (
+    cache_get,
+    cache_key,
+    cache_set,
+    flatten_markdown,
+    strip_enum_markers,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/insights", tags=["Strategic Insights"])
@@ -95,8 +101,12 @@ def _finalize(payload: dict[str, Any], provenance: str) -> StrategicInsightRespo
         # Takeaways render inside the card's own list-disc <ul>: strip a leading
         # bullet marker outright (normalize_list's convention on the string
         # path) instead of normalizing to "• ", which would double-bullet.
+        # Numbered-list markers double-mark the same way now that the guards
+        # tolerate them (#1880), so they go too; the paragraph channels keep
+        # "1." as prose under whitespace-pre-line (#1874's deliberate call).
         key_takeaways=[
-            flatten_markdown(t).removeprefix("• ") for t in payload.get("key_takeaways", [])
+            strip_enum_markers(flatten_markdown(t).removeprefix("• "))
+            for t in payload.get("key_takeaways", [])
         ],
         grounding=[GroundingChip(**c) for c in payload.get("grounding", [])],
         is_fallback=payload["is_fallback"],

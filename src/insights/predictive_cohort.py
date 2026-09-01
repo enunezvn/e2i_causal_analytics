@@ -33,7 +33,7 @@ try:
 
         Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
         no underscore emphasis, no backticks, no # heading markers, no
-        bullet-list markers; plain numbered enumeration like "1." is fine."""
+        bullet-list markers, no numbered-list markers — write flowing prose."""
 
         model_version: str = dspy.InputField(desc="Scoring model version")
         distribution_summary: str = dspy.InputField(
@@ -71,7 +71,7 @@ try:
 
         Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
         no underscore emphasis, no backticks, no # heading markers, no
-        bullet-list markers; plain numbered enumeration like "1." is fine."""
+        bullet-list markers, no numbered-list markers — write flowing prose."""
 
         model_version: str = dspy.InputField(desc="Scoring model version")
         profile_summary: str = dspy.InputField(desc="The hypothetical profile's entered inputs")

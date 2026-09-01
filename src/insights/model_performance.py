@@ -21,7 +21,7 @@ try:
 
         Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
         no underscore emphasis, no backticks, no # heading markers, no
-        bullet-list markers; plain numbered enumeration like "1." is fine."""
+        bullet-list markers, no numbered-list markers — write flowing prose."""
 
         model_version: str = dspy.InputField(desc="Model version/identifier")
         accuracy_summary: str = dspy.InputField(desc="Current vs baseline accuracy + trend")

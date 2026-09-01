@@ -18,7 +18,7 @@ import re
 from collections import Counter
 from typing import Any
 
-from src.insights.common import normalize_list, run_signature
+from src.insights.common import normalize_list, run_signature, strip_enum_markers
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ try:
 
         Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
         no underscore emphasis, no backticks, no # heading markers, no
-        bullet-list markers; plain numbered enumeration like "1." is fine."""
+        bullet-list markers, no numbered-list markers — write flowing prose."""
 
         scope: str = dspy.InputField(desc="Brand + territory the KPI values are scoped to")
         kpi_table: str = dspy.InputField(desc="Computed KPIs: name [workstream]: value (status)")
@@ -295,10 +295,15 @@ def _digit_violation(outputs: list[str], corpus: str) -> str | None:
     """First digit sequence in ``outputs`` that the grounding corpus cannot
     vouch for, or None. Subset check, fail-closed — mirrors the exec-brief
     lesson (instruction-only grounding proved insufficient) without its full
-    placeholder machinery."""
+    placeholder machinery.
+
+    Leading numbered-list markers are stripped first (#1880): a list index
+    ("5.") is prose structure the LM mints without grounding, not a numeric
+    claim — live 2026-09-01 it rejected every sample and served the factual
+    fallback."""
     allowed = _digit_sequences(corpus)
     for text in outputs:
-        for seq in _digit_sequences(text):
+        for seq in _digit_sequences(strip_enum_markers(text)):
             if seq not in allowed:
                 return seq
     return None

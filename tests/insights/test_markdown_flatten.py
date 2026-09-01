@@ -145,3 +145,23 @@ def test_insight_signatures_carry_the_plain_prose_constraint(mod_name, cls_name)
         f"{cls_name} docstring must instruct the LM to write plain prose "
         "with no markdown syntax (#1874)"
     )
+
+
+@pytest.mark.parametrize("mod_name,cls_name", _SIGNATURE_CLASSES)
+def test_insight_signatures_do_not_bless_numbered_enumeration(mod_name, cls_name):
+    # #1880: #1874's "plain numbered enumeration like '1.' is fine" made the LM
+    # number its takeaways; the marker digit ("5.") is absent from the grounding
+    # and the fail-closed numeric guards rejected every sample, so prod served
+    # the factual fallback. Signatures must forbid numbered-list markers.
+    mod = importlib.import_module(mod_name)
+    cls = getattr(mod, cls_name)
+    if cls is None:
+        pytest.skip("dspy unavailable in this environment")
+    doc = (cls.__doc__ or "").lower()
+    assert "numbered enumeration" not in doc, (
+        f"{cls_name} must not bless numbered enumeration (#1880)"
+    )
+    if "bullet-list markers" in doc:
+        assert "no numbered-list markers" in doc, (
+            f"{cls_name} must forbid numbered-list markers alongside bullets (#1880)"
+        )

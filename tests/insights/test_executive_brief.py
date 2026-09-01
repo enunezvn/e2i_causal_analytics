@@ -244,6 +244,15 @@ def test_placeholder_violation_passes_clean_token_prose():
     assert _placeholder_violation("Returns run from {ROI_2} up to {ROI_1}.", _VOCAB) is None
 
 
+def test_placeholder_violation_tolerates_enumeration_markers():
+    # #1880: a leading list-index digit ("1.", "2)") is prose structure the LM
+    # mints without grounding — not a figure. Stripped before the digit check.
+    assert _placeholder_violation("1. Lead with {SEG_1} into {SEG_2}.", _VOCAB) is None
+    assert _placeholder_violation("2) Then expand toward {SEG_2}.", _VOCAB) is None
+    # Positive control: the marker never launders a real leaked figure.
+    assert _placeholder_violation("1. Expect a 6.2x return on {IMPACT_1}.", _VOCAB) is not None
+
+
 def test_placeholder_violation_rejects_leaked_digits():
     assert _placeholder_violation("Expect a 6.2x return on {IMPACT_1}.", _VOCAB) is not None
     assert _placeholder_violation("Roughly $500K of upside.", _VOCAB) is not None

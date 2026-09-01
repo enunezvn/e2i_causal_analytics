@@ -147,6 +147,40 @@ def test_verbatim_negative_and_unicode_minus_pass():
         assert out["is_fallback"] is False, quote
 
 
+def test_enumeration_markers_are_not_ungrounded_digits():
+    """#1880 regression (live 2026-09-01): the LM numbered its takeaways
+    "1."–"5."; the list-index digits "4"/"5" are absent from this grounding, and
+    the digit-subset guard rejected both attempts, serving the factual fallback.
+    A leading enumeration marker is prose structure, not a numeric claim."""
+    numbered = _pred(
+        "Trigger Recall at 67.5% is good; TRx Share at 25.6% needs commercial focus.",
+        [
+            "1. Lift TRx Share from 25.6% with call-plan focus.",
+            "2. Hold Trigger Recall at 67.5%.",
+            "3. Watch the 10.2% consistency gap.",
+            "4. Keep claims-lag expectations in scope.",
+            "5. Revisit coverage next cycle.",
+        ],
+    )
+    with patch.object(home_kpi, "run_signature", return_value=numbered) as rs:
+        out = home_kpi.generate_insight(_g())
+    assert out["is_fallback"] is False
+    assert rs.call_count == 1
+
+
+def test_enumerated_takeaway_with_invented_digit_still_falls_back():
+    """Positive control for #1880: stripping the marker must not blind the
+    guard to a genuinely ungrounded figure in the same item."""
+    bad = _pred(
+        "Trigger Recall at 67.5% is good.",
+        ["5. Recall improved 42% quarter over quarter."],
+    )
+    with patch.object(home_kpi, "run_signature", return_value=bad) as rs:
+        out = home_kpi.generate_insight(_g())
+    assert out["is_fallback"] is True
+    assert rs.call_count == 2
+
+
 def test_range_digits_stay_individually_quotable():
     """Deliberate stance (codex M2 declined): '1-3 months' licenses '1' and
     '3' individually — honest phrasings like 'up to 3 months' must not be
