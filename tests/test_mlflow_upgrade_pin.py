@@ -52,7 +52,8 @@ MLFLOW_DOCKER_IMAGE_TAG = "v3.15.1"
 MLFLOW_REQUIRED_SPEC = SpecifierSet(">=3.15.1,<3.16.0")
 
 # Whitelisted MLFLOW-RELATED advisory IDs that must remain ignored AFTER the
-# #442 upgrade. Only ONE remains because GHSA-7qhf has no upstream fix yet.
+# #442 upgrade. TWO remain, both with no upstream fix: GHSA-7qhf (#442) and
+# CVE-2026-71211 (#1870, 2026-09-01).
 # Three other entries (GHSA-46r5, GHSA-fh64, GHSA-75cm) were dropped in #442
 # because the 3.11.x line addresses them per V-D8 advisory data + 3.11.1
 # release notes (PR #21708 / PR #21435).
@@ -63,6 +64,15 @@ EXPECTED_MLFLOW_IGNORES: frozenset[str] = frozenset(
         # confirmed via ``gh api /advisories/GHSA-7qhf-v65m-g5f3`` on 2026-05-22.
         # Mitigated — MLFLOW_SERVER_ENABLE_JOB_EXECUTION is unset in our deployment.
         "GHSA-7qhf-v65m-g5f3",
+        # CVE-2026-71211 (GHSA-h7x2-h6g9-p789) — AI Gateway SSRF: CreateGatewaySecret
+        # stores an unvalidated auth_config.api_base which the gateway raw proxy
+        # then dereferences server-side. ``fix_versions: []`` per pip-audit (pypi
+        # AND osv services) and ``first_patched_version: null`` per
+        # ``gh api /advisories/GHSA-h7x2-h6g9-p789`` on 2026-09-01; affected range
+        # >=3.13.0,<=3.15.2 covers every 3.15.x. pip-audit keys this advisory by
+        # its CVE id (verified 2026-09-01 with both services), hence a CVE- entry.
+        # Reachability mitigation is documented on the security.yml row (#1870).
+        "CVE-2026-71211",
     }
 )
 
@@ -82,7 +92,7 @@ _PKG_LINE_RE = re.compile(
 )
 
 _IGNORE_LINE_RE = re.compile(
-    r"--ignore-vuln\s+(GHSA-[a-zA-Z0-9-]+|PYSEC-[0-9-]+)\b[^`]*`([^`]*)`",
+    r"--ignore-vuln\s+(GHSA-[a-zA-Z0-9-]+|PYSEC-[0-9-]+|CVE-[0-9-]+)\b[^`]*`([^`]*)`",
 )
 
 
@@ -344,7 +354,9 @@ def _collect_mlflow_mistune_ignores() -> set[str]:
     """Grep security.yml for ignore-vuln rows whose rationale starts with
     ``mlflow X.Y.Z`` or ``mistune X.Y.Z`` (i.e. the IGNORED package is
     mlflow or mistune, not just a contextual mention). Returns the bare
-    GHSA/PYSEC IDs.
+    GHSA/PYSEC/CVE IDs (CVE- added 2026-09-01: pip-audit keys some advisories
+    by CVE id, and a CVE-keyed mlflow row must not slip past this exact-set
+    guard).
 
     This filter intentionally excludes joblib + pyarrow + similar entries
     whose rationale references "MLflow artifacts" or "MLflow-tracked models"
@@ -368,7 +380,8 @@ def test_security_yml_mlflow_ignores_match_post_upgrade_set_exactly() -> None:
     Only GHSA-7qhf remains (first_patched_version=null, advisory range
     <=3.10.1 — kept listed so local and CI advisory DBs agree; re-verified
     via gh api /advisories/GHSA-7qhf-v65m-g5f3 on 2026-08-04 during #1476).
-    Asserting exact-set semantics is the forcing function that ensures
+    2026-09-01 (#1870): CVE-2026-71211 (AI Gateway SSRF, no fix in any
+    release through 3.15.2) joins it. Asserting exact-set semantics is the forcing function that ensures
     resolved entries are removed in the same PR as the bump.
     """
     actual = _collect_mlflow_mistune_ignores()
