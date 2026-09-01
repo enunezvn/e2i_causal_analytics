@@ -154,7 +154,11 @@ try:
         STRICTLY grounded in the provided counts and entity names. Use ONLY the
         numbers and names given; NEVER invent nodes, edges, or confidence values.
         Explain what the structure implies about causal drivers/levers; if the graph
-        is sparse, say so plainly rather than over-reading it."""
+        is sparse, say so plainly rather than over-reading it.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         scope: str = dspy.InputField(desc="Brand/region scope of this graph view")
         node_summary: str = dspy.InputField(desc="Node counts by type and total")

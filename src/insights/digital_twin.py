@@ -27,7 +27,11 @@ try:
         cohort (a capability showcase, not real-world evidence) — say so plainly.
         Explain what the simulation evidence implies about which intervention levers
         look strongest and what to pre-screen next; if history is thin, say so
-        rather than over-reading it."""
+        rather than over-reading it.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         scope: str = dspy.InputField(desc="Brand scope of this twin program view")
         model_summary: str = dspy.InputField(desc="Trained twin models available")

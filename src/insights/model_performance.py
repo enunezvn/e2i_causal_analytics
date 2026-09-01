@@ -17,7 +17,11 @@ try:
         STRICTLY grounded in the provided metrics. Use ONLY the numbers given; never
         invent metrics or thresholds. State whether the model is healthy vs degrading,
         what the confusion/ROC imply (e.g. precision vs recall trade-off), and the
-        single most appropriate next action (monitor / retrain / investigate drift)."""
+        single most appropriate next action (monitor / retrain / investigate drift).
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         model_version: str = dspy.InputField(desc="Model version/identifier")
         accuracy_summary: str = dspy.InputField(desc="Current vs baseline accuracy + trend")

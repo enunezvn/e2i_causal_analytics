@@ -37,7 +37,11 @@ try:
         The registry context lists curated directional chains related to this pair —
         SEPARATE knowledge, not evidence for or against this estimate: you may use it
         qualitatively to situate the effect, but NEVER present it as corroboration and
-        NEVER attribute numbers to it."""
+        NEVER attribute numbers to it.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         scope: str = dspy.InputField(desc="Cohort + brand for this estimate")
         estimate: str = dspy.InputField(

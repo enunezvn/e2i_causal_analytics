@@ -29,7 +29,7 @@ from src.insights import (
 from src.insights import (
     experiments as experiments_insight_mod,
 )
-from src.insights.common import cache_get, cache_key, cache_set
+from src.insights.common import cache_get, cache_key, cache_set, flatten_markdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/insights", tags=["Strategic Insights"])
@@ -84,14 +84,25 @@ class StrategicInsightResponse(BaseModel):
 
 
 def _finalize(payload: dict[str, Any], provenance: str) -> StrategicInsightResponse:
+    # #1874: the LM-generated fields are flattened to plain prose HERE — the one
+    # seam every insight route flows through — so markdown in a fresh payload
+    # AND in a stale Redis-cached one (cache_key hashes inputs only, so a
+    # prompt-side fix alone keeps serving markdown for up to the TTL) never
+    # reaches the plain-text StrategicInsightCard. Grounding chips and the
+    # mitigation playbook are authored/deterministic and stay verbatim.
     return StrategicInsightResponse(
-        insight=payload["insight"],
-        key_takeaways=payload.get("key_takeaways", []),
+        insight=flatten_markdown(payload["insight"]),
+        # Takeaways render inside the card's own list-disc <ul>: strip a leading
+        # bullet marker outright (normalize_list's convention on the string
+        # path) instead of normalizing to "• ", which would double-bullet.
+        key_takeaways=[
+            flatten_markdown(t).removeprefix("• ") for t in payload.get("key_takeaways", [])
+        ],
         grounding=[GroundingChip(**c) for c in payload.get("grounding", [])],
         is_fallback=payload["is_fallback"],
         generated_at=datetime.now(timezone.utc).isoformat(),
         provenance=provenance,
-        structural_considerations=payload.get("structural_considerations"),
+        structural_considerations=flatten_markdown(payload.get("structural_considerations")),
         mitigation_playbook=payload.get("mitigation_playbook"),
     )
 

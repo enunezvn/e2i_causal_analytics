@@ -65,7 +65,11 @@ try:
         label constraints, competitors; no figures): optional qualitative
         color for the targeting read — a segment's clinical plausibility can
         support a targeting call — but never attribute numbers to it, never
-        count it, and never present it as a finding of this analysis."""
+        count it, and never present it as a finding of this analysis.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         scope: str = dspy.InputField(desc="Treatment -> outcome, brand filter, cohort size")
         effect_summary: str = dspy.InputField(

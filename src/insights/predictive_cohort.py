@@ -29,7 +29,11 @@ try:
         context lists curated directional chains around the predicted outcome —
         SEPARATE domain knowledge, not model output: you may use it
         qualitatively to frame why targeting matters, but NEVER present it as
-        a prediction driver and NEVER attribute numbers to it."""
+        a prediction driver and NEVER attribute numbers to it.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         model_version: str = dspy.InputField(desc="Scoring model version")
         distribution_summary: str = dspy.InputField(
@@ -63,7 +67,11 @@ try:
         the real world would change the outcome — say so when relevant. Define
         any technical term (e.g. SHAP) in a brief plain-English aside. The
         registry context is separate domain knowledge — qualitative framing
-        only, never a prediction driver, never a source of numbers."""
+        only, never a prediction driver, never a source of numbers.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         model_version: str = dspy.InputField(desc="Scoring model version")
         profile_summary: str = dspy.InputField(desc="The hypothetical profile's entered inputs")

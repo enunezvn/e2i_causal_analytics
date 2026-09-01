@@ -62,7 +62,10 @@ try:
 
         The estimate comes from a SYNTHETIC patient cohort; the clinical and
         competitive context is REAL. Keep that boundary explicit and never
-        present the estimate as clinical evidence."""
+        present the estimate as clinical evidence.
+
+        Write in PLAIN PROSE — no markdown syntax: no asterisks, no
+        underscore emphasis, no backticks, no # heading markers."""
 
         analysis: str = dspy.InputField(
             desc="What this causal analysis asks: framing, treatment kind, grain"

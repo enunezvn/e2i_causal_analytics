@@ -33,7 +33,11 @@ try:
         ALWAYS close with the caveat given in `caveats` (the run is on
         clearly-labelled synthetic data: directionally meaningful, but the
         dollar values are illustrative, so validate against real budget data
-        before acting)."""
+        before acting).
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         scope: str = dspy.InputField(
             desc="Brand scope, resource type, objective, solver status, entity count"

@@ -21,7 +21,11 @@ try:
         counts, severities, or agent names. State whether the loop is actively
         learning or starved, what the detected patterns imply about agent
         quality, and the single most useful next action (e.g. review pending
-        updates / investigate a low-reward agent / keep collecting)."""
+        updates / investigate a low-reward agent / keep collecting).
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         activity_summary: str = dspy.InputField(desc="Cycles, last run, feedback inflow volumes")
         patterns_summary: str = dspy.InputField(desc="Detected patterns by severity + examples")
