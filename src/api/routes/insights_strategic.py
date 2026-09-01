@@ -92,7 +92,12 @@ def _finalize(payload: dict[str, Any], provenance: str) -> StrategicInsightRespo
     # mitigation playbook are authored/deterministic and stay verbatim.
     return StrategicInsightResponse(
         insight=flatten_markdown(payload["insight"]),
-        key_takeaways=[flatten_markdown(t) for t in payload.get("key_takeaways", [])],
+        # Takeaways render inside the card's own list-disc <ul>: strip a leading
+        # bullet marker outright (normalize_list's convention on the string
+        # path) instead of normalizing to "• ", which would double-bullet.
+        key_takeaways=[
+            flatten_markdown(t).removeprefix("• ") for t in payload.get("key_takeaways", [])
+        ],
         grounding=[GroundingChip(**c) for c in payload.get("grounding", [])],
         is_fallback=payload["is_fallback"],
         generated_at=datetime.now(timezone.utc).isoformat(),

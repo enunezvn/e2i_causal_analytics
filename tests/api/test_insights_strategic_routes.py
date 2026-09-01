@@ -1239,9 +1239,11 @@ def test_finalize_flattens_lm_markdown_in_all_three_lm_fields():
         provenance="test",
     )
     assert resp.insight == "1. acceptance_status -> conversion_flag drives conversions"
+    # Takeaways render inside the card's own list-disc <ul>: a leading bullet
+    # marker is stripped outright (normalize_list convention), never doubled.
     assert resp.key_takeaways == [
         "Prioritize copay_card outreach",
-        "• Watch adherence_180d weekly",
+        "Watch adherence_180d weekly",
     ]
     assert resp.structural_considerations == "Escalate\nclaims_lag blocks attribution"
     # Grounding chips are deterministic/authored — never rewritten.
