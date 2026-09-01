@@ -3281,7 +3281,8 @@ def _agent_state_to_response(
     for _conf in _declared:
         _prior_edges.add((_conf, _t))
         _prior_edges.add((_conf, _o))
-    _beyond_priors = {(e[0], e[1]) for e in dag.edges if len(e) == 2} - _prior_edges
+    # dag.edges was already filtered to [from, to] pairs at model construction.
+    _beyond_priors = {(e[0], e[1]) for e in dag.edges} - _prior_edges
 
     if discovery_ran and _gate_dec == "accept" and not _dag_overridden:
         dag_source = "discovered" if _beyond_priors else "prior_asserted"
