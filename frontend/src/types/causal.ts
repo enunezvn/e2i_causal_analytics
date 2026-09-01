@@ -270,9 +270,9 @@ export interface AgentCausalAnalysisResponse {
   /** database / synthetic */
   data_source: string;
   dag: CausalDAGModel;
-  /** How the DAG was built: 'discovered' | 'augmented' | 'domain_knowledge' */
+  /** How the DAG was built: 'discovered' | 'prior_asserted' | 'augmented' | 'domain_knowledge' */
   dag_source?: string;
-  /** Covariates the data identified as confounders (the adjustment set). */
+  /** Confounders the DATA identified beyond the declared covariates — empty when the adjustment set only echoes the declaration (full set on dag.adjustment_sets). */
   discovered_confounders?: string[];
   /** Adjusted (headline) average treatment effect. */
   ate?: number | null;

@@ -655,12 +655,13 @@ class AgentCausalAnalysisResponse(BaseModel):
         default="domain_knowledge",
         description=(
             "How the DAG was built: 'discovered' (accepted, and the DAG carries "
-            "edges BEYOND the declared priors), 'prior_asserted' (accepted, but "
-            "every shipped edge is implied by the declared priors — guided "
-            "discovery seeds them as required edges, so agreement by the data is "
-            "indistinguishable from assertion and no data contribution is "
-            "claimed), 'augmented' (domain DAG + high-confidence discovered "
-            "edges), or 'domain_knowledge' (the agent's curated DAG — discovery "
+            "edges BEYOND the declared priors), 'prior_asserted' (discovery's "
+            "DAG was used — accept or augment gate — but every shipped edge is "
+            "implied by the declared priors: guided discovery seeds them as "
+            "required edges, so agreement by the data is indistinguishable from "
+            "assertion and no data contribution is claimed), 'augmented' "
+            "(domain DAG + high-confidence discovered edges beyond the priors), "
+            "or 'domain_knowledge' (the agent's curated DAG — discovery "
             "skipped, rejected, or its DAG discarded)."
         ),
     )
