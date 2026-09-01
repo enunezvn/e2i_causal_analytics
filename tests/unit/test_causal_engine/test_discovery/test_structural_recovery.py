@@ -57,6 +57,21 @@ assertions.
    and the shipped DAG is IDENTICAL whether the frame contains real causal structure
    or is pure noise. Under that wiring the data cannot change the graph.
 
+   The LABELLING half of this gap is now fixed: ``dag_source`` reports
+   'prior_asserted' rather than 'discovered' for a prior-implied DAG, and
+   ``discovered_confounders`` no longer echoes the declared covariates back
+   (tests/unit/test_api/test_causal_agent_analyze.py). The WIRING half stands, and
+   the obvious remedy was measured and REJECTED — dropping the required confounder
+   edges (tiers only, letting the data select) recovers cleaner STRUCTURE but drops
+   a true confounder from the backdoor set in 7/20 runs on this DGP and 3/20 on an
+   all-binary variant, i.e. it trades a labelling problem for a CONFOUNDED estimate.
+   Adding the curated set back after discovery is not a middle path either: it
+   reproduces the prior-implied DAG exactly, because ``_add_curated_confounder_edges``
+   draws the same two edges on the ACCEPT path. Over-declaration costs precision,
+   not bias (ATE +0.1439 all-covariates vs +0.1420 true-confounders-only, true
+   0.1586), so the wiring is deliberately LEFT AS IS pending a design that reports
+   per-edge provenance rather than one that removes the adjustment guarantee.
+
 3. KNOWN GAP (pinned, ``TestPostTreatmentCovariateIsNotRejected``): a post-treatment
    MEDIATOR declared as a confounder is forced in with its edge reversed, gate-ACCEPTed,
    and shipped in the adjustment set. Measured ATE consequence on the mediator DGP:
@@ -318,10 +333,12 @@ class TestProductionWiringIsPriorDetermined:
         assert _structural_metrics(result["edges"])["shd"] == 4.0
 
     @pytest.mark.asyncio
-    async def test_provenance_says_discovered_for_a_prior_determined_dag(self) -> None:
-        """``dag_source`` in the API layer reads 'discovered' from this combination
-        (accept + not overridden) even though the identical graph is produced from
-        noise. The label overstates what the data contributed."""
+    async def test_gate_accepts_the_prior_determined_dag(self) -> None:
+        """The gate ACCEPTs and nothing is overridden, so the DAG ships as-is even
+        though the identical graph is produced from noise. The API layer no longer
+        calls this combination 'discovered' — it reports 'prior_asserted' when every
+        shipped edge is prior-implied (see test_causal_agent_analyze.py) — but the
+        gate decision itself is unchanged, which is what this pins."""
         result = await _build_dag(_make_frame(2000, 2000), ALL_COVARIATES)
         assert result["gate_decision"] == GateDecision.ACCEPT.value
         assert result["dag_overridden"] is False

@@ -3231,10 +3231,25 @@ def _agent_state_to_response(
         dag_dot=causal_graph.get("dag_dot"),
     )
 
-    # How was the DAG built? 'discovered' = learned from data (guided structure
-    # discovery accepted by the gate), 'augmented' = domain DAG + discovered
-    # edges, 'domain_knowledge' = the agent's curated DAG (discovery skipped or
-    # not accepted). discovery_result is present only when discovery ran.
+    # How was the DAG built? Provenance must separate what the DATA contributed
+    # from what the PRIORS asserted. Guided discovery seeds the estimand edge plus
+    # BOTH common-cause edges for every modeled confounder as REQUIRED constraints,
+    # so when those constraints alone account for every edge that ships, the data
+    # cannot be credited with the structure.
+    #
+    # Not hypothetical: with the agent endpoints declaring every covariate a
+    # confounder, the shipped DAG is IDENTICAL for a real frame and for a PURE
+    # NOISE frame — yet the old classifier labelled the first 'discovered' and the
+    # second 'domain_knowledge' (measured in tests/unit/test_causal_engine/
+    # test_discovery/test_structural_recovery.py::TestProductionWiringIsPriorDetermined).
+    #
+    #   'discovered'       accepted, and the DAG carries edges BEYOND the priors
+    #   'prior_asserted'   accepted, but every shipped edge is prior-implied. The
+    #                      data may well agree; a required-edge constraint makes
+    #                      agreement indistinguishable from assertion, so no data
+    #                      contribution is claimed either way.
+    #   'augmented'        domain DAG + high-confidence discovered edges
+    #   'domain_knowledge' discovery skipped, rejected, or its DAG discarded
     #
     # ``discovery_dag_overridden`` guards an honesty corner case: the gate can
     # ACCEPT a discovered DAG that contradicts a curated confounder, in which case
@@ -3245,17 +3260,40 @@ def _agent_state_to_response(
     discovery_ran = final_state.get("discovery_result") is not None
     _gate_dec = causal_graph.get("discovery_gate_decision")
     _dag_overridden = bool(causal_graph.get("discovery_dag_overridden"))
+
+    # Confounders DECLARED to discovery as priors. ``modeled_confounders`` is the
+    # guided-discovery key; fall back to the plain adjustment covariates for
+    # callers that do not set it.
+    _declared = {
+        str(c)
+        for c in (final_state.get("modeled_confounders") or final_state.get("confounders") or [])
+    }
+    # Exactly the edges those priors imply on their own. Treatment/outcome are read
+    # from the DAG'S OWN node lists, not the request: the edges are expressed in the
+    # graph's names, and a divergence would silently empty the prior set and label
+    # every run 'discovered' — failing toward the OVERSTATING label. Falling back to
+    # the request keeps the classifier working for states that omit the node lists.
+    _t = next(iter(dag.treatment_nodes or []), request.treatment_var)
+    _o = next(iter(dag.outcome_nodes or []), request.outcome_var)
+    _prior_edges = {(_t, _o)}
+    for _conf in _declared:
+        _prior_edges.add((_conf, _t))
+        _prior_edges.add((_conf, _o))
+    _beyond_priors = {(e[0], e[1]) for e in dag.edges if len(e) == 2} - _prior_edges
+
     if discovery_ran and _gate_dec == "accept" and not _dag_overridden:
-        dag_source = "discovered"
+        dag_source = "discovered" if _beyond_priors else "prior_asserted"
     elif discovery_ran and _gate_dec == "augment":
         dag_source = "augmented"
     else:
         dag_source = "domain_knowledge"
-    # Confounders the DATA identified (the backdoor adjustment set) — only
-    # surfaced when the structure was actually learned from data.
+    # Confounders the DATA identified: the backdoor adjustment set MINUS whatever
+    # was declared up front. Echoing a declared covariate back as 'discovered' is
+    # the same overstatement as the label above — under the all-covariates
+    # declaration this correctly reports nothing rather than the caller's own list.
     _adj_sets = causal_graph.get("adjustment_sets", []) or []
     discovered_confounders = (
-        [str(c) for c in _adj_sets[0]]
+        sorted({str(c) for c in _adj_sets[0]} - _declared)
         if dag_source in ("discovered", "augmented") and _adj_sets
         else []
     )
