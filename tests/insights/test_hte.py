@@ -158,6 +158,14 @@ class TestGuard:
         g = hte.build_grounding(_record())
         assert hte._is_grounded("- 11.1pp overall effect", g) is True
 
+    def test_enumeration_marker_is_not_a_metric_claim(self):
+        # #1880: a leading list index ("3)") is prose structure; unstripped it
+        # binds to the heterogeneity anchor as its claimed value and rejects.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("3) Heterogeneity across the bands is modest.", g) is True
+        # Positive control: a real figure bound to the anchor still rejects.
+        assert hte._is_grounded("3) Heterogeneity across the bands is 0.62.", g) is False
+
     def test_fraction_variants_all_checked(self):
         # codex round-1 HIGH: "3 out of 3" / "3-of-3" bypassed the fraction
         # rule; codex round-2 HIGH: so did hyphenated "3-out-of-3".

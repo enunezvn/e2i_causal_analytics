@@ -1231,6 +1231,7 @@ def test_finalize_flattens_lm_markdown_in_all_three_lm_fields():
             "key_takeaways": [
                 "**Prioritize** `copay_card` outreach",
                 "- Watch *adherence_180d* weekly",
+                "3. Escalate `claims_lag` gaps",  # #1880: enum marker, same double-mark risk
             ],
             "grounding": [{"label": "Effects", "value": "3"}],
             "is_fallback": False,
@@ -1244,6 +1245,7 @@ def test_finalize_flattens_lm_markdown_in_all_three_lm_fields():
     assert resp.key_takeaways == [
         "Prioritize copay_card outreach",
         "Watch adherence_180d weekly",
+        "Escalate claims_lag gaps",
     ]
     assert resp.structural_considerations == "Escalate\nclaims_lag blocks attribution"
     # Grounding chips are deterministic/authored — never rewritten.

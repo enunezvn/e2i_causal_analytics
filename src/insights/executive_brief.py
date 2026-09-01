@@ -30,7 +30,7 @@ import logging
 import re
 from typing import Any
 
-from src.insights.common import normalize_list, run_signature
+from src.insights.common import normalize_list, run_signature, strip_enum_markers
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ try:
 
         Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
         no underscore emphasis, no backticks, no # heading markers, no
-        bullet-list markers."""
+        bullet-list markers, no numbered-list markers — write flowing prose."""
 
         scope: str = dspy.InputField(
             desc="Brand, total addressable opportunity value, opportunity mix counts"
@@ -406,7 +406,12 @@ def _placeholder_violation(text: str, vocab: set[str]) -> str | None:
     every metric token's index must be among that sentence's segment indices —
     "{SEG_1} yields {ROI_2}" re-attributes rank 2's figure to rank 1's segment
     even though both values are real.
+
+    Leading numbered-list markers are stripped first (#1880): a list index
+    ("1.") is prose structure the LM mints without grounding, not a figure —
+    check 2 would otherwise reject every enumerated output.
     """
+    text = strip_enum_markers(text)
     used = set(_PLACEHOLDER_RE.findall(text))
     unknown = used - vocab
     if unknown:
