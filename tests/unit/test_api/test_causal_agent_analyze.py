@@ -513,6 +513,44 @@ def test_dag_source_augmented_when_augment_carries_edges_beyond_priors():
     assert resp.discovered_confounders == ["academic_hcp"]
 
 
+@pytest.mark.unit
+def test_discovered_confounders_are_sorted_and_deduplicated():
+    """The reported findings list is deterministic: sorted, no duplicates —
+    regardless of adjustment-set order or repeats. Pins the contract change
+    from #1879 (was insertion-ordered) so stored-response diffs stay stable."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 6}
+    state["causal_graph"]["discovery_gate_decision"] = "accept"
+    # Nothing declared -> the whole backdoor set is a data finding.
+    state["causal_graph"]["nodes"] = [
+        "treatment_arm",
+        "persistent_180d",
+        "zeta_cov",
+        "alpha_cov",
+    ]
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("zeta_cov", "treatment_arm"),
+        ("zeta_cov", "persistent_180d"),
+        ("alpha_cov", "treatment_arm"),
+        ("alpha_cov", "persistent_180d"),
+    ]
+    # Reverse-alphabetical with a duplicate: output must normalize both.
+    state["causal_graph"]["adjustment_sets"] = [["zeta_cov", "alpha_cov", "zeta_cov"]]
+    resp = _agent_state_to_response(
+        analysis_id="p5",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "discovered"
+    assert resp.discovered_confounders == ["alpha_cov", "zeta_cov"]
+
+
 # ---------------------------------------------------------------------------
 # Per-test refutation details (the drill-down table needs more than pass/total)
 # ---------------------------------------------------------------------------
