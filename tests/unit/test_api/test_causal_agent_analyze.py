@@ -445,6 +445,74 @@ def test_dag_source_domain_knowledge_when_discovery_absent():
     assert resp.discovered_confounders == []
 
 
+@pytest.mark.unit
+def test_dag_source_prior_asserted_when_augment_ships_only_prior_implied_edges():
+    """The AUGMENT gate path claims 'domain DAG + high-confidence discovered
+    edges' — but when the shipped DAG carries nothing beyond the prior-implied
+    set, that label overstates the data's contribution exactly the way
+    'discovered' did on the ACCEPT path (fixed in #1879). Same rule, same
+    label: prior_asserted."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 3}
+    state["causal_graph"]["discovery_gate_decision"] = "augment"
+    state["modeled_confounders"] = ["disease_severity"]
+    # Exactly the prior-implied edge set: estimand + both common-cause edges.
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("disease_severity", "treatment_arm"),
+        ("disease_severity", "persistent_180d"),
+    ]
+    resp = _agent_state_to_response(
+        analysis_id="p3",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "prior_asserted"
+    assert resp.discovered_confounders == []
+
+
+@pytest.mark.unit
+def test_dag_source_augmented_when_augment_carries_edges_beyond_priors():
+    """Positive control for the augment collapse: an augment-gate DAG that DOES
+    carry edges beyond the priors keeps the 'augmented' label and reports the
+    genuinely data-added confounder."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 5}
+    state["causal_graph"]["discovery_gate_decision"] = "augment"
+    state["modeled_confounders"] = ["disease_severity"]
+    state["causal_graph"]["nodes"] = [
+        "treatment_arm",
+        "persistent_180d",
+        "disease_severity",
+        "academic_hcp",
+    ]
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("disease_severity", "treatment_arm"),
+        ("disease_severity", "persistent_180d"),
+        ("academic_hcp", "treatment_arm"),
+        ("academic_hcp", "persistent_180d"),
+    ]
+    state["causal_graph"]["adjustment_sets"] = [["disease_severity", "academic_hcp"]]
+    resp = _agent_state_to_response(
+        analysis_id="p4",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "augmented"
+    assert resp.discovered_confounders == ["academic_hcp"]
+
+
 # ---------------------------------------------------------------------------
 # Per-test refutation details (the drill-down table needs more than pass/total)
 # ---------------------------------------------------------------------------

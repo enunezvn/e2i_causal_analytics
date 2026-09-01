@@ -3244,11 +3244,13 @@ def _agent_state_to_response(
     # test_discovery/test_structural_recovery.py::TestProductionWiringIsPriorDetermined).
     #
     #   'discovered'       accepted, and the DAG carries edges BEYOND the priors
-    #   'prior_asserted'   accepted, but every shipped edge is prior-implied. The
-    #                      data may well agree; a required-edge constraint makes
-    #                      agreement indistinguishable from assertion, so no data
+    #   'prior_asserted'   discovery's DAG was used (ACCEPT or AUGMENT) but every
+    #                      shipped edge is prior-implied. The data may well agree;
+    #                      a required-edge constraint makes agreement
+    #                      indistinguishable from assertion, so no data
     #                      contribution is claimed either way.
-    #   'augmented'        domain DAG + high-confidence discovered edges
+    #   'augmented'        domain DAG + high-confidence discovered edges beyond
+    #                      the priors
     #   'domain_knowledge' discovery skipped, rejected, or its DAG discarded
     #
     # ``discovery_dag_overridden`` guards an honesty corner case: the gate can
@@ -3284,7 +3286,9 @@ def _agent_state_to_response(
     if discovery_ran and _gate_dec == "accept" and not _dag_overridden:
         dag_source = "discovered" if _beyond_priors else "prior_asserted"
     elif discovery_ran and _gate_dec == "augment":
-        dag_source = "augmented"
+        # Same honesty rule as ACCEPT: an augment-gate DAG that carries nothing
+        # beyond the prior-implied set has no data contribution to claim.
+        dag_source = "augmented" if _beyond_priors else "prior_asserted"
     else:
         dag_source = "domain_knowledge"
     # Confounders the DATA identified: the backdoor adjustment set MINUS whatever
