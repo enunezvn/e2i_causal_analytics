@@ -78,7 +78,11 @@ try:
         key_takeaways) must NOT restate the claims adjudication/runout lag or
         any other structural constraint — at most it may note that a KPI's
         recent-window reading is gated by a constraint covered in the
-        structural channel, without repeating the constraint itself."""
+        structural channel, without repeating the constraint itself.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         scope: str = dspy.InputField(desc="Brand + territory the KPI values are scoped to")
         kpi_table: str = dspy.InputField(desc="Computed KPIs: name [workstream]: value (status)")

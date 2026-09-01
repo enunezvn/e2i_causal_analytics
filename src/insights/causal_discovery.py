@@ -42,7 +42,11 @@ try:
         off-target population (e.g. treatment-naive patients for an
         antihistamine-refractory indication) is NOT an actionable commercial
         recommendation. When the clinical positioning is empty, proceed without
-        this gate rather than inventing one."""
+        this gate rather than inventing one.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         scope: str = dspy.InputField(desc="Brand + analysis grain")
         effects_table: str = dspy.InputField(

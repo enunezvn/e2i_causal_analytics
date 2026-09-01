@@ -36,7 +36,11 @@ try:
         targeted HCPs" framing only — no invented dollars), and be explicit
         about channels whose tests show NO significant effect: a null result
         is decision-relevant (stop investing) and must not be spun as a win.
-        ALWAYS close with the caveat given in `caveats`."""
+        ALWAYS close with the caveat given in `caveats`.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers; plain numbered enumeration like "1." is fine."""
 
         scope: str = dspy.InputField(
             desc="Brand scope, number of running experiments with results, channels tested"

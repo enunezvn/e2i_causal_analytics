@@ -58,7 +58,11 @@ try:
         in a clinical vacuum — placed after the action sequence and before the
         closing caveat; it carries NO figures and you must not invent any. If
         `clinical_context` states that no clinical context is available, omit
-        any clinical sentence entirely — never invent one."""
+        any clinical sentence entirely — never invent one.
+
+        Write every output as PLAIN PROSE — no markdown syntax: no asterisks,
+        no underscore emphasis, no backticks, no # heading markers, no
+        bullet-list markers."""
 
         scope: str = dspy.InputField(
             desc="Brand, total addressable opportunity value, opportunity mix counts"

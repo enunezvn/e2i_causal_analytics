@@ -1214,3 +1214,94 @@ def test_clinical_narrative_real_narrative_cached_for_the_hour(test_client, monk
     r = test_client.post("/api/insights/clinical-narrative", json=_NARRATIVE_BODY)
     assert r.status_code == 200, r.text
     assert seen == {"ttl": 3600, "is_fallback": False}
+
+
+# ---- #1874: markdown flattening at the _finalize seam ---------------------------
+# The LM signatures can emit markdown; StrategicInsightCard renders plain text.
+# _finalize is the one seam every route (and every STALE cached payload —
+# cache_key hashes inputs only) flows through, so flattening lives there.
+
+
+def test_finalize_flattens_lm_markdown_in_all_three_lm_fields():
+    from src.api.routes.insights_strategic import _finalize
+
+    resp = _finalize(
+        {
+            "insight": "1. **`acceptance_status -> conversion_flag`** drives conversions",
+            "key_takeaways": [
+                "**Prioritize** `copay_card` outreach",
+                "- Watch *adherence_180d* weekly",
+            ],
+            "grounding": [{"label": "Effects", "value": "3"}],
+            "is_fallback": False,
+            "structural_considerations": "## Escalate\n`claims_lag` **blocks** attribution",
+        },
+        provenance="test",
+    )
+    assert resp.insight == "1. acceptance_status -> conversion_flag drives conversions"
+    assert resp.key_takeaways == [
+        "Prioritize copay_card outreach",
+        "• Watch adherence_180d weekly",
+    ]
+    assert resp.structural_considerations == "Escalate\nclaims_lag blocks attribution"
+    # Grounding chips are deterministic/authored — never rewritten.
+    assert resp.grounding[0].value == "3"
+
+
+def test_finalize_passes_plain_fallback_prose_through_unchanged():
+    from src.api.routes.insights_strategic import _finalize
+
+    insight = (
+        "For Kisqali / patient, discovered effects (by |ATE|):\n"
+        "copay_card->adherence_180d: ATE +0.043 [+0.020, +0.066], gate=proceed, "
+        "est=CausalForestDML\nGate distribution: proceed=1. "
+        "(Factual summary — LLM interpretation unavailable.)"
+    )
+    takeaways = ["Gates: proceed=1", "copay_card->adherence_180d: ATE +0.043"]
+    resp = _finalize(
+        {
+            "insight": insight,
+            "key_takeaways": list(takeaways),
+            "grounding": [],
+            "is_fallback": True,
+        },
+        provenance="test",
+    )
+    assert resp.insight == insight
+    assert resp.key_takeaways == takeaways
+    assert resp.structural_considerations is None
+
+
+def test_cached_markdown_payload_is_flattened_on_read(test_client, monkeypatch):
+    # THE reason flattening lives at _finalize rather than only in the
+    # signatures: cache_key hashes inputs only, so a pre-fix payload cached
+    # with markdown keeps being served for up to the 3600s TTL — it must
+    # still reach the FE clean.
+    canned = {
+        "insight": "1. **`acceptance_status -> conversion_flag`** drives conversions",
+        "key_takeaways": ["**Prioritize** `copay_card` outreach"],
+        "grounding": [{"label": "Effects", "value": "1"}],
+        "is_fallback": False,
+    }
+
+    async def _hit(key):
+        return dict(canned)
+
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_get", _hit)
+    body = {
+        "brand": "Kisqali",
+        "grain": "patient",
+        "effects": [
+            {
+                "treatment": "copay_card",
+                "outcome": "adherence_180d",
+                "ate": 0.043,
+                "status": "proceed",
+            }
+        ],
+    }
+    r = test_client.post("/api/insights/causal-discovery", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["insight"] == "1. acceptance_status -> conversion_flag drives conversions"
+    assert data["key_takeaways"] == ["Prioritize copay_card outreach"]
