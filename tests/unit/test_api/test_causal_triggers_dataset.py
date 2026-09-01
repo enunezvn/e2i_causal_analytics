@@ -125,8 +125,8 @@ def test_coerce_row_patient_outcome_null_still_drops():
 
 # ---------------------------------------------------------------------------
 # #1188: curated BASELINE covariates (RCT efficiency / ANCOVA), distinct from
-# the de-confounding covariate set (which stays EMPTY — the RCT has no
-# confounders by design).
+# the de-confounding covariate set (#1872: non-empty — the OBSERVATIONAL
+# acceptance_status -> conversion_flag edge carries a real backdoor).
 # ---------------------------------------------------------------------------
 
 
@@ -152,10 +152,34 @@ def test_nba_triggers_baselines_exclude_post_treatment_descendants():
 
 
 @pytest.mark.unit
-def test_nba_triggers_deconfounding_covariates_stay_empty():
-    """The RCT's DE-CONFOUNDING covariate set stays empty (randomized treatment
-    == empty backdoor is CORRECT); baselines are a separate, opt-in role."""
-    assert _CAUSAL_DATASET_SPECS["nba_triggers"]["covariate"] == []
+def test_nba_triggers_covariates_match_ssot_acceptance_backdoor():
+    """#1872: the dataset offers exactly the SSOT backdoor set of the
+    OBSERVATIONAL acceptance_status -> conversion_flag edge (COMM-ARMS Phase 4:
+    the trigger_accepted arm is confounded on disease_severity +
+    engagement_score, treatment_arm.ARM_REGISTRY). Locked to the causal_paths
+    generator SSOT so the two can never drift apart again — the pre-fix
+    `covariate: []` silently emptied every registry-derived adjustment set and
+    shipped the naive difference (+0.0145 measured confounding bias on Kisqali).
+    The RCT edge keeps its empty default via the randomized-treatment guard,
+    not via an empty offer."""
+    from src.ml.synthetic.generators.causal_paths_generator import _TRIGGER_EDGES
+
+    ssot = {(t, o): confounders for t, o, confounders in _TRIGGER_EDGES}
+    expected = ssot[("acceptance_status", "conversion_flag")]
+    assert expected == ["disease_severity", "engagement_score"]
+    assert _CAUSAL_DATASET_SPECS["nba_triggers"]["covariate"] == expected
+    # The RCT edge's registry backdoor is empty — the covariate OFFER above must
+    # never leak into it (guarded per-treatment at the submit endpoint).
+    assert ssot[("control_group_flag", "action_taken")] == []
+
+
+@pytest.mark.unit
+def test_nba_triggers_confounders_registered_numeric():
+    """#1872: the discovery-path intersection (spec covariate ∩ numeric∪categorical)
+    must KEEP the two patient-joined confounders — absent registration they were
+    silently dropped from every leaderboard adjustment set."""
+    numeric = _CAUSAL_NUMERIC_COLUMNS["nba_triggers"]
+    assert {"disease_severity", "engagement_score"} <= numeric
 
 
 @pytest.mark.unit

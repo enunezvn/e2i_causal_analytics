@@ -287,8 +287,10 @@ async def test_list_causal_variables_nba_includes_baseline_candidates():
 
     assert "disease_severity" in resp.baseline_candidates
     assert "age_at_diagnosis" in resp.baseline_candidates
-    # The de-confounding covariate list stays empty for the RCT.
-    assert resp.covariate_candidates == []
+    # #1872: the acceptance edge's SSOT backdoor pair is offered as covariates.
+    # They are patient-JOINED columns (not on the triggers table), so the
+    # physical-table probe must NOT filter them out — same bypass as baselines.
+    assert resp.covariate_candidates == ["disease_severity", "engagement_score"]
 
 
 @pytest.mark.asyncio
