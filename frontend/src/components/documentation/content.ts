@@ -814,13 +814,14 @@ export const REFUTATION_TESTS: RefutationTestDef[] = [
  * (docstring item 6).
  */
 export const LATENT_DIAGNOSTIC_NOTE =
-  'Alongside these tests, every discovery run includes an FCI-based latent-confounding ' +
-  'diagnostic: a check for signs that the treatment–outcome relationship is driven by an ' +
-  'unmeasured common cause. Its warning appears only when the E-value independently ' +
-  'indicates limited robustness — a corroborated alarm, not a reflex. Two honest limits: ' +
-  'the diagnostic can only detect confounding strong enough to account for the entire ' +
-  'treatment–outcome dependence, and its silence is NOT evidence that no unmeasured ' +
-  'confounding exists — quantitative robustness always rests with the E-value.';
+  'Alongside these tests, guided discovery runs include an FCI-based latent-confounding ' +
+  'diagnostic by default: a check for signs that the treatment–outcome relationship is ' +
+  'driven by an unmeasured common cause. Its warning appears only when the E-value ' +
+  'independently corroborates limited robustness — or when the E-value analysis could ' +
+  'not run, in which case the diagnostic is surfaced unchecked as a precaution. Two ' +
+  'honest limits: the diagnostic can only detect confounding strong enough to account ' +
+  'for the entire treatment–outcome dependence, and its silence is NOT evidence that no ' +
+  'unmeasured confounding exists — quantitative robustness always rests with the E-value.';
 
 export type GateDecision = 'proceed' | 'review' | 'block';
 
