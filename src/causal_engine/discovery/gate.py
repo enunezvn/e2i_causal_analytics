@@ -151,13 +151,25 @@ class DiscoveryGate:
         reasons = []
         warnings = []
 
+        # Latent-confounding diagnostic (FCI) rides along as METADATA on every
+        # evaluation path, early REJECTs included. It is a pass-through only:
+        # no decision or confidence math below may read it — the diagnostic
+        # annotates, it never gates (fix 2's accept/reject calibration would be
+        # invalidated by a new gate input).
+        diagnostic_passthrough: Dict[str, Any] = {}
+        if "latent_diagnostic" in result.metadata:
+            diagnostic_passthrough["latent_diagnostic"] = result.metadata["latent_diagnostic"]
+
         # Check for failed discovery
         if not result.success:
             return GateEvaluation(
                 decision=GateDecision.REJECT,
                 confidence=0.0,
                 reasons=["Discovery failed"],
-                metadata={"error": result.metadata.get("error", "Unknown error")},
+                metadata={
+                    "error": result.metadata.get("error", "Unknown error"),
+                    **diagnostic_passthrough,
+                },
             )
 
         # Check minimum edges
@@ -166,6 +178,7 @@ class DiscoveryGate:
                 decision=GateDecision.REJECT,
                 confidence=0.0,
                 reasons=[f"Too few edges discovered: {result.n_edges} < {self.config.min_edges}"],
+                metadata=dict(diagnostic_passthrough),
             )
 
         # Calculate component scores
@@ -269,6 +282,7 @@ class DiscoveryGate:
                 "edge_confidence_score": edge_confidence_score,
                 "structure_score": structure_score,
                 "rejected_fraction": rejected_fraction,
+                **diagnostic_passthrough,
             },
         )
 

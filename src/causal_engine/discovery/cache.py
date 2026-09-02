@@ -405,6 +405,12 @@ class DiscoveryCache:
                 score_func=config_data.get("score_func", "local_score_BIC"),
                 assume_linear=config_data.get("assume_linear", True),
                 assume_gaussian=config_data.get("assume_gaussian", False),
+                # These two are hashed into the cache key (hasher.py), so the
+                # reconstruction must restore them too — the deserializer
+                # enumerates config fields manually, and a field left out here
+                # silently reverts to its default on every cache hit.
+                bootstrap_resamples=config_data.get("bootstrap_resamples", 0),
+                latent_diagnostic=config_data.get("latent_diagnostic", False),
             )
 
             # Reconstruct edges

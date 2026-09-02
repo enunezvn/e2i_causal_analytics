@@ -157,6 +157,14 @@ class DiscoveryConfig:
     # The gate scores corroboration from these frequencies when only one
     # algorithm ran (agreement is vacuous there); see DiscoveryGate.
     bootstrap_resamples: int = 0
+    # Run FCI alongside discovery as a latent-confounding DIAGNOSTIC (off by
+    # default; graph_builder turns it on for guided runs). PC assumes causal
+    # sufficiency, so nothing else in the pipeline can notice a latent
+    # confounder. The diagnostic runs UNGUIDED (no priors — the point is the
+    # data's own testimony) and reports bidirected-edge findings as
+    # ``DiscoveryResult.metadata["latent_diagnostic"]``. It annotates only:
+    # gate decisions never read it (see DiscoveryGate).
+    latent_diagnostic: bool = False
     # Domain priors (tiers / required / forbidden edges) for GUIDED discovery.
     # Only the PC algorithm consumes these (causal-learn BackgroundKnowledge);
     # when set, prefer ``algorithms=[PC]`` so the ensemble is not polluted by
@@ -178,6 +186,7 @@ class DiscoveryConfig:
             "use_process_pool": self.use_process_pool,
             "max_workers": self.max_workers,
             "bootstrap_resamples": self.bootstrap_resamples,
+            "latent_diagnostic": self.latent_diagnostic,
             "prior_knowledge": (
                 {
                     "tiers": self.prior_knowledge.tiers,
