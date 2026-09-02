@@ -292,6 +292,25 @@ class TestMetricExtraction:
         assert isinstance(metrics, CausalImpactMetrics)
         assert metrics.p_value == 0.05
 
+    def test_extract_metrics_reads_refutation_contract_keys(self, tracker, sample_result):
+        """``refutation_results`` carries ``total_tests`` — the RefutationResults
+        contract key, emitted by RefutationSuite.to_legacy_format(). No producer
+        anywhere writes ``n_tests``; extracting that phantom key logged
+        n_refutation_tests=0 on every run (latent until wave-51 wired the first
+        live caller for this tracker)."""
+        state = {
+            "refutation_results": {
+                "tests_passed": 3,
+                "tests_failed": 1,
+                "total_tests": 4,
+                "confidence_adjustment": 0.9,
+            }
+        }
+        metrics = tracker._extract_metrics(sample_result, state)
+        assert metrics.n_refutation_tests == 4
+        assert metrics.tests_passed == 3
+        assert metrics.confidence_adjustment == 0.9
+
 
 # =============================================================================
 # LOGGING TESTS

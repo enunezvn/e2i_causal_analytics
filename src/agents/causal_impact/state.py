@@ -327,6 +327,12 @@ class CausalImpactState(TypedDict):
 
     # V4.4: Causal Discovery Configuration
     auto_discover: NotRequired[bool]  # Enable automatic DAG discovery (default: False)
+    # Guided (priors-constrained PC) discovery opt-in — the agent endpoints set
+    # True (graph_builder reads it; default False keeps other consumers on the
+    # legacy unguided ensemble). MUST stay declared: StateGraph's input filter
+    # silently drops undeclared keys, and this one was submitted-but-undeclared
+    # for all of wave-49/50 — guided discovery never actually ran via the API.
+    discovery_guided: NotRequired[bool]
     discovery_algorithms: NotRequired[
         List[str]
     ]  # Algorithms to use: ["ges", "pc", "fci", "lingam"]

@@ -3088,16 +3088,23 @@ async def _run_agent_analysis_task(
             final_state = await asyncio.wait_for(
                 graph.ainvoke(initial_state), timeout=_AGENT_HARD_TIMEOUT_S
             )
-        await _agent_analysis_store.set(
-            analysis_id,
-            _agent_state_to_response(
-                analysis_id=analysis_id,
-                request=request,
-                data_source=data_source,
-                n_rows=int(df.shape[0]),
-                final_state=final_state,
-                latency_ms=int((_time.time() - start) * 1000),
-            ),
+        response = _agent_state_to_response(
+            analysis_id=analysis_id,
+            request=request,
+            data_source=data_source,
+            n_rows=int(df.shape[0]),
+            final_state=final_state,
+            latency_ms=int((_time.time() - start) * 1000),
+        )
+        # Store the result first so it is pollable immediately; the MLflow
+        # trail below is best-effort observability (wave-51 Gap B) and runs
+        # after, so tracking problems cannot affect the cached result.
+        await _agent_analysis_store.set(analysis_id, response)
+        await _record_agent_mlflow_run(
+            request=request,
+            analysis_id=analysis_id,
+            response=response,
+            final_state=final_state,
         )
     except Exception as e:  # noqa: BLE001 — cache a generic FAILED record
         logger.error(f"Background causal agent analysis failed: {e}", exc_info=True)
@@ -3117,6 +3124,109 @@ async def _run_agent_analysis_task(
                 warnings=["Analysis failed due to an internal error."],
                 latency_ms=int((_time.time() - start) * 1000),
             ),
+        )
+
+
+def _agent_mlflow_output(
+    response: AgentCausalAnalysisResponse, final_state: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Adapt the API response onto the ``CausalImpactOutput`` field names the
+    MLflow tracker reads.
+
+    ``mlflow_tracker._extract_metrics`` / ``_log_params`` / ``_log_artifacts``
+    consume the output with ``.get()`` only, so a plain dict carrying the same
+    keys is a faithful payload; the detail metrics (latent diagnostic,
+    refutation counts, sensitivity) all come from ``final_state``.
+    """
+    computation_latency_ms = (
+        (final_state.get("graph_builder_latency_ms") or 0)
+        + (final_state.get("estimation_latency_ms") or 0)
+        + (final_state.get("refutation_latency_ms") or 0)
+        + (final_state.get("sensitivity_latency_ms") or 0)
+    )
+    return {
+        "query_id": response.analysis_id,
+        "status": response.status,
+        "ate_estimate": response.ate,
+        "confidence_interval": (
+            (response.ate_ci_lower, response.ate_ci_upper)
+            if response.ate_ci_lower is not None and response.ate_ci_upper is not None
+            else None
+        ),
+        "standard_error": response.standard_error,
+        "p_value": response.p_value,
+        "statistical_significance": response.statistical_significance,
+        # None would break mlflow.log_metric — the tracker defaults 0.0 only
+        # for an ABSENT key, not a present-but-None one.
+        "confidence": response.confidence if response.confidence is not None else 0.0,
+        "refutation_passed": bool(response.refutation.passed),
+        "estimation_method": response.selected_estimator or "unknown",
+        "model_used": response.selected_estimator or "unknown",
+        "effect_type": "ate",
+        "computation_latency_ms": float(computation_latency_ms),
+        "interpretation_latency_ms": float(final_state.get("interpretation_latency_ms") or 0),
+        "total_latency_ms": float(response.latency_ms),
+    }
+
+
+async def _record_agent_mlflow_run(
+    *,
+    request: AgentCausalAnalysisRequest,
+    analysis_id: str,
+    response: AgentCausalAnalysisResponse,
+    final_state: Dict[str, Any],
+) -> None:
+    """Record a finished agent-analyze run to MLflow, best-effort (wave-51 Gap B).
+
+    ``_run_agent_analysis_task`` invokes the causal_impact graph DIRECTLY (see
+    its docstring for why), so it never traverses ``CausalImpactAgent.run()`` —
+    the only seam ``CausalImpactMLflowTracker`` wrapped — and no
+    ``e2i_causal/causal_impact`` experiment was ever recorded from the API.
+    This records the same tracker payload after the fact.
+
+    Two deliberate mechanics:
+
+    * The run is opened AFTER the analysis completes, not around the (minutes
+      long) ainvoke: mlflow's fluent active-run stack is per-THREAD
+      (``ThreadLocalVariable``, mlflow 3.11 fluent.py) and ``start_run``
+      raises on a non-empty stack — the per-minute health_score tracker holds
+      fluent runs open in this same process, so a long-lived run here would
+      collide both ways. Wall-clock lives in the ``total_latency_ms`` metric;
+      the MLflow run duration itself is meaningless by design.
+    * The whole recording executes in a WORKER thread via ``asyncio.to_thread``
+      (fresh thread == empty fluent stack == no collision even at the instant a
+      health_score run is open), which also keeps mlflow's blocking HTTP off
+      the event loop.
+
+    Never raises: the response is already stored, and observability must not
+    fail the analysis (a raise here would hit the caller's generic-FAILED
+    handler and clobber the good cached result).
+    """
+    try:
+        from src.agents.causal_impact.mlflow_tracker import CausalImpactMLflowTracker
+
+        tracker = CausalImpactMLflowTracker()
+        output = _agent_mlflow_output(response, final_state)
+
+        def _record_in_fresh_loop() -> None:
+            async def _record() -> None:
+                async with tracker.start_analysis_run(
+                    experiment_name="default",
+                    brand=request.brand,
+                    treatment_var=request.treatment_var,
+                    outcome_var=request.outcome_var,
+                    query_id=analysis_id,
+                ):
+                    # Plain dicts are faithful payloads here: the tracker
+                    # reads both TypedDicts with .get() only.
+                    await tracker.log_analysis_result(output, final_state)  # type: ignore[arg-type]
+
+            asyncio.run(_record())
+
+        await asyncio.to_thread(_record_in_fresh_loop)
+    except Exception as exc:  # noqa: BLE001 — observability is best-effort
+        logger.warning(
+            f"MLflow recording failed for agent analysis {analysis_id} (non-fatal): {exc}"
         )
 
 

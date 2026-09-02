@@ -372,8 +372,10 @@ class CausalImpactMLflowTracker:
             metrics.energy_score = estimation_result.get("energy_score")  # type: ignore[assignment]
             metrics.selection_strategy = estimation_result.get("selection_strategy")  # type: ignore[assignment]
 
-            # Refutation details
-            metrics.n_refutation_tests = refutation_results.get("n_tests", 0)  # type: ignore[assignment]
+            # Refutation details — "total_tests" is the RefutationResults
+            # contract key (RefutationSuite.to_legacy_format); nothing ever
+            # produced the "n_tests" read here before, so runs logged 0.
+            metrics.n_refutation_tests = refutation_results.get("total_tests", 0)  # type: ignore[assignment]
             metrics.tests_passed = refutation_results.get("tests_passed", 0)
             metrics.confidence_adjustment = refutation_results.get("confidence_adjustment", 1.0)
 

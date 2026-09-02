@@ -1032,3 +1032,204 @@ def test_edge_provenance_defaults_empty_on_legacy_states():
         latency_ms=10,
     )
     assert resp.dag.edge_provenance == []
+
+
+# ---------------------------------------------------------------------------
+# Wave-51: agent-analyze wiring gaps exposed by the wave-50 live-cert.
+# Gap A — every key the route submits must be a declared CausalImpactState
+# channel (LangGraph's input filter silently drops the rest).
+# Gap B — the task bypasses CausalImpactAgent.run(), the only seam the MLflow
+# tracker wrapped, so no e2i_causal/causal_impact run was ever recorded.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_route_initial_state_keys_are_declared_in_state_schema():
+    """StateGraph(CausalImpactState) DROPS input keys that are not declared
+    channels — wave-50 Gap A: ``"discovery_guided": True`` was filtered
+    pre-graph, so guided discovery never ran via this endpoint. Guard the whole
+    literal: any future key added to the route without a state declaration is
+    the same silent no-op."""
+    import ast
+    import inspect
+
+    from src.agents.causal_impact.state import CausalImpactState
+    from src.api.routes import causal as causal_routes
+
+    tree = ast.parse(inspect.getsource(causal_routes))
+    keys: set = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name == "_run_agent_analysis_task"
+        ):
+            for stmt in ast.walk(node):
+                if isinstance(stmt, (ast.AnnAssign, ast.Assign)) and isinstance(
+                    stmt.value, ast.Dict
+                ):
+                    target = stmt.target if isinstance(stmt, ast.AnnAssign) else stmt.targets[0]
+                    if getattr(target, "id", None) == "initial_state":
+                        keys = {
+                            k.value
+                            for k in stmt.value.keys
+                            if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                        }
+
+    # Positive control: the literal was found and is the real one.
+    assert keys, "initial_state dict literal not found in _run_agent_analysis_task"
+    assert "treatment_var" in keys
+    # The wave-50 regression key, pinned explicitly.
+    assert "discovery_guided" in keys
+    undeclared = keys - set(CausalImpactState.__annotations__)
+    assert not undeclared, (
+        f"route submits state keys not declared in CausalImpactState — LangGraph "
+        f"silently drops them before any node runs: {sorted(undeclared)}"
+    )
+
+
+def _fake_agent_frame():
+    import pandas as pd
+
+    return pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0, 1.0, 0.0],
+            "persistent_180d": [1.0, 0.0, 1.0, 1.0],
+            "disease_severity": [2.0, 1.0, 2.0, 1.0],
+        }
+    )
+
+
+class _RecordingTracker:
+    """Stands in for CausalImpactMLflowTracker: records the run lifecycle."""
+
+    calls: dict = {}
+
+    def __init__(self, *args, **kwargs):
+        type(self).calls["created"] = True
+
+    def start_analysis_run(self, **kwargs):
+        from contextlib import asynccontextmanager
+
+        cls = type(self)
+
+        @asynccontextmanager
+        async def _cm():
+            cls.calls["start_kwargs"] = kwargs
+            yield object()
+
+        return _cm()
+
+    async def log_analysis_result(self, output, state=None, **kwargs):
+        type(self).calls["logged_output"] = output
+        type(self).calls["logged_state"] = state
+
+
+@pytest.mark.asyncio
+async def test_agent_analysis_task_records_mlflow_run():
+    """Gap B: the background task must record the analysis through
+    CausalImpactMLflowTracker (start run + log result with the final state) —
+    the direct graph.ainvoke path bypassed the tracker entirely, so ZERO
+    e2i_causal/causal_impact experiments existed in MLflow."""
+    from unittest.mock import AsyncMock, patch
+
+    from src.api.routes import causal as causal_routes
+
+    _RecordingTracker.calls = {}
+    final_state = _base_state()
+
+    class _FakeGraph:
+        async def ainvoke(self, state):
+            return {**state, **final_state}
+
+    stored: list = []
+
+    async def _capture_set(analysis_id, response):
+        stored.append(response)
+
+    with (
+        patch(
+            "src.agents.causal_impact.graph.create_causal_impact_graph",
+            lambda *a, **k: _FakeGraph(),
+        ),
+        patch(
+            "src.agents.causal_impact.mlflow_tracker.CausalImpactMLflowTracker",
+            _RecordingTracker,
+        ),
+        patch.object(causal_routes._agent_analysis_store, "get", AsyncMock(return_value=None)),
+        patch.object(causal_routes._agent_analysis_store, "set", _capture_set),
+    ):
+        await causal_routes._run_agent_analysis_task(
+            "wave51-test-id",
+            _req(),
+            _fake_agent_frame(),
+            ["disease_severity"],
+            "synthetic",
+        )
+
+    calls = _RecordingTracker.calls
+    # The run was recorded through the tracker seam.
+    assert calls.get("created") is True
+    assert calls.get("start_kwargs", {}).get("query_id") == "wave51-test-id"
+    assert calls["start_kwargs"].get("treatment_var") == "treatment_arm"
+    assert calls["start_kwargs"].get("outcome_var") == "persistent_180d"
+    # log_analysis_result received the FINAL STATE (the tracker reads the
+    # latent-diagnostic payload, refutation and sensitivity details from it).
+    assert calls.get("logged_state", {}).get("estimation_result", {}).get("ate") == 0.12
+    # ...and an output payload carrying the tracker's CausalImpactOutput keys.
+    out = calls.get("logged_output") or {}
+    assert out.get("ate_estimate") == 0.12
+    assert out.get("query_id") == "wave51-test-id"
+    assert out.get("statistical_significance") is True
+    # The user-facing result was stored, and BEFORE any MLflow work could
+    # delay it is not directly observable here — but it must exist and be sane.
+    assert stored and stored[-1].status == "completed"
+    assert stored[-1].ate == 0.12
+
+
+@pytest.mark.asyncio
+async def test_agent_analysis_task_survives_tracker_failure():
+    """Observability is best-effort: a tracker that blows up (MLflow down,
+    import failure, mid-log exception) must never fail the analysis or clobber
+    the stored response with a failed record."""
+    from unittest.mock import AsyncMock, patch
+
+    from src.api.routes import causal as causal_routes
+
+    final_state = _base_state()
+
+    class _FakeGraph:
+        async def ainvoke(self, state):
+            return {**state, **final_state}
+
+    class _ExplodingTracker:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("mlflow is down")
+
+    stored: list = []
+
+    async def _capture_set(analysis_id, response):
+        stored.append(response)
+
+    with (
+        patch(
+            "src.agents.causal_impact.graph.create_causal_impact_graph",
+            lambda *a, **k: _FakeGraph(),
+        ),
+        patch(
+            "src.agents.causal_impact.mlflow_tracker.CausalImpactMLflowTracker",
+            _ExplodingTracker,
+        ),
+        patch.object(causal_routes._agent_analysis_store, "get", AsyncMock(return_value=None)),
+        patch.object(causal_routes._agent_analysis_store, "set", _capture_set),
+    ):
+        await causal_routes._run_agent_analysis_task(
+            "wave51-fail-id",
+            _req(),
+            _fake_agent_frame(),
+            ["disease_severity"],
+            "synthetic",
+        )
+
+    # The analysis result survived the tracker failure untouched.
+    assert stored and stored[-1].status == "completed"
+    assert stored[-1].ate == 0.12
