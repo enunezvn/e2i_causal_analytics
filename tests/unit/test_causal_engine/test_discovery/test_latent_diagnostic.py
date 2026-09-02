@@ -304,3 +304,115 @@ class TestGraphBuilderFlagAnnotation:
 
     def test_absent_payload_is_left_absent(self) -> None:
         assert self._annotate(None) is None
+
+
+class TestConfigReconstructionContract:
+    """One shared ``DiscoveryConfig.from_dict`` behind every manual
+    field-by-field reconstruction (cache deserializer, process-pool worker):
+    the fix-2/fix-3 trap class is a field added to the dataclass but not to a
+    hand-enumerated copy, silently reverting to its default."""
+
+    def _guided_config(self) -> DiscoveryConfig:
+        return DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC],
+            alpha=0.01,
+            bootstrap_resamples=20,
+            latent_diagnostic=True,
+            prior_knowledge=CausalPriorKnowledge(
+                tiers=[["c"], ["t"], ["y"]],
+                required_edges=[("t", "y"), ("c", "y")],
+                forbidden_edges=[("y", "t")],
+            ),
+        )
+
+    def test_from_dict_round_trips_every_field(self) -> None:
+        config = self._guided_config()
+        restored = DiscoveryConfig.from_dict(config.to_dict())
+        assert restored.to_dict() == config.to_dict()
+        assert restored.prior_knowledge is not None
+        assert restored.prior_knowledge.required_edges == [("t", "y"), ("c", "y")]
+        assert restored.prior_knowledge.forbidden_edges == [("y", "t")]
+        assert restored.prior_knowledge.tiers == [["c"], ["t"], ["y"]]
+
+    def test_cache_round_trip_preserves_gate_corroboration_basis(self) -> None:
+        """A guided result whose every edge is prior-required must evaluate as
+        'prior_determined' AFTER a cache round-trip too — losing
+        prior_knowledge in deserialization would silently re-basis the gate
+        to 'uncorroborated_single_run' (score 0.0) on every cache hit."""
+        import networkx as nx
+
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC],
+            prior_knowledge=CausalPriorKnowledge(required_edges=[("t", "y")]),
+        )
+        dag = nx.DiGraph()
+        dag.add_edge("t", "y")
+        result = DiscoveryResult(
+            success=True,
+            config=config,
+            ensemble_dag=dag,
+            edges=[DiscoveredEdge(source="t", target="y", confidence=1.0, algorithms=["pc"])],
+            algorithm_results=[
+                AlgorithmResult(
+                    algorithm=DiscoveryAlgorithmType.PC,
+                    adjacency_matrix=np.zeros((2, 2), dtype=int),
+                    edge_list=[("t", "y")],
+                    runtime_seconds=0.0,
+                    converged=True,
+                )
+            ],
+        )
+        before = DiscoveryGate().evaluate(result)
+        assert before.metadata["corroboration_basis"] == "prior_determined"
+
+        cache = DiscoveryCache()
+        restored = cache._deserialize_result(cache._serialize_result(result))
+        assert restored is not None
+        # The deserialized result drops algorithm_results (not serialized), so
+        # re-evaluating the full gate is not faithful — but the config's prior
+        # must survive, which is what the basis computation reads.
+        assert restored.config.prior_knowledge is not None
+        assert restored.config.prior_knowledge.required_edges == [("t", "y")]
+
+    def test_process_pool_worker_receives_the_full_config(self) -> None:
+        from src.causal_engine.discovery.runner import _run_algorithm_in_process
+
+        config = self._guided_config()
+        frame = _frame()
+        result_dict = _run_algorithm_in_process(
+            _ConfigEchoAlgorithm, frame.to_dict(), config.to_dict()
+        )
+        seen = result_dict["metadata"]
+        assert seen["prior_required_edges"] == [("t", "y"), ("c", "y")]
+        assert seen["bootstrap_resamples"] == 20
+        assert seen["latent_diagnostic"] is True
+        assert seen["alpha"] == 0.01
+
+
+class _ConfigEchoAlgorithm(BaseDiscoveryAlgorithm):
+    """Echoes the config it received back through result metadata, so tests
+    can assert what a reconstruction actually delivered."""
+
+    @property
+    def algorithm_type(self) -> DiscoveryAlgorithmType:
+        return DiscoveryAlgorithmType.PC
+
+    def supports_latent_confounders(self) -> bool:
+        return False
+
+    def discover(self, data: pd.DataFrame, config: DiscoveryConfig) -> AlgorithmResult:
+        n = len(data.columns)
+        prior = config.prior_knowledge
+        return AlgorithmResult(
+            algorithm=DiscoveryAlgorithmType.PC,
+            adjacency_matrix=np.zeros((n, n), dtype=int),
+            edge_list=[],
+            runtime_seconds=0.0,
+            converged=True,
+            metadata={
+                "prior_required_edges": list(prior.required_edges) if prior else None,
+                "bootstrap_resamples": config.bootstrap_resamples,
+                "latent_diagnostic": config.latent_diagnostic,
+                "alpha": config.alpha,
+            },
+        )

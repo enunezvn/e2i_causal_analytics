@@ -66,21 +66,14 @@ def _run_algorithm_in_process(
     """
     import pandas as pd
 
-    from .base import DiscoveryAlgorithmType, DiscoveryConfig
+    from .base import DiscoveryConfig
 
-    # Reconstruct objects from dicts
+    # Reconstruct objects from dicts. from_dict is the single reconstruction
+    # path: the previous hand-enumerated copy dropped prior_knowledge (guided
+    # PC in a process worker would have run unguided), bootstrap_resamples,
+    # and latent_diagnostic.
     data = pd.DataFrame(data_dict)
-    config = DiscoveryConfig(
-        algorithms=[DiscoveryAlgorithmType(a) for a in config_dict["algorithms"]],
-        alpha=config_dict["alpha"],
-        max_cond_vars=config_dict.get("max_cond_vars"),
-        ensemble_threshold=config_dict["ensemble_threshold"],
-        max_iter=config_dict["max_iter"],
-        random_state=config_dict["random_state"],
-        score_func=config_dict["score_func"],
-        assume_linear=config_dict["assume_linear"],
-        assume_gaussian=config_dict["assume_gaussian"],
-    )
+    config = DiscoveryConfig.from_dict(config_dict)
 
     # Run algorithm
     algorithm = algo_class()
@@ -716,8 +709,12 @@ class DiscoveryRunner:
         confounder (a bidirected edge). The diagnostic strips the guided
         priors — the point is the data's OWN testimony about latent structure,
         not the priors echoed back — and never multiplies by the bootstrap
-        resample count. Any failure degrades to ``{"ran": False}``: a broken
-        diagnostic must not fail discovery.
+        resample count. Failure modes are distinct and neither fails
+        discovery: an exception (data invalid, algorithm missing) degrades to
+        ``{"ran": False, "error": ...}``, while an FCI run that executed but
+        did not converge reports ``{"ran": True, "converged": False}`` — it
+        DID run, and the distinction tells the consumer whether to blame the
+        infrastructure or the data.
 
         Returns the ``latent_diagnostic`` payload; graph_builder later
         annotates it with the estimand and the flag (the runner does not know

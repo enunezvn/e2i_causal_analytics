@@ -171,6 +171,45 @@ class DiscoveryConfig:
     # unconstrained orientations from algorithms that ignore the priors.
     prior_knowledge: Optional[CausalPriorKnowledge] = None
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DiscoveryConfig":
+        """Reconstruct a config from ``to_dict()`` output.
+
+        The single reconstruction path for every consumer that round-trips a
+        config through JSON (cache deserializer, process-pool worker). Manual
+        field-by-field copies are the trap this replaces: a field added to the
+        dataclass but not to a hand-enumerated copy silently reverts to its
+        default (bit ``bootstrap_resamples`` and ``prior_knowledge`` before).
+        """
+        prior_data = data.get("prior_knowledge")
+        prior_knowledge = None
+        if prior_data is not None:
+            prior_knowledge = CausalPriorKnowledge(
+                tiers=prior_data.get("tiers"),
+                required_edges=[
+                    (str(e[0]), str(e[1])) for e in (prior_data.get("required_edges") or [])
+                ],
+                forbidden_edges=[
+                    (str(e[0]), str(e[1])) for e in (prior_data.get("forbidden_edges") or [])
+                ],
+            )
+        return cls(
+            algorithms=[DiscoveryAlgorithmType(a) for a in data.get("algorithms", [])],
+            alpha=data.get("alpha", 0.05),
+            max_cond_vars=data.get("max_cond_vars"),
+            ensemble_threshold=data.get("ensemble_threshold", 0.5),
+            max_iter=data.get("max_iter", 10000),
+            random_state=data.get("random_state", 42),
+            score_func=data.get("score_func", "local_score_BIC"),
+            assume_linear=data.get("assume_linear", True),
+            assume_gaussian=data.get("assume_gaussian", False),
+            use_process_pool=data.get("use_process_pool", False),
+            max_workers=data.get("max_workers"),
+            bootstrap_resamples=data.get("bootstrap_resamples", 0),
+            latent_diagnostic=data.get("latent_diagnostic", False),
+            prior_knowledge=prior_knowledge,
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
         return {
