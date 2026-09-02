@@ -95,3 +95,74 @@ async def test_run_discovery_skips_modeled_confounders_absent_from_frame(monkeyp
     # The absent confounder is NOT seeded as a required edge.
     assert ("geographic_region=west", "treatment_arm") not in edges
     assert ("geographic_region=west", "persistent_180d") not in edges
+
+
+def _capture_prior(node, monkeypatch) -> dict:
+    captured: dict = {}
+
+    async def _fake_discover_dag(*, data, config, session_id):
+        captured["config"] = config
+        return DiscoveryResult(success=True, config=config, ensemble_dag=None, edges=[])
+
+    monkeypatch.setattr(node.discovery_runner, "discover_dag", _fake_discover_dag)
+    monkeypatch.setattr(
+        node.discovery_gate,
+        "evaluate",
+        lambda result, expected: GateEvaluation(
+            decision=GateDecision.REVIEW, confidence=0.5, reasons=[]
+        ),
+    )
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_anchored_channel_alone_names_the_required_confounders(monkeypatch):
+    """Fix 4: when ``anchored_confounders`` is present, it is the ONLY source of
+    required confounder edges — the guarantee-channel ``modeled_confounders``
+    must not leak into the structural prior."""
+    node = GraphBuilderNode()
+    df = pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0, 1.0],
+            "persistent_180d": [1.0, 0.0, 1.0],
+            "disease_severity": [2.0, 1.0, 3.0],
+            "academic_hcp": [1.0, 0.0, 1.0],
+        }
+    )
+    captured = _capture_prior(node, monkeypatch)
+    state = {
+        "data_cache": {"estimation_data": df},
+        "discovery_guided": True,
+        "modeled_confounders": ["disease_severity", "academic_hcp"],
+        "anchored_confounders": ["disease_severity"],
+    }
+    await node._run_discovery(state, "treatment_arm", "persistent_180d")
+    edges = set(captured["config"].prior_knowledge.required_edges or [])
+    assert ("disease_severity", "treatment_arm") in edges
+    assert ("disease_severity", "persistent_180d") in edges
+    assert ("academic_hcp", "treatment_arm") not in edges
+    assert ("academic_hcp", "persistent_180d") not in edges
+
+
+@pytest.mark.asyncio
+async def test_empty_anchored_channel_leaves_estimand_only_prior(monkeypatch):
+    """The agent API's production shape: anchored_confounders=[] means the data
+    selects every confounder edge — only the estimand edge is required."""
+    node = GraphBuilderNode()
+    df = pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0, 1.0],
+            "persistent_180d": [1.0, 0.0, 1.0],
+            "disease_severity": [2.0, 1.0, 3.0],
+        }
+    )
+    captured = _capture_prior(node, monkeypatch)
+    state = {
+        "data_cache": {"estimation_data": df},
+        "discovery_guided": True,
+        "modeled_confounders": ["disease_severity"],
+        "anchored_confounders": [],
+    }
+    await node._run_discovery(state, "treatment_arm", "persistent_180d")
+    edges = set(captured["config"].prior_knowledge.required_edges or [])
+    assert edges == {("treatment_arm", "persistent_180d")}

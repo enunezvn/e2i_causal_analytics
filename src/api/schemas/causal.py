@@ -12,7 +12,7 @@ Phase B10: Causal API endpoints for:
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -510,6 +510,22 @@ class AgentCausalAnalysisRequest(BaseModel):
     )
 
 
+class EdgeProvenanceModel(BaseModel):
+    """Why one edge is in the shipped DAG (fix 4 — per-edge provenance)."""
+
+    source: str = Field(..., description="Edge source variable")
+    target: str = Field(..., description="Edge target variable")
+    provenance: Literal["required_prior", "discovered", "curated"] = Field(
+        ...,
+        description=(
+            "required_prior = asserted by the guided-discovery REQUIRED prior "
+            "(the estimand edge, plus any anchored confounders); discovered = "
+            "contributed by the data (accepted discovery edge or corroborated "
+            "AUGMENT edge); curated = drawn by the manual/domain constructor"
+        ),
+    )
+
+
 class CausalDAGModel(BaseModel):
     """The causal DAG the agent's graph_builder constructed for this analysis."""
 
@@ -518,9 +534,20 @@ class CausalDAGModel(BaseModel):
     treatment_nodes: List[str] = Field(default_factory=list)
     outcome_nodes: List[str] = Field(default_factory=list)
     adjustment_sets: List[List[str]] = Field(
-        default_factory=list, description="Valid backdoor adjustment sets"
+        default_factory=list,
+        description=(
+            "Adjustment sets the estimate conditions on: the DAG's backdoor "
+            "sets unioned with every declared (guarantee-channel) covariate"
+        ),
     )
     dag_dot: Optional[str] = Field(default=None, description="Graphviz DOT for rendering")
+    edge_provenance: List[EdgeProvenanceModel] = Field(
+        default_factory=list,
+        description=(
+            "Per-edge provenance for every edge of the shipped DAG "
+            "(required_prior / discovered / curated). Empty on legacy payloads."
+        ),
+    )
 
 
 class RefutationTestDetail(BaseModel):

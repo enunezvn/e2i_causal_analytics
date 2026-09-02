@@ -61,27 +61,42 @@ assertions.
    assertion there is subset-safety rather than SHD. This is the claim to protect
    against regression; a tighter assertion would be overfitted to the seeds.
 
-2. KNOWN GAP (pinned as CHARACTERIZATION, ``TestProductionWiringIsPriorDetermined``):
-   the API declares EVERY covariate a confounder (``modeled_confounders=covariates``,
-   ``src/api/routes/causal.py``), which seeds ``conf->treatment`` AND ``conf->outcome``
-   as REQUIRED edges for all of them. Measured consequence: F1 drops to 0.78, SHD 4,
-   and the shipped DAG is IDENTICAL whether the frame contains real causal structure
-   or is pure noise. Under that wiring the data cannot change the graph.
+2. FIXED (2026-09-02, was KNOWN GAP "production wiring is prior-determined"):
+   the API used to declare EVERY covariate a confounder
+   (``modeled_confounders=covariates``), seeding ``conf->treatment`` AND
+   ``conf->outcome`` as REQUIRED edges for all of them — the shipped DAG was
+   IDENTICAL for real structure and pure noise (F1 0.78, SHD 4). The naive
+   remedy (tiers only, data selects, backdoor from the DAG) was measured and
+   REJECTED at the time: it dropped a true confounder from the backdoor set in
+   7/20 runs — a CONFOUNDED estimate. The fix SPLITS the fused channels:
 
-   The LABELLING half of this gap is now fixed: ``dag_source`` reports
-   'prior_asserted' rather than 'discovered' for a prior-implied DAG, and
-   ``discovered_confounders`` no longer echoes the declared covariates back
-   (tests/unit/test_api/test_causal_agent_analyze.py). The WIRING half stands, and
-   the obvious remedy was measured and REJECTED — dropping the required confounder
-   edges (tiers only, letting the data select) recovers cleaner STRUCTURE but drops
-   a true confounder from the backdoor set in 7/20 runs on this DGP and 3/20 on an
-   all-binary variant, i.e. it trades a labelling problem for a CONFOUNDED estimate.
-   Adding the curated set back after discovery is not a middle path either: it
-   reproduces the prior-implied DAG exactly, because ``_add_curated_confounder_edges``
-   draws the same two edges on the ACCEPT path. Over-declaration costs precision,
-   not bias (ATE +0.1439 all-covariates vs +0.1420 true-confounders-only, true
-   0.1586), so the wiring is deliberately LEFT AS IS pending a design that reports
-   per-edge provenance rather than one that removes the adjustment guarantee.
+     - ``anchored_confounders`` (STRUCTURAL prior): only these seed required
+       edges. The agent API passes [] — its dataset-spec covariate list is a
+       role allowlist, not a per-question confounder assertion — so prod runs
+       tiers + estimand-edge priors and the data selects the confounder edges.
+     - ``modeled_confounders`` (ADJUSTMENT GUARANTEE): every declared covariate
+       present in the shipped DAG (and not a treatment descendant) is UNIONED
+       into the final adjustment sets (``_apply_adjustment_guarantee``), so the
+       7/20-class structural misses are harmless: the conditioning set stays
+       exactly the declared covariates BY CONSTRUCTION (over-declaration costs
+       precision, not bias — ATE +0.1439 all-covariates vs +0.1420 true-only,
+       true +0.1586). The ACCEPT path re-asserts only ANCHORED confounders on
+       the discovered DAG; legacy callers without the anchored key keep the old
+       full re-add.
+     - Per-edge provenance ships on the graph (``edge_provenance``:
+       required_prior / discovered / curated) and on the API DAG model.
+
+   Measured under the prod shape (anchored=[], declared=ALL, B=20, seeds 1-10):
+   real frames 19/20 ACCEPT + 1 AUGMENT, ALL on the bootstrap_stability basis
+   (prior_determined no longer occurs); shipped-DAG F1 mean 0.93 (n=2000:
+   mean 0.98, SHD <= 1, 7/10 exact; n=500: 0.78-1.00); noise frames 0/20
+   ACCEPT (16 reject / 4 review) shipping the all-curated manual assertion;
+   final adjustment set == declared covariates in 40/40 runs. Real-vs-noise
+   DAGs now DIFFER (``TestProductionWiringIsDataResponsive``). ``dag_source``
+   tracks the anchored channel, so honest prod ACCEPTs read 'discovered'
+   (prior_asserted still applies to genuinely anchored priors). The mediator
+   DGP (item 3) is byte-identical under both shapes — tiers, not the required
+   edges, force the reversed direction — so its pins stand unchanged.
 
 3. KNOWN GAP (pinned, ``TestPostTreatmentCovariateIsNotRejected``): a post-treatment
    MEDIATOR declared as a confounder is forced in with its edge reversed, gate-ACCEPTed,
@@ -174,12 +189,13 @@ assertions.
    confounding robustness stays where it belongs, with the E-value sensitivity
    analysis.
 
-The remaining characterization tests (2, 3, 5) PIN CURRENT BEHAVIOUR SO A FIX IS
+The remaining characterization tests (3, 5) PIN CURRENT BEHAVIOUR SO A FIX IS
 NOTICED. They are not an endorsement of it. If one fails because someone corrected the
 wiring or the test selection: that is the fix landing — update the test to assert the
-new, better behaviour and delete the corresponding gap note above. Item 4 is what that
-looks like once done: the gap note became a fix record and
-``TestGateRejectsUncorroboratedSingleAlgorithmRuns`` now asserts the corrected gate.
+new, better behaviour and delete the corresponding gap note above. Items 2 and 4 are
+what that looks like once done: each gap note became a fix record, and
+``TestGateRejectsUncorroboratedSingleAlgorithmRuns`` /
+``TestProductionWiringIsDataResponsive`` now assert the corrected behaviour.
 
 SCOPE / FAITHFULNESS: this is a synthetic linear-logistic DGP with Gaussian
 confounders, no missingness and n <= 2000 — a faithful test of the ALGORITHM AND ITS
@@ -298,6 +314,7 @@ async def _build_dag(
     data: pd.DataFrame,
     declared_confounders: Sequence[str],
     *,
+    anchored: Optional[Sequence[str]] = None,
     guided: bool = True,
     bootstrap_resamples: Optional[int] = None,
     latent_diagnostic: Optional[bool] = None,
@@ -310,6 +327,15 @@ async def _build_dag(
     resample count explicitly (0 turns stability off). ``latent_diagnostic``
     mirrors that idiom for the FCI diagnostic's ``discovery_latent_diagnostic``
     state key (guided node default: ON).
+
+    Fix 4 split the confounder wiring into two channels. ``declared_confounders``
+    always fills the ADJUSTMENT-GUARANTEE channel (``modeled_confounders`` — these
+    are unioned into the final adjustment sets no matter what the DAG shows).
+    ``anchored=None`` (default) also anchors them as STRUCTURAL priors
+    (``anchored_confounders`` — required conf->treatment/conf->outcome edges),
+    which is the honest-priors benchmark shape the capability bands were measured
+    under. ``anchored=[]`` is the agent API's PRODUCTION shape: no structural
+    priors, tiers + the estimand edge only, the data selects the confounder edges.
     """
     state: Dict[str, Any] = {
         "query": f"What is the causal effect of {TREATMENT} on {OUTCOME}?",
@@ -317,6 +343,7 @@ async def _build_dag(
         "outcome_var": OUTCOME,
         "confounders": list(declared_confounders),
         "modeled_confounders": list(declared_confounders),
+        "anchored_confounders": list(declared_confounders if anchored is None else anchored),
         "data_cache": {"estimation_data": data},
         "auto_discover": True,
         "discovery_guided": guided,
@@ -329,12 +356,18 @@ async def _build_dag(
     assert result.get("status") != "failed", result.get("error_message")
     graph = result["causal_graph"]
     adjustment_sets = graph.get("adjustment_sets") or [[]]
+    gate_evaluation = result.get("discovery_gate_evaluation") or {}
     return {
         "edges": {(u, v) for u, v in graph["edges"]},
         "adjustment_set": set(adjustment_sets[0]),
         "gate_decision": graph.get("discovery_gate_decision"),
+        "corroboration_basis": (gate_evaluation.get("metadata") or {}).get("corroboration_basis"),
         "dag_overridden": bool(graph.get("discovery_dag_overridden")),
         "n_discovered_edges": graph.get("discovery_n_edges"),
+        "edge_provenance": {
+            (e["source"], e["target"]): e["provenance"]
+            for e in (graph.get("edge_provenance") or [])
+        },
         "skip_reason": result.get("discovery_skip_reason"),
         "latent_diagnostic": graph.get("latent_diagnostic"),
         # Direct node call (no LangGraph accumulator): exactly the NEW warning
@@ -464,42 +497,65 @@ class TestGuidedRecoveryWithHonestPriors:
         assert result["edges"] == TRUE_EDGES
 
 
-class TestProductionWiringIsPriorDetermined:
-    """KNOWN GAP (see docstring item 2), pinned as characterization.
-
-    Declaring every covariate a confounder — what the agent API does today — forces
-    ``conf->treatment`` and ``conf->outcome`` for all of them, so the shipped DAG no
-    longer depends on the data. Delete this class and fix the assertions in
-    ``TestGuidedRecoveryWithHonestPriors`` if the wiring is narrowed."""
+class TestProductionWiringIsDataResponsive:
+    """FIXED GAP (was docstring item 2). The agent API now declares every
+    covariate into the adjustment-GUARANTEE channel (``modeled_confounders``)
+    and NOTHING into the structural-prior channel (``anchored_confounders=[]``,
+    the ``anchored=[]`` shape here), so guided discovery runs with tiers + the
+    required estimand edge only: the DATA selects the confounder edges, while
+    the guarantee unions every declared covariate into the final adjustment set
+    — the estimate's conditioning set is unchanged BY CONSTRUCTION, and a
+    structural miss by discovery cannot silently unadjust it."""
 
     @pytest.mark.asyncio
-    async def test_real_data_and_pure_noise_produce_the_same_dag(self) -> None:
-        real = await _build_dag(_make_frame(2000, 2000), ALL_COVARIATES)
-        noise = await _build_dag(_make_noise_frame(2000, 1), ALL_COVARIATES)
+    async def test_real_data_and_pure_noise_produce_different_dags(self) -> None:
+        real = await _build_dag(_make_frame(2000, 2000), ALL_COVARIATES, anchored=[])
+        noise = await _build_dag(_make_noise_frame(2000, 1), ALL_COVARIATES, anchored=[])
 
-        # Discovery genuinely found nothing in the noise frame...
+        # Discovery genuinely finds nothing in the noise frame and the gate
+        # rejects it; the manual fallback ships the declared covariates as
+        # ASSERTED common causes (labeled curated, never discovered).
         assert noise["n_discovered_edges"] == 0
         assert noise["gate_decision"] == GateDecision.REJECT.value
-        # ...and the gate correctly rejected it. It changes nothing: the manual DAG
-        # asserts the same declared common causes, so both frames ship one graph.
-        assert real["edges"] == noise["edges"]
-        assert real["adjustment_set"] == noise["adjustment_set"]
+        assert set(noise["edge_provenance"].values()) == {"curated"}
+        # The real frame ships a data-selected DAG — the graphs now DIFFER
+        # (measured: real recovers TRUE_EDGES exactly on this seed; noise ships
+        # the 11-edge all-covariate assertion).
+        assert real["edges"] != noise["edges"]
+        assert real["edges"] == TRUE_EDGES
+        # The adjustment GUARANTEE holds on both: conditioning set == declared.
+        assert real["adjustment_set"] == set(ALL_COVARIATES)
+        assert noise["adjustment_set"] == set(ALL_COVARIATES)
 
     @pytest.mark.asyncio
-    async def test_non_confounders_enter_the_adjustment_set(self) -> None:
-        result = await _build_dag(_make_frame(2000, 2000), ALL_COVARIATES)
+    async def test_declared_covariates_stay_adjusted_while_structure_recovers(self) -> None:
+        """Non-confounders still enter the adjustment set — deliberately: that is
+        the guarantee channel keeping the ATE's conditioning set exactly the
+        declared covariates (over-declaration costs precision, not bias —
+        measured ATE +0.1439 all-covariates vs +0.1420 true-only, true +0.1586).
+        What changed is the DAG: SHD 4.0 -> 0.0 on this pinned seed (sweep band:
+        F1 mean 0.93, SHD <= 1 in 17/20 runs), and every covariate edge carries
+        honest 'discovered' provenance instead of being prior-forced."""
+        result = await _build_dag(_make_frame(2000, 2000), ALL_COVARIATES, anchored=[])
         assert result["adjustment_set"] == set(ALL_COVARIATES)
-        assert _structural_metrics(result["edges"])["shd"] == 4.0
+        assert _structural_metrics(result["edges"])["shd"] == 0.0
+        assert result["edge_provenance"][(TREATMENT, OUTCOME)] == "required_prior"
+        covariate_labels = {
+            label
+            for edge, label in result["edge_provenance"].items()
+            if edge != (TREATMENT, OUTCOME)
+        }
+        assert covariate_labels == {"discovered"}
 
     @pytest.mark.asyncio
-    async def test_gate_accepts_the_prior_determined_dag(self) -> None:
-        """The gate ACCEPTs and nothing is overridden, so the DAG ships as-is even
-        though the identical graph is produced from noise. The API layer no longer
-        calls this combination 'discovered' — it reports 'prior_asserted' when every
-        shipped edge is prior-implied (see test_causal_agent_analyze.py) — but the
-        gate decision itself is unchanged, which is what this pins."""
-        result = await _build_dag(_make_frame(2000, 2000), ALL_COVARIATES)
+    async def test_gate_scores_prod_runs_on_bootstrap_stability(self) -> None:
+        """With beyond-prior edges now existing in every prod-shaped run, the
+        fix-2 gate scores real evidence — bootstrap resample stability — instead
+        of renormalizing over a prior-determined graph. This is the decision
+        basis that lets it genuinely REJECT the noise frame above."""
+        result = await _build_dag(_make_frame(2000, 2000), ALL_COVARIATES, anchored=[])
         assert result["gate_decision"] == GateDecision.ACCEPT.value
+        assert result["corroboration_basis"] == "bootstrap_stability"
         assert result["dag_overridden"] is False
 
 
