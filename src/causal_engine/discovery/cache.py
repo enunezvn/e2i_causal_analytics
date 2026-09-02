@@ -381,7 +381,6 @@ class DiscoveryCache:
         """
         from .base import (
             DiscoveredEdge,
-            DiscoveryAlgorithmType,
             DiscoveryConfig,
             DiscoveryResult,
             EdgeType,
@@ -391,21 +390,12 @@ class DiscoveryCache:
         try:
             data = json.loads(result_json)
 
-            # Reconstruct config
-            config_data = data.get("config", {})
-            config = DiscoveryConfig(
-                algorithms=[
-                    DiscoveryAlgorithmType(alg) for alg in config_data.get("algorithms", [])
-                ],
-                alpha=config_data.get("alpha", 0.05),
-                max_cond_vars=config_data.get("max_cond_vars"),
-                ensemble_threshold=config_data.get("ensemble_threshold", 0.5),
-                max_iter=config_data.get("max_iter", 10000),
-                random_state=config_data.get("random_state", 42),
-                score_func=config_data.get("score_func", "local_score_BIC"),
-                assume_linear=config_data.get("assume_linear", True),
-                assume_gaussian=config_data.get("assume_gaussian", False),
-            )
+            # Reconstruct config through the shared from_dict path — a field
+            # enumerated here by hand and forgotten silently reverts to its
+            # default on every cache hit (bootstrap_resamples and
+            # prior_knowledge were both lost this way; prior loss re-based the
+            # gate's corroboration on deserialized guided results).
+            config = DiscoveryConfig.from_dict(data.get("config", {}))
 
             # Reconstruct edges
             edges = []

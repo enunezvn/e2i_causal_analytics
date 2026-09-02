@@ -427,3 +427,47 @@ class TestHasherIntegration:
         # Should produce valid cache key
         assert key.startswith("discovery:")
         assert len(key) > 20  # Has meaningful content
+
+
+class TestPriorKnowledgeInConfigHash:
+    """Guided priors are part of discovery's identity: two configs that differ
+    only in prior_knowledge must not share a cache key (they can produce
+    different DAGs and different gate corroboration bases)."""
+
+    def test_priors_change_the_hash(self):
+        from src.causal_engine.discovery.base import CausalPriorKnowledge
+
+        bare = DiscoveryConfig()
+        guided = DiscoveryConfig(
+            prior_knowledge=CausalPriorKnowledge(
+                tiers=[["c"], ["t"], ["y"]], required_edges=[("t", "y")]
+            )
+        )
+        assert hash_config(bare) != hash_config(guided)
+
+    def test_different_required_edges_hash_differently(self):
+        from src.causal_engine.discovery.base import CausalPriorKnowledge
+
+        one = DiscoveryConfig(prior_knowledge=CausalPriorKnowledge(required_edges=[("t", "y")]))
+        other = DiscoveryConfig(
+            prior_knowledge=CausalPriorKnowledge(required_edges=[("t", "y"), ("c", "y")])
+        )
+        assert hash_config(one) != hash_config(other)
+
+    def test_edge_order_does_not_change_the_hash(self):
+        from src.causal_engine.discovery.base import CausalPriorKnowledge
+
+        forward = DiscoveryConfig(
+            prior_knowledge=CausalPriorKnowledge(required_edges=[("a", "b"), ("c", "d")])
+        )
+        reversed_order = DiscoveryConfig(
+            prior_knowledge=CausalPriorKnowledge(required_edges=[("c", "d"), ("a", "b")])
+        )
+        assert hash_config(forward) == hash_config(reversed_order)
+
+    def test_empty_prior_hashes_like_no_prior(self):
+        from src.causal_engine.discovery.base import CausalPriorKnowledge
+
+        assert hash_config(DiscoveryConfig()) == hash_config(
+            DiscoveryConfig(prior_knowledge=CausalPriorKnowledge())
+        )

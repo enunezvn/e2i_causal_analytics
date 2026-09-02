@@ -200,6 +200,19 @@ class GraphBuilderNode:
             dag_version_hash = compute_dag_hash(causal_graph=causal_graph.copy())  # type: ignore[arg-type]
             causal_graph["dag_version_hash"] = dag_version_hash
 
+            # Latent-confounding diagnostic (FCI): surface the annotated
+            # payload on causal_graph, and raise a human-readable warning when
+            # the flag is up. Added AFTER the hash: compute_dag_hash keys off
+            # nodes/edges/treatment/outcome only, and the payload carries a
+            # nondeterministic runtime that must never perturb hashing.
+            new_warnings: List[str] = []
+            if discovery_result is not None:
+                latent_diagnostic = discovery_result.metadata.get("latent_diagnostic")
+                if isinstance(latent_diagnostic, dict):
+                    causal_graph["latent_diagnostic"] = latent_diagnostic
+                    if latent_diagnostic.get("flag"):
+                        new_warnings.append(self._latent_confounding_warning(treatment, outcome))
+
             latency_ms = (time.time() - start_time) * 1000
 
             result = {
@@ -219,9 +232,11 @@ class GraphBuilderNode:
                     result["discovery_gate_evaluation"] = gate_evaluation
                 if discovery_skip_reason is not None:
                     result["discovery_skip_reason"] = discovery_skip_reason
-                    # warnings is an operator.add accumulator (state.py);
-                    # return ONLY the new entry so LangGraph appends it.
-                    result["warnings"] = [discovery_skip_reason]
+                    new_warnings.append(discovery_skip_reason)
+            if new_warnings:
+                # warnings is an operator.add accumulator (state.py);
+                # return ONLY the new entries so LangGraph appends them.
+                result["warnings"] = new_warnings
 
             return result
 
@@ -639,6 +654,10 @@ class GraphBuilderNode:
             bootstrap_resamples = int(
                 state.get("discovery_bootstrap_resamples", DISCOVERY_BOOTSTRAP_RESAMPLES)
             )
+            # Guided runs are single-algorithm PC, which assumes causal
+            # sufficiency — default the FCI latent-confounding diagnostic ON
+            # here (opt-out via state), mirroring the bootstrap idiom above.
+            latent_diagnostic = bool(state.get("discovery_latent_diagnostic", True))
         else:
             algorithms_str = state.get("discovery_algorithms", ["ges", "pc"])
             algorithms = []
@@ -653,6 +672,9 @@ class GraphBuilderNode:
             # agreement already; bootstrap stability is off by default here to
             # avoid a 20x runtime surprise for existing (unguided) consumers.
             bootstrap_resamples = int(state.get("discovery_bootstrap_resamples", 0))
+            # Same opt-in reasoning: other discover_dag consumers (ranker,
+            # tool registry) should not pay an extra FCI run by default.
+            latent_diagnostic = bool(state.get("discovery_latent_diagnostic", False))
 
         config = DiscoveryConfig(
             algorithms=algorithms,
@@ -660,6 +682,7 @@ class GraphBuilderNode:
             alpha=state.get("discovery_alpha", 0.05),
             prior_knowledge=prior_knowledge,
             bootstrap_resamples=bootstrap_resamples,
+            latent_diagnostic=latent_diagnostic,
         )
 
         # Run discovery
@@ -674,6 +697,10 @@ class GraphBuilderNode:
             session_id=session_uuid,
         )
 
+        # Annotate the latent diagnostic with the estimand BEFORE the gate
+        # evaluates, so the gate's metadata pass-through carries the flag too.
+        self._annotate_latent_diagnostic(result, treatment, outcome)
+
         # Evaluate with gate
         expected_edges = [(treatment, outcome)]  # Minimal expectation
         evaluation = self.discovery_gate.evaluate(result, expected_edges)
@@ -684,6 +711,55 @@ class GraphBuilderNode:
         )
 
         return result, evaluation.to_dict()
+
+    @staticmethod
+    def _latent_confounding_warning(treatment: Optional[str], outcome: Optional[str]) -> str:
+        """Warning surfaced through the state's warnings accumulator into the
+        analyze response. Worded to be TRUE in every measured world where the
+        flag fires: FCI genuinely could not attribute the dependence to the
+        treatment — whether because a latent confounder accounts for it (the
+        detectable case) or because orientation was uncertain on a real effect
+        (the unidentifiable case; both fire, see the benchmark docstring)."""
+        return (
+            f"Latent-confounding diagnostic (FCI): the data's dependence pattern marks "
+            f"{treatment} <-> {outcome} as sharing an unmeasured common cause, and FCI "
+            f"could not attribute this dependence to {treatment} itself. Unmeasured "
+            f"confounding may account for part or all of the estimated effect."
+        )
+
+    @staticmethod
+    def _annotate_latent_diagnostic(
+        result: DiscoveryResult,
+        treatment: Optional[str],
+        outcome: Optional[str],
+    ) -> None:
+        """Attach the estimand and the warning flag to the latent-diagnostic
+        payload (the runner does not know treatment/outcome). Mutates the
+        payload in ``result.metadata`` in place; no-op when the diagnostic did
+        not run.
+
+        Flag predicate — MEASURED, not assumed (test_structural_recovery.py
+        docstring item 6): raised iff FCI marks the ESTIMAND PAIR itself
+        bidirected. That mark is the one location with true-positive signal on
+        this platform's binary-logit frames (10/10 detection on the null-effect
+        latent DGP at n=2000; 0/10 false alarms on the observed-confounder and
+        noise controls). Bidirected pairs involving covariates are false alarms
+        on every measured control, so they stay in the payload as data but do
+        not raise the flag.
+        """
+        payload = result.metadata.get("latent_diagnostic")
+        if not isinstance(payload, dict):
+            return
+        pairs = payload.get("bidirected_edges") or []
+        estimand = {treatment, outcome}
+        flag = (
+            bool(treatment)
+            and bool(outcome)
+            and any({str(source), str(target)} == estimand for source, target in pairs)
+        )
+        payload["treatment"] = treatment
+        payload["outcome"] = outcome
+        payload["flag"] = flag
 
     def _build_dag_with_discovery(
         self,

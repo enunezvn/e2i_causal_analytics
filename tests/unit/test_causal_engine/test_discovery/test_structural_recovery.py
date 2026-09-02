@@ -133,6 +133,47 @@ assertions.
    ``chisq`` branch is a code-shape defect, not a measured recovery loss, and a
    selection change would re-open the fix-1/fix-2 measured bands for no gain.
 
+6. NEW CAPABILITY (2026-09-02, ``TestLatentConfounderProducesAFlag``): a
+   latent-confounding DIAGNOSTIC. Guided discovery is PC-only and PC assumes
+   causal sufficiency, so before this nothing in the pipeline could NOTICE a
+   latent confounder. One UNGUIDED FCI run now rides along
+   (``DiscoveryConfig.latent_diagnostic``; graph_builder defaults it ON for
+   guided runs via state key ``discovery_latent_diagnostic``), surfacing as
+   ``causal_graph["latent_diagnostic"]`` — converged, runtime, bidirected pairs
+   by column name, estimand, flag — carried through gate-evaluation metadata as
+   a pass-through (never a gate input: item 4's calibration is untouched,
+   pinned by an on-vs-off equality test) plus a warning through the state accumulator
+   into the analyze response when the flag is up.
+
+   Flag predicate (MEASURED, alpha=0.05/fisherz, seeds 1-10): the ESTIMAND
+   PAIR carries a bidirected mark in FCI's PAG. Operating point:
+       null-effect latent DGP (treatment_effect=0, disease_severity dropped —
+       the whole T-Y dependence is an unmeasured common cause):
+                                        flag 10/10 at n=2000, 6/10 at n=500
+       same DGP, severity OBSERVED:     0/10 (FCI separates T from Y)
+       pure-noise frames:               0/10 (covariate-level bidirected marks
+                                        occur — n=2000 seed 7 — and do NOT flag)
+   Covariate-level bidirected pairs stay in the payload as data but never
+   raise the flag: they appeared on the observed-confounder control (2/10 at
+   n=2000, 4/10 at n=500 across alpha 0.05) and on noise, i.e. they are
+   orientation noise on this DGP family, not latent evidence.
+
+   KNOWN LIMIT (measured, then accepted): latent confounding ON TOP of a real
+   direct effect is NOT detectable and is not claimed. With T an ancestor of Y
+   the true MAG orients T -> Y — there is no bidirected mark to find — and the
+   T <-> Y marks that DO appear on effectful frames (7/10 at n=2000) are
+   fisherz-on-binary orientation noise appearing at the SAME rate whether the
+   confounder is latent or observed (7/10 vs 7/10; n=500: 6/10 vs 6/10). No
+   measured statistic separates them: alpha in {0.01, 0.05, 0.1, 0.2} (flag
+   rates track within 1/10 of each other at every level), bootstrap stability
+   of the mark over B=20 (true-signal 0.65-1.00 vs artifact 0.35-0.95 —
+   overlapping), and requiring a near-zero resample directed-rate (effectful
+   control still 6/10 at theta=0.05) all fail to discriminate. So the flag on
+   an effectful frame means exactly what the warning says — FCI could not
+   attribute the T-Y dependence to the treatment — and quantitative latent-
+   confounding robustness stays where it belongs, with the E-value sensitivity
+   analysis.
+
 The remaining characterization tests (2, 3, 5) PIN CURRENT BEHAVIOUR SO A FIX IS
 NOTICED. They are not an endorsement of it. If one fails because someone corrected the
 wiring or the test selection: that is the fix landing — update the test to assert the
@@ -186,8 +227,15 @@ TRUE_EDGES: Set[Tuple[str, str]] = {
 }
 
 
-def _make_frame(n: int, seed: int) -> pd.DataFrame:
-    """Sample the DGP documented in the module docstring."""
+def _make_frame(n: int, seed: int, treatment_effect: float = 0.8) -> pd.DataFrame:
+    """Sample the DGP documented in the module docstring.
+
+    ``treatment_effect`` scales the treatment coefficient in the outcome logit
+    (default 0.8, the documented DGP). ``0.0`` gives the NULL-EFFECT variant
+    used by the latent-confounding diagnostic benchmark (item 6): identical
+    draws and structure, but the entire T-Y dependence flows through the
+    confounders.
+    """
     rng = np.random.default_rng(seed)
     severity = rng.normal(0.0, 1.0, n)
     academic = rng.binomial(1, 0.35, n).astype(float)
@@ -198,7 +246,9 @@ def _make_frame(n: int, seed: int) -> pd.DataFrame:
     logit_t = -0.2 + 0.9 * severity + 0.8 * academic + 0.7 * region
     treatment = rng.binomial(1, 1.0 / (1.0 + np.exp(-logit_t)), n).astype(float)
 
-    logit_y = -0.3 + 0.8 * treatment + 0.8 * severity + 0.7 * academic + 0.6 * prognostic
+    logit_y = (
+        -0.3 + treatment_effect * treatment + 0.8 * severity + 0.7 * academic + 0.6 * prognostic
+    )
     outcome = rng.binomial(1, 1.0 / (1.0 + np.exp(-logit_y)), n).astype(float)
 
     return pd.DataFrame(
@@ -250,13 +300,16 @@ async def _build_dag(
     *,
     guided: bool = True,
     bootstrap_resamples: Optional[int] = None,
+    latent_diagnostic: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Drive the real graph_builder node the way the agent API drives it.
 
     ``bootstrap_resamples=None`` leaves the state key OUT, so the node applies
     its own guided default (20) — that is the wiring the agent API ships, and
     the sweeps below measure the system AT that default. Pass an int to pin a
-    resample count explicitly (0 turns stability off).
+    resample count explicitly (0 turns stability off). ``latent_diagnostic``
+    mirrors that idiom for the FCI diagnostic's ``discovery_latent_diagnostic``
+    state key (guided node default: ON).
     """
     state: Dict[str, Any] = {
         "query": f"What is the causal effect of {TREATMENT} on {OUTCOME}?",
@@ -270,6 +323,8 @@ async def _build_dag(
     }
     if bootstrap_resamples is not None:
         state["discovery_bootstrap_resamples"] = bootstrap_resamples
+    if latent_diagnostic is not None:
+        state["discovery_latent_diagnostic"] = latent_diagnostic
     result = await GraphBuilderNode().execute(cast(CausalImpactState, state))
     assert result.get("status") != "failed", result.get("error_message")
     graph = result["causal_graph"]
@@ -281,6 +336,10 @@ async def _build_dag(
         "dag_overridden": bool(graph.get("discovery_dag_overridden")),
         "n_discovered_edges": graph.get("discovery_n_edges"),
         "skip_reason": result.get("discovery_skip_reason"),
+        "latent_diagnostic": graph.get("latent_diagnostic"),
+        # Direct node call (no LangGraph accumulator): exactly the NEW warning
+        # entries this execute() returned.
+        "warnings": result.get("warnings") or [],
     }
 
 
@@ -558,3 +617,97 @@ class TestBinaryFramesGetAGaussianTest:
         )
         config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC])
         assert PCAlgorithm()._select_independence_test(frame, config) == "fisherz"
+
+
+def _null_effect_latent_frame(n: int, seed: int) -> pd.DataFrame:
+    """Latent DGP for the diagnostic benchmark (docstring item 6): the true
+    treatment effect is ZERO and ``disease_severity`` — a genuine confounder of
+    treatment and outcome — is dropped from the frame, so the entire T-Y
+    dependence flows through an unmeasured common cause. This is the class FCI
+    can actually detect (measured 10/10 at n=2000): with no direct effect, the
+    true MAG edge is T <-> Y. Dropping severity while KEEPING the direct
+    effect is not a usable flag case — see the item-6 KNOWN LIMIT."""
+    return _make_frame(n, seed, treatment_effect=0.0).drop(columns=["disease_severity"])
+
+
+class TestLatentConfounderProducesAFlag:
+    """CAPABILITY (docstring item 6): the FCI latent-confounding diagnostic,
+    driven through the real ``GraphBuilderNode.execute``. All pins at n=2000,
+    seeds measured in the item-6 table. ``bootstrap_resamples=0`` keeps each
+    run inside CI's 30s thread cap: the diagnostic is orthogonal to gate
+    corroboration (the gate never reads it), so the pins lose nothing by
+    turning resampling off."""
+
+    @pytest.mark.asyncio
+    async def test_null_effect_latent_dgp_raises_the_flag(self) -> None:
+        """Measured 10/10 over seeds 1-10 at n=2000; pinned at seed 1. The
+        payload must name real columns (the pre-fix ``get_bidirected_edges``
+        returned node-INDEX strings) and the warning must reach the state's
+        warnings accumulator."""
+        result = await _build_dag(
+            _null_effect_latent_frame(2000, 1), ["academic_hcp"], bootstrap_resamples=0
+        )
+        payload = result["latent_diagnostic"]
+        assert payload is not None and payload["ran"] and payload["converged"]
+        assert payload["flag"] is True
+        assert payload["treatment"] == TREATMENT and payload["outcome"] == OUTCOME
+        pairs = payload["bidirected_edges"]
+        assert any({u, v} == {TREATMENT, OUTCOME} for u, v in pairs), pairs
+        flat = {name for pair in pairs for name in pair}
+        assert flat <= {
+            TREATMENT,
+            OUTCOME,
+            "academic_hcp",
+            "region_south",
+            "prognostic_only",
+            "noise_cov",
+        }
+        assert any("Latent-confounding diagnostic" in w for w in result["warnings"]), result[
+            "warnings"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_diagnostic_does_not_change_the_gate_decision_or_the_dag(self) -> None:
+        """Constraint pin: fix 2 calibrated the gate's accept/reject bands; the
+        diagnostic must be a pure annotation. Identical frame and config with
+        the diagnostic ON vs OFF must ship the identical gate decision, DAG,
+        and adjustment set."""
+        frame = _null_effect_latent_frame(2000, 1)
+        on = await _build_dag(frame, ["academic_hcp"], bootstrap_resamples=0)
+        off = await _build_dag(
+            frame, ["academic_hcp"], bootstrap_resamples=0, latent_diagnostic=False
+        )
+        assert off["latent_diagnostic"] is None  # opt-out actually opts out
+        assert on["gate_decision"] == off["gate_decision"]
+        assert on["edges"] == off["edges"]
+        assert on["adjustment_set"] == off["adjustment_set"]
+
+    @pytest.mark.asyncio
+    async def test_observed_confounders_do_not_flag(self) -> None:
+        """Specificity control, measured 0/10 at n=2000: same null-effect DGP
+        with ``disease_severity`` OBSERVED — FCI separates T from Y given the
+        observed confounders, so there is no estimand mark and no warning."""
+        result = await _build_dag(
+            _make_frame(2000, 1, treatment_effect=0.0),
+            TRUE_CONFOUNDERS,
+            bootstrap_resamples=0,
+        )
+        payload = result["latent_diagnostic"]
+        assert payload is not None and payload["ran"] and payload["converged"]
+        assert payload["flag"] is False
+        assert not any("Latent-confounding diagnostic" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_covariate_level_bidirected_pairs_do_not_flag(self) -> None:
+        """Noise control with teeth: at n=2000 seed 7 FCI marks a COVARIATE
+        pair bidirected (persistent_180d <-> prognostic_only, measured) — the
+        payload must report it (positive control that the diagnostic saw it)
+        while the flag stays down: covariate-level marks false-alarm on every
+        measured control, so only the estimand pair may raise the flag."""
+        result = await _build_dag(_make_noise_frame(2000, 7), [], bootstrap_resamples=0)
+        payload = result["latent_diagnostic"]
+        assert payload is not None and payload["ran"] and payload["converged"]
+        assert payload["bidirected_edges"], "expected the measured covariate-level mark"
+        assert not any({u, v} == {TREATMENT, OUTCOME} for u, v in payload["bidirected_edges"])
+        assert payload["flag"] is False
+        assert not any("Latent-confounding diagnostic" in w for w in result["warnings"])

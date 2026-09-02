@@ -138,6 +138,26 @@ def hash_config(config: DiscoveryConfig) -> str:
         "assume_linear": config.assume_linear,
         "assume_gaussian": config.assume_gaussian,
         "bootstrap_resamples": config.bootstrap_resamples,
+        "latent_diagnostic": config.latent_diagnostic,
+        # Guided priors are part of discovery's identity — two configs that
+        # differ only in priors can produce different DAGs and different gate
+        # corroboration bases, so they must not share a cache key. Edge lists
+        # are sorted (they are sets semantically); tier ORDER is meaning
+        # (causal precedence) and is preserved. An empty prior hashes like no
+        # prior — the two behave identically everywhere.
+        "prior_knowledge": (
+            None
+            if config.prior_knowledge is None or config.prior_knowledge.is_empty()
+            else {
+                "tiers": config.prior_knowledge.tiers,
+                "required_edges": sorted(
+                    [list(e) for e in (config.prior_knowledge.required_edges or [])]
+                ),
+                "forbidden_edges": sorted(
+                    [list(e) for e in (config.prior_knowledge.forbidden_edges or [])]
+                ),
+            }
+        ),
     }
 
     # Convert to deterministic JSON string

@@ -66,21 +66,14 @@ def _run_algorithm_in_process(
     """
     import pandas as pd
 
-    from .base import DiscoveryAlgorithmType, DiscoveryConfig
+    from .base import DiscoveryConfig
 
-    # Reconstruct objects from dicts
+    # Reconstruct objects from dicts. from_dict is the single reconstruction
+    # path: the previous hand-enumerated copy dropped prior_knowledge (guided
+    # PC in a process worker would have run unguided), bootstrap_resamples,
+    # and latent_diagnostic.
     data = pd.DataFrame(data_dict)
-    config = DiscoveryConfig(
-        algorithms=[DiscoveryAlgorithmType(a) for a in config_dict["algorithms"]],
-        alpha=config_dict["alpha"],
-        max_cond_vars=config_dict.get("max_cond_vars"),
-        ensemble_threshold=config_dict["ensemble_threshold"],
-        max_iter=config_dict["max_iter"],
-        random_state=config_dict["random_state"],
-        score_func=config_dict["score_func"],
-        assume_linear=config_dict["assume_linear"],
-        assume_gaussian=config_dict["assume_gaussian"],
-    )
+    config = DiscoveryConfig.from_dict(config_dict)
 
     # Run algorithm
     algorithm = algo_class()
@@ -91,8 +84,8 @@ def _run_algorithm_in_process(
         "algorithm": result.algorithm.value,
         "adjacency_matrix": result.adjacency_matrix.tolist(),
         "edge_list": [
-            (e.source, e.target, e.edge_type.value, e.confidence)
-            for e in result.edge_list  # type: ignore[attr-defined]
+            (e.source, e.target, e.edge_type.value, e.confidence)  # type: ignore[attr-defined]
+            for e in result.edge_list
         ],
         "runtime_seconds": result.runtime_seconds,
         "converged": result.converged,
@@ -246,6 +239,8 @@ class DiscoveryRunner:
             data, config, algorithm_results, edges, ensemble_dag
         )
 
+        latent_metadata = await self._maybe_latent_diagnostic(data, config)
+
         total_runtime = time.time() - start_time
         logger.info(f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s")
 
@@ -261,6 +256,7 @@ class DiscoveryRunner:
                 "node_names": node_names,
                 "n_samples": len(data),
                 **bootstrap_metadata,
+                **latent_metadata,
             },
         )
 
@@ -295,6 +291,8 @@ class DiscoveryRunner:
             bootstrap_metadata = await self._maybe_bootstrap(
                 data, config, algorithm_results, edges, ensemble_dag
             )
+
+            latent_metadata = await self._maybe_latent_diagnostic(data, config)
 
             total_runtime = time.time() - start_time
 
@@ -337,6 +335,7 @@ class DiscoveryRunner:
                     "trace_id": span.trace_id,
                     "span_id": span.span_id,
                     **bootstrap_metadata,
+                    **latent_metadata,
                 },
             )
 
@@ -697,6 +696,76 @@ class DiscoveryRunner:
             lambda: self._bootstrap_edge_stability(data, config, algorithm, edges, ensemble_dag),
         )
         return {"bootstrap": summary}
+
+    def _run_latent_diagnostic(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+    ) -> Dict[str, Any]:
+        """Run FCI once, unguided, as a latent-confounding diagnostic.
+
+        PC (and the guided production path) assume causal sufficiency; FCI's
+        PAG is the only signal in the toolbox that can even represent a latent
+        confounder (a bidirected edge). The diagnostic strips the guided
+        priors — the point is the data's OWN testimony about latent structure,
+        not the priors echoed back — and never multiplies by the bootstrap
+        resample count. Failure modes are distinct and neither fails
+        discovery: an exception (data invalid, algorithm missing) degrades to
+        ``{"ran": False, "error": ...}``, while an FCI run that executed but
+        did not converge reports ``{"ran": True, "converged": False}`` — it
+        DID run, and the distinction tells the consumer whether to blame the
+        infrastructure or the data.
+
+        Returns the ``latent_diagnostic`` payload; graph_builder later
+        annotates it with the estimand and the flag (the runner does not know
+        treatment/outcome).
+        """
+        from dataclasses import replace
+
+        diagnostic_config = replace(
+            config,
+            algorithms=[DiscoveryAlgorithmType.FCI],
+            prior_knowledge=None,
+            bootstrap_resamples=0,
+            latent_diagnostic=False,
+        )
+        try:
+            algorithm = self._get_algorithm(DiscoveryAlgorithmType.FCI)
+            result = algorithm.discover(data, diagnostic_config)
+            if not result.converged:
+                return {
+                    "ran": True,
+                    "converged": False,
+                    "runtime_seconds": result.runtime_seconds,
+                    "bidirected_edges": [],
+                    "error": result.metadata.get("error"),
+                }
+            # get_bidirected_edges maps index-keyed edge_types to column names.
+            pairs = algorithm.get_bidirected_edges(result)  # type: ignore[attr-defined]
+            return {
+                "ran": True,
+                "converged": True,
+                "runtime_seconds": result.runtime_seconds,
+                "bidirected_edges": [[source, target] for source, target in pairs],
+            }
+        except Exception as exc:
+            logger.warning(f"Latent-confounding diagnostic (FCI) failed: {exc}")
+            return {"ran": False, "error": str(exc)}
+
+    async def _maybe_latent_diagnostic(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+    ) -> Dict[str, Any]:
+        """Run the FCI latent diagnostic when configured (off by default).
+        Returns extra metadata entries ({} when the diagnostic is off)."""
+        if not config.latent_diagnostic:
+            return {}
+        loop = asyncio.get_event_loop()
+        payload = await loop.run_in_executor(
+            None, lambda: self._run_latent_diagnostic(data, config)
+        )
+        return {"latent_diagnostic": payload}
 
     def _remove_cycles(self, dag: nx.DiGraph) -> nx.DiGraph:
         """Remove cycles from graph by removing lowest-confidence edges.

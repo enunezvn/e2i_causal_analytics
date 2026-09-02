@@ -46,6 +46,11 @@ class CausalGraph(TypedDict, total=False):
     # reports 'domain_knowledge' instead of mislabeling the manual DAG as
     # 'discovered'. Absent/False on every non-fallback path.
     discovery_dag_overridden: NotRequired[bool]
+    # Latent-confounding diagnostic (FCI) payload: {ran, converged,
+    # runtime_seconds, bidirected_edges (column-name pairs), treatment,
+    # outcome, flag}. Annotates only — never feeds gate decisions. The flag
+    # also raises a human-readable entry in the warnings accumulator.
+    latent_diagnostic: NotRequired[Dict[str, Any]]
 
 
 class EstimationResult(TypedDict, total=False):
@@ -294,6 +299,9 @@ class CausalImpactState(TypedDict):
     discovery_bootstrap_resamples: NotRequired[
         int
     ]  # Resamples for single-algorithm stability (0 = off; guided default 20)
+    discovery_latent_diagnostic: NotRequired[
+        bool
+    ]  # FCI latent-confounding diagnostic (guided default True; unguided False)
     discovery_fallback_to_manual: NotRequired[
         bool
     ]  # Use manual DAG on discovery failure (default: True)

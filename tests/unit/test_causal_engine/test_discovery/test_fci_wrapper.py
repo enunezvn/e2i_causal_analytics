@@ -423,3 +423,62 @@ class TestFCIBidirectedEdgeHelper:
 
         bidirected = fci.get_bidirected_edges(result)
         assert ("X", "Y") in bidirected
+
+
+class TestFCIBidirectedEdgeNameMapping:
+    """``discover()`` keys ``edge_types`` by INTEGER node indices, so
+    ``get_bidirected_edges`` used to return index strings ("1->2" -> ("1", "2"))
+    instead of column names — useless to any consumer. The mapping goes through
+    ``node_names`` in the same metadata; hand-crafted metadata that already uses
+    names (the tests above) must keep working unchanged."""
+
+    @pytest.fixture
+    def fci(self):
+        return FCIAlgorithm()
+
+    def test_index_keyed_edge_types_map_to_column_names(self, fci):
+        result = AlgorithmResult(
+            algorithm=DiscoveryAlgorithmType.FCI,
+            adjacency_matrix=np.zeros((3, 3), dtype=int),
+            edge_list=[],
+            runtime_seconds=0.1,
+            metadata={
+                "edge_types": {"1->2": "bidirected", "0->1": "directed"},
+                "node_names": ["treatment_arm", "persistent_180d", "academic_hcp"],
+            },
+        )
+        assert fci.get_bidirected_edges(result) == [("persistent_180d", "academic_hcp")]
+
+    def test_real_discovery_output_yields_column_names(self, fci):
+        """End-to-end through the real fci() on a frame measured to produce a
+        treatment<->outcome bidirected mark (null-effect latent DGP, n=2000
+        seed 1 — 10/10 seeds at this n, see test_structural_recovery.py
+        docstring item 6). Pins that discover()'s own metadata feeds the
+        mapping, not just hand-crafted dicts."""
+        rng = np.random.default_rng(1)
+        n = 2000
+        severity = rng.normal(0.0, 1.0, n)
+        academic = rng.binomial(1, 0.35, n).astype(float)
+        region = rng.binomial(1, 0.40, n).astype(float)
+        prognostic = rng.normal(0.0, 1.0, n)
+        noise = rng.normal(0.0, 1.0, n)
+        logit_t = -0.2 + 0.9 * severity + 0.8 * academic + 0.7 * region
+        treatment = rng.binomial(1, 1.0 / (1.0 + np.exp(-logit_t)), n).astype(float)
+        logit_y = -0.3 + 0.8 * severity + 0.7 * academic + 0.6 * prognostic
+        outcome = rng.binomial(1, 1.0 / (1.0 + np.exp(-logit_y)), n).astype(float)
+        frame = pd.DataFrame(
+            {
+                "treatment_arm": treatment,
+                "persistent_180d": outcome,
+                "academic_hcp": academic,
+                "region_south": region,
+                "prognostic_only": prognostic,
+                "noise_cov": noise,
+            }
+        )
+        result = fci.discover(frame, DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.FCI]))
+        assert result.converged
+        pairs = fci.get_bidirected_edges(result)
+        flat = {name for pair in pairs for name in pair}
+        assert flat <= set(frame.columns), f"non-column names leaked: {pairs}"
+        assert any({u, v} == {"treatment_arm", "persistent_180d"} for u, v in pairs), pairs

@@ -95,13 +95,20 @@ class FCIAlgorithm(BaseDiscoveryAlgorithm):
             indep_test = self._select_independence_test(data, config)
 
             # Run FCI algorithm
-            # FCI returns a tuple: (G, edges) where G is the PAG
+            # FCI returns a tuple: (G, edges) where G is the PAG.
+            # show_progress must be off explicitly (it defaults to True and
+            # writes a tqdm bar to stderr on every production run). node_names
+            # keeps causal-learn's own diagnostics (it prints visible directed
+            # edges unconditionally) readable; our adjacency mapping below is
+            # index-based and unaffected.
             result = fci(
                 X,
                 independence_test_method=indep_test,
                 alpha=config.alpha,
                 depth=config.max_cond_vars if config.max_cond_vars else -1,
                 verbose=False,
+                show_progress=False,
+                node_names=node_names,
             )
 
             # Extract graph from result
@@ -294,18 +301,34 @@ class FCIAlgorithm(BaseDiscoveryAlgorithm):
     ) -> List[Tuple[str, str]]:
         """Extract bidirected edges (latent confounders) from result.
 
+        ``discover()`` keys ``edge_types`` by integer NODE INDICES (the tuples
+        ``_graph_to_adjacency_with_types`` returns), so the raw keys parse to
+        index strings like ``("1", "2")`` — meaningless to consumers. Map them
+        back through ``node_names`` from the same metadata; keys that are not
+        index-shaped (hand-built metadata already using names) pass through
+        unchanged.
+
         Args:
             result: AlgorithmResult from FCI discovery
 
         Returns:
-            List of (X, Y) pairs with latent confounders
+            List of (X, Y) column-name pairs with latent confounders
         """
         bidirected = []
         edge_types = result.metadata.get("edge_types", {})
+        node_names = result.metadata.get("node_names", [])
         for edge_str, edge_type in edge_types.items():
             if edge_type == EdgeType.BIDIRECTED.value:
                 # Parse "X->Y" format
                 parts = edge_str.split("->")
                 if len(parts) == 2:
-                    bidirected.append((parts[0], parts[1]))
+                    source, target = parts
+                    try:
+                        s_idx, t_idx = int(source), int(target)
+                    except ValueError:
+                        pass
+                    else:
+                        if 0 <= s_idx < len(node_names) and 0 <= t_idx < len(node_names):
+                            source, target = node_names[s_idx], node_names[t_idx]
+                    bidirected.append((source, target))
         return bidirected
