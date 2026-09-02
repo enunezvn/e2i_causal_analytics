@@ -35,20 +35,27 @@ a dependency bump that shifts them should update these numbers, not loosen the
 assertions.
 1. CAPABILITY (asserted, ``TestGuidedRecoveryWithHonestPriors``): when the declared
    confounders are the true ones, guided PC recovers the DAG essentially correctly.
-   Over a 20-run sweep (n = 500 and n = 2000, seeds 1-10):
-       exact recovery      12/20        (so exactness is NOT asserted — it is seed-dependent)
-       SHD                 max 1, mean 0.40
+   Over a 20-run sweep (n = 500 and n = 2000, seeds 1-10), re-measured 2026-09-02
+   through the corroboration gate at the shipped guided default B=20 (item 4):
+       gate ACCEPTed       18/20        (n=500 seed 2 REVIEW, seed 8 AUGMENT)
+       exact recovery      11/20        (so exactness is NOT asserted — it is seed-dependent)
+       SHD                 max 1 and mean 0.39 over the 18 ACCEPTed runs;
+                           max 2 and mean 0.55 over all 20 shipped DAGs
        reversed edges      0/20         (never inverts an arrow)
        non-confounder placed as a common cause
                            0/20         (never invents confounding)
        true confounders present in the backdoor set
-                           20/20        (one run added prognostic_only, a harmless
-                                         precision covariate, making a valid superset)
-   The invariants that hold in every run — no reversed edge, no invented common cause,
-   no omitted true confounder, SHD <= 1 — are what this class asserts. The residual
-   errors are single spurious covariate-covariate edges or a missed instrument edge,
-   neither of which reaches the backdoor set. This is the claim to protect against
-   regression; a tighter assertion would be overfitted to the seeds.
+                           20/20        (exactly {disease_severity, academic_hcp} in
+                                         every run — no superset, no omission)
+   The invariants that hold in every run are what this class asserts: no reversed
+   edge, no invented common cause, no omitted true confounder, and SHD <= 1 whenever
+   the gate ACCEPTs. The residual errors on accepted runs are single spurious
+   covariate-covariate edges or a missed instrument edge, neither of which reaches the
+   backdoor set. On the two withheld runs the manual DAG ships instead, a strict
+   SUBSET of the true DAG missing the two beyond-prior true edges — a recovery loss,
+   not a correctness one, which is why the assertion there is subset-safety rather
+   than SHD. This is the claim to protect against regression; a tighter assertion
+   would be overfitted to the seeds.
 
 2. KNOWN GAP (pinned as CHARACTERIZATION, ``TestProductionWiringIsPriorDetermined``):
    the API declares EVERY covariate a confounder (``modeled_confounders=covariates``,
@@ -77,19 +84,35 @@ assertions.
    and shipped in the adjustment set. Measured ATE consequence on the mediator DGP:
    true total effect +0.2925, correct set +0.2887 (-1%), pipeline set +0.1182 (-60%).
 
-4. KNOWN GAP (pinned, ``TestGateCannotRejectSingleAlgorithmRuns``): with one converged
-   algorithm — which is what guided mode runs — agreement and edge confidence are both
-   1.0 by construction, so 0.4 + 0.4 already meets ``accept_threshold``; ACCEPT is
-   reached before ``structure_score`` is consulted.
+4. FIXED (2026-09-02, was KNOWN GAP "gate cannot reject single-algorithm runs"):
+   the gate now scores CORROBORATION — bootstrap resample stability over
+   beyond-prior edges for single-algorithm runs (``DiscoveryConfig.
+   bootstrap_resamples``, guided default 20) — instead of self-agreement.
+   Measured at B=20 under the same pins: honest-priors sweep 18/20 ACCEPT
+   (n=2000: 10/10; n=500: 8/10 — seed 2 REVIEW, seed 8 AUGMENT; band
+   user-accepted). Noise frames with no declared confounders: 0/20 ACCEPT
+   (n=2000: 7 reject / 3 review; n=500: 9 reject / 1 review). A run with
+   no stability data is uncorroborated (scores 0.0) and cannot be accepted.
+   Prior-determined runs (every edge required) renormalize over edge
+   confidence + structure and still ACCEPT — the wiring itself is gap 2.
+
+   Uncovered while measuring the above, and NOT fixed here: AUGMENT is inert.
+   ``GateEvaluation.to_dict`` serializes ``n_high_confidence_edges`` (a count)
+   but not the edges, so graph_builder's AUGMENT branch iterates an empty list
+   and ships the bare manual DAG — indistinguishable from REVIEW. Before this
+   fix no guided run ever reached AUGMENT, so the dead branch was unreachable;
+   n=500 seed 8 is the first case that exercises it.
 
 5. KNOWN GAP (pinned, ``TestBinaryFramesGetAGaussianTest``): ``_select_independence_test``
    returns ``fisherz`` for an all-binary numeric frame; the ``chisq`` branch needs a
    non-numeric dtype, which PC's ``data.values`` path cannot consume.
 
-The characterization tests (2-5) PIN CURRENT BEHAVIOUR SO A FIX IS NOTICED. They are
-not an endorsement of it. If one fails because someone corrected the wiring, the gate,
-or the test selection: that is the fix landing — update the test to assert the new,
-better behaviour and delete the corresponding gap note above.
+The remaining characterization tests (2, 3, 5) PIN CURRENT BEHAVIOUR SO A FIX IS
+NOTICED. They are not an endorsement of it. If one fails because someone corrected the
+wiring or the test selection: that is the fix landing — update the test to assert the
+new, better behaviour and delete the corresponding gap note above. Item 4 is what that
+looks like once done: the gap note became a fix record and
+``TestGateRejectsUncorroboratedSingleAlgorithmRuns`` now asserts the corrected gate.
 
 SCOPE / FAITHFULNESS: this is a synthetic linear-logistic DGP with Gaussian
 confounders, no missingness and n <= 2000 — a faithful test of the ALGORITHM AND ITS
@@ -99,7 +122,7 @@ against the live frame remains the stronger check.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple, cast
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -200,8 +223,15 @@ async def _build_dag(
     declared_confounders: Sequence[str],
     *,
     guided: bool = True,
+    bootstrap_resamples: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Drive the real graph_builder node the way the agent API drives it."""
+    """Drive the real graph_builder node the way the agent API drives it.
+
+    ``bootstrap_resamples=None`` leaves the state key OUT, so the node applies
+    its own guided default (20) — that is the wiring the agent API ships, and
+    the sweeps below measure the system AT that default. Pass an int to pin a
+    resample count explicitly (0 turns stability off).
+    """
     state: Dict[str, Any] = {
         "query": f"What is the causal effect of {TREATMENT} on {OUTCOME}?",
         "treatment_var": TREATMENT,
@@ -212,6 +242,8 @@ async def _build_dag(
         "auto_discover": True,
         "discovery_guided": guided,
     }
+    if bootstrap_resamples is not None:
+        state["discovery_bootstrap_resamples"] = bootstrap_resamples
     result = await GraphBuilderNode().execute(cast(CausalImpactState, state))
     assert result.get("status") != "failed", result.get("error_message")
     graph = result["causal_graph"]
@@ -250,9 +282,18 @@ def _structural_metrics(edges: Iterable[Tuple[str, str]]) -> Dict[str, float]:
 class TestGuidedRecoveryWithHonestPriors:
     """CAPABILITY. Guided PC recovers the true DAG when the declared confounders are
     the true confounders. Asserted as a seed sweep with measured bands rather than a
-    single lucky seed: exact recovery is seed-dependent (12/20), but the invariants
-    below held in every one of the 20 runs. A regression here means the guided
-    discovery method itself has broken."""
+    single lucky seed. A regression here means the guided discovery method itself has
+    broken.
+
+    These invariants are measured on the discovery + GATE system at the wiring the
+    agent API ships — ``bootstrap_resamples`` at graph_builder's guided default of 20
+    (``_build_dag`` deliberately omits the state key). The gate is therefore part of
+    what is under test: it decides whether the DISCOVERED DAG ships at all, and a
+    withheld discovery ships the manual/prior DAG instead. Measured band at B=20:
+    18/20 ACCEPT (n=2000: 10/10; n=500: 8/10 — seed 2 REVIEW, seed 8 AUGMENT). That
+    band is user-accepted; do not chase 20/20. Both withheld runs are the same two
+    beyond-prior true edges going bootstrap-unstable at n=500, which costs recovery,
+    not correctness — the fallback is a strict subset of the true DAG."""
 
     SWEEP = [(n, seed) for n in (500, 2000) for seed in range(1, 11)]
 
@@ -271,17 +312,39 @@ class TestGuidedRecoveryWithHonestPriors:
 
     @pytest.mark.asyncio
     async def test_structural_error_stays_within_one_edge(self) -> None:
-        """Measured band: SHD <= 1 in every run, mean 0.40. Exactness is NOT asserted
-        (12/20) — pinning it would overfit the seed."""
+        """Gate-aware. Where the gate ACCEPTs, the DISCOVERED DAG ships and the old
+        bar holds unchanged: SHD <= 1. Where it withholds the discovery, the manual
+        DAG ships instead, and the bar that matters is that the fallback is SAFE — a
+        strict subset of the true DAG, never spurious structure. Measured at B=20:
+        18 accepted (SHD <= 1, exactness 11/20 so it is not asserted), 2 withheld at
+        n=500 (seed 2 REVIEW, seed 8 AUGMENT), both shipping the 5-edge prior DAG at
+        SHD 2 because the two beyond-prior true edges are bootstrap-unstable there.
+        Mean SHD over all 20 shipped DAGs 0.55.
+
+        AUGMENT counts as WITHHELD, which is a measured fact rather than a taxonomy
+        choice: ``GateEvaluation.to_dict`` serializes only ``n_high_confidence_edges``
+        and not the edges, so graph_builder's AUGMENT branch augments with an empty
+        list and ships the bare manual DAG — byte-identical to REVIEW.
+        """
         distances = []
+        withheld = []
         for n_rows, seed in self.SWEEP:
-            edges = (await _build_dag(_make_frame(n_rows, seed), TRUE_CONFOUNDERS))["edges"]
+            result = await _build_dag(_make_frame(n_rows, seed), TRUE_CONFOUNDERS)
+            edges = result["edges"]
             shd = _structural_metrics(edges)["shd"]
-            assert shd <= 1.0, (
-                f"n={n_rows} seed={seed} SHD={shd}: "
-                f"spurious={sorted(edges - TRUE_EDGES)} missing={sorted(TRUE_EDGES - edges)}"
-            )
+            if result["gate_decision"] == GateDecision.ACCEPT.value:
+                assert shd <= 1.0, (
+                    f"n={n_rows} seed={seed} SHD={shd}: "
+                    f"spurious={sorted(edges - TRUE_EDGES)} missing={sorted(TRUE_EDGES - edges)}"
+                )
+            else:
+                withheld.append((n_rows, seed, result["gate_decision"]))
+                assert edges <= TRUE_EDGES, (
+                    f"n={n_rows} seed={seed} gate={result['gate_decision']}: the fallback "
+                    f"DAG invented structure {sorted(edges - TRUE_EDGES)}"
+                )
             distances.append(shd)
+        assert len(withheld) <= 2, f"gate withheld more than the accepted band: {withheld}"
         assert sum(distances) / len(distances) <= 0.6
 
     @pytest.mark.asyncio
@@ -363,13 +426,12 @@ class TestPostTreatmentCovariateIsNotRejected:
         assert result["gate_decision"] == GateDecision.ACCEPT.value
 
 
-class TestGateCannotRejectSingleAlgorithmRuns:
-    """KNOWN GAP (see docstring item 4), pinned as characterization.
-
-    Guided mode restricts discovery to PC alone. With one converged algorithm every
-    edge scores confidence 1.0 and agreement 1.0 by construction, so the weighted
-    score reaches ``accept_threshold`` (0.4 + 0.4) before ``structure_score`` is
-    added — no single-algorithm result with at least one edge can be rejected."""
+class TestGateRejectsUncorroboratedSingleAlgorithmRuns:
+    """FIXED GAP (was docstring item 4): a single-algorithm result used to
+    self-agree at 1.0 and reach ACCEPT unconditionally. The gate now scores
+    corroboration — bootstrap stability for single-algorithm runs — and a run
+    with NO stability evidence scores 0.0 and cannot be accepted, nor can its
+    uncorroborated edges qualify for AUGMENT."""
 
     @staticmethod
     def _single_algorithm_result(edges: List[Tuple[str, str]]) -> DiscoveryResult:
@@ -405,20 +467,41 @@ class TestGateCannotRejectSingleAlgorithmRuns:
             ],
         )
 
-    def test_structurally_poor_result_is_still_accepted(self) -> None:
-        """One unrelated edge among eight isolated nodes: structure score ~0.1,
-        expected-edge recall 0 — and the gate still ACCEPTs."""
+    def test_structurally_poor_uncorroborated_result_is_rejected(self) -> None:
         result = self._single_algorithm_result([("unrelated_a", "unrelated_b")])
         evaluation = DiscoveryGate().evaluate(result, expected_edges=[(TREATMENT, OUTCOME)])
+        assert evaluation.decision == GateDecision.REJECT
+        assert evaluation.metadata["corroboration_score"] == 0.0
+        assert evaluation.metadata["corroboration_basis"] == "uncorroborated_single_run"
 
-        assert evaluation.decision == GateDecision.ACCEPT
-        assert evaluation.metadata["structure_score"] < 0.5
-        assert evaluation.metadata["agreement_score"] == 1.0
-        assert evaluation.metadata["edge_confidence_score"] == 1.0
-
-    def test_reversed_estimand_edge_is_still_accepted(self) -> None:
+    def test_reversed_estimand_edge_is_rejected(self) -> None:
         result = self._single_algorithm_result([(OUTCOME, TREATMENT)])
-        assert DiscoveryGate().evaluate(result).decision == GateDecision.ACCEPT
+        assert DiscoveryGate().evaluate(result).decision == GateDecision.REJECT
+
+
+class TestBootstrapStabilityGatesNoiseAtTheDataLevel:
+    """End-to-end through the real GraphBuilderNode: with bootstrap on and no
+    declared confounders, spurious noise-frame edges are unstable, so the
+    gate no longer ACCEPTs the discovered DAG — the manual fallback ships
+    instead. Pinned to one seed with the prod-default B to match the fix-2
+    calibration; the full measured sweep lives in the module docstring
+    (item 4)."""
+
+    @pytest.mark.asyncio
+    async def test_noise_discoveries_are_not_accepted(self) -> None:
+        result = await _build_dag(_make_noise_frame(500, 7), [], bootstrap_resamples=20)
+        # Non-vacuity: this seed must keep REACHING the corroboration scoring, not
+        # short-circuit on the gate's min-edges check. Measured: 3 edges, REVIEW.
+        assert result["n_discovered_edges"], "pin degraded to a vacuous min-edges reject"
+        assert result["gate_decision"] != GateDecision.ACCEPT.value
+
+    @pytest.mark.asyncio
+    async def test_honest_priors_still_accept_with_bootstrap_on(self) -> None:
+        """Positive control: the gate's new muscle must not reject genuine
+        structure. Same pinned seed family as the capability sweep."""
+        result = await _build_dag(_make_frame(500, 3), TRUE_CONFOUNDERS, bootstrap_resamples=20)
+        assert result["gate_decision"] == GateDecision.ACCEPT.value
+        assert result["edges"]  # discovered DAG shipped
 
 
 class TestBinaryFramesGetAGaussianTest:
