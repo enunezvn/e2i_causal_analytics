@@ -146,16 +146,33 @@ class GraphBuilderNode:
             # Build DAG based on discovery results
             dag_overridden = False
             if discovery_result and gate_evaluation:
+                # The ACCEPT-path narrowing applies only to callers that OPTED
+                # INTO the channel split by setting anchored_confounders; a
+                # legacy state (confounders only) keeps the old full re-add.
                 dag, augmented_edges, dag_overridden = self._build_dag_with_discovery(
-                    treatment, outcome, confounders, discovery_result, gate_evaluation
+                    treatment,
+                    outcome,
+                    confounders,
+                    discovery_result,
+                    gate_evaluation,
+                    anchored_confounders=(
+                        self._resolve_anchored_confounders(state)
+                        if "anchored_confounders" in state
+                        else None
+                    ),
                 )
             else:
                 # Manual DAG construction (original behavior)
                 dag = self._construct_dag(treatment, outcome, confounders)
                 augmented_edges = []
 
-            # Find valid adjustment sets (backdoor criterion)
+            # Find valid adjustment sets (backdoor criterion), then enforce the
+            # adjustment guarantee: declared (modeled) confounders are unioned
+            # into every set regardless of what the DAG shows (fix 4).
             adjustment_sets = self._find_adjustment_sets(dag, treatment, outcome)
+            adjustment_sets = self._apply_adjustment_guarantee(
+                dag, treatment, outcome, state, adjustment_sets
+            )
 
             # Compute confidence based on discovery results
             if gate_evaluation and gate_evaluation.get("decision") == GateDecision.ACCEPT.value:
@@ -194,6 +211,10 @@ class GraphBuilderNode:
                 # Honest provenance: True only when an ACCEPTED discovered DAG was
                 # discarded for the manual one (curated-confounder contradiction).
                 "discovery_dag_overridden": dag_overridden,
+                # Fix 4: per-edge provenance (required_prior / discovered / curated).
+                "edge_provenance": self._compute_edge_provenance(
+                    dag, discovery_result, gate_evaluation, dag_overridden, augmented_edges
+                ),
             }
 
             # Compute DAG version hash for expert review tracking
@@ -567,6 +588,142 @@ class GraphBuilderNode:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _resolve_anchored_confounders(state: CausalImpactState) -> List[str]:
+        """Structural-prior channel (fix 4). When ``anchored_confounders`` is
+        PRESENT it alone names the confounders to force as required edges (an
+        empty list = no structural priors). When ABSENT, legacy behavior anchors
+        the modeled (guarantee-channel) confounders so pre-split callers keep
+        their exact prior shape."""
+        if "anchored_confounders" in state:
+            return [str(c) for c in (state.get("anchored_confounders") or [])]
+        return [str(c) for c in (state.get("modeled_confounders") or [])]
+
+    def _apply_adjustment_guarantee(
+        self,
+        dag: nx.DiGraph,
+        treatment: str,
+        outcome: str,
+        state: CausalImpactState,
+        adjustment_sets: List[List[str]],
+    ) -> List[List[str]]:
+        """Union the declared (guarantee-channel) confounders into every
+        adjustment set (fix 4).
+
+        ``modeled_confounders`` is the caller's promise that these covariates
+        must be adjusted for. Under the old wiring that promise was enforced by
+        FORCING conf->treatment/conf->outcome DAG edges for all of them, which
+        made the shipped DAG prior-determined (identical for real data and pure
+        noise). The guarantee now lives here instead: whatever backdoor set the
+        shipped DAG licenses is unioned with the declared covariates, so a
+        structural miss by discovery can never silently unadjust the estimate —
+        measured on the recovery benchmark, tiers-only discovery drops a true
+        confounder from the DAG in 7/20 runs, and this union is what makes
+        those misses harmless.
+
+        Skips declared names that are not nodes of the shipped DAG (not frame
+        columns — the estimator could not resolve them) and names the DAG shows
+        as descendants of treatment (not backdoor variables; conditioning on a
+        post-treatment variable would bias the estimate — unreachable under
+        guided tiers, guards non-tiered DAG shapes). With nothing declared the
+        sets pass through untouched, preserving the validated-empty ``[[]]``
+        backdoor semantics for randomized designs.
+
+        DELIBERATE LIMIT (codex iter-1 finding 1, rebutted by design): the
+        merged set is NOT re-checked against the backdoor criterion, because
+        declaration wins over DAG evidence by design — dropping a declared
+        covariate when the (possibly wrong) DAG disagrees is exactly the
+        measured-and-rejected 7/20-confounded failure mode. The residual risk
+        is a declared pre-treatment COLLIDER whose parents are latent or
+        undeclared (M-bias): under the agent API's declare-everything wiring a
+        collider's in-frame parents are co-declared and block the opened path,
+        and the OLD wiring adjusted for every declared covariate with no guard
+        at all, so this is not a regression. The sanctioned mechanism for
+        excluding a declared collider/mediator is the trust-gated
+        ``adjustment_set_policy`` node (STRICT mode; M-bias detection tracked
+        at #359), which runs downstream of this union."""
+        declared = [
+            str(c) for c in (state.get("modeled_confounders") or state.get("confounders") or [])
+        ]
+        if not declared:
+            return adjustment_sets
+        if treatment not in dag or outcome not in dag or treatment == outcome:
+            return adjustment_sets
+        nodes = set(dag.nodes())
+        treatment_descendants = nx.descendants(dag, treatment)
+        guaranteed = {
+            c
+            for c in declared
+            if c in nodes and c not in (treatment, outcome) and c not in treatment_descendants
+        }
+        if not guaranteed:
+            return adjustment_sets
+        unioned: List[List[str]] = []
+        seen = set()
+        for adj_set in adjustment_sets or [[]]:
+            merged = sorted(set(adj_set) | guaranteed)
+            key = tuple(merged)
+            if key not in seen:
+                seen.add(key)
+                unioned.append(merged)
+        return unioned
+
+    @staticmethod
+    def _compute_edge_provenance(
+        dag: nx.DiGraph,
+        discovery_result: Optional[DiscoveryResult],
+        gate_evaluation: Optional[Dict[str, Any]],
+        dag_overridden: bool,
+        augmented_edges: List[Tuple[str, str]],
+    ) -> List[Dict[str, str]]:
+        """Label every shipped edge with WHY it is in the DAG (fix 4).
+
+        'required_prior' and 'discovered' apply only when the shipped DAG came
+        through discovery (a clean ACCEPT, or AUGMENT's manual-plus-extras);
+        on every other path the DAG is the manual domain construction and each
+        edge is honestly 'curated' — even where a prior happened to assert the
+        same edge, the shipped graph did not come from it.
+
+        'discovered' additionally requires the edge to be one the ensemble
+        actually DREW (codex iter-1 HIGH): the ACCEPT path appends the estimand
+        edge for consistency when discovery omitted it, and a legacy full
+        re-add can draw curated confounder edges onto the discovered DAG —
+        crediting either to the data would be the same overstatement the
+        dag_source label used to make. Such appended edges are 'curated'
+        (or 'required_prior' where a prior asserted them)."""
+        prior_edges: Set[Tuple[str, str]] = set()
+        if (
+            discovery_result is not None
+            and discovery_result.config is not None
+            and discovery_result.config.prior_knowledge is not None
+        ):
+            prior_edges = {
+                (source, target)
+                for source, target in (discovery_result.config.prior_knowledge.required_edges or [])
+            }
+        ensemble_edges: Set[Tuple[str, str]] = set()
+        if discovery_result is not None and discovery_result.ensemble_dag is not None:
+            ensemble_edges = set(discovery_result.ensemble_dag.edges())
+        decision = gate_evaluation.get("decision") if gate_evaluation else None
+        shipped_via_discovery = not dag_overridden and decision in (
+            GateDecision.ACCEPT.value,
+            GateDecision.AUGMENT.value,
+        )
+        accepted = shipped_via_discovery and decision == GateDecision.ACCEPT.value
+        augmented = set(augmented_edges)
+
+        def _label(edge: Tuple[str, str]) -> str:
+            if shipped_via_discovery and edge in prior_edges:
+                return "required_prior"
+            if (accepted and edge in ensemble_edges) or edge in augmented:
+                return "discovered"
+            return "curated"
+
+        return [
+            {"source": source, "target": target, "provenance": _label((source, target))}
+            for source, target in dag.edges()
+        ]
+
     async def _run_discovery(
         self,
         state: CausalImpactState,
@@ -628,20 +785,25 @@ class GraphBuilderNode:
                 if covariate_cols
                 else [[treatment], [outcome]]
             )
-            # Seed the question's MODELED confounders as REQUIRED edges so guided
-            # PC anchors them as confounders (confounder->treatment AND
-            # confounder->outcome) by construction, while the data still selects
-            # the rest. Replaces the generic KNOWN_CAUSAL_RELATIONSHIPS constants
-            # (~0 overlap with real covariates) as the discovery prior. Restricted
-            # to confounders actually present as frame columns (build_background_knowledge
-            # name-matches the frame; keeping required_edges clean keeps the prior honest).
-            modeled = [
+            # Seed the ANCHORED confounders (fix 4: the structural-prior channel,
+            # falling back to modeled_confounders for pre-split callers) as
+            # REQUIRED edges so guided PC anchors them as confounders
+            # (confounder->treatment AND confounder->outcome) by construction,
+            # while the data still selects the rest. An empty anchored channel —
+            # the agent API's production shape — leaves only the estimand edge
+            # required, so the shipped DAG is data-responsive; the declared
+            # covariates stay adjusted through the guarantee channel instead
+            # (see _apply_adjustment_guarantee). Restricted to confounders
+            # actually present as frame columns (build_background_knowledge
+            # name-matches the frame; keeping required_edges clean keeps the
+            # prior honest).
+            anchored = [
                 c
-                for c in (state.get("modeled_confounders") or [])
+                for c in self._resolve_anchored_confounders(state)
                 if c in data.columns and c not in (treatment, outcome)
             ]
             required_edges: List[Tuple[str, str]] = [(treatment, outcome)]
-            for conf in modeled:
+            for conf in anchored:
                 required_edges.append((conf, treatment))
                 required_edges.append((conf, outcome))
             prior_knowledge = CausalPriorKnowledge(
@@ -768,15 +930,26 @@ class GraphBuilderNode:
         confounders: List[str],
         discovery_result: DiscoveryResult,
         gate_evaluation: Dict[str, Any],
+        anchored_confounders: Optional[List[str]] = None,
     ) -> Tuple[nx.DiGraph, List[Tuple[str, str]], bool]:
         """Build DAG based on discovery results and gate decision.
 
         Args:
             treatment: Treatment variable
             outcome: Outcome variable
-            confounders: Confounder variables
+            confounders: Confounder variables (the manual/fallback DAG asserts
+                ALL of these as common causes — the adjustment guarantee on the
+                REVIEW/REJECT/AUGMENT paths)
             discovery_result: Result from discovery runner
             gate_evaluation: Result from discovery gate
+            anchored_confounders: fix 4 — the structural-prior channel. On the
+                ACCEPT path only these are re-asserted onto the discovered DAG
+                (a no-op when the prior already forced their edges); the
+                remaining declared covariates stay adjusted through
+                ``_apply_adjustment_guarantee`` WITHOUT forcing DAG edges, which
+                is what makes the accepted DAG data-responsive. ``None``
+                preserves the legacy behavior (re-add every ``confounders``
+                entry) for direct callers that predate the channel split.
 
         Returns:
             Tuple of ``(DAG, augmented_edges, dag_overridden)``. ``dag_overridden``
@@ -838,14 +1011,26 @@ class GraphBuilderNode:
                     dag.add_edge(treatment, outcome)
                     if not nx.is_directed_acyclic_graph(dag):
                         dag.remove_edge(treatment, outcome)
-                # Preserve the caller's curated confounders on the discovered DAG.
-                # Constraint-based discovery on binary data routinely MISSES a
-                # confounder's edges; dropping a domain-known confounder would
-                # silently confound the estimate (the all-other-columns estimator
-                # fallback no longer rescues an empty backdoor since PR #1084). The
-                # other gate paths (AUGMENT/REVIEW/REJECT) already adjust for them
-                # via _construct_dag — ACCEPT must be consistent.
-                unplaced = self._add_curated_confounder_edges(dag, treatment, outcome, confounders)
+                # Re-assert the ANCHORED confounders on the discovered DAG (fix 4).
+                # These are the structural-prior channel: the prior already forced
+                # their edges, so this is normally a no-op that exists to catch a
+                # contradictory orientation atomically (see below). The rest of the
+                # declared covariates are deliberately NOT drawn here — forcing an
+                # edge for every declared covariate is what made the shipped DAG
+                # identical for real data and pure noise. Their adjustment is
+                # guaranteed at adjustment-set assembly instead
+                # (_apply_adjustment_guarantee), so a discovery miss still cannot
+                # silently confound the estimate (PR #1084 removed the estimator's
+                # all-other-columns rescue). Legacy callers (anchored is None)
+                # keep the old behavior: every curated confounder is re-added.
+                accept_curated = (
+                    confounders
+                    if anchored_confounders is None
+                    else [c for c in anchored_confounders if c in dag]
+                )
+                unplaced = self._add_curated_confounder_edges(
+                    dag, treatment, outcome, accept_curated
+                )
                 if unplaced:
                     # Discovery oriented a curated confounder contradictorily
                     # (treatment->conf or outcome->conf), so it cannot be a clean

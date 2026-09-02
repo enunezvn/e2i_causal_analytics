@@ -920,3 +920,114 @@ def test_latent_confounding_warning_reaches_response_warnings():
     # The payload on causal_graph must not disturb DAG mapping or status.
     assert resp.status == "completed"
     assert resp.dag.treatment_nodes == ["treatment_arm"]
+
+
+@pytest.mark.unit
+def test_dag_source_discovered_when_anchored_channel_is_empty():
+    """Fix 4: the agent endpoints declare every covariate into the adjustment-
+    GUARANTEE channel (modeled_confounders) but pass anchored_confounders=[] —
+    only the estimand edge is prior-implied. A shipped confounder edge is then a
+    genuine data contribution, so the label is 'discovered' where the legacy
+    single-channel state (same edges, no anchored key) reads 'prior_asserted'.
+    The declared covariate is still not echoed back as a finding."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 3}
+    state["causal_graph"]["discovery_gate_decision"] = "accept"
+    state["modeled_confounders"] = ["disease_severity"]
+    state["anchored_confounders"] = []
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("disease_severity", "treatment_arm"),
+        ("disease_severity", "persistent_180d"),
+    ]
+    resp = _agent_state_to_response(
+        analysis_id="f4a",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "discovered"
+    assert resp.discovered_confounders == []
+
+
+@pytest.mark.unit
+def test_dag_source_prior_asserted_tracks_the_anchored_channel():
+    """When a caller genuinely anchors a confounder, its two common-cause edges
+    are prior-implied again: a DAG carrying nothing beyond them (plus the
+    estimand) must NOT be credited to the data."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 3}
+    state["causal_graph"]["discovery_gate_decision"] = "accept"
+    state["modeled_confounders"] = ["disease_severity"]
+    state["anchored_confounders"] = ["disease_severity"]
+    state["causal_graph"]["edges"] = [
+        ("treatment_arm", "persistent_180d"),
+        ("disease_severity", "treatment_arm"),
+        ("disease_severity", "persistent_180d"),
+    ]
+    resp = _agent_state_to_response(
+        analysis_id="f4b",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "prior_asserted"
+    assert resp.discovered_confounders == []
+
+
+@pytest.mark.unit
+def test_edge_provenance_passes_through_to_the_dag_model():
+    """graph_builder's per-edge provenance ships on the response DAG; malformed
+    entries are dropped rather than failing the mapping."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["causal_graph"]["edge_provenance"] = [
+        {
+            "source": "treatment_arm",
+            "target": "persistent_180d",
+            "provenance": "required_prior",
+        },
+        {
+            "source": "disease_severity",
+            "target": "persistent_180d",
+            "provenance": "discovered",
+        },
+        {"source": "bad_row", "target": "x", "provenance": "not_a_label"},
+    ]
+    resp = _agent_state_to_response(
+        analysis_id="f4c",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    labels = {(e.source, e.target): e.provenance for e in resp.dag.edge_provenance}
+    assert labels == {
+        ("treatment_arm", "persistent_180d"): "required_prior",
+        ("disease_severity", "persistent_180d"): "discovered",
+    }
+
+
+@pytest.mark.unit
+def test_edge_provenance_defaults_empty_on_legacy_states():
+    from src.api.routes.causal import _agent_state_to_response
+
+    resp = _agent_state_to_response(
+        analysis_id="f4d",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=_base_state(),
+        latency_ms=10,
+    )
+    assert resp.dag.edge_provenance == []

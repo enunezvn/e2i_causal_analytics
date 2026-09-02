@@ -192,14 +192,25 @@ export interface AgentCausalAnalysisRequest {
 }
 
 /** The causal DAG the agent's graph_builder constructed. */
+/** Why one edge is in the shipped DAG (fix 4 — per-edge provenance). */
+export interface EdgeProvenance {
+  source: string;
+  target: string;
+  /** required_prior = asserted by the guided-discovery prior; discovered = contributed by the data; curated = drawn by the manual/domain constructor */
+  provenance: 'required_prior' | 'discovered' | 'curated';
+}
+
 export interface CausalDAGModel {
   nodes: string[];
   /** Directed [from, to] edges */
   edges: string[][];
   treatment_nodes: string[];
   outcome_nodes: string[];
+  /** Adjustment sets the estimate conditions on: DAG backdoor sets unioned with every declared covariate */
   adjustment_sets: string[][];
   dag_dot?: string | null;
+  /** Per-edge provenance for every shipped edge; empty on legacy payloads. */
+  edge_provenance?: EdgeProvenance[];
 }
 
 /** One refutation test's result, for the drill-down per-test table. */

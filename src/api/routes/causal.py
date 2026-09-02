@@ -67,6 +67,7 @@ from src.api.schemas.causal import (
     CrossValidationResponse,
     DiscoveredEffect,
     DiscoverEffectsResponse,
+    EdgeProvenanceModel,
     EstimationDataResponse,
     EstimatorCandidate,
     EstimatorComparison,
@@ -3027,9 +3028,25 @@ async def _run_agent_analysis_task(
         "treatment_var": request.treatment_var,
         "outcome_var": request.outcome_var,
         "confounders": covariates,
-        # Threaded so guided discovery seeds confounder->treatment/outcome priors
-        # from the question's modeled (resolved/expanded) adjustment set.
+        # Fix 4 (two-channel confounder wiring): ``modeled_confounders`` is the
+        # ADJUSTMENT-GUARANTEE channel — every covariate listed here is unioned
+        # into the final adjustment set no matter what the discovered DAG shows,
+        # so the estimate's conditioning set stays exactly the declared
+        # covariates (unchanged vs the old wiring by construction).
         "modeled_confounders": covariates,
+        # STRUCTURAL-PRIOR channel: deliberately EMPTY. The dataset spec's
+        # covariate list is a role ALLOWLIST (an offer of adjustable columns),
+        # not a per-question assertion that each is a genuine confounder — no
+        # curated structural subset exists at this call site. Declaring them all
+        # here (the old single-channel behavior) forced conf->treatment and
+        # conf->outcome as REQUIRED edges for every covariate, making the
+        # shipped DAG identical for real data and pure noise (measured:
+        # F1 0.78, SHD 4 on the recovery benchmark). Empty anchors leave tiers +
+        # the estimand edge as the only prior, so the DATA selects the
+        # confounder edges (measured: F1 mean 0.93, SHD<=1 at n=2000) and the
+        # corroboration gate scores real evidence (bootstrap stability) instead
+        # of prior-determined renormalization.
+        "anchored_confounders": [],
         # #1188: pre-treatment baselines for RCT efficiency adjustment —
         # deliberately NOT in confounders (they are not backdoor variables;
         # the estimation node routes them to the selector's
@@ -3229,6 +3246,21 @@ def _agent_state_to_response(
         outcome_nodes=list(causal_graph.get("outcome_nodes", []) or []),
         adjustment_sets=[list(s) for s in (causal_graph.get("adjustment_sets", []) or [])],
         dag_dot=causal_graph.get("dag_dot"),
+        # Fix 4: per-edge provenance (required_prior / discovered / curated),
+        # computed by graph_builder. Malformed entries are dropped rather than
+        # failing the response (legacy states simply have none).
+        edge_provenance=[
+            EdgeProvenanceModel(
+                source=str(e["source"]),
+                target=str(e["target"]),
+                provenance=e["provenance"],
+            )
+            for e in (causal_graph.get("edge_provenance") or [])
+            if isinstance(e, dict)
+            and e.get("source")
+            and e.get("target")
+            and e.get("provenance") in ("required_prior", "discovered", "curated")
+        ],
     )
 
     # How was the DAG built? Provenance must separate what the DATA contributed
@@ -3263,22 +3295,40 @@ def _agent_state_to_response(
     _gate_dec = causal_graph.get("discovery_gate_decision")
     _dag_overridden = bool(causal_graph.get("discovery_dag_overridden"))
 
-    # Confounders DECLARED to discovery as priors. ``modeled_confounders`` is the
-    # guided-discovery key; fall back to the plain adjustment covariates for
-    # callers that do not set it.
-    _declared = {
+    # Confounders DECLARED to discovery as STRUCTURAL priors. Fix 4 split the
+    # channels: when ``anchored_confounders`` is present it alone shapes the
+    # required edges (graph_builder._resolve_anchored_confounders — the agent
+    # endpoints pass [] so only the estimand edge is prior-implied); legacy
+    # states without the key fall back to ``modeled_confounders`` /
+    # ``confounders``, which the old single-channel wiring anchored wholesale.
+    # This MUST track graph_builder's resolution exactly, or every prod run
+    # would be mislabeled against the wrong prior shape.
+    if "anchored_confounders" in final_state:
+        _prior_confs = {str(c) for c in (final_state.get("anchored_confounders") or [])}
+    else:
+        _prior_confs = {
+            str(c)
+            for c in (
+                final_state.get("modeled_confounders") or final_state.get("confounders") or []
+            )
+        }
+    # Everything the caller declared through ANY channel — a declared covariate
+    # echoed back is not a data finding, whichever channel carried it.
+    _declared = _prior_confs | {
         str(c)
-        for c in (final_state.get("modeled_confounders") or final_state.get("confounders") or [])
+        for key in ("modeled_confounders", "confounders")
+        for c in (final_state.get(key) or [])
     }
-    # Exactly the edges those priors imply on their own. Treatment/outcome are read
-    # from the DAG'S OWN node lists, not the request: the edges are expressed in the
-    # graph's names, and a divergence would silently empty the prior set and label
-    # every run 'discovered' — failing toward the OVERSTATING label. Falling back to
-    # the request keeps the classifier working for states that omit the node lists.
+    # Exactly the edges the structural priors imply on their own. Treatment/outcome
+    # are read from the DAG'S OWN node lists, not the request: the edges are
+    # expressed in the graph's names, and a divergence would silently empty the
+    # prior set and label every run 'discovered' — failing toward the OVERSTATING
+    # label. Falling back to the request keeps the classifier working for states
+    # that omit the node lists.
     _t = next(iter(dag.treatment_nodes or []), request.treatment_var)
     _o = next(iter(dag.outcome_nodes or []), request.outcome_var)
     _prior_edges = {(_t, _o)}
-    for _conf in _declared:
+    for _conf in _prior_confs:
         _prior_edges.add((_conf, _t))
         _prior_edges.add((_conf, _o))
     # dag.edges was already filtered to [from, to] pairs at model construction.

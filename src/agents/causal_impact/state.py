@@ -51,6 +51,15 @@ class CausalGraph(TypedDict, total=False):
     # outcome, flag}. Annotates only — never feeds gate decisions. The flag
     # also raises a human-readable entry in the warnings accumulator.
     latent_diagnostic: NotRequired[Dict[str, Any]]
+    # Fix 4: per-edge provenance for every edge of the shipped DAG. Each entry is
+    # {"source", "target", "provenance"} with provenance one of:
+    #   'required_prior' — asserted by the guided-discovery REQUIRED prior
+    #                      (estimand edge + anchored confounders), on a DAG that
+    #                      shipped through discovery (ACCEPT/AUGMENT)
+    #   'discovered'     — contributed by the data (accepted discovery edge, or
+    #                      a corroborated AUGMENT edge)
+    #   'curated'        — drawn by the manual/domain constructor
+    edge_provenance: NotRequired[List[Dict[str, str]]]
 
 
 class EstimationResult(TypedDict, total=False):
@@ -234,12 +243,23 @@ class CausalImpactState(TypedDict):
     time_period: NotRequired[Dict[str, str]]  # {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
     brand: NotRequired[str]  # Brand context
     # Modeled confounders for the question (the resolved/expanded adjustment set).
-    # Threaded SEPARATELY from ``confounders`` so guided discovery can seed
-    # CausalPriorKnowledge.required_edges (confounder->treatment, confounder->outcome)
-    # from the MODELED backdoor set instead of the generic KNOWN_CAUSAL_RELATIONSHIPS
-    # constants. Declared so LangGraph persists it across nodes (undeclared channels
-    # are dropped).
+    # Fix 4 (two-channel confounder wiring): this is the ADJUSTMENT-GUARANTEE
+    # channel — every name listed here that is present in the shipped DAG (and
+    # is not a descendant of treatment) is unioned into the final
+    # ``causal_graph.adjustment_sets``, so a discovery miss can never silently
+    # unadjust a declared covariate. It no longer forces DAG edges when
+    # ``anchored_confounders`` is present. Declared so LangGraph persists it
+    # across nodes (undeclared channels are dropped).
     modeled_confounders: NotRequired[List[str]]
+    # Fix 4: STRUCTURAL-PRIOR channel for guided discovery. When this key is
+    # PRESENT, exactly these confounders (frame-present) are seeded as REQUIRED
+    # conf->treatment / conf->outcome edges; an empty list means "no structural
+    # priors — tiers + the estimand edge only", which is the agent API's
+    # production shape (the data selects the confounder edges; the guarantee
+    # channel above keeps the declared covariates adjusted regardless). When the
+    # key is ABSENT, graph_builder falls back to anchoring
+    # ``modeled_confounders`` so pre-split callers keep their exact prior shape.
+    anchored_confounders: NotRequired[List[str]]
     # #1188: pre-treatment baseline covariates for a randomized (empty-backdoor)
     # question — routed to the estimator selector's efficiency_controls channel
     # (ANCOVA-style variance reduction), NEVER merged into confounders /
