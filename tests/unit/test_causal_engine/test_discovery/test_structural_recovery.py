@@ -117,7 +117,20 @@ assertions.
 
 5. KNOWN GAP (pinned, ``TestBinaryFramesGetAGaussianTest``): ``_select_independence_test``
    returns ``fisherz`` for an all-binary numeric frame; the ``chisq`` branch needs a
-   non-numeric dtype, which PC's ``data.values`` path cannot consume.
+   non-numeric dtype, which PC's ``data.values`` path cannot consume. The obvious
+   remedy — cardinality-based selection routing all-binary frames to ``chisq`` — was
+   measured 2026-09-02 and REJECTED: causal-learn's ``chisq`` DOES accept float-coded
+   0/1 data (``Chisq_or_Gsq.__init__`` re-encodes every column to 0..k-1 via
+   ``np.unique`` itself, so the dtype guard protects nothing), but on an all-binary
+   variant of this DGP (every covariate Bernoulli, same structure and coefficients),
+   driven through the real ``GraphBuilderNode`` at the guided default B=20 over the
+   same 20-point sweep, chisq did NOT improve recovery: mean F1 0.943 vs 0.953,
+   mean SHD 0.70 vs 0.60, one more withheld run (5 REVIEW vs fisherz's 4), with the
+   backdoor set correct 20/20, zero reversed edges and zero invented common causes
+   under BOTH tests (paired per-seed: fisherz strictly better on 3 sweep points,
+   chisq on 1 — within seed noise). Selection is deliberately LEFT AS IS: the dead
+   ``chisq`` branch is a code-shape defect, not a measured recovery loss, and a
+   selection change would re-open the fix-1/fix-2 measured bands for no gain.
 
 The remaining characterization tests (2, 3, 5) PIN CURRENT BEHAVIOUR SO A FIX IS
 NOTICED. They are not an endorsement of it. If one fails because someone corrected the
@@ -532,7 +545,10 @@ class TestBinaryFramesGetAGaussianTest:
 
     ``chisq`` is unreachable for any frame PC can actually run on: the branch needs a
     non-numeric dtype, but PC consumes ``data.values``. Binary treatment/outcome
-    columns are therefore tested with Fisher's z, a linear-Gaussian test."""
+    columns are therefore tested with Fisher's z, a linear-Gaussian test.
+
+    Measured 2026-09-02 (item 5): routing all-binary frames to chisq does not
+    improve recovery on this benchmark, so the selection — and this pin — stand."""
 
     def test_all_binary_frame_selects_fisherz(self) -> None:
         rng = np.random.default_rng(0)
