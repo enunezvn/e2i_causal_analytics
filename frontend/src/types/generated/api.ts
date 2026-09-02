@@ -7229,7 +7229,7 @@ export interface components {
             outcome_nodes?: string[];
             /**
              * Adjustment Sets
-             * @description Valid backdoor adjustment sets
+             * @description Adjustment sets the estimate conditions on: the DAG's backdoor sets unioned with every declared (guarantee-channel) covariate
              */
             adjustment_sets?: string[][];
             /**
@@ -7237,6 +7237,11 @@ export interface components {
              * @description Graphviz DOT for rendering
              */
             dag_dot?: string | null;
+            /**
+             * Edge Provenance
+             * @description Per-edge provenance for every edge of the shipped DAG (required_prior / discovered / curated). Empty on legacy payloads.
+             */
+            edge_provenance?: components["schemas"]["EdgeProvenanceModel"][];
         };
         /** CausalEffect */
         CausalEffect: {
@@ -9160,6 +9165,28 @@ export interface components {
             feature: string;
             /** Importance */
             importance: number;
+        };
+        /**
+         * EdgeProvenanceModel
+         * @description Why one edge is in the shipped DAG (fix 4 — per-edge provenance).
+         */
+        EdgeProvenanceModel: {
+            /**
+             * Source
+             * @description Edge source variable
+             */
+            source: string;
+            /**
+             * Target
+             * @description Edge target variable
+             */
+            target: string;
+            /**
+             * Provenance
+             * @description required_prior = asserted by the guided-discovery REQUIRED prior (the estimand edge, plus any anchored confounders); discovered = contributed by the data (accepted discovery edge or corroborated AUGMENT edge); curated = drawn by the manual/domain constructor
+             * @enum {string}
+             */
+            provenance: "required_prior" | "discovered" | "curated";
         };
         /**
          * EffectHeterogeneityResponse
