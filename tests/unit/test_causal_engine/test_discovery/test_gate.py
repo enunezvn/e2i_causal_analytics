@@ -10,6 +10,7 @@ import pytest
 
 from src.causal_engine.discovery.base import (
     AlgorithmResult,
+    CausalPriorKnowledge,
     DiscoveredEdge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
@@ -92,6 +93,56 @@ class TestGateEvaluation:
         assert d["n_rejected_edges"] == 1
 
 
+@pytest.fixture
+def high_confidence_result():
+    """Create a high-confidence discovery result.
+
+    Module-level (not class-scoped) so both ``TestDiscoveryGate`` and
+    ``TestCorroboration`` can request it.
+    """
+    config = DiscoveryConfig()
+    dag = nx.DiGraph()
+    dag.add_edges_from([("A", "B"), ("B", "C"), ("A", "C")])
+
+    edges = [
+        DiscoveredEdge(source="A", target="B", confidence=0.95, algorithm_votes=3),
+        DiscoveredEdge(source="B", target="C", confidence=0.90, algorithm_votes=3),
+        DiscoveredEdge(source="A", target="C", confidence=0.85, algorithm_votes=2),
+    ]
+
+    algorithm_results = [
+        AlgorithmResult(
+            algorithm=DiscoveryAlgorithmType.GES,
+            adjacency_matrix=np.zeros((3, 3)),
+            edge_list=[("A", "B"), ("B", "C"), ("A", "C")],
+            runtime_seconds=1.0,
+            converged=True,
+        ),
+        AlgorithmResult(
+            algorithm=DiscoveryAlgorithmType.PC,
+            adjacency_matrix=np.zeros((3, 3)),
+            edge_list=[("A", "B"), ("B", "C"), ("A", "C")],
+            runtime_seconds=1.5,
+            converged=True,
+        ),
+        AlgorithmResult(
+            algorithm=DiscoveryAlgorithmType.LINGAM,
+            adjacency_matrix=np.zeros((3, 3)),
+            edge_list=[("A", "B"), ("B", "C")],
+            runtime_seconds=2.0,
+            converged=True,
+        ),
+    ]
+
+    return DiscoveryResult(
+        success=True,
+        config=config,
+        ensemble_dag=dag,
+        edges=edges,
+        algorithm_results=algorithm_results,
+    )
+
+
 class TestDiscoveryGate:
     """Test DiscoveryGate class."""
 
@@ -99,51 +150,6 @@ class TestDiscoveryGate:
     def gate(self):
         """Create a DiscoveryGate with default config."""
         return DiscoveryGate()
-
-    @pytest.fixture
-    def high_confidence_result(self):
-        """Create a high-confidence discovery result."""
-        config = DiscoveryConfig()
-        dag = nx.DiGraph()
-        dag.add_edges_from([("A", "B"), ("B", "C"), ("A", "C")])
-
-        edges = [
-            DiscoveredEdge(source="A", target="B", confidence=0.95, algorithm_votes=3),
-            DiscoveredEdge(source="B", target="C", confidence=0.90, algorithm_votes=3),
-            DiscoveredEdge(source="A", target="C", confidence=0.85, algorithm_votes=2),
-        ]
-
-        algorithm_results = [
-            AlgorithmResult(
-                algorithm=DiscoveryAlgorithmType.GES,
-                adjacency_matrix=np.zeros((3, 3)),
-                edge_list=[("A", "B"), ("B", "C"), ("A", "C")],
-                runtime_seconds=1.0,
-                converged=True,
-            ),
-            AlgorithmResult(
-                algorithm=DiscoveryAlgorithmType.PC,
-                adjacency_matrix=np.zeros((3, 3)),
-                edge_list=[("A", "B"), ("B", "C"), ("A", "C")],
-                runtime_seconds=1.5,
-                converged=True,
-            ),
-            AlgorithmResult(
-                algorithm=DiscoveryAlgorithmType.LINGAM,
-                adjacency_matrix=np.zeros((3, 3)),
-                edge_list=[("A", "B"), ("B", "C")],
-                runtime_seconds=2.0,
-                converged=True,
-            ),
-        ]
-
-        return DiscoveryResult(
-            success=True,
-            config=config,
-            ensemble_dag=dag,
-            edges=edges,
-            algorithm_results=algorithm_results,
-        )
 
     @pytest.fixture
     def low_confidence_result(self):
@@ -465,3 +471,98 @@ class TestDiscoveryGate:
             eval_connected.metadata["structure_score"]
             >= eval_disconnected.metadata["structure_score"]
         )
+
+
+class TestCorroboration:
+    """Fix 2: single-algorithm runs are scored by bootstrap stability, not
+    self-agreement. Multi-algorithm agreement is unchanged (fixtures above)."""
+
+    @staticmethod
+    def _single_result(edges, prior_required=None, stabilities=None):
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC],
+            prior_knowledge=(
+                CausalPriorKnowledge(required_edges=prior_required) if prior_required else None
+            ),
+        )
+        stabilities = stabilities or {}
+        discovered = []
+        dag = nx.DiGraph()
+        for source, target in edges:
+            stability = stabilities.get((source, target))
+            discovered.append(
+                DiscoveredEdge(
+                    source=source,
+                    target=target,
+                    confidence=stability if stability is not None else 1.0,
+                    algorithm_votes=1,
+                    algorithms=["pc"],
+                    bootstrap_stability=stability,
+                )
+            )
+            dag.add_edge(source, target)
+        return DiscoveryResult(
+            success=True,
+            config=config,
+            ensemble_dag=dag,
+            edges=discovered,
+            algorithm_results=[
+                AlgorithmResult(
+                    algorithm=DiscoveryAlgorithmType.PC,
+                    adjacency_matrix=np.zeros((2, 2), dtype=int),
+                    edge_list=list(edges),
+                    runtime_seconds=0.01,
+                    converged=True,
+                )
+            ],
+        )
+
+    def test_uncorroborated_single_run_is_rejected(self):
+        result = self._single_result([("a", "b")])
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.decision == GateDecision.REJECT
+        assert evaluation.metadata["corroboration_score"] == 0.0
+        assert evaluation.metadata["corroboration_basis"] == "uncorroborated_single_run"
+        assert evaluation.high_confidence_edges == []
+
+    def test_stable_beyond_prior_edges_accept(self):
+        edges = [("t", "y"), ("x", "t"), ("x", "y")]
+        result = self._single_result(
+            edges,
+            prior_required=[("t", "y")],
+            stabilities={("t", "y"): 1.0, ("x", "t"): 0.95, ("x", "y"): 0.9},
+        )
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.decision == GateDecision.ACCEPT
+        assert evaluation.metadata["corroboration_basis"] == "bootstrap_stability"
+        assert evaluation.metadata["corroboration_score"] == pytest.approx(0.925)
+
+    def test_unstable_beyond_prior_edges_do_not_accept(self):
+        edges = [("t", "y"), ("q", "r")]
+        result = self._single_result(
+            edges,
+            prior_required=[("t", "y")],
+            stabilities={("t", "y"): 1.0, ("q", "r"): 0.15},
+        )
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.decision in (GateDecision.REJECT, GateDecision.REVIEW)
+        # The always-present required edge must not smuggle the run into
+        # AUGMENT: it is prior-required, hence not augment-eligible.
+        assert evaluation.high_confidence_edges == []
+
+    def test_prior_determined_run_renormalizes_and_accepts(self):
+        edges = [("t", "y"), ("c", "t"), ("c", "y")]
+        result = self._single_result(
+            edges,
+            prior_required=edges,
+            stabilities=dict.fromkeys(edges, 1.0),
+        )
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.decision == GateDecision.ACCEPT
+        assert evaluation.metadata["corroboration_basis"] == "prior_determined"
+
+    def test_multi_algorithm_agreement_still_reports(self, high_confidence_result):
+        evaluation = DiscoveryGate().evaluate(high_confidence_result)
+        assert evaluation.metadata["corroboration_basis"] == "algorithm_agreement"
+        assert "corroboration_score" in evaluation.metadata
+        assert "agreement_score" not in evaluation.metadata
