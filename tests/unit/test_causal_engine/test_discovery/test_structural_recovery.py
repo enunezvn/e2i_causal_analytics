@@ -104,10 +104,11 @@ assertions.
    ``GateEvaluation.to_dict`` serialized only ``n_high_confidence_edges`` (a
    count) but not the edges themselves, so graph_builder's AUGMENT branch
    iterated an empty list and shipped the bare manual DAG — indistinguishable
-   from REVIEW. Before this fix no guided run ever reached AUGMENT with an
-   effect, so the dead branch was unreachable; n=500 seed 8 is the first case
-   that exercises it. ``to_dict`` now also serializes ``high_confidence_edges``,
-   so AUGMENT ships the manual DAG plus its corroborated beyond-prior edges:
+   from REVIEW. n=500 seed 8 is the first honest-priors case that reaches
+   AUGMENT at all, and before this fix it reached that decision without ever
+   actually augmenting the shipped DAG. ``to_dict`` now also serializes
+   ``high_confidence_edges``, so AUGMENT ships the manual DAG plus its
+   corroborated beyond-prior edges:
    n=500 seed 8 now ships the 5-edge prior DAG plus the corroborated
    ``prognostic_only -> persistent_180d`` edge, at SHD 1 (previously SHD 2 as a
    bare manual DAG, and counted as withheld). Of the honest-priors sweep's two

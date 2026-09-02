@@ -618,11 +618,16 @@ class TestCorroboration:
 
         as_dict = evaluation.to_dict()
         assert as_dict["n_high_confidence_edges"] == 1
-        assert as_dict["high_confidence_edges"] == [
-            {
-                "source": "x",
-                "target": "y",
-                "confidence": edge.confidence,
-                "bootstrap_stability": 0.9,
-            }
-        ]
+        # Exact-shape pin: to_dict() delegates to DiscoveredEdge.to_dict(), so the
+        # serialized entry must equal the edge's own dict representation exactly.
+        assert as_dict["high_confidence_edges"] == [edge.to_dict()]
+        # The four semantically load-bearing fields the consumer actually reads
+        # (graph_builder._build_dag_with_discovery: edge.get("source") /
+        # .get("target")) or that document the gate's reasoning, spelled out
+        # explicitly so this test keeps stating the consumer contract in the
+        # reader's face even though the shape now comes from a shared helper.
+        (entry,) = as_dict["high_confidence_edges"]
+        assert entry["source"] == "x"
+        assert entry["target"] == "y"
+        assert entry["confidence"] == edge.confidence
+        assert entry["bootstrap_stability"] == 0.9

@@ -150,14 +150,12 @@ class TestAugmentActuallyAugments:
         assert result.get("status") != "failed", result.get("error_message")
         gate_evaluation = result["discovery_gate_evaluation"]
         assert gate_evaluation["decision"] == "augment"
-        assert gate_evaluation["high_confidence_edges"] == [
-            {
-                "source": "z",
-                "target": "y",
-                "confidence": 0.9,
-                "bootstrap_stability": 0.9,
-            }
-        ]
+        # Consumer projection only — exact-dict-shape ownership lives in
+        # test_gate.py::TestCorroboration::test_to_dict_serializes_high_confidence_edges.
+        # This test cares that graph_builder can actually read the edge it consumes
+        # (source/target), not the full serialized shape.
+        high_conf_edges = gate_evaluation["high_confidence_edges"]
+        assert [(e["source"], e["target"]) for e in high_conf_edges] == [("z", "y")]
 
         manual_edges = {("t", "y"), ("c", "t"), ("c", "y")}
         shipped_edges = set(result["causal_graph"]["edges"])
