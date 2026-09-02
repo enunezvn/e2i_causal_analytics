@@ -298,7 +298,10 @@ class DiscoveryRunner:
 
             total_runtime = time.time() - start_time
 
-            # Calculate algorithm agreement
+            # Calculate algorithm agreement. On a bootstrapped single-algorithm
+            # run, _maybe_bootstrap has already overwritten e.confidence with
+            # bootstrap_stability above, so this reports mean bootstrap
+            # stability rather than the (vacuous) 1.0 multi-vote agreement.
             n_converged = len([r for r in algorithm_results if r.converged])
             agreement = 0.0
             if edges and n_converged > 0:

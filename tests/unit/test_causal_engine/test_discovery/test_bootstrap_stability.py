@@ -144,6 +144,84 @@ class _Flaky(BaseDiscoveryAlgorithm):
         raise RuntimeError("degenerate resample")
 
 
+class _PartialFailureAlgorithm(BaseDiscoveryAlgorithm):
+    """Primary call converges with a->b. Of the 10 resample calls that
+    follow: calls 1-2 raise, call 3 returns converged=False, and of the
+    remaining 7 (calls 4-10), calls 4-7 recover a->b and calls 8-10 do not.
+    Pins the stability denominator to n_succeeded (7), not n_resamples (10):
+    4/7 != 4/10."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def algorithm_type(self) -> DiscoveryAlgorithmType:
+        return DiscoveryAlgorithmType.PC
+
+    def supports_latent_confounders(self) -> bool:
+        return False
+
+    def discover(self, data: pd.DataFrame, config: DiscoveryConfig) -> AlgorithmResult:
+        self.calls += 1
+        n = len(data.columns)
+        if self.calls == 1:
+            return AlgorithmResult(
+                algorithm=DiscoveryAlgorithmType.PC,
+                adjacency_matrix=np.zeros((n, n), dtype=int),
+                edge_list=[("a", "b")],
+                runtime_seconds=0.0,
+                converged=True,
+            )
+        resample_call = self.calls - 1  # 1..10
+        if resample_call in (1, 2):
+            raise RuntimeError("degenerate resample")
+        if resample_call == 3:
+            return AlgorithmResult(
+                algorithm=DiscoveryAlgorithmType.PC,
+                adjacency_matrix=np.zeros((n, n), dtype=int),
+                edge_list=[],
+                runtime_seconds=0.0,
+                converged=False,
+            )
+        edges = [("a", "b")] if resample_call <= 7 else []
+        return AlgorithmResult(
+            algorithm=DiscoveryAlgorithmType.PC,
+            adjacency_matrix=np.zeros((n, n), dtype=int),
+            edge_list=edges,
+            runtime_seconds=0.0,
+            converged=True,
+        )
+
+
+class _FixedAlgorithm(BaseDiscoveryAlgorithm):
+    """Always converges and returns the same fixed edge list. Used to
+    populate a >=2-algorithm ensemble; tracks call count so a test can
+    assert it was never re-invoked for bootstrap resampling."""
+
+    def __init__(self, algo_type: DiscoveryAlgorithmType, edges: list[tuple[str, str]]) -> None:
+        self._algo_type = algo_type
+        self._edges = edges
+        self.calls = 0
+
+    @property
+    def algorithm_type(self) -> DiscoveryAlgorithmType:
+        return self._algo_type
+
+    def supports_latent_confounders(self) -> bool:
+        return False
+
+    def discover(self, data: pd.DataFrame, config: DiscoveryConfig) -> AlgorithmResult:
+        self.calls += 1
+        n = len(data.columns)
+        return AlgorithmResult(
+            algorithm=self._algo_type,
+            adjacency_matrix=np.zeros((n, n), dtype=int),
+            edge_list=self._edges,
+            runtime_seconds=0.0,
+            converged=True,
+        )
+
+
 def _frame() -> pd.DataFrame:
     rng = np.random.default_rng(0)
     return pd.DataFrame({c: rng.normal(size=40) for c in ("a", "b", "c", "d")})
@@ -189,3 +267,48 @@ class TestRunnerBootstrapStability:
         assert all(e.bootstrap_stability is None for e in result.edges)
         assert all(e.confidence == 1.0 for e in result.edges)
         assert result.metadata["bootstrap"] is None
+
+    @pytest.mark.asyncio
+    async def test_stability_denominator_is_succeeded_not_total_resamples(self) -> None:
+        """Of 10 resample calls: 2 raise, 1 returns converged=False, and of
+        the 7 that succeed, 4 recover a->b. Stability must be 4/7 (over the
+        SUCCEEDED resamples) — flipping the denominator to n_resamples would
+        give 0.4 instead of ~0.571, so this fails loudly if runner.py divides
+        by the wrong count."""
+        runner = DiscoveryRunner(enable_tracing=False)
+        algo = _PartialFailureAlgorithm()
+        runner._algorithms[DiscoveryAlgorithmType.PC] = algo
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC], bootstrap_resamples=10
+        )
+        result = await runner.discover_dag(_frame(), config)
+
+        by_edge = {(e.source, e.target): e for e in result.edges}
+        assert by_edge[("a", "b")].bootstrap_stability == pytest.approx(4 / 7)
+        assert by_edge[("a", "b")].confidence == pytest.approx(4 / 7)
+        assert result.metadata["bootstrap"] == {"n_resamples": 10, "n_succeeded": 7}
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_skipped_when_multiple_algorithms_converge(self) -> None:
+        """Agreement across >=2 converged algorithms is already a corroboration
+        signal, so bootstrap must not run — and, more precisely, the scripted
+        doubles must never be re-invoked for resampling at all."""
+        runner = DiscoveryRunner(enable_tracing=False)
+        pc = _FixedAlgorithm(DiscoveryAlgorithmType.PC, [("a", "b")])
+        ges = _FixedAlgorithm(DiscoveryAlgorithmType.GES, [("a", "b")])
+        runner._algorithms[DiscoveryAlgorithmType.PC] = pc
+        runner._algorithms[DiscoveryAlgorithmType.GES] = ges
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC, DiscoveryAlgorithmType.GES],
+            bootstrap_resamples=10,
+        )
+        result = await runner.discover_dag(_frame(), config)
+
+        assert "bootstrap" not in result.metadata
+        assert all(e.bootstrap_stability is None for e in result.edges)
+        by_edge = {(e.source, e.target): e for e in result.edges}
+        # Both algorithms agree on a->b: untouched ensemble-vote confidence.
+        assert by_edge[("a", "b")].confidence == 1.0
+        # Neither double was called beyond its one primary discovery run.
+        assert pc.calls == 1
+        assert ges.calls == 1
