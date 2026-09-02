@@ -627,7 +627,21 @@ class GraphBuilderNode:
         post-treatment variable would bias the estimate — unreachable under
         guided tiers, guards non-tiered DAG shapes). With nothing declared the
         sets pass through untouched, preserving the validated-empty ``[[]]``
-        backdoor semantics for randomized designs."""
+        backdoor semantics for randomized designs.
+
+        DELIBERATE LIMIT (codex iter-1 finding 1, rebutted by design): the
+        merged set is NOT re-checked against the backdoor criterion, because
+        declaration wins over DAG evidence by design — dropping a declared
+        covariate when the (possibly wrong) DAG disagrees is exactly the
+        measured-and-rejected 7/20-confounded failure mode. The residual risk
+        is a declared pre-treatment COLLIDER whose parents are latent or
+        undeclared (M-bias): under the agent API's declare-everything wiring a
+        collider's in-frame parents are co-declared and block the opened path,
+        and the OLD wiring adjusted for every declared covariate with no guard
+        at all, so this is not a regression. The sanctioned mechanism for
+        excluding a declared collider/mediator is the trust-gated
+        ``adjustment_set_policy`` node (STRICT mode; M-bias detection tracked
+        at #359), which runs downstream of this union."""
         declared = [
             str(c) for c in (state.get("modeled_confounders") or state.get("confounders") or [])
         ]
@@ -668,7 +682,15 @@ class GraphBuilderNode:
         through discovery (a clean ACCEPT, or AUGMENT's manual-plus-extras);
         on every other path the DAG is the manual domain construction and each
         edge is honestly 'curated' — even where a prior happened to assert the
-        same edge, the shipped graph did not come from it."""
+        same edge, the shipped graph did not come from it.
+
+        'discovered' additionally requires the edge to be one the ensemble
+        actually DREW (codex iter-1 HIGH): the ACCEPT path appends the estimand
+        edge for consistency when discovery omitted it, and a legacy full
+        re-add can draw curated confounder edges onto the discovered DAG —
+        crediting either to the data would be the same overstatement the
+        dag_source label used to make. Such appended edges are 'curated'
+        (or 'required_prior' where a prior asserted them)."""
         prior_edges: Set[Tuple[str, str]] = set()
         if (
             discovery_result is not None
@@ -679,6 +701,9 @@ class GraphBuilderNode:
                 (source, target)
                 for source, target in (discovery_result.config.prior_knowledge.required_edges or [])
             }
+        ensemble_edges: Set[Tuple[str, str]] = set()
+        if discovery_result is not None and discovery_result.ensemble_dag is not None:
+            ensemble_edges = set(discovery_result.ensemble_dag.edges())
         decision = gate_evaluation.get("decision") if gate_evaluation else None
         shipped_via_discovery = not dag_overridden and decision in (
             GateDecision.ACCEPT.value,
@@ -690,7 +715,7 @@ class GraphBuilderNode:
         def _label(edge: Tuple[str, str]) -> str:
             if shipped_via_discovery and edge in prior_edges:
                 return "required_prior"
-            if accepted or edge in augmented:
+            if (accepted and edge in ensemble_edges) or edge in augmented:
                 return "discovered"
             return "curated"
 

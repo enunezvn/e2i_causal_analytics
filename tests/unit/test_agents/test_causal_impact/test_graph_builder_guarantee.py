@@ -238,6 +238,54 @@ class TestEdgeProvenance:
         assert set(provenance.values()) == {"curated"}
 
     @pytest.mark.asyncio
+    async def test_appended_estimand_edge_is_not_credited_to_the_data(self) -> None:
+        """codex iter-1 HIGH: on ACCEPT, graph_builder appends treatment->outcome
+        for estimand consistency when discovery omitted it. Without a guided
+        prior (unguided caller) that edge is neither prior-required nor
+        ensemble-drawn — labeling it 'discovered' would credit the data with an
+        edge it never produced. It must read 'curated'."""
+        node = GraphBuilderNode()
+        node._discovery_runner = _AcceptingRunner(  # type: ignore[assignment]
+            [("c1", "t"), ("c1", "y")]  # ensemble NEVER drew t->y
+        )
+        _accept_gate(node)
+
+        result = await node.execute(_state(discovery_guided=False))
+
+        provenance = {
+            (e["source"], e["target"]): e["provenance"]
+            for e in result["causal_graph"]["edge_provenance"]
+        }
+        # Unguided: no prior exists, so nothing may claim required_prior.
+        assert ("t", "y") in provenance
+        assert provenance[("t", "y")] == "curated"
+        assert provenance[("c1", "t")] == "discovered"
+        assert provenance[("c1", "y")] == "discovered"
+
+    @pytest.mark.asyncio
+    async def test_legacy_curated_readd_on_accept_is_not_credited_to_the_data(self) -> None:
+        """codex iter-1 HIGH, second half: a legacy caller (no anchored key)
+        keeps the full curated re-add on ACCEPT — confounder edges drawn onto
+        the discovered DAG by that re-add are curated assertions, not data."""
+        node = GraphBuilderNode()
+        node._discovery_runner = _AcceptingRunner([("t", "y")])  # type: ignore[assignment]
+        _accept_gate(node)
+
+        state = _state(discovery_guided=False)
+        del state["anchored_confounders"]  # legacy shape
+        result = await node.execute(state)
+
+        provenance = {
+            (e["source"], e["target"]): e["provenance"]
+            for e in result["causal_graph"]["edge_provenance"]
+        }
+        assert provenance[("t", "y")] == "discovered"  # ensemble drew it
+        assert provenance[("c1", "t")] == "curated"  # legacy re-add drew these
+        assert provenance[("c1", "y")] == "curated"
+        assert provenance[("c2", "t")] == "curated"
+        assert provenance[("c2", "y")] == "curated"
+
+    @pytest.mark.asyncio
     async def test_rejected_discovery_ships_all_curated_manual_dag(self) -> None:
         """When the gate withholds discovery, the manual DAG's edges are domain
         assertions — none may claim discovery or prior provenance."""
