@@ -595,3 +595,34 @@ class TestCorroboration:
         assert ("x", "y") in high_conf_tuples
         assert ("t", "y") not in high_conf_tuples  # prior-required exclusion
         assert ("q", "r") not in high_conf_tuples  # below augment_edge_threshold
+
+    def test_to_dict_serializes_high_confidence_edges(self):
+        """``to_dict()`` used to serialize only ``n_high_confidence_edges`` (a
+        count), so graph_builder's AUGMENT branch — which reads
+        ``gate_evaluation.get("high_confidence_edges", [])`` — always got an
+        empty list and shipped the bare manual DAG. AUGMENT can only actually
+        augment once the edges themselves round-trip through the dict, in the
+        dict shape the consumer reads (``edge.get("source")`` / ``.get("target")``)."""
+        edges = [("t", "y"), ("x", "y"), ("q", "r")]
+        result = self._single_result(
+            edges,
+            prior_required=[("t", "y")],
+            stabilities={("t", "y"): 1.0, ("x", "y"): 0.9, ("q", "r"): 0.3},
+        )
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.decision == GateDecision.AUGMENT
+        assert evaluation.confidence == pytest.approx(0.709333, abs=1e-5)
+        assert len(evaluation.high_confidence_edges) == 1
+        (edge,) = evaluation.high_confidence_edges
+        assert (edge.source, edge.target) == ("x", "y")
+
+        as_dict = evaluation.to_dict()
+        assert as_dict["n_high_confidence_edges"] == 1
+        assert as_dict["high_confidence_edges"] == [
+            {
+                "source": "x",
+                "target": "y",
+                "confidence": edge.confidence,
+                "bootstrap_stability": 0.9,
+            }
+        ]

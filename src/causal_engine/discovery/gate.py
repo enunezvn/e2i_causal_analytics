@@ -89,6 +89,15 @@ class GateEvaluation:
             "confidence": self.confidence,
             "reasons": self.reasons,
             "n_high_confidence_edges": len(self.high_confidence_edges),
+            "high_confidence_edges": [
+                {
+                    "source": e.source,
+                    "target": e.target,
+                    "confidence": e.confidence,
+                    "bootstrap_stability": e.bootstrap_stability,
+                }
+                for e in self.high_confidence_edges
+            ],
             "n_rejected_edges": len(self.rejected_edges),
             "warnings": self.warnings,
             "metadata": self.metadata,

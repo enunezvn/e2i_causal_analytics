@@ -36,11 +36,15 @@ assertions.
 1. CAPABILITY (asserted, ``TestGuidedRecoveryWithHonestPriors``): when the declared
    confounders are the true ones, guided PC recovers the DAG essentially correctly.
    Over a 20-run sweep (n = 500 and n = 2000, seeds 1-10), re-measured 2026-09-02
-   through the corroboration gate at the shipped guided default B=20 (item 4):
+   through the corroboration gate at the shipped guided default B=20, with the
+   AUGMENT fix (item 4) also in effect:
        gate ACCEPTed       18/20        (n=500 seed 2 REVIEW, seed 8 AUGMENT)
+       gate shipped a discovered edge
+                           19/20        (the 18 ACCEPTs plus seed 8 AUGMENT, which
+                                         now actually augments — see item 4)
        exact recovery      11/20        (so exactness is NOT asserted — it is seed-dependent)
        SHD                 max 1 and mean 0.39 over the 18 ACCEPTed runs;
-                           max 2 and mean 0.55 over all 20 shipped DAGs
+                           max 2 and mean 0.5 over all 20 shipped DAGs
        reversed edges      0/20         (never inverts an arrow)
        non-confounder placed as a common cause
                            0/20         (never invents confounding)
@@ -49,13 +53,13 @@ assertions.
                                          every run — no superset, no omission)
    The invariants that hold in every run are what this class asserts: no reversed
    edge, no invented common cause, no omitted true confounder, and SHD <= 1 whenever
-   the gate ACCEPTs. The residual errors on accepted runs are single spurious
-   covariate-covariate edges or a missed instrument edge, neither of which reaches the
-   backdoor set. On the two withheld runs the manual DAG ships instead, a strict
-   SUBSET of the true DAG missing the two beyond-prior true edges — a recovery loss,
-   not a correctness one, which is why the assertion there is subset-safety rather
-   than SHD. This is the claim to protect against regression; a tighter assertion
-   would be overfitted to the seeds.
+   the gate ACCEPTs or AUGMENTs. The residual errors on accepted/augmented runs are
+   single spurious covariate-covariate edges or a missed instrument edge, neither of
+   which reaches the backdoor set. On the one withheld run (n=500 seed 2, REVIEW) the
+   bare manual DAG ships instead, a strict SUBSET of the true DAG missing both
+   beyond-prior true edges — a recovery loss, not a correctness one, which is why the
+   assertion there is subset-safety rather than SHD. This is the claim to protect
+   against regression; a tighter assertion would be overfitted to the seeds.
 
 2. KNOWN GAP (pinned as CHARACTERIZATION, ``TestProductionWiringIsPriorDetermined``):
    the API declares EVERY covariate a confounder (``modeled_confounders=covariates``,
@@ -96,12 +100,19 @@ assertions.
    Prior-determined runs (every edge required) renormalize over edge
    confidence + structure and still ACCEPT — the wiring itself is gap 2.
 
-   Uncovered while measuring the above, and NOT fixed here: AUGMENT is inert.
-   ``GateEvaluation.to_dict`` serializes ``n_high_confidence_edges`` (a count)
-   but not the edges, so graph_builder's AUGMENT branch iterates an empty list
-   and ships the bare manual DAG — indistinguishable from REVIEW. Before this
-   fix no guided run ever reached AUGMENT, so the dead branch was unreachable;
-   n=500 seed 8 is the first case that exercises it.
+   Also fixed in this branch (2026-09-02): AUGMENT used to be inert.
+   ``GateEvaluation.to_dict`` serialized only ``n_high_confidence_edges`` (a
+   count) but not the edges themselves, so graph_builder's AUGMENT branch
+   iterated an empty list and shipped the bare manual DAG — indistinguishable
+   from REVIEW. Before this fix no guided run ever reached AUGMENT with an
+   effect, so the dead branch was unreachable; n=500 seed 8 is the first case
+   that exercises it. ``to_dict`` now also serializes ``high_confidence_edges``,
+   so AUGMENT ships the manual DAG plus its corroborated beyond-prior edges:
+   n=500 seed 8 now ships the 5-edge prior DAG plus the corroborated
+   ``prognostic_only -> persistent_180d`` edge, at SHD 1 (previously SHD 2 as a
+   bare manual DAG, and counted as withheld). Of the honest-priors sweep's two
+   non-ACCEPT runs, only n=500 seed 2 (REVIEW) still withholds discovery
+   entirely — the withheld count for that sweep is now 1, not 2.
 
 5. KNOWN GAP (pinned, ``TestBinaryFramesGetAGaussianTest``): ``_select_independence_test``
    returns ``fisherz`` for an all-binary numeric frame; the ``chisq`` branch needs a
@@ -288,12 +299,16 @@ class TestGuidedRecoveryWithHonestPriors:
     These invariants are measured on the discovery + GATE system at the wiring the
     agent API ships — ``bootstrap_resamples`` at graph_builder's guided default of 20
     (``_build_dag`` deliberately omits the state key). The gate is therefore part of
-    what is under test: it decides whether the DISCOVERED DAG ships at all, and a
-    withheld discovery ships the manual/prior DAG instead. Measured band at B=20:
-    18/20 ACCEPT (n=2000: 10/10; n=500: 8/10 — seed 2 REVIEW, seed 8 AUGMENT). That
-    band is user-accepted; do not chase 20/20. Both withheld runs are the same two
-    beyond-prior true edges going bootstrap-unstable at n=500, which costs recovery,
-    not correctness — the fallback is a strict subset of the true DAG."""
+    what is under test: it decides whether the DISCOVERED DAG ships at all, an AUGMENT
+    decision ships the manual DAG plus its corroborated beyond-prior edges, and a
+    withheld (REVIEW/REJECT) discovery ships the bare manual/prior DAG instead.
+    Measured band at B=20: 18/20 ACCEPT (n=2000: 10/10; n=500: 8/10 — seed 2 REVIEW,
+    seed 8 AUGMENT). That band is user-accepted; do not chase 20/20. Both non-ACCEPT
+    runs are the same two beyond-prior true edges going bootstrap-unstable at n=500;
+    seed 8's edge (``prognostic_only -> persistent_180d``) is stable enough to clear
+    AUGMENT's own threshold and ships anyway, while seed 2's is not and the fallback
+    (a strict subset of the true DAG) ships instead — only seed 2 is actually
+    withheld."""
 
     SWEEP = [(n, seed) for n in (500, 2000) for seed in range(1, 11)]
 
@@ -312,19 +327,17 @@ class TestGuidedRecoveryWithHonestPriors:
 
     @pytest.mark.asyncio
     async def test_structural_error_stays_within_one_edge(self) -> None:
-        """Gate-aware. Where the gate ACCEPTs, the DISCOVERED DAG ships and the old
-        bar holds unchanged: SHD <= 1. Where it withholds the discovery, the manual
-        DAG ships instead, and the bar that matters is that the fallback is SAFE — a
-        strict subset of the true DAG, never spurious structure. Measured at B=20:
-        18 accepted (SHD <= 1, exactness 11/20 so it is not asserted), 2 withheld at
-        n=500 (seed 2 REVIEW, seed 8 AUGMENT), both shipping the 5-edge prior DAG at
-        SHD 2 because the two beyond-prior true edges are bootstrap-unstable there.
-        Mean SHD over all 20 shipped DAGs 0.55.
-
-        AUGMENT counts as WITHHELD, which is a measured fact rather than a taxonomy
-        choice: ``GateEvaluation.to_dict`` serializes only ``n_high_confidence_edges``
-        and not the edges, so graph_builder's AUGMENT branch augments with an empty
-        list and ships the bare manual DAG — byte-identical to REVIEW.
+        """Gate-aware. Where the gate ACCEPTs or AUGMENTs, a discovered DAG actually
+        ships — ACCEPT ships it directly, AUGMENT ships the manual DAG plus its
+        corroborated beyond-prior edges (fixed 2026-09-02: ``GateEvaluation.to_dict``
+        now serializes the edges, not just a count) — and the old bar holds: SHD <= 1.
+        Where the gate withholds entirely (REVIEW/REJECT), the bare manual DAG ships,
+        and the bar that matters is that the fallback is SAFE — a non-empty strict
+        subset of the true DAG, never spurious structure. Measured at B=20: 19/20
+        ship at SHD <= 1 (18 ACCEPT + 1 AUGMENT at n=500 seed 8, which now ships the
+        5-edge prior DAG plus the corroborated ``prognostic_only -> persistent_180d``
+        edge, SHD 1), 1 withheld (n=500 seed 2, REVIEW) shipping the bare 5-edge prior
+        DAG at SHD 2 because both beyond-prior true edges are bootstrap-unstable there.
         """
         distances = []
         withheld = []
@@ -332,20 +345,29 @@ class TestGuidedRecoveryWithHonestPriors:
             result = await _build_dag(_make_frame(n_rows, seed), TRUE_CONFOUNDERS)
             edges = result["edges"]
             shd = _structural_metrics(edges)["shd"]
-            if result["gate_decision"] == GateDecision.ACCEPT.value:
+            if result["gate_decision"] in (GateDecision.ACCEPT.value, GateDecision.AUGMENT.value):
                 assert shd <= 1.0, (
-                    f"n={n_rows} seed={seed} SHD={shd}: "
+                    f"n={n_rows} seed={seed} gate={result['gate_decision']} SHD={shd}: "
                     f"spurious={sorted(edges - TRUE_EDGES)} missing={sorted(TRUE_EDGES - edges)}"
                 )
             else:
                 withheld.append((n_rows, seed, result["gate_decision"]))
+                assert edges, (
+                    f"n={n_rows} seed={seed} gate={result['gate_decision']}: empty fallback DAG"
+                )
                 assert edges <= TRUE_EDGES, (
                     f"n={n_rows} seed={seed} gate={result['gate_decision']}: the fallback "
                     f"DAG invented structure {sorted(edges - TRUE_EDGES)}"
                 )
-            distances.append(shd)
-        assert len(withheld) <= 2, f"gate withheld more than the accepted band: {withheld}"
-        assert sum(distances) / len(distances) <= 0.6
+            distances.append((n_rows, seed, shd))
+        shds = [d for _, _, d in distances]
+        assert len(withheld) <= 1, (
+            f"gate withheld more than the accepted+augmented band: {withheld}"
+        )
+        mean_shd = sum(shds) / len(shds)
+        # Measured 2026-09-02 (post-fix): 0.5 (19/20 shipped runs at SHD <= 1, one
+        # withheld run at SHD 2). Bound carries modest headroom over the measurement.
+        assert mean_shd <= 0.55, f"mean SHD {mean_shd} over per-run SHDs {distances}"
 
     @pytest.mark.asyncio
     async def test_backdoor_set_never_omits_a_true_confounder(self) -> None:
