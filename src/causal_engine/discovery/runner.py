@@ -84,8 +84,8 @@ def _run_algorithm_in_process(
         "algorithm": result.algorithm.value,
         "adjacency_matrix": result.adjacency_matrix.tolist(),
         "edge_list": [
-            (e.source, e.target, e.edge_type.value, e.confidence)
-            for e in result.edge_list  # type: ignore[attr-defined]
+            (e.source, e.target, e.edge_type.value, e.confidence)  # type: ignore[attr-defined]
+            for e in result.edge_list
         ],
         "runtime_seconds": result.runtime_seconds,
         "converged": result.converged,
