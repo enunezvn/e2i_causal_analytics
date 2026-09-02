@@ -278,8 +278,13 @@ class DiscoveryGate:
         A single-algorithm run agrees with itself by construction, so its
         corroboration must come from bootstrap resample stability — measured
         over the edges the priors did NOT force (a required edge appears in
-        every resample, so its stability is assertion, not evidence). With no
-        stability data the run is uncorroborated and scores 0.0.
+        every resample, so its stability is assertion, not evidence). Whether
+        every edge is prior-required is checked BEFORE whether stability data
+        exists at all: a fully-prior-forced graph makes the resample axis
+        inapplicable regardless of whether bootstrap ran, so it must not be
+        mistaken for a run that had no evidence to offer. With no stability
+        data and at least one edge beyond the priors, the run is
+        uncorroborated and scores 0.0.
 
         Args:
             result: Discovery result
@@ -297,16 +302,17 @@ class DiscoveryGate:
             total = sum(e.algorithm_votes / n_algorithms for e in result.edges)
             return total / len(result.edges), "algorithm_agreement"
 
-        if all(e.bootstrap_stability is None for e in result.edges):
-            return 0.0, "uncorroborated_single_run"
-
         required = self._required_edge_set(result)
         beyond_prior = [e for e in result.edges if (e.source, e.target) not in required]
         if not beyond_prior:
             # Every edge is prior-required: resampling can neither confirm nor
-            # refute the graph, so this axis is not applicable — the caller
-            # renormalizes over the remaining components.
+            # refute the graph, so this axis is not applicable — whether or
+            # not bootstrap even ran — and the caller renormalizes over the
+            # remaining components.
             return 1.0, "prior_determined"
+
+        if all(e.bootstrap_stability is None for e in result.edges):
+            return 0.0, "uncorroborated_single_run"
 
         stabilities = [e.bootstrap_stability or 0.0 for e in beyond_prior]
         return sum(stabilities) / len(stabilities), "bootstrap_stability"

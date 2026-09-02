@@ -561,6 +561,16 @@ class TestCorroboration:
         assert evaluation.decision == GateDecision.ACCEPT
         assert evaluation.metadata["corroboration_basis"] == "prior_determined"
 
+    def test_prior_determined_without_bootstrap_still_renormalizes(self):
+        """Bootstrap OFF (or none succeeded) must not be conflated with
+        uncorroborated: when every discovered edge is prior-required, the
+        resample axis is inapplicable whether or not it ran at all."""
+        edges = [("t", "y"), ("c", "t"), ("c", "y")]
+        result = self._single_result(edges, prior_required=edges)
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.decision == GateDecision.ACCEPT
+        assert evaluation.metadata["corroboration_basis"] == "prior_determined"
+
     def test_multi_algorithm_agreement_still_reports(self, high_confidence_result):
         evaluation = DiscoveryGate().evaluate(high_confidence_result)
         assert evaluation.metadata["corroboration_basis"] == "algorithm_agreement"
