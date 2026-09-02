@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # with state key ``discovery_bootstrap_resamples``.
 DISCOVERY_BOOTSTRAP_RESAMPLES = 20
 
-from src.agents.causal_impact.state import CausalGraph, CausalImpactState
+from src.agents.causal_impact.state import CausalGraph, CausalImpactState, spread_safe
 from src.causal_engine import compute_dag_hash
 from src.causal_engine.discovery import (
     CausalPriorKnowledge,
@@ -222,22 +222,34 @@ class GraphBuilderNode:
             causal_graph["dag_version_hash"] = dag_version_hash
 
             # Latent-confounding diagnostic (FCI): surface the annotated
-            # payload on causal_graph, and raise a human-readable warning when
-            # the flag is up. Added AFTER the hash: compute_dag_hash keys off
-            # nodes/edges/treatment/outcome only, and the payload carries a
-            # nondeterministic runtime that must never perturb hashing.
+            # payload on causal_graph. Added AFTER the hash: compute_dag_hash
+            # keys off nodes/edges/treatment/outcome only, and the payload
+            # carries a nondeterministic runtime that must never perturb
+            # hashing. This node only annotates and logs — the human-readable
+            # warning is raised by InterpretationNode, which can corroborate
+            # the flag against the E-value sensitivity result (surfacing
+            # policy; see test_structural_recovery docstring item 6).
             new_warnings: List[str] = []
             if discovery_result is not None:
                 latent_diagnostic = discovery_result.metadata.get("latent_diagnostic")
                 if isinstance(latent_diagnostic, dict):
                     causal_graph["latent_diagnostic"] = latent_diagnostic
-                    if latent_diagnostic.get("flag"):
-                        new_warnings.append(self._latent_confounding_warning(treatment, outcome))
+                    # Base-rate observability: the agent-analyze job store TTL
+                    # is 8h, so this line (and the MLflow metric) is the
+                    # durable record of how often the flag fires live.
+                    logger.info(
+                        "latent_diagnostic ran=%s converged=%s flag=%s treatment=%s outcome=%s",
+                        latent_diagnostic.get("ran"),
+                        latent_diagnostic.get("converged"),
+                        latent_diagnostic.get("flag"),
+                        treatment,
+                        outcome,
+                    )
 
             latency_ms = (time.time() - start_time) * 1000
 
             result = {
-                **state,
+                **spread_safe(state),
                 "causal_graph": causal_graph,
                 "dag_version_hash": dag_version_hash,
                 "graph_builder_latency_ms": latency_ms,
@@ -265,7 +277,7 @@ class GraphBuilderNode:
             latency_ms = (time.time() - start_time) * 1000
             logger.error(f"Graph building failed: {e}")
             return {
-                **state,
+                **spread_safe(state),
                 "graph_builder_error": str(e),
                 "graph_builder_latency_ms": latency_ms,
                 "status": "failed",

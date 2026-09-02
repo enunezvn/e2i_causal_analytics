@@ -8,7 +8,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from src.agents.causal_impact.state import CausalImpactState, SensitivityAnalysis
+from src.agents.causal_impact.state import CausalImpactState, SensitivityAnalysis, spread_safe
 
 
 class SensitivityNode:
@@ -117,7 +117,7 @@ class SensitivityNode:
             latency_ms = (time.time() - start_time) * 1000
 
             return {
-                **state,
+                **spread_safe(state),
                 "sensitivity_analysis": sensitivity_analysis,
                 "sensitivity_latency_ms": latency_ms,
                 "current_phase": "interpreting",
@@ -126,7 +126,7 @@ class SensitivityNode:
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
             return {
-                **state,
+                **spread_safe(state),
                 "sensitivity_error": str(e),
                 "sensitivity_latency_ms": latency_ms,
                 "status": "failed",

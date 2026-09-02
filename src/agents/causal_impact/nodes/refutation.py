@@ -31,6 +31,7 @@ from src.agents.causal_impact.nodes._compute_budget import (
 from src.agents.causal_impact.state import (
     CausalImpactState,
     RefutationResults,
+    spread_safe,
 )
 from src.causal_engine import (
     DOWHY_AVAILABLE,
@@ -1401,7 +1402,7 @@ class RefutationNode:
                 error_message = None
 
             result = {
-                **state,
+                **spread_safe(state),
                 "refutation_results": refutation_results,
                 "refutation_latency_ms": latency_ms,
                 "current_phase": next_phase,
@@ -1437,7 +1438,7 @@ class RefutationNode:
                 extra={"details": re.details},
             )
             return {
-                **state,
+                **spread_safe(state),
                 "refutation_error": re.message,
                 "refutation_error_details": re.details,
                 "refutation_latency_ms": latency_ms,
@@ -1448,7 +1449,7 @@ class RefutationNode:
             latency_ms = (time.time() - start_time) * 1000
             logger.error(f"Refutation failed: {e}", exc_info=True)
             return {
-                **state,
+                **spread_safe(state),
                 "refutation_error": str(e),
                 "refutation_latency_ms": latency_ms,
                 "status": "failed",

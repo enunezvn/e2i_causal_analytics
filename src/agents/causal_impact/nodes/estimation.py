@@ -33,7 +33,7 @@ from src.agents.causal_impact.nodes._compute_budget import (
     ComputeBudgetExpired,
     run_bounded_with_budget,
 )
-from src.agents.causal_impact.state import CausalImpactState, EstimationResult
+from src.agents.causal_impact.state import CausalImpactState, EstimationResult, spread_safe
 
 # V4.2: Energy Score imports
 from src.causal_engine.energy_score import (
@@ -898,7 +898,7 @@ class EstimationNode:
             latency_ms = (time.time() - start_time) * 1000
 
             return {
-                **state,
+                **spread_safe(state),
                 "estimation_result": result,
                 "estimation_latency_ms": latency_ms,
                 "current_phase": "refuting",
@@ -926,7 +926,7 @@ class EstimationNode:
             )
             errors = [{"phase": "estimation", "message": ee.message, "details": ee.details}]
             return {
-                **state,
+                **spread_safe(state),
                 "estimation_error": ee.message,
                 "estimation_error_details": ee.details,
                 "estimation_latency_ms": latency_ms,
@@ -939,7 +939,7 @@ class EstimationNode:
             # Contract: accumulate errors using operator.add
             errors = [{"phase": "estimation", "message": str(e)}]
             return {
-                **state,
+                **spread_safe(state),
                 "estimation_error": str(e),
                 "estimation_latency_ms": latency_ms,
                 "status": "failed",
