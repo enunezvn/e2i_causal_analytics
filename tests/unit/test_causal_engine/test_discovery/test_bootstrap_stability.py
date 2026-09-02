@@ -233,9 +233,7 @@ class TestRunnerBootstrapStability:
         runner = DiscoveryRunner(enable_tracing=False)
         algo = _ScriptedAlgorithm()
         runner._algorithms[DiscoveryAlgorithmType.PC] = algo
-        config = DiscoveryConfig(
-            algorithms=[DiscoveryAlgorithmType.PC], bootstrap_resamples=10
-        )
+        config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC], bootstrap_resamples=10)
         result = await runner.discover_dag(_frame(), config)
 
         by_edge = {(e.source, e.target): e for e in result.edges}
@@ -260,9 +258,7 @@ class TestRunnerBootstrapStability:
     async def test_too_many_failed_resamples_leaves_stability_unknown(self) -> None:
         runner = DiscoveryRunner(enable_tracing=False)
         runner._algorithms[DiscoveryAlgorithmType.PC] = _Flaky()
-        config = DiscoveryConfig(
-            algorithms=[DiscoveryAlgorithmType.PC], bootstrap_resamples=10
-        )
+        config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC], bootstrap_resamples=10)
         result = await runner.discover_dag(_frame(), config)
         assert all(e.bootstrap_stability is None for e in result.edges)
         assert all(e.confidence == 1.0 for e in result.edges)
@@ -278,9 +274,7 @@ class TestRunnerBootstrapStability:
         runner = DiscoveryRunner(enable_tracing=False)
         algo = _PartialFailureAlgorithm()
         runner._algorithms[DiscoveryAlgorithmType.PC] = algo
-        config = DiscoveryConfig(
-            algorithms=[DiscoveryAlgorithmType.PC], bootstrap_resamples=10
-        )
+        config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC], bootstrap_resamples=10)
         result = await runner.discover_dag(_frame(), config)
 
         by_edge = {(e.source, e.target): e for e in result.edges}

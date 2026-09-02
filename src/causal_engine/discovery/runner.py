@@ -694,9 +694,7 @@ class DiscoveryRunner:
         loop = asyncio.get_event_loop()
         summary = await loop.run_in_executor(
             None,
-            lambda: self._bootstrap_edge_stability(
-                data, config, algorithm, edges, ensemble_dag
-            ),
+            lambda: self._bootstrap_edge_stability(data, config, algorithm, edges, ensemble_dag),
         )
         return {"bootstrap": summary}
 
