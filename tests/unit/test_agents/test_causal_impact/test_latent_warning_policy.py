@@ -164,6 +164,21 @@ class TestLatentWarningSurfacingPolicy:
         assert not any("Latent-confounding diagnostic" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
+    async def test_exception_path_still_applies_the_policy(self):
+        """Interpretation's own crash is a terminal path too: a corroborated
+        latent flag must not die with it."""
+        node = InterpretationNode()
+        state = _interpretation_state(interpretation_depth="unknown-depth")
+        state["sensitivity_analysis"] = {
+            **state["sensitivity_analysis"],
+            "robust_to_confounding": False,
+        }
+        result = await node.execute(state)
+        assert result["status"] == "failed"
+        latent = [w for w in result.get("warnings", []) if "Latent-confounding diagnostic" in w]
+        assert len(latent) == 1
+
+    @pytest.mark.asyncio
     async def test_depth_none_still_applies_the_policy(self):
         """The skip-interpretation early return completes the analysis; the
         surfacing policy must ride it too."""

@@ -234,7 +234,7 @@ class InterpretationNode:
             latency_ms = (time.time() - start_time) * 1000
             # Contract: accumulate errors using operator.add
             errors = [{"phase": "interpretation", "message": str(e)}]
-            return {
+            result = {
                 **spread_safe(state),
                 "interpretation_error": str(e),
                 "interpretation_latency_ms": latency_ms,
@@ -242,6 +242,12 @@ class InterpretationNode:
                 "error_message": f"Interpretation failed: {e}",
                 "errors": errors,  # Contract error accumulator
             }
+            # This is a terminal path too: the surfacing policy must ride it or
+            # a corroborated/uncrosscheckable latent flag dies with the crash.
+            latent_warnings = self._latent_warning_entries(state)
+            if latent_warnings:
+                result["warnings"] = latent_warnings
+            return result
 
     @staticmethod
     def _latent_warning_entries(state: CausalImpactState) -> List[str]:
