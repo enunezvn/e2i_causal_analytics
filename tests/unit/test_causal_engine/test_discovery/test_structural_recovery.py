@@ -121,7 +121,8 @@ assertions.
    remedy — cardinality-based selection routing all-binary frames to ``chisq`` — was
    measured 2026-09-02 and REJECTED: causal-learn's ``chisq`` DOES accept float-coded
    0/1 data (``Chisq_or_Gsq.__init__`` re-encodes every column to 0..k-1 via
-   ``np.unique`` itself, so the dtype guard protects nothing), but on an all-binary
+   ``np.unique`` itself, so the dtype guard protects no input-capability
+   constraint of causal-learn's), but on an all-binary
    variant of this DGP (every covariate Bernoulli, same structure and coefficients),
    driven through the real ``GraphBuilderNode`` at the guided default B=20 over the
    same 20-point sweep, chisq did NOT improve recovery: mean F1 0.943 vs 0.953,
