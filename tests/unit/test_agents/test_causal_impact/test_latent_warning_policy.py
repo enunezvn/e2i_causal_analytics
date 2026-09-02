@@ -36,6 +36,9 @@ from src.agents.causal_impact.nodes.interpretation import InterpretationNode
 from src.agents.causal_impact.state import spread_safe
 
 NODES_DIR = Path("src/agents/causal_impact/nodes")
+# handle_workflow_error is a LangGraph node too — it lives outside nodes/ but
+# writes to the same operator.add channels, so the source scan must cover it.
+SPREAD_SCANNED_SOURCES = (Path("src/agents/causal_impact/graph.py"),)
 
 LATENT_PAYLOAD = {
     "ran": True,
@@ -204,7 +207,7 @@ class TestWarningsAccumulatorDiscipline:
         """Source pin: a bare ``**state`` spread re-appends warnings/errors.
         New spread sites must go through spread_safe."""
         offenders = []
-        for path in sorted(NODES_DIR.glob("*.py")):
+        for path in sorted(NODES_DIR.glob("*.py")) + list(SPREAD_SCANNED_SOURCES):
             for lineno, line in enumerate(path.read_text().splitlines(), 1):
                 if re.search(r"\*\*state\b", line) and "spread_safe" not in line:
                     offenders.append(f"{path.name}:{lineno}: {line.strip()}")
@@ -237,6 +240,52 @@ class TestWarningsAccumulatorDiscipline:
         assert all(e.get("phase") != "earlier" for e in result.get("errors", []))
 
 
+class TestErrorHandlerTerminalPath:
+    """handle_workflow_error ends the graph before sensitivity/interpretation
+    run (estimation total failure, refutation error/failure, gate block), so it
+    must apply the surfacing policy's fail-open branch itself — and it writes
+    to the same operator.add channels, so accumulator discipline applies."""
+
+    def _error_state(self, **overrides) -> Dict:
+        state = _interpretation_state(
+            status="running",
+            current_phase="estimation",
+            error_message="estimation produced no ATE",
+            errors=[{"phase": "earlier", "message": "old"}],
+            warnings=["pre-existing warning"],
+        )
+        # Sensitivity never ran on these terminal paths.
+        state.pop("sensitivity_analysis", None)
+        state.update(overrides)
+        return state
+
+    def test_surfaces_latent_warning_fail_open(self):
+        """A flagged diagnostic can never be cross-checked on a terminal error
+        path — it must surface as a precaution, as it did pre-policy."""
+        from src.agents.causal_impact.graph import handle_workflow_error
+
+        result = handle_workflow_error(self._error_state())
+        latent = [w for w in result.get("warnings", []) if "Latent-confounding diagnostic" in w]
+        assert len(latent) == 1
+        assert "could not be cross-checked" in latent[0]
+
+    def test_returns_only_new_entries_for_accumulator_channels(self):
+        from src.agents.causal_impact.graph import handle_workflow_error
+
+        result = handle_workflow_error(self._error_state())
+        assert result["status"] == "failed"
+        assert [e["message"] for e in result["errors"]] == ["estimation produced no ATE"]
+        assert "pre-existing warning" not in result.get("warnings", [])
+
+    def test_no_flag_no_warning(self):
+        from src.agents.causal_impact.graph import handle_workflow_error
+
+        state = self._error_state()
+        state["causal_graph"]["latent_diagnostic"] = {**LATENT_PAYLOAD, "flag": False}
+        result = handle_workflow_error(state)
+        assert "warnings" not in result
+
+
 class TestMlflowLatentDiagnosticObservability:
     """Item 1 (base rate): the tracker extracts the diagnostic so MLflow keeps
     a durable record (the agent-analyze job store TTL is 8h)."""
@@ -259,3 +308,36 @@ class TestMlflowLatentDiagnosticObservability:
         metrics = tracker._extract_metrics({}, state)  # type: ignore[arg-type]
         assert metrics.latent_diagnostic_ran is None
         assert metrics.latent_diagnostic_flag is None
+
+    def test_log_metrics_emits_latent_diagnostic_metrics(self):
+        """Extraction alone is not observability — the values must reach
+        mlflow.log_metric."""
+        from unittest.mock import patch
+
+        from src.agents.causal_impact.mlflow_tracker import (
+            CausalImpactMetrics,
+            CausalImpactMLflowTracker,
+        )
+
+        tracker = CausalImpactMLflowTracker.__new__(CausalImpactMLflowTracker)
+        metrics = CausalImpactMetrics(latent_diagnostic_ran=True, latent_diagnostic_flag=False)
+        with patch("mlflow.log_metric") as log_metric:
+            tracker._log_metrics(metrics)
+        logged = {call.args[0]: call.args[1] for call in log_metric.call_args_list}
+        assert logged["latent_diagnostic_ran"] == 1
+        assert logged["latent_diagnostic_flag"] == 0
+
+    def test_log_metrics_skips_absent_latent_diagnostic(self):
+        from unittest.mock import patch
+
+        from src.agents.causal_impact.mlflow_tracker import (
+            CausalImpactMetrics,
+            CausalImpactMLflowTracker,
+        )
+
+        tracker = CausalImpactMLflowTracker.__new__(CausalImpactMLflowTracker)
+        with patch("mlflow.log_metric") as log_metric:
+            tracker._log_metrics(CausalImpactMetrics())
+        logged = {call.args[0] for call in log_metric.call_args_list}
+        assert "latent_diagnostic_ran" not in logged
+        assert "latent_diagnostic_flag" not in logged

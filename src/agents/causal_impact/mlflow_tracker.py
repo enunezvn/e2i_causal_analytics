@@ -424,6 +424,12 @@ class CausalImpactMLflowTracker:
             mlflow.log_metric("e_value", metrics.e_value)
         mlflow.log_metric("robust_to_confounding", int(metrics.robust_to_confounding))
 
+        # Latent-confounding diagnostic (base-rate observability)
+        if metrics.latent_diagnostic_ran is not None:
+            mlflow.log_metric("latent_diagnostic_ran", int(metrics.latent_diagnostic_ran))
+        if metrics.latent_diagnostic_flag is not None:
+            mlflow.log_metric("latent_diagnostic_flag", int(metrics.latent_diagnostic_flag))
+
         # Energy score (if available)
         if metrics.energy_score is not None:
             mlflow.log_metric("energy_score", metrics.energy_score)

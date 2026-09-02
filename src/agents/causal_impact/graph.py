@@ -28,10 +28,10 @@ from src.agents.causal_impact.nodes.adjustment_set_policy import (
 )
 from src.agents.causal_impact.nodes.estimation import estimate_causal_effect
 from src.agents.causal_impact.nodes.graph_builder import build_causal_graph
-from src.agents.causal_impact.nodes.interpretation import interpret_results
+from src.agents.causal_impact.nodes.interpretation import InterpretationNode, interpret_results
 from src.agents.causal_impact.nodes.refutation import refute_causal_estimate
 from src.agents.causal_impact.nodes.sensitivity import analyze_sensitivity
-from src.agents.causal_impact.state import CausalImpactState
+from src.agents.causal_impact.state import CausalImpactState, spread_safe
 from src.mlops.mlflow_connector import get_mlflow_connector
 from src.mlops.opik_connector import get_opik_connector
 from src.utils.audit_chain import AgentTier, RefutationResults
@@ -397,10 +397,18 @@ def should_continue_after_refutation(
     return "sensitivity"
 
 
-def handle_workflow_error(state: CausalImpactState) -> CausalImpactState:
+def handle_workflow_error(state: CausalImpactState) -> Dict[str, Any]:
     """Handle workflow errors gracefully.
 
-    Contract: Accumulate errors and mark workflow as failed.
+    Contract: mark the workflow failed and submit ONLY the new error entry —
+    ``errors`` is an ``operator.add`` channel, so returning the accumulated
+    list would re-append every prior entry.
+
+    This node is a terminal path (estimation total failure, refutation
+    error/failure, gate block) that ends the graph before sensitivity and
+    interpretation run, so the latent-confounding surfacing policy's fail-open
+    branch applies here: a flagged diagnostic can never be cross-checked
+    against the E-value on these paths and must be surfaced as a precaution.
 
     Args:
         state: Current workflow state
@@ -410,16 +418,16 @@ def handle_workflow_error(state: CausalImpactState) -> CausalImpactState:
     """
     error_msg = state.get("error_message") or "Unknown error occurred"
 
-    # Accumulate error if not already present
-    errors = list(state.get("errors", []))
-    errors.append({"phase": state.get("current_phase", "unknown"), "message": error_msg})
-
-    return {
-        **state,
+    result: Dict[str, Any] = {
+        **spread_safe(state),
         "status": "failed",
-        "errors": errors,
+        "errors": [{"phase": state.get("current_phase", "unknown"), "message": error_msg}],
         "current_phase": "failed",
     }
+    latent_warnings = InterpretationNode._latent_warning_entries(state)
+    if latent_warnings:
+        result["warnings"] = latent_warnings
+    return result
 
 
 def create_causal_impact_graph(enable_checkpointing: bool = False):
