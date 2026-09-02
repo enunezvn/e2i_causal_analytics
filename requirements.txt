@@ -334,7 +334,7 @@ toml==0.10.2
 tomli_w==1.2.0
 toolz==1.1.0
 torch==2.9.1+cpu  # CPU build (see --extra-index-url at top); no CUDA/nvidia/triton deps
-tornado==6.5.7
+tornado==6.5.8
 tqdm==4.67.1
 transformers==4.57.3
 # triton intentionally removed: a CUDA-only transitive dep of the GPU torch
