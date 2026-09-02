@@ -173,6 +173,23 @@ assertions.
    n=2000, 4/10 at n=500 across alpha 0.05) and on noise, i.e. they are
    orientation noise on this DGP family, not latent evidence.
 
+   SURFACING POLICY (2026-09-02, measured before designed): a full alpha
+   sweep through the production seam (``_run_latent_diagnostic`` + the
+   estimand-pair predicate; alpha 0.005/0.01/0.02/0.05/0.1/0.2, n=2000,
+   seeds 1-10) put the shipped alpha=0.05 at the knee — detection 10/10 at
+   EVERY level, specificity 0/10 through 0.05 (then 1/10 at 0.1, 3/10 at
+   0.2: false alarms where a MEASURED confounder explains the dependence),
+   and the effectful-frame mark rate MONOTONE DECREASING in alpha (10/10 at
+   0.005 down to 6/10 at 0.2) with latent==observed at every level. No
+   discovery-side knob reduces the fatigue rate without buying misleading
+   alarms, so fatigue is handled as POLICY: graph_builder only annotates the
+   payload and logs the flag (base-rate observability; MLflow keeps
+   latent_diagnostic_ran/flag per run), and ``InterpretationNode`` surfaces
+   the warning iff the flag is corroborated by the E-value
+   (robust_to_confounding False, or sensitivity unavailable — fail-open).
+   A mark on an estimate the E-value calls robust is, per the table above,
+   indistinguishable from orientation noise.
+
    KNOWN LIMIT (measured, then accepted): latent confounding ON TOP of a real
    direct effect is NOT detectable and is not claimed. With T an ancestor of Y
    the true MAG orients T -> Y — there is no bidirected mark to find — and the
@@ -698,8 +715,10 @@ class TestLatentConfounderProducesAFlag:
     async def test_null_effect_latent_dgp_raises_the_flag(self) -> None:
         """Measured 10/10 over seeds 1-10 at n=2000; pinned at seed 1. The
         payload must name real columns (the pre-fix ``get_bidirected_edges``
-        returned node-INDEX strings) and the warning must reach the state's
-        warnings accumulator."""
+        returned node-INDEX strings). Surfacing policy (item 6): this node
+        only annotates — the human-readable warning is raised downstream by
+        ``InterpretationNode`` iff the E-value corroborates, so graph_builder
+        must NOT put it in the warnings accumulator."""
         result = await _build_dag(
             _null_effect_latent_frame(2000, 1), ["academic_hcp"], bootstrap_resamples=0
         )
@@ -718,7 +737,7 @@ class TestLatentConfounderProducesAFlag:
             "prognostic_only",
             "noise_cov",
         }
-        assert any("Latent-confounding diagnostic" in w for w in result["warnings"]), result[
+        assert not any("Latent-confounding diagnostic" in w for w in result["warnings"]), result[
             "warnings"
         ]
 

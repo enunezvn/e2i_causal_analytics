@@ -10,11 +10,12 @@ import asyncio
 import logging
 import time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from src.agents.causal_impact.state import (
     CausalImpactState,
     NaturalLanguageInterpretation,
+    spread_safe,
 )
 
 if TYPE_CHECKING:
@@ -181,13 +182,17 @@ class InterpretationNode:
 
                 latency_ms = (time.time() - start_time) * 1000
 
-                return {
-                    **state,
+                skip_result: Dict[str, Any] = {
+                    **spread_safe(state),
                     "interpretation": interpretation,
                     "interpretation_latency_ms": latency_ms,
                     "current_phase": "completed",
                     "status": "completed",
                 }
+                skip_latent = self._latent_warning_entries(state)
+                if skip_latent:
+                    skip_result["warnings"] = skip_latent
+                return skip_result
 
             # Generate interpretation based on depth and expertise
             if depth == "minimal":
@@ -210,7 +215,7 @@ class InterpretationNode:
             # the failed status and flag the result as needing review.
             sensitivity_failed = bool(state.get("sensitivity_error"))
             result: Dict[str, Any] = {
-                **state,
+                **spread_safe(state),
                 "interpretation": interpretation,
                 "interpretation_latency_ms": latency_ms,
                 "current_phase": "failed" if sensitivity_failed else "completed",
@@ -218,20 +223,73 @@ class InterpretationNode:
             }
             if sensitivity_failed:
                 result["needs_review"] = True
+            latent_warnings = self._latent_warning_entries(state)
+            if latent_warnings:
+                # warnings is an operator.add accumulator: return ONLY the new
+                # entries so LangGraph appends them.
+                result["warnings"] = latent_warnings
             return result
 
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
             # Contract: accumulate errors using operator.add
             errors = [{"phase": "interpretation", "message": str(e)}]
-            return {
-                **state,
+            result = {
+                **spread_safe(state),
                 "interpretation_error": str(e),
                 "interpretation_latency_ms": latency_ms,
                 "status": "failed",
                 "error_message": f"Interpretation failed: {e}",
                 "errors": errors,  # Contract error accumulator
             }
+            # This is a terminal path too: the surfacing policy must ride it or
+            # a corroborated/uncrosscheckable latent flag dies with the crash.
+            latent_warnings = self._latent_warning_entries(state)
+            if latent_warnings:
+                result["warnings"] = latent_warnings
+            return result
+
+    @staticmethod
+    def _latent_warning_entries(state: CausalImpactState) -> List[str]:
+        """Surfacing policy for the FCI latent-confounding diagnostic.
+
+        Measured basis (test_structural_recovery docstring item 6 + the
+        2026-09-02 alpha sweep): the estimand mark alone cannot distinguish a
+        real latent confounder from orientation noise on an effectful frame,
+        and no discovery-side knob changes that — but the E-value CAN say
+        whether the estimate is fragile. So the warning surfaces only when
+        the two signals corroborate: flag up AND (robust_to_confounding is
+        False, or the sensitivity analysis never produced a result —
+        fail-open, the diagnostic could not be cross-checked). The flag and
+        payload stay on causal_graph unconditionally, and graph_builder logs
+        every diagnostic run for base-rate observability, so suppression here
+        loses no data.
+        """
+        causal_graph = state.get("causal_graph") or {}
+        payload = causal_graph.get("latent_diagnostic")
+        if not isinstance(payload, dict) or not payload.get("flag"):
+            return []
+        sensitivity = state.get("sensitivity_analysis") or {}
+        sensitivity_failed = bool(state.get("sensitivity_error")) or not sensitivity
+        if not sensitivity_failed and sensitivity.get("robust_to_confounding", False):
+            return []
+        from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode
+
+        base = GraphBuilderNode._latent_confounding_warning(
+            payload.get("treatment"), payload.get("outcome")
+        )
+        if sensitivity_failed:
+            suffix = (
+                " The E-value sensitivity analysis was unavailable for this run, so the "
+                "diagnostic could not be cross-checked and is surfaced as a precaution."
+            )
+        else:
+            suffix = (
+                " The E-value sensitivity analysis independently indicates limited "
+                "robustness to unmeasured confounding for this estimate, corroborating "
+                "the diagnostic."
+            )
+        return [base + suffix]
 
     async def _generate_minimal_interpretation(
         self, state: CausalImpactState, expertise: str

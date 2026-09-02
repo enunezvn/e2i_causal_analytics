@@ -80,6 +80,12 @@ class CausalImpactMetrics:
     e_value: Optional[float] = None
     robust_to_confounding: bool = False
 
+    # Latent-confounding diagnostic (FCI). Durable base-rate record: the
+    # agent-analyze job store TTL is 8h, MLflow keeps these per run. None =
+    # the diagnostic did not run / no payload on causal_graph.
+    latent_diagnostic_ran: Optional[bool] = None
+    latent_diagnostic_flag: Optional[bool] = None
+
     # Energy score (if using estimator selector)
     energy_score: Optional[float] = None
     selection_strategy: Optional[str] = None
@@ -375,6 +381,12 @@ class CausalImpactMLflowTracker:
             metrics.e_value = sensitivity_analysis.get("e_value")
             metrics.robust_to_confounding = sensitivity_analysis.get("robust_to_confounding", False)
 
+            # Latent-confounding diagnostic (rides on causal_graph)
+            latent_payload = (state.get("causal_graph") or {}).get("latent_diagnostic")
+            if isinstance(latent_payload, dict):
+                metrics.latent_diagnostic_ran = bool(latent_payload.get("ran"))
+                metrics.latent_diagnostic_flag = bool(latent_payload.get("flag"))
+
         return metrics
 
     def _log_metrics(self, metrics: CausalImpactMetrics) -> None:
@@ -411,6 +423,12 @@ class CausalImpactMLflowTracker:
         if metrics.e_value is not None:
             mlflow.log_metric("e_value", metrics.e_value)
         mlflow.log_metric("robust_to_confounding", int(metrics.robust_to_confounding))
+
+        # Latent-confounding diagnostic (base-rate observability)
+        if metrics.latent_diagnostic_ran is not None:
+            mlflow.log_metric("latent_diagnostic_ran", int(metrics.latent_diagnostic_ran))
+        if metrics.latent_diagnostic_flag is not None:
+            mlflow.log_metric("latent_diagnostic_flag", int(metrics.latent_diagnostic_flag))
 
         # Energy score (if available)
         if metrics.energy_score is not None:

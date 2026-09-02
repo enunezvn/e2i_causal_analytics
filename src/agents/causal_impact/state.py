@@ -5,7 +5,7 @@ Contract: .claude/contracts/tier2-contracts.md
 """
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional, TypedDict
 from uuid import UUID
 
 from typing_extensions import NotRequired
@@ -211,6 +211,22 @@ class NaturalLanguageInterpretation(TypedDict, total=False):
     recommendations: List[str]  # Actionable next steps
     depth_level: Literal["none", "minimal", "standard", "deep"]
     user_expertise_adjusted: bool
+
+
+# Channels below declared with operator.add reducers: LangGraph APPENDS
+# whatever a node returns for them, so a node that ``**state``-spreads its
+# input re-submits the already-accumulated lists and every entry multiplies
+# (measured: a two-node probe doubles; this pipeline reached 16x by the
+# interpretation node). Nodes spread ``spread_safe(state)`` and return ONLY
+# their NEW entries for these channels.
+_ACCUMULATOR_KEYS = ("errors", "warnings")
+
+
+def spread_safe(state: Mapping[str, Any]) -> Dict[str, Any]:
+    """Copy of ``state`` safe to ``**``-spread from a LangGraph node: the
+    operator.add accumulator channels are stripped so the reducer does not
+    re-append what is already accumulated."""
+    return {key: value for key, value in state.items() if key not in _ACCUMULATOR_KEYS}
 
 
 class CausalImpactState(TypedDict):

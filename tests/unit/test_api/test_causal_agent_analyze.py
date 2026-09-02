@@ -888,11 +888,12 @@ def test_variables_response_carries_baseline_candidates_field():
 
 @pytest.mark.unit
 def test_latent_confounding_warning_reaches_response_warnings():
-    """Fix 3 (FCI latent diagnostic): graph_builder appends its warning to the
-    state's warnings accumulator when the flag is raised; the response mapper
-    must surface it VERBATIM (and tolerate the latent_diagnostic payload
-    riding on causal_graph). Uses the real warning builder so the pin breaks
-    if either end of the seam drifts."""
+    """Fix 3 (FCI latent diagnostic): InterpretationNode appends the warning
+    to the state's warnings accumulator when the flag is corroborated by the
+    E-value (surfacing policy); the response mapper must surface it VERBATIM
+    (and tolerate the latent_diagnostic payload riding on causal_graph).
+    Uses the real warning builder so the pin breaks if either end of the
+    seam drifts."""
     from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode
     from src.api.routes.causal import _agent_state_to_response
 
