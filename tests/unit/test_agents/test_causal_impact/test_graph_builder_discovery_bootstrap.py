@@ -56,3 +56,13 @@ class TestGuidedBootstrapWiring:
         await node.execute(_state(discovery_bootstrap_resamples=0))
         assert runner.config is not None
         assert runner.config.bootstrap_resamples == 0
+
+    @pytest.mark.asyncio
+    async def test_unguided_mode_stays_bootstrap_off(self) -> None:
+        node = GraphBuilderNode()
+        runner = _CapturingRunner()
+        node._discovery_runner = runner  # type: ignore[assignment]
+        await node.execute(_state(discovery_guided=False))
+        assert runner.config is not None
+        assert runner.config.bootstrap_resamples == 0
+        assert len(runner.config.algorithms) >= 2
