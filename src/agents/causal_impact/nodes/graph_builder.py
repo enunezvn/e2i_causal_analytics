@@ -211,9 +211,7 @@ class GraphBuilderNode:
                 if isinstance(latent_diagnostic, dict):
                     causal_graph["latent_diagnostic"] = latent_diagnostic
                     if latent_diagnostic.get("flag"):
-                        new_warnings.append(
-                            self._latent_confounding_warning(treatment, outcome)
-                        )
+                        new_warnings.append(self._latent_confounding_warning(treatment, outcome))
 
             latency_ms = (time.time() - start_time) * 1000
 
@@ -754,8 +752,10 @@ class GraphBuilderNode:
             return
         pairs = payload.get("bidirected_edges") or []
         estimand = {treatment, outcome}
-        flag = bool(treatment) and bool(outcome) and any(
-            {str(source), str(target)} == estimand for source, target in pairs
+        flag = (
+            bool(treatment)
+            and bool(outcome)
+            and any({str(source), str(target)} == estimand for source, target in pairs)
         )
         payload["treatment"] = treatment
         payload["outcome"] = outcome

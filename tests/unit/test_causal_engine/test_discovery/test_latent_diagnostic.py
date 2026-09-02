@@ -52,9 +52,7 @@ class TestLatentDiagnosticConfig:
         payload = json.dumps(
             {
                 "success": True,
-                "config": DiscoveryConfig(
-                    latent_diagnostic=True, bootstrap_resamples=20
-                ).to_dict(),
+                "config": DiscoveryConfig(latent_diagnostic=True, bootstrap_resamples=20).to_dict(),
                 "edges": [],
                 "gate_decision": None,
                 "gate_confidence": 0.0,
@@ -161,9 +159,7 @@ class TestRunnerLatentDiagnostic:
         runner = DiscoveryRunner(enable_tracing=False)
         runner._algorithms[DiscoveryAlgorithmType.PC] = _PrimaryPC()
         runner._algorithms[DiscoveryAlgorithmType.FCI] = _ScriptedFCI(_INDEX_KEYED_BIDIRECTED)
-        config = DiscoveryConfig(
-            algorithms=[DiscoveryAlgorithmType.PC], latent_diagnostic=True
-        )
+        config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC], latent_diagnostic=True)
         result = await runner.discover_dag(_frame(), config)
         payload = result.metadata["latent_diagnostic"]
         assert payload["ran"] is True
@@ -198,12 +194,10 @@ class TestRunnerLatentDiagnostic:
         runner = DiscoveryRunner(enable_tracing=False)
         runner._algorithms[DiscoveryAlgorithmType.PC] = _PrimaryPC()
         runner._algorithms[DiscoveryAlgorithmType.FCI] = _ExplodingFCI()
-        config = DiscoveryConfig(
-            algorithms=[DiscoveryAlgorithmType.PC], latent_diagnostic=True
-        )
+        config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC], latent_diagnostic=True)
         result = await runner.discover_dag(_frame(), config)
         assert result.success is True
-        assert [e for e in result.edges] , "primary discovery must be unaffected"
+        assert result.edges, "primary discovery must be unaffected"
         payload = result.metadata["latent_diagnostic"]
         assert payload["ran"] is False
         assert "fci blew up" in payload["error"]
@@ -215,9 +209,7 @@ class TestRunnerLatentDiagnostic:
         runner._algorithms[DiscoveryAlgorithmType.FCI] = _ScriptedFCI(
             {"error": "did not converge"}, converged=False
         )
-        config = DiscoveryConfig(
-            algorithms=[DiscoveryAlgorithmType.PC], latent_diagnostic=True
-        )
+        config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC], latent_diagnostic=True)
         result = await runner.discover_dag(_frame(), config)
         payload = result.metadata["latent_diagnostic"]
         assert payload["ran"] is True
@@ -235,9 +227,7 @@ def _result_with_payload(payload) -> DiscoveryResult:
         success=True,
         config=DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC]),
         ensemble_dag=dag,
-        edges=[
-            DiscoveredEdge(source="t", target="y", confidence=1.0, algorithms=["pc"])
-        ],
+        edges=[DiscoveredEdge(source="t", target="y", confidence=1.0, algorithms=["pc"])],
         algorithm_results=[
             AlgorithmResult(
                 algorithm=DiscoveryAlgorithmType.PC,
@@ -293,9 +283,7 @@ class TestGraphBuilderFlagAnnotation:
 
     def test_estimand_pair_bidirected_raises_flag_either_order(self) -> None:
         for pair in (["t", "y"], ["y", "t"]):
-            payload = self._annotate(
-                {"ran": True, "converged": True, "bidirected_edges": [pair]}
-            )
+            payload = self._annotate({"ran": True, "converged": True, "bidirected_edges": [pair]})
             assert payload["flag"] is True
             assert payload["treatment"] == "t"
             assert payload["outcome"] == "y"

@@ -884,3 +884,39 @@ def test_variables_response_carries_baseline_candidates_field():
         labels={},
     )
     assert resp.baseline_candidates == ["disease_severity", "age_at_diagnosis"]
+
+
+@pytest.mark.unit
+def test_latent_confounding_warning_reaches_response_warnings():
+    """Fix 3 (FCI latent diagnostic): graph_builder appends its warning to the
+    state's warnings accumulator when the flag is raised; the response mapper
+    must surface it VERBATIM (and tolerate the latent_diagnostic payload
+    riding on causal_graph). Uses the real warning builder so the pin breaks
+    if either end of the seam drifts."""
+    from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode
+    from src.api.routes.causal import _agent_state_to_response
+
+    warning = GraphBuilderNode._latent_confounding_warning("treatment_arm", "persistent_180d")
+    state = _base_state(warnings=[warning])
+    state["causal_graph"]["latent_diagnostic"] = {
+        "ran": True,
+        "converged": True,
+        "runtime_seconds": 0.03,
+        "bidirected_edges": [["treatment_arm", "persistent_180d"]],
+        "treatment": "treatment_arm",
+        "outcome": "persistent_180d",
+        "flag": True,
+    }
+    resp = _agent_state_to_response(
+        analysis_id="ld1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=100,
+        final_state=state,
+        latency_ms=5,
+    )
+    assert warning in resp.warnings
+    assert "unmeasured common cause" in warning
+    # The payload on causal_graph must not disturb DAG mapping or status.
+    assert resp.status == "completed"
+    assert resp.dag.treatment_nodes == ["treatment_arm"]
