@@ -9,7 +9,7 @@
  * badged "Illustrative example" per the documentation spec.
  */
 import { useId, useState } from 'react';
-import { GATE_BANDS, REFUTATION_INTRO, REFUTATION_TESTS } from './content';
+import { GATE_BANDS, LATENT_DIAGNOSTIC_NOTE, REFUTATION_INTRO, REFUTATION_TESTS } from './content';
 import type { GateDecision, RefutationTestDef, RefutationTestId } from './content';
 
 type Outcome = 'pass' | 'fail';
@@ -374,6 +374,10 @@ export function RefutationGate() {
           <TestCard key={t.id} test={t} outcome={outcome} />
         ))}
       </ol>
+
+      <p className="mt-4 max-w-3xl rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/40 px-3 py-2 text-xs leading-5 text-[var(--color-muted-foreground)]">
+        {LATENT_DIAGNOSTIC_NOTE}
+      </p>
 
       <h4 className="mt-5 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">
         The gate the results feed
