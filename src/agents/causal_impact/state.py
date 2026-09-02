@@ -291,6 +291,9 @@ class CausalImpactState(TypedDict):
     ]  # Algorithms to use: ["ges", "pc", "fci", "lingam"]
     discovery_ensemble_threshold: NotRequired[float]  # Min algorithm agreement (default: 0.5)
     discovery_alpha: NotRequired[float]  # Significance level for CI tests (default: 0.05)
+    discovery_bootstrap_resamples: NotRequired[
+        int
+    ]  # Resamples for single-algorithm stability (0 = off; guided default 20)
     discovery_fallback_to_manual: NotRequired[
         bool
     ]  # Use manual DAG on discovery failure (default: True)

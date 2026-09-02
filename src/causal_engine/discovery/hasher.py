@@ -137,6 +137,7 @@ def hash_config(config: DiscoveryConfig) -> str:
         "score_func": config.score_func,
         "assume_linear": config.assume_linear,
         "assume_gaussian": config.assume_gaussian,
+        "bootstrap_resamples": config.bootstrap_resamples,
     }
 
     # Convert to deterministic JSON string

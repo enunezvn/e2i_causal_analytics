@@ -45,11 +45,12 @@ class GateConfig:
     were DELETED. They were documented + defaulted but ``evaluate()`` NEVER read
     them, so they were false assurance: acyclicity is already guaranteed UPSTREAM
     by ``runner._build_ensemble`` → ``_remove_cycles`` (the gate never sees a
-    cyclic ``ensemble_dag``), and agreement already enters as a soft 0.4 weight in
-    the confidence score (ACCEPT is unreachable below ~0.5 agreement). An operator
-    who set ``require_dag=True`` / raised ``min_algorithm_agreement`` got NO extra
-    enforcement. The real acyclicity guarantee is pinned by a ``_remove_cycles``
-    invariant test instead of an inert config flag.
+    cyclic ``ensemble_dag``), and corroboration already enters as a soft 0.4
+    weight in the confidence score (ACCEPT is unreachable below ~0.5
+    corroboration). An operator who set ``require_dag=True`` / raised
+    ``min_algorithm_agreement`` got NO extra enforcement. The real acyclicity
+    guarantee is pinned by a ``_remove_cycles`` invariant test instead of an
+    inert config flag.
     """
 
     accept_threshold: float = 0.8
@@ -88,6 +89,7 @@ class GateEvaluation:
             "confidence": self.confidence,
             "reasons": self.reasons,
             "n_high_confidence_edges": len(self.high_confidence_edges),
+            "high_confidence_edges": [e.to_dict() for e in self.high_confidence_edges],
             "n_rejected_edges": len(self.rejected_edges),
             "warnings": self.warnings,
             "metadata": self.metadata,
@@ -98,7 +100,9 @@ class DiscoveryGate:
     """Evaluates discovery results and makes gating decisions.
 
     The gate uses multiple criteria to determine confidence:
-    1. Algorithm agreement: How many algorithms found the same edges
+    1. Corroboration: agreement between >=2 converged algorithms, or —
+       for a single-algorithm run — bootstrap resample stability of the
+       edges beyond what the priors already assert
     2. Edge confidence: Average confidence across edges
     3. Coverage: Whether important variables are connected
 
@@ -165,16 +169,38 @@ class DiscoveryGate:
             )
 
         # Calculate component scores
-        agreement_score = self._calculate_agreement_score(result)
+        corroboration_score, corroboration_basis = self._calculate_corroboration(result)
         edge_confidence_score = self._calculate_edge_confidence(result)
         structure_score = self._calculate_structure_score(result)
 
-        # Overall confidence is weighted average
-        confidence = 0.4 * agreement_score + 0.4 * edge_confidence_score + 0.2 * structure_score
+        # Overall confidence is weighted average. Two bases get special
+        # treatment because plugging them into the plain weighted average
+        # would smuggle non-evidence in as if it were evidence:
+        #   - uncorroborated_single_run: a single algorithm's self-reported
+        #     edge confidence is exactly the vacuous signal this fix removes
+        #     trust from, so it cannot be allowed to rescue the score.
+        #   - prior_determined: every edge is prior-required, so the
+        #     corroboration axis is not applicable (not "failed") and is
+        #     dropped from the weighted average rather than scored as 0.
+        if corroboration_basis == "uncorroborated_single_run":
+            confidence = corroboration_score
+        elif corroboration_basis == "prior_determined":
+            confidence = (0.4 * edge_confidence_score + 0.2 * structure_score) / 0.6
+        else:
+            confidence = (
+                0.4 * corroboration_score + 0.4 * edge_confidence_score + 0.2 * structure_score
+            )
 
-        # Categorize edges
+        # Categorize edges. Augment-eligible edges must be corroborated and
+        # beyond the priors: a required edge is already in the manual DAG, and
+        # an uncorroborated single-run edge is not evidence.
+        required_edges = self._required_edge_set(result)
         high_conf_edges = [
-            e for e in result.edges if e.confidence >= self.config.augment_edge_threshold
+            e
+            for e in result.edges
+            if e.confidence >= self.config.augment_edge_threshold
+            and (e.source, e.target) not in required_edges
+            and self._is_corroborated(e)
         ]
         low_conf_edges = [e for e in result.edges if e.confidence < self.config.review_threshold]
 
@@ -182,7 +208,13 @@ class DiscoveryGate:
         rejected_fraction = len(low_conf_edges) / len(result.edges) if result.edges else 0
 
         # Build reasons
-        reasons.append(f"Algorithm agreement: {agreement_score:.2%}")
+        if corroboration_basis == "prior_determined":
+            reasons.append(
+                "Corroboration: not applicable (every discovered edge is prior-required); "
+                "renormalized over edge confidence + structure"
+            )
+        else:
+            reasons.append(f"Corroboration ({corroboration_basis}): {corroboration_score:.2%}")
         reasons.append(f"Average edge confidence: {edge_confidence_score:.2%}")
         reasons.append(f"Structure score: {structure_score:.2%}")
 
@@ -232,34 +264,76 @@ class DiscoveryGate:
             rejected_edges=low_conf_edges,
             warnings=warnings,
             metadata={
-                "agreement_score": agreement_score,
+                "corroboration_score": corroboration_score,
+                "corroboration_basis": corroboration_basis,
                 "edge_confidence_score": edge_confidence_score,
                 "structure_score": structure_score,
                 "rejected_fraction": rejected_fraction,
             },
         )
 
-    def _calculate_agreement_score(self, result: DiscoveryResult) -> float:
-        """Calculate algorithm agreement score.
+    def _calculate_corroboration(self, result: DiscoveryResult) -> Tuple[float, str]:
+        """Corroboration score + basis for the discovered edges.
 
-        Higher score when algorithms agree on more edges.
+        Agreement between >=2 converged algorithms keeps the existing math.
+        A single-algorithm run agrees with itself by construction, so its
+        corroboration must come from bootstrap resample stability — measured
+        over the edges the priors did NOT force (a required edge appears in
+        every resample, so its stability is assertion, not evidence). Whether
+        every edge is prior-required is checked BEFORE whether stability data
+        exists at all: a fully-prior-forced graph makes the resample axis
+        inapplicable regardless of whether bootstrap ran, so it must not be
+        mistaken for a run that had no evidence to offer. With no stability
+        data and at least one edge beyond the priors, the run is
+        uncorroborated and scores 0.0.
 
         Args:
             result: Discovery result
 
         Returns:
-            Agreement score [0, 1]
+            Tuple of (corroboration score [0, 1], basis label)
         """
-        if not result.edges or not result.algorithm_results:
-            return 0.0
+        converged = [r for r in result.algorithm_results if r.converged]
+        if not result.edges or not converged:
+            return 0.0, "no_evidence"
 
-        n_algorithms = len([r for r in result.algorithm_results if r.converged])
-        if n_algorithms == 0:
-            return 0.0
+        if len(converged) >= 2:
+            n_algorithms = len(converged)
+            # Average votes per edge normalized by number of algorithms
+            total = sum(e.algorithm_votes / n_algorithms for e in result.edges)
+            return total / len(result.edges), "algorithm_agreement"
 
-        # Average votes per edge normalized by number of algorithms
-        total_agreement = sum(e.algorithm_votes / n_algorithms for e in result.edges)
-        return total_agreement / len(result.edges)
+        required = self._required_edge_set(result)
+        beyond_prior = [e for e in result.edges if (e.source, e.target) not in required]
+        if not beyond_prior:
+            # Every edge is prior-required: resampling can neither confirm nor
+            # refute the graph, so this axis is not applicable — whether or
+            # not bootstrap even ran — and the caller renormalizes over the
+            # remaining components.
+            return 1.0, "prior_determined"
+
+        if all(e.bootstrap_stability is None for e in result.edges):
+            return 0.0, "uncorroborated_single_run"
+
+        stabilities = [e.bootstrap_stability or 0.0 for e in beyond_prior]
+        return sum(stabilities) / len(stabilities), "bootstrap_stability"
+
+    @staticmethod
+    def _required_edge_set(result: DiscoveryResult) -> set:
+        """Prior-required (source, target) edges, or empty set if none."""
+        prior = result.config.prior_knowledge
+        if prior is None or not prior.required_edges:
+            return set()
+        return {(source, target) for source, target in prior.required_edges}
+
+    def _is_corroborated(self, edge: DiscoveredEdge) -> bool:
+        """Whether an edge has evidence beyond a single algorithm's say-so."""
+        if edge.algorithm_votes >= 2:
+            return True
+        return (
+            edge.bootstrap_stability is not None
+            and edge.bootstrap_stability >= self.config.augment_edge_threshold
+        )
 
     def _calculate_edge_confidence(self, result: DiscoveryResult) -> float:
         """Calculate average edge confidence.

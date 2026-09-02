@@ -418,6 +418,7 @@ class DiscoveryCache:
                         confidence=edge_data.get("confidence", 1.0),
                         algorithm_votes=edge_data.get("algorithm_votes", 1),
                         algorithms=edge_data.get("algorithms", []),
+                        bootstrap_stability=edge_data.get("bootstrap_stability"),
                     )
                 )
 

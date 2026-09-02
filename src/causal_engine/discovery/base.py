@@ -65,6 +65,8 @@ class DiscoveredEdge:
         confidence: Confidence score [0, 1]
         algorithm_votes: Number of algorithms that found this edge
         algorithms: List of algorithm names that found this edge
+        bootstrap_stability: Fraction of bootstrap resamples that recovered
+            this edge (None when bootstrap resampling was not run)
     """
 
     source: str
@@ -73,6 +75,7 @@ class DiscoveredEdge:
     confidence: float = 1.0
     algorithm_votes: int = 1
     algorithms: List[str] = field(default_factory=list)
+    bootstrap_stability: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -83,6 +86,7 @@ class DiscoveredEdge:
             "confidence": self.confidence,
             "algorithm_votes": self.algorithm_votes,
             "algorithms": self.algorithms,
+            "bootstrap_stability": self.bootstrap_stability,
         }
 
 
@@ -132,6 +136,8 @@ class DiscoveryConfig:
         assume_gaussian: Assume Gaussian errors
         use_process_pool: Use ProcessPoolExecutor for true parallelism (default: False)
         max_workers: Maximum worker processes/threads (default: None = CPU count)
+        bootstrap_resamples: Resamples for single-algorithm edge-stability
+            measurement (0 = off)
     """
 
     algorithms: List[DiscoveryAlgorithmType] = field(
@@ -147,6 +153,10 @@ class DiscoveryConfig:
     assume_gaussian: bool = False
     use_process_pool: bool = False
     max_workers: Optional[int] = None
+    # Resamples for single-algorithm edge-stability measurement (0 = off).
+    # The gate scores corroboration from these frequencies when only one
+    # algorithm ran (agreement is vacuous there); see DiscoveryGate.
+    bootstrap_resamples: int = 0
     # Domain priors (tiers / required / forbidden edges) for GUIDED discovery.
     # Only the PC algorithm consumes these (causal-learn BackgroundKnowledge);
     # when set, prefer ``algorithms=[PC]`` so the ensemble is not polluted by
@@ -167,6 +177,7 @@ class DiscoveryConfig:
             "assume_gaussian": self.assume_gaussian,
             "use_process_pool": self.use_process_pool,
             "max_workers": self.max_workers,
+            "bootstrap_resamples": self.bootstrap_resamples,
             "prior_knowledge": (
                 {
                     "tiers": self.prior_knowledge.tiers,

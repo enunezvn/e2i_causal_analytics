@@ -242,6 +242,10 @@ class DiscoveryRunner:
             config.ensemble_threshold,
         )
 
+        bootstrap_metadata = await self._maybe_bootstrap(
+            data, config, algorithm_results, edges, ensemble_dag
+        )
+
         total_runtime = time.time() - start_time
         logger.info(f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s")
 
@@ -256,6 +260,7 @@ class DiscoveryRunner:
                 "total_runtime_seconds": total_runtime,
                 "node_names": node_names,
                 "n_samples": len(data),
+                **bootstrap_metadata,
             },
         )
 
@@ -287,9 +292,16 @@ class DiscoveryRunner:
                 config.ensemble_threshold,
             )
 
+            bootstrap_metadata = await self._maybe_bootstrap(
+                data, config, algorithm_results, edges, ensemble_dag
+            )
+
             total_runtime = time.time() - start_time
 
-            # Calculate algorithm agreement
+            # Calculate algorithm agreement. On a bootstrapped single-algorithm
+            # run, _maybe_bootstrap has already overwritten e.confidence with
+            # bootstrap_stability above, so this reports mean bootstrap
+            # stability rather than the (vacuous) 1.0 multi-vote agreement.
             n_converged = len([r for r in algorithm_results if r.converged])
             agreement = 0.0
             if edges and n_converged > 0:
@@ -324,6 +336,7 @@ class DiscoveryRunner:
                     "n_samples": len(data),
                     "trace_id": span.trace_id,
                     "span_id": span.span_id,
+                    **bootstrap_metadata,
                 },
             )
 
@@ -612,6 +625,78 @@ class DiscoveryRunner:
         dag = self._remove_cycles(dag)
 
         return edges, dag
+
+    def _bootstrap_edge_stability(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+        algorithm: BaseDiscoveryAlgorithm,
+        edges: List[DiscoveredEdge],
+        ensemble_dag: nx.DiGraph,
+    ) -> Optional[Dict[str, int]]:
+        """Measure per-edge stability by re-running the single converged
+        algorithm on ``config.bootstrap_resamples`` bootstrap resamples.
+
+        Mutates ``edges`` in place: ``bootstrap_stability`` becomes the
+        directed-match resample frequency, and ``confidence`` — vacuously 1.0
+        for a single-algorithm run — is overwritten with it. Returns None when
+        fewer than max(2, B//2) resamples succeeded: the frequencies would be
+        noise, so the gate must treat the run as uncorroborated (failing
+        toward caution, not toward ACCEPT).
+        """
+        n_resamples = config.bootstrap_resamples
+        rng = np.random.default_rng(config.random_state)
+        counts: Dict[Tuple[str, str], int] = {(e.source, e.target): 0 for e in edges}
+        succeeded = 0
+        for _ in range(n_resamples):
+            indices = rng.integers(0, len(data), len(data))
+            resample = data.iloc[indices].reset_index(drop=True)
+            try:
+                result = algorithm.discover(resample, config)
+            except Exception as exc:
+                logger.debug(f"Bootstrap resample failed: {exc}")
+                continue
+            if not result.converged:
+                continue
+            succeeded += 1
+            found = {(source, target) for source, target in result.edge_list}
+            for key in counts:
+                if key in found:
+                    counts[key] += 1
+        if succeeded < max(2, n_resamples // 2):
+            logger.warning(
+                f"Bootstrap stability unknown: {succeeded}/{n_resamples} resamples succeeded"
+            )
+            return None
+        for edge in edges:
+            stability = counts[(edge.source, edge.target)] / succeeded
+            edge.bootstrap_stability = stability
+            edge.confidence = stability
+            if ensemble_dag.has_edge(edge.source, edge.target):
+                ensemble_dag.edges[edge.source, edge.target]["confidence"] = stability
+        return {"n_resamples": n_resamples, "n_succeeded": succeeded}
+
+    async def _maybe_bootstrap(
+        self,
+        data: pd.DataFrame,
+        config: DiscoveryConfig,
+        algorithm_results: List[AlgorithmResult],
+        edges: List[DiscoveredEdge],
+        ensemble_dag: nx.DiGraph,
+    ) -> Dict[str, Any]:
+        """Run stability measurement when configured and exactly one
+        algorithm converged (multi-algorithm runs already have agreement).
+        Returns extra metadata entries ({} when bootstrap did not apply)."""
+        converged = [r for r in algorithm_results if r.converged]
+        if config.bootstrap_resamples <= 0 or len(converged) != 1 or not edges:
+            return {}
+        algorithm = self._get_algorithm(converged[0].algorithm)
+        loop = asyncio.get_event_loop()
+        summary = await loop.run_in_executor(
+            None,
+            lambda: self._bootstrap_edge_stability(data, config, algorithm, edges, ensemble_dag),
+        )
+        return {"bootstrap": summary}
 
     def _remove_cycles(self, dag: nx.DiGraph) -> nx.DiGraph:
         """Remove cycles from graph by removing lowest-confidence edges.

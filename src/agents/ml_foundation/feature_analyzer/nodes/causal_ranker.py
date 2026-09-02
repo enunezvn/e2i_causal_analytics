@@ -24,6 +24,10 @@ from src.causal_engine.discovery.runner import DiscoveryRunner
 def _build_discovery_config(config_dict: Optional[Dict[str, Any]]) -> DiscoveryConfig:
     """Build DiscoveryConfig from dict, handling algorithm type conversion.
 
+    Note: a config that resolves to a single algorithm now gates as
+    uncorroborated (hard-REJECT) unless ``bootstrap_resamples`` is set; the
+    default multi-algorithm config keeps the agreement path unchanged.
+
     Args:
         config_dict: Configuration dictionary or None
 
