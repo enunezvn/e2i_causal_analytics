@@ -576,3 +576,22 @@ class TestCorroboration:
         assert evaluation.metadata["corroboration_basis"] == "algorithm_agreement"
         assert "corroboration_score" in evaluation.metadata
         assert "agreement_score" not in evaluation.metadata
+
+    def test_bootstrap_corroborated_edge_augments_at_threshold_boundary(self):
+        """Positively pin ``_is_corroborated``'s bootstrap branch: every other
+        assertion in this class checks ``high_confidence_edges == []``, which
+        a mutated ``>=`` (e.g. to ``>``) or an inverted None check would pass
+        vacuously. ("x", "y") sits at EXACTLY the augment_edge_threshold."""
+        edges = [("t", "y"), ("x", "y"), ("q", "r")]
+        result = self._single_result(
+            edges,
+            prior_required=[("t", "y")],
+            stabilities={("t", "y"): 1.0, ("x", "y"): 0.9, ("q", "r"): 0.3},
+        )
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.decision == GateDecision.AUGMENT
+        assert evaluation.metadata["corroboration_score"] == pytest.approx(0.6)
+        high_conf_tuples = [(e.source, e.target) for e in evaluation.high_confidence_edges]
+        assert ("x", "y") in high_conf_tuples
+        assert ("t", "y") not in high_conf_tuples  # prior-required exclusion
+        assert ("q", "r") not in high_conf_tuples  # below augment_edge_threshold
