@@ -19,6 +19,12 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# Bootstrap resamples for guided (single-algorithm) discovery. The gate can
+# only corroborate a single-algorithm run through resample stability; 0 would
+# make every guided run gate-uncorroborated (auto-REJECT). Override per run
+# with state key ``discovery_bootstrap_resamples``.
+DISCOVERY_BOOTSTRAP_RESAMPLES = 20
+
 from src.agents.causal_impact.state import CausalGraph, CausalImpactState
 from src.causal_engine import compute_dag_hash
 from src.causal_engine.discovery import (
@@ -630,6 +636,9 @@ class GraphBuilderNode:
             # Only PC consumes BackgroundKnowledge; restrict to it so the ensemble
             # is not polluted by unconstrained orientations from other algorithms.
             algorithms = [DiscoveryAlgorithmType.PC]
+            bootstrap_resamples = int(
+                state.get("discovery_bootstrap_resamples", DISCOVERY_BOOTSTRAP_RESAMPLES)
+            )
         else:
             algorithms_str = state.get("discovery_algorithms", ["ges", "pc"])
             algorithms = []
@@ -640,12 +649,17 @@ class GraphBuilderNode:
                     logger.warning(f"Unknown algorithm: {algo}, skipping")
             if not algorithms:
                 algorithms = [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
+            # Multi-algorithm ensembles are corroborated by cross-algorithm
+            # agreement already; bootstrap stability is off by default here to
+            # avoid a 20x runtime surprise for existing (unguided) consumers.
+            bootstrap_resamples = int(state.get("discovery_bootstrap_resamples", 0))
 
         config = DiscoveryConfig(
             algorithms=algorithms,
             ensemble_threshold=state.get("discovery_ensemble_threshold", 0.5),
             alpha=state.get("discovery_alpha", 0.05),
             prior_knowledge=prior_knowledge,
+            bootstrap_resamples=bootstrap_resamples,
         )
 
         # Run discovery
