@@ -2308,6 +2308,44 @@ async def _te_paged_select_all_brands(client: Any) -> List[Dict[str, Any]]:
     return rows
 
 
+def _require_covariate_role(
+    dataset: str, spec: Dict[str, List[str]], covariates: List[str]
+) -> None:
+    """Role-aware covariate validation (recovery-benchmark gap 3).
+
+    The union allowlist admits any spec column into any slot, so an analyst's
+    explicit picks could place an outcome/treatment-role column
+    (``adherent_180d``, ``treatment_initiated``) in the COVARIATE slot. Those
+    are post-treatment relative to the curated causal questions; the engine
+    then trusts the declaration — guided tiers force the covariate
+    pre-treatment, REVERSING its true edge, and the adjustment guarantee ships
+    it in the adjustment set (measured on the benchmark's mediator DGP:
+    conditioning on the mediator attenuated the ATE 60%). Engine-side
+    detection is measured-impossible (the mediator DGP's true graph is
+    complete, so every orientation is Markov-equivalent, and FCI returns an
+    all-circle PAG), which makes this boundary — where the specs' curated
+    pre-treatment role lists live — the only seam that can enforce it.
+
+    The rule is membership in ``spec["covariate"]``: dual-role columns
+    (``disease_stage`` et al., treatment AND covariate) stay accepted.
+    Question slots are deliberately NOT tightened (the reversed-estimand gate
+    already rejects outcome-as-treatment runs; no measured harm there).
+    """
+    allowed_covariate_role = set(spec["covariate"])
+    role_crossed = [c for c in covariates if c not in allowed_covariate_role]
+    if role_crossed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column(s) {role_crossed} are not permitted as covariates for "
+                f"dataset '{dataset}': they hold no covariate role in the curated "
+                "spec (treatment/outcome-role columns are post-treatment relative "
+                "to the causal questions — adjusting on them biases the estimate). "
+                f"Allowed covariates: {sorted(allowed_covariate_role)}"
+            ),
+        )
+
+
 async def _load_hcp_adoption_join_frame(
     *,
     treatment_var: str,
@@ -2342,6 +2380,7 @@ async def _load_hcp_adoption_join_frame(
                 f"'hcp_adoption'. Allowed: {sorted(allowed)}"
             ),
         )
+    _require_covariate_role("hcp_adoption", spec, covariates)
     select_cols = list(dict.fromkeys(requested))
 
     client = await get_async_supabase_client()
@@ -2734,6 +2773,7 @@ async def _load_agent_estimation_frame(
                 f"'{dataset}'. Allowed: {sorted(allowed)}"
             ),
         )
+    _require_covariate_role(dataset, spec, covariates)
 
     # #1872 (codex iter-2): the union allowlist above is role-insensitive, so a
     # patient-JOINED covariate could ride a question slot into this
