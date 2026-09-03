@@ -98,10 +98,34 @@ assertions.
    DGP (item 3) is byte-identical under both shapes — tiers, not the required
    edges, force the reversed direction — so its pins stand unchanged.
 
-3. KNOWN GAP (pinned, ``TestPostTreatmentCovariateIsNotRejected``): a post-treatment
-   MEDIATOR declared as a confounder is forced in with its edge reversed, gate-ACCEPTed,
-   and shipped in the adjustment set. Measured ATE consequence on the mediator DGP:
-   true total effect +0.2925, correct set +0.2887 (-1%), pipeline set +0.1182 (-60%).
+3. FIXED AT THE BOUNDARY (2026-09-03, was KNOWN GAP "post-treatment covariate
+   is not rejected"): a post-treatment MEDIATOR declared as a confounder is
+   forced in with its edge reversed, gate-ACCEPTed, and shipped in the
+   adjustment set. Measured ATE consequence on the mediator DGP: true total
+   effect +0.2925, correct set +0.2887 (-1%), pipeline set +0.1182 (-60%).
+
+   ENGINE-side detection was measured and ruled out: the mediator DGP's true
+   graph is COMPLETE (severity->T/M/Y, T->M, M->Y, T->Y), so it has no
+   v-structures and every orientation is Markov-equivalent — no
+   conditional-independence method can orient T-M from this data (FCI returns
+   an all-circle PAG on it, measured 2026-09-02). The engine therefore TRUSTS
+   declarations by design, and ``TestPostTreatmentCovariateIsNotRejected``
+   still pins that trust contract below.
+
+   The fix lands where the temporal knowledge actually lives — the API's
+   dataset specs, whose curated ``covariate`` role lists are pre-treatment by
+   curation (the 2026-06-29 overcontrol review): ``_require_covariate_role``
+   in routes/causal.py makes the loaders' covariate slot role-AWARE (a
+   requested covariate must hold the covariate role; previously the
+   role-insensitive union ``treatment|outcome|covariate`` admitted
+   ``adherent_180d``/``treatment_initiated``/``discontinued_180d`` as
+   declared confounders through the analyst's explicit picks — the live
+   reachability of this gap). Dual-role columns keep working; question slots
+   are deliberately untightened (the reversed-estimand gate already rejects
+   outcome-as-treatment runs). Pinned by
+   ``tests/unit/test_api/test_causal_covariate_roles.py``. For callers with
+   genuine role knowledge outside the specs, the sanctioned engine-side
+   mechanism remains the trust-gated ``adjustment_set_policy`` node.
 
 4. FIXED (2026-09-02, was KNOWN GAP "gate cannot reject single-algorithm runs"):
    the gate now scores CORROBORATION — bootstrap resample stability over
@@ -206,13 +230,16 @@ assertions.
    confounding robustness stays where it belongs, with the E-value sensitivity
    analysis.
 
-The remaining characterization tests (3, 5) PIN CURRENT BEHAVIOUR SO A FIX IS
-NOTICED. They are not an endorsement of it. If one fails because someone corrected the
-wiring or the test selection: that is the fix landing — update the test to assert the
+The remaining characterization test (5) PINS CURRENT BEHAVIOUR SO A FIX IS
+NOTICED. It is not an endorsement of it. If it fails because someone corrected the
+test selection: that is the fix landing — update the test to assert the
 new, better behaviour and delete the corresponding gap note above. Items 2 and 4 are
 what that looks like once done: each gap note became a fix record, and
 ``TestGateRejectsUncorroboratedSingleAlgorithmRuns`` /
 ``TestProductionWiringIsDataResponsive`` now assert the corrected behaviour.
+Item 3's pin (``TestPostTreatmentCovariateIsNotRejected``) is different in
+kind: it documents a DESIGN CONTRACT (declaration trust, boundary-enforced),
+not a defect awaiting a fix — see the item-3 record above.
 
 SCOPE / FAITHFULNESS: this is a synthetic linear-logistic DGP with Gaussian
 confounders, no missingness and n <= 2000 — a faithful test of the ALGORITHM AND ITS
@@ -577,11 +604,15 @@ class TestProductionWiringIsDataResponsive:
 
 
 class TestPostTreatmentCovariateIsNotRejected:
-    """KNOWN GAP (see docstring item 3), pinned as characterization.
-
-    Nothing validates that a declared confounder is pre-treatment. A mediator is
-    forced in with its true edge reversed and shipped in the adjustment set;
-    conditioning on it attenuated the measured ATE by 60%."""
+    """DESIGN CONTRACT (see docstring item 3, fixed at the API boundary
+    2026-09-03): the ENGINE trusts declarations — a mediator declared as a
+    confounder is forced in with its true edge reversed and shipped in the
+    adjustment set (conditioning on it attenuated the measured ATE by 60%).
+    Post-treatment-ness is not identifiable from this data (complete graph, no
+    v-structures — Markov-equivalent throughout), so the enforcement lives at
+    the declaration boundary: ``_require_covariate_role`` keeps role-crossed
+    columns out of the covariate slot at the API, and this pin documents what
+    the engine does when a caller with direct access mis-declares anyway."""
 
     @pytest.mark.asyncio
     async def test_mediator_declared_as_confounder_is_shipped_in_adjustment_set(self) -> None:
