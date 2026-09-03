@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from ..cross_validation import compute_cross_library_validation
+from ..design import binarize_treatment, sanitize_effect_modifiers
 from ..state import HeterogeneousOptimizerState
 
 logger = logging.getLogger(__name__)
@@ -396,8 +397,37 @@ class UpliftAnalyzerNode:
         treatment = df[state["treatment_var"]].values
         y = df[state["outcome_var"]].values
 
-        # Prepare features (effect modifiers)
-        X = df[state["effect_modifiers"]].copy()
+        # Binarize a continuous treatment at the median — the SAME rule the CATE
+        # and hierarchical nodes apply (design.binarize_treatment). Before wave 53
+        # this node alone handed CausalML the raw score: live seg_05f29d1b3295 fit
+        # 27 "treatment groups" with control "16.0", and the retained column was
+        # the uplift of score 42 vs 16 — a different estimand from EconML's, so
+        # the cross-library check compared apples to oranges (9% "agreement").
+        treatment, binarized = binarize_treatment(treatment)
+        if binarized is not None:
+            logger.info(
+                f"Binarized continuous treatment at median={binarized['median_threshold']:.2f}",
+                extra={
+                    "node": "uplift_analyzer",
+                    "treatment_var": state["treatment_var"],
+                    **binarized,
+                },
+            )
+
+        # Prepare features (effect modifiers) — never the treatment, the outcome
+        # or a provenance column (wave 53 / Shard 07 C2).
+        effect_modifiers, dropped_modifiers = sanitize_effect_modifiers(state)
+        if dropped_modifiers:
+            logger.warning(
+                "Dropped effect modifiers that must not enter the uplift design matrix",
+                extra={
+                    "node": "uplift_analyzer",
+                    "dropped": dropped_modifiers,
+                    "treatment_var": state["treatment_var"],
+                    "outcome_var": state["outcome_var"],
+                },
+            )
+        X = df[effect_modifiers].copy()
 
         # Encode categorical columns
         for col in X.columns:

@@ -1323,7 +1323,9 @@ async def run_segment_analysis(
     # handed to the run so the registry is read once per request.
     treatment_var = request.treatment_var or _SEGMENT_HTE_DEFAULT_TREATMENT
     outcome_var = request.outcome_var or _SEGMENT_HTE_DEFAULT_OUTCOME
-    effect_modifiers = _segment_effect_modifiers(request.brand)
+    effect_modifiers = _segment_effect_modifiers(
+        request.brand, treatment_var=treatment_var, outcome_var=outcome_var
+    )
     adjustment = await _segment_question_adjustment(
         treatment_var=treatment_var,
         outcome_var=outcome_var,
@@ -1824,7 +1826,12 @@ _SEGMENT_HTE_EFFECT_MODIFIERS = [
 ]
 
 
-def _segment_effect_modifiers(brand: Optional[str]) -> List[str]:
+def _segment_effect_modifiers(
+    brand: Optional[str],
+    *,
+    treatment_var: Optional[str] = None,
+    outcome_var: Optional[str] = None,
+) -> List[str]:
     """Brand-aware heterogeneity features (X) for the HTE run (Phase 2 brand-gating).
 
     The 5 indication-specific clinical modifiers (ecog/egfr/proteinuria/ldh/uas7) are
@@ -1834,10 +1841,20 @@ def _segment_effect_modifiers(brand: Optional[str]) -> List[str]:
     universals (disease_severity/age/academic_hcp) always survive; a brand's own
     clinical modifier survives only when that brand is the row filter; brand=None
     (all brands) keeps the universals only.
+
+    The question slots are removed from X (wave 53). Since #1321 a brand's own
+    clinical column is BOTH a curated effect modifier and that brand's treatment
+    axis (Remibrutinib: urticaria_severity_uas7). With the treatment inside X the
+    median-split T is a deterministic function of an X column, CausalForestDML's
+    propensity model is perfect and its residual is zero — live seg_05f29d1b3295
+    returned ATE -0.514 on a 0/1 outcome against a planted +0.150, and dropping
+    the column from X alone recovered +0.140. The causal page dedups the same way
+    on its submit path.
     """
     from src.api.routes.causal import _brand_scoped_covariates
 
-    return _brand_scoped_covariates(list(_SEGMENT_HTE_EFFECT_MODIFIERS), brand)
+    scoped = _brand_scoped_covariates(list(_SEGMENT_HTE_EFFECT_MODIFIERS), brand)
+    return [c for c in scoped if c not in (treatment_var, outcome_var)]
 
 
 # Confounders (W -> pure controls routed into the DML nuisance model, NOT in X).
@@ -2143,6 +2160,9 @@ async def _load_segment_hte_frame(
       ``age_band`` <50/50-65/>65) so per-segment stratification has enough rows
       per band (cate_estimator skips segments with <10 rows — raw floats would
       all be skipped).
+    * a #1321 clinical axis in a QUESTION slot is derived to its 0/1 contrast
+      (``_CAUSAL_NUMERIC_DERIVATIONS``, same as the causal page); the same column
+      as an effect modifier stays raw (wave 53).
 
     Security / honesty gates (same posture as the causal loader):
       * treatment/outcome validated against the patient_journeys allowlist
@@ -2159,6 +2179,7 @@ async def _load_segment_hte_frame(
     # SSOT for the curated allowlist lives in causal.py (single source of truth).
     from src.api.routes.causal import (
         _CAUSAL_DATASET_SPECS,
+        _CAUSAL_NUMERIC_DERIVATIONS,
         _coerce_estimation_row,
     )
 
@@ -2198,6 +2219,20 @@ async def _load_segment_hte_frame(
     numeric_cols = _SEGMENT_HTE_NUMERIC_COLUMNS | {
         c for c in controls if c not in _SEGMENT_HTE_CATEGORICAL_COLUMNS
     }
+    # Question-slot derivations (wave 53): when the treatment (or outcome) is one
+    # of the #1321 brand-distinct clinical axes, run the SAME 0/1 contrast the
+    # causal page and the causal_paths edge use — "Uncontrolled CSU (UAS7 >= 28)",
+    # "Advanced line", "Prior C5-inhibitor" — instead of the raw column. Raw, the
+    # numeric axis was median-split by the nodes (a different, unlabeled cut) and
+    # the two TEXT axes reached cate_estimator as strings and failed closed
+    # ("entirely null/non-numeric after coercion"). Scoped to the question slots
+    # ONLY: as an effect modifier the raw score keeps its resolution.
+    derivations = {
+        col: fn
+        for col, fn in _CAUSAL_NUMERIC_DERIVATIONS.get(_SEGMENT_HTE_DATASET, {}).items()
+        if col in (treatment_var, outcome_var)
+    }
+    numeric_cols = numeric_cols | set(derivations)
 
     from src.memory.services.factories import get_async_supabase_client
 
@@ -2234,6 +2269,7 @@ async def _load_segment_hte_frame(
             numeric_cols=numeric_cols,
             # geographic_region passes through as a raw string (not float-coerced).
             categorical_cols=frozenset(_SEGMENT_HTE_CATEGORICAL_COLUMNS),
+            derivations=derivations,
         )
         if rec is not None:
             records.append(rec)
@@ -2391,7 +2427,9 @@ async def _execute_segment_analysis(
     # dimensions always survive.
     from src.api.routes.causal import _brand_scoped_covariates
 
-    effect_modifiers = _segment_effect_modifiers(request.brand)
+    effect_modifiers = _segment_effect_modifiers(
+        request.brand, treatment_var=treatment_var, outcome_var=outcome_var
+    )
     segment_vars = _brand_scoped_covariates(list(_SEGMENT_HTE_SEGMENT_VARS), request.brand)
     # W (nuisance controls) come from the causal_paths registry edge for this
     # question (copay_support needs insurance_access_score; no other registered

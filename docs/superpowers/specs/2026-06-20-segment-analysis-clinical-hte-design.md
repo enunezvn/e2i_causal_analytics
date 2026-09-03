@@ -177,3 +177,30 @@ All six findings adopted into the design above:
   `segment_comparison`/policy/profile imply two buckets. → Thread mid count through all summaries.
 - **LOW-2 — map from final state.** Route reads `graph.ainvoke` result directly (`:1206`), not
   `_build_output`. → Mapping targets `result`; `_build_output` expanded only if orchestrator needs it.
+
+## Addendum 2026-09-03 (wave 53) — question slots never enter X; clinical axes run as 0/1
+
+Since #1321 a brand's own clinical column is BOTH an effect modifier in the set above AND
+that brand's treatment axis (Remibrutinib `urticaria_severity_uas7`, Kisqali `disease_stage`,
+Fabhalta `complement_inhibitor_status`). Live `seg_05f29d1b3295` (uas7 → persistent_180d)
+put the treatment inside X: the median-split T was a deterministic function of an X column,
+CausalForestDML's propensity model was perfect (AUC 1.000, zero residual) and the forest
+returned ATE −0.514 on a 0/1 outcome (per-segment CATE −1.6..+0.4) against a planted +0.150.
+
+Contract changes (all red-first tested):
+
+- **X = brand-scoped modifier set MINUS the question's treatment and outcome**
+  (`_segment_effect_modifiers(brand, treatment_var=, outcome_var=)`), matching the causal
+  page's submit-path dedup. The nodes enforce the same invariant themselves
+  (`heterogeneous_optimizer/design.sanitize_effect_modifiers`), so no caller can reintroduce it.
+- **A #1321 axis in a QUESTION slot is loaded as its 0/1 contrast** via
+  `_CAUSAL_NUMERIC_DERIVATIONS` — the contrast the option label states ("UAS7 ≥ 28") and the
+  causal_paths edge was validated on; the two TEXT axes previously reached cate_estimator as
+  strings and failed closed. The same column as an effect modifier stays raw.
+- **All three nodes binarize a continuous treatment by ONE rule**
+  (`design.binarize_treatment`, strictly above the median). The uplift node previously handed
+  CausalML the raw score (27 groups, control "16.0"), so the cross-library validator compared
+  two estimands (9% "agreement").
+
+Faithful in-process run on the real Remibrutinib cohort after the fix: ATE +0.153, CATE
++0.08..+0.26 across 12 segments, cross-library agreement 0.776 (sign 1.00) → PASSED.

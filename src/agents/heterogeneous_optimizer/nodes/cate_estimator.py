@@ -17,6 +17,7 @@ import pandas as pd
 from src.causal.stats import z_score_for_alpha
 from src.utils.supabase_env import resolve_supabase_service_key
 
+from ..design import binarize_treatment, sanitize_effect_modifiers
 from ..state import CATEResult, HeterogeneousOptimizerState
 
 logger = logging.getLogger(__name__)
@@ -281,23 +282,19 @@ class CATEEstimatorNode:
             T_raw = T_series.to_numpy()
 
             # Binarize continuous treatment at median (consistent with causal_impact agent)
-            # This ensures comparable results between agents and better CATE estimation
-            if len(np.unique(T_raw)) > 2:
-                median_val = np.median(T_raw)
-                T = (T_raw > median_val).astype(int)
+            # This ensures comparable results between agents and better CATE estimation.
+            # ONE shared rule (design.binarize_treatment) so EconML here and CausalML in
+            # the uplift node estimate the SAME contrast.
+            T, binarized = binarize_treatment(T_raw)
+            if binarized is not None:
                 logger.info(
-                    f"Binarized continuous treatment at median={median_val:.2f}",
+                    f"Binarized continuous treatment at median={binarized['median_threshold']:.2f}",
                     extra={
                         "node": "cate_estimator",
                         "treatment_var": state["treatment_var"],
-                        "original_unique_values": int(len(np.unique(T_raw))),
-                        "median_threshold": float(median_val),
-                        "treated_count": int(np.sum(T)),
-                        "control_count": int(np.sum(1 - T)),
+                        **binarized,
                     },
                 )
-            else:
-                T = T_raw
 
             # Diagnostic logging for debugging ATE=0 issue
             logger.info(
@@ -324,12 +321,20 @@ class CATEEstimatorNode:
             # Encode effect modifiers (handle categorical).
             # Shard 07 C2: a provenance column (is_synthetic) must NEVER enter
             # the CATE design matrix as an effect modifier, even if a caller
-            # passed it explicitly. Sanitize against PROVENANCE_DROP_COLS.
-            from src.repositories.provenance import PROVENANCE_DROP_COLS
-
-            effect_modifiers = [
-                c for c in state["effect_modifiers"] if c not in PROVENANCE_DROP_COLS
-            ]
+            # passed it explicitly. Neither may the treatment or the outcome
+            # (wave 53): with T inside X the propensity model is perfect and the
+            # DML residual is zero — live ATE -0.514 on a 0/1 outcome.
+            effect_modifiers, dropped_modifiers = sanitize_effect_modifiers(state)
+            if dropped_modifiers:
+                logger.warning(
+                    "Dropped effect modifiers that must not enter the CATE design matrix",
+                    extra={
+                        "node": "cate_estimator",
+                        "dropped": dropped_modifiers,
+                        "treatment_var": state["treatment_var"],
+                        "outcome_var": state["outcome_var"],
+                    },
+                )
             X_df = df[effect_modifiers].copy()
             X = self._encode_features(X_df)
 
