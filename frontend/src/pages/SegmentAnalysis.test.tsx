@@ -624,6 +624,122 @@ describe('SegmentAnalysis — Library Validation honest-null', () => {
       screen.getByText('40% of 5 distinguishable pairs (below the 50% chance floor)')
     ).toBeInTheDocument();
   });
+
+  it('colors the Agreement Score badge off the verdict, not a re-derived 0.7 threshold', async () => {
+    // Wave 54 chance floor: score 0.70 can FAIL (ordering below chance), so a
+    // badge that re-derives "pass" from score >= 0.7 would render a branded
+    // "pass" colour beside a red "Failed" verdict (codex wave-54 iter-2).
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: ['econml', 'causalml'],
+        library_agreement_score: 0.7,
+        validation_passed: false,
+        cross_library_validation: {
+          computed: true,
+          method: '0.5*sign_agreement + 0.5*ordering_agreement (CI-distinguishable within-dimension pairs)',
+          n_segments_compared: 4,
+          sign_agreement: 1.0,
+          n_distinguishable_pairs: 5,
+          ordering_agreement: 0.4,
+          ordering_floor: 0.5,
+          spearman_rho: 0.2,
+          threshold: 0.7,
+          uplift_model: 'random_forest',
+        },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed')).toBeInTheDocument();
+    });
+    const scoreBadge = screen.getByText('70%');
+    expect(scoreBadge.className).not.toContain('bg-[var(--color-primary)]');
+    expect(scoreBadge.className).toContain('bg-[var(--color-secondary)]');
+  });
+
+  it('keeps the branded Agreement Score colour when the verdict passed', async () => {
+    // Positive control for the badge test above: a passed verdict at the same
+    // score keeps the "pass" colour, so the assertion is on the verdict, not
+    // on the badge never being branded.
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: ['econml', 'causalml'],
+        library_agreement_score: 0.7,
+        validation_passed: true,
+        cross_library_validation: {
+          computed: true,
+          method: 'sign_agreement only (ordering not testable: no CI-distinguishable segment pair)',
+          n_segments_compared: 4,
+          sign_agreement: 0.7,
+          n_distinguishable_pairs: 0,
+          ordering_agreement: null,
+          ordering_floor: 0.5,
+          spearman_rho: 0.1,
+          threshold: 0.7,
+          uplift_model: 'random_forest',
+        },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Passed')).toBeInTheDocument();
+    });
+    expect(screen.getByText('70%').className).toContain('bg-[var(--color-primary)]');
+  });
+
+  it('never discards a reported ordering agreement when the pair count is missing', async () => {
+    // The wire type declares ordering_agreement and n_distinguishable_pairs
+    // independently optional. A reported ordering with no pair count must not
+    // collapse to "no distinguishable pairs" (codex wave-54 iter-2).
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: ['econml', 'causalml'],
+        library_agreement_score: 0.9,
+        validation_passed: true,
+        cross_library_validation: {
+          computed: true,
+          method: '0.5*sign_agreement + 0.5*ordering_agreement (CI-distinguishable within-dimension pairs)',
+          n_segments_compared: 4,
+          sign_agreement: 1.0,
+          ordering_agreement: 0.8,
+          ordering_floor: 0.5,
+          spearman_rho: 0.6,
+          threshold: 0.7,
+          uplift_model: 'random_forest',
+        },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Ordering agreement')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Not testable (no distinguishable pairs)')).not.toBeInTheDocument();
+    expect(screen.getByText('80% of distinguishable pairs (count not reported)')).toBeInTheDocument();
+  });
 });
 
 describe('SegmentAnalysis — Policy Details formatting + zero-lift filtering', () => {

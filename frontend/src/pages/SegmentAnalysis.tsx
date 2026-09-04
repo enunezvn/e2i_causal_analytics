@@ -602,12 +602,22 @@ function ResponderDetailDialog({ profile, onClose }: ResponderDetailDialogProps)
  * below it (validation fails on that floor even when the composite passes).
  */
 function formatOrderingAgreement(detail: CrossLibraryValidationDetail): string {
-  const pairs = detail.n_distinguishable_pairs ?? 0;
   const ordering = detail.ordering_agreement;
-  if (ordering == null || pairs <= 0) {
-    return pairs > 0 ? 'Not testable' : 'Not testable (no distinguishable pairs)';
+  const pairs = detail.n_distinguishable_pairs;
+  if (ordering == null) {
+    // A reported ordering is the ONLY "testable" signal; the pair count just
+    // qualifies it (both come from the same backend branch, but the wire type
+    // declares them independently, so never let a missing count erase a
+    // reported ordering — codex wave-54 iter-2).
+    return pairs != null && pairs > 0
+      ? 'Not testable'
+      : 'Not testable (no distinguishable pairs)';
   }
-  const base = `${(ordering * 100).toFixed(0)}% of ${pairs} distinguishable pairs`;
+  const pct = `${(ordering * 100).toFixed(0)}%`;
+  const base =
+    pairs != null && pairs > 0
+      ? `${pct} of ${pairs} distinguishable pairs`
+      : `${pct} of distinguishable pairs (count not reported)`;
   const floor = detail.ordering_floor;
   if (floor != null && ordering < floor) {
     return `${base} (below the ${(floor * 100).toFixed(0)}% chance floor)`;
@@ -1314,9 +1324,11 @@ export default function SegmentAnalysis() {
                   <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                     <span>Agreement Score</span>
                     {analysisResult.library_agreement_score != null ? (
-                      // 0.7 mirrors the backend pass threshold, so color and
-                      // Validation Status can't disagree.
-                      <Badge variant={analysisResult.library_agreement_score >= 0.7 ? 'default' : 'secondary'}>
+                      // Colour follows the backend VERDICT, never a re-derived
+                      // score threshold: since wave 54 a 0.70 score can still
+                      // fail on the ordering chance floor, and a branded badge
+                      // beside a red "Failed" would contradict itself.
+                      <Badge variant={analysisResult.validation_passed ? 'default' : 'secondary'}>
                         {(analysisResult.library_agreement_score * 100).toFixed(0)}%
                       </Badge>
                     ) : (
