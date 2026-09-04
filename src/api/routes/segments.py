@@ -1628,6 +1628,14 @@ class SegmentDatasetsResponse(BaseModel):
         default_factory=dict,
         description="Human-readable display labels keyed by column name",
     )
+    definitions: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Plain-language definition of each offered treatment/outcome column "
+            "(what 1 vs 0 means), keyed by column name. Same SSOT as `labels`; a "
+            "column without a curated definition is absent from the map."
+        ),
+    )
     outcomes_by_treatment: Dict[str, List[str]] = Field(
         default_factory=dict,
         description=(
@@ -1742,6 +1750,7 @@ async def get_segment_datasets(
     """
     from src.api.routes.causal import (
         _CAUSAL_DATASET_SPECS,
+        _COLUMN_DEFINITIONS,
         _COLUMN_LABELS,
         _brand_scoped_covariates,
     )
@@ -1783,12 +1792,15 @@ async def get_segment_datasets(
 
     offered = list(dict.fromkeys(treatments + outcomes))
     labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in offered}
+    # Only offered columns, only curated text — never a synthesized sentence.
+    definitions = {c: _COLUMN_DEFINITIONS[c] for c in offered if c in _COLUMN_DEFINITIONS}
 
     return SegmentDatasetsResponse(
         treatments=treatments,
         outcomes=outcomes,
         brands=brands,
         labels=labels,
+        definitions=definitions,
         outcomes_by_treatment=outcomes_by_treatment,
         brand=brand,
         options_source=options_source,

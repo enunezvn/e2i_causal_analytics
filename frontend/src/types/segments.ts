@@ -401,6 +401,13 @@ export interface SegmentDatasetsResponse {
    */
   labels?: Record<string, string>;
   /**
+   * Plain-language definition of each offered column (what 1 vs 0 means), keyed
+   * by column name — same SSOT as `labels`. The page renders the SELECTED
+   * option's definition under each dropdown; a column absent here gets no line
+   * (the page never invents a definition).
+   */
+  definitions?: Record<string, string>;
+  /**
    * Outcomes with a modeled causal edge from each offered treatment (causal_paths
    * SSOT, scoped to `brand`). The Outcome dropdown must offer ONLY these for the
    * selected treatment. Empty/absent when `options_source` is the curated

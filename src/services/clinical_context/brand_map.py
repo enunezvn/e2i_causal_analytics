@@ -154,7 +154,7 @@ _COMMERCIAL_TREATMENT_CONTEXT: Dict[str, Dict[str, Optional[str]]] = {
         "literature_theme": None,
     },
     "sample_dropped": {
-        "label": "Sample dropped",
+        "label": "Product samples provided (rep sample drop)",
         "framing": "receiving a product sample",
         "literature_theme": None,
     },

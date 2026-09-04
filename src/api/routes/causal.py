@@ -1119,15 +1119,83 @@ _COLUMN_LABELS: Dict[str, str] = {
     "urticaria_severity_uas7": "Uncontrolled CSU (UAS7 ≥ 28)",
     "copay_support": "Copay support",
     "psp_enrolled": "Patient support program",
-    # COMM-ARMS Phase 3: two initiation-latent commercial arms.
+    # COMM-ARMS Phase 3/4: the initiation-latent commercial arms. "Sample
+    # dropped" (rep jargon for leaving product samples) read as "excluded from
+    # the sample" on the /segment-analysis dropdown (2026-09-04), so the label
+    # names the lever. trigger_accepted previously had NO curated label and fell
+    # back to the auto-capitalized "Trigger accepted" while the clinical-context
+    # panel (brand_map._COMMERCIAL_TREATMENT_CONTEXT) said "NBA trigger accepted";
+    # the two SSOTs are now pinned equal (test_commercial_arm_labels_agree_...).
     "rep_detailing_high": "High rep detailing",
-    "sample_dropped": "Sample dropped",
+    "sample_dropped": "Product samples provided (rep sample drop)",
+    "trigger_accepted": "NBA trigger accepted",
     # NOT a measured payer metric: a deterministic access gradient derived from
     # insurance_type (range approx -0.35..+0.45, higher = better access). The label
     # says "derived" for the same reason disease_severity's label says
     # "cross-indication" — an analyst must not read a synthetic index as a real
     # instrument.
     "insurance_access_score": "Insurance access (derived from insurance type)",
+}
+
+# Plain-language definitions of the curated treatment/outcome columns — what a
+# 1 vs 0 means — served next to _COLUMN_LABELS (GET /segments/datasets
+# `definitions`) so the config dropdowns can explain the selected option
+# (2026-09-04 /segment-analysis review: "Sample dropped" was unreadable and no
+# option said what it measured). Worded from the DGP that generates the columns
+# (src/ml/synthetic/dgp/*, treatment_arm.ARM_REGISTRY, adherence_outcomes,
+# cohort_outcomes). Every patient_journeys treatment + outcome MUST have an entry
+# (test_every_patient_grain_option_has_a_definition); a column absent here is
+# simply served without a definition — the FE never invents one.
+_COLUMN_DEFINITIONS: Dict[str, str] = {
+    # --- patient_journeys treatments ---
+    "treatment_arm": (
+        "Patient is on the brand's therapy (1) vs not (0). Observational: assignment "
+        "depends on disease severity and academic HCP, which the analysis adjusts for."
+    ),
+    "copay_support": "Patient received copay assistance (1) vs not (0).",
+    "psp_enrolled": "Patient enrolled in the brand's patient support program (1) vs not (0).",
+    "rep_detailing_high": (
+        "The patient's prescriber received high-frequency sales-rep detailing (1) vs not (0)."
+    ),
+    "sample_dropped": (
+        "The patient's prescriber received product samples from the sales rep (1) vs "
+        "not (0). A promotional lever, not a data exclusion."
+    ),
+    "trigger_accepted": (
+        "The prescriber acted on a next-best-action (NBA) trigger (1) vs not (0)."
+    ),
+    "complement_inhibitor_status": (
+        "Fabhalta only: patient switched from a prior C5 inhibitor "
+        "(eculizumab / ravulizumab) (1) vs C5-inhibitor-naive (0)."
+    ),
+    "disease_stage": (
+        "Kisqali only: advanced-line disease (metastatic / stage IV) (1) vs earlier line (0)."
+    ),
+    "urticaria_severity_uas7": (
+        "Remibrutinib only: uncontrolled CSU, UAS7 ≥ 28 (1) vs below 28 (0)."
+    ),
+    # --- patient_journeys outcomes (treatment_initiated is also the target of the
+    # initiation-latent arms, so it sits on both sides of the question) ---
+    "treatment_initiated": "Patient started therapy (1) vs did not (0).",
+    # persistent/discontinued are drawn for EVERY row (the DGP conditions on
+    # treatment_arm, not treatment_initiated) and the loader applies no initiator
+    # filter, so the wording must not promise a cohort restriction that is not
+    # applied (codex iter-1, PR #1893; measured on prod 2026-09-04).
+    "persistent_180d": (
+        "Still on therapy at day 180 of the window (1) vs not (0). "
+        "The complement of Discontinued at 180d."
+    ),
+    "discontinued_180d": (
+        "Stopped therapy within the 180-day window (1) vs still on therapy (0). "
+        "The complement of Persistent at 180d."
+    ),
+    "adherent_180d": (
+        "Proportion of days covered (PDC) ≥ 0.80 over the 180-day window (1) vs below (0)."
+    ),
+    "low_gap_180d": (
+        "Refill gap of 30 days or less over the 180-day window (1) vs a longer gap (0). "
+        "A subset of Adherent at 180d."
+    ),
 }
 
 # Datasets that are NOT a single physical table — built by a JOIN-aware loader
