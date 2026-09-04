@@ -941,6 +941,9 @@ class _DurableAnalysesStore:
         sanitized.cate_by_segment = {}
         sanitized.high_responders = []
         sanitized.low_responders = []
+        # Same per-segment CATE profiles as the two buckets above; the page's
+        # "Average Responders" column reads this list (codex wave-54 iter-5).
+        sanitized.mid_responders = []
         sanitized.policy_recommendations = []
         sanitized.overall_ate = None
         sanitized.heterogeneity_score = None
@@ -963,6 +966,11 @@ class _DurableAnalysesStore:
         sanitized.validation_passed = None
         sanitized.expected_total_lift = None
         sanitized.expected_lift_pp = None
+        # Prose policy_learner builds FROM the two lift numbers just nulled
+        # ("+2.0 percentage points (~125 incremental patients ...)"); the page
+        # renders that card whenever the text exists, beside an N/A lift KPI
+        # (codex wave-54 iter-5).
+        sanitized.optimal_allocation_summary = None
         sanitized.confidence = 0.0
         # Free text generated FROM the numbers just scrubbed. The page renders
         # every card regardless of status, so an LM narrative about the dropped

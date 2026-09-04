@@ -2135,6 +2135,68 @@ class TestSanitizeScrubsAllFloatFields:
         assert got.strategic_interpretation is None
         assert got.key_insights == []
 
+    @pytest.mark.asyncio
+    async def test_sanitize_drops_allocation_summary_and_mid_responders(self):
+        """A degenerate fit drops EVERY artefact derived from the scrubbed numbers.
+
+        ``optimal_allocation_summary`` is prose built by policy_learner FROM
+        ``expected_lift_pp`` / ``expected_total_lift`` ("+2.0 percentage points
+        (~125 incremental patients ...)"); the page renders that card whenever
+        the text is present, so it would sit beside an "Expected Lift: N/A" KPI.
+        ``mid_responders`` are per-segment CATE profiles exactly like the
+        high/low buckets the scrub already empties (codex wave-54 iter-5).
+        """
+        import math
+
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            SegmentProfile,
+            _DurableAnalysesStore,
+        )
+
+        resp = SegmentAnalysisResponse(
+            analysis_id="seg_alloc",
+            status=SegmentAnalysisStatus.COMPLETED,
+            timestamp=datetime.now(timezone.utc),
+            overall_ate=math.nan,
+            expected_total_lift=125.0,
+            expected_lift_pp=0.02,
+            optimal_allocation_summary=(
+                "Expected outcome lift by targeting the region axis: +2.0 "
+                "percentage points (~125 incremental patients on the best single axis)"
+            ),
+            mid_responders=[
+                SegmentProfile(
+                    segment_id="region_west",
+                    responder_type=ResponderType.AVERAGE,
+                    cate_estimate=0.01,
+                    defining_features=[{"feature": "region", "value": "west"}],
+                    size=300,
+                    size_percentage=25.0,
+                    recommendation="Maintain current allocation",
+                )
+            ],
+        )
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        await store.set("seg_alloc", resp)
+
+        got = await store.get("seg_alloc")
+        assert got is not None
+        assert got.status == SegmentAnalysisStatus.FAILED
+        assert got.expected_total_lift is None
+        assert got.expected_lift_pp is None
+        assert got.optimal_allocation_summary is None, (
+            "allocation prose quoting the scrubbed lift numbers survived sanitisation"
+        )
+        assert got.mid_responders == [], (
+            "mid_responders survived while high/low responders were emptied"
+        )
+
     @pytest.mark.parametrize(
         "field",
         [
