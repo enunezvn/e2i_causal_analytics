@@ -33,6 +33,13 @@ _COMMENT_RE = re.compile(
     r"COMMENT\s+ON\s+COLUMN\s+(?:public\.)?patient_journeys\.(\w+)\s+IS\s+'((?:[^']|'')*)'",
     re.IGNORECASE | re.DOTALL,
 )
+# An ALTER TABLE patient_journeys statement (up to its ';'); DROP COLUMN clauses
+# inside it clear the column comment, so the parser must model them too.
+_ALTER_RE = re.compile(
+    r"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:public\.)?patient_journeys\b([^;]*);",
+    re.IGNORECASE | re.DOTALL,
+)
+_DROP_RE = re.compile(r"DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?(\w+)", re.IGNORECASE)
 
 
 def _migration_order(path: Path) -> tuple[int, str]:
@@ -40,12 +47,25 @@ def _migration_order(path: Path) -> tuple[int, str]:
     return (int(m.group(1)) if m else 10**9, path.name)
 
 
-def _effective_comments() -> dict[str, tuple[str, str]]:
-    """column -> (migration filename, comment text) for the LAST comment applied."""
+def _effective_comments(migrations: Path = MIGRATIONS) -> dict[str, tuple[str, str]]:
+    """column -> (migration filename, comment text) for the LAST comment applied,
+    replaying COMMENT ON COLUMN and DROP COLUMN in migration (then statement) order."""
     effective: dict[str, tuple[str, str]] = {}
-    for path in sorted(MIGRATIONS.glob("*.sql"), key=_migration_order):
-        for col, text in _COMMENT_RE.findall(path.read_text()):
-            if col in COLUMNS:
+    for path in sorted(migrations.glob("*.sql"), key=_migration_order):
+        sql = path.read_text()
+        events: list[tuple[int, str, str, str]] = [
+            (m.start(), "comment", m.group(1), m.group(2)) for m in _COMMENT_RE.finditer(sql)
+        ]
+        for alter in _ALTER_RE.finditer(sql):
+            events.extend(
+                (alter.start(), "drop", d.group(1), "") for d in _DROP_RE.finditer(alter.group(1))
+            )
+        for _, kind, col, text in sorted(events):
+            if col not in COLUMNS:
+                continue
+            if kind == "drop":
+                effective.pop(col, None)
+            else:
                 effective[col] = (path.name, " ".join(text.replace("''", "'").split()))
     return effective
 
@@ -80,7 +100,11 @@ def test_effective_comments_describe_the_rwd_path_per_column():
     converter = (MIGRATIONS.parents[1] / "scripts" / "convert_optum_rwd.py").read_text()
     assert '"discontinued_180d"' in converter
     assert '"persistent_at_180d"' in converter
-    assert "persistent_180d" not in converter
+    # The converter writes journey dicts with quoted string keys; only that form
+    # is a write path (a docstring merely mentioning the name is not).
+    assert '"persistent_180d"' not in converter, (
+        "convert_optum_rwd.py now writes persistent_180d; revisit the comment"
+    )
     assert re.search(
         r"_target_discontinued_180d\(patid, init_date\).{0,200}init_date is not None",
         converter,
@@ -93,6 +117,27 @@ def test_effective_comments_describe_the_rwd_path_per_column():
         "not this column"
     )
     assert "initiators" in effective["discontinued_180d"][1].lower()
+
+
+def test_effective_comment_is_cleared_by_a_later_drop_column(tmp_path):
+    """A later DROP COLUMN wipes the DB comment; the parser must not keep
+    reporting the older text as effective (codex iter-3, PR #1894). A comment
+    re-applied after a recreate becomes effective again."""
+    (tmp_path / "001_add.sql").write_text(
+        "COMMENT ON COLUMN patient_journeys.persistent_180d IS 'old text';\n"
+        "COMMENT ON COLUMN patient_journeys.discontinued_180d IS 'kept';\n"
+    )
+    (tmp_path / "002_drop.sql").write_text(
+        "ALTER TABLE public.patient_journeys\n    DROP COLUMN IF EXISTS persistent_180d;\n"
+    )
+    effective = _effective_comments(tmp_path)
+    assert "persistent_180d" not in effective
+    assert effective["discontinued_180d"] == ("001_add.sql", "kept")
+
+    (tmp_path / "003_recomment.sql").write_text(
+        "COMMENT ON COLUMN patient_journeys.persistent_180d IS 'new text';\n"
+    )
+    assert _effective_comments(tmp_path)["persistent_180d"] == ("003_recomment.sql", "new text")
 
 
 def test_generator_draws_for_every_row_without_an_initiator_input():
