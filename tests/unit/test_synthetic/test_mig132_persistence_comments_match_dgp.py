@@ -2,8 +2,10 @@
 describe the data the generator actually ships.
 
 Migration 064 (M2, 2026-06-09) documented both columns as "Filtered
-treatment_initiated=1". That is the RWD semantic (convert_optum_rwd.py populates
-them only when an initiation date exists) but NOT the synthetic DGP's:
+treatment_initiated=1". That is the RWD semantic, and only for discontinued_180d
+(convert_optum_rwd.py writes it solely for initiators of its discontinuation
+cohort and never writes persistent_180d at all; its persistence target is
+persistent_at_180d), but NOT the synthetic DGP's:
 ``generate_discontinuation_outcomes`` has no treatment_initiated input and draws
 an outcome for every unit as a function of ``treatment_arm``. Measured on prod
 2026-09-04 (all rows synthetic): 17,186 / 17,186 treatment_initiated=0 rows carry
