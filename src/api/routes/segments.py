@@ -763,6 +763,31 @@ async def _default_redis_factory() -> Any:
     return await get_redis()
 
 
+# ``SegmentAnalysisResponse`` fields that describe what the request WAS (ids,
+# question, brand, variables, CI level, method, libraries, latencies,
+# timestamp, warnings) rather than what the estimators produced. They are the
+# ONLY fields a degenerate-fit FAILED record keeps — see
+# ``_DurableAnalysesStore._sanitize_non_finite`` (wave 54).
+_FAILED_RECORD_PROVENANCE_FIELDS = frozenset(
+    {
+        "analysis_id",
+        "status",
+        "question_type",
+        "brand",
+        "treatment_var",
+        "outcome_var",
+        "confidence_level",
+        "segmentation_method_used",
+        "libraries_used",
+        "estimation_latency_ms",
+        "analysis_latency_ms",
+        "total_latency_ms",
+        "timestamp",
+        "warnings",
+    }
+)
+
+
 class _DurableAnalysesStore:
     """Durable, cross-worker analyses store backed by Redis.
 
@@ -936,51 +961,27 @@ class _DurableAnalysesStore:
             "record.",
             analysis_id,
         )
+        # The honest FAILED record is defined by what it KEEPS, not by what it
+        # drops. Codex wave-54 iters 4-6 each found one more artefact of the
+        # failed fit surviving a hand-enumerated scrub (LM narrative, allocation
+        # prose + mid_responders, then the hierarchical / uplift diagnostics):
+        # the page renders every card regardless of status, so any value the
+        # degenerate estimators PRODUCED would sit beside "N/A / Not computed /
+        # Not run" and contradict it. So provenance (what the request WAS)
+        # survives and every other field resets to its schema default — all
+        # honest empties (None / [] / {} / 0.0; ``confidence`` is non-Optional
+        # so it becomes 0.0 rather than a fabricated estimate). A field added
+        # later is scrubbed by construction, and
+        # ``test_sanitize_resets_every_non_provenance_field_to_its_schema_default``
+        # walks the model so the whitelist cannot drift silently.
         sanitized = response.model_copy(deep=True)
         sanitized.status = SegmentAnalysisStatus.FAILED
-        sanitized.cate_by_segment = {}
-        sanitized.high_responders = []
-        sanitized.low_responders = []
-        # Same per-segment CATE profiles as the two buckets above; the page's
-        # "Average Responders" column reads this list (codex wave-54 iter-5).
-        sanitized.mid_responders = []
-        sanitized.policy_recommendations = []
-        sanitized.overall_ate = None
-        sanitized.heterogeneity_score = None
-        # Round-2 BUG 1: ``_has_non_finite_floats`` fires for a non-finite in ANY
-        # float field, so dropping only the CATE/policy payloads is INSUFFICIENT
-        # — a NaN/inf in any of the fields below would survive and re-poison the
-        # record (unreadable on read -> silently skipped + pruned on
-        # enumeration, vanishing from durable storage). Scrub EVERY remaining
-        # float-bearing field so the result is provably finite. The Optional
-        # ones drop to ``None``; ``confidence`` is non-Optional so it resets to
-        # the schema default ``0.0`` rather than a fabricated estimate.
-        sanitized.feature_importance = None
-        sanitized.uplift_metrics = None
-        sanitized.library_agreement_score = None
-        sanitized.cross_library_validation = None
-        # The verdict is a bool, so the finite-float scrub never touched it: a
-        # degenerate fit kept ``validation_passed=True`` beside a nulled score
-        # and the card showed "Passed" next to "Not computed" (wave 54). A
-        # verdict cannot outlive the score it summarises.
-        sanitized.validation_passed = None
-        sanitized.expected_total_lift = None
-        sanitized.expected_lift_pp = None
-        # Prose policy_learner builds FROM the two lift numbers just nulled
-        # ("+2.0 percentage points (~125 incremental patients ...)"); the page
-        # renders that card whenever the text exists, beside an N/A lift KPI
-        # (codex wave-54 iter-5).
-        sanitized.optimal_allocation_summary = None
-        sanitized.confidence = 0.0
-        # Free text generated FROM the numbers just scrubbed. The page renders
-        # every card regardless of status, so an LM narrative about the dropped
-        # CATEs, or a cross-library warning quoting the nulled score, would sit
-        # beside "Not computed / Not run" and contradict it. Keep warnings that
-        # describe real conditions (positivity, saturation); drop only the
-        # cross-library line whose structured backing is gone (wave 54).
-        sanitized.executive_summary = None
-        sanitized.strategic_interpretation = None
-        sanitized.key_insights = []
+        for name, field in SegmentAnalysisResponse.model_fields.items():
+            if name in _FAILED_RECORD_PROVENANCE_FIELDS:
+                continue
+            setattr(sanitized, name, field.get_default(call_default_factory=True))
+        # Keep warnings that describe real conditions (positivity, saturation);
+        # drop only the cross-library line quoting the score just nulled.
         sanitized.warnings = [
             w for w in sanitized.warnings if not w.startswith("Cross-library validation")
         ]

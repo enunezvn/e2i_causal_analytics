@@ -2197,6 +2197,157 @@ class TestSanitizeScrubsAllFloatFields:
             "mid_responders survived while high/low responders were emptied"
         )
 
+    @pytest.mark.asyncio
+    async def test_sanitize_resets_every_non_provenance_field_to_its_schema_default(self):
+        """A degenerate fit keeps ONLY provenance; every other field resets.
+
+        Codex wave-54 iters 4, 5 and 6 each found one more artefact of the failed
+        fit surviving a hand-enumerated scrub (LM narrative, allocation prose +
+        mid_responders, then the hierarchical / uplift diagnostics). The honest
+        FAILED record is defined the other way round: what the request WAS
+        (ids, question, brand, variables, CI level, method, libraries,
+        latencies, timestamp, warnings) survives, and everything the failed
+        estimators PRODUCED goes back to its schema default. This test
+        populates every non-provenance field with a finite, non-default value
+        and walks the model, so a field added later is scrubbed by
+        construction or fails here.
+        """
+        import math
+
+        from src.api.routes.segments import (
+            CATEResult,
+            PolicyRecommendation,
+            SegmentAnalysisResponse,
+            SegmentProfile,
+            UpliftMetrics,
+            _DurableAnalysesStore,
+        )
+
+        provenance = {
+            "analysis_id",
+            "status",
+            "question_type",
+            "brand",
+            "treatment_var",
+            "outcome_var",
+            "confidence_level",
+            "segmentation_method_used",
+            "libraries_used",
+            "estimation_latency_ms",
+            "analysis_latency_ms",
+            "total_latency_ms",
+            "timestamp",
+            "warnings",
+        }
+        profile = SegmentProfile(
+            segment_id="region_west",
+            responder_type=ResponderType.AVERAGE,
+            cate_estimate=0.01,
+            defining_features=[{"feature": "region", "value": "west"}],
+            size=300,
+            size_percentage=25.0,
+            recommendation="Maintain",
+        )
+        produced = {
+            "cate_by_segment": {
+                "region": [
+                    CATEResult(
+                        segment_name="region",
+                        segment_value="west",
+                        cate_estimate=0.12,
+                        cate_ci_lower=0.05,
+                        cate_ci_upper=0.19,
+                        sample_size=300,
+                        statistical_significance=True,
+                    )
+                ]
+            },
+            "overall_ate": math.nan,  # the poison that marks the fit degenerate
+            "heterogeneity_score": 0.4,
+            "feature_importance": {"age": 0.6},
+            "uplift_metrics": UpliftMetrics(
+                overall_auuc=0.6, overall_qini=0.1, targeting_efficiency=0.7, model_type_used="t"
+            ),
+            "high_responders": [profile],
+            "mid_responders": [profile],
+            "low_responders": [profile],
+            "policy_recommendations": [
+                PolicyRecommendation(
+                    segment="region_west",
+                    current_treatment_rate=0.3,
+                    recommended_treatment_rate=0.5,
+                    expected_incremental_outcome=12.0,
+                    confidence=0.8,
+                )
+            ],
+            "expected_total_lift": 125.0,
+            "expected_lift_pp": 0.02,
+            "optimal_allocation_summary": "+2.0 percentage points (~125 incremental patients)",
+            "executive_summary": "Northeast shows 74% higher response.",
+            "strategic_interpretation": "Target high severity first.",
+            "key_insights": ["High severity responds 2x."],
+            "segment_comparison": {"best": "region_west"},
+            "segment_heterogeneity": 42.0,
+            "n_segments_analyzed": 4,
+            "overall_hierarchical_ate": 0.08,
+            "hierarchical_segment_results": [{"segment": "west", "ate": 0.08}],
+            "uplift_by_segment": {"region": [{"segment_value": "west", "mean_uplift_score": 0.03}]},
+            "library_agreement_score": 0.9,
+            "validation_passed": True,
+            "cross_library_validation": {"computed": True, "sign_agreement": 1.0},
+            "confidence": 0.85,
+        }
+        all_fields = set(SegmentAnalysisResponse.model_fields)
+        assert set(produced) == all_fields - provenance, (
+            "populate every non-provenance field so the walk below is complete: "
+            f"missing={sorted(all_fields - provenance - set(produced))} "
+            f"extra={sorted(set(produced) - (all_fields - provenance))}"
+        )
+
+        resp = SegmentAnalysisResponse(
+            analysis_id="seg_complete",
+            status=SegmentAnalysisStatus.COMPLETED,
+            question_type=None,
+            brand="Remibrutinib",
+            treatment_var="treatment_arm",
+            outcome_var="treatment_initiated",
+            confidence_level=0.9,
+            segmentation_method_used="hierarchical",
+            libraries_used=["econml", "causalml"],
+            estimation_latency_ms=1200,
+            analysis_latency_ms=300,
+            total_latency_ms=1500,
+            timestamp=datetime.now(timezone.utc),
+            warnings=["Positivity: 3 segments below the overlap floor"],
+            **produced,
+        )
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        await store.set("seg_complete", resp)
+        got = await store.get("seg_complete")
+        assert got is not None
+        assert got.status == SegmentAnalysisStatus.FAILED
+
+        survivors = {}
+        for name, field in SegmentAnalysisResponse.model_fields.items():
+            if name in provenance:
+                continue
+            default = field.get_default(call_default_factory=True)
+            if getattr(got, name) != default:
+                survivors[name] = getattr(got, name)
+        assert not survivors, f"failed-fit artefacts survived sanitisation: {survivors}"
+
+        # Provenance is untouched (warnings keep the real condition + gain the
+        # non-finite explanation; status is the honest FAILED).
+        for name in provenance - {"status", "warnings"}:
+            assert getattr(got, name) == getattr(resp, name), name
+        assert "Positivity: 3 segments below the overlap floor" in got.warnings
+        assert any("non-finite" in w for w in got.warnings)
+
     @pytest.mark.parametrize(
         "field",
         [
