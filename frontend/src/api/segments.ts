@@ -186,7 +186,8 @@ export async function getSegmentHealth(): Promise<SegmentHealthResponse> {
  * @param brand - Brand to scope the options to (omit = all brands). Treatments are
  *   brand-scoped (a brand-distinct clinical axis only on its own cohort) and each
  *   treatment lists only the outcomes it has a modeled causal edge to.
- * @returns Brand-scoped treatment/outcome options + brand filter list
+ * @returns Brand-scoped treatment/outcome options + brand filter list, with
+ *   `labels` and `definitions` (what 1 vs 0 means) keyed by column
  *
  * @example
  * ```typescript

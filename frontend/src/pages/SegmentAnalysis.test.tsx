@@ -1106,3 +1106,100 @@ describe('SegmentAnalysis — poll ceiling covers the measured single-brand runt
     expect(arg.maxWaitMs).toBeGreaterThanOrEqual(300_000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Option definitions (2026-09-04 /segment-analysis review). "Sample dropped"
+// read as "excluded from the sample", and neither dropdown said what a 0/1
+// option means. GET /segments/datasets now ships a `definitions` map next to
+// `labels`; the page renders the SELECTED option's definition under each
+// dropdown and follows the selection. No backend definition -> no line (the
+// page never invents one).
+// ---------------------------------------------------------------------------
+describe('SegmentAnalysis — option definitions under the config dropdowns', () => {
+  const definedDatasets = {
+    treatments: ['treatment_arm', 'sample_dropped'],
+    outcomes: ['persistent_180d', 'treatment_initiated'],
+    outcomes_by_treatment: {
+      treatment_arm: ['persistent_180d', 'treatment_initiated'],
+      sample_dropped: ['treatment_initiated'],
+    },
+    brands: ['Kisqali'],
+    brand: null,
+    options_source: 'causal_paths' as const,
+    labels: {
+      treatment_arm: 'Treatment arm',
+      sample_dropped: 'Product samples provided (rep sample drop)',
+      persistent_180d: 'Persistent at 180d',
+      treatment_initiated: 'Treatment initiated',
+    },
+    definitions: {
+      treatment_arm: 'Patient is on the brand therapy (1) vs not (0).',
+      sample_dropped: 'Prescriber received product samples from the sales rep (1/0).',
+      persistent_180d: 'Still on therapy 180 days after initiation (1/0).',
+      treatment_initiated: 'Patient started therapy (1/0).',
+    },
+  };
+
+  function primeDefinitions(datasets: object) {
+    primeBaseHooks();
+    mockHook(useSegmentDatasets).mockReturnValue({ data: datasets, isLoading: false, error: null });
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+  }
+
+  it('shows the selected treatment and outcome definitions and follows the selection', async () => {
+    const user = userEvent.setup();
+    primeDefinitions(definedDatasets);
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    // Defaults: treatment_arm -> persistent_180d.
+    expect(screen.getByTestId('treatment-definition')).toHaveTextContent(
+      'Patient is on the brand therapy (1) vs not (0).'
+    );
+    expect(screen.getByTestId('outcome-definition')).toHaveTextContent(
+      'Still on therapy 180 days after initiation (1/0).'
+    );
+
+    // Pick the arm whose old label read as "excluded from the sample".
+    await user.click(screen.getByRole('combobox', { name: 'Treatment variable' }));
+    await user.click(
+      await screen.findByRole('option', { name: 'Product samples provided (rep sample drop)' })
+    );
+
+    expect(screen.getByTestId('treatment-definition')).toHaveTextContent(
+      'Prescriber received product samples from the sales rep (1/0).'
+    );
+    // The outcome auto-scopes to the arm's only modeled outcome; its definition follows.
+    const outcomeDef = await screen.findByText('Patient started therapy (1/0).');
+    expect(outcomeDef).toHaveAttribute('id', 'outcome-definition');
+  });
+
+  it('renders no definition line when the backend sends none (never invents text)', () => {
+    primeDefinitions({ ...definedDatasets, definitions: undefined });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    expect(screen.queryByTestId('treatment-definition')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('outcome-definition')).not.toBeInTheDocument();
+  });
+
+  it('links each dropdown to its definition for assistive tech (aria-describedby)', () => {
+    primeDefinitions(definedDatasets);
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    expect(screen.getByRole('combobox', { name: 'Treatment variable' })).toHaveAttribute(
+      'aria-describedby',
+      'treatment-definition'
+    );
+    expect(screen.getByRole('combobox', { name: 'Outcome variable' })).toHaveAttribute(
+      'aria-describedby',
+      'outcome-definition'
+    );
+  });
+});

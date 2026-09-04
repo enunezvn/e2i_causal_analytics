@@ -17387,6 +17387,13 @@ export interface components {
                 [key: string]: string;
             };
             /**
+             * Definitions
+             * @description Plain-language definition of each offered treatment/outcome column (what 1 vs 0 means), keyed by column name. Same SSOT as `labels`; a column without a curated definition is absent from the map.
+             */
+            definitions?: {
+                [key: string]: string;
+            };
+            /**
              * Outcomes By Treatment
              * @description Outcomes with a modeled causal edge from each offered treatment (causal_paths SSOT, brand-scoped). Empty when options_source is the curated fallback — the FE then offers the flat `outcomes` list.
              */

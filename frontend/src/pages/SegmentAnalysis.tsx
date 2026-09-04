@@ -737,6 +737,12 @@ export default function SegmentAnalysis() {
   // dropdowns previously always title-cased the raw column, so the curated labels
   // GET /segments/datasets returns never reached the user.
   const labelFor = (col: string) => datasets?.labels?.[col] ?? titleCase(col);
+  // The backend's plain-language definition of a column (what 1 vs 0 means).
+  // Rendered under each dropdown for the SELECTED option only; undefined when
+  // the backend curates none — the page never invents a definition.
+  const definitionFor = (col: string) => datasets?.definitions?.[col];
+  const treatmentDefinition = definitionFor(selectedTreatment);
+  const outcomeDefinition = definitionFor(selectedOutcome);
 
   // Policy Details shows only actionable recommendations. Zero-lift entries are
   // segments the backend's above-ATE significance gate kept at their current
@@ -992,7 +998,11 @@ export default function SegmentAnalysis() {
             <div>
               <label htmlFor="treatment-select" className="text-sm font-medium mb-2 block">Treatment</label>
               <Select value={selectedTreatment} onValueChange={setSelectedTreatment} disabled={runAnalysis.isPending}>
-                <SelectTrigger id="treatment-select" aria-label="Treatment variable">
+                <SelectTrigger
+                  id="treatment-select"
+                  aria-label="Treatment variable"
+                  aria-describedby={treatmentDefinition ? 'treatment-definition' : undefined}
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1003,11 +1013,24 @@ export default function SegmentAnalysis() {
                   ))}
                 </SelectContent>
               </Select>
+              {treatmentDefinition && (
+                <p
+                  id="treatment-definition"
+                  data-testid="treatment-definition"
+                  className="text-xs text-muted-foreground mt-1"
+                >
+                  {treatmentDefinition}
+                </p>
+              )}
             </div>
             <div>
               <label htmlFor="outcome-select" className="text-sm font-medium mb-2 block">Outcome</label>
               <Select value={selectedOutcome} onValueChange={setSelectedOutcome} disabled={runAnalysis.isPending}>
-                <SelectTrigger id="outcome-select" aria-label="Outcome variable">
+                <SelectTrigger
+                  id="outcome-select"
+                  aria-label="Outcome variable"
+                  aria-describedby={outcomeDefinition ? 'outcome-definition' : undefined}
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1018,6 +1041,15 @@ export default function SegmentAnalysis() {
                   ))}
                 </SelectContent>
               </Select>
+              {outcomeDefinition && (
+                <p
+                  id="outcome-definition"
+                  data-testid="outcome-definition"
+                  className="text-xs text-muted-foreground mt-1"
+                >
+                  {outcomeDefinition}
+                </p>
+              )}
             </div>
             <div className="flex items-end">
               <Button
