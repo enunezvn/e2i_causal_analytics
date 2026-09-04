@@ -320,9 +320,9 @@ export interface SegmentAnalysisResponse {
   /** Causal libraries used */
   libraries_used?: string[];
   /** Agreement between libraries (0-1) */
-  library_agreement_score?: number;
+  library_agreement_score?: number | null;
   /** Whether cross-validation passed */
-  validation_passed?: boolean;
+  validation_passed?: boolean | null;
   /**
    * Components behind library_agreement_score (wave 54). Direction agreement
    * covers every segment both libraries scored; ordering agreement covers only

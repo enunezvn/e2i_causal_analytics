@@ -964,6 +964,18 @@ class _DurableAnalysesStore:
         sanitized.expected_total_lift = None
         sanitized.expected_lift_pp = None
         sanitized.confidence = 0.0
+        # Free text generated FROM the numbers just scrubbed. The page renders
+        # every card regardless of status, so an LM narrative about the dropped
+        # CATEs, or a cross-library warning quoting the nulled score, would sit
+        # beside "Not computed / Not run" and contradict it. Keep warnings that
+        # describe real conditions (positivity, saturation); drop only the
+        # cross-library line whose structured backing is gone (wave 54).
+        sanitized.executive_summary = None
+        sanitized.strategic_interpretation = None
+        sanitized.key_insights = []
+        sanitized.warnings = [
+            w for w in sanitized.warnings if not w.startswith("Cross-library validation")
+        ]
         if "non-finite" not in " ".join(sanitized.warnings).lower():
             sanitized.warnings.append(
                 "Analysis produced non-finite (NaN/inf) estimates; marked as failed."

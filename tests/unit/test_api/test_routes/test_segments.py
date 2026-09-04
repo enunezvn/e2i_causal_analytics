@@ -2098,6 +2098,17 @@ class TestSanitizeScrubsAllFloatFields:
             library_agreement_score=0.9,
             validation_passed=True,
             cross_library_validation={"computed": True, "sign_agreement": 1.0},
+            # Free text generated FROM the numbers being scrubbed: the page
+            # renders every card regardless of status, so text that still
+            # says "PASSED 90%" or narrates the dropped CATEs would contradict
+            # the nulled card (codex wave-54 iter-4).
+            warnings=[
+                "Cross-library validation FAILED: EconML and CausalML agree only 60%",
+                "Positivity: 3 segments below the overlap floor",
+            ],
+            executive_summary="Northeast shows 74% higher response than average.",
+            strategic_interpretation="Target the high-severity cohort first.",
+            key_insights=["High severity responds 2x."],
         )
         shared = _FakeAsyncRedis()
 
@@ -2115,6 +2126,14 @@ class TestSanitizeScrubsAllFloatFields:
         assert got.validation_passed is None, (
             "verdict outlived its score: the card would show Passed beside Not computed"
         )
+        assert not any(w.startswith("Cross-library validation") for w in got.warnings), (
+            "warning text still describes the nulled cross-library verdict"
+        )
+        assert "Positivity: 3 segments below the overlap floor" in got.warnings
+        assert any("non-finite" in w for w in got.warnings)
+        assert got.executive_summary is None
+        assert got.strategic_interpretation is None
+        assert got.key_insights == []
 
     @pytest.mark.parametrize(
         "field",
