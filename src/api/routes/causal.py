@@ -1177,19 +1177,23 @@ _COLUMN_DEFINITIONS: Dict[str, str] = {
     # --- patient_journeys outcomes (treatment_initiated is also the target of the
     # initiation-latent arms, so it sits on both sides of the question) ---
     "treatment_initiated": "Patient started therapy (1) vs did not (0).",
+    # persistent/discontinued are drawn for EVERY row (the DGP conditions on
+    # treatment_arm, not treatment_initiated) and the loader applies no initiator
+    # filter, so the wording must not promise a cohort restriction that is not
+    # applied (codex iter-1, PR #1893; measured on prod 2026-09-04).
     "persistent_180d": (
-        "Still on therapy 180 days after initiation (1) vs not (0). Initiators only; "
-        "the complement of Discontinued at 180d."
+        "Still on therapy at day 180 of the window (1) vs not (0). "
+        "The complement of Discontinued at 180d."
     ),
     "discontinued_180d": (
-        "Stopped therapy within 180 days of initiation (1) vs still on therapy (0). "
-        "Initiators only."
+        "Stopped therapy within the 180-day window (1) vs still on therapy (0). "
+        "The complement of Persistent at 180d."
     ),
     "adherent_180d": (
         "Proportion of days covered (PDC) ≥ 0.80 over the 180-day window (1) vs below (0)."
     ),
     "low_gap_180d": (
-        "Longest refill gap ≤ 30 days over the 180-day window (1) vs a longer gap (0). "
+        "Refill gap of 30 days or less over the 180-day window (1) vs a longer gap (0). "
         "A subset of Adherent at 180d."
     ),
 }

@@ -2854,6 +2854,24 @@ def test_every_patient_grain_option_has_a_definition():
 
 
 @pytest.mark.unit
+def test_outcome_definitions_do_not_claim_unshipped_restrictions():
+    """Codex iter-1 on PR #1893: the persistence/discontinuation columns are drawn
+    for EVERY patient_journeys row (generate_discontinuation_outcomes conditions on
+    treatment_arm, not treatment_initiated; measured on prod 2026-09-04: all 17,186
+    treatment_initiated=0 rows carry persistent_180d) and the segment loader applies
+    no initiator filter — so the definition must not promise "initiators only" or
+    anchor the window on an initiation the row may not have. low_gap_180d's
+    documented semantic (migration 088) is gap_days <= 30, not a "longest" gap."""
+    from src.api.routes.causal import _COLUMN_DEFINITIONS
+
+    for col in ("persistent_180d", "discontinued_180d"):
+        text = _COLUMN_DEFINITIONS[col].lower()
+        assert "initiator" not in text, col
+        assert "initiation" not in text, col
+    assert "longest" not in _COLUMN_DEFINITIONS["low_gap_180d"].lower()
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_segment_datasets_definitions_cover_every_scoped_option():
     from src.api.routes.segments import get_segment_datasets
