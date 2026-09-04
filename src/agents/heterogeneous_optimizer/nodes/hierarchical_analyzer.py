@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 import numpy as np
 import pandas as pd
 
+from ..design import binarize_treatment, sanitize_effect_modifiers
 from ..state import HeterogeneousOptimizerState
 
 logger = logging.getLogger(__name__)
@@ -372,30 +373,38 @@ class HierarchicalAnalyzerNode:
         treatment = df[state["treatment_var"]].values
         y = df[state["outcome_var"]].values
 
-        # Binarize continuous treatment at median (consistent with cate_estimator)
-        if len(np.unique(treatment)) > 2:
-            median_val = np.median(treatment)
-            treatment = (treatment > median_val).astype(int)
+        # Binarize continuous treatment at median (consistent with cate_estimator —
+        # the ONE shared rule in design.binarize_treatment).
+        treatment, binarized = binarize_treatment(treatment)
+        if binarized is not None:
             logger.info(
-                f"Binarized continuous treatment at median={median_val:.2f}",
+                f"Binarized continuous treatment at median={binarized['median_threshold']:.2f}",
                 extra={
                     "node": "hierarchical_analyzer",
                     "treatment_var": state["treatment_var"],
-                    "treated_count": int(np.sum(treatment)),
-                    "control_count": int(np.sum(1 - treatment)),
+                    **binarized,
                 },
             )
 
         # Prepare features (effect modifiers or all numeric columns).
         # Shard 07 C2: a provenance column (is_synthetic) must NEVER enter the
         # uplift design matrix — neither via an explicit effect_modifiers list
-        # nor via the all-numeric-columns fallback. Strip PROVENANCE_DROP_COLS
-        # from both branches.
+        # nor via the all-numeric-columns fallback. Neither may the treatment or
+        # the outcome (wave 53). sanitize_effect_modifiers strips both from the
+        # explicit list; the fallback excludes them below.
         from src.repositories.provenance import PROVENANCE_DROP_COLS
 
-        effect_modifiers = [
-            c for c in state.get("effect_modifiers", []) if c not in PROVENANCE_DROP_COLS
-        ]
+        effect_modifiers, dropped_modifiers = sanitize_effect_modifiers(state)
+        if dropped_modifiers:
+            logger.warning(
+                "Dropped effect modifiers that must not enter the hierarchical design matrix",
+                extra={
+                    "node": "hierarchical_analyzer",
+                    "dropped": dropped_modifiers,
+                    "treatment_var": state["treatment_var"],
+                    "outcome_var": state["outcome_var"],
+                },
+            )
         if effect_modifiers:
             X = df[effect_modifiers].copy()
         else:

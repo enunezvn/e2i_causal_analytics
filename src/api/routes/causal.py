@@ -1272,8 +1272,11 @@ _CAUSAL_NUMERIC_DERIVATIONS: Dict[str, Dict[str, Callable[[Any], float]]] = {
         "complement_inhibitor_status": _derive_is_prior_c5,
         # #1321 rollout: the causal loaders see these as the 0/1 axis. urticaria_severity_uas7
         # is ALSO a Remibrutinib covariate — dichotomizing it there is immaterial (it adjusts
-        # a RANDOMIZED treatment_arm, a precision covariate, not a confounder); segments.py /
-        # KPIs read the raw continuous column via their OWN loaders, unaffected by this map.
+        # a RANDOMIZED treatment_arm, a precision covariate, not a confounder). KPIs read the
+        # raw continuous column via their OWN loaders. segments.py applies this map to its
+        # QUESTION slots only (wave 53): the treatment axis runs as the same 0/1 contrast the
+        # page labels and the registry validated, while the column stays raw as an effect
+        # modifier.
         "disease_stage": _derive_is_advanced_line,
         "urticaria_severity_uas7": _derive_is_uncontrolled_csu,
     },

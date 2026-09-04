@@ -12,15 +12,17 @@
 
 import axios, {
   AxiosError,
+  AxiosHeaders,
   AxiosInstance,
   AxiosResponse,
   InternalAxiosRequestConfig,
 } from 'axios';
+import type { Session } from '@supabase/supabase-js';
 import type { ZodTypeAny } from 'zod';
 import { env, buildApiUrl } from '@/config/env';
 import { logger } from '@/lib/logger';
 import { useAuthStore } from '@/stores/auth-store';
-import { isSupabaseConfigured } from '@/lib/supabase';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import { validateApiResponse } from './api-schemas';
 import type { ApiErrorResponse } from './api-schemas';
 
@@ -187,10 +189,82 @@ function responseInterceptor(response: AxiosResponse): AxiosResponse {
   return response;
 }
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /**
+     * Set on a request the 401 handler has already replayed once with a
+     * refreshed token, so a second 401 is terminal (no refresh loop). Survives
+     * axios's mergeConfig (custom string keys are deep-merged).
+     */
+    e2iAuthReplayed?: boolean;
+  }
+}
+
+/** The bearer token a request was sent with, if any. */
+function sentBearerToken(config: InternalAxiosRequestConfig): string | undefined {
+  const value = AxiosHeaders.from(config.headers).get('Authorization');
+  if (typeof value !== 'string') return undefined;
+  return value.startsWith('Bearer ') ? value.slice('Bearer '.length) : undefined;
+}
+
+/**
+ * Find a session whose access token differs from the one the API rejected.
+ *
+ * 1. `getSession()` — supabase-js returns the stored session and refreshes it
+ *    itself when it is expired by the local clock (deduping concurrent refreshes
+ *    and emitting TOKEN_REFRESHED for AuthProvider). This is the tab-wake case:
+ *    the store's token is hours old but supabase-js has not ticked yet.
+ * 2. `refreshSession()` — only when the stored token is the rejected one and is
+ *    NOT expired locally (clock skew / server-side revocation): force one rotation.
+ *
+ * Returns null when nothing fresher exists; the caller then surfaces the 401
+ * unchanged. Never signs the user out — AuthProvider owns that on SIGNED_OUT.
+ */
+async function resolveFreshSession(rejectedToken: string | undefined): Promise<Session | null> {
+  const { data: current } = await supabase.auth.getSession();
+  const stored = current.session ?? null;
+  if (stored?.access_token && stored.access_token !== rejectedToken) {
+    return stored;
+  }
+  const { data: rotated } = await supabase.auth.refreshSession();
+  const refreshed = rotated.session ?? null;
+  if (refreshed?.access_token && refreshed.access_token !== rejectedToken) {
+    return refreshed;
+  }
+  return null;
+}
+
+/**
+ * One in-flight session resolution per REJECTED token, shared by every 401 of
+ * the same burst. Keyed (codex iter-1 MED) because a burst can carry two
+ * different rejected tokens — a request built before a rotation and one built
+ * after it — and the later one must not adopt a result that IS its own
+ * rejected token, or it would spend its only replay on a token the API just
+ * refused.
+ */
+const freshSessionInFlight = new Map<string, Promise<Session | null>>();
+
+function resolveFreshSessionOnce(rejectedToken: string | undefined): Promise<Session | null> {
+  const key = rejectedToken ?? '';
+  let pending = freshSessionInFlight.get(key);
+  if (!pending) {
+    pending = resolveFreshSession(rejectedToken)
+      .catch((err: unknown) => {
+        logger.warn('[API] session refresh after 401 failed', err);
+        return null;
+      })
+      .finally(() => {
+        freshSessionInFlight.delete(key);
+      });
+    freshSessionInFlight.set(key, pending);
+  }
+  return pending;
+}
+
 /**
  * Error interceptor for standardized error handling
  */
-function errorInterceptor(error: AxiosError<ApiErrorResponse>): Promise<never> {
+async function errorInterceptor(error: AxiosError<ApiErrorResponse>): Promise<unknown> {
   // Log error in development
   if (env.isDev) {
     const method = error.config?.method?.toUpperCase() ?? 'GET';
@@ -202,10 +276,31 @@ function errorInterceptor(error: AxiosError<ApiErrorResponse>): Promise<never> {
     });
   }
 
-  // Handle 401 Unauthorized - log but don't clear Supabase auth session.
-  // The Supabase session is managed by AuthProvider's onAuthStateChange listener.
-  // A backend API 401 means the API rejected the request, not that the
-  // Supabase session is invalid.
+  // Handle 401 Unauthorized: refresh once and replay, never clear the Supabase
+  // session here (AuthProvider's onAuthStateChange listener owns it).
+  //
+  // Why: on tab wake after a long idle, react-query's focus refetch fires with
+  // the auth store's STALE access token before supabase-js's own refresh tick
+  // runs, so a whole burst of requests 401s ("Invalid or expired token") and
+  // the query retry policy (correctly) never retries a 4xx — the page sits in
+  // its error state until the next focus/mount (live 2026-09-03: four
+  // endpoints in one burst; /segments/datasets showed "Couldn't load the full
+  // analysis options"). A 401 is rejected at the auth gate before any handler
+  // runs, so replaying any method is side-effect safe. One replay per request.
+  const config = error.config;
+  if (error.response?.status === 401 && config && !config.e2iAuthReplayed && isSupabaseConfigured()) {
+    const rejectedToken = sentBearerToken(config);
+    const session = await resolveFreshSessionOnce(rejectedToken);
+    // Belt and braces: never replay with the token the API just refused.
+    if (session && session.access_token !== rejectedToken) {
+      useAuthStore.getState().setSession(session);
+      config.e2iAuthReplayed = true;
+      config.headers = AxiosHeaders.from(config.headers);
+      config.headers.set('Authorization', `Bearer ${session.access_token}`);
+      logger.info('[API] 401 -> session refreshed, replaying request', config.url);
+      return apiClient.request(config);
+    }
+  }
   if (error.response?.status === 401) {
     console.warn('[API] 401 Unauthorized:', error.config?.url);
   }

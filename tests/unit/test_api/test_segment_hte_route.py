@@ -1242,3 +1242,202 @@ async def test_background_task_uses_handed_adjustment_without_registry_read(
     assert not any("registry unavailable" in w for w in stored.warnings)
     initial_state = mock_graph.ainvoke.call_args.args[0]
     assert initial_state["confounders"] == ["engagement_score", "insurance_access_score"]
+
+
+# =============================================================================
+# 2026-09-03 (wave 53): a clinical axis used as the TREATMENT must not also sit
+# in X, and the loader must hand the graph the registry's 0/1 axis.
+#
+# Live seg_05f29d1b3295 (Remibrutinib, urticaria_severity_uas7 -> persistent_180d):
+# the page's brand-scoped effect modifiers include the brand's own clinical
+# column, so T = (uas7 > cohort median) was a deterministic function of an X
+# column. CausalForestDML's propensity model was perfect (AUC 1.000, zero
+# treatment residual) and the forest returned ATE -0.514 on a 0/1 outcome
+# (per-segment CATE -1.6..+0.4) against a planted +0.150; the LLM narrative then
+# recommended REDUCING treatment in the Midwest. Offline on the same 8,755 rows:
+# dropping the column from X alone recovers +0.140; running the registry's >=28
+# axis recovers +0.154. The causal page already dedups the question slots out of
+# its covariates (causal.py submit path); this page did not.
+# =============================================================================
+
+
+def _uas7_registry_rows() -> list[dict]:
+    """The live registry edge for the failing question, plus the usual rows."""
+    return [
+        {
+            "treatment": "urticaria_severity_uas7",
+            "outcome": "persistent_180d",
+            "brand": "Remibrutinib",
+            "confounders": ["disease_severity"],
+        },
+        *_registry_rows(),
+    ]
+
+
+def _axis_rows(*, brand: str, column: str, values: list) -> list[dict]:
+    """patient_journeys-shaped rows carrying one brand-distinct clinical axis."""
+    return [
+        {
+            column: values[i % len(values)],
+            "copay_support": i % 2,
+            "persistent_180d": (i + 1) % 2,
+            "disease_severity": i % 10,
+            "age_at_diagnosis": 40 + (i % 40),
+            "academic_hcp": i % 2,
+            "engagement_score": float(i % 5),
+            "geographic_region": ["midwest", "south"][i % 2],
+            "brand": brand,
+        }
+        for i in range(120)
+    ]
+
+
+_UNIVERSAL_X = ["disease_severity", "age_at_diagnosis", "academic_hcp"]
+
+
+def test_effect_modifiers_exclude_the_question_slots():
+    """X must never contain the treatment or the outcome of the question. A
+    question that does not touch a modifier keeps the brand-scoped list intact."""
+    x = _segment_effect_modifiers(
+        "Remibrutinib",
+        treatment_var="urticaria_severity_uas7",
+        outcome_var="persistent_180d",
+    )
+    assert "urticaria_severity_uas7" not in x
+    assert set(x) == set(_UNIVERSAL_X)
+    assert _segment_effect_modifiers(
+        "Remibrutinib", treatment_var="treatment_arm", outcome_var="persistent_180d"
+    ) == _segment_effect_modifiers("Remibrutinib")
+
+
+@pytest.mark.asyncio
+async def test_execute_keeps_clinical_treatment_out_of_x_for_loader_and_graph(
+    rich_graph_result,
+):
+    """The SAME deduped X must reach the loader (column selection) and the graph
+    state (the CATE design matrix) — the run that fails live."""
+    request = RunSegmentAnalysisRequest(
+        query="Which uncontrolled-CSU segments persist on Remibrutinib?",
+        brand="Remibrutinib",
+        treatment_var="urticaria_severity_uas7",
+        outcome_var="persistent_180d",
+    )
+    captured: dict = {}
+    mock_graph = MagicMock()
+
+    async def _capture(initial_state):
+        captured.update(initial_state)
+        return rich_graph_result
+
+    mock_graph.ainvoke = AsyncMock(side_effect=_capture)
+    loader = AsyncMock(return_value=_make_stub_frame())
+    with (
+        _patch_registry(_uas7_registry_rows()),
+        patch("src.api.routes.segments._load_segment_hte_frame", new=loader),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        response = await _execute_segment_analysis(request)
+
+    assert captured["treatment_var"] == "urticaria_severity_uas7"
+    assert "urticaria_severity_uas7" not in captured["effect_modifiers"]
+    assert set(captured["effect_modifiers"]) == set(_UNIVERSAL_X)
+    assert "urticaria_severity_uas7" not in loader.await_args.kwargs["effect_modifiers"]
+    # The pair IS registered — no unmodeled warning, no refusal.
+    assert response.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_loader_runs_the_registry_axis_when_uas7_is_the_treatment():
+    """The option the page offers is 'Uncontrolled CSU (UAS7 >= 28)' — the
+    contrast the causal_paths edge was validated on. The loader must hand the
+    graph that 0/1 column, not the raw 0-42 score (which the nodes then split at
+    the cohort median of 29, a different question with a different label)."""
+    query = _FakeQuery(
+        _axis_rows(
+            brand="Remibrutinib",
+            column="urticaria_severity_uas7",
+            values=[30.0, 20.0, 28.0, 27.9],
+        )
+    )
+    client = MagicMock()
+    client.table = MagicMock(return_value=query)
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=client),
+    ):
+        frame = await _load_segment_hte_frame(
+            brand="Remibrutinib",
+            treatment_var="urticaria_severity_uas7",
+            outcome_var="persistent_180d",
+            effect_modifiers=_UNIVERSAL_X,
+            confounders=["engagement_score"],
+        )
+
+    assert frame["urticaria_severity_uas7"].tolist()[:4] == [1.0, 0.0, 1.0, 0.0]
+    assert set(frame["urticaria_severity_uas7"].unique()) == {0.0, 1.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("brand", "column", "negative", "positive"),
+    [
+        ("Kisqali", "disease_stage", "early", "metastatic"),
+        ("Fabhalta", "complement_inhibitor_status", "current", "prior"),
+    ],
+)
+async def test_loader_derives_text_clinical_axes_to_a_binary_treatment(
+    brand: str, column: str, negative: str, positive: str
+):
+    """The other two #1321 axes are TEXT columns. Without the derivation they
+    reach the frame as strings and cate_estimator's numeric coercion fails
+    closed ('entirely null/non-numeric after coercion') — the page cannot run
+    them at all. They must arrive as the same 0/1 contrast the causal page uses."""
+    query = _FakeQuery(_axis_rows(brand=brand, column=column, values=[negative, positive]))
+    client = MagicMock()
+    client.table = MagicMock(return_value=query)
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=client),
+    ):
+        frame = await _load_segment_hte_frame(
+            brand=brand,
+            treatment_var=column,
+            outcome_var="persistent_180d",
+            effect_modifiers=_UNIVERSAL_X,
+            confounders=["engagement_score"],
+        )
+
+    assert frame[column].dtype.kind == "f"
+    assert frame[column].tolist()[:2] == [0.0, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_loader_keeps_uas7_raw_when_it_is_only_an_effect_modifier():
+    """Design guard for the derivation's SCOPE: only the question slots are
+    dichotomized. As an X column the raw score keeps its resolution for the
+    heterogeneity model (the copay question on Remibrutinib)."""
+    query = _FakeQuery(
+        _axis_rows(
+            brand="Remibrutinib",
+            column="urticaria_severity_uas7",
+            values=[30.0, 20.0, 28.0, 27.9],
+        )
+    )
+    client = MagicMock()
+    client.table = MagicMock(return_value=query)
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=client),
+    ):
+        frame = await _load_segment_hte_frame(
+            brand="Remibrutinib",
+            treatment_var="copay_support",
+            outcome_var="persistent_180d",
+            effect_modifiers=[*_UNIVERSAL_X, "urticaria_severity_uas7"],
+            confounders=["engagement_score"],
+        )
+
+    assert frame["urticaria_severity_uas7"].tolist()[:4] == [30.0, 20.0, 28.0, 27.9]
