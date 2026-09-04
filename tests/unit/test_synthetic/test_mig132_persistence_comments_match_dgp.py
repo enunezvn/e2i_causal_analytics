@@ -1,0 +1,100 @@
+"""Drift-lock: the DB column comments on persistent_180d / discontinued_180d must
+describe the data the generator actually ships.
+
+Migration 064 (M2, 2026-06-09) documented both columns as "Filtered
+treatment_initiated=1". That is the RWD semantic (convert_optum_rwd.py populates
+them only when an initiation date exists) but NOT the synthetic DGP's:
+``generate_discontinuation_outcomes`` has no treatment_initiated input and draws
+an outcome for every unit as a function of ``treatment_arm``. Measured on prod
+2026-09-04 (all rows synthetic): 17,186 / 17,186 treatment_initiated=0 rows carry
+persistent_180d, 0 complement violations. The stale comment already produced a
+wrong user-facing definition once (PR #1893, caught in review), so the
+EFFECTIVE comment — the last COMMENT ON COLUMN in migration order, which is what
+the DB holds — is pinned here. Pure file parse, no DB (mirrors
+test_mig130_registry_presence.py).
+"""
+
+from __future__ import annotations
+
+import inspect
+import re
+from pathlib import Path
+
+import numpy as np
+
+from src.ml.synthetic.generators.cohort_outcomes import generate_discontinuation_outcomes
+
+MIGRATIONS = Path(__file__).resolve().parents[3] / "database" / "migrations"
+COLUMNS = ("persistent_180d", "discontinued_180d")
+
+_COMMENT_RE = re.compile(
+    r"COMMENT\s+ON\s+COLUMN\s+(?:public\.)?patient_journeys\.(\w+)\s+IS\s+'((?:[^']|'')*)'",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _migration_order(path: Path) -> tuple[int, str]:
+    m = re.match(r"(\d+)_", path.name)
+    return (int(m.group(1)) if m else 10**9, path.name)
+
+
+def _effective_comments() -> dict[str, tuple[str, str]]:
+    """column -> (migration filename, comment text) for the LAST comment applied."""
+    effective: dict[str, tuple[str, str]] = {}
+    for path in sorted(MIGRATIONS.glob("*.sql"), key=_migration_order):
+        for col, text in _COMMENT_RE.findall(path.read_text()):
+            if col in COLUMNS:
+                effective[col] = (path.name, " ".join(text.replace("''", "'").split()))
+    return effective
+
+
+def test_effective_comments_no_longer_claim_an_initiator_filter():
+    effective = _effective_comments()
+    for col in COLUMNS:
+        assert col in effective, f"no COMMENT ON COLUMN for {col} in any migration"
+        source, text = effective[col]
+        lowered = text.lower()
+        assert "filtered treatment_initiated=1" not in lowered, (
+            f"{col}: effective comment ({source}) still claims an initiator filter "
+            "the synthetic generator does not apply"
+        )
+        assert "regardless of treatment_initiated" in lowered, (
+            f"{col}: effective comment ({source}) must state the synthetic population"
+        )
+        assert "treatment_arm" in text, f"{col}: effective comment must name the DGP driver"
+
+
+def test_effective_comments_state_the_exact_complement():
+    effective = _effective_comments()
+    assert "1 - discontinued_180d" in effective["persistent_180d"][1]
+    assert "1 - persistent_180d" in effective["discontinued_180d"][1]
+
+
+def test_generator_draws_for_every_row_without_an_initiator_input():
+    """The premise the corrected comment rests on: no initiator input, no gaps."""
+    params = inspect.signature(generate_discontinuation_outcomes).parameters
+    assert "treatment_initiated" not in params
+
+    n, rng = 500, np.random.default_rng(11)
+    severity = np.clip(rng.normal(5.0, 2.0, n), 0, 10)
+    out = generate_discontinuation_outcomes(
+        rng=rng,
+        treatment_arm=rng.integers(0, 2, n),
+        disease_severity=severity,
+        academic_hcp=(rng.random(n) < 0.30).astype(int),
+        geographic_region=rng.choice(["midwest", "northeast", "south", "west"], n),
+        insurance_type=rng.choice(["commercial", "medicare", "medicaid"], n),
+        age_at_diagnosis=rng.integers(18, 85, n),
+        comorbidity_burden=rng.poisson(1.3, n).clip(0, 5),
+        prior_therapy_lines=rng.integers(0, 4, n),
+        segment=np.where(
+            severity > 7,
+            "high_severity",
+            np.where(severity > 4, "medium_severity", "low_severity"),
+        ),
+        brand_cate_scale=1.0,
+    )
+    for col in COLUMNS:
+        assert len(out[col]) == n, col
+        assert set(np.unique(out[col])) <= {0, 1}, col
+    assert np.array_equal(out["persistent_180d"], 1 - out["discontinued_180d"])
