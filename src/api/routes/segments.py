@@ -482,6 +482,16 @@ class SegmentAnalysisResponse(BaseModel):
     validation_passed: Optional[bool] = Field(
         default=None, description="Whether cross-validation passed"
     )
+    cross_library_validation: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Components behind library_agreement_score so the verdict is explainable: "
+            "method, n_segments_compared, sign_agreement (direction), "
+            "n_distinguishable_pairs + ordering_agreement (within-axis segment pairs "
+            "whose CATE CIs are disjoint), spearman_rho (pooled diagnostic only), "
+            "threshold, uplift_model. computed=False carries a reason instead."
+        ),
+    )
 
     # Metadata
     estimation_latency_ms: int = Field(default=0, description="CATE estimation time")
@@ -753,6 +763,32 @@ async def _default_redis_factory() -> Any:
     return await get_redis()
 
 
+# ``SegmentAnalysisResponse`` fields that describe what the request WAS (ids,
+# question, brand, variables, CI level, libraries, latencies, timestamp,
+# warnings) rather than what the estimators produced. ``segmentation_method_used``
+# is NOT provenance: the hierarchical node picks/defaults it and the page's
+# diagnostics card renders on its presence alone (codex iter-7). They are the
+# ONLY fields a degenerate-fit FAILED record keeps — see
+# ``_DurableAnalysesStore._sanitize_non_finite`` (wave 54).
+_FAILED_RECORD_PROVENANCE_FIELDS = frozenset(
+    {
+        "analysis_id",
+        "status",
+        "question_type",
+        "brand",
+        "treatment_var",
+        "outcome_var",
+        "confidence_level",
+        "libraries_used",
+        "estimation_latency_ms",
+        "analysis_latency_ms",
+        "total_latency_ms",
+        "timestamp",
+        "warnings",
+    }
+)
+
+
 class _DurableAnalysesStore:
     """Durable, cross-worker analyses store backed by Redis.
 
@@ -926,28 +962,30 @@ class _DurableAnalysesStore:
             "record.",
             analysis_id,
         )
+        # The honest FAILED record is defined by what it KEEPS, not by what it
+        # drops. Codex wave-54 iters 4-6 each found one more artefact of the
+        # failed fit surviving a hand-enumerated scrub (LM narrative, allocation
+        # prose + mid_responders, then the hierarchical / uplift diagnostics):
+        # the page renders every card regardless of status, so any value the
+        # degenerate estimators PRODUCED would sit beside "N/A / Not computed /
+        # Not run" and contradict it. So provenance (what the request WAS)
+        # survives and every other field resets to its schema default — all
+        # honest empties (None / [] / {} / 0.0; ``confidence`` is non-Optional
+        # so it becomes 0.0 rather than a fabricated estimate). A field added
+        # later is scrubbed by construction, and
+        # ``test_sanitize_resets_every_non_provenance_field_to_its_schema_default``
+        # walks the model so the whitelist cannot drift silently.
         sanitized = response.model_copy(deep=True)
         sanitized.status = SegmentAnalysisStatus.FAILED
-        sanitized.cate_by_segment = {}
-        sanitized.high_responders = []
-        sanitized.low_responders = []
-        sanitized.policy_recommendations = []
-        sanitized.overall_ate = None
-        sanitized.heterogeneity_score = None
-        # Round-2 BUG 1: ``_has_non_finite_floats`` fires for a non-finite in ANY
-        # float field, so dropping only the CATE/policy payloads is INSUFFICIENT
-        # — a NaN/inf in any of the fields below would survive and re-poison the
-        # record (unreadable on read -> silently skipped + pruned on
-        # enumeration, vanishing from durable storage). Scrub EVERY remaining
-        # float-bearing field so the result is provably finite. The Optional
-        # ones drop to ``None``; ``confidence`` is non-Optional so it resets to
-        # the schema default ``0.0`` rather than a fabricated estimate.
-        sanitized.feature_importance = None
-        sanitized.uplift_metrics = None
-        sanitized.library_agreement_score = None
-        sanitized.expected_total_lift = None
-        sanitized.expected_lift_pp = None
-        sanitized.confidence = 0.0
+        for name, field in SegmentAnalysisResponse.model_fields.items():
+            if name in _FAILED_RECORD_PROVENANCE_FIELDS:
+                continue
+            setattr(sanitized, name, field.get_default(call_default_factory=True))
+        # Keep warnings that describe real conditions (positivity, saturation);
+        # drop only the cross-library line quoting the score just nulled.
+        sanitized.warnings = [
+            w for w in sanitized.warnings if not w.startswith("Cross-library validation")
+        ]
         if "non-finite" not in " ".join(sanitized.warnings).lower():
             sanitized.warnings.append(
                 "Analysis produced non-finite (NaN/inf) estimates; marked as failed."
@@ -2615,6 +2653,7 @@ async def _execute_segment_analysis(
                 libraries_used=result.get("libraries_executed"),
                 library_agreement_score=result.get("library_agreement_score"),
                 validation_passed=result.get("validation_passed"),
+                cross_library_validation=_to_native(result.get("cross_library_validation")),
                 estimation_latency_ms=result.get("estimation_latency_ms", 0),
                 analysis_latency_ms=result.get("analysis_latency_ms", 0),
                 total_latency_ms=total_latency,

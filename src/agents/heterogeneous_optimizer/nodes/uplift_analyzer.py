@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, TypedDict, cast
 import numpy as np
 import pandas as pd
 
-from ..cross_validation import compute_cross_library_validation
+from ..cross_validation import compute_cross_library_validation, describe_ordering
 from ..design import binarize_treatment, sanitize_effect_modifiers
 from ..state import HeterogeneousOptimizerState
 
@@ -280,11 +280,22 @@ class UpliftAnalyzerNode:
         if update.get("validation_passed") is False:
             score = update.get("library_agreement_score") or 0.0
             detail = update.get("cross_library_validation") or {}
+            sign = detail.get("sign_agreement")
+            direction = f"direction {float(sign):.0%}" if sign is not None else "direction n/a"
+            # "ordering agreement 0% on 3 ..." -> "ordering 0% on 3 ..." so the
+            # warning reads as components of the one score.
+            ordering = describe_ordering(detail).replace("ordering agreement ", "ordering ")
+            threshold = float(detail.get("threshold") or 0.0)
+            # "only" when the composite fell short; when it met the threshold
+            # the failure is the ordering chance floor, which the ordering
+            # phrase already states -- "only 70% ... threshold 70%" would read
+            # as a contradiction.
+            qualifier = "only " if score < threshold else ""
             update["warnings"] = [
-                f"Cross-library validation FAILED: EconML and CausalML agree only "
-                f"{score:.0%} on segment direction/ranking "
-                f"(threshold {detail.get('threshold', 0):.0%}); treat targeting "
-                f"conclusions with caution."
+                f"Cross-library validation FAILED: EconML and CausalML agree {qualifier}"
+                f"{score:.0%} ({direction}; {ordering}); threshold "
+                f"{threshold:.0%}; treat targeting conclusions "
+                f"with caution."
             ]
         return update
 

@@ -78,6 +78,7 @@ import type {
   SegmentProfile,
   PolicyRecommendation,
   UpliftMetrics,
+  CrossLibraryValidationDetail,
 } from '@/types/segments';
 import { ResponderType } from '@/types/segments';
 
@@ -593,6 +594,36 @@ function ResponderDetailDialog({ profile, onClose }: ResponderDetailDialogProps)
 // =============================================================================
 // MAIN PAGE COMPONENT
 // =============================================================================
+
+/**
+ * Ordering-agreement row of the Library Validation card. State-driven so the
+ * copy never claims "no distinguishable pairs" when pairs existed but the
+ * ordering was not scored, and names the chance floor when the ordering fell
+ * below it (validation fails on that floor even when the composite passes).
+ */
+function formatOrderingAgreement(detail: CrossLibraryValidationDetail): string {
+  const ordering = detail.ordering_agreement;
+  const pairs = detail.n_distinguishable_pairs;
+  if (ordering == null) {
+    // A reported ordering is the ONLY "testable" signal; the pair count just
+    // qualifies it (both come from the same backend branch, but the wire type
+    // declares them independently, so never let a missing count erase a
+    // reported ordering — codex wave-54 iter-2).
+    return pairs != null && pairs > 0
+      ? 'Not testable'
+      : 'Not testable (no distinguishable pairs)';
+  }
+  const pct = `${(ordering * 100).toFixed(0)}%`;
+  const base =
+    pairs != null && pairs > 0
+      ? `${pct} of ${pairs} distinguishable pairs`
+      : `${pct} of distinguishable pairs (count not reported)`;
+  const floor = detail.ordering_floor;
+  if (floor != null && ordering < floor) {
+    return `${base} (below the ${(floor * 100).toFixed(0)}% chance floor)`;
+  }
+  return base;
+}
 
 export default function SegmentAnalysis() {
   const [activeTab, setActiveTab] = useState('cate');
@@ -1293,9 +1324,11 @@ export default function SegmentAnalysis() {
                   <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                     <span>Agreement Score</span>
                     {analysisResult.library_agreement_score != null ? (
-                      // 0.7 mirrors the backend pass threshold, so color and
-                      // Validation Status can't disagree.
-                      <Badge variant={analysisResult.library_agreement_score >= 0.7 ? 'default' : 'secondary'}>
+                      // Colour follows the backend VERDICT, never a re-derived
+                      // score threshold: since wave 54 a 0.70 score can still
+                      // fail on the ordering chance floor, and a branded badge
+                      // beside a red "Failed" would contradict itself.
+                      <Badge variant={analysisResult.validation_passed ? 'default' : 'secondary'}>
                         {(analysisResult.library_agreement_score * 100).toFixed(0)}%
                       </Badge>
                     ) : (
@@ -1312,6 +1345,41 @@ export default function SegmentAnalysis() {
                       <Badge variant="outline">Not run</Badge>
                     )}
                   </div>
+                  {/* Wave 54: the components behind the score, so a direction
+                      disagreement is distinguishable from an ordering one and
+                      the user sees how many pairs the ordering check could
+                      actually test (ordering among statistically
+                      indistinguishable segments is noise, not evidence). */}
+                  {analysisResult.cross_library_validation?.computed && (
+                    <>
+                      <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                        <span>Direction agreement</span>
+                        <span className="text-sm">
+                          {analysisResult.cross_library_validation.sign_agreement != null
+                            ? `${(analysisResult.cross_library_validation.sign_agreement * 100).toFixed(0)}% of ${analysisResult.cross_library_validation.n_segments_compared ?? 0} segments`
+                            : 'Not reported'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                        <span>Ordering agreement</span>
+                        <span className="text-sm">
+                          {formatOrderingAgreement(analysisResult.cross_library_validation)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Ordering is compared only across segment pairs on the same axis whose
+                        CATE confidence intervals do not overlap. Segments with statistically
+                        indistinguishable effects have no true ordering to reproduce.
+                      </p>
+                    </>
+                  )}
+                  {analysisResult.cross_library_validation &&
+                    !analysisResult.cross_library_validation.computed &&
+                    analysisResult.cross_library_validation.reason && (
+                      <p className="text-xs text-muted-foreground">
+                        Not computed: {analysisResult.cross_library_validation.reason}
+                      </p>
+                    )}
                 </div>
               </CardContent>
             </Card>

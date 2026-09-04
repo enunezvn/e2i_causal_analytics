@@ -766,6 +766,44 @@ async def test_execute_segment_analysis_with_agent(curated_request, mock_agent_r
 
 
 @pytest.mark.asyncio
+async def test_execute_segment_analysis_passes_cross_library_detail_through(
+    curated_request, mock_agent_result
+):
+    """Wave 54: the validation COMPONENTS reach the API so the page can explain
+    a verdict (direction vs ordering on distinguishable pairs) instead of a
+    bare percentage the user has to fish for in the logs."""
+    detail = {
+        "computed": True,
+        "method": "0.5*sign_agreement + 0.5*ordering_agreement (CI-distinguishable within-dimension pairs)",
+        "n_segments_compared": 12,
+        "sign_agreement": 1.0,
+        "n_distinguishable_pairs": 3,
+        "ordering_agreement": 1.0,
+        "spearman_rho": 0.35,
+        "threshold": 0.7,
+        "uplift_model": "random_forest",
+    }
+    result_state = dict(mock_agent_result)
+    result_state["cross_library_validation"] = detail
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value=result_state)
+
+    with (
+        _patch_hte_loader(),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        result = await _execute_segment_analysis(curated_request)
+
+    from src.api.routes.segments import SegmentAnalysisResponse
+
+    assert result.cross_library_validation == detail
+    assert "cross_library_validation" in SegmentAnalysisResponse.model_fields
+
+
+@pytest.mark.asyncio
 async def test_execute_segment_analysis_falls_back_to_mock_when_explicitly_allowed(
     curated_request, monkeypatch
 ):
@@ -2034,6 +2072,282 @@ class TestSanitizeScrubsAllFloatFields:
         assert f"seg_{field}" in listed, (
             f"poison in {field} vanished from enumeration (broken write guarantee)"
         )
+
+    @pytest.mark.asyncio
+    async def test_sanitize_drops_the_verdict_with_its_score(self):
+        """A degenerate fit must not keep a cross-library VERDICT it lost the score for.
+
+        ``_sanitize_non_finite`` nulls ``library_agreement_score`` and
+        ``cross_library_validation`` but ``validation_passed`` is a bool, so the
+        finite-float scrub never touched it: the persisted FAILED record still
+        carried ``validation_passed=True`` and the Library Validation card
+        rendered a green "Passed" beside "Not computed" (codex wave-54 iter-3).
+        """
+        import math
+
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            _DurableAnalysesStore,
+        )
+
+        resp = SegmentAnalysisResponse(
+            analysis_id="seg_verdict",
+            status=SegmentAnalysisStatus.COMPLETED,
+            timestamp=datetime.now(timezone.utc),
+            overall_ate=math.nan,
+            library_agreement_score=0.9,
+            validation_passed=True,
+            cross_library_validation={"computed": True, "sign_agreement": 1.0},
+            # Free text generated FROM the numbers being scrubbed: the page
+            # renders every card regardless of status, so text that still
+            # says "PASSED 90%" or narrates the dropped CATEs would contradict
+            # the nulled card (codex wave-54 iter-4).
+            warnings=[
+                "Cross-library validation FAILED: EconML and CausalML agree only 60%",
+                "Positivity: 3 segments below the overlap floor",
+            ],
+            executive_summary="Northeast shows 74% higher response than average.",
+            strategic_interpretation="Target the high-severity cohort first.",
+            key_insights=["High severity responds 2x."],
+        )
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        await store.set("seg_verdict", resp)
+
+        got = await store.get("seg_verdict")
+        assert got is not None
+        assert got.status == SegmentAnalysisStatus.FAILED
+        assert got.library_agreement_score is None
+        assert got.cross_library_validation is None
+        assert got.validation_passed is None, (
+            "verdict outlived its score: the card would show Passed beside Not computed"
+        )
+        assert not any(w.startswith("Cross-library validation") for w in got.warnings), (
+            "warning text still describes the nulled cross-library verdict"
+        )
+        assert "Positivity: 3 segments below the overlap floor" in got.warnings
+        assert any("non-finite" in w for w in got.warnings)
+        assert got.executive_summary is None
+        assert got.strategic_interpretation is None
+        assert got.key_insights == []
+
+    @pytest.mark.asyncio
+    async def test_sanitize_drops_allocation_summary_and_mid_responders(self):
+        """A degenerate fit drops EVERY artefact derived from the scrubbed numbers.
+
+        ``optimal_allocation_summary`` is prose built by policy_learner FROM
+        ``expected_lift_pp`` / ``expected_total_lift`` ("+2.0 percentage points
+        (~125 incremental patients ...)"); the page renders that card whenever
+        the text is present, so it would sit beside an "Expected Lift: N/A" KPI.
+        ``mid_responders`` are per-segment CATE profiles exactly like the
+        high/low buckets the scrub already empties (codex wave-54 iter-5).
+        """
+        import math
+
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            SegmentProfile,
+            _DurableAnalysesStore,
+        )
+
+        resp = SegmentAnalysisResponse(
+            analysis_id="seg_alloc",
+            status=SegmentAnalysisStatus.COMPLETED,
+            timestamp=datetime.now(timezone.utc),
+            overall_ate=math.nan,
+            expected_total_lift=125.0,
+            expected_lift_pp=0.02,
+            optimal_allocation_summary=(
+                "Expected outcome lift by targeting the region axis: +2.0 "
+                "percentage points (~125 incremental patients on the best single axis)"
+            ),
+            mid_responders=[
+                SegmentProfile(
+                    segment_id="region_west",
+                    responder_type=ResponderType.AVERAGE,
+                    cate_estimate=0.01,
+                    defining_features=[{"feature": "region", "value": "west"}],
+                    size=300,
+                    size_percentage=25.0,
+                    recommendation="Maintain current allocation",
+                )
+            ],
+        )
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        await store.set("seg_alloc", resp)
+
+        got = await store.get("seg_alloc")
+        assert got is not None
+        assert got.status == SegmentAnalysisStatus.FAILED
+        assert got.expected_total_lift is None
+        assert got.expected_lift_pp is None
+        assert got.optimal_allocation_summary is None, (
+            "allocation prose quoting the scrubbed lift numbers survived sanitisation"
+        )
+        assert got.mid_responders == [], (
+            "mid_responders survived while high/low responders were emptied"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sanitize_resets_every_non_provenance_field_to_its_schema_default(self):
+        """A degenerate fit keeps ONLY provenance; every other field resets.
+
+        Codex wave-54 iters 4, 5 and 6 each found one more artefact of the failed
+        fit surviving a hand-enumerated scrub (LM narrative, allocation prose +
+        mid_responders, then the hierarchical / uplift diagnostics). The honest
+        FAILED record is defined the other way round: what the request WAS
+        (ids, question, brand, variables, CI level, libraries,
+        latencies, timestamp, warnings) survives, and everything the failed
+        estimators PRODUCED goes back to its schema default. This test
+        populates every non-provenance field with a finite, non-default value
+        and walks the model, so a field added later is scrubbed by
+        construction or fails here.
+        """
+        import math
+
+        from src.api.routes.segments import (
+            CATEResult,
+            PolicyRecommendation,
+            SegmentAnalysisResponse,
+            SegmentProfile,
+            UpliftMetrics,
+            _DurableAnalysesStore,
+        )
+
+        provenance = {
+            "analysis_id",
+            "status",
+            "question_type",
+            "brand",
+            "treatment_var",
+            "outcome_var",
+            "confidence_level",
+            "libraries_used",
+            "estimation_latency_ms",
+            "analysis_latency_ms",
+            "total_latency_ms",
+            "timestamp",
+            "warnings",
+        }
+        profile = SegmentProfile(
+            segment_id="region_west",
+            responder_type=ResponderType.AVERAGE,
+            cate_estimate=0.01,
+            defining_features=[{"feature": "region", "value": "west"}],
+            size=300,
+            size_percentage=25.0,
+            recommendation="Maintain",
+        )
+        produced = {
+            "cate_by_segment": {
+                "region": [
+                    CATEResult(
+                        segment_name="region",
+                        segment_value="west",
+                        cate_estimate=0.12,
+                        cate_ci_lower=0.05,
+                        cate_ci_upper=0.19,
+                        sample_size=300,
+                        statistical_significance=True,
+                    )
+                ]
+            },
+            "overall_ate": math.nan,  # the poison that marks the fit degenerate
+            "heterogeneity_score": 0.4,
+            "feature_importance": {"age": 0.6},
+            "uplift_metrics": UpliftMetrics(
+                overall_auuc=0.6, overall_qini=0.1, targeting_efficiency=0.7, model_type_used="t"
+            ),
+            "high_responders": [profile],
+            "mid_responders": [profile],
+            "low_responders": [profile],
+            "policy_recommendations": [
+                PolicyRecommendation(
+                    segment="region_west",
+                    current_treatment_rate=0.3,
+                    recommended_treatment_rate=0.5,
+                    expected_incremental_outcome=12.0,
+                    confidence=0.8,
+                )
+            ],
+            "expected_total_lift": 125.0,
+            "expected_lift_pp": 0.02,
+            "optimal_allocation_summary": "+2.0 percentage points (~125 incremental patients)",
+            "executive_summary": "Northeast shows 74% higher response.",
+            "strategic_interpretation": "Target high severity first.",
+            "key_insights": ["High severity responds 2x."],
+            "segment_comparison": {"best": "region_west"},
+            # Analyzer-owned (hierarchical node picks/defaults it), and the
+            # diagnostics card renders on its presence alone (codex iter-7).
+            "segmentation_method_used": "hierarchical",
+            "segment_heterogeneity": 42.0,
+            "n_segments_analyzed": 4,
+            "overall_hierarchical_ate": 0.08,
+            "hierarchical_segment_results": [{"segment": "west", "ate": 0.08}],
+            "uplift_by_segment": {"region": [{"segment_value": "west", "mean_uplift_score": 0.03}]},
+            "library_agreement_score": 0.9,
+            "validation_passed": True,
+            "cross_library_validation": {"computed": True, "sign_agreement": 1.0},
+            "confidence": 0.85,
+        }
+        all_fields = set(SegmentAnalysisResponse.model_fields)
+        assert set(produced) == all_fields - provenance, (
+            "populate every non-provenance field so the walk below is complete: "
+            f"missing={sorted(all_fields - provenance - set(produced))} "
+            f"extra={sorted(set(produced) - (all_fields - provenance))}"
+        )
+
+        resp = SegmentAnalysisResponse(
+            analysis_id="seg_complete",
+            status=SegmentAnalysisStatus.COMPLETED,
+            question_type=None,
+            brand="Remibrutinib",
+            treatment_var="treatment_arm",
+            outcome_var="treatment_initiated",
+            confidence_level=0.9,
+            libraries_used=["econml", "causalml"],
+            estimation_latency_ms=1200,
+            analysis_latency_ms=300,
+            total_latency_ms=1500,
+            timestamp=datetime.now(timezone.utc),
+            warnings=["Positivity: 3 segments below the overlap floor"],
+            **produced,
+        )
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        await store.set("seg_complete", resp)
+        got = await store.get("seg_complete")
+        assert got is not None
+        assert got.status == SegmentAnalysisStatus.FAILED
+
+        survivors = {}
+        for name, field in SegmentAnalysisResponse.model_fields.items():
+            if name in provenance:
+                continue
+            default = field.get_default(call_default_factory=True)
+            if getattr(got, name) != default:
+                survivors[name] = getattr(got, name)
+        assert not survivors, f"failed-fit artefacts survived sanitisation: {survivors}"
+
+        # Provenance is untouched (warnings keep the real condition + gain the
+        # non-finite explanation; status is the honest FAILED).
+        for name in provenance - {"status", "warnings"}:
+            assert getattr(got, name) == getattr(resp, name), name
+        assert "Positivity: 3 segments below the overlap floor" in got.warnings
+        assert any("non-finite" in w for w in got.warnings)
 
     @pytest.mark.parametrize(
         "field",
