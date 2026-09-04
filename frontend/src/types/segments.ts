@@ -229,6 +229,8 @@ export interface CrossLibraryValidationDetail {
   n_distinguishable_pairs?: number | null;
   /** Share of distinguishable pairs ordered the same way by both libraries (0-1); null when not testable. */
   ordering_agreement?: number | null;
+  /** Chance-level pairwise concordance; ordering below it fails validation. */
+  ordering_floor?: number | null;
   /** Pooled Spearman rank correlation over all scored segments — diagnostic only. */
   spearman_rho?: number | null;
   threshold?: number | null;

@@ -52,8 +52,21 @@ MIN_SEGMENTS_FOR_VALIDATION = 3
 # consistent directions but a contradicted ordering score 0.5 (fails — the
 # libraries don't reproduce the ordering the targeting recommendation depends
 # on). With no distinguishable pair (homogeneous effect) there is no ordering to
-# reproduce, so the score is direction agreement alone and the method says so.
+# reproduce, so the score is direction agreement alone and the method says so —
+# that is the ONE path where validation can pass with no ordering evidence, and
+# it is deliberate: statistically indistinguishable segments carry no targeting
+# ordering for the libraries to disagree about.
 AGREEMENT_THRESHOLD = 0.7
+
+# ordering_agreement is a pairwise concordance, so 0.5 is what two unrelated
+# rankings produce by chance. Below it the libraries CONTRADICT each other on
+# most testable pairs, which the composite alone can hide: perfect direction
+# with 40% ordering scores exactly 0.70 (codex wave-54 iter-1). Validation
+# therefore also requires the tested ordering to be at least chance level. An
+# exact tie on the uplift side counts against ordering (it does not reproduce a
+# distinguishable ordering), so an uplift model that scores every segment
+# identically while the CATE CIs separate them fails here, as it should.
+ORDERING_CHANCE_FLOOR = 0.5
 
 
 def _finite(value: Any) -> Optional[float]:
@@ -111,10 +124,11 @@ def compute_cross_library_validation(
     state update. When computable:
 
     * ``library_agreement_score`` / ``econml_causalml_agreement`` — 0..1
-    * ``validation_passed`` — score >= AGREEMENT_THRESHOLD
+    * ``validation_passed`` — score >= AGREEMENT_THRESHOLD and, when ordering
+      was testable, ordering_agreement >= ORDERING_CHANCE_FLOOR
     * ``cross_library_validation`` — method + components (sign agreement,
-      n_distinguishable_pairs + ordering_agreement, pooled spearman_rho as a
-      diagnostic, n compared, threshold, uplift model)
+      n_distinguishable_pairs + ordering_agreement + ordering_floor, pooled
+      spearman_rho as a diagnostic, n compared, threshold, uplift model)
 
     When NOT computable (uplift missing, <MIN_SEGMENTS pairs, non-finite
     values), returns ONLY a ``cross_library_validation`` dict with
@@ -176,20 +190,17 @@ def compute_cross_library_validation(
     rho_out: Optional[float] = None if math.isnan(rho) else rho
 
     n_pairs, n_agree = _distinguishable_pair_agreement(pairs)
-    uplift_constant = bool(np.all(uplift_arr == uplift_arr[0]))
     ordering: Optional[float]
     if n_pairs == 0:
         # Homogeneous effect (or no CIs): nothing to order -> direction only.
         ordering = None
         score = sign_agreement
         method = "sign_agreement only (ordering not testable: no CI-distinguishable segment pair)"
-    elif uplift_constant:
-        # The uplift model produced one score for every segment, so it cannot
-        # order anything; fall back to direction agreement alone and say so.
-        ordering = None
-        score = sign_agreement
-        method = "sign_agreement only (ordering not testable: constant uplift scores)"
     else:
+        # A constant uplift vector lands here too: every distinguishable pair
+        # is an uplift tie -> ordering 0.0 -> fails. CausalML not reproducing
+        # an ordering EconML is confident about is a disagreement, not a
+        # "not testable" (codex wave-54 iter-1 HIGH).
         ordering = n_agree / n_pairs
         score = 0.5 * sign_agreement + 0.5 * ordering
         method = (
@@ -198,7 +209,8 @@ def compute_cross_library_validation(
         )
 
     score = float(min(max(score, 0.0), 1.0))
-    passed = score >= AGREEMENT_THRESHOLD
+    ordering_at_least_chance = ordering is None or ordering >= ORDERING_CHANCE_FLOOR
+    passed = score >= AGREEMENT_THRESHOLD and ordering_at_least_chance
 
     logger.info(
         "Cross-library validation: agreement=%.3f (sign=%.2f, ordering=%s on %d "
@@ -220,6 +232,7 @@ def compute_cross_library_validation(
             "sign_agreement": sign_agreement,
             "n_distinguishable_pairs": n_pairs,
             "ordering_agreement": ordering,
+            "ordering_floor": ORDERING_CHANCE_FLOOR,
             # Pooled rank correlation over every scored segment — a diagnostic
             # only (noise-dominated when most axes are flat), never the score.
             "spearman_rho": rho_out,
@@ -270,7 +283,11 @@ def describe_ordering(detail: Mapping[str, Any]) -> str:
     n_pairs = detail.get("n_distinguishable_pairs")
     if ordering is None or not n_pairs:
         return "ordering not testable (no statistically distinguishable segment pair)"
-    return (
+    text = (
         f"ordering agreement {float(ordering):.0%} on {int(n_pairs)} "
         f"statistically distinguishable segment pairs"
     )
+    floor = detail.get("ordering_floor")
+    if floor is not None and float(ordering) < float(floor):
+        text += f", below the {float(floor):.0%} chance floor"
+    return text

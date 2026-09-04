@@ -550,6 +550,80 @@ describe('SegmentAnalysis — Library Validation honest-null', () => {
     });
     expect(screen.getByText('Not testable (no distinguishable pairs)')).toBeInTheDocument();
   });
+
+  it('never claims "no distinguishable pairs" when pairs existed but ordering was not scored', async () => {
+    // Codex wave-54 iter-1 HIGH: the copy must be state-driven, not a
+    // catch-all -- a null ordering with pairs present is "not testable", full stop.
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: ['econml', 'causalml'],
+        library_agreement_score: 1.0,
+        validation_passed: true,
+        cross_library_validation: {
+          computed: true,
+          method: 'sign_agreement only',
+          n_segments_compared: 12,
+          sign_agreement: 1.0,
+          n_distinguishable_pairs: 3,
+          ordering_agreement: null,
+          spearman_rho: null,
+          threshold: 0.7,
+          uplift_model: 'random_forest',
+        },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Ordering agreement')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Not testable', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText('Not testable (no distinguishable pairs)')).not.toBeInTheDocument();
+  });
+
+  it('flags ordering agreement that is below the chance floor', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: ['econml', 'causalml'],
+        library_agreement_score: 0.7,
+        validation_passed: false,
+        cross_library_validation: {
+          computed: true,
+          method: '0.5*sign_agreement + 0.5*ordering_agreement (CI-distinguishable within-dimension pairs)',
+          n_segments_compared: 4,
+          sign_agreement: 1.0,
+          n_distinguishable_pairs: 5,
+          ordering_agreement: 0.4,
+          ordering_floor: 0.5,
+          spearman_rho: 0.2,
+          threshold: 0.7,
+          uplift_model: 'random_forest',
+        },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Ordering agreement')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText('40% of 5 distinguishable pairs (below the 50% chance floor)')
+    ).toBeInTheDocument();
+  });
 });
 
 describe('SegmentAnalysis — Policy Details formatting + zero-lift filtering', () => {

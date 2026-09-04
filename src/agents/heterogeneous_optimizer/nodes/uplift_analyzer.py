@@ -285,10 +285,16 @@ class UpliftAnalyzerNode:
             # "ordering agreement 0% on 3 ..." -> "ordering 0% on 3 ..." so the
             # warning reads as components of the one score.
             ordering = describe_ordering(detail).replace("ordering agreement ", "ordering ")
+            threshold = float(detail.get("threshold") or 0.0)
+            # "only" when the composite fell short; when it met the threshold
+            # the failure is the ordering chance floor, which the ordering
+            # phrase already states -- "only 70% ... threshold 70%" would read
+            # as a contradiction.
+            qualifier = "only " if score < threshold else ""
             update["warnings"] = [
-                f"Cross-library validation FAILED: EconML and CausalML agree only "
+                f"Cross-library validation FAILED: EconML and CausalML agree {qualifier}"
                 f"{score:.0%} ({direction}; {ordering}); threshold "
-                f"{detail.get('threshold', 0):.0%}; treat targeting conclusions "
+                f"{threshold:.0%}; treat targeting conclusions "
                 f"with caution."
             ]
         return update

@@ -78,6 +78,7 @@ import type {
   SegmentProfile,
   PolicyRecommendation,
   UpliftMetrics,
+  CrossLibraryValidationDetail,
 } from '@/types/segments';
 import { ResponderType } from '@/types/segments';
 
@@ -593,6 +594,26 @@ function ResponderDetailDialog({ profile, onClose }: ResponderDetailDialogProps)
 // =============================================================================
 // MAIN PAGE COMPONENT
 // =============================================================================
+
+/**
+ * Ordering-agreement row of the Library Validation card. State-driven so the
+ * copy never claims "no distinguishable pairs" when pairs existed but the
+ * ordering was not scored, and names the chance floor when the ordering fell
+ * below it (validation fails on that floor even when the composite passes).
+ */
+function formatOrderingAgreement(detail: CrossLibraryValidationDetail): string {
+  const pairs = detail.n_distinguishable_pairs ?? 0;
+  const ordering = detail.ordering_agreement;
+  if (ordering == null || pairs <= 0) {
+    return pairs > 0 ? 'Not testable' : 'Not testable (no distinguishable pairs)';
+  }
+  const base = `${(ordering * 100).toFixed(0)}% of ${pairs} distinguishable pairs`;
+  const floor = detail.ordering_floor;
+  if (floor != null && ordering < floor) {
+    return `${base} (below the ${(floor * 100).toFixed(0)}% chance floor)`;
+  }
+  return base;
+}
 
 export default function SegmentAnalysis() {
   const [activeTab, setActiveTab] = useState('cate');
@@ -1330,10 +1351,7 @@ export default function SegmentAnalysis() {
                       <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                         <span>Ordering agreement</span>
                         <span className="text-sm">
-                          {analysisResult.cross_library_validation.ordering_agreement != null &&
-                          analysisResult.cross_library_validation.n_distinguishable_pairs
-                            ? `${(analysisResult.cross_library_validation.ordering_agreement * 100).toFixed(0)}% of ${analysisResult.cross_library_validation.n_distinguishable_pairs} distinguishable pairs`
-                            : 'Not testable (no distinguishable pairs)'}
+                          {formatOrderingAgreement(analysisResult.cross_library_validation)}
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground">
