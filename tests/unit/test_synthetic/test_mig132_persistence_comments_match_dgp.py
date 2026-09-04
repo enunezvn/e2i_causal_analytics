@@ -70,6 +70,29 @@ def test_effective_comments_state_the_exact_complement():
     assert "1 - persistent_180d" in effective["discontinued_180d"][1]
 
 
+def test_effective_comments_describe_the_rwd_path_per_column():
+    """The two columns differ on the RWD path: convert_optum_rwd.py writes
+    discontinued_180d (initiators of its discontinuation cohort only) but never
+    persistent_180d — it emits persistent_at_180d instead — so a comment that
+    claims RWD rows carry persistent_180d is wrong (codex iter-1, PR #1894)."""
+    converter = (MIGRATIONS.parents[1] / "scripts" / "convert_optum_rwd.py").read_text()
+    assert '"discontinued_180d"' in converter
+    assert '"persistent_at_180d"' in converter
+    assert "persistent_180d" not in converter
+    assert re.search(
+        r"_target_discontinued_180d\(patid, init_date\).{0,200}init_date is not None",
+        converter,
+        re.DOTALL,
+    ), "discontinued_180d is no longer guarded on an initiation date; revisit the comment"
+
+    effective = _effective_comments()
+    assert "persistent_at_180d" in effective["persistent_180d"][1], (
+        "persistent_180d comment must say the RWD converter writes persistent_at_180d, "
+        "not this column"
+    )
+    assert "initiators" in effective["discontinued_180d"][1].lower()
+
+
 def test_generator_draws_for_every_row_without_an_initiator_input():
     """The premise the corrected comment rests on: no initiator input, no gaps."""
     params = inspect.signature(generate_discontinuation_outcomes).parameters
