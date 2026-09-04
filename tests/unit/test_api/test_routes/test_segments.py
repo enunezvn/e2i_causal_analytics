@@ -2797,3 +2797,112 @@ def test_segment_datasets_route_accepts_brand_query_param():
     assert "complement_inhibitor_status" in body["treatments"]
     assert "urticaria_severity_uas7" not in body["treatments"]
     assert body["outcomes_by_treatment"]["complement_inhibitor_status"] == ["persistent_180d"]
+
+
+# =============================================================================
+# Option definitions + unambiguous labels (2026-09-04 /segment-analysis review).
+# "Sample dropped" read as "excluded from the sample"; trigger_accepted had no
+# curated label at all (auto-capitalized to "Trigger accepted" while the
+# clinical-context panel says "NBA trigger accepted"); and neither dropdown told
+# the user what a 0/1 option means. The API now ships a `definitions` map next
+# to `labels`, from the same causal.py SSOT, on both the registry and fallback
+# paths.
+# =============================================================================
+
+
+@pytest.mark.unit
+def test_sample_dropped_label_names_the_promotional_lever():
+    from src.api.routes.causal import _COLUMN_LABELS
+
+    label = _COLUMN_LABELS["sample_dropped"]
+    assert label != "Sample dropped", "reads as 'excluded from the sample'"
+    assert "sample" in label.lower()
+    assert "rep" in label.lower() or "product" in label.lower()
+
+
+@pytest.mark.unit
+def test_trigger_accepted_has_a_curated_label():
+    from src.api.routes.causal import _COLUMN_LABELS
+
+    assert _COLUMN_LABELS["trigger_accepted"] == "NBA trigger accepted"
+
+
+@pytest.mark.unit
+def test_commercial_arm_labels_agree_with_clinical_context_panel():
+    """The dropdown label (causal._COLUMN_LABELS) and the clinical-context panel
+    label (brand_map) name the same column; they must not drift apart."""
+    from src.api.routes.causal import _COLUMN_LABELS
+    from src.services.clinical_context.brand_map import _COMMERCIAL_TREATMENT_CONTEXT
+
+    checked = 0
+    for col, ctx in _COMMERCIAL_TREATMENT_CONTEXT.items():
+        if col in _COLUMN_LABELS:
+            assert _COLUMN_LABELS[col] == ctx["label"], col
+            checked += 1
+    assert checked >= 5, "expected every patient-grain commercial arm to be labelled"
+
+
+@pytest.mark.unit
+def test_every_patient_grain_option_has_a_definition():
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _COLUMN_DEFINITIONS
+
+    spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
+    for col in [*spec["treatment"], *spec["outcome"]]:
+        text = _COLUMN_DEFINITIONS.get(col, "")
+        assert text.strip(), f"{col} has no definition"
+        assert text.rstrip().endswith("."), f"{col}: definition is a sentence"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_definitions_cover_every_scoped_option():
+    from src.api.routes.segments import get_segment_datasets
+
+    for brand in (None, "Remibrutinib", "Kisqali", "Fabhalta"):
+        with _patch_ssot():
+            resp = await get_segment_datasets(brand=brand)
+        offered = set(resp.treatments) | set(resp.outcomes)
+        for outs in resp.outcomes_by_treatment.values():
+            offered |= set(outs)
+        assert offered, brand
+        for col in offered:
+            assert resp.definitions.get(col), f"{col} has no definition (brand={brand})"
+        # Definitions are only emitted for offered columns (no unrelated leakage).
+        assert set(resp.definitions) == offered, brand
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_segment_datasets_definitions_survive_curated_fallback():
+    from src.api.routes.segments import get_segment_datasets
+
+    def _down(brand):
+        raise RuntimeError("registry down")
+
+    with _patch_ssot(repo=_fake_repo(rows_for_brand=_down)):
+        resp = await get_segment_datasets(brand="Remibrutinib")
+
+    assert resp.options_source == "curated_fallback"
+    for col in resp.treatments + resp.outcomes:
+        assert resp.definitions.get(col), f"{col} has no definition on the fallback path"
+
+
+@pytest.mark.unit
+def test_segment_datasets_route_serializes_definitions():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.routes.segments import router
+
+    app = FastAPI()
+    app.include_router(router)
+    with _patch_ssot():
+        client = TestClient(app)
+        resp = client.get("/segments/datasets", params={"brand": "Kisqali"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    offered = set(body["treatments"]) | set(body["outcomes"])
+    assert set(body["definitions"]) == offered
+    for col in offered:
+        assert body["definitions"][col].strip(), col
