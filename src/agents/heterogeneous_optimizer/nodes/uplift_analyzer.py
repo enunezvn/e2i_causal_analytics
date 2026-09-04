@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, TypedDict, cast
 import numpy as np
 import pandas as pd
 
-from ..cross_validation import compute_cross_library_validation
+from ..cross_validation import compute_cross_library_validation, describe_ordering
 from ..design import binarize_treatment, sanitize_effect_modifiers
 from ..state import HeterogeneousOptimizerState
 
@@ -280,11 +280,16 @@ class UpliftAnalyzerNode:
         if update.get("validation_passed") is False:
             score = update.get("library_agreement_score") or 0.0
             detail = update.get("cross_library_validation") or {}
+            sign = detail.get("sign_agreement")
+            direction = f"direction {float(sign):.0%}" if sign is not None else "direction n/a"
+            # "ordering agreement 0% on 3 ..." -> "ordering 0% on 3 ..." so the
+            # warning reads as components of the one score.
+            ordering = describe_ordering(detail).replace("ordering agreement ", "ordering ")
             update["warnings"] = [
                 f"Cross-library validation FAILED: EconML and CausalML agree only "
-                f"{score:.0%} on segment direction/ranking "
-                f"(threshold {detail.get('threshold', 0):.0%}); treat targeting "
-                f"conclusions with caution."
+                f"{score:.0%} ({direction}; {ordering}); threshold "
+                f"{detail.get('threshold', 0):.0%}; treat targeting conclusions "
+                f"with caution."
             ]
         return update
 

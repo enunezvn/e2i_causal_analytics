@@ -1312,6 +1312,44 @@ export default function SegmentAnalysis() {
                       <Badge variant="outline">Not run</Badge>
                     )}
                   </div>
+                  {/* Wave 54: the components behind the score, so a direction
+                      disagreement is distinguishable from an ordering one and
+                      the user sees how many pairs the ordering check could
+                      actually test (ordering among statistically
+                      indistinguishable segments is noise, not evidence). */}
+                  {analysisResult.cross_library_validation?.computed && (
+                    <>
+                      <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                        <span>Direction agreement</span>
+                        <span className="text-sm">
+                          {analysisResult.cross_library_validation.sign_agreement != null
+                            ? `${(analysisResult.cross_library_validation.sign_agreement * 100).toFixed(0)}% of ${analysisResult.cross_library_validation.n_segments_compared ?? 0} segments`
+                            : 'Not reported'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                        <span>Ordering agreement</span>
+                        <span className="text-sm">
+                          {analysisResult.cross_library_validation.ordering_agreement != null &&
+                          analysisResult.cross_library_validation.n_distinguishable_pairs
+                            ? `${(analysisResult.cross_library_validation.ordering_agreement * 100).toFixed(0)}% of ${analysisResult.cross_library_validation.n_distinguishable_pairs} distinguishable pairs`
+                            : 'Not testable (no distinguishable pairs)'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Ordering is compared only across segment pairs on the same axis whose
+                        CATE confidence intervals do not overlap. Segments with statistically
+                        indistinguishable effects have no true ordering to reproduce.
+                      </p>
+                    </>
+                  )}
+                  {analysisResult.cross_library_validation &&
+                    !analysisResult.cross_library_validation.computed &&
+                    analysisResult.cross_library_validation.reason && (
+                      <p className="text-xs text-muted-foreground">
+                        Not computed: {analysisResult.cross_library_validation.reason}
+                      </p>
+                    )}
                 </div>
               </CardContent>
             </Card>

@@ -309,3 +309,236 @@ class TestSerializeValidationForLLM:
 
     def test_threshold_is_sane(self):
         assert 0.5 < AGREEMENT_THRESHOLD < 1.0
+
+
+def _cate_ci(dim: str, value: str, estimate: float, half_width: float) -> dict:
+    row = _cate(dim, value, estimate)
+    row["cate_ci_lower"] = estimate - half_width
+    row["cate_ci_upper"] = estimate + half_width
+    return row
+
+
+class TestCIAwareOrdering:
+    """Wave 54 (live seg_0b3933fde63d, 2026-09-04): the ordering component must
+    only be scored on segment pairs the CATE estimator itself distinguishes.
+
+    The DGP plants heterogeneity on ONE axis (disease severity); the other
+    post-hoc axes (age / region / academic) are flat by design, so their
+    ordering is noise in BOTH libraries. Pooling those into one Spearman made
+    the verdict a coin flip for well-posed questions (live: sign 100%, rho
+    0.35 -> 67% FAILED while both libraries agreed on every distinguishable
+    pair).
+    """
+
+    def _live_shape(self):
+        # Severity: planted, distinguishable, SAME order in both libraries.
+        cate = {
+            "sev": [
+                _cate_ci("sev", "high", 0.300, 0.041),
+                _cate_ci("sev", "medium", 0.180, 0.036),
+                _cate_ci("sev", "low", 0.066, 0.055),
+            ],
+            # Flat axes: overlapping CIs, uplift ordering scrambled/reversed.
+            "age": [
+                _cate_ci("age", "<50", 0.197, 0.036),
+                _cate_ci("age", "50-65", 0.194, 0.054),
+                _cate_ci("age", ">65", 0.175, 0.045),
+            ],
+            "region": [
+                _cate_ci("region", "ne", 0.210, 0.050),
+                _cate_ci("region", "s", 0.195, 0.050),
+                _cate_ci("region", "w", 0.180, 0.050),
+                _cate_ci("region", "mw", 0.174, 0.049),
+            ],
+            "academic": [
+                _cate_ci("academic", "0", 0.197, 0.031),
+                _cate_ci("academic", "1", 0.178, 0.041),
+            ],
+        }
+        uplift = {
+            "sev": [
+                _uplift("sev", "high", 0.2885),
+                _uplift("sev", "medium", 0.2869),
+                _uplift("sev", "low", 0.2825),
+            ],
+            "age": [
+                _uplift("age", "<50", 0.27),
+                _uplift("age", "50-65", 0.28),
+                _uplift("age", ">65", 0.29),
+            ],
+            "region": [
+                _uplift("region", "ne", 0.26),
+                _uplift("region", "s", 0.30),
+                _uplift("region", "w", 0.25),
+                _uplift("region", "mw", 0.31),
+            ],
+            "academic": [
+                _uplift("academic", "0", 0.27),
+                _uplift("academic", "1", 0.29),
+            ],
+        }
+        return cate, uplift
+
+    def test_noise_ordering_among_indistinguishable_segments_does_not_fail(self):
+        cate, uplift = self._live_shape()
+
+        out = compute_cross_library_validation(cate, uplift, "random_forest")
+
+        detail = out["cross_library_validation"]
+        assert detail["n_segments_compared"] == 12
+        assert detail["sign_agreement"] == pytest.approx(1.0)
+        # Only the three severity pairs are CI-distinguishable; both libraries
+        # order all three the same way.
+        assert detail["n_distinguishable_pairs"] == 3
+        assert detail["ordering_agreement"] == pytest.approx(1.0)
+        assert out["library_agreement_score"] == pytest.approx(1.0)
+        assert out["validation_passed"] is True
+        # The pooled rank correlation stays reported as a diagnostic only.
+        assert detail["spearman_rho"] is not None
+        assert detail["spearman_rho"] < 0.7
+
+    def test_ordering_disagreement_on_distinguishable_pairs_still_fails(self):
+        cate = {
+            "sev": [
+                _cate_ci("sev", "high", 0.30, 0.03),
+                _cate_ci("sev", "medium", 0.18, 0.03),
+                _cate_ci("sev", "low", 0.06, 0.03),
+            ]
+        }
+        uplift = {
+            "sev": [
+                _uplift("sev", "high", 0.10),
+                _uplift("sev", "medium", 0.20),
+                _uplift("sev", "low", 0.30),
+            ]
+        }
+
+        out = compute_cross_library_validation(cate, uplift, "random_forest")
+
+        detail = out["cross_library_validation"]
+        assert detail["n_distinguishable_pairs"] == 3
+        assert detail["ordering_agreement"] == pytest.approx(0.0)
+        assert out["library_agreement_score"] == pytest.approx(0.5)
+        assert out["validation_passed"] is False
+
+    def test_no_distinguishable_pair_scores_direction_only_and_says_so(self):
+        # Homogeneous effect: every CI overlaps, so there is no ordering to
+        # reproduce. Direction agrees everywhere -> full score, not a noise draw.
+        cate = {
+            "sev": [
+                _cate_ci("sev", "a", 0.20, 0.05),
+                _cate_ci("sev", "b", 0.19, 0.05),
+                _cate_ci("sev", "c", 0.18, 0.05),
+            ]
+        }
+        uplift = {
+            "sev": [_uplift("sev", "a", 0.10), _uplift("sev", "b", 0.30), _uplift("sev", "c", 0.20)]
+        }
+
+        out = compute_cross_library_validation(cate, uplift, "random_forest")
+
+        detail = out["cross_library_validation"]
+        assert detail["n_distinguishable_pairs"] == 0
+        assert detail["ordering_agreement"] is None
+        assert "not testable" in detail["method"]
+        assert out["library_agreement_score"] == pytest.approx(1.0)
+        assert out["validation_passed"] is True
+
+    def test_cross_dimension_pairs_are_never_compared(self):
+        # a1 vs b1 have disjoint CIs but live on different segmentation axes —
+        # a targeting decision never ranks "age <50" against "region west".
+        cate = {
+            "a": [_cate_ci("a", "a1", 0.30, 0.05), _cate_ci("a", "a2", 0.29, 0.05)],
+            "b": [_cate_ci("b", "b1", 0.05, 0.05)],
+        }
+        uplift = {
+            "a": [_uplift("a", "a1", 0.10), _uplift("a", "a2", 0.10)],
+            "b": [_uplift("b", "b1", 0.30)],
+        }
+
+        out = compute_cross_library_validation(cate, uplift, "random_forest")
+
+        detail = out["cross_library_validation"]
+        assert detail["n_distinguishable_pairs"] == 0
+        assert out["library_agreement_score"] == pytest.approx(1.0)
+
+    def test_segment_without_ci_counts_for_direction_but_not_ordering(self):
+        cate = {
+            "sev": [
+                _cate_ci("sev", "high", 0.30, 0.02),
+                _cate_ci("sev", "low", 0.05, 0.02),
+                {"segment_name": "sev", "segment_value": "unk", "cate_estimate": 0.20},
+            ]
+        }
+        uplift = {
+            "sev": [
+                _uplift("sev", "high", 0.30),
+                _uplift("sev", "low", 0.05),
+                _uplift("sev", "unk", 0.01),
+            ]
+        }
+
+        out = compute_cross_library_validation(cate, uplift, "random_forest")
+
+        detail = out["cross_library_validation"]
+        assert detail["n_segments_compared"] == 3
+        assert detail["n_distinguishable_pairs"] == 1
+        assert detail["ordering_agreement"] == pytest.approx(1.0)
+
+
+class TestFailedWarningExplainsComponents:
+    def test_failed_warning_names_direction_and_ordering(self):
+        node = UpliftAnalyzerNode()
+        state = {
+            "cate_by_segment": {
+                "sev": [
+                    _cate_ci("sev", "a", 0.30, 0.03),
+                    _cate_ci("sev", "b", 0.18, 0.03),
+                    _cate_ci("sev", "c", 0.06, 0.03),
+                ]
+            }
+        }
+        uplift = {
+            "sev": [_uplift("sev", "a", 0.10), _uplift("sev", "b", 0.20), _uplift("sev", "c", 0.30)]
+        }
+
+        update = node._cross_library_update(state, uplift, "random_forest")
+
+        warning = update["warnings"][0]
+        assert warning.startswith("Cross-library validation FAILED")
+        assert "direction 100%" in warning
+        assert "ordering 0% on 3 statistically distinguishable segment pairs" in warning
+
+
+class TestSerializeOrderingForLLM:
+    def test_serializes_ordering_agreement_on_distinguishable_pairs(self):
+        state = {
+            "library_agreement_score": 1.0,
+            "validation_passed": True,
+            "cross_library_validation": {
+                "computed": True,
+                "n_segments_compared": 12,
+                "spearman_rho": 0.35,
+                "sign_agreement": 1.0,
+                "n_distinguishable_pairs": 3,
+                "ordering_agreement": 1.0,
+            },
+        }
+        text = serialize_validation_for_llm(state)
+        assert text.startswith("PASSED")
+        assert "ordering agreement 100% on 3 statistically distinguishable segment pairs" in text
+
+    def test_serializes_ordering_not_testable(self):
+        state = {
+            "library_agreement_score": 1.0,
+            "validation_passed": True,
+            "cross_library_validation": {
+                "computed": True,
+                "n_segments_compared": 12,
+                "spearman_rho": None,
+                "sign_agreement": 1.0,
+                "n_distinguishable_pairs": 0,
+                "ordering_agreement": None,
+            },
+        }
+        assert "ordering not testable" in serialize_validation_for_llm(state)

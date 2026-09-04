@@ -216,6 +216,25 @@ export interface UpliftMetrics {
 /**
  * Response from segment analysis
  */
+/** Components of the EconML-vs-CausalML cross-library check (see SegmentAnalysisResponse.cross_library_validation). */
+export interface CrossLibraryValidationDetail {
+  computed: boolean;
+  /** Present when computed=false: why no verdict was produced. */
+  reason?: string | null;
+  method?: string | null;
+  n_segments_compared?: number | null;
+  /** Share of segments where both libraries agree on the effect sign (0-1). */
+  sign_agreement?: number | null;
+  /** Within-axis segment pairs with disjoint CATE CIs (the only pairs whose ordering is testable). */
+  n_distinguishable_pairs?: number | null;
+  /** Share of distinguishable pairs ordered the same way by both libraries (0-1); null when not testable. */
+  ordering_agreement?: number | null;
+  /** Pooled Spearman rank correlation over all scored segments — diagnostic only. */
+  spearman_rho?: number | null;
+  threshold?: number | null;
+  uplift_model?: string | null;
+}
+
 export interface SegmentAnalysisResponse {
   /** Unique analysis identifier */
   analysis_id: string;
@@ -302,6 +321,14 @@ export interface SegmentAnalysisResponse {
   library_agreement_score?: number;
   /** Whether cross-validation passed */
   validation_passed?: boolean;
+  /**
+   * Components behind library_agreement_score (wave 54). Direction agreement
+   * covers every segment both libraries scored; ordering agreement covers only
+   * within-axis segment pairs whose CATE confidence intervals are disjoint —
+   * segments with indistinguishable effects have no true ordering to
+   * reproduce. spearman_rho is the pooled rank correlation, a diagnostic only.
+   */
+  cross_library_validation?: CrossLibraryValidationDetail | null;
 
   // Metadata
   /** CATE estimation time (ms) */

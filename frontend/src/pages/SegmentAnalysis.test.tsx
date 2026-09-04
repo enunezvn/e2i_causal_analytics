@@ -477,6 +477,79 @@ describe('SegmentAnalysis — Library Validation honest-null', () => {
     expect(screen.getByText('econml')).toBeInTheDocument();
     expect(screen.getByText('causalml')).toBeInTheDocument();
   });
+
+  // Wave 54: the card explains the verdict's components so a user can tell a
+  // direction disagreement from an ordering disagreement, and sees how many
+  // segment pairs the ordering check could actually test.
+  it('renders direction and ordering components when the backend reports them', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: ['econml', 'causalml'],
+        library_agreement_score: 0.9,
+        validation_passed: true,
+        cross_library_validation: {
+          computed: true,
+          method: '0.5*sign_agreement + 0.5*ordering_agreement (CI-distinguishable within-dimension pairs)',
+          n_segments_compared: 12,
+          sign_agreement: 1.0,
+          n_distinguishable_pairs: 3,
+          ordering_agreement: 0.8,
+          spearman_rho: 0.35,
+          threshold: 0.7,
+          uplift_model: 'random_forest',
+        },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Direction agreement')).toBeInTheDocument();
+    });
+    expect(screen.getByText('100% of 12 segments')).toBeInTheDocument();
+    expect(screen.getByText('Ordering agreement')).toBeInTheDocument();
+    expect(screen.getByText('80% of 3 distinguishable pairs')).toBeInTheDocument();
+  });
+
+  it('says ordering was not testable when no segment pair is distinguishable', async () => {
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: completedResponse({
+        libraries_used: ['econml', 'causalml'],
+        library_agreement_score: 1.0,
+        validation_passed: true,
+        cross_library_validation: {
+          computed: true,
+          method: 'sign_agreement only (ordering not testable: no CI-distinguishable segment pair)',
+          n_segments_compared: 12,
+          sign_agreement: 1.0,
+          n_distinguishable_pairs: 0,
+          ordering_agreement: null,
+          spearman_rho: null,
+          threshold: 0.7,
+          uplift_model: 'random_forest',
+        },
+      }),
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /Uplift Metrics/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Ordering agreement')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Not testable (no distinguishable pairs)')).toBeInTheDocument();
+  });
 });
 
 describe('SegmentAnalysis — Policy Details formatting + zero-lift filtering', () => {

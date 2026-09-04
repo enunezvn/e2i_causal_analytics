@@ -766,6 +766,44 @@ async def test_execute_segment_analysis_with_agent(curated_request, mock_agent_r
 
 
 @pytest.mark.asyncio
+async def test_execute_segment_analysis_passes_cross_library_detail_through(
+    curated_request, mock_agent_result
+):
+    """Wave 54: the validation COMPONENTS reach the API so the page can explain
+    a verdict (direction vs ordering on distinguishable pairs) instead of a
+    bare percentage the user has to fish for in the logs."""
+    detail = {
+        "computed": True,
+        "method": "0.5*sign_agreement + 0.5*ordering_agreement (CI-distinguishable within-dimension pairs)",
+        "n_segments_compared": 12,
+        "sign_agreement": 1.0,
+        "n_distinguishable_pairs": 3,
+        "ordering_agreement": 1.0,
+        "spearman_rho": 0.35,
+        "threshold": 0.7,
+        "uplift_model": "random_forest",
+    }
+    result_state = dict(mock_agent_result)
+    result_state["cross_library_validation"] = detail
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value=result_state)
+
+    with (
+        _patch_hte_loader(),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        result = await _execute_segment_analysis(curated_request)
+
+    from src.api.routes.segments import SegmentAnalysisResponse
+
+    assert result.cross_library_validation == detail
+    assert "cross_library_validation" in SegmentAnalysisResponse.model_fields
+
+
+@pytest.mark.asyncio
 async def test_execute_segment_analysis_falls_back_to_mock_when_explicitly_allowed(
     curated_request, monkeypatch
 ):

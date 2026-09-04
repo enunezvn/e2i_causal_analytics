@@ -482,6 +482,16 @@ class SegmentAnalysisResponse(BaseModel):
     validation_passed: Optional[bool] = Field(
         default=None, description="Whether cross-validation passed"
     )
+    cross_library_validation: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Components behind library_agreement_score so the verdict is explainable: "
+            "method, n_segments_compared, sign_agreement (direction), "
+            "n_distinguishable_pairs + ordering_agreement (within-axis segment pairs "
+            "whose CATE CIs are disjoint), spearman_rho (pooled diagnostic only), "
+            "threshold, uplift_model. computed=False carries a reason instead."
+        ),
+    )
 
     # Metadata
     estimation_latency_ms: int = Field(default=0, description="CATE estimation time")
@@ -945,6 +955,7 @@ class _DurableAnalysesStore:
         sanitized.feature_importance = None
         sanitized.uplift_metrics = None
         sanitized.library_agreement_score = None
+        sanitized.cross_library_validation = None
         sanitized.expected_total_lift = None
         sanitized.expected_lift_pp = None
         sanitized.confidence = 0.0
@@ -2615,6 +2626,7 @@ async def _execute_segment_analysis(
                 libraries_used=result.get("libraries_executed"),
                 library_agreement_score=result.get("library_agreement_score"),
                 validation_passed=result.get("validation_passed"),
+                cross_library_validation=_to_native(result.get("cross_library_validation")),
                 estimation_latency_ms=result.get("estimation_latency_ms", 0),
                 analysis_latency_ms=result.get("analysis_latency_ms", 0),
                 total_latency_ms=total_latency,

@@ -17255,6 +17255,13 @@ export interface components {
              */
             validation_passed?: boolean | null;
             /**
+             * Cross Library Validation
+             * @description Components behind library_agreement_score so the verdict is explainable: method, n_segments_compared, sign_agreement (direction), n_distinguishable_pairs + ordering_agreement (within-axis segment pairs whose CATE CIs are disjoint), spearman_rho (pooled diagnostic only), threshold, uplift_model. computed=False carries a reason instead.
+             */
+            cross_library_validation?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Estimation Latency Ms
              * @description CATE estimation time
              * @default 0
