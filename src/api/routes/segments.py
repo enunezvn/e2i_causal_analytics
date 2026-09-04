@@ -956,6 +956,11 @@ class _DurableAnalysesStore:
         sanitized.uplift_metrics = None
         sanitized.library_agreement_score = None
         sanitized.cross_library_validation = None
+        # The verdict is a bool, so the finite-float scrub never touched it: a
+        # degenerate fit kept ``validation_passed=True`` beside a nulled score
+        # and the card showed "Passed" next to "Not computed" (wave 54). A
+        # verdict cannot outlive the score it summarises.
+        sanitized.validation_passed = None
         sanitized.expected_total_lift = None
         sanitized.expected_lift_pp = None
         sanitized.confidence = 0.0

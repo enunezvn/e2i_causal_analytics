@@ -2073,6 +2073,49 @@ class TestSanitizeScrubsAllFloatFields:
             f"poison in {field} vanished from enumeration (broken write guarantee)"
         )
 
+    @pytest.mark.asyncio
+    async def test_sanitize_drops_the_verdict_with_its_score(self):
+        """A degenerate fit must not keep a cross-library VERDICT it lost the score for.
+
+        ``_sanitize_non_finite`` nulls ``library_agreement_score`` and
+        ``cross_library_validation`` but ``validation_passed`` is a bool, so the
+        finite-float scrub never touched it: the persisted FAILED record still
+        carried ``validation_passed=True`` and the Library Validation card
+        rendered a green "Passed" beside "Not computed" (codex wave-54 iter-3).
+        """
+        import math
+
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            _DurableAnalysesStore,
+        )
+
+        resp = SegmentAnalysisResponse(
+            analysis_id="seg_verdict",
+            status=SegmentAnalysisStatus.COMPLETED,
+            timestamp=datetime.now(timezone.utc),
+            overall_ate=math.nan,
+            library_agreement_score=0.9,
+            validation_passed=True,
+            cross_library_validation={"computed": True, "sign_agreement": 1.0},
+        )
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        await store.set("seg_verdict", resp)
+
+        got = await store.get("seg_verdict")
+        assert got is not None
+        assert got.status == SegmentAnalysisStatus.FAILED
+        assert got.library_agreement_score is None
+        assert got.cross_library_validation is None
+        assert got.validation_passed is None, (
+            "verdict outlived its score: the card would show Passed beside Not computed"
+        )
+
     @pytest.mark.parametrize(
         "field",
         [
