@@ -764,8 +764,10 @@ async def _default_redis_factory() -> Any:
 
 
 # ``SegmentAnalysisResponse`` fields that describe what the request WAS (ids,
-# question, brand, variables, CI level, method, libraries, latencies,
-# timestamp, warnings) rather than what the estimators produced. They are the
+# question, brand, variables, CI level, libraries, latencies, timestamp,
+# warnings) rather than what the estimators produced. ``segmentation_method_used``
+# is NOT provenance: the hierarchical node picks/defaults it and the page's
+# diagnostics card renders on its presence alone (codex iter-7). They are the
 # ONLY fields a degenerate-fit FAILED record keeps — see
 # ``_DurableAnalysesStore._sanitize_non_finite`` (wave 54).
 _FAILED_RECORD_PROVENANCE_FIELDS = frozenset(
@@ -777,7 +779,6 @@ _FAILED_RECORD_PROVENANCE_FIELDS = frozenset(
         "treatment_var",
         "outcome_var",
         "confidence_level",
-        "segmentation_method_used",
         "libraries_used",
         "estimation_latency_ms",
         "analysis_latency_ms",

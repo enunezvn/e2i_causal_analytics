@@ -2205,7 +2205,7 @@ class TestSanitizeScrubsAllFloatFields:
         fit surviving a hand-enumerated scrub (LM narrative, allocation prose +
         mid_responders, then the hierarchical / uplift diagnostics). The honest
         FAILED record is defined the other way round: what the request WAS
-        (ids, question, brand, variables, CI level, method, libraries,
+        (ids, question, brand, variables, CI level, libraries,
         latencies, timestamp, warnings) survives, and everything the failed
         estimators PRODUCED goes back to its schema default. This test
         populates every non-provenance field with a finite, non-default value
@@ -2231,7 +2231,6 @@ class TestSanitizeScrubsAllFloatFields:
             "treatment_var",
             "outcome_var",
             "confidence_level",
-            "segmentation_method_used",
             "libraries_used",
             "estimation_latency_ms",
             "analysis_latency_ms",
@@ -2287,6 +2286,9 @@ class TestSanitizeScrubsAllFloatFields:
             "strategic_interpretation": "Target high severity first.",
             "key_insights": ["High severity responds 2x."],
             "segment_comparison": {"best": "region_west"},
+            # Analyzer-owned (hierarchical node picks/defaults it), and the
+            # diagnostics card renders on its presence alone (codex iter-7).
+            "segmentation_method_used": "hierarchical",
             "segment_heterogeneity": 42.0,
             "n_segments_analyzed": 4,
             "overall_hierarchical_ate": 0.08,
@@ -2312,7 +2314,6 @@ class TestSanitizeScrubsAllFloatFields:
             treatment_var="treatment_arm",
             outcome_var="treatment_initiated",
             confidence_level=0.9,
-            segmentation_method_used="hierarchical",
             libraries_used=["econml", "causalml"],
             estimation_latency_ms=1200,
             analysis_latency_ms=300,
