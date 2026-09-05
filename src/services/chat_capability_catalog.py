@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from src.agents.factory import build_agent_roster_block
+from src.kpi.models import Workstream
 from src.kpi.registry import get_registry
 from src.kpi.segmented_history import SEGMENTED_KPI_QUERY_FAMILIES
 
@@ -151,3 +152,135 @@ async def build_capability_catalog(
         degraded=tuple(degraded),
         loaded_at=time.monotonic(),
     )
+
+
+# =============================================================================
+# RENDERER
+# =============================================================================
+
+_WORKSTREAM_ORDER: Tuple[Tuple[Workstream, str], ...] = (
+    (Workstream.WS3_BUSINESS, "Business impact"),
+    (Workstream.WS2_TRIGGERS, "Trigger performance"),
+    (Workstream.WS1_MODEL_PERFORMANCE, "Model performance"),
+    (Workstream.WS1_DATA_QUALITY, "Data quality"),
+    (Workstream.BRAND_SPECIFIC, "Brand-specific"),
+    (Workstream.CAUSAL_METRICS, "Causal-effect metrics"),
+)
+
+# Hand-written RULES (not a list). The axis words are pinned to
+# kpi_calculate_tool's parameter names by test_axis_vocabulary_matches_kpi_calculate_tool.
+AXIS_PARAMETER_NAMES: Tuple[str, ...] = (
+    "segment",
+    "therapy_line",
+    "region",
+    "biologic",
+    "ige_tier",
+)
+AXIS_RULES = (
+    "Breakdown axes, AT MOST ONE per ask: segment = patient severity tier (low/medium/high); "
+    "therapy_line = line of therapy (0-3); region = US census region (northeast/south/midwest/west); "
+    "and - Remibrutinib ONLY - biologic status (naive/experienced) or ige_tier (low/medium/high). "
+    'An optional time window ("last 3 months", "Q1 2025", "2025-01-01 to 2025-03-31") composes with '
+    "segment/therapy_line but NOT with region/biologic/ige_tier for share, conversion or trigger KPIs. "
+    "TRx share is share of the tracked 3-brand portfolio, NOT share versus competitors."
+)
+
+NEVER_BLOCK = (
+    "NEVER PROPOSE (no tool serves these): named HCP or patient lists / rosters / exports; "
+    'territory-level detail; competitor brands\' share or volume; TRx/NRx/NBRx "by HCP segment" '
+    "(patient axes only); trends over time of SHAP values, CATE / treatment effects, predicted "
+    "probabilities, gap sizes or optimizer allocations; recomputing, validating, re-deriving or "
+    "EXTENDING an on-screen SHAP, optimizer, prediction, gap or CATE result (another segment, more "
+    "features, per-territory detail, robustness, thresholds); two breakdown axes at once; causal "
+    "drivers scoped to a region, month or segment; drivers OF a driver (unless it is itself a "
+    "section-C outcome); thresholds, dose-response or nonlinearity questions; on-demand sensitivity / "
+    'subgroup / "controlling for" analyses; live experiment status, lift or results; agent accuracy / '
+    "error rates; audit-cycle metrics; data refresh schedules or pipeline latency; campaign-level ROI; "
+    'toggling page UI (e.g. nowcast overlay); undefined ratios such as "conversion from NRx to NBRx"; '
+    "emails, external data, CRM or any write action; treating a section-C outcome as a KPI (its rate, "
+    "value, trend, chart or breakdown)."
+)
+
+
+def _names(catalog: CapabilityCatalog, ids: FrozenSet[str], *, mark_per_brand: bool = False) -> str:
+    parts: List[str] = []
+    for kpi_id in sorted(ids):
+        name = catalog.kpi_name(kpi_id)
+        if mark_per_brand and kpi_id in catalog.per_brand_only_trend_ids:
+            name += " (per brand only)"
+        parts.append(name)
+    return ", ".join(parts)
+
+
+def render_catalog_block(catalog: CapabilityCatalog) -> str:
+    """Render the catalog as the prompt's A-H capability sections plus the NEVER list."""
+    lines: List[str] = ["WHAT THE ASSISTANT CAN DO (every pill must map to exactly one of A-H):"]
+
+    lines.append(
+        "A. KPI values - the current value of any registry KPI, per brand, optionally over a time "
+        "window. Registry KPIs by area:"
+    )
+    for workstream, label in _WORKSTREAM_ORDER:
+        names = [
+            e.name + (f" ({e.brand} only)" if e.brand else "")
+            for e in catalog.kpis
+            if e.workstream == workstream.value
+        ]
+        if names:
+            lines.append(f"   - {label}: {'; '.join(names)}")
+    lines.append("   " + AXIS_RULES)
+
+    axis_names = _names(catalog, catalog.axis_kpi_ids)
+    if "trend_coverage" in catalog.degraded:
+        trend_clause = (
+            "a monthly trend line for the KPIs with a materialized history (the coverage list is "
+            f"unavailable right now - the Rx-volume KPIs {axis_names} always have one; propose trends "
+            "only for those)"
+        )
+    else:
+        trend_clause = f"a monthly trend line for {_names(catalog, catalog.trend_kpi_ids, mark_per_brand=True)}"
+    lines.append(
+        f"B. Charts: {trend_clause}; ONE chart comparing severity tiers or lines of therapy for "
+        f"{axis_names}; any other registry KPI as a current-value chart; several KPIs side by side."
+    )
+
+    if "causal_outcomes" in catalog.degraded:
+        lines.append(
+            "C. Causal drivers, causal paths and treatment effects from the causal-path registry, per "
+            "brand, with confidence and refutation evidence, for the registry's patient-journey and "
+            "commercial outcomes. The outcome list is unavailable right now: propose at most ONE "
+            'causal-driver pill, phrased "what drives <the outcome or KPI named on screen> for '
+            '<brand>?", and invent no outcome names.'
+        )
+    else:
+        lines.append(
+            "C. Causal drivers, causal paths and treatment effects from the causal-path registry, per "
+            "brand, with confidence and refutation evidence, for these OUTCOMES only: "
+            f"{', '.join(catalog.causal_outcomes)}. These outcomes are registry NODES, not KPIs: they "
+            "cannot be computed, trended, charted or broken down by region, segment or month - a "
+            'driver question is "what drives <outcome> for <brand>?", nothing finer. The registry has '
+            "NO time, region or segment dimension."
+        )
+
+    lines.append(
+        "D. Segments: KPI breakdowns by ONE of the axes in A; a ranking of HCP segments by predicted "
+        "likelihood to prescribe a brand, by specialty OR by geographic region; aggregate HCP / "
+        "patient cohort profiles (counts by specialty, tier, severity - never named individuals)."
+    )
+    lines.append(
+        "E. Clinical and regulatory context per brand: FDA-label indications, mechanism of action, "
+        "pivotal trial endpoints, real-world evidence, competitor landscape (as context, not as data)."
+    )
+    lines.append(
+        "F. Platform: the agents below and what each does; an agent's recent activity; the system "
+        "health score; experiment design, drift checks and gap/ROI opportunity analysis run through "
+        "the orchestrator."
+    )
+    lines.extend("   " + line for line in catalog.agent_roster.splitlines())
+    lines.append("G. Internal document / knowledge-base search.")
+    lines.append(
+        "H. Dashboard actions: navigate to a page, set the brand or region filter, set the date range."
+    )
+    lines.append("")
+    lines.append(NEVER_BLOCK)
+    return "\n".join(lines)

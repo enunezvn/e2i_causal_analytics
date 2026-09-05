@@ -127,3 +127,69 @@ async def test_empty_results_are_degraded_too(caplog):
     messages = [r.getMessage() for r in caplog.records]
     assert any("trend coverage empty" in m for m in messages)
     assert any("causal outcomes empty" in m for m in messages)
+
+
+# =============================================================================
+# RENDERER
+# =============================================================================
+
+
+async def test_render_lists_registry_kpis_by_area():
+    c = await make_catalog()
+    block = cat.render_catalog_block(c)
+    assert block.startswith("WHAT THE ASSISTANT CAN DO")
+    assert "A. KPI values" in block
+    assert "- Business impact: " in block
+    assert "Total Prescriptions (TRx)" in block
+
+
+async def test_render_trend_and_axis_kpis_by_name():
+    c = await make_catalog()
+    block = cat.render_catalog_block(c)
+    assert f"{c.kpi_name('WS3-BI-007')} (per brand only)" in block
+    assert c.kpi_name("WS3-BI-005") in block
+    # axis KPIs are named in the comparison clause
+    for kpi_id in SEGMENTED_KPI_QUERY_FAMILIES:
+        assert c.kpi_name(kpi_id) in block
+
+
+async def test_render_causal_outcomes_as_registry_nodes():
+    c = await make_catalog()
+    block = cat.render_catalog_block(c)
+    assert "for these OUTCOMES only: " + ", ".join(c.causal_outcomes) in block
+    assert "registry NODES, not KPIs" in block
+    assert "NO time, region or segment dimension" in block
+
+
+async def test_render_roster_never_block_and_letters():
+    c = await make_catalog()
+    block = cat.render_catalog_block(c)
+    assert "The E2I system has" in block
+    assert "NEVER PROPOSE" in block
+    for letter in "ABCDEFGH":
+        assert f"\n{letter}. " in block or block.startswith(f"{letter}. "), letter
+
+
+async def test_render_degraded_fallbacks_invent_nothing():
+    c = await make_catalog(coverage=_boom, outcomes=_boom)
+    block = cat.render_catalog_block(c)
+    assert "coverage list is unavailable" in block
+    assert "outcome list is unavailable" in block
+    assert "persistent_180d" not in block
+    # the Rx-volume trends are code-derived and stay offered
+    assert c.kpi_name("WS3-BI-005") in block
+
+
+def test_axis_vocabulary_matches_kpi_calculate_tool():
+    """The axis RULES are prose; pin their vocabulary to the tool's parameters
+    so the prompt can never name an axis the tool does not accept."""
+    import inspect
+
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    # kpi_calculate_tool is a LangChain StructuredTool (``@tool(...)``-wrapped);
+    # ``.coroutine`` is the original async function inspect.signature needs.
+    params = set(inspect.signature(kpi_calculate_tool.coroutine).parameters)
+    for axis in cat.AXIS_PARAMETER_NAMES:
+        assert axis in params, axis
+        assert axis in cat.AXIS_RULES, axis
