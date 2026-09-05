@@ -256,6 +256,23 @@ describe('SystemHealth', () => {
     expect(screen.getByText(/Health check:/)).toBeInTheDocument();
   });
 
+  it('renders the overall score to one decimal, not raw float precision', () => {
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        // Live value observed on /system-health (2026-09-05): the composer's
+        // weighted average is an unrounded float.
+        overall_health_score: 99.4230769,
+        data_provenance: 'measured',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('99.4')).toBeInTheDocument();
+    expect(screen.queryByText('99.4230769')).not.toBeInTheDocument();
+  });
+
   it('flags a partial (non-fully-measured) check with a provenance badge', () => {
     (useFullHealthCheck as MockFn).mockReturnValue({
       data: {
