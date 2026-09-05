@@ -27,6 +27,15 @@ Semantics (deliberately different from the backfill):
   described; ``reseed_synthetic.sh --full`` therefore calls ``--purge`` before
   reseeding so stale observations don't masquerade as history of the new seed.
 
+Brand axis: KPIs in :data:`BRAND_CAPTURE_KPI_IDS` are ALSO captured once per
+portfolio brand (:data:`CAPTURE_BRANDS`) through the same calculator path with
+``context={"brand": <brand>}`` — the honest forward-accruing substrate for the
+Time-Series brand selector / "Compare Brands" overlay on present-state KPIs.
+Only KPIs whose live calculator returns a DISTINCT brand-scoped reading are
+listed (measured against the live API before wiring); a KPI whose calculator
+ignores or lacks a brand parameter is captured globally only — three identical
+lines would be a fabricated brand axis.
+
 Run: ``python -m src.kpi.history_capture`` (wired into reseed_synthetic.sh
 after the backfill step). ``--purge`` deletes all weekly_capture rows instead.
 """
@@ -66,6 +75,38 @@ CAPTURE_KPI_IDS: tuple = (
     "WS2-TR-009",
 )
 
+#: Portfolio brands captured per-brand for :data:`BRAND_CAPTURE_KPI_IDS`.
+#: Mirrors ``src.ml.synthetic.config.Brand`` (the DGP's brand domain — the only
+#: values ``triggers.brand_id`` / ``patient_journeys.brand`` carry); canonical
+#: case matches the backfill's brand rows and the calculators' case-sensitive
+#: ``brand::text = $1`` predicates. Lockstep-tested against the enum.
+CAPTURE_BRANDS: tuple = ("Fabhalta", "Kisqali", "Remibrutinib")
+
+#: Capture KPIs whose LIVE calculator honors ``context["brand"]`` with a
+#: distinct per-brand reading (verified 2026-09-05 against
+#: ``GET /api/kpis/{id}?brand=...`` on prod: every brand differed from the
+#: global and from each other). Deliberately NOT here:
+#: - WS1-DQ-002 — hcp_profiles has no brand column (calculator docstring);
+#: - WS1-DQ-003/004/005/007/009, WS3-BI-004 — calculators take no brand
+#:   parameter (a brand-scoped ask returns the global figure);
+#: - BR-005 — single-brand by definition.
+BRAND_CAPTURE_KPI_IDS: frozenset = frozenset(
+    {
+        # data_quality_source_coverage_patients: $1 brand on numerator + universe
+        "WS1-DQ-001",
+        # data_quality_geographic_consistency: $1 brand on source + universe shares
+        "WS1-DQ-006",
+        # business_impact_patient_touch_rate: $1 brand over v_patient_eligibility
+        "WS3-BI-003",
+        # trigger_performance_recall_brand (113)
+        "WS2-TR-002",
+        # trigger_performance_action_rate_uplift_brand (113)
+        "WS2-TR-003",
+        # trigger_effectiveness_funnel_conversion: $1 brand, nullable (118)
+        "WS2-TR-009",
+    }
+)
+
 
 def _status_str(result: Any) -> Optional[str]:
     status = getattr(result, "status", None)
@@ -90,38 +131,55 @@ async def run_capture(kpi_ids: Optional[List[str]] = None) -> Dict[str, Any]:
     today = date.today().isoformat()
 
     targets = list(kpi_ids or CAPTURE_KPI_IDS)
-    summary: Dict[str, Any] = {"written": {}, "errors": {}, "date": today}
+    summary: Dict[str, Any] = {
+        "written": {},
+        "written_by_brand": {},
+        "errors": {},
+        "date": today,
+    }
     points: List[Dict[str, Any]] = []
     for kpi_id in targets:
-        try:
-            result = await asyncio.to_thread(
-                calculator.calculate, kpi_id, use_cache=False, force_refresh=True
-            )
-            error = getattr(result, "error", None)
-            value = getattr(result, "value", None)
-            if error or value is None:
-                summary["errors"][kpi_id] = str(error or "no value")
-                continue
-            points.append(
-                {
-                    "kpi_id": kpi_id,
-                    "brand": "",
-                    "region": "",
-                    "metric_date": today,
-                    "value": float(value),
-                    "status": _status_str(result),
-                    "source": CAPTURE_SOURCE,
-                    "is_synthetic": True,
-                }
-            )
-        except Exception as e:  # noqa: BLE001
-            summary["errors"][kpi_id] = str(e)
-            logger.error("KPI capture failed for %s: %s", kpi_id, e, exc_info=True)
+        # '' = the global reading (every capture KPI); brand-capable KPIs are
+        # additionally read once per portfolio brand. Each scope is independent:
+        # one brand failing never blocks the global point or the other brands.
+        scopes = [""] + (list(CAPTURE_BRANDS) if kpi_id in BRAND_CAPTURE_KPI_IDS else [])
+        for brand in scopes:
+            key = f"{kpi_id}[{brand}]" if brand else kpi_id
+            # The global call keeps its historical shape (no context kwarg);
+            # brand scopes route through the calculators' context["brand"].
+            kwargs: Dict[str, Any] = {"context": {"brand": brand}} if brand else {}
+            try:
+                result = await asyncio.to_thread(
+                    calculator.calculate, kpi_id, use_cache=False, force_refresh=True, **kwargs
+                )
+                error = getattr(result, "error", None)
+                value = getattr(result, "value", None)
+                if error or value is None:
+                    summary["errors"][key] = str(error or "no value")
+                    continue
+                points.append(
+                    {
+                        "kpi_id": kpi_id,
+                        "brand": brand,
+                        "region": "",
+                        "metric_date": today,
+                        "value": float(value),
+                        "status": _status_str(result),
+                        "source": CAPTURE_SOURCE,
+                        "is_synthetic": True,
+                    }
+                )
+            except Exception as e:  # noqa: BLE001
+                summary["errors"][key] = str(e)
+                logger.error("KPI capture failed for %s: %s", key, e, exc_info=True)
 
     if points:
         written = await repo.upsert_points(points)
         for p in points:
-            summary["written"][p["kpi_id"]] = p["value"]
+            if p["brand"]:
+                summary["written_by_brand"].setdefault(p["kpi_id"], {})[p["brand"]] = p["value"]
+            else:
+                summary["written"][p["kpi_id"]] = p["value"]
         logger.info("KPI weekly capture: %d points written for %s", written, today)
     return summary
 

@@ -744,15 +744,18 @@ class TestWeeklyCapture:
     def _result(self, value, status="good", error=None):
         return SimpleNamespace(value=value, status=SimpleNamespace(value=status), error=error)
 
-    def test_capture_writes_todays_point_and_skips_failures(self):
+    _BRAND_VALUES = {"Fabhalta": 0.81, "Kisqali": 0.82, "Remibrutinib": 0.83}
+
+    def _run(self, kpi_ids, fake_calculate):
         from src.kpi import history_capture
 
-        def fake_calculate(kpi_id, use_cache=True, force_refresh=False):
-            if kpi_id == "WS3-BI-004":
-                return self._result(None, error="KPI WS3-BI-004 unavailable: no data")
-            return self._result(0.87)
+        calls: list = []
 
-        calculator = SimpleNamespace(calculate=fake_calculate)
+        def recording_calculate(kpi_id, use_cache=True, force_refresh=False, **kwargs):
+            calls.append((kpi_id, kwargs))
+            return fake_calculate(kpi_id, kwargs.get("context"))
+
+        calculator = SimpleNamespace(calculate=recording_calculate)
         upserted: list = []
 
         async def fake_upsert(points):
@@ -767,20 +770,103 @@ class TestWeeklyCapture:
                 new=AsyncMock(return_value=fake_repo),
             ),
         ):
-            summary = asyncio.run(history_capture.run_capture(["WS1-DQ-001", "WS3-BI-004"]))
+            summary = asyncio.run(history_capture.run_capture(kpi_ids))
+        return summary, upserted, calls
 
-        # The healthy KPI wrote exactly one append-only point for today.
+    def test_capture_writes_todays_point_and_skips_failures(self):
+        def fake_calculate(kpi_id, context):
+            if kpi_id == "WS3-BI-004":
+                return self._result(None, error="KPI WS3-BI-004 unavailable: no data")
+            if context and context.get("brand"):
+                return self._result(self._BRAND_VALUES[context["brand"]])
+            return self._result(0.87)
+
+        summary, upserted, calls = self._run(["WS1-DQ-001", "WS3-BI-004"], fake_calculate)
+
+        # The healthy KPI wrote exactly one global append-only point for today.
         assert summary["written"] == {"WS1-DQ-001": 0.87}
-        assert len(upserted) == 1
-        point = upserted[0]
+        global_points = [p for p in upserted if p["brand"] == ""]
+        assert len(global_points) == 1
+        point = global_points[0]
         assert point["kpi_id"] == "WS1-DQ-001"
         assert point["source"] == "weekly_capture"
         assert point["metric_date"] == summary["date"]
         assert point["brand"] == "" and point["region"] == ""
         assert point["is_synthetic"] is True
+        # The global call keeps its historical shape: no context kwarg.
+        assert ("WS1-DQ-001", {}) in calls
         # The failing KPI wrote NOTHING and surfaced its error honestly.
         assert "WS3-BI-004" in summary["errors"]
         assert all(p["kpi_id"] != "WS3-BI-004" for p in upserted)
+
+    def test_brand_capable_kpi_also_captures_each_portfolio_brand(self):
+        from src.kpi import history_capture
+
+        def fake_calculate(kpi_id, context):
+            if context and context.get("brand"):
+                return self._result(self._BRAND_VALUES[context["brand"]])
+            return self._result(0.87)
+
+        summary, upserted, calls = self._run(["WS1-DQ-001"], fake_calculate)
+
+        # One global + one point per portfolio brand, same day, same source.
+        assert len(upserted) == 1 + len(history_capture.CAPTURE_BRANDS)
+        brand_points = {p["brand"]: p for p in upserted if p["brand"]}
+        assert set(brand_points) == set(history_capture.CAPTURE_BRANDS)
+        for brand, p in brand_points.items():
+            assert p["kpi_id"] == "WS1-DQ-001"
+            assert p["value"] == self._BRAND_VALUES[brand]
+            assert p["region"] == ""
+            assert p["source"] == "weekly_capture"
+            assert p["metric_date"] == summary["date"]
+        assert summary["written_by_brand"] == {"WS1-DQ-001": self._BRAND_VALUES}
+        # Each brand scope routed through the calculators' context["brand"].
+        for brand in history_capture.CAPTURE_BRANDS:
+            assert ("WS1-DQ-001", {"context": {"brand": brand}}) in calls
+
+    def test_non_brand_capable_kpi_captures_global_only(self):
+        # WS1-DQ-002's calculator is explicitly NOT brand-attributable
+        # (hcp_profiles has no brand column) — three identical brand lines
+        # would be a fabricated axis, so no brand scope is ever requested.
+        def fake_calculate(kpi_id, context):
+            assert context is None, "non-brand KPI must never see a brand context"
+            return self._result(0.57)
+
+        summary, upserted, calls = self._run(["WS1-DQ-002"], fake_calculate)
+        assert [p["brand"] for p in upserted] == [""]
+        assert summary["written"] == {"WS1-DQ-002": 0.57}
+        assert summary["written_by_brand"] == {}
+        assert calls == [("WS1-DQ-002", {})]
+
+    def test_one_failing_brand_scope_blocks_nothing_else(self):
+        def fake_calculate(kpi_id, context):
+            if context and context.get("brand") == "Kisqali":
+                raise RuntimeError("KPI WS1-DQ-001 unavailable for Kisqali")
+            if context and context.get("brand"):
+                return self._result(self._BRAND_VALUES[context["brand"]])
+            return self._result(0.87)
+
+        summary, upserted, _ = self._run(["WS1-DQ-001"], fake_calculate)
+        assert {p["brand"] for p in upserted} == {"", "Fabhalta", "Remibrutinib"}
+        assert "WS1-DQ-001[Kisqali]" in summary["errors"]
+        assert summary["written"] == {"WS1-DQ-001": 0.87}
+        assert summary["written_by_brand"] == {
+            "WS1-DQ-001": {"Fabhalta": 0.81, "Remibrutinib": 0.83}
+        }
+
+    def test_brand_capture_set_lockstep(self):
+        from src.kpi import history_backfill, history_capture
+        from src.ml.synthetic.config import Brand
+
+        # Brand-capable capture KPIs are a subset of the capture universe and
+        # never overlap the backfilled (recomputable) KPIs.
+        assert history_capture.BRAND_CAPTURE_KPI_IDS <= set(history_capture.CAPTURE_KPI_IDS)
+        assert not (history_capture.BRAND_CAPTURE_KPI_IDS & set(history_backfill.HANDLERS))
+        # The captured brand labels ARE the DGP's brand domain, canonical case.
+        assert history_capture.CAPTURE_BRANDS == tuple(sorted(b.value for b in Brand))
+        # Documented exclusions stay excluded (no brand param / not attributable).
+        for kpi_id in ("WS1-DQ-002", "WS1-DQ-009", "WS3-BI-004", "BR-005"):
+            assert kpi_id not in history_capture.BRAND_CAPTURE_KPI_IDS
 
     def test_purge_deletes_only_weekly_capture_source(self):
         from src.kpi import history_capture

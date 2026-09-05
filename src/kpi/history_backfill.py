@@ -26,11 +26,13 @@ Batch-2 coverage (each handler documents the registry query it mirrors):
   no ``brand=''`` rows are fabricated)
 - ``WS3-BI-009`` Conversion Rate <- triggers x treatment_events (30-day
   trigger->prescription window, right-censored at the frontier exactly like the
-  live query)
+  live query; global + per-brand, where a brand's trigger converts only on a
+  SAME-brand prescription — migration 111 ``_brand`` semantics)
 - ``WS3-BI-001/002`` MAU/WAU <- user_sessions.session_start (the substrate keeps
   only ~90 days of sessions, so this is a SHORT honest series — 2-3 points)
 - ``WS2-TR-001/004/005/006/007/008`` <- triggers.trigger_timestamp
-  (TR-004/006 denominator = delivered/viewed ONLY, per migrations 092/090)
+  (TR-004/006 denominator = delivered/viewed ONLY, per migrations 092/090;
+  global + per-brand via ``triggers.brand_id``, migration 113 ``_brand``)
 - ``BR-001`` <- treatment_events UAS7 baseline events (monthly patient cohorts)
 - ``BR-003`` <- patient_journeys x treatment_events PNH tests (cumulative AS-OF
   recompute at each month-end — both numerator and denominator are real dated
@@ -88,6 +90,22 @@ reading the live platform cannot produce would be a fabrication. BR-* gained
 live region variants in migration 127 (#1564); mirroring them here is
 follow-up scope, so the BR handlers still emit global-only series.
 
+Brand axis: handlers in :data:`BRAND_AXIS_KPI_IDS` emit per-brand series (and,
+where the KPI also carries a region axis, brand×region series) — the substrate
+of the Time-Series page's brand selector + "Compare Brands" overlay, which the
+coverage map offers only for KPIs with ≥1 / ≥2 named brand scopes. Each brand
+series mirrors a vetted live brand variant byte-for-byte in semantics: the Rx
+family filters ``treatment_events.brand`` (the base statements' ``$1``), ROI
+reads ``business_metrics.brand`` directly (125), the trigger family filters
+``triggers.brand_id`` exactly like the 113 ``_brand`` variants
+(``brand_id::text = $1`` — canonical-cased labels, no LOWER()), and conversion
+counts a brand's triggers converting to a SAME-brand prescription (111/128).
+Brand-less rows (NULL ``brand_id``/``brand``) stay in the global series only —
+exactly what the live equality predicate does. Maturation cutoffs stay anchored
+to the GLOBAL frontier (113's unscoped ``MAX(trigger_timestamp)``). KPIs whose
+live calculator has no honest brand reading never grow a brand axis: MAU/WAU
+(``user_sessions`` has no brand column) and BR-* (single-brand by definition).
+
 Run:  python -m src.kpi.history_backfill           # all registered KPIs
       python -m src.kpi.history_backfill WS3-BI-010 # one KPI
 """
@@ -143,6 +161,29 @@ HANDLER_SOURCES: Dict[str, str] = {
 # vetted live region-capable registry variant — 077 (Rx family + conversion),
 # 078/113 (trigger family), 125 (ROI). Never add an id without one.
 REGION_AXIS_KPI_IDS: frozenset = frozenset(
+    {
+        "WS3-BI-010",
+        "WS3-BI-005",
+        "WS3-BI-006",
+        "WS3-BI-007",
+        "WS3-BI-008",
+        "WS3-BI-009",
+        "WS2-TR-001",
+        "WS2-TR-004",
+        "WS2-TR-005",
+        "WS2-TR-006",
+        "WS2-TR-007",
+        "WS2-TR-008",
+    }
+)
+
+# KPIs whose backfill emits per-brand series (the Time-Series brand selector /
+# Compare Brands substrate). Lockstep contract
+# (tests/unit/test_kpi/test_history_brand_axis.py): every id here maps to a
+# vetted live brand-capable registry variant — the Rx family's base statements
+# (089, ``$1`` = brand), 111 (conversion ``_brand``), 113 (trigger family
+# ``_brand``), 125 (ROI scoped read). Never add an id without one.
+BRAND_AXIS_KPI_IDS: frozenset = frozenset(
     {
         "WS3-BI-010",
         "WS3-BI-005",
@@ -319,9 +360,9 @@ async def _fetch_triggers(client: Any, cache: Optional[Dict[str, Any]]) -> List[
     return await _fetch_all(
         client,
         "triggers",
-        "trigger_id,patient_id,trigger_timestamp,delivery_status,acceptance_status,"
-        "false_positive_flag,lead_time_days,outcome_tracked,outcome_value,"
-        "previous_trigger_id,change_failed",
+        "trigger_id,patient_id,brand_id,trigger_timestamp,delivery_status,"
+        "acceptance_status,false_positive_flag,lead_time_days,outcome_tracked,"
+        "outcome_value,previous_trigger_id,change_failed",
         "trigger_id",
         cache=cache,
         cache_key="triggers",
@@ -377,6 +418,18 @@ def _patient_regions(journeys: List[Dict[str, Any]]) -> Dict[Any, set]:
         if region:
             out[r.get("patient_id")].add(str(region).lower())
     return out
+
+
+def _trigger_brand(row: Dict[str, Any]) -> str:
+    """Canonical brand label of a trigger ('' when ``brand_id`` is NULL/empty).
+
+    Mirrors the 113 ``_brand`` variants' ``brand_id::text = $1`` — an exact,
+    case-sensitive match on the stored label (no LOWER(), unlike regions), so
+    the label is kept verbatim and a brand-less trigger belongs to no brand
+    series (it still counts globally).
+    """
+    brand = row.get("brand_id")
+    return str(brand) if brand else ""
 
 
 def _rx_dated(rows: List[Dict[str, Any]]) -> List[tuple]:
@@ -718,59 +771,71 @@ async def _backfill_conversion_rate(
     SAME patient has a prescription with trigger_date <= event_date <=
     trigger_date + 30 days. Like the live query, the follow-up window is
     right-censored at the prescription frontier (a trigger near the frontier
-    that has had no time to convert counts as unconverted). Brand-agnostic
-    like the live query; region series mirror
+    that has had no time to convert counts as unconverted). The global series
+    is brand-agnostic like the base query; region series mirror
     ``business_impact_conversion_rate_region`` (077): patient MEMBERSHIP
     scopes the triggers, while the converting prescription stays UNSCOPED —
-    exactly the live join shape.
+    exactly the live join shape. Brand series mirror
+    ``business_impact_conversion_rate_brand`` (111) / ``_brand_region`` (128):
+    the cohort is the brand's own triggers (``triggers.brand_id``) and a
+    trigger converts ONLY on a SAME-brand prescription (``te.brand = $1``) —
+    a Kisqali trigger followed by a Fabhalta script converts globally but not
+    in Kisqali's series. Brand-less triggers stay global-only.
     """
     triggers = await _fetch_triggers(client, cache)
     rx_by_patient: Dict[Any, List[date]] = defaultdict(list)
+    rx_by_patient_brand: Dict[Tuple[Any, str], List[date]] = defaultdict(list)
     for d, r in _rx_dated(await _fetch_prescriptions(client, cache)):
         rx_by_patient[r.get("patient_id")].append(d)
-    for dates in rx_by_patient.values():
-        dates.sort()
+        if r.get("brand"):
+            rx_by_patient_brand[(r.get("patient_id"), str(r["brand"]))].append(d)
+    for rx_dates in rx_by_patient.values():
+        rx_dates.sort()
+    for rx_dates in rx_by_patient_brand.values():
+        rx_dates.sort()
     patient_regions = _patient_regions(await _fetch_journeys(client, cache))
 
+    def _converts(rx_dates: Optional[List[date]], d: date) -> bool:
+        if not rx_dates:
+            return False
+        i = bisect_left(rx_dates, d)
+        return i < len(rx_dates) and rx_dates[i] <= d + timedelta(days=30)
+
     trig_dates: List[date] = []
-    triggered: Dict[date, int] = defaultdict(int)
-    converted: Dict[date, int] = defaultdict(int)
-    region_triggered: Dict[tuple, int] = defaultdict(int)
-    region_converted: Dict[tuple, int] = defaultdict(int)
+    # (brand, region, month) -> counts; '' = global / all-regions scope.
+    triggered: Dict[Tuple[str, str, date], int] = defaultdict(int)
+    converted: Dict[Tuple[str, str, date], int] = defaultdict(int)
     for t in triggers:
         d = _to_date(t.get("trigger_timestamp"))
         if d is None:
             continue
         trig_dates.append(d)
         m = _month_start(d)
-        triggered[m] += 1
-        regions = patient_regions.get(t.get("patient_id"), ())
-        for region in regions:
-            region_triggered[(region, m)] += 1
-        rx_dates = rx_by_patient.get(t.get("patient_id"))
-        if not rx_dates:
-            continue
-        i = bisect_left(rx_dates, d)
-        if i < len(rx_dates) and rx_dates[i] <= d + timedelta(days=30):
-            converted[m] += 1
-            for region in regions:
-                region_converted[(region, m)] += 1
+        pid = t.get("patient_id")
+        regions = patient_regions.get(pid, ())
+        brand = _trigger_brand(t)
+        any_rx = _converts(rx_by_patient.get(pid), d)
+        same_brand_rx = bool(brand) and _converts(rx_by_patient_brand.get((pid, brand)), d)
+        scopes: List[Tuple[str, str]] = [("", "")] + [("", region) for region in regions]
+        if brand:
+            scopes += [(brand, "")] + [(brand, region) for region in regions]
+        for b, region in scopes:
+            triggered[(b, region, m)] += 1
+            hit = same_brand_rx if b else any_rx
+            if hit:
+                converted[(b, region, m)] += 1
 
-    months = _complete_months(trig_dates)
+    complete = set(_complete_months(trig_dates))
     points: List[Dict[str, Any]] = []
-    for m in months:
-        den = triggered.get(m, 0)
+    for brand, region, m in sorted(triggered):
+        if m not in complete:
+            continue
+        den = triggered[(brand, region, m)]
         if den == 0:
             continue
-        points.append(_point(kpi_meta, "", m, converted.get(m, 0) / den))
-    for region in sorted({r for r, _ in region_triggered}):
-        for m in months:
-            den = region_triggered.get((region, m), 0)
-            if den == 0:
-                continue
-            points.append(
-                _point(kpi_meta, "", m, region_converted.get((region, m), 0) / den, region=region)
-            )
+        points.append(
+            _point(kpi_meta, brand, m, converted.get((brand, region, m), 0) / den, region=region)
+        )
     return points
 
 
@@ -888,45 +953,57 @@ async def _trigger_monthly_ratio(
     frontier would shift the matured window per region and stop mirroring the
     live reading.
 
+    Brand series mirror the 113 ``_brand`` / ``_brand_region`` variants:
+    ``brand_id::text = $1`` scopes the cohort to the brand's own triggers
+    (exact label match — see :func:`_trigger_brand`), region membership
+    composes on top for brand×region, and the maturation cutoff is the SAME
+    global frontier for every scope. Brand-less triggers count globally only.
+
     Rows with an unparseable ``trigger_timestamp`` are dropped at bucketing
     (they have no month), so every bucketed row carries a valid parsed date.
     """
     by_month: Dict[date, List[Tuple[date, Dict[str, Any]]]] = defaultdict(list)
     dates: List[date] = []
+    brands: set = set()
     for r in await _fetch_triggers(client, cache):
         d = _to_date(r.get("trigger_timestamp"))
         if d is None:
             continue
         dates.append(d)
         by_month[_month_start(d)].append((d, r))
+        brand = _trigger_brand(r)
+        if brand:
+            brands.add(brand)
     patient_regions = _patient_regions(await _fetch_journeys(client, cache))
+    regions = sorted({r for regs in patient_regions.values() for r in regs})
     cutoff: Optional[date] = None
     if mature_days > 0 and dates:
         cutoff = max(dates) - timedelta(days=mature_days)
     months = _complete_months(dates)
+
+    def _in_scope(row: Dict[str, Any], brand: str, region: str) -> bool:
+        if brand and _trigger_brand(row) != brand:
+            return False
+        return not region or region in patient_regions.get(row.get("patient_id"), ())
+
+    # Scope lattice: global, region-only (#1536), brand-only and brand×region
+    # (113 ``_brand`` / ``_brand_region``). Same global cutoff for every scope.
+    scopes: List[Tuple[str, str]] = [("", "")]
+    scopes += [("", region) for region in regions]
+    scopes += [(brand, "") for brand in sorted(brands)]
+    scopes += [(brand, region) for brand in sorted(brands) for region in regions]
     points: List[Dict[str, Any]] = []
-    for m in months:
-        pairs = by_month.get(m, [])
-        if cutoff is not None:
-            pairs = [(d, r) for d, r in pairs if d <= cutoff]
-        den = sum(1 for _, r in pairs if denominator(r))
-        if den == 0:
-            continue
-        num = sum(1 for _, r in pairs if numerator(r))
-        points.append(_point(kpi_meta, "", m, num / den))
-    for region in sorted({r for regs in patient_regions.values() for r in regs}):
+    for brand, region in scopes:
         for m in months:
             pairs = by_month.get(m, [])
             if cutoff is not None:
                 pairs = [(d, r) for d, r in pairs if d <= cutoff]
-            pairs = [
-                (d, r) for d, r in pairs if region in patient_regions.get(r.get("patient_id"), ())
-            ]
+            pairs = [(d, r) for d, r in pairs if _in_scope(r, brand, region)]
             den = sum(1 for _, r in pairs if denominator(r))
             if den == 0:
                 continue
             num = sum(1 for _, r in pairs if numerator(r))
-            points.append(_point(kpi_meta, "", m, num / den, region=region))
+            points.append(_point(kpi_meta, brand, m, num / den, region=region))
     return points
 
 
@@ -1019,10 +1096,12 @@ async def _backfill_tr007_lead_time(
     non-null lead_time_days; statistics.median matches (mean of the middle
     two on even n). Months with no non-null values are skipped. Region series
     mirror ``trigger_performance_lead_time_region`` (078): the median over the
-    region cohort's triggers (patient membership).
+    region cohort's triggers (patient membership). Brand series mirror
+    ``trigger_performance_lead_time_brand[_region]`` (113): the median over
+    the brand's own triggers (× region membership).
     """
-    by_month: Dict[date, List[float]] = defaultdict(list)
-    by_region_month: Dict[tuple, List[float]] = defaultdict(list)
+    # (brand, region, month) -> lead times; '' = global / all-regions scope.
+    by_scope_month: Dict[Tuple[str, str, date], List[float]] = defaultdict(list)
     patient_regions = _patient_regions(await _fetch_journeys(client, cache))
     dates: List[date] = []
     for r in await _fetch_triggers(client, cache):
@@ -1031,24 +1110,22 @@ async def _backfill_tr007_lead_time(
             continue
         dates.append(d)
         lead = r.get("lead_time_days")
-        if lead is not None:
-            m = _month_start(d)
-            by_month[m].append(float(lead))
-            for region in patient_regions.get(r.get("patient_id"), ()):
-                by_region_month[(region, m)].append(float(lead))
-    months = _complete_months(dates)
-    points: List[Dict[str, Any]] = []
-    for m in months:
-        vals = by_month.get(m)
-        if not vals:
+        if lead is None:
             continue
-        points.append(_point(kpi_meta, "", m, float(statistics.median(vals))))
-    for region in sorted({r for r, _ in by_region_month}):
-        for m in months:
-            vals = by_region_month.get((region, m))
-            if not vals:
-                continue
-            points.append(_point(kpi_meta, "", m, float(statistics.median(vals)), region=region))
+        m = _month_start(d)
+        regions = patient_regions.get(r.get("patient_id"), ())
+        brand = _trigger_brand(r)
+        for b in ("", brand) if brand else ("",):
+            by_scope_month[(b, "", m)].append(float(lead))
+            for region in regions:
+                by_scope_month[(b, region, m)].append(float(lead))
+    complete = set(_complete_months(dates))
+    points: List[Dict[str, Any]] = []
+    for brand, region, m in sorted(by_scope_month):
+        if m not in complete:
+            continue
+        vals = by_scope_month[(brand, region, m)]
+        points.append(_point(kpi_meta, brand, m, float(statistics.median(vals)), region=region))
     return points
 
 
