@@ -67,9 +67,13 @@ class CapabilityCatalog:
 
 
 async def _default_coverage_loader() -> List[Dict[str, Any]]:
-    from src.repositories.kpi_history import get_kpi_history_repository
+    # Build the repository directly (not via get_kpi_history_repository(), which
+    # caches a client-less instance forever after one failed init) so a client
+    # failure raises here, lands in ``degraded`` and is retried on the next refresh.
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.kpi_history import KPIHistoryRepository
 
-    repo = await get_kpi_history_repository()
+    repo = KPIHistoryRepository(supabase_client=await get_async_supabase_client())
     return await repo.get_coverage()
 
 
@@ -99,7 +103,9 @@ def _trend_sets(rows: Sequence[Dict[str, Any]]) -> Tuple[FrozenSet[str], FrozenS
             points = int(row.get("points") or 0)
         except (TypeError, ValueError):
             points = 0
-        if not kpi_id or points <= 0:
+        # Brand axis only: region-scoped rows never make a KPI trendable (kpi.py coverage endpoint semantics).
+        region = str(row.get("region") or "")
+        if not kpi_id or points <= 0 or region:
             continue
         brand = row.get("brand")
         scopes.setdefault(kpi_id, set()).add("" if brand is None else str(brand))
@@ -122,6 +128,7 @@ async def build_capability_catalog(
     except Exception as exc:  # noqa: BLE001 - degrade, never 502 the pills
         logger.warning("capability catalog: trend coverage unavailable: %s", exc)
     if not rows:
+        logger.warning("capability catalog: trend coverage empty; marking degraded")
         degraded.append("trend_coverage")
 
     outcomes: List[str] = []
@@ -130,6 +137,7 @@ async def build_capability_catalog(
     except Exception as exc:  # noqa: BLE001
         logger.warning("capability catalog: causal outcomes unavailable: %s", exc)
     if not outcomes:
+        logger.warning("capability catalog: causal outcomes empty; marking degraded")
         degraded.append("causal_outcomes")
 
     trend, per_brand_only = _trend_sets(rows)
