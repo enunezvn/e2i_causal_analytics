@@ -1935,17 +1935,40 @@ async def _run_discover_effects_task(
             ),
         )
 
-    async def _cancel_requested() -> bool:
-        # The sidecar marker is the primary, race-free signal. The row flag is
-        # the fallback for a degraded cancel: the route's marker SET can fail
-        # transiently on ITS worker (the marker then lives only in that
-        # process's memory, invisible here) while its row write still reaches
-        # Redis and the route has already answered 200. Honouring the flag too
-        # means the API never acknowledges a cancel this run then ignores.
+    async def _boundary_stop_reason() -> Optional[str]:
+        """Why the run must stop at this question boundary, or None to go on.
+
+        ``"cancel"``: the sidecar marker is the primary, race-free signal. The
+        row flag is the fallback for a degraded cancel: the route's marker SET
+        can fail transiently on ITS worker (the marker then lives only in that
+        process's memory, invisible here) while its row write still reaches
+        Redis and the route has already answered 200. Honouring the flag too
+        means the API never acknowledges a cancel this run then ignores.
+
+        ``"repaired"``: a poll on some worker already closed this row as
+        ``failed`` — it found no live heartbeat (see ``_repair_if_orphaned``),
+        e.g. because THIS worker's beats could not reach Redis for the whole
+        budget. The row is terminal and the page has stopped polling; publishing
+        again would resurrect a run nobody is watching and burn minutes per
+        question for nothing. The repaired row stands.
+        """
         if await _discover_effects_store.has_marker(job_id, _DISCOVERY_CANCEL_MARKER):
-            return True
+            return "cancel"
         row = await _discover_effects_store.get(job_id)
-        return row is not None and row.cancel_requested
+        if row is None:
+            return None
+        if row.cancel_requested:
+            return "cancel"
+        if row.status == "failed":
+            return "repaired"
+        return None
+
+    def _log_repaired(completed: int) -> None:
+        logger.warning(
+            f"discover-effects {job_id}: a poll already closed this row as failed "
+            f"(no live heartbeat seen); stopping after {completed}/{len(questions)} "
+            "without publishing"
+        )
 
     async def _stop_cancelled(completed: int) -> None:
         # Honest terminal rows for the questions that never ran: status only —
@@ -1980,8 +2003,12 @@ async def _run_discover_effects_task(
             # Cooperative cancel, honoured at question boundaries only: the agent's
             # estimators run synchronously inside the question and cannot be
             # interrupted, so a cancel lands after the in-flight question finishes.
-            if await _cancel_requested():
+            reason = await _boundary_stop_reason()
+            if reason == "cancel":
                 await _stop_cancelled(completed)
+                return
+            if reason == "repaired":
+                _log_repaired(completed)
                 return
             t, o = q.treatment, q.outcome
             key = (t, o, q.brand)
@@ -2049,9 +2076,14 @@ async def _run_discover_effects_task(
             # pending rows; fail-open so it never disrupts the leaderboard).
             await _attach_clinical_context(effects[key])
             completed += 1
+            reason = await _boundary_stop_reason()
+            if reason == "repaired":
+                _log_repaired(completed)
+                return
             if completed == len(questions):
+                # A cancel landing after the last question is still a completed run.
                 await _publish("completed", completed)
-            elif await _cancel_requested():
+            elif reason == "cancel":
                 await _stop_cancelled(completed)
                 return
             else:

@@ -727,3 +727,46 @@ async def test_task_crash_outside_a_question_marks_the_run_failed_not_stuck(task
     assert {e.status for e in job.effects} == {"cancelled"}
     assert all(e.ate is None for e in job.effects)
     assert len(task_env["calls"]) == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_task_stops_when_a_poll_already_closed_its_row(task_env):
+    """A poll on some worker found no live heartbeat (e.g. THIS worker's beats
+    could not reach Redis for the whole budget) and persisted the repaired
+    `failed` row; the FE has stopped polling. The task must neither resurrect
+    the row (`running` -> `completed`, flipping a terminal state under a page
+    that no longer polls) nor keep spending minutes per question on a run
+    nobody is watching: it stops at the next boundary and the repaired row
+    stands (codex iter-1 finding 3)."""
+    store = task_env["store"]
+
+    async def poll_on_another_worker_repaired_it(n_loads: int) -> None:
+        if n_loads != 1:
+            return
+        row = await store.get("job-rep")
+        assert row is not None and row.status == "running"
+        # Exactly what _repair_if_orphaned persists, as seen through shared Redis.
+        await store.set(
+            "job-rep",
+            row.model_copy(
+                update={
+                    "status": "failed",
+                    "error": (
+                        "The discovery run was interrupted (the API restarted or its "
+                        "worker was recycled) after 0/3 questions; re-run discovery to continue."
+                    ),
+                    "effects": [causal_routes._interrupt_effect(e) for e in row.effects],
+                }
+            ),
+        )
+
+    task_env["hooks"]["on_load"] = poll_on_another_worker_repaired_it
+    await causal_routes._run_discover_effects_task(
+        "job-rep", "patient_journeys", list(CANDIDATES), "synthetic", "Remibrutinib"
+    )
+    job = await store.get("job-rep")
+    assert job is not None
+    assert job.status == "failed", "the task resurrected a row a poll had already closed"
+    assert "interrupted" in (job.error or "")
+    assert len(task_env["calls"]) == 1, "the task kept running questions nobody is watching"
