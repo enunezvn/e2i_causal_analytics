@@ -817,7 +817,10 @@ class DiscoveredEffect(BaseModel):
     )
     status: str = Field(
         ...,
-        description="pending / running / completed / needs_review / blocked / failed",
+        description=(
+            "pending / running / completed / needs_review / blocked / failed / "
+            "cancelled (never ran: the job was cancelled before its turn)"
+        ),
     )
     ate: Optional[float] = None
     ate_ci_lower: Optional[float] = None
@@ -855,7 +858,13 @@ class DiscoverEffectsResponse(BaseModel):
     ranked by confidence (robustness gate + significance) then impact."""
 
     job_id: str
-    status: str = Field(..., description="pending / running / completed")
+    status: str = Field(
+        ...,
+        description=(
+            "pending / running / completed / cancelled (stopped at a question "
+            "boundary on request; finished rows are kept, unrun rows are `cancelled`)"
+        ),
+    )
     dataset: str
     brand: Optional[str] = Field(
         default=None,
@@ -863,12 +872,73 @@ class DiscoverEffectsResponse(BaseModel):
     )
     total: int = Field(..., description="Candidate questions the agent is validating")
     completed: int = Field(..., description="Questions validated so far")
+    cancel_requested: bool = Field(
+        default=False,
+        description=(
+            "A cancel was requested. The question in flight finishes (its estimator "
+            "cannot be interrupted); the run then stops with status `cancelled`."
+        ),
+    )
     effects: List[DiscoveredEffect] = Field(default_factory=list)
     note: str = Field(
         default=(
             "Validated causal effects from the causal_impact agent (discovered DAG + "
             "data-driven estimator + refutation gate), ranked by confidence then impact."
         )
+    )
+
+
+class DiscoverQuestion(BaseModel):
+    """One SSOT candidate question a discover-effects run WOULD validate for a
+    (dataset, brand) scope — what the question selector lists. The labels are the
+    curated column labels the leaderboard renders (same SSOT as ``labels`` on
+    ``GET /causal/variables``)."""
+
+    treatment: str
+    outcome: str
+    brand: Optional[str] = Field(
+        default=None, description="Brand this SSOT row is scoped to (None = all brands)"
+    )
+    treatment_label: str = Field(..., description="Curated display label for `treatment`")
+    outcome_label: str = Field(..., description="Curated display label for `outcome`")
+    adjustment_set: List[str] = Field(
+        default_factory=list, description="Modeled backdoor set the run adjusts on"
+    )
+
+
+class DiscoverQuestionsResponse(BaseModel):
+    """The candidate questions of a (dataset, brand) scope, in run order."""
+
+    dataset: str
+    brand: Optional[str] = Field(default=None, description="Brand scope (None = all brands)")
+    questions: List[DiscoverQuestion] = Field(default_factory=list)
+    note: str = Field(
+        default=(
+            "SSOT candidate questions for this scope. POST /causal/discover-effects "
+            "runs all of them unless its body names a subset in `questions`."
+        )
+    )
+
+
+class DiscoverQuestionSelection(BaseModel):
+    """A candidate to include in a run. Must match a row of
+    ``GET /causal/discover-effects/questions`` on (treatment, outcome, brand)."""
+
+    treatment: str
+    outcome: str
+    brand: Optional[str] = Field(default=None, description="The candidate row's brand")
+
+
+class DiscoverEffectsRequest(BaseModel):
+    """Optional body for ``POST /causal/discover-effects``."""
+
+    questions: Optional[List[DiscoverQuestionSelection]] = Field(
+        default=None,
+        description=(
+            "Run only these SSOT candidates (see GET /causal/discover-effects/questions). "
+            "Omit / null = every candidate. An empty list is rejected (400); a pair "
+            "outside the candidates is rejected (400) — never a free-form question."
+        ),
     )
 
 

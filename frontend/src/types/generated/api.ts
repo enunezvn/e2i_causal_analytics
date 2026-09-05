@@ -3796,6 +3796,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/causal/discover-effects/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the SSOT candidate questions a discover-effects run would validate
+         * @description What ``POST /causal/discover-effects`` WOULD run for this scope, with the
+         *     curated display labels, so the user can pick a subset up front (each question
+         *     is minutes of agent time). Declared BEFORE ``GET /discover-effects/{job_id}``
+         *     so the literal ``questions`` segment is never captured as a job id.
+         */
+        get: operations["list_discover_causal_questions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/causal/discover-effects": {
         parameters: {
             query?: never;
@@ -3813,7 +3836,9 @@ export interface paths {
          *     job; poll ``GET /causal/discover-effects/{job_id}``. Fail-closed per question.
          *
          *     ``brand`` (optional) scopes the cohort to one brand — a plain row subset, so
-         *     each candidate is validated on that brand's patients only.
+         *     each candidate is validated on that brand's patients only. ``questions``
+         *     (optional body) restricts the run to a subset of the SSOT candidates; stop a
+         *     run early with ``POST /causal/discover-effects/{job_id}/cancel``.
          */
         post: operations["discover_causal_effects"];
         delete?: never;
@@ -3833,6 +3858,29 @@ export interface paths {
         get: operations["get_discover_causal_effects"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/causal/discover-effects/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a discover-effects job at its next question boundary
+         * @description Cooperative cancel. The question in flight finishes (its estimators run
+         *     synchronously and cannot be interrupted — up to a few minutes); the run then
+         *     stops, keeps every finished row and marks the unrun ones ``cancelled``.
+         *     Idempotent, and a no-op on a job that already ended.
+         */
+        post: operations["cancel_discover_causal_effects"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8845,6 +8893,17 @@ export interface components {
             twin_type: string;
         };
         /**
+         * DiscoverEffectsRequest
+         * @description Optional body for ``POST /causal/discover-effects``.
+         */
+        DiscoverEffectsRequest: {
+            /**
+             * Questions
+             * @description Run only these SSOT candidates (see GET /causal/discover-effects/questions). Omit / null = every candidate. An empty list is rejected (400); a pair outside the candidates is rejected (400) — never a free-form question.
+             */
+            questions?: components["schemas"]["DiscoverQuestionSelection"][] | null;
+        };
+        /**
          * DiscoverEffectsResponse
          * @description Async job: the agent's validated causal effects across candidate questions,
          *     ranked by confidence (robustness gate + significance) then impact.
@@ -8854,7 +8913,7 @@ export interface components {
             job_id: string;
             /**
              * Status
-             * @description pending / running / completed
+             * @description pending / running / completed / cancelled (stopped at a question boundary on request; finished rows are kept, unrun rows are `cancelled`)
              */
             status: string;
             /** Dataset */
@@ -8874,11 +8933,86 @@ export interface components {
              * @description Questions validated so far
              */
             completed: number;
+            /**
+             * Cancel Requested
+             * @description A cancel was requested. The question in flight finishes (its estimator cannot be interrupted); the run then stops with status `cancelled`.
+             * @default false
+             */
+            cancel_requested: boolean;
             /** Effects */
             effects?: components["schemas"]["DiscoveredEffect"][];
             /**
              * Note
              * @default Validated causal effects from the causal_impact agent (discovered DAG + data-driven estimator + refutation gate), ranked by confidence then impact.
+             */
+            note: string;
+        };
+        /**
+         * DiscoverQuestion
+         * @description One SSOT candidate question a discover-effects run WOULD validate for a
+         *     (dataset, brand) scope — what the question selector lists. The labels are the
+         *     curated column labels the leaderboard renders (same SSOT as ``labels`` on
+         *     ``GET /causal/variables``).
+         */
+        DiscoverQuestion: {
+            /** Treatment */
+            treatment: string;
+            /** Outcome */
+            outcome: string;
+            /**
+             * Brand
+             * @description Brand this SSOT row is scoped to (None = all brands)
+             */
+            brand?: string | null;
+            /**
+             * Treatment Label
+             * @description Curated display label for `treatment`
+             */
+            treatment_label: string;
+            /**
+             * Outcome Label
+             * @description Curated display label for `outcome`
+             */
+            outcome_label: string;
+            /**
+             * Adjustment Set
+             * @description Modeled backdoor set the run adjusts on
+             */
+            adjustment_set?: string[];
+        };
+        /**
+         * DiscoverQuestionSelection
+         * @description A candidate to include in a run. Must match a row of
+         *     ``GET /causal/discover-effects/questions`` on (treatment, outcome, brand).
+         */
+        DiscoverQuestionSelection: {
+            /** Treatment */
+            treatment: string;
+            /** Outcome */
+            outcome: string;
+            /**
+             * Brand
+             * @description The candidate row's brand
+             */
+            brand?: string | null;
+        };
+        /**
+         * DiscoverQuestionsResponse
+         * @description The candidate questions of a (dataset, brand) scope, in run order.
+         */
+        DiscoverQuestionsResponse: {
+            /** Dataset */
+            dataset: string;
+            /**
+             * Brand
+             * @description Brand scope (None = all brands)
+             */
+            brand?: string | null;
+            /** Questions */
+            questions?: components["schemas"]["DiscoverQuestion"][];
+            /**
+             * Note
+             * @default SSOT candidate questions for this scope. POST /causal/discover-effects runs all of them unless its body names a subset in `questions`.
              */
             note: string;
         };
@@ -8907,7 +9041,7 @@ export interface components {
             adjustment_set?: string[];
             /**
              * Status
-             * @description pending / running / completed / needs_review / blocked / failed
+             * @description pending / running / completed / needs_review / blocked / failed / cancelled (never ran: the job was cancelled before its turn)
              */
             status: string;
             /** Ate */
@@ -27425,6 +27559,58 @@ export interface operations {
             };
         };
     };
+    list_discover_causal_questions: {
+        parameters: {
+            query?: {
+                /** @description Gold-standard dataset */
+                dataset?: string;
+                /** @description Optional brand scope — same semantics as POST /causal/discover-effects. */
+                brand?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverQuestionsResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     discover_causal_effects: {
         parameters: {
             query?: {
@@ -27435,6 +27621,59 @@ export interface operations {
             };
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DiscoverEffectsRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverEffectsResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_discover_causal_effects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -27477,7 +27716,7 @@ export interface operations {
             };
         };
     };
-    get_discover_causal_effects: {
+    cancel_discover_causal_effects: {
         parameters: {
             query?: never;
             header?: never;
