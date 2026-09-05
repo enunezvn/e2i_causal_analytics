@@ -483,6 +483,27 @@ describe('CausalAnalysis — unified agent-led page', () => {
       expect(start).not.toHaveBeenCalled();
     }, 20000);
 
+    it('holds Discover until the candidate list has loaded (a click must not start a full run the user meant to narrow)', () => {
+      // codex iter-1 MEDIUM: with the list still loading, `candidateQuestions` is
+      // [] so "all selected" is vacuously true and a click would submit every
+      // candidate before the user could pick a subset.
+      (useDiscoverQuestions as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+      });
+      const start = vi.fn();
+      mockDiscover({ start });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toHaveTextContent(
+        'Loading questions…'
+      );
+      const discover = screen.getByRole('button', { name: /Discover causal effects/i });
+      expect(discover).toBeDisabled();
+      fireEvent.click(discover);
+      expect(start).not.toHaveBeenCalled();
+    }, 20000);
+
     it('still lets the run start when the candidate list could not load (every candidate runs)', () => {
       (useDiscoverQuestions as ReturnType<typeof vi.fn>).mockReturnValue({
         data: undefined,

@@ -279,6 +279,11 @@ export default function CausalAnalysis() {
   }, [candidateQuestions, selectedQuestionKeys]);
   const allQuestionsSelected = selectedQuestions.length === candidateQuestions.length;
   const noQuestionSelected = candidateQuestions.length > 0 && selectedQuestions.length === 0;
+  // Hold Discover until the list has loaded: with `candidateQuestions` still []
+  // "all selected" is vacuously true and a click would submit EVERY candidate
+  // before the user could narrow it (codex iter-1). A failed load is different —
+  // the selector says so and the run honestly covers every candidate.
+  const questionsLoading = questionsQuery.isLoading;
   const handleDiscover = useCallback(() => {
     if (allQuestionsSelected) {
       start(); // every candidate — no subset on the wire
@@ -721,8 +726,14 @@ export default function CausalAnalysis() {
                 </div>
                 <Button
                   onClick={handleDiscover}
-                  disabled={isStarting || running || noQuestionSelected}
-                  title={noQuestionSelected ? 'Select at least one question to discover.' : undefined}
+                  disabled={isStarting || running || noQuestionSelected || questionsLoading}
+                  title={
+                    noQuestionSelected
+                      ? 'Select at least one question to discover.'
+                      : questionsLoading
+                        ? 'Loading the candidate questions…'
+                        : undefined
+                  }
                 >
                   {isStarting || running ? (
                     <>
