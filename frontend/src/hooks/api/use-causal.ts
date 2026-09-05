@@ -21,6 +21,8 @@ import {
   proposeCausalQuestions,
   discoverCausalEffects,
   getDiscoverCausalEffects,
+  getDiscoverQuestions,
+  cancelDiscoverCausalEffects,
   getCausalBrands,
   getClinicalContext,
   routeQuery,
@@ -36,6 +38,7 @@ import {
   quickEffectEstimate,
   fullCausalAnalysis,
 } from '@/api/causal';
+import { DISCOVERY_TERMINAL_STATUSES } from '@/types/causal';
 import type {
   AgentCausalAnalysisRequest,
   AgentCausalAnalysisResponse,
@@ -46,6 +49,8 @@ import type {
   ClinicalContext,
   ProposeQuestionsResponse,
   DiscoverEffectsResponse,
+  DiscoverQuestionSelection,
+  DiscoverQuestionsResponse,
   CrossValidationRequest,
   CrossValidationResponse,
   EstimatorListResponse,
@@ -146,10 +151,31 @@ export function useProposeQuestions(
 }
 
 /**
+ * The SSOT candidate questions a discovery run WOULD validate for this
+ * (dataset, brand) scope, with curated labels — drives the question selector so
+ * the analyst can run a subset. Cached per scope.
+ */
+export function useDiscoverQuestions(
+  dataset: string = 'patient_journeys',
+  brand?: string | null,
+  options?: Omit<UseQueryOptions<DiscoverQuestionsResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<DiscoverQuestionsResponse, ApiError>({
+    queryKey: ['causal', 'discover-questions', dataset, brand ?? null],
+    queryFn: () => getDiscoverQuestions(dataset, brand),
+    staleTime: 5 * 60 * 1000,
+    ...options,
+  });
+}
+
+/**
  * Discover-effects leaderboard: submit a job, then poll it (every 3s) until the
- * agent has validated every candidate question. The ranked effects fill in
- * progressively. ``start()`` submits; ``job`` is the latest (submit or poll)
- * state.
+ * run ends (every question validated, or cancelled at a question boundary). The
+ * ranked effects fill in progressively. ``start(questions?)`` submits — with an
+ * optional subset of the scope's candidate questions (rows of
+ * {@link useDiscoverQuestions}); omit it to run every candidate. ``cancel()``
+ * asks the active job to stop after the question in flight; ``cancelRequested``
+ * stays true until that job ends. ``job`` is the latest (submit or poll) state.
  *
  * @param brand - optional brand to scope the cohort to (a row subset). Omit /
  *   null = all brands.
@@ -177,16 +203,35 @@ export function useDiscoverEffects(
     isPending: isStarting,
     error: startError,
     reset: resetSubmit,
-  } = useMutation<{ job: DiscoverEffectsResponse; dataset: string; brand: string | null }, ApiError>(
-    {
-      mutationFn: async () => {
-        const job = await discoverCausalEffects(dataset, brand);
-        return { job, dataset, brand: brandKey };
-      },
-      onSuccess: ({ job, dataset: ds, brand: br }) =>
-        setActive({ jobId: job.job_id, dataset: ds, brand: br, initial: job }),
-    }
-  );
+  } = useMutation<
+    { job: DiscoverEffectsResponse; dataset: string; brand: string | null },
+    ApiError,
+    DiscoverQuestionSelection[] | void
+  >({
+    mutationFn: async (questions) => {
+      const job = await discoverCausalEffects(dataset, brand, questions ?? undefined);
+      return { job, dataset, brand: brandKey };
+    },
+    onSuccess: ({ job, dataset: ds, brand: br }) =>
+      setActive({ jobId: job.job_id, dataset: ds, brand: br, initial: job }),
+  });
+
+  // The job id a cancel request SUCCEEDED for. Kept as an id (not a boolean) so
+  // it can only ever describe that job: a late cancel response for a job the
+  // scope switch dropped, or a re-run in the same scope, never inherits it. The
+  // backend echoes `cancel_requested` on the row too, but the task's own next
+  // publish may briefly overwrite that flag before the question boundary — the
+  // local id is what keeps the button from flickering back to "Cancel".
+  const [cancelledJobId, setCancelledJobId] = useState<string | null>(null);
+  const {
+    mutate: cancelMutate,
+    isPending: isCancelling,
+    error: cancelError,
+    reset: resetCancel,
+  } = useMutation<DiscoverEffectsResponse, ApiError, string>({
+    mutationFn: (id) => cancelDiscoverCausalEffects(id),
+    onSuccess: (_job, id) => setCancelledJobId(id),
+  });
 
   // Drop the active job (and any retained submit state) whenever the scope
   // changes, so the previous scope's leaderboard returns to the honest empty
@@ -194,7 +239,8 @@ export function useDiscoverEffects(
   useEffect(() => {
     setActive(null);
     resetSubmit();
-  }, [dataset, brandKey, resetSubmit]);
+    resetCancel();
+  }, [dataset, brandKey, resetSubmit, resetCancel]);
 
   const inScope = active !== null && active.dataset === dataset && active.brand === brandKey;
   const jobId = inScope ? active.jobId : null;
@@ -203,17 +249,28 @@ export function useDiscoverEffects(
     queryKey: ['causal', 'discover-effects', jobId],
     queryFn: () => getDiscoverCausalEffects(jobId as string),
     enabled: !!jobId,
-    // Poll until the job completes; then stop.
+    // Poll until the job ends (completed OR cancelled); then stop.
     refetchInterval: (query) =>
-      query.state.data && query.state.data.status === 'completed' ? false : 3000,
+      query.state.data && DISCOVERY_TERMINAL_STATUSES.has(query.state.data.status) ? false : 3000,
   });
+
+  const job = inScope ? poll.data ?? active.initial : null;
+  const cancelRequested =
+    !!job && (cancelledJobId === job.job_id || job.cancel_requested === true);
 
   return {
     start: startMutate,
     isStarting,
     startError,
-    job: inScope ? poll.data ?? active.initial : null,
+    job,
     isPolling: poll.isFetching,
+    /** Ask the active job to stop after the question in flight. No-op without one. */
+    cancel: () => {
+      if (jobId) cancelMutate(jobId);
+    },
+    isCancelling,
+    cancelError,
+    cancelRequested,
   };
 }
 

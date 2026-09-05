@@ -56,6 +56,7 @@ export {
   useCausalAnalysisHistory,
   useCausalVariables,
   useProposeQuestions,
+  useDiscoverQuestions,
   useDiscoverEffects,
   useCausalBrands,
   useClinicalContext,

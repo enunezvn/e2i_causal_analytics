@@ -387,15 +387,60 @@ export interface DiscoveredEffect {
 /** Async discover-effects job: the agent's validated effects, ranked. */
 export interface DiscoverEffectsResponse {
   job_id: string;
-  /** pending / running / completed */
+  /**
+   * pending / running / completed / cancelled (stopped at a question boundary
+   * on request; finished rows are kept, unrun rows carry status `cancelled`).
+   */
   status: string;
   dataset: string;
   /** Brand the cohort was scoped to (null = all brands). */
   brand?: string | null;
   total: number;
   completed: number;
+  /**
+   * A cancel was requested: the question in flight finishes (its estimator
+   * cannot be interrupted), then the run stops with status `cancelled`.
+   */
+  cancel_requested?: boolean;
   effects: DiscoveredEffect[];
   note: string;
+}
+
+/** The discover-effects job states in which the run is over. */
+export const DISCOVERY_TERMINAL_STATUSES: ReadonlySet<string> = new Set(['completed', 'cancelled']);
+
+/**
+ * One SSOT candidate question a discovery run WOULD validate for a (dataset,
+ * brand) scope — what the question selector lists. Labels are the curated
+ * column labels the leaderboard renders.
+ */
+export interface DiscoverQuestion {
+  treatment: string;
+  outcome: string;
+  /** Brand this SSOT row is scoped to (null = all brands). */
+  brand?: string | null;
+  treatment_label: string;
+  outcome_label: string;
+  /** Modeled backdoor set the run adjusts on. */
+  adjustment_set?: string[];
+}
+
+/** GET /causal/discover-effects/questions */
+export interface DiscoverQuestionsResponse {
+  dataset: string;
+  brand?: string | null;
+  questions: DiscoverQuestion[];
+  note: string;
+}
+
+/**
+ * A candidate to include in a run — must match a row of
+ * {@link DiscoverQuestionsResponse} on (treatment, outcome, brand).
+ */
+export interface DiscoverQuestionSelection {
+  treatment: string;
+  outcome: string;
+  brand?: string | null;
 }
 
 /** Drug mechanism of action + provenance (chembl | static_fallback). */

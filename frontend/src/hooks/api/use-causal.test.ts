@@ -17,6 +17,8 @@ import * as React from 'react';
 vi.mock('@/api/causal', () => ({
   discoverCausalEffects: vi.fn(),
   getDiscoverCausalEffects: vi.fn(),
+  getDiscoverQuestions: vi.fn(),
+  cancelDiscoverCausalEffects: vi.fn(),
   runHierarchicalAnalysisAndWait: vi.fn(),
   runCausalAgentAnalysisAndWait: vi.fn(),
 }));
@@ -29,6 +31,7 @@ import {
 import {
   discoverCausalEffects,
   getDiscoverCausalEffects,
+  cancelDiscoverCausalEffects,
   runHierarchicalAnalysisAndWait,
   runCausalAgentAnalysisAndWait,
 } from '@/api/causal';
@@ -237,5 +240,132 @@ describe('useRunCausalAgentAnalysis — a timed-out poll must not re-submit the 
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(runCausalAgentAnalysisAndWait).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Question subset + cooperative cancel (CAUSAL-DISC-UX)
+// ---------------------------------------------------------------------------
+
+const RUNNING_JOB = {
+  ...PATIENT_JOB,
+  status: 'running',
+  total: 2,
+  completed: 0,
+  cancel_requested: false,
+};
+
+describe('useDiscoverEffects — question subset + cancel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (discoverCausalEffects as ReturnType<typeof vi.fn>).mockResolvedValue(RUNNING_JOB);
+    (getDiscoverCausalEffects as ReturnType<typeof vi.fn>).mockResolvedValue(RUNNING_JOB);
+    (cancelDiscoverCausalEffects as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...RUNNING_JOB,
+      cancel_requested: true,
+    });
+  });
+
+  it('passes the selected questions to the submit, and nothing when every candidate runs', async () => {
+    const subset = [{ treatment: 'treatment_arm', outcome: 'persistent_180d', brand: 'Kisqali' }];
+    const { result } = renderHook(() => useDiscoverEffects('patient_journeys', 'Kisqali'), {
+      wrapper: createWrapper(),
+    });
+    act(() => {
+      result.current.start(subset);
+    });
+    await waitFor(() =>
+      expect(discoverCausalEffects).toHaveBeenCalledWith('patient_journeys', 'Kisqali', subset)
+    );
+    act(() => {
+      result.current.start();
+    });
+    await waitFor(() =>
+      expect(discoverCausalEffects).toHaveBeenLastCalledWith('patient_journeys', 'Kisqali', undefined)
+    );
+  });
+
+  it('cancel() targets the active job and holds cancelRequested until that job ends', async () => {
+    const { result } = renderHook(() => useDiscoverEffects('patient_journeys', null), {
+      wrapper: createWrapper(),
+    });
+    expect(result.current.cancelRequested).toBe(false);
+    act(() => {
+      result.current.cancel(); // no active job → no request
+    });
+    expect(cancelDiscoverCausalEffects).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.start();
+    });
+    await waitFor(() => expect(result.current.job?.status).toBe('running'));
+    act(() => {
+      result.current.cancel();
+    });
+    await waitFor(() => expect(cancelDiscoverCausalEffects).toHaveBeenCalledWith('j1'));
+    await waitFor(() => expect(result.current.cancelRequested).toBe(true));
+    // A poll that has not yet observed the marker (the task's own publish can
+    // briefly overwrite the row flag) must NOT flip the button back.
+    expect(result.current.job?.cancel_requested).toBe(false);
+    expect(result.current.cancelRequested).toBe(true);
+
+    // The job ends `cancelled` → the hook reports it as the terminal job.
+    (getDiscoverCausalEffects as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...RUNNING_JOB,
+      status: 'cancelled',
+      completed: 1,
+      cancel_requested: true,
+    });
+    await waitFor(() => expect(result.current.job?.status).toBe('cancelled'), { timeout: 5000 });
+  }, 10000);
+
+  it('a fresh run in the same scope does not inherit the previous cancel', async () => {
+    const { result } = renderHook(() => useDiscoverEffects('patient_journeys', null), {
+      wrapper: createWrapper(),
+    });
+    act(() => {
+      result.current.start();
+    });
+    await waitFor(() => expect(result.current.job?.status).toBe('running'));
+    act(() => {
+      result.current.cancel();
+    });
+    await waitFor(() => expect(result.current.cancelRequested).toBe(true));
+
+    (discoverCausalEffects as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...RUNNING_JOB,
+      job_id: 'j2',
+    });
+    (getDiscoverCausalEffects as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...RUNNING_JOB,
+      job_id: 'j2',
+    });
+    act(() => {
+      result.current.start();
+    });
+    await waitFor(() => expect(result.current.job?.job_id).toBe('j2'));
+    expect(result.current.cancelRequested).toBe(false);
+  });
+
+  it('drops cancel state with the job on a scope switch', async () => {
+    const { result, rerender } = renderHook(
+      ({ dataset, brand }: { dataset: string; brand: string | null }) =>
+        useDiscoverEffects(dataset, brand),
+      {
+        wrapper: createWrapper(),
+        initialProps: { dataset: 'patient_journeys', brand: null as string | null },
+      }
+    );
+    act(() => {
+      result.current.start();
+    });
+    await waitFor(() => expect(result.current.job?.status).toBe('running'));
+    act(() => {
+      result.current.cancel();
+    });
+    await waitFor(() => expect(result.current.cancelRequested).toBe(true));
+    rerender({ dataset: 'hcp_adoption', brand: null });
+    await waitFor(() => expect(result.current.job).toBeNull());
+    expect(result.current.cancelRequested).toBe(false);
   });
 });
