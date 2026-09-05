@@ -110,7 +110,7 @@ const EFFECTS = [
     impact: 0.0875,
     n_rows: 1500,
     brand: 'Kisqali',
-    summary: 'treatment_arm raises persistent_180d by +0.088 — survived all robustness checks.',
+    summary: 'Treatment arm raises Persistent at 180d by +0.088 — survived all robustness checks.',
     analysis_id: 'a1',
   },
   {
@@ -322,8 +322,10 @@ describe('CausalAnalysis — unified agent-led page', () => {
     // Brand surfaced per row (SSOT-derived scope).
     expect(screen.getByText('Kisqali')).toBeInTheDocument();
     expect(screen.getByText('Fabhalta')).toBeInTheDocument();
-    // Plain-language summary surfaced.
-    expect(screen.getByText(/raises persistent_180d by \+0\.088/)).toBeInTheDocument();
+    // Plain-language summary surfaced verbatim (the backend labels it; the row
+    // must not re-expose the raw column names anywhere).
+    expect(screen.getByText(/Treatment arm raises Persistent at 180d by \+0\.088/)).toBeInTheDocument();
+    expect(screen.queryByText(/persistent_180d/)).not.toBeInTheDocument();
     // Honest verdicts.
     expect(screen.getByText('Proceed')).toBeInTheDocument();
     expect(screen.getByText('Blocked')).toBeInTheDocument();

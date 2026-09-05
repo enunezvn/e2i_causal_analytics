@@ -24,6 +24,15 @@ describe('columnLabel', () => {
     expect(columnLabel({}, 'conversion_flag')).toBe('Conversion flag');
   });
 
+  it('matches the backend fallback byte-for-byte on mixed-case tokens (Python str.capitalize lowercases the rest)', () => {
+    // Parity contract with causal._column_label — pinned by the same inputs in
+    // tests/unit/test_api/test_causal_discover_effects.py. A one-hot dummy or an
+    // acronym-bearing name must not read one way in the backend summary prose
+    // and another way in the leaderboard cell beside it.
+    expect(columnLabel(undefined, 'geographic_region=West')).toBe('Geographic region=west');
+    expect(columnLabel({}, 'uas7_HIGH')).toBe('Uas7 high');
+  });
+
   it('never returns an empty label for a named column, and never crashes on a missing one', () => {
     expect(columnLabel({ x: '' }, 'x')).toBe('X');
     expect(columnLabel({}, '')).toBe('');

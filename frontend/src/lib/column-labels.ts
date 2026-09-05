@@ -8,9 +8,11 @@
  * "Product samples provided (rep sample drop)" (#1893) while /causal-analysis
  * still printed `sample_dropped`, because it never consumed the served map.
  *
- * Fallback (map absent or column not curated) mirrors the backend auto-label —
- * underscores to spaces, first letter capitalised — so an uncurated column
- * never reads differently on two pages.
+ * Fallback (map absent or column not curated) mirrors the backend auto-label
+ * byte-for-byte — underscores to spaces, then Python `str.capitalize()`: first
+ * character upper-cased, the REST lower-cased — so an uncurated column never
+ * reads differently on two pages, nor in the leaderboard cell beside the
+ * backend's own summary prose.
  */
 export function columnLabel(
   labels: Record<string, string> | null | undefined,
@@ -22,5 +24,5 @@ export function columnLabel(
   const curated = labels?.[col];
   if (curated) return curated;
   const spaced = col.replace(/_/g, ' ');
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }

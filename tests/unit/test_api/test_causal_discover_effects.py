@@ -422,6 +422,11 @@ def test_column_label_helper_is_the_served_label_ssot():
     # No curated entry -> the same fallback the variables endpoint has always served.
     assert "conversion_flag" not in _COLUMN_LABELS
     assert _column_label("conversion_flag") == "Conversion flag"
+    # Parity contract with frontend/src/lib/column-labels.ts (same inputs pinned
+    # there): ``str.capitalize`` lowercases the REST of the string, so a one-hot
+    # dummy or acronym-bearing name yields exactly these strings on both sides.
+    assert _column_label("geographic_region=West") == "Geographic region=west"
+    assert _column_label("uas7_HIGH") == "Uas7 high"
 
 
 @pytest.mark.unit
