@@ -43,6 +43,25 @@ const FULL: ClinicalContext = {
     'Effect estimate = a SYNTHETIC patient cohort. Clinical context below is REAL and cited.',
 };
 
+describe('ClinicalContextPanel — outcome reads by its display label (#1895)', () => {
+  // The treatment line already reads "Treatment `column` = label — note"; the
+  // outcome line printed the bare identifier. Both now pair the identifier
+  // with the same SSOT label the page's title and leaderboard render.
+  it('pairs the outcome identifier with the label supplied by the page', () => {
+    const labelFor = (col: string) =>
+      ({ persistent_180d: 'Persistent at 180d' })[col] ?? `UNLABELLED:${col}`;
+    render(<ClinicalContextPanel context={FULL} labelFor={labelFor} />);
+    expect(screen.getByText('persistent_180d')).toBeInTheDocument();
+    expect(screen.getByText(/= Persistent at 180d maps to:/)).toBeInTheDocument();
+    expect(screen.queryByText(/UNLABELLED/)).toBeNull();
+  });
+
+  it('falls back to the shared auto-label when no label function is supplied', () => {
+    render(<ClinicalContextPanel context={FULL} />);
+    expect(screen.getByText(/= Persistent 180d maps to:/)).toBeInTheDocument();
+  });
+});
+
 describe('ClinicalContextPanel', () => {
   it('renders drug, MoA, mapped endpoint, pivotal endpoints, and a linked citation', () => {
     render(<ClinicalContextPanel context={FULL} />);

@@ -881,7 +881,11 @@ export default function CausalAnalysis() {
                     <Loader2 className="h-4 w-4 animate-spin" /> Loading the validated analysis…
                   </div>
                 ) : (
-                  <CausalAnalysisDetail result={detailResult} brand={selectedEffect?.brand ?? brandArg} />
+                  <CausalAnalysisDetail
+                    result={detailResult}
+                    brand={selectedEffect?.brand ?? brandArg}
+                    labelFor={labelFor}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -1024,7 +1028,9 @@ export default function CausalAnalysis() {
                   </Alert>
                 )}
 
-                {manualResult && <CausalAnalysisDetail result={manualResult} brand={brandArg} />}
+                {manualResult && (
+                  <CausalAnalysisDetail result={manualResult} brand={brandArg} labelFor={labelFor} />
+                )}
               </CardContent>
             )}
           </Card>
