@@ -589,7 +589,7 @@ function SystemHealth() {
             ) : (
               <>
                 <div className="flex items-center gap-4">
-                  <div className="text-4xl font-bold">{healthScore}</div>
+                  <div className="text-4xl font-bold">{healthScore.toFixed(1)}</div>
                   {healthGrade !== null && (
                     <div className={`px-3 py-1 rounded-lg border text-xl font-bold ${GRADE_COLORS[healthGrade] || GRADE_COLORS[HealthGrade.C]}`}>
                       {healthGrade}
