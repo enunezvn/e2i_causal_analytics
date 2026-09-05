@@ -25,6 +25,7 @@ Version: 4.2.0
 """
 
 import asyncio
+import contextlib
 import logging
 import math
 import time
@@ -1623,12 +1624,26 @@ async def propose_causal_questions(
 _discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJobStore(
     "causal:discover_effects", DiscoverEffectsResponse, ttl_seconds=_CAUSAL_JOB_TTL_SECONDS
 )
-# A discover job ends in exactly one of these; a cancel on either is a no-op.
-_TERMINAL_DISCOVERY_STATUSES = frozenset({"completed", "cancelled"})
+# A discover job ends in exactly one of these; a cancel on any of them is a no-op.
+_TERMINAL_DISCOVERY_STATUSES = frozenset({"completed", "cancelled", "failed"})
 # Sidecar marker (see DurableJobStore.set_marker) the cancel route raises and the
 # background task polls at every question boundary. A BackgroundTask cannot be
 # signalled from another request (or worker) any other way.
 _DISCOVERY_CANCEL_MARKER = "cancel"
+# Liveness heartbeat (see DurableJobStore.touch_marker): the task re-stamps this
+# sidecar every INTERVAL while it runs; a poll that finds a non-terminal row
+# whose stamp is older than TTL (or absent) knows the task is gone — the API
+# restarted (every deploy), gunicorn recycled the worker (--max-requests), or
+# the task crashed — and repairs the row to `failed` instead of leaving it
+# `running` until the 8h TTL with the FE polling forever. Why not a startup
+# sweep: prod runs 2 workers, and a freshly (re)started worker cannot tell
+# whether the OTHER worker's jobs are still alive; the heartbeat can. TTL = the
+# gunicorn worker timeout (docker/Dockerfile --timeout 120): an event loop
+# stalled that long is killed anyway, so a gap that long means the worker is
+# gone, never a live run.
+_DISCOVERY_ALIVE_MARKER = "alive"
+_DISCOVERY_HEARTBEAT_INTERVAL_SECONDS: float = 15.0
+_DISCOVERY_HEARTBEAT_TTL_SECONDS: int = 120
 
 # Complementary outcomes are 1 - each other (persistent_180d vs discontinued_180d);
 # running both is redundant, so one is skipped to dedupe the leaderboard.
@@ -1832,6 +1847,55 @@ def _pending_effect(q: _CandidateQuestion, status: str) -> DiscoveredEffect:
     )
 
 
+def _interrupt_effect(e: DiscoveredEffect) -> DiscoveredEffect:
+    """Honest terminal row for a question the run never finished: the one in
+    flight is `failed` (it could not run to an estimate), a queued one is
+    `cancelled` (it never got its turn). Finished rows are untouched."""
+    if e.status == "running":
+        return e.model_copy(update={"status": "failed"})
+    if e.status == "pending":
+        return e.model_copy(update={"status": "cancelled"})
+    return e
+
+
+async def _touch_discovery_heartbeat(job_id: str) -> None:
+    await _discover_effects_store.touch_marker(
+        job_id, _DISCOVERY_ALIVE_MARKER, ttl_seconds=_DISCOVERY_HEARTBEAT_TTL_SECONDS
+    )
+
+
+async def _discovery_is_alive(job_id: str) -> bool:
+    age = await _discover_effects_store.marker_age_seconds(job_id, _DISCOVERY_ALIVE_MARKER)
+    return age is not None and age <= _DISCOVERY_HEARTBEAT_TTL_SECONDS
+
+
+async def _repair_if_orphaned(job: DiscoverEffectsResponse) -> DiscoverEffectsResponse:
+    """Read-repair for an orphaned run. A non-terminal row whose task no longer
+    beats is over: mark it `failed` with the reason, keep every finished row,
+    close the unfinished ones honestly, and PERSIST it so every later poll (on
+    any worker) agrees and the FE stops polling. Terminal rows are returned
+    as-is — their task is gone because it finished."""
+    if job.status in _TERMINAL_DISCOVERY_STATUSES or await _discovery_is_alive(job.job_id):
+        return job
+    repaired = job.model_copy(
+        update={
+            "status": "failed",
+            "error": (
+                "The discovery run was interrupted (the API restarted or its worker "
+                f"was recycled) after {job.completed}/{job.total} questions; re-run "
+                "discovery to continue."
+            ),
+            "effects": [_interrupt_effect(e) for e in job.effects],
+        }
+    )
+    logger.warning(
+        f"discover-effects {job.job_id}: no heartbeat for a `{job.status}` row "
+        f"({job.completed}/{job.total}); repaired to failed"
+    )
+    await _discover_effects_store.set(job.job_id, repaired)
+    return repaired
+
+
 async def _run_discover_effects_task(
     job_id: str,
     dataset: str,
@@ -1853,7 +1917,9 @@ async def _run_discover_effects_task(
         (q.treatment, q.outcome, q.brand): _pending_effect(q, "pending") for q in questions
     }
 
-    async def _publish(status: str, completed: int, cancel_requested: bool = False) -> None:
+    async def _publish(
+        status: str, completed: int, cancel_requested: bool = False, error: Optional[str] = None
+    ) -> None:
         await _discover_effects_store.set(
             job_id,
             DiscoverEffectsResponse(
@@ -1864,6 +1930,7 @@ async def _run_discover_effects_task(
                 total=len(questions),
                 completed=completed,
                 cancel_requested=cancel_requested,
+                error=error,
                 effects=_rank_effects(list(effects.values())),
             ),
         )
@@ -1888,88 +1955,126 @@ async def _run_discover_effects_task(
                 effects[k] = e.model_copy(update={"status": "cancelled"})
         await _publish("cancelled", completed, cancel_requested=True)
 
-    questions = await _prerank_questions(dataset, questions)
+    async def _beat() -> None:
+        # Liveness heartbeat (see _repair_if_orphaned). The estimators run in a
+        # worker thread, so the loop is free to beat right through a question;
+        # polls on ANY worker read the stamp's age. A failed touch must never end
+        # the beat — a silently stopped heartbeat would declare a live run dead.
+        while True:
+            try:
+                await _touch_discovery_heartbeat(job_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"discover-effects {job_id}: heartbeat touch failed: {e}")
+            await asyncio.sleep(_DISCOVERY_HEARTBEAT_INTERVAL_SECONDS)
+
+    # First beat inline, BEFORE anything else: a created task only runs once this
+    # coroutine suspends, and nothing here is guaranteed to (the pre-rank, the
+    # store, a stubbed loader may all complete without yielding). The submit
+    # route stamps the row too, but the task must not rely on it.
+    await _touch_discovery_heartbeat(job_id)
+    heartbeat = asyncio.create_task(_beat())
     completed = 0
-    for q in questions:
-        # Cooperative cancel, honoured at question boundaries only: the agent's
-        # estimators run synchronously inside the question and cannot be
-        # interrupted, so a cancel lands after the in-flight question finishes.
-        if await _cancel_requested():
-            await _stop_cancelled(completed)
-            return
-        t, o = q.treatment, q.outcome
-        key = (t, o, q.brand)
-        # Fallback to the request-level brand filter when the SSOT row has no
-        # brand. NOTE: this fallback scopes the DATA LOAD only; the effect's
-        # ``brand`` label stays q.brand (None here). Harmless for patient grain —
-        # the reseed populates brand per causal_paths row — but later grains that
-        # share this table must revisit whether the fallback brand should be the
-        # displayed label.
-        q_brand = q.brand or brand
-        effects[key] = _pending_effect(q, "running")
-        await _publish("running", completed)
-        try:
-            df, select_cols = await _load_agent_estimation_frame(
-                dataset=dataset,
-                treatment_var=t,
-                outcome_var=o,
-                covariates=q.adjustment_set,
-                limit=_DISCOVERY_ROW_CAP,
-                brand=q_brand,
-            )
-            # The loader EXPANDS categorical covariates (e.g. geographic_region)
-            # into one-hot dummies; the agent run must adjust on the resolved frame
-            # columns (the dummy names), not the raw categorical. Derive them from
-            # the loader's returned column list, excluding treatment/outcome.
-            resolved_cov = [c for c in select_cols if c not in (t, o)]
-            aid = str(uuid.uuid4())
-            req = AgentCausalAnalysisRequest(
-                treatment_var=t,
-                outcome_var=o,
-                dataset=dataset,
-                limit=_DISCOVERY_ROW_CAP,
-                auto_discover=True,
-                brand=q_brand,
-            )
-            await _agent_analysis_store.set(
-                aid,
-                AgentCausalAnalysisResponse(
-                    analysis_id=aid,
-                    status="pending",
+    try:
+        questions = await _prerank_questions(dataset, questions)
+        for q in questions:
+            # Cooperative cancel, honoured at question boundaries only: the agent's
+            # estimators run synchronously inside the question and cannot be
+            # interrupted, so a cancel lands after the in-flight question finishes.
+            if await _cancel_requested():
+                await _stop_cancelled(completed)
+                return
+            t, o = q.treatment, q.outcome
+            key = (t, o, q.brand)
+            # Fallback to the request-level brand filter when the SSOT row has no
+            # brand. NOTE: this fallback scopes the DATA LOAD only; the effect's
+            # ``brand`` label stays q.brand (None here). Harmless for patient grain —
+            # the reseed populates brand per causal_paths row — but later grains that
+            # share this table must revisit whether the fallback brand should be the
+            # displayed label.
+            q_brand = q.brand or brand
+            effects[key] = _pending_effect(q, "running")
+            await _publish("running", completed)
+            try:
+                df, select_cols = await _load_agent_estimation_frame(
+                    dataset=dataset,
+                    treatment_var=t,
+                    outcome_var=o,
+                    covariates=q.adjustment_set,
+                    limit=_DISCOVERY_ROW_CAP,
+                    brand=q_brand,
+                )
+                # The loader EXPANDS categorical covariates (e.g. geographic_region)
+                # into one-hot dummies; the agent run must adjust on the resolved frame
+                # columns (the dummy names), not the raw categorical. Derive them from
+                # the loader's returned column list, excluding treatment/outcome.
+                resolved_cov = [c for c in select_cols if c not in (t, o)]
+                aid = str(uuid.uuid4())
+                req = AgentCausalAnalysisRequest(
                     treatment_var=t,
                     outcome_var=o,
                     dataset=dataset,
-                    n_rows=int(df.shape[0]),
-                    data_source=data_source,
-                    dag=CausalDAGModel(),
-                    statistical_significance=False,
-                    refutation=RefutationSummary(),
-                    latency_ms=0,
-                ),
-            )
-            await _run_agent_analysis_task(aid, req, df, resolved_cov, data_source)
-            resp = await _agent_analysis_store.get(aid)
-            if resp is None:
-                raise RuntimeError(f"agent analysis {aid} produced no cached result")
-            effects[key] = _effect_from_agent_response(t, o, resp, aid, question=q)
-        except HTTPException as e:
-            # Fail-closed: a question with no usable data is marked failed, not faked.
-            logger.warning(f"discover-effects: {t}->{o} failed-closed: {e.detail}")
-            effects[key] = _pending_effect(q, "failed")
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"discover-effects: {t}->{o} errored: {e}", exc_info=True)
-            effects[key] = _pending_effect(q, "failed")
-        # Best-effort clinical context for the freshly-built row (no-op for failed/
-        # pending rows; fail-open so it never disrupts the leaderboard).
-        await _attach_clinical_context(effects[key])
-        completed += 1
-        if completed == len(questions):
-            await _publish("completed", completed)
-        elif await _cancel_requested():
-            await _stop_cancelled(completed)
-            return
-        else:
-            await _publish("running", completed)
+                    limit=_DISCOVERY_ROW_CAP,
+                    auto_discover=True,
+                    brand=q_brand,
+                )
+                await _agent_analysis_store.set(
+                    aid,
+                    AgentCausalAnalysisResponse(
+                        analysis_id=aid,
+                        status="pending",
+                        treatment_var=t,
+                        outcome_var=o,
+                        dataset=dataset,
+                        n_rows=int(df.shape[0]),
+                        data_source=data_source,
+                        dag=CausalDAGModel(),
+                        statistical_significance=False,
+                        refutation=RefutationSummary(),
+                        latency_ms=0,
+                    ),
+                )
+                await _run_agent_analysis_task(aid, req, df, resolved_cov, data_source)
+                resp = await _agent_analysis_store.get(aid)
+                if resp is None:
+                    raise RuntimeError(f"agent analysis {aid} produced no cached result")
+                effects[key] = _effect_from_agent_response(t, o, resp, aid, question=q)
+            except HTTPException as e:
+                # Fail-closed: a question with no usable data is marked failed, not faked.
+                logger.warning(f"discover-effects: {t}->{o} failed-closed: {e.detail}")
+                effects[key] = _pending_effect(q, "failed")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"discover-effects: {t}->{o} errored: {e}", exc_info=True)
+                effects[key] = _pending_effect(q, "failed")
+            # Best-effort clinical context for the freshly-built row (no-op for failed/
+            # pending rows; fail-open so it never disrupts the leaderboard).
+            await _attach_clinical_context(effects[key])
+            completed += 1
+            if completed == len(questions):
+                await _publish("completed", completed)
+            elif await _cancel_requested():
+                await _stop_cancelled(completed)
+                return
+            else:
+                await _publish("running", completed)
+    except Exception as e:  # noqa: BLE001
+        # An error OUTSIDE a question (the pre-rank, a publish, ...) used to end
+        # the task silently and leave the row `running` until the TTL. Close it
+        # honestly instead: finished rows kept, the rest interrupted, reason set.
+        logger.error(f"discover-effects {job_id}: run crashed: {e}", exc_info=True)
+        for k, eff in effects.items():
+            effects[k] = _interrupt_effect(eff)
+        await _publish(
+            "failed",
+            completed,
+            error=(
+                f"The discovery run crashed before finishing ({type(e).__name__}: {e}); "
+                "re-run discovery to continue."
+            ),
+        )
+    finally:
+        heartbeat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat
 
 
 async def _resolve_discovery_scope(
@@ -2139,6 +2244,9 @@ async def discover_causal_effects(
         ],
     )
     await _discover_effects_store.set(job_id, initial)
+    # Alive from the moment the row exists: a poll landing before the task's
+    # first beat must not declare a brand-new job dead.
+    await _touch_discovery_heartbeat(job_id)
     background_tasks.add_task(
         _run_discover_effects_task, job_id, dataset, questions, data_source, brand
     )
@@ -2158,7 +2266,7 @@ async def get_discover_causal_effects(
     job = await _discover_effects_store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
-    return job
+    return await _repair_if_orphaned(job)
 
 
 @router.post(
@@ -2174,10 +2282,13 @@ async def cancel_discover_causal_effects(
     """Cooperative cancel. The question in flight finishes (its estimators run
     synchronously and cannot be interrupted — up to a few minutes); the run then
     stops, keeps every finished row and marks the unrun ones ``cancelled``.
-    Idempotent, and a no-op on a job that already ended."""
+    Idempotent, and a no-op on a job that already ended — including one whose
+    task died (reported `failed`, never "stopping after the current question":
+    there is no current question)."""
     job = await _discover_effects_store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
+    job = await _repair_if_orphaned(job)
     if job.status in _TERMINAL_DISCOVERY_STATUSES:
         return job
     # The marker is the signal the task honours; it is raised FIRST so the task

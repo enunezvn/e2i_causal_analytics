@@ -3878,7 +3878,9 @@ export interface paths {
          * @description Cooperative cancel. The question in flight finishes (its estimators run
          *     synchronously and cannot be interrupted — up to a few minutes); the run then
          *     stops, keeps every finished row and marks the unrun ones ``cancelled``.
-         *     Idempotent, and a no-op on a job that already ended.
+         *     Idempotent, and a no-op on a job that already ended — including one whose
+         *     task died (reported `failed`, never "stopping after the current question":
+         *     there is no current question).
          */
         post: operations["cancel_discover_causal_effects"];
         delete?: never;
@@ -8913,7 +8915,7 @@ export interface components {
             job_id: string;
             /**
              * Status
-             * @description pending / running / completed / cancelled (stopped at a question boundary on request; finished rows are kept, unrun rows are `cancelled`)
+             * @description pending / running / completed / cancelled (stopped at a question boundary on request; finished rows are kept, unrun rows are `cancelled`) / failed (the run was interrupted — API restart, worker recycle, crash — or could not finish; `error` says why; finished rows are kept)
              */
             status: string;
             /** Dataset */
@@ -8939,6 +8941,11 @@ export interface components {
              * @default false
              */
             cancel_requested: boolean;
+            /**
+             * Error
+             * @description Why the run ended `failed` (None unless it did).
+             */
+            error?: string | null;
             /** Effects */
             effects?: components["schemas"]["DiscoveredEffect"][];
             /**

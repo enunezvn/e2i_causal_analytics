@@ -18,6 +18,7 @@ Design contracts pinned here:
   are kept, the rest are marked ``cancelled`` — never fabricated.
 """
 
+import asyncio
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock
 
@@ -29,6 +30,7 @@ from src.api.routes import causal as causal_routes
 from src.api.schemas.causal import (
     AgentCausalAnalysisResponse,
     CausalDAGModel,
+    DiscoveredEffect,
     DiscoverEffectsResponse,
     RefutationSummary,
 )
@@ -277,6 +279,9 @@ def _job(job_id: str, status: str, completed: int = 0) -> DiscoverEffectsRespons
 async def test_cancel_route_flags_a_running_job(scope):
     store: DurableJobStore = scope["store"]
     await store.set("j-run", _job("j-run", "running", completed=1))
+    # A LIVE run: its task is beating. (A `running` row with no heartbeat is an
+    # orphan, which the cancel route reports as failed — see the orphan tests.)
+    await store.touch_marker("j-run", causal_routes._DISCOVERY_ALIVE_MARKER, ttl_seconds=120)
     client = _wire_client()
     r = client.post("/causal/discover-effects/j-run/cancel")
     assert r.status_code == 200, r.text
@@ -510,3 +515,215 @@ async def test_cancel_is_honoured_when_the_marker_write_degraded_on_another_work
     assert job.completed == 1 and job.total == 3
     assert len(task_env["calls"]) == 1
     assert sum(1 for e in job.effects if e.status == "cancelled") == 2
+
+
+# ---------------------------------------------------------------------------
+# Orphaned runs. The task dies without publishing (API restart on deploy, a
+# gunicorn worker recycled at --max-requests, a crash) and the row used to stay
+# `running` until the 8h TTL while the FE polled forever. The task stamps a
+# liveness heartbeat; a poll on ANY worker repairs a non-terminal row whose
+# heartbeat is gone to an honest `failed`. No startup sweep: with 2 workers a
+# fresh worker cannot tell whether the OTHER worker's job is still alive.
+# ---------------------------------------------------------------------------
+
+
+def _running_row(job_id: str = "job-orphan") -> DiscoverEffectsResponse:
+    """A run mid-flight: one question kept (with its estimate), one in flight,
+    one still queued."""
+    q0, q1, q2 = CANDIDATES
+    return DiscoverEffectsResponse(
+        job_id=job_id,
+        status="running",
+        dataset="patient_journeys",
+        brand="Remibrutinib",
+        total=3,
+        completed=1,
+        effects=[
+            DiscoveredEffect(
+                treatment=q0.treatment,
+                outcome=q0.outcome,
+                brand=q0.brand,
+                status="completed",
+                ate=0.182,
+            ),
+            DiscoveredEffect(
+                treatment=q1.treatment, outcome=q1.outcome, brand=q1.brand, status="running"
+            ),
+            DiscoveredEffect(
+                treatment=q2.treatment, outcome=q2.outcome, brand=q2.brand, status="pending"
+            ),
+        ],
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_submit_stamps_a_liveness_heartbeat(scope):
+    """The row is alive from the moment it exists: a poll that lands before the
+    task's first beat must not declare a brand-new job dead."""
+    client = _wire_client()
+    r = client.post(
+        "/causal/discover-effects",
+        params={"dataset": "patient_journeys", "brand": "Remibrutinib"},
+    )
+    assert r.status_code == 200, r.text
+    job_id = r.json()["job_id"]
+    age = await scope["store"].marker_age_seconds(job_id, causal_routes._DISCOVERY_ALIVE_MARKER)
+    assert age is not None and age < 5
+    assert client.get(f"/causal/discover-effects/{job_id}").json()["status"] == "pending"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_poll_repairs_a_running_job_whose_heartbeat_is_gone(scope):
+    """API restarted (deploy) / worker recycled: the task is gone, the row says
+    `running`, no heartbeat exists. The poll reports the run `failed` with the
+    reason, keeps the finished row (and its estimate), marks the in-flight
+    question `failed` and the unrun one `cancelled` — nothing fabricated — and
+    PERSISTS the repair so every later poll (on any worker) agrees."""
+    store = scope["store"]
+    await store.set("job-orphan", _running_row())
+    client = _wire_client()
+    r = client.get("/causal/discover-effects/job-orphan")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "failed"
+    assert "interrupted" in body["error"].lower()
+    assert body["completed"] == 1 and body["total"] == 3
+    by_t = {e["treatment"]: e for e in body["effects"]}
+    assert by_t["treatment_arm"]["status"] == "completed"
+    assert by_t["treatment_arm"]["ate"] == pytest.approx(0.182)
+    assert by_t["sample_dropped"]["status"] == "failed" and by_t["sample_dropped"]["ate"] is None
+    assert by_t["copay_card_used"]["status"] == "cancelled"
+    assert by_t["copay_card_used"]["ate"] is None
+    persisted = await store.get("job-orphan")
+    assert persisted is not None and persisted.status == "failed"
+    assert persisted.error == body["error"]
+    assert client.get("/causal/discover-effects/job-orphan").json()["status"] == "failed"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_poll_leaves_a_live_running_job_alone(scope):
+    store = scope["store"]
+    await store.set("job-live", _running_row("job-live"))
+    await store.touch_marker("job-live", causal_routes._DISCOVERY_ALIVE_MARKER, ttl_seconds=120)
+    client = _wire_client()
+    body = client.get("/causal/discover-effects/job-live").json()
+    assert body["status"] == "running" and body.get("error") is None
+    assert [e["status"] for e in body["effects"]] == ["completed", "running", "pending"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_poll_treats_a_stale_heartbeat_as_dead(scope, monkeypatch):
+    """A heartbeat older than the budget is as good as none: the task stopped
+    beating (killed mid-question) even though its last stamp is still there."""
+    store = scope["store"]
+    await store.set("job-stale", _running_row("job-stale"))
+    await store.touch_marker("job-stale", causal_routes._DISCOVERY_ALIVE_MARKER, ttl_seconds=120)
+    # Budget of -1s: any stamp, however fresh, is past it.
+    monkeypatch.setattr(causal_routes, "_DISCOVERY_HEARTBEAT_TTL_SECONDS", -1)
+    client = _wire_client()
+    assert client.get("/causal/discover-effects/job-stale").json()["status"] == "failed"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_poll_never_repairs_a_finished_job(scope):
+    """Terminal rows have no live heartbeat by design (the task is gone because
+    it FINISHED). completed / cancelled must stay exactly as published."""
+    store = scope["store"]
+    done = _running_row("job-done").model_copy(update={"status": "completed", "completed": 3})
+    await store.set("job-done", done)
+    stopped = _running_row("job-stop").model_copy(
+        update={"status": "cancelled", "cancel_requested": True}
+    )
+    await store.set("job-stop", stopped)
+    client = _wire_client()
+    assert client.get("/causal/discover-effects/job-done").json()["status"] == "completed"
+    assert client.get("/causal/discover-effects/job-stop").json()["status"] == "cancelled"
+    persisted = await store.get("job-done")
+    assert persisted is not None and persisted.status == "completed" and persisted.error is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancel_on_a_dead_job_reports_it_failed_not_stopping(scope):
+    """A cancel that lands after the task died must not pretend the run will
+    stop 'after the current question' — there is no current question."""
+    store = scope["store"]
+    await store.set("job-dead", _running_row("job-dead"))
+    client = _wire_client()
+    r = client.post("/causal/discover-effects/job-dead/cancel")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "failed"
+    assert r.json()["cancel_requested"] is False
+    assert await store.has_marker("job-dead", causal_routes._DISCOVERY_CANCEL_MARKER) is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_task_beats_periodically_while_a_question_runs_and_stops_with_the_run(
+    task_env, monkeypatch
+):
+    """The estimators run in a worker thread, so the event loop is free to beat.
+    The beat must be PERIODIC (a single stamp at start would go stale during a
+    3-minute question) and must stop when the run ends."""
+    store = task_env["store"]
+    monkeypatch.setattr(causal_routes, "_DISCOVERY_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    touches: List[int] = []
+    real_touch = store.touch_marker
+
+    async def counting_touch(job_id, marker, *, ttl_seconds):
+        touches.append(ttl_seconds)
+        await real_touch(job_id, marker, ttl_seconds=ttl_seconds)
+
+    monkeypatch.setattr(store, "touch_marker", counting_touch)
+    seen: Dict[str, Any] = {}
+
+    async def slow_question(n_loads: int) -> None:
+        if n_loads != 1:
+            return
+        before = len(touches)
+        await asyncio.sleep(0.1)
+        seen["beats_during_question"] = len(touches) - before
+        seen["age_during_question"] = await store.marker_age_seconds(
+            "job-hb", causal_routes._DISCOVERY_ALIVE_MARKER
+        )
+
+    task_env["hooks"]["on_load"] = slow_question
+    await causal_routes._run_discover_effects_task(
+        "job-hb", "patient_journeys", list(CANDIDATES), "synthetic", "Remibrutinib"
+    )
+    assert seen["beats_during_question"] >= 3
+    assert seen["age_during_question"] is not None and seen["age_during_question"] < 1
+    assert set(touches) == {causal_routes._DISCOVERY_HEARTBEAT_TTL_SECONDS}
+    n_after = len(touches)
+    await asyncio.sleep(0.1)
+    assert len(touches) == n_after, "the heartbeat outlived the run"
+    job = await store.get("job-hb")
+    assert job is not None and job.status == "completed"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_task_crash_outside_a_question_marks_the_run_failed_not_stuck(task_env, monkeypatch):
+    """Per-question errors are already caught; an error OUTSIDE a question (the
+    pre-rank, here) used to kill the task silently and leave the row `running`
+    until the TTL. It must publish an honest `failed` row with the reason."""
+
+    async def boom(dataset, questions):
+        raise RuntimeError("prerank exploded")
+
+    monkeypatch.setattr(causal_routes, "_prerank_questions", boom)
+    await causal_routes._run_discover_effects_task(
+        "job-crash", "patient_journeys", list(CANDIDATES), "synthetic", "Remibrutinib"
+    )
+    job = await task_env["store"].get("job-crash")
+    assert job is not None and job.status == "failed"
+    assert "prerank exploded" in (job.error or "")
+    assert job.completed == 0
+    assert {e.status for e in job.effects} == {"cancelled"}
+    assert all(e.ate is None for e in job.effects)
+    assert len(task_env["calls"]) == 0
