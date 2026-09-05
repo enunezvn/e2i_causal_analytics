@@ -1869,7 +1869,16 @@ async def _run_discover_effects_task(
         )
 
     async def _cancel_requested() -> bool:
-        return await _discover_effects_store.has_marker(job_id, _DISCOVERY_CANCEL_MARKER)
+        # The sidecar marker is the primary, race-free signal. The row flag is
+        # the fallback for a degraded cancel: the route's marker SET can fail
+        # transiently on ITS worker (the marker then lives only in that
+        # process's memory, invisible here) while its row write still reaches
+        # Redis and the route has already answered 200. Honouring the flag too
+        # means the API never acknowledges a cancel this run then ignores.
+        if await _discover_effects_store.has_marker(job_id, _DISCOVERY_CANCEL_MARKER):
+            return True
+        row = await _discover_effects_store.get(job_id)
+        return row is not None and row.cancel_requested
 
     async def _stop_cancelled(completed: int) -> None:
         # Honest terminal rows for the questions that never ran: status only —

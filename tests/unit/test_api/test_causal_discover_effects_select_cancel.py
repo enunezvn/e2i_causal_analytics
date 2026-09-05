@@ -452,3 +452,61 @@ async def test_cancel_after_the_last_question_is_still_a_completed_run(task_env)
     assert job.status == "completed"
     assert job.completed == 3
     assert {e.status for e in job.effects} == {"completed"}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancel_is_honoured_when_the_marker_write_degraded_on_another_worker(
+    task_env, monkeypatch
+):
+    """Prod runs 2 gunicorn workers: the task lives on worker A and the cancel
+    POST can land on worker B. If B's Redis marker SET fails transiently,
+    ``set_marker`` degrades to B's process memory (invisible to A) while the
+    route's row write does reach Redis and the route answers 200 with
+    ``cancel_requested: true``. The task must honour the ROW flag as a fallback
+    so the API can never acknowledge a cancel the run then ignores."""
+
+    class _SharedRedis:
+        def __init__(self) -> None:
+            self.kv: Dict[str, str] = {}
+
+        async def set(self, key, value, ex=None):
+            if key.endswith(":cancel"):
+                raise ConnectionError("marker SET lost on this worker")
+            self.kv[key] = value
+
+        async def get(self, key):
+            return self.kv.get(key)
+
+    shared = _SharedRedis()
+
+    async def factory():
+        return shared
+
+    worker_a = DurableJobStore("test:discover", DiscoverEffectsResponse, redis_factory=factory)
+    worker_b = DurableJobStore("test:discover", DiscoverEffectsResponse, redis_factory=factory)
+    monkeypatch.setattr(causal_routes, "_discover_effects_store", worker_a)
+
+    async def cancel_via_worker_b(n_loads: int) -> None:
+        if n_loads != 1:
+            return
+        # The cancel request is served by worker B's process (its own store).
+        monkeypatch.setattr(causal_routes, "_discover_effects_store", worker_b)
+        try:
+            resp = await causal_routes.cancel_discover_causal_effects("job-1", user={})
+        finally:
+            monkeypatch.setattr(causal_routes, "_discover_effects_store", worker_a)
+        assert resp.status == "running" and resp.cancel_requested is True
+        # The marker never reached Redis, so worker A cannot see it.
+        assert await worker_a.has_marker("job-1", "cancel") is False
+
+    task_env["hooks"]["on_load"] = cancel_via_worker_b
+    await causal_routes._run_discover_effects_task(
+        "job-1", "patient_journeys", list(CANDIDATES), "synthetic", "Remibrutinib"
+    )
+    job = await worker_a.get("job-1")
+    assert job is not None
+    assert job.status == "cancelled", "the acknowledged cancel was ignored by the task"
+    assert job.completed == 1 and job.total == 3
+    assert len(task_env["calls"]) == 1
+    assert sum(1 for e in job.effects if e.status == "cancelled") == 2
