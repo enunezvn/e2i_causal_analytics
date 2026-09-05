@@ -204,7 +204,21 @@ class TestBuildGrounding:
 
     def test_missing_ate_is_reported_not_invented(self):
         g = _grounding(ate=None, ate_ci_lower=None, ate_ci_upper=None)
-        assert "No effect estimate was provided for treatment_arm -> adopted." in g["result"]
+        assert "No effect estimate was provided for Treatment arm -> Adopted." in g["result"]
+
+    def test_result_sentence_names_the_pair_by_curated_label(self):
+        # #1895: the drill-down title reads the curated labels; the narrative's
+        # result sentence and Analysis chip must agree with it.
+        g = _grounding(our_treatment="sample_dropped", our_outcome="treatment_initiated")
+        assert (
+            "Estimated effect of Product samples provided (rep sample drop) on Treatment initiated: ATE"
+            in g["result"]
+        )
+        assert "sample_dropped" not in g["result"]
+        chips = {c["label"]: c["value"] for c in g["grounding"]}
+        assert (
+            chips["Analysis"] == "Product samples provided (rep sample drop) -> Treatment initiated"
+        )
 
     def test_analysis_carries_framing_kind_and_grain(self):
         g = _grounding()
@@ -259,7 +273,7 @@ class TestBuildGrounding:
     def test_unmapped_outcome_is_stated(self):
         g = _grounding()
         assert (
-            "Our outcome 'adopted' is not mapped to any registered endpoint."
+            "Our outcome 'Adopted' is not mapped to any registered endpoint."
             in g["trial_endpoints"]
         )
         assert "Change from baseline in UAS7 at Week 12" in g["trial_endpoints"]
@@ -267,7 +281,7 @@ class TestBuildGrounding:
     def test_mapped_outcome_names_the_endpoint(self):
         g = _grounding(mapped_endpoint="Treatment persistence / duration of therapy")
         assert (
-            "Our outcome 'adopted' maps to the real endpoint: "
+            "Our outcome 'Adopted' maps to the real endpoint: "
             "Treatment persistence / duration of therapy." in g["trial_endpoints"]
         )
 
@@ -385,7 +399,7 @@ class TestBuildGrounding:
         g = _grounding()
         chips = {c["label"]: c["value"] for c in g["grounding"]}
         assert chips["Brand"] == "Remibrutinib"
-        assert chips["Analysis"] == "treatment_arm -> adopted"
+        assert chips["Analysis"] == "Treatment arm -> Adopted"
         assert chips["Gate"] == "proceed"
         # chembl + clinicaltrials.gov + openfda live; RWE is None -> 3/4
         assert chips["Live sources"] == "3/4"
@@ -406,7 +420,8 @@ class TestResultOnlyGrounding:
         )
         assert g["context_unavailable"] is True
         assert "ATE +0.1400 [95% CI +0.0500, +0.2300]" in g["result"]
-        assert "Causal analysis of treatment_arm -> adopted for Remibrutinib" in g["analysis"]
+        assert "Causal analysis of Treatment arm -> Adopted for Remibrutinib" in g["analysis"]
+        assert "treatment_arm" not in g["analysis"]
         unavailable = "The clinical-context sources could not be fetched for this analysis."
         assert g["clinical_position"] == unavailable
         assert g["competitive_position"] == unavailable

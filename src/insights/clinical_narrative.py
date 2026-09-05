@@ -19,6 +19,7 @@ import re
 from typing import Any, Mapping, Optional, Sequence
 
 from src.insights.clinical_context import format_clinical_positioning
+from src.insights.column_labels import column_label
 from src.insights.common import run_signature
 from src.insights.robustness_phrase import gate_verdict_phrase, test_label
 
@@ -168,8 +169,12 @@ def build_grounding(
     + the caller-supplied result. Every string is honest about absences — the
     LM is instructed to weave them in, never to fill them."""
     brand = str(payload.get("brand") or "")
-    treatment = str(payload.get("our_treatment") or "")
-    outcome = str(payload.get("our_outcome") or "")
+    # #1895: the pair is rendered by its curated display label everywhere the
+    # user reads it (result sentence, Analysis chip) — the drill-down title
+    # above this narrative reads the same label. Raw identifiers never reach
+    # the prose.
+    treatment = column_label(str(payload.get("our_treatment") or ""))
+    outcome = column_label(str(payload.get("our_outcome") or ""))
     tc = payload.get("treatment_context") or {}
 
     # -- analysis --------------------------------------------------------
@@ -337,6 +342,8 @@ def build_result_only_grounding(
     """Grounding for the fetch-failed path: the result is all we can honestly
     say. The route renders it through fallback() — never through the LM."""
     unavailable = "The clinical-context sources could not be fetched for this analysis."
+    treatment = column_label(treatment)
+    outcome = column_label(outcome)
     return {
         "analysis": f"Causal analysis of {treatment} -> {outcome} for {brand} at the {grain} grain.",
         "result": _result_sentence(
