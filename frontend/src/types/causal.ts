@@ -389,7 +389,9 @@ export interface DiscoverEffectsResponse {
   job_id: string;
   /**
    * pending / running / completed / cancelled (stopped at a question boundary
-   * on request; finished rows are kept, unrun rows carry status `cancelled`).
+   * on request; finished rows are kept, unrun rows carry status `cancelled`) /
+   * failed (the run was interrupted — API restart, worker recycle, crash — or
+   * could not finish; `error` says why; finished rows are kept).
    */
   status: string;
   dataset: string;
@@ -402,12 +404,22 @@ export interface DiscoverEffectsResponse {
    * cannot be interrupted), then the run stops with status `cancelled`.
    */
   cancel_requested?: boolean;
+  /** Why the run ended `failed` (null unless it did). */
+  error?: string | null;
   effects: DiscoveredEffect[];
   note: string;
 }
 
-/** The discover-effects job states in which the run is over. */
-export const DISCOVERY_TERMINAL_STATUSES: ReadonlySet<string> = new Set(['completed', 'cancelled']);
+/**
+ * The discover-effects job states in which the run is over. `failed` is how the
+ * backend reports a run whose task died (the poll repairs the row once its
+ * liveness heartbeat is gone) — polling must stop there too.
+ */
+export const DISCOVERY_TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'cancelled',
+  'failed',
+]);
 
 /**
  * One SSOT candidate question a discovery run WOULD validate for a (dataset,

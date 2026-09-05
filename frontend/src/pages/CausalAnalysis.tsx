@@ -575,6 +575,9 @@ export default function CausalAnalysis() {
         `Discovery stopped early on request: ${job.completed}/${job.total} questions validated.`
       );
     }
+    if (job?.status === 'failed') {
+      lines.push(`Discovery was interrupted: ${job.completed}/${job.total} questions validated.`);
+    }
     if (teData) {
       lines.push(
         `Treatment-effect estimate on screen: ${teData.treatment_var} → ${teData.outcome_var} for ${teData.brand}, ATE ${teData.ate.toFixed(3)} (n=${teData.n}).`
@@ -771,7 +774,11 @@ export default function CausalAnalysis() {
                 )}
                 {job && (
                   <span className="text-sm text-muted-foreground">
-                    {job.status === 'cancelled' ? 'Stopped early — ' : ''}
+                    {job.status === 'cancelled'
+                      ? 'Stopped early — '
+                      : job.status === 'failed'
+                        ? 'Interrupted — '
+                        : ''}
                     {job.completed}/{job.total} questions validated
                   </span>
                 )}
@@ -789,6 +796,16 @@ export default function CausalAnalysis() {
                   <AlertTitle>Could not cancel the run</AlertTitle>
                   <AlertDescription>
                     The run continues. Please try again; it stops after the current question.
+                  </AlertDescription>
+                </Alert>
+              )}
+              {job?.status === 'failed' && (
+                <Alert variant="destructive" className="mt-4">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Discovery was interrupted</AlertTitle>
+                  <AlertDescription>
+                    {job.error ??
+                      'The run stopped before finishing. Validated rows are kept; re-run discovery to continue.'}
                   </AlertDescription>
                 </Alert>
               )}

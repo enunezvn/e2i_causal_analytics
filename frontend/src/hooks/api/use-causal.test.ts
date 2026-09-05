@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
+import { DISCOVERY_TERMINAL_STATUSES } from '@/types/causal';
 
 vi.mock('@/api/causal', () => ({
   discoverCausalEffects: vi.fn(),
@@ -318,6 +319,30 @@ describe('useDiscoverEffects — question subset + cancel', () => {
     });
     await waitFor(() => expect(result.current.job?.status).toBe('cancelled'), { timeout: 5000 });
   }, 10000);
+
+  it('a run that ends failed (interrupted by an API restart) is terminal: reported as the job, polling stops', async () => {
+    expect(DISCOVERY_TERMINAL_STATUSES.has('failed')).toBe(true);
+    const { result } = renderHook(() => useDiscoverEffects('patient_journeys', null), {
+      wrapper: createWrapper(),
+    });
+    act(() => {
+      result.current.start();
+    });
+    await waitFor(() => expect(result.current.job?.status).toBe('running'));
+    (getDiscoverCausalEffects as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...RUNNING_JOB,
+      status: 'failed',
+      completed: 1,
+      error: 'The discovery run was interrupted (the API restarted) after 1/2 questions.',
+    });
+    await waitFor(() => expect(result.current.job?.status).toBe('failed'), { timeout: 5000 });
+    expect(result.current.job?.error).toMatch(/interrupted/);
+    expect(result.current.cancelRequested).toBe(false);
+    // Terminal: no further polls (the interval is 3s; none must fire in 3.5s).
+    const polls = (getDiscoverCausalEffects as ReturnType<typeof vi.fn>).mock.calls.length;
+    await new Promise((r) => setTimeout(r, 3500));
+    expect((getDiscoverCausalEffects as ReturnType<typeof vi.fn>).mock.calls.length).toBe(polls);
+  }, 15000);
 
   it('a fresh run in the same scope does not inherit the previous cancel', async () => {
     const { result } = renderHook(() => useDiscoverEffects('patient_journeys', null), {
