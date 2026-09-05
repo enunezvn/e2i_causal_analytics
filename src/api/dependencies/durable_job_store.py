@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections import OrderedDict
 from typing import Any, Awaitable, Callable, Generic, Optional, Type, TypeVar
 
@@ -206,6 +207,56 @@ class DurableJobStore(Generic[T]):
                 self._last_durable = False
                 logger.warning(f"{self.prefix}: Redis marker GET failed, trying memory: {e}")
         return key in self._memory
+
+    # ------------------------------------------------------------------
+    # Timestamped markers (liveness heartbeats). The task that owns a job
+    # re-stamps one periodically; a poll on ANY worker reads its AGE to tell a
+    # live job from one orphaned by a restart / worker recycle / crash. The
+    # value is the stamp, not a flag: the memory mirror has no TTL, so a reader
+    # must compare the age against its own budget, never infer liveness from
+    # presence. ``ttl_seconds`` only bounds the Redis key's life (hygiene).
+    # ------------------------------------------------------------------
+
+    async def touch_marker(self, job_id: str, marker: str, *, ttl_seconds: int) -> None:
+        """Stamp ``marker`` for ``job_id`` with the current time (Redis + memory mirror)."""
+        key = self._marker_key(job_id, marker)
+        raw = f"{time.time():.6f}"
+        client = await self._redis()
+        if client is not None:
+            try:
+                await client.set(key, raw, ex=ttl_seconds)
+            except _REDIS_DEGRADE_ERRORS as e:
+                self._last_durable = False
+                logger.warning(
+                    f"{self.prefix}: Redis marker TOUCH failed, mirroring to memory only: {e}"
+                )
+        self._mem_set(key, raw)
+
+    async def marker_age_seconds(self, job_id: str, marker: str) -> Optional[float]:
+        """Seconds since ``marker`` was last touched (Redis first, then memory);
+        None when it was never touched, has expired, or holds no timestamp."""
+        key = self._marker_key(job_id, marker)
+        raw: Any = None
+        client = await self._redis()
+        if client is not None:
+            try:
+                raw = await client.get(key)
+            except _REDIS_DEGRADE_ERRORS as e:
+                self._last_durable = False
+                logger.warning(f"{self.prefix}: Redis marker GET failed, trying memory: {e}")
+                raw = None
+        if raw is None:
+            raw = self._memory.get(key)
+        if raw is None:
+            return None
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8")
+        try:
+            stamped = float(raw)
+        except (TypeError, ValueError):
+            logger.warning(f"{self.prefix}: marker {key} holds no timestamp, treating as absent")
+            return None
+        return max(0.0, time.time() - stamped)
 
     async def is_durable(self) -> bool:
         """True if this worker can currently reach Redis (probes the factory)."""

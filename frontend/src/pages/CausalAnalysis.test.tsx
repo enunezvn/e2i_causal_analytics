@@ -569,6 +569,49 @@ describe('CausalAnalysis — unified agent-led page', () => {
       expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toBeEnabled();
     }, 20000);
 
+    it('renders an interrupted run honestly: kept rows, the reason, no Cancel, re-run offered', () => {
+      mockDiscover({
+        job: {
+          ...COMPLETED_JOB,
+          status: 'failed',
+          total: 3,
+          completed: 1,
+          error:
+            'The discovery run was interrupted (the API restarted or its worker was recycled) after 1/3 questions; re-run discovery to continue.',
+          effects: [
+            EFFECTS[0],
+            {
+              treatment: 'treatment_arm',
+              outcome: 'treatment_initiated',
+              status: 'failed',
+              statistical_significance: false,
+              confidence_score: 0,
+              n_rows: 0,
+              brand: 'Fabhalta',
+            },
+            {
+              treatment: 'copay_card_used',
+              outcome: 'persistent_180d',
+              status: 'cancelled',
+              statistical_significance: false,
+              confidence_score: 0,
+              n_rows: 0,
+              brand: 'Fabhalta',
+            },
+          ],
+        },
+      });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      expect(screen.getByText(/Interrupted — 1\/3 questions validated/)).toBeInTheDocument();
+      expect(screen.getByText('Discovery was interrupted')).toBeInTheDocument();
+      expect(screen.getByText(/the API restarted or its worker was recycled/)).toBeInTheDocument();
+      expect(screen.getByText('Proceed')).toBeInTheDocument();
+      expect(screen.getAllByText('Failed').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Cancelled')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Cancel|Stopping/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Re-run discovery/i })).toBeEnabled();
+    }, 20000);
+
     it('surfaces a failed cancel without pretending the run stopped', () => {
       mockDiscover({
         job: { ...COMPLETED_JOB, status: 'running', completed: 1 },

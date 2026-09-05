@@ -862,7 +862,9 @@ class DiscoverEffectsResponse(BaseModel):
         ...,
         description=(
             "pending / running / completed / cancelled (stopped at a question "
-            "boundary on request; finished rows are kept, unrun rows are `cancelled`)"
+            "boundary on request; finished rows are kept, unrun rows are `cancelled`) / "
+            "failed (the run was interrupted — API restart, worker recycle, crash — "
+            "or could not finish; `error` says why; finished rows are kept)"
         ),
     )
     dataset: str
@@ -878,6 +880,10 @@ class DiscoverEffectsResponse(BaseModel):
             "A cancel was requested. The question in flight finishes (its estimator "
             "cannot be interrupted); the run then stops with status `cancelled`."
         ),
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Why the run ended `failed` (None unless it did).",
     )
     effects: List[DiscoveredEffect] = Field(default_factory=list)
     note: str = Field(
