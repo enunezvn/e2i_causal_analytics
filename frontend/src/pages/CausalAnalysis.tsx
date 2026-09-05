@@ -66,6 +66,7 @@ import {
 } from '@/components/ui/table';
 import { KPICard } from '@/components/visualizations';
 import { CausalAnalysisDetail } from '@/components/causal/CausalAnalysisDetail';
+import { columnLabel } from '@/lib/column-labels';
 import { StrategicInsightCard } from '@/components/insights';
 import { usePageChatContext } from '@/providers/E2ICopilotProvider';
 import type { E2IFilters } from '@/providers/E2ICopilotProvider';
@@ -304,6 +305,13 @@ export default function CausalAnalysis() {
   // will actually adjust for (a Fabhalta question is never offered UAS7 — the
   // off-brand gated column is NULL for that cohort and estimation drops it).
   const { data: variables } = useCausalVariables(dataset, brandArg);
+  // Curated display label for a column (backend `labels` SSOT — the same map
+  // /segment-analysis renders). Every treatment / outcome name this page prints
+  // goes through it; the raw column is never shown.
+  const labelFor = useCallback(
+    (col: string) => columnLabel(variables?.labels, col),
+    [variables]
+  );
   const treatmentCandidates = useMemo(
     () => variables?.treatment_candidates ?? ['treatment_arm'],
     [variables]
@@ -741,9 +749,9 @@ export default function CausalAnalysis() {
                           >
                             <td className="p-3 text-muted-foreground">{i + 1}</td>
                             <td className="p-3 font-medium">
-                              <span>{e.treatment}</span>{' '}
+                              <span>{labelFor(e.treatment)}</span>{' '}
                               <span className="text-muted-foreground">&rarr;</span>{' '}
-                              <span>{e.outcome}</span>
+                              <span>{labelFor(e.outcome)}</span>
                               {e.summary && (
                                 <div className="mt-1 max-w-md text-xs font-normal text-muted-foreground">
                                   {e.summary}
@@ -820,7 +828,8 @@ export default function CausalAnalysis() {
                   <Network className="h-5 w-5" />
                   {detailResult ? (
                     <>
-                      {detailResult.treatment_var} &rarr; {detailResult.outcome_var}
+                      {labelFor(detailResult.treatment_var)} &rarr;{' '}
+                      {labelFor(detailResult.outcome_var)}
                     </>
                   ) : (
                     'Loading effect…'
@@ -912,7 +921,7 @@ export default function CausalAnalysis() {
                       <SelectContent>
                         {treatmentCandidates.map((c) => (
                           <SelectItem key={c} value={c}>
-                            {c}
+                            {labelFor(c)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -927,7 +936,7 @@ export default function CausalAnalysis() {
                       <SelectContent>
                         {outcomeCandidates.map((c) => (
                           <SelectItem key={c} value={c}>
-                            {c}
+                            {labelFor(c)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1292,8 +1301,9 @@ export default function CausalAnalysis() {
                     </div>
                     <div>
                       <span className="font-medium text-foreground">Treatment:</span>{' '}
-                      {teData.treatment_var} → <span className="font-medium text-foreground">Outcome:</span>{' '}
-                      {teData.outcome_var}
+                      {labelFor(teData.treatment_var)} →{' '}
+                      <span className="font-medium text-foreground">Outcome:</span>{' '}
+                      {labelFor(teData.outcome_var)}
                     </div>
                     <div>
                       <span className="font-medium text-foreground">Adjusted for:</span>{' '}
