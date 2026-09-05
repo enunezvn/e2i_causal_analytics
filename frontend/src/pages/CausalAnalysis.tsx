@@ -35,6 +35,7 @@ import {
   Settings,
   Sparkles,
   TrendingUp,
+  X,
 } from 'lucide-react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -66,6 +67,8 @@ import {
 } from '@/components/ui/table';
 import { KPICard } from '@/components/visualizations';
 import { CausalAnalysisDetail } from '@/components/causal/CausalAnalysisDetail';
+import { DiscoveryQuestionSelect } from '@/components/causal/DiscoveryQuestionSelect';
+import { questionKey } from '@/lib/discovery-questions';
 import { columnLabel } from '@/lib/column-labels';
 import { StrategicInsightCard } from '@/components/insights';
 import { usePageChatContext } from '@/providers/E2ICopilotProvider';
@@ -76,6 +79,7 @@ import {
   useCausalAnalysisHistory,
   useCausalVariables,
   useCausalBrands,
+  useDiscoverQuestions,
   useDiscoverEffects,
   useCausalDiscoveryInsight,
   useRunCausalAgentAnalysis,
@@ -86,7 +90,13 @@ import {
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
 import { ApiError } from '@/lib/api-client';
-import type { DiscoveredEffect, CohortName, TreatmentEffectResponse } from '@/types/causal';
+import { DISCOVERY_TERMINAL_STATUSES } from '@/types/causal';
+import type {
+  DiscoveredEffect,
+  DiscoverQuestionSelection,
+  CohortName,
+  TreatmentEffectResponse,
+} from '@/types/causal';
 import type { TreatmentEffectInsightRequest } from '@/types/insights';
 
 // =============================================================================
@@ -210,6 +220,9 @@ function verdictBadge(e: DiscoveredEffect) {
       );
     case 'pending':
       return <Badge variant="outline">Queued</Badge>;
+    case 'cancelled':
+      // Never ran: the job was cancelled before its turn (no estimate to judge).
+      return <Badge variant="outline">Cancelled</Badge>;
     default:
       return <Badge variant="destructive">Failed</Badge>;
   }
@@ -241,7 +254,48 @@ export default function CausalAnalysis() {
 
   // ── Leaderboard (landing): the agent's validated, ranked effects ───────────
   const brandsQuery = useCausalBrands(dataset);
-  const { start, isStarting, startError, job } = useDiscoverEffects(dataset, brandArg);
+  const { start, isStarting, startError, job, cancel, isCancelling, cancelError, cancelRequested } =
+    useDiscoverEffects(dataset, brandArg);
+  // ── Question subset: what the run covers ───────────────────────────────────
+  // The scope's SSOT candidates (labelled). Every question costs the agent
+  // minutes, so the analyst can restrict the run. `null` selection = every
+  // candidate (the default, and exactly the pre-selector behaviour: no subset
+  // is sent). Reset on a scope switch — a Patient-grain pick means nothing
+  // under HCP.
+  const questionsQuery = useDiscoverQuestions(dataset, brandArg);
+  const candidateQuestions = useMemo(
+    () => questionsQuery.data?.questions ?? [],
+    [questionsQuery.data]
+  );
+  const [questionSelection, setQuestionSelection] = useState<string[] | null>(null);
+  useEffect(() => {
+    setQuestionSelection(null);
+  }, [dataset, brandArg]);
+  const allQuestionKeys = useMemo(() => candidateQuestions.map(questionKey), [candidateQuestions]);
+  const selectedQuestionKeys = questionSelection ?? allQuestionKeys;
+  const selectedQuestions = useMemo(() => {
+    const keys = new Set(selectedQuestionKeys);
+    return candidateQuestions.filter((q) => keys.has(questionKey(q)));
+  }, [candidateQuestions, selectedQuestionKeys]);
+  const allQuestionsSelected = selectedQuestions.length === candidateQuestions.length;
+  const noQuestionSelected = candidateQuestions.length > 0 && selectedQuestions.length === 0;
+  // Hold Discover until the list has loaded: with `candidateQuestions` still []
+  // "all selected" is vacuously true and a click would submit EVERY candidate
+  // before the user could narrow it (codex iter-1). A failed load is different —
+  // the selector says so and the run honestly covers every candidate.
+  const questionsLoading = questionsQuery.isLoading;
+  const handleDiscover = useCallback(() => {
+    if (allQuestionsSelected) {
+      start(); // every candidate — no subset on the wire
+      return;
+    }
+    const subset: DiscoverQuestionSelection[] = selectedQuestions.map((q) => ({
+      treatment: q.treatment,
+      outcome: q.outcome,
+      brand: q.brand ?? null,
+    }));
+    start(subset);
+  }, [allQuestionsSelected, selectedQuestions, start]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const detail = useQuery({
     queryKey: ['causal', 'agent-analyze', selectedId],
@@ -250,7 +304,10 @@ export default function CausalAnalysis() {
   });
   const detailResult = detail.data;
   const effects: DiscoveredEffect[] = useMemo(() => job?.effects ?? [], [job]);
-  const running = !!job && job.status !== 'completed';
+  // A run is over when every question was validated OR it was cancelled at a
+  // question boundary (finished rows kept, the rest marked cancelled).
+  const discoveryEnded = !!job && DISCOVERY_TERMINAL_STATUSES.has(job.status);
+  const running = !!job && !discoveryEnded;
 
   // Agentic strategic read of the discovered-effects leaderboard (on-demand LLM
   // interpretation grounded in the real ranked effects).
@@ -275,7 +332,9 @@ export default function CausalAnalysis() {
         })),
     [effects]
   );
-  const discoveryComplete = !!job && job.status === 'completed';
+  // A cancelled run is a FINISHED run of fewer questions: its effects are final,
+  // so the interpretation may ground in them exactly like a completed one.
+  const discoveryComplete = discoveryEnded;
   const canGenerateInsight = discoveryComplete && insightEffects.length > 0;
   // The (dataset, brand) the interpretation was SUBMITTED for. The LLM response
   // carries no scope, so we tag the submitted scope ourselves and only surface a
@@ -511,13 +570,18 @@ export default function CausalAnalysis() {
         .join('; ');
       lines.push(`Discovered effects: ${effects.length} total. Top: ${top}.`);
     }
+    if (job?.status === 'cancelled') {
+      lines.push(
+        `Discovery stopped early on request: ${job.completed}/${job.total} questions validated.`
+      );
+    }
     if (teData) {
       lines.push(
         `Treatment-effect estimate on screen: ${teData.treatment_var} → ${teData.outcome_var} for ${teData.brand}, ATE ${teData.ate.toFixed(3)} (n=${teData.n}).`
       );
     }
     return lines.join('\n');
-  }, [selectedBrand, dataset, effects, teData]);
+  }, [selectedBrand, dataset, effects, job, teData]);
   usePageChatContext(pageChatSummary);
 
   return (
@@ -648,7 +712,29 @@ export default function CausalAnalysis() {
                     </SelectContent>
                   </Select>
                 </div>
-                <Button onClick={() => start()} disabled={isStarting || running}>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-muted-foreground">Questions</span>
+                  <DiscoveryQuestionSelect
+                    questions={candidateQuestions}
+                    selected={selectedQuestionKeys}
+                    onChange={setQuestionSelection}
+                    disabled={isStarting || running}
+                    isLoading={questionsQuery.isLoading}
+                    loadError={questionsQuery.isError}
+                    showBrand={brandArg === null}
+                  />
+                </div>
+                <Button
+                  onClick={handleDiscover}
+                  disabled={isStarting || running || noQuestionSelected || questionsLoading}
+                  title={
+                    noQuestionSelected
+                      ? 'Select at least one question to discover.'
+                      : questionsLoading
+                        ? 'Loading the candidate questions…'
+                        : undefined
+                  }
+                >
                   {isStarting || running ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -663,8 +749,29 @@ export default function CausalAnalysis() {
                     </>
                   )}
                 </Button>
+                {running && (
+                  <Button
+                    variant="outline"
+                    onClick={cancel}
+                    disabled={cancelRequested || isCancelling}
+                    title="The question in progress finishes first (a few minutes); the remaining questions are skipped."
+                  >
+                    {cancelRequested || isCancelling ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Stopping after current question…
+                      </>
+                    ) : (
+                      <>
+                        <X className="mr-2 h-4 w-4" />
+                        Cancel
+                      </>
+                    )}
+                  </Button>
+                )}
                 {job && (
                   <span className="text-sm text-muted-foreground">
+                    {job.status === 'cancelled' ? 'Stopped early — ' : ''}
                     {job.completed}/{job.total} questions validated
                   </span>
                 )}
@@ -674,6 +781,15 @@ export default function CausalAnalysis() {
                   <AlertTriangle className="h-4 w-4" />
                   <AlertTitle>Discovery could not start</AlertTitle>
                   <AlertDescription>Please try again.</AlertDescription>
+                </Alert>
+              )}
+              {cancelError && (
+                <Alert variant="destructive" className="mt-4">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Could not cancel the run</AlertTitle>
+                  <AlertDescription>
+                    The run continues. Please try again; it stops after the current question.
+                  </AlertDescription>
                 </Alert>
               )}
             </CardContent>
@@ -704,7 +820,7 @@ export default function CausalAnalysis() {
           {!job ? (
             <EmptyState
               title="No discovery run yet"
-              description="Click Discover causal effects. The agent validates each candidate question and ranks the effects by confidence (robustness gate + significance) and impact (effect size)."
+              description="Pick the questions to run (all by default) and click Discover causal effects. The agent validates each one and ranks the effects by confidence (robustness gate + significance) and impact (effect size)."
             />
           ) : (
             <Card>
@@ -801,6 +917,8 @@ export default function CausalAnalysis() {
                   &ldquo;persistent&rdquo;) and self-pairs. Clinical markers (eGFR, LDH, …) are
                   designated adjustment covariates, not treatments or outcomes, so they enter the
                   model as confounders rather than as questions.
+                  {job.total < candidateQuestions.length &&
+                    ` This run covered ${job.total} of the ${candidateQuestions.length} candidate questions for this scope (chosen in the Questions selector).`}
                 </p>
                 {brandArg && leaderboardContext.data && (
                   <p className="border-t px-3 py-2 text-xs text-muted-foreground">

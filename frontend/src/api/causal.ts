@@ -31,6 +31,8 @@ import type {
   CausalVariablesResponse,
   ClinicalContext,
   DiscoverEffectsResponse,
+  DiscoverQuestionSelection,
+  DiscoverQuestionsResponse,
   ProposeQuestionsResponse,
   CrossValidationRequest,
   CrossValidationResponse,
@@ -284,13 +286,43 @@ export async function proposeCausalQuestions(
  */
 export async function discoverCausalEffects(
   dataset: string = 'patient_journeys',
-  brand?: string | null
+  brand?: string | null,
+  questions?: DiscoverQuestionSelection[]
 ): Promise<DiscoverEffectsResponse> {
-  // `dataset` (and optional `brand`) are query params (no request body).
+  // `dataset` (and optional `brand`) are query params; the optional `questions`
+  // subset (rows of `getDiscoverQuestions`) is the body. No subset = run every
+  // candidate (the body stays `{}`, exactly as before the selector existed).
   const params = new URLSearchParams({ dataset });
   if (brand) params.set('brand', brand);
-  return post<DiscoverEffectsResponse, Record<string, never>>(
+  return post<DiscoverEffectsResponse, { questions?: DiscoverQuestionSelection[] }>(
     `${CAUSAL_BASE}/discover-effects?${params.toString()}`,
+    questions ? { questions } : {}
+  );
+}
+
+/**
+ * List the SSOT candidate questions a discovery run WOULD validate for this
+ * (dataset, brand) scope, with curated labels — drives the question selector.
+ */
+export async function getDiscoverQuestions(
+  dataset: string = 'patient_journeys',
+  brand?: string | null
+): Promise<DiscoverQuestionsResponse> {
+  const params: Record<string, string> = { dataset };
+  if (brand) params.brand = brand;
+  return get<DiscoverQuestionsResponse>(`${CAUSAL_BASE}/discover-effects/questions`, params);
+}
+
+/**
+ * Ask a running discover-effects job to stop at its next question boundary.
+ * The question in flight finishes first (its estimator cannot be interrupted);
+ * finished rows are kept, the rest are marked `cancelled`. Idempotent.
+ */
+export async function cancelDiscoverCausalEffects(
+  jobId: string
+): Promise<DiscoverEffectsResponse> {
+  return post<DiscoverEffectsResponse, Record<string, never>>(
+    `${CAUSAL_BASE}/discover-effects/${encodeURIComponent(jobId)}/cancel`,
     {}
   );
 }

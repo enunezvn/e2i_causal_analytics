@@ -32,7 +32,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NamedTuple, Optional, cast
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 
 if TYPE_CHECKING:
     from src.repositories.causal_path import CausalPathRepository
@@ -66,7 +66,11 @@ from src.api.schemas.causal import (
     CrossValidationRequest,
     CrossValidationResponse,
     DiscoveredEffect,
+    DiscoverEffectsRequest,
     DiscoverEffectsResponse,
+    DiscoverQuestion,
+    DiscoverQuestionSelection,
+    DiscoverQuestionsResponse,
     EdgeProvenanceModel,
     EstimationDataResponse,
     EstimatorCandidate,
@@ -1619,6 +1623,12 @@ async def propose_causal_questions(
 _discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJobStore(
     "causal:discover_effects", DiscoverEffectsResponse, ttl_seconds=_CAUSAL_JOB_TTL_SECONDS
 )
+# A discover job ends in exactly one of these; a cancel on either is a no-op.
+_TERMINAL_DISCOVERY_STATUSES = frozenset({"completed", "cancelled"})
+# Sidecar marker (see DurableJobStore.set_marker) the cancel route raises and the
+# background task polls at every question boundary. A BackgroundTask cannot be
+# signalled from another request (or worker) any other way.
+_DISCOVERY_CANCEL_MARKER = "cancel"
 
 # Complementary outcomes are 1 - each other (persistent_180d vs discontinued_180d);
 # running both is redundant, so one is skipped to dedupe the leaderboard.
@@ -1843,7 +1853,7 @@ async def _run_discover_effects_task(
         (q.treatment, q.outcome, q.brand): _pending_effect(q, "pending") for q in questions
     }
 
-    async def _publish(status: str, completed: int) -> None:
+    async def _publish(status: str, completed: int, cancel_requested: bool = False) -> None:
         await _discover_effects_store.set(
             job_id,
             DiscoverEffectsResponse(
@@ -1853,13 +1863,40 @@ async def _run_discover_effects_task(
                 brand=brand,
                 total=len(questions),
                 completed=completed,
+                cancel_requested=cancel_requested,
                 effects=_rank_effects(list(effects.values())),
             ),
         )
 
+    async def _cancel_requested() -> bool:
+        # The sidecar marker is the primary, race-free signal. The row flag is
+        # the fallback for a degraded cancel: the route's marker SET can fail
+        # transiently on ITS worker (the marker then lives only in that
+        # process's memory, invisible here) while its row write still reaches
+        # Redis and the route has already answered 200. Honouring the flag too
+        # means the API never acknowledges a cancel this run then ignores.
+        if await _discover_effects_store.has_marker(job_id, _DISCOVERY_CANCEL_MARKER):
+            return True
+        row = await _discover_effects_store.get(job_id)
+        return row is not None and row.cancel_requested
+
+    async def _stop_cancelled(completed: int) -> None:
+        # Honest terminal rows for the questions that never ran: status only —
+        # no estimate, no summary, nothing fabricated. Finished rows are kept.
+        for k, e in effects.items():
+            if e.status == "pending":
+                effects[k] = e.model_copy(update={"status": "cancelled"})
+        await _publish("cancelled", completed, cancel_requested=True)
+
     questions = await _prerank_questions(dataset, questions)
     completed = 0
     for q in questions:
+        # Cooperative cancel, honoured at question boundaries only: the agent's
+        # estimators run synchronously inside the question and cannot be
+        # interrupted, so a cancel lands after the in-flight question finishes.
+        if await _cancel_requested():
+            await _stop_cancelled(completed)
+            return
         t, o = q.treatment, q.outcome
         key = (t, o, q.brand)
         # Fallback to the request-level brand filter when the SSOT row has no
@@ -1926,7 +1963,121 @@ async def _run_discover_effects_task(
         # pending rows; fail-open so it never disrupts the leaderboard).
         await _attach_clinical_context(effects[key])
         completed += 1
-        await _publish("running" if completed < len(questions) else "completed", completed)
+        if completed == len(questions):
+            await _publish("completed", completed)
+        elif await _cancel_requested():
+            await _stop_cancelled(completed)
+            return
+        else:
+            await _publish("running", completed)
+
+
+async def _resolve_discovery_scope(
+    dataset: str, brand: Optional[str]
+) -> tuple[Optional[str], List[_CandidateQuestion]]:
+    """Validate a (dataset, brand) discovery scope and enumerate its SSOT candidate
+    questions — shared by the question list and the run submit so both see the
+    same set (404 unknown dataset, 400 unknown brand)."""
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+    brand = brand or None
+    if brand is not None:
+        available = await _list_dataset_brands(dataset)
+        if available and brand not in available:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown brand '{brand}' for dataset '{dataset}'. Known: {available}",
+            )
+    return brand, await _discover_candidate_questions(dataset, brand)
+
+
+def _select_discovery_questions(
+    candidates: List[_CandidateQuestion],
+    selection: Optional[List[DiscoverQuestionSelection]],
+) -> List[_CandidateQuestion]:
+    """The run set: every SSOT candidate, or the user's SUBSET of them.
+
+    A selection is matched on (treatment, outcome, brand) against the candidates
+    so the column-allowlist gate stays authoritative — a pair outside the SSOT is
+    a 400, never a run. Duplicates collapse; the SSOT row (its modeled adjustment
+    set) is what runs, never the request's echo. Request order is kept (the
+    pre-rank reorders it later, exactly as for a full run)."""
+    if selection is None:
+        return candidates
+    if not selection:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Select at least one question to discover, or omit `questions` to "
+                "run every candidate."
+            ),
+        )
+    by_key = {(c.treatment, c.outcome, c.brand or None): c for c in candidates}
+    chosen: List[_CandidateQuestion] = []
+    seen: set = set()
+    unknown: List[str] = []
+    for sel in selection:
+        key = (sel.treatment, sel.outcome, sel.brand or None)
+        cand = by_key.get(key)
+        if cand is None:
+            unknown.append(
+                f"{sel.treatment} -> {sel.outcome}" + (f" [{sel.brand}]" if sel.brand else "")
+            )
+        elif key not in seen:
+            seen.add(key)
+            chosen.append(cand)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown discovery question(s) for this dataset/brand: {unknown}. "
+                "Selections must come from GET /causal/discover-effects/questions."
+            ),
+        )
+    return chosen
+
+
+@router.get(
+    "/discover-effects/questions",
+    response_model=DiscoverQuestionsResponse,
+    summary="List the SSOT candidate questions a discover-effects run would validate",
+    operation_id="list_discover_causal_questions",
+)
+async def list_discover_causal_questions(
+    dataset: str = Query(_DEFAULT_CAUSAL_DATASET, description="Gold-standard dataset"),
+    brand: Optional[str] = Query(
+        None,
+        description="Optional brand scope — same semantics as POST /causal/discover-effects.",
+    ),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> DiscoverQuestionsResponse:
+    """What ``POST /causal/discover-effects`` WOULD run for this scope, with the
+    curated display labels, so the user can pick a subset up front (each question
+    is minutes of agent time). Declared BEFORE ``GET /discover-effects/{job_id}``
+    so the literal ``questions`` segment is never captured as a job id."""
+    brand, questions = await _resolve_discovery_scope(dataset, brand)
+    return DiscoverQuestionsResponse(
+        dataset=dataset,
+        brand=brand,
+        questions=[
+            DiscoverQuestion(
+                treatment=q.treatment,
+                outcome=q.outcome,
+                brand=q.brand,
+                treatment_label=_column_label(q.treatment),
+                outcome_label=_column_label(q.outcome),
+                adjustment_set=list(q.adjustment_set),
+            )
+            for q in questions
+        ],
+    )
 
 
 @router.post(
@@ -1946,6 +2097,13 @@ async def discover_causal_effects(
             "agent estimates on are subset to this brand."
         ),
     ),
+    body: Optional[DiscoverEffectsRequest] = Body(
+        None,
+        description=(
+            "Optional. `questions` names a SUBSET of GET /causal/discover-effects/"
+            "questions to run; omit it (or send `{}`) to run every candidate."
+        ),
+    ),
     user: Dict[str, Any] = Depends(require_analyst),
 ) -> DiscoverEffectsResponse:
     """Run the causal_impact agent across the dataset's candidate questions and
@@ -1954,26 +2112,12 @@ async def discover_causal_effects(
     job; poll ``GET /causal/discover-effects/{job_id}``. Fail-closed per question.
 
     ``brand`` (optional) scopes the cohort to one brand — a plain row subset, so
-    each candidate is validated on that brand's patients only.
+    each candidate is validated on that brand's patients only. ``questions``
+    (optional body) restricts the run to a subset of the SSOT candidates; stop a
+    run early with ``POST /causal/discover-effects/{job_id}/cancel``.
     """
-    spec = _CAUSAL_DATASET_SPECS.get(dataset)
-    if spec is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Unknown causal dataset '{dataset}'. "
-                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
-            ),
-        )
-    brand = brand or None
-    if brand is not None:
-        available = await _list_dataset_brands(dataset)
-        if available and brand not in available:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown brand '{brand}' for dataset '{dataset}'. Known: {available}",
-            )
-    questions = await _discover_candidate_questions(dataset, brand)
+    brand, candidates = await _resolve_discovery_scope(dataset, brand)
+    questions = _select_discovery_questions(candidates, body.questions if body else None)
     job_id = str(uuid.uuid4())
     data_source = "synthetic" if deployment_includes_synthetic() else "database"
     initial = DiscoverEffectsResponse(
@@ -2015,6 +2159,38 @@ async def get_discover_causal_effects(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
     return job
+
+
+@router.post(
+    "/discover-effects/{job_id}/cancel",
+    response_model=DiscoverEffectsResponse,
+    summary="Stop a discover-effects job at its next question boundary",
+    operation_id="cancel_discover_causal_effects",
+)
+async def cancel_discover_causal_effects(
+    job_id: str,
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> DiscoverEffectsResponse:
+    """Cooperative cancel. The question in flight finishes (its estimators run
+    synchronously and cannot be interrupted — up to a few minutes); the run then
+    stops, keeps every finished row and marks the unrun ones ``cancelled``.
+    Idempotent, and a no-op on a job that already ended."""
+    job = await _discover_effects_store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
+    if job.status in _TERMINAL_DISCOVERY_STATUSES:
+        return job
+    # The marker is the signal the task honours; it is raised FIRST so the task
+    # can never miss it. The row is then re-read and echoed with the flag so a
+    # poll reflects the request before the next boundary. (The task's own next
+    # publish may briefly overwrite the flag on the row — never the marker.)
+    await _discover_effects_store.set_marker(job_id, _DISCOVERY_CANCEL_MARKER)
+    current = await _discover_effects_store.get(job_id) or job
+    if current.status in _TERMINAL_DISCOVERY_STATUSES:
+        return current
+    flagged = current.model_copy(update={"cancel_requested": True})
+    await _discover_effects_store.set(job_id, flagged)
+    return flagged
 
 
 @router.get(

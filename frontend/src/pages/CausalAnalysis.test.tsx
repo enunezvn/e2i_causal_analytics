@@ -38,6 +38,7 @@ vi.mock('@/hooks/api', () => ({
   useCausalAnalysisHistory: vi.fn(),
   useCausalVariables: vi.fn(),
   useCausalBrands: vi.fn(),
+  useDiscoverQuestions: vi.fn(),
   useDiscoverEffects: vi.fn(),
   useCausalDiscoveryInsight: vi.fn(),
   useRunCausalAgentAnalysis: vi.fn(),
@@ -56,6 +57,7 @@ import {
   useCausalAnalysisHistory,
   useCausalVariables,
   useCausalBrands,
+  useDiscoverQuestions,
   useDiscoverEffects,
   useCausalDiscoveryInsight,
   useRunCausalAgentAnalysis,
@@ -142,6 +144,40 @@ const COMPLETED_JOB = {
 
 const DETAIL = { analysis_id: 'a1', status: 'completed' };
 
+// The scope's SSOT candidate questions (GET /causal/discover-effects/questions),
+// already labelled — what the Questions selector lists.
+const QUESTIONS = {
+  dataset: 'patient_journeys',
+  brand: null,
+  questions: [
+    {
+      treatment: 'treatment_arm',
+      outcome: 'persistent_180d',
+      brand: 'Kisqali',
+      treatment_label: 'Treatment arm',
+      outcome_label: 'Persistent at 180d',
+      adjustment_set: ['disease_severity'],
+    },
+    {
+      treatment: 'treatment_arm',
+      outcome: 'treatment_initiated',
+      brand: 'Fabhalta',
+      treatment_label: 'Treatment arm',
+      outcome_label: 'Treatment initiated',
+      adjustment_set: [],
+    },
+    {
+      treatment: 'sample_dropped',
+      outcome: 'treatment_initiated',
+      brand: 'Remibrutinib',
+      treatment_label: 'Product samples provided (rep sample drop)',
+      outcome_label: 'Treatment initiated',
+      adjustment_set: [],
+    },
+  ],
+  note: '',
+};
+
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -157,6 +193,10 @@ function mockDiscover(overrides: Record<string, unknown> = {}) {
     isStarting: false,
     startError: null,
     job: null,
+    cancel: vi.fn(),
+    isCancelling: false,
+    cancelError: null,
+    cancelRequested: false,
     ...overrides,
   });
 }
@@ -175,6 +215,11 @@ describe('CausalAnalysis — unified agent-led page', () => {
       data: { dataset: 'patient_journeys', brands: ['Remibrutinib', 'Kisqali', 'Fabhalta'] },
       isLoading: false,
       error: null,
+    });
+    (useDiscoverQuestions as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: QUESTIONS,
+      isLoading: false,
+      isError: false,
     });
     (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
@@ -384,6 +429,159 @@ describe('CausalAnalysis — unified agent-led page', () => {
     render(<CausalAnalysis />, { wrapper: createWrapper() });
     expect(screen.getByText(/Validating… \(1\/2\)/)).toBeInTheDocument();
   }, 20000);
+
+  // CAUSAL-DISC-UX: run only the questions of interest, and stop a run early.
+  describe('question subset + cancel', () => {
+    it('runs every candidate by default — no subset on the wire', async () => {
+      const start = vi.fn();
+      mockDiscover({ start });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      expect(useDiscoverQuestions).toHaveBeenCalledWith('patient_journeys', null);
+      expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toHaveTextContent(
+        'All 3 questions'
+      );
+      fireEvent.click(screen.getByRole('button', { name: /Discover causal effects/i }));
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledWith();
+    }, 20000);
+
+    it('runs only the checked questions, sent as SSOT (treatment, outcome, brand) rows', async () => {
+      const user = userEvent.setup();
+      const start = vi.fn();
+      mockDiscover({ start });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      await user.click(screen.getByRole('combobox', { name: 'Questions to discover' }));
+      // Curated labels in the selector, never the raw column.
+      expect(await screen.findByLabelText(/Product samples provided/)).toBeInTheDocument();
+      expect(screen.queryByText('sample_dropped')).not.toBeInTheDocument();
+      await user.click(screen.getByLabelText(/Product samples provided/));
+      await user.keyboard('{Escape}');
+      expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toHaveTextContent(
+        '2 of 3 questions'
+      );
+      fireEvent.click(screen.getByRole('button', { name: /Discover causal effects/i }));
+      expect(start).toHaveBeenCalledWith([
+        { treatment: 'treatment_arm', outcome: 'persistent_180d', brand: 'Kisqali' },
+        { treatment: 'treatment_arm', outcome: 'treatment_initiated', brand: 'Fabhalta' },
+      ]);
+    }, 20000);
+
+    it('will not start a run with no question checked', async () => {
+      const user = userEvent.setup();
+      const start = vi.fn();
+      mockDiscover({ start });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      await user.click(screen.getByRole('combobox', { name: 'Questions to discover' }));
+      await user.click(await screen.findByRole('button', { name: 'Clear' }));
+      await user.keyboard('{Escape}');
+      expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toHaveTextContent(
+        'No questions selected'
+      );
+      const discover = screen.getByRole('button', { name: /Discover causal effects/i });
+      expect(discover).toBeDisabled();
+      fireEvent.click(discover);
+      expect(start).not.toHaveBeenCalled();
+    }, 20000);
+
+    it('holds Discover until the candidate list has loaded (a click must not start a full run the user meant to narrow)', () => {
+      // codex iter-1 MEDIUM: with the list still loading, `candidateQuestions` is
+      // [] so "all selected" is vacuously true and a click would submit every
+      // candidate before the user could pick a subset.
+      (useDiscoverQuestions as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+      });
+      const start = vi.fn();
+      mockDiscover({ start });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toHaveTextContent(
+        'Loading questions…'
+      );
+      const discover = screen.getByRole('button', { name: /Discover causal effects/i });
+      expect(discover).toBeDisabled();
+      fireEvent.click(discover);
+      expect(start).not.toHaveBeenCalled();
+    }, 20000);
+
+    it('still lets the run start when the candidate list could not load (every candidate runs)', () => {
+      (useDiscoverQuestions as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        isError: true,
+      });
+      const start = vi.fn();
+      mockDiscover({ start });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: /Discover causal effects/i }));
+      expect(start).toHaveBeenCalledWith();
+    }, 20000);
+
+    it('offers Cancel while validating and reports the request until the run stops', () => {
+      const cancel = vi.fn();
+      mockDiscover({ job: { ...COMPLETED_JOB, status: 'running', completed: 1 }, cancel });
+      const { rerender } = render(<CausalAnalysis />, { wrapper: createWrapper() });
+      // The selector is locked while a run is in flight.
+      expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+      expect(cancel).toHaveBeenCalledTimes(1);
+
+      mockDiscover({
+        job: { ...COMPLETED_JOB, status: 'running', completed: 1 },
+        cancel,
+        cancelRequested: true,
+      });
+      rerender(<CausalAnalysis />);
+      const stopping = screen.getByRole('button', { name: /Stopping after current question/ });
+      expect(stopping).toBeDisabled();
+      expect(screen.queryByRole('button', { name: /^Cancel$/ })).not.toBeInTheDocument();
+    }, 20000);
+
+    it('renders a cancelled run honestly: kept rows, cancelled rows, no fabricated estimates', () => {
+      mockDiscover({
+        job: {
+          ...COMPLETED_JOB,
+          status: 'cancelled',
+          completed: 1,
+          cancel_requested: true,
+          effects: [
+            EFFECTS[0],
+            {
+              treatment: 'treatment_arm',
+              outcome: 'treatment_initiated',
+              status: 'cancelled',
+              statistical_significance: false,
+              confidence_score: 0,
+              n_rows: 0,
+              brand: 'Fabhalta',
+            },
+          ],
+        },
+      });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      expect(screen.getByText(/Stopped early — 1\/2 questions validated/)).toBeInTheDocument();
+      expect(screen.getByText('Cancelled')).toBeInTheDocument();
+      expect(screen.getByText('Proceed')).toBeInTheDocument();
+      // The run is over: no Cancel, and discovery can be re-run.
+      expect(screen.queryByRole('button', { name: /Cancel|Stopping/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Re-run discovery/i })).toBeEnabled();
+      expect(screen.getByRole('combobox', { name: 'Questions to discover' })).toBeEnabled();
+    }, 20000);
+
+    it('surfaces a failed cancel without pretending the run stopped', () => {
+      mockDiscover({
+        job: { ...COMPLETED_JOB, status: 'running', completed: 1 },
+        cancelError: new ApiError({
+          message: 'boom',
+          response: { status: 500 },
+        } as unknown as ConstructorParameters<typeof ApiError>[0]),
+      });
+      render(<CausalAnalysis />, { wrapper: createWrapper() });
+      expect(screen.getByText(/Could not cancel the run/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Cancel$/ })).toBeEnabled();
+    }, 20000);
+  });
 
   it('drills a validated row into the shared deep view', async () => {
     mockDiscover({ job: COMPLETED_JOB });

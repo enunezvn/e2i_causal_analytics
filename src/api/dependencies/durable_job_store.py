@@ -167,6 +167,46 @@ class DurableJobStore(Generic[T]):
                 self._memory.pop(job_id, None)
         return None
 
+    # ------------------------------------------------------------------
+    # Markers: a sidecar flag per job (``"<prefix>:<id>:<marker>"``) that a
+    # DIFFERENT worker can raise while the task owning the job keeps publishing
+    # its row wholesale. A ``cancel_requested`` field on the row itself would
+    # need a read-modify-write that the task's next ``set`` could overwrite; a
+    # sidecar key has no such race — the task polls it at its own boundaries.
+    # ------------------------------------------------------------------
+
+    def _marker_key(self, job_id: str, marker: str) -> str:
+        return f"{self._key(job_id)}:{marker}"
+
+    async def set_marker(self, job_id: str, marker: str) -> None:
+        """Raise ``marker`` for ``job_id`` (Redis + memory mirror, same TTL as the job)."""
+        key = self._marker_key(job_id, marker)
+        client = await self._redis()
+        if client is not None:
+            try:
+                await client.set(key, "1", ex=self.ttl_seconds)
+            except _REDIS_DEGRADE_ERRORS as e:
+                self._last_durable = False
+                logger.warning(
+                    f"{self.prefix}: Redis marker SET failed, mirroring to memory only: {e}"
+                )
+        # Same degraded-mode caveat as set(): a memory-only marker is visible to
+        # THIS worker only.
+        self._mem_set(key, "1")
+
+    async def has_marker(self, job_id: str, marker: str) -> bool:
+        """True once ``marker`` was raised for ``job_id`` (Redis first, then memory)."""
+        key = self._marker_key(job_id, marker)
+        client = await self._redis()
+        if client is not None:
+            try:
+                if await client.get(key) is not None:
+                    return True
+            except _REDIS_DEGRADE_ERRORS as e:
+                self._last_durable = False
+                logger.warning(f"{self.prefix}: Redis marker GET failed, trying memory: {e}")
+        return key in self._memory
+
     async def is_durable(self) -> bool:
         """True if this worker can currently reach Redis (probes the factory)."""
         return (await self._redis()) is not None

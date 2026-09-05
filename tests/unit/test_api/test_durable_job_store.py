@@ -131,3 +131,42 @@ async def test_undecodable_record_degrades_not_500():
     assert got is not None and got.status == "running"
     # Unknown key: garbage from Redis + nothing in memory -> None, never raises.
     assert await store.get("nope") is None
+
+
+# ---------------------------------------------------------------------------
+# Markers: a tiny sidecar flag per job (e.g. "cancel") that another worker can
+# raise without a read-modify-write race against the task's own row publishes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_marker_is_visible_across_workers():
+    """The cancel POST lands on worker B while the task runs on worker A: the
+    marker must be raised in Redis, not in B's process memory."""
+    fake = _FakeRedis()
+
+    async def factory():
+        return fake
+
+    worker_a = DurableJobStore("test:mk", DiscoverEffectsResponse, redis_factory=factory)
+    worker_b = DurableJobStore("test:mk", DiscoverEffectsResponse, redis_factory=factory)
+    assert await worker_a.has_marker("job1", "cancel") is False
+    await worker_b.set_marker("job1", "cancel")
+    assert await worker_a.has_marker("job1", "cancel") is True
+    # Namespaced per job AND per marker name.
+    assert await worker_a.has_marker("job2", "cancel") is False
+    assert await worker_a.has_marker("job1", "other") is False
+    assert "test:mk:job1:cancel" in fake.kv
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_marker_degrades_to_memory_without_redis():
+    async def boom():
+        raise RuntimeError("no redis")
+
+    store = DurableJobStore("test:mk-mem", DiscoverEffectsResponse, redis_factory=boom)
+    assert await store.has_marker("j", "cancel") is False
+    await store.set_marker("j", "cancel")
+    assert await store.has_marker("j", "cancel") is True
