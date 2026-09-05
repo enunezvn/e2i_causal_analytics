@@ -170,3 +170,70 @@ async def test_marker_degrades_to_memory_without_redis():
     assert await store.has_marker("j", "cancel") is False
     await store.set_marker("j", "cancel")
     assert await store.has_marker("j", "cancel") is True
+
+
+# ---------------------------------------------------------------------------
+# Timestamped markers (liveness heartbeats): a task refreshes one periodically;
+# a poll on ANY worker reads its age to tell a live job from an orphaned one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_touched_marker_age_is_visible_across_workers(monkeypatch):
+    """The task on worker A touches the heartbeat; the poll on worker B reads
+    its age from Redis. Absent marker -> None (never a fake 0)."""
+    import src.api.dependencies.durable_job_store as mod
+
+    fake = _FakeRedis()
+
+    async def factory():
+        return fake
+
+    worker_a = DurableJobStore("test:hb", DiscoverEffectsResponse, redis_factory=factory)
+    worker_b = DurableJobStore("test:hb", DiscoverEffectsResponse, redis_factory=factory)
+    assert await worker_b.marker_age_seconds("job1", "alive") is None
+
+    now = {"t": 1_000.0}
+    monkeypatch.setattr(mod.time, "time", lambda: now["t"])
+    await worker_a.touch_marker("job1", "alive", ttl_seconds=120)
+    assert "test:hb:job1:alive" in fake.kv
+    now["t"] += 42.0
+    age = await worker_b.marker_age_seconds("job1", "alive")
+    assert age == pytest.approx(42.0)
+    # A fresh touch resets the age.
+    await worker_a.touch_marker("job1", "alive", ttl_seconds=120)
+    assert await worker_b.marker_age_seconds("job1", "alive") == pytest.approx(0.0)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_touched_marker_age_degrades_to_memory_without_redis(monkeypatch):
+    """Without Redis the age still ages (memory has no TTL; the caller compares
+    the age against its own budget) so a same-worker orphan check still works."""
+    import src.api.dependencies.durable_job_store as mod
+
+    async def boom():
+        raise RuntimeError("no redis")
+
+    store = DurableJobStore("test:hb-mem", DiscoverEffectsResponse, redis_factory=boom)
+    now = {"t": 5_000.0}
+    monkeypatch.setattr(mod.time, "time", lambda: now["t"])
+    assert await store.marker_age_seconds("j", "alive") is None
+    await store.touch_marker("j", "alive", ttl_seconds=120)
+    now["t"] += 130.0
+    assert await store.marker_age_seconds("j", "alive") == pytest.approx(130.0)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_marker_without_a_timestamp_reads_as_absent():
+    """A tampered / legacy value must read as 'no heartbeat', never crash the poll."""
+    fake = _FakeRedis()
+
+    async def factory():
+        return fake
+
+    store = DurableJobStore("test:hb-bad", DiscoverEffectsResponse, redis_factory=factory)
+    fake.kv["test:hb-bad:k:alive"] = "not-a-number"
+    assert await store.marker_age_seconds("k", "alive") is None
