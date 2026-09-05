@@ -1137,6 +1137,20 @@ _COLUMN_LABELS: Dict[str, str] = {
     "insurance_access_score": "Insurance access (derived from insurance type)",
 }
 
+
+def _column_label(col: str) -> str:
+    """Display label for a gold-standard column: the curated ``_COLUMN_LABELS``
+    entry, else the auto-label (underscores -> spaces, first letter capitalised).
+
+    The ONE label path for every user-facing surface — ``GET /causal/variables``
+    and ``GET /segments/datasets`` serve it per offered column, and the
+    discover-effects summary prose interpolates it. 2026-09-05: the
+    /segment-analysis relabel (#1893, "Product samples provided (rep sample
+    drop)") never reached the /causal-analysis leaderboard text, which still
+    interpolated the raw ``sample_dropped``."""
+    return _COLUMN_LABELS.get(col, col.replace("_", " ").capitalize())
+
+
 # Plain-language definitions of the curated treatment/outcome columns — what a
 # 1 vs 0 means — served next to _COLUMN_LABELS (GET /segments/datasets
 # `definitions`) so the config dropdowns can explain the selected option
@@ -1498,7 +1512,7 @@ async def list_causal_variables(
         covariate_candidates = _brand_scoped_covariates(list(spec["covariate"]), brand)
         all_cols = sorted(set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"]))
         _offered = list(spec["treatment"]) + list(spec["outcome"]) + covariate_candidates
-        labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
+        labels = {c: _column_label(c) for c in _offered}
         return CausalVariablesResponse(
             dataset=dataset,
             treatment_candidates=list(spec["treatment"]),
@@ -1549,7 +1563,7 @@ async def list_causal_variables(
     _offered = (
         _available("treatment") + _available("outcome") + covariate_candidates + baseline_candidates
     )
-    labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
+    labels = {c: _column_label(c) for c in _offered}
     return CausalVariablesResponse(
         dataset=dataset,
         treatment_candidates=_available("treatment"),
@@ -1821,7 +1835,12 @@ def _effect_summary(
     direction = "raises" if ate > 0 else "lowers" if ate < 0 else "does not change"
     verdict = gate_verdict_phrase(gate, tests) or "robustness unknown"
     sig = "statistically significant" if significant else "not statistically significant"
-    return f"{treatment} {direction} {outcome} by {ate:+.3f} — {verdict}, {sig}."
+    # Curated display labels, never the raw column: the leaderboard row above
+    # this sentence renders the label, and the two must read as one name.
+    return (
+        f"{_column_label(treatment)} {direction} {_column_label(outcome)} "
+        f"by {ate:+.3f} — {verdict}, {sig}."
+    )
 
 
 def _effect_from_agent_response(

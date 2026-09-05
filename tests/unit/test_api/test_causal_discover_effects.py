@@ -400,3 +400,46 @@ async def test_prerank_signal_handles_categorical_adjustment_without_keyerror(mo
     )
     val = await causal_routes._prerank_signal("patient_journeys", q)
     assert isinstance(val, float) and val >= 0.0
+
+
+# ── 2026-09-05: leaderboard prose must use the curated column labels ──────────
+# /segment-analysis relabelled sample_dropped -> "Product samples provided (rep
+# sample drop)" (#1893) through causal._COLUMN_LABELS, but the discover-effects
+# summary — user-facing prose under every /causal-analysis leaderboard row —
+# still interpolated the RAW column names. One label SSOT, every surface.
+
+
+@pytest.mark.unit
+def test_column_label_helper_is_the_served_label_ssot():
+    """``_column_label`` is what GET /causal/variables and GET /segments/datasets
+    serve per column: the curated label, else the auto-label (underscores ->
+    spaces, first letter capitalised)."""
+    from src.api.routes.causal import _COLUMN_LABELS, _column_label
+
+    assert _column_label("sample_dropped") == _COLUMN_LABELS["sample_dropped"]
+    assert _column_label("sample_dropped") == "Product samples provided (rep sample drop)"
+    assert _column_label("trigger_accepted") == "NBA trigger accepted"
+    # No curated entry -> the same fallback the variables endpoint has always served.
+    assert "conversion_flag" not in _COLUMN_LABELS
+    assert _column_label("conversion_flag") == "Conversion flag"
+
+
+@pytest.mark.unit
+def test_effect_summary_uses_curated_column_labels():
+    """The summary sentence names the treatment and outcome by their curated
+    labels, never the raw column — the leaderboard row above it renders the
+    label, so the two must agree."""
+    from src.api.routes.causal import _COLUMN_LABELS, _effect_summary
+
+    s = _effect_summary("sample_dropped", "treatment_initiated", 0.092, "proceed", True, None)
+    assert s is not None
+    assert s.startswith(_COLUMN_LABELS["sample_dropped"] + " raises ")
+    assert _COLUMN_LABELS["treatment_initiated"] in s
+    assert "sample_dropped" not in s
+    assert "treatment_initiated" not in s
+    assert "+0.092" in s
+
+    # Unlabelled columns fall back exactly like the served labels do.
+    s2 = _effect_summary("acceptance_status", "conversion_flag", -0.01, "block", False, None)
+    assert s2 is not None
+    assert s2.startswith("Acceptance status lowers Conversion flag by -0.010")
