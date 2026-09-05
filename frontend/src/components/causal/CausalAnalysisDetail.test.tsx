@@ -422,3 +422,23 @@ describe('CausalAnalysisDetail — auto-fires the clinical narrative (Task 8)', 
     expect(mockNarrativeMutate).toHaveBeenCalledTimes(1);
   });
 });
+
+// #1895: the page owns the label map (GET /causal/variables `labels`); the detail
+// view threads its `labelFor` down to the clinical-context panel so the outcome
+// line reads the same label as the drill-down title above it.
+describe('CausalAnalysisDetail — threads labelFor to the clinical-context panel (#1895)', () => {
+  it('renders the mapped-outcome line with the page label, identifier kept beside it', () => {
+    vi.mocked(useClinicalContext).mockReturnValue({
+      data: { ...CLINICAL, mapped_endpoint: 'Treatment persistence / duration of therapy' },
+    } as never);
+    renderWithProviders(
+      <CausalAnalysisDetail
+        result={RESULT}
+        brand="Remibrutinib"
+        labelFor={(col) => (col === 'persistent_180d' ? 'Persistent at 180d' : col)}
+      />
+    );
+    expect(screen.getByText(/= Persistent at 180d maps to:/)).toBeInTheDocument();
+    expect(screen.getByText('persistent_180d')).toBeInTheDocument();
+  });
+});

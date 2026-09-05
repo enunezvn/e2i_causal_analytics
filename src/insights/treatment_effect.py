@@ -6,6 +6,7 @@ import logging
 import math
 from typing import Any
 
+from src.insights.column_labels import column_label
 from src.insights.common import normalize_list, run_signature
 
 logger = logging.getLogger(__name__)
@@ -138,7 +139,13 @@ def build_grounding(
         f"ATE {_fmt_num(ate)} {_ci_str(ci_lower, ci_upper)}, "
         f"p={_p_str(p_value)}, n={n}, estimator={estimator or '—'}; {verdict}"
     )
-    design = f"{treatment_var} -> {outcome_var}; adjusted for {', '.join(confounders) or 'none'}"
+    # #1895: the pair reads by its curated label (the drill-down title above
+    # this insight does); confounders stay raw — variable identifiers, one-hot
+    # dummies included, exactly as the page's "Adjusted for" list prints them.
+    design = (
+        f"{column_label(treatment_var)} -> {column_label(outcome_var)}; "
+        f"adjusted for {', '.join(confounders) or 'none'}"
+    )
     # Registry context is digit-free BY DESIGN (format_qualitative_context): a
     # curated effect size rendered next to the fitted ATE would read as an
     # estimate. Kept a separate grounding key so the cache key and fallback

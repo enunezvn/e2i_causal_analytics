@@ -1751,8 +1751,8 @@ async def get_segment_datasets(
     from src.api.routes.causal import (
         _CAUSAL_DATASET_SPECS,
         _COLUMN_DEFINITIONS,
-        _COLUMN_LABELS,
         _brand_scoped_covariates,
+        _column_label,
     )
 
     spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
@@ -1791,7 +1791,7 @@ async def get_segment_datasets(
         outcomes_by_treatment = {}
 
     offered = list(dict.fromkeys(treatments + outcomes))
-    labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in offered}
+    labels = {c: _column_label(c) for c in offered}
     # Only offered columns, only curated text — never a synthesized sentence.
     definitions = {c: _COLUMN_DEFINITIONS[c] for c in offered if c in _COLUMN_DEFINITIONS}
 

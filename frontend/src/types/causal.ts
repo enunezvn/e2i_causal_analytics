@@ -136,6 +136,14 @@ export interface CausalVariablesResponse {
   /** All columns available in the dataset */
   columns: string[];
   /**
+   * Human-readable display labels keyed by column name for every offered
+   * candidate (treatment, outcome, covariate, baseline), e.g. `sample_dropped`
+   * -> "Product samples provided (rep sample drop)". Same SSOT as
+   * `GET /segments/datasets` `labels`; render through `columnLabel()` — never
+   * the raw column.
+   */
+  labels?: Record<string, string>;
+  /**
    * Union of the indication-specific clinical biomarker columns across all
    * brands (UAS7, ECOG, eGFR, ...). Brand-independent: split
    * covariate_candidates (or HTE feature-importance keys) against this set to

@@ -27,6 +27,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from src.insights.column_labels import column_label
 from src.insights.common import normalize_list, run_signature, strip_enum_markers
 
 logger = logging.getLogger(__name__)
@@ -895,8 +896,13 @@ def build_grounding(
     so the fail-closed guard is untouched. A ``clinical_context`` carrying any
     digit is dropped rather than risk poisoning every sample into fallback.
     """
-    treatment = record.get("treatment_var") or "the treatment"
-    outcome = record.get("outcome_var") or "the outcome"
+    # #1895: the pair is named by its curated display label (the card header
+    # above this insight reads the same label); the raw identifiers stay in
+    # the phrase vocabulary below so an LM echo of either form is vouched.
+    treatment_raw = str(record.get("treatment_var") or "")
+    outcome_raw = str(record.get("outcome_var") or "")
+    treatment = column_label(treatment_raw) if treatment_raw else "the treatment"
+    outcome = column_label(outcome_raw) if outcome_raw else "the outcome"
     brand = record.get("brand")
     ci_level = record.get("confidence_level")
     ci_pct = f"{round(float(ci_level) * 100):d}" if ci_level else "95"
@@ -985,7 +991,7 @@ def build_grounding(
     # guard only in context.
     phrases: set[str] = set()
     ambiguous: set[str] = set()
-    for name_part in (treatment, outcome, brand, *dims):
+    for name_part in (treatment_raw, outcome_raw, treatment, outcome, brand, *dims):
         safe_v, ambig_v = _phrase_variants(name_part)
         phrases |= safe_v
         ambiguous |= ambig_v

@@ -34,6 +34,26 @@ function mockSegments(overrides: Partial<Mutation> = {}) {
   } as unknown as Mutation);
 }
 
+// GET /api/segments/datasets serves the backend label SSOT (`labels`, same
+// map /segment-analysis renders). The card must print those labels in its
+// header, never the raw column names — 2026-09-05 (#1895): /segment-analysis
+// read "Product samples provided (rep sample drop)" while this card still
+// printed `treatment_arm → persistent_180d`.
+const DATASET_LABELS: Record<string, string> = {
+  treatment_arm: 'Treatment arm',
+  persistent_180d: 'Persistent at 180d',
+  sample_dropped: 'Product samples provided (rep sample drop)',
+  treatment_initiated: 'Treatment initiated',
+};
+
+// `null` = the datasets query has not resolved yet (no label map on hand).
+function mockDatasets(labels: Record<string, string> | null = DATASET_LABELS) {
+  vi.mocked(useSegments.useSegmentDatasets).mockReturnValue({
+    data: labels ? { labels } : undefined,
+    isError: false,
+  } as unknown as ReturnType<typeof useSegments.useSegmentDatasets>);
+}
+
 function mockInsight(overrides: Partial<InsightMutation> = {}) {
   const mutate = vi.fn();
   vi.mocked(useInsights.useHTEInsight).mockReturnValue({
@@ -92,6 +112,7 @@ const COMPLETED = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSegments();
+  mockDatasets();
   mockInsight();
 });
 
@@ -135,6 +156,43 @@ describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
     await user.click(screen.getByRole('button', { name: /run cate analysis/i }));
 
     expect(mutate.mock.calls[0][0].request.brand).toBe('Remibrutinib');
+  });
+
+  it('labels the header treatment/outcome from the backend label SSOT, never the raw column', () => {
+    render(<HeterogeneousTreatmentEffects brand="Remibrutinib" />);
+
+    expect(screen.getByText(/Treatment arm → Persistent at 180d/)).toBeInTheDocument();
+    expect(screen.queryByText(/treatment_arm/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/persistent_180d/)).not.toBeInTheDocument();
+    // The label map is brand-scoped on the wire, like the segment page's.
+    expect(vi.mocked(useSegments.useSegmentDatasets)).toHaveBeenCalledWith({ brand: 'Remibrutinib' });
+  });
+
+  it('labels a non-default pair the same way and keeps the REQUEST payload raw', async () => {
+    const mutate = vi.fn();
+    mockSegments({ mutate } as unknown as Partial<Mutation>);
+    const user = userEvent.setup();
+    render(
+      <HeterogeneousTreatmentEffects treatmentVar="sample_dropped" outcomeVar="treatment_initiated" />
+    );
+
+    expect(
+      screen.getByText(/Product samples provided \(rep sample drop\) → Treatment initiated/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/sample_dropped/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /run cate analysis/i }));
+    // Labels are display-only: the analysis request still carries column names.
+    expect(mutate.mock.calls[0][0].request.treatment_var).toBe('sample_dropped');
+    expect(mutate.mock.calls[0][0].request.outcome_var).toBe('treatment_initiated');
+  });
+
+  it('falls back to the shared auto-label when the label map has not loaded', () => {
+    mockDatasets(null);
+    render(<HeterogeneousTreatmentEffects />);
+
+    // Same fallback as every other page (columnLabel): spaces + first letter.
+    expect(screen.getByText(/Treatment arm → Persistent 180d/)).toBeInTheDocument();
   });
 
   it('renders real per-segment CATE in percentage points from cate_by_segment', () => {

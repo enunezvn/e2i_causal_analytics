@@ -78,11 +78,20 @@ const BIOMARKERS = [
 
 const VARIABLES = {
   dataset: 'patient_journeys',
-  treatment_candidates: ['treatment_arm', 'treatment_initiated'],
+  treatment_candidates: ['treatment_arm', 'treatment_initiated', 'sample_dropped'],
   outcome_candidates: ['persistent_180d', 'discontinued_180d'],
   covariate_candidates: ['disease_severity', 'engagement_score'],
   columns: [],
   clinical_biomarkers: BIOMARKERS,
+  // Curated display labels (causal._COLUMN_LABELS) — the SSOT /segment-analysis
+  // already renders; this page must render the same names.
+  labels: {
+    treatment_arm: 'Treatment arm',
+    treatment_initiated: 'Treatment initiated',
+    persistent_180d: 'Persistent at 180d',
+    discontinued_180d: 'Discontinued at 180d',
+    sample_dropped: 'Product samples provided (rep sample drop)',
+  },
 };
 
 const EFFECTS = [
@@ -101,7 +110,7 @@ const EFFECTS = [
     impact: 0.0875,
     n_rows: 1500,
     brand: 'Kisqali',
-    summary: 'treatment_arm raises persistent_180d by +0.088 — survived all robustness checks.',
+    summary: 'Treatment arm raises Persistent at 180d by +0.088 — survived all robustness checks.',
     analysis_id: 'a1',
   },
   {
@@ -308,16 +317,66 @@ describe('CausalAnalysis — unified agent-led page', () => {
   it('renders the ranked leaderboard with the brand column and per-row summary', () => {
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    expect(screen.getByText('persistent_180d')).toBeInTheDocument();
-    expect(screen.getByText('treatment_initiated')).toBeInTheDocument();
+    expect(screen.getByText('Persistent at 180d')).toBeInTheDocument();
+    expect(screen.getByText('Treatment initiated')).toBeInTheDocument();
     // Brand surfaced per row (SSOT-derived scope).
     expect(screen.getByText('Kisqali')).toBeInTheDocument();
     expect(screen.getByText('Fabhalta')).toBeInTheDocument();
-    // Plain-language summary surfaced.
-    expect(screen.getByText(/raises persistent_180d by \+0\.088/)).toBeInTheDocument();
+    // Plain-language summary surfaced verbatim (the backend labels it; the row
+    // must not re-expose the raw column names anywhere).
+    expect(screen.getByText(/Treatment arm raises Persistent at 180d by \+0\.088/)).toBeInTheDocument();
+    expect(screen.queryByText(/persistent_180d/)).not.toBeInTheDocument();
     // Honest verdicts.
     expect(screen.getByText('Proceed')).toBeInTheDocument();
     expect(screen.getByText('Blocked')).toBeInTheDocument();
+  }, 20000);
+
+  it('renders the curated column labels — never raw column names — on the leaderboard, drill-down title and manual dropdowns', async () => {
+    // 2026-09-05: /segment-analysis relabelled sample_dropped (#1893) but this
+    // page still printed the raw column — GET /causal/variables already served
+    // the same `labels` map; the page never consumed it.
+    const user = userEvent.setup();
+    const job = {
+      ...COMPLETED_JOB,
+      total: 3,
+      effects: [
+        ...EFFECTS,
+        {
+          treatment: 'sample_dropped',
+          outcome: 'treatment_initiated',
+          status: 'pending',
+          statistical_significance: false,
+          confidence_score: 0,
+          n_rows: 0,
+          brand: 'Remibrutinib',
+        },
+      ],
+    };
+    mockDiscover({ job });
+    (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...DETAIL,
+      treatment_var: 'treatment_arm',
+      outcome_var: 'persistent_180d',
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // Leaderboard row.
+    expect(screen.getByText('Product samples provided (rep sample drop)')).toBeInTheDocument();
+    expect(screen.queryByText('sample_dropped')).not.toBeInTheDocument();
+    // Drill-down title.
+    fireEvent.click(screen.getByText('Persistent at 180d'));
+    expect(
+      await screen.findByText(/Treatment arm\s*→\s*Persistent at 180d/)
+    ).toBeInTheDocument();
+    // Manual panel dropdown options read the same labels.
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    await user.click(screen.getByRole('combobox', { name: 'Treatment variable' }));
+    expect(
+      await screen.findByRole('option', { name: 'Product samples provided (rep sample drop)' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'sample_dropped' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('combobox', { name: 'Outcome variable' }));
+    expect(await screen.findByRole('option', { name: 'Persistent at 180d' })).toBeInTheDocument();
   }, 20000);
 
   it('shows progress while the agent is validating', () => {
@@ -329,7 +388,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
   it('drills a validated row into the shared deep view', async () => {
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    fireEvent.click(screen.getByText('persistent_180d'));
+    fireEvent.click(screen.getByText('Persistent at 180d'));
     const detail = await screen.findByTestId('causal-detail');
     expect(detail).toHaveAttribute('data-analysis-id', 'a1');
     expect(getCausalAgentAnalysis).toHaveBeenCalledWith('a1');
@@ -342,7 +401,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    fireEvent.click(screen.getByText('persistent_180d'));
+    fireEvent.click(screen.getByText('Persistent at 180d'));
     expect(await screen.findByText(/Could not load this analysis/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
     expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
@@ -357,7 +416,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockRejectedValue(notFound);
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    fireEvent.click(screen.getByText('persistent_180d'));
+    fireEvent.click(screen.getByText('Persistent at 180d'));
     expect(await screen.findByText(/no longer available/i)).toBeInTheDocument();
     expect(screen.getByText(/Re-run discovery to regenerate it/i)).toBeInTheDocument();
     // No blind Retry button for a genuine expiry — retrying the same id just 404s again.
@@ -532,7 +591,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     const user = userEvent.setup();
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    fireEvent.click(screen.getByText('persistent_180d'));
+    fireEvent.click(screen.getByText('Persistent at 180d'));
     expect(await screen.findByTestId('causal-detail')).toBeInTheDocument();
     await user.click(screen.getByRole('combobox', { name: 'Grain' }));
     await user.click(await screen.findByRole('option', { name: 'HCP' }));

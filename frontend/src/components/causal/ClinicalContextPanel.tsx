@@ -30,6 +30,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
+import { columnLabel } from '@/lib/column-labels';
 import type { ClinicalContext } from '@/types/causal';
 import type { StrategicInsightResponse } from '@/types/insights';
 
@@ -109,8 +110,14 @@ export function ClinicalContextPanel({
   context,
   narrative,
   narrativeLoading = false,
+  labelFor = (col) => columnLabel(undefined, col),
 }: {
   context: ClinicalContext;
+  /** Display label for a gold-standard column — the page owns the backend label
+   *  map (GET /causal/variables `labels`) and threads its `labelFor` here so the
+   *  outcome line reads the same label as the drill-down title above it
+   *  (#1895). Default: the shared auto-label, never the raw identifier. */
+  labelFor?: (col: string) => string;
   /** LLM-synthesized single narrative for THIS analysis. A fallback response or
    *  an absent narrative renders the fragments expanded exactly as before —
    *  the no-regression path. */
@@ -171,7 +178,10 @@ export function ClinicalContextPanel({
         <div className="text-sm">
           <span className="text-muted-foreground">Our outcome </span>
           <code className="rounded bg-muted px-1 py-0.5 text-xs">{context.our_outcome}</code>
-          <span className="text-muted-foreground"> maps to: </span>
+          <span className="text-muted-foreground">
+            {' '}
+            = {labelFor(context.our_outcome)} maps to:{' '}
+          </span>
           <span className="font-medium">{context.mapped_endpoint}</span>
         </div>
       )}

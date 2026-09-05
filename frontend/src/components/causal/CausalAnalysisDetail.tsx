@@ -274,8 +274,11 @@ function ConfoundingAdjustmentPanel({ result }: { result: AgentCausalAnalysisRes
 export function CausalAnalysisDetail({
   result,
   brand,
+  labelFor,
 }: {
   result: AgentCausalAnalysisResponse;
+  /** Page-owned column display labels (see ClinicalContextPanel.labelFor). */
+  labelFor?: (col: string) => string;
   brand?: string | null;
 }) {
   // Map the analysis's DAG onto the shared causal-graph visualization. The
@@ -440,6 +443,7 @@ export function CausalAnalysisDetail({
           context={clinicalContext.data}
           narrative={narrative}
           narrativeLoading={narrativeLoading}
+          labelFor={labelFor}
         />
       )}
 

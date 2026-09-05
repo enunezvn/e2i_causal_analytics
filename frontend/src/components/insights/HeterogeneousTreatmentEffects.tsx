@@ -39,7 +39,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useRunSegmentAnalysisAndWait } from '@/hooks/api/use-segments';
+import { useRunSegmentAnalysisAndWait, useSegmentDatasets } from '@/hooks/api/use-segments';
+import { columnLabel } from '@/lib/column-labels';
 import { SegmentAnalysisTimeoutError } from '@/api/segments';
 import { useHTEInsight } from '@/hooks/api/use-insights';
 import { StrategicInsightCard } from './StrategicInsightCard';
@@ -206,6 +207,14 @@ export function HeterogeneousTreatmentEffects({
     isPending,
   } = useRunSegmentAnalysisAndWait();
 
+  // Display labels come from the backend label SSOT served with the segment
+  // datasets (the same map /segment-analysis renders), so this header reads
+  // exactly like every other treatment/outcome surface — 2026-09-05 (#1895)
+  // it still printed `treatment_arm → persistent_180d`. Display-only: the
+  // analysis request below keeps the raw column names.
+  const { data: datasets } = useSegmentDatasets({ brand: brand || undefined });
+  const labelFor = (col: string) => columnLabel(datasets?.labels, col);
+
   const handleRun = useCallback(() => {
     // Segment set, effect modifiers, confounders, and data source are FIXED
     // server-side for the clinical patient_journeys path — send only what the
@@ -274,7 +283,8 @@ export function HeterogeneousTreatmentEffects({
                 Heterogeneous Treatment Effects
               </CardTitle>
               <p className="text-xs text-[var(--color-muted-foreground)]">
-                Segment-level CATE — {treatmentVar} → {outcomeVar} across clinical segments
+                Segment-level CATE — {labelFor(treatmentVar)} → {labelFor(outcomeVar)} across
+                clinical segments
                 {brand ? ` (${brand})` : ''}
               </p>
             </div>

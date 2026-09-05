@@ -40,7 +40,29 @@ def test_generate_insight_fallback_grounded():
     g = build_grounding("Kisqali", "patient", EFFECTS)
     out = generate_insight(g)
     assert out["is_fallback"] is True
-    assert "copay_card" in out["insight"]
+    # #1895: effects are named by their display labels (uncurated -> auto-label),
+    # never the raw column — the leaderboard rows above the insight read labels.
+    assert "Copay card->Adherence 180d" in out["insight"]
+    assert "copay_card" not in out["insight"]
+
+
+def test_effects_table_uses_the_curated_label_for_a_commercial_arm():
+    effects = [
+        {
+            "treatment": "sample_dropped",
+            "outcome": "treatment_initiated",
+            "ate": 0.092,
+            "ate_ci_lower": 0.05,
+            "ate_ci_upper": 0.13,
+            "status": "proceed",
+            "selected_estimator": "CausalForestDML",
+        }
+    ]
+    g = build_grounding("Remibrutinib", "patient", effects)
+    assert g["effects_table"].startswith(
+        "Product samples provided (rep sample drop)->Treatment initiated: ATE +0.092"
+    )
+    assert "sample_dropped" not in g["effects_table"]
 
 
 # ---------------------------------------------------------------------------

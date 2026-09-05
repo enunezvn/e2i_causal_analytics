@@ -59,11 +59,44 @@ def _record(**overrides):
 class TestBuildGrounding:
     def test_scope_and_effect_summary_render_real_figures(self):
         g = hte.build_grounding(_record())
-        assert "treatment_arm -> persistent_180d" in g["scope"]
+        # #1895: the scope names the pair by its curated labels — the card's
+        # header above the insight reads the same labels, so the prose must
+        # never re-expose the raw columns.
+        assert "Treatment arm -> Persistent at 180d" in g["scope"]
+        assert "treatment_arm" not in g["scope"]
+        assert "persistent_180d" not in g["scope"]
         assert "Remibrutinib" in g["scope"]
         assert "+11.1pp" in g["effect_summary"]
         assert "2 of 3 segments" in g["effect_summary"]
         assert g["sig_count"] == 2 and g["total_count"] == 3
+
+    def test_scope_labels_a_commercial_arm_and_the_fallback_prose_carries_it(self):
+        # The relabel that started #1895: "sample_dropped" must read as
+        # "Product samples provided (rep sample drop)" in the HTE insight too.
+        g = hte.build_grounding(
+            _record(treatment_var="sample_dropped", outcome_var="treatment_initiated")
+        )
+        assert g["scope"].startswith(
+            "Product samples provided (rep sample drop) -> Treatment initiated"
+        )
+        out = hte._fallback(g)
+        assert (
+            "For Product samples provided (rep sample drop) -> Treatment initiated"
+            in out["insight"]
+        )
+        assert "sample_dropped" not in out["insight"]
+        assert "treatment_initiated" not in out["insight"]
+
+    def test_label_digits_pass_the_guard_only_in_context_like_raw_name_digits(self):
+        # A curated label can carry digits the raw name does not ("Uncontrolled
+        # CSU (UAS7 ≥ 28)"). They are grounded as a PHRASE exactly like a raw
+        # name's digits: the verbatim label passes, a bare re-use of "28" does
+        # not, and the raw identifier itself stays vouched.
+        g = hte.build_grounding(_record(treatment_var="urticaria_severity_uas7"))
+        assert "Uncontrolled CSU (UAS7 ≥ 28) -> Persistent at 180d" in g["scope"]
+        assert hte._is_grounded("Uncontrolled CSU (UAS7 ≥ 28) raises persistence.", g) is True
+        assert hte._is_grounded("urticaria_severity_uas7 raises persistence.", g) is True
+        assert hte._is_grounded("Treat 28 patients first.", g) is False
 
     def test_cohort_n_is_per_dimension_sum_not_all_rows(self):
         # severity dim: 1385+2498=3883; age dim: 2015 -> cohort = max = 3883,
@@ -589,7 +622,7 @@ class TestGuard:
         assert hte._is_grounded("Heterogeneity (0-1 scale) is 0.26.", g) is True
         assert (
             hte._is_grounded(
-                "For treatment_arm -> persistent_180d, brand filter Remibrutinib, "
+                "For Treatment arm -> Persistent at 180d, brand filter Remibrutinib, "
                 "cohort n=1,385 with 95% CIs, the overall ATE is +11.1pp.",
                 g,
             )
@@ -597,7 +630,7 @@ class TestGuard:
         )
         assert (
             hte._is_grounded(
-                "For treatment_arm -> persistent_180d, brand filter Remibrutinib, "
+                "For Treatment arm -> Persistent at 180d, brand filter Remibrutinib, "
                 "cohort n=3,883 with 95% CIs, the overall ATE is +11.1pp.",
                 g,
             )

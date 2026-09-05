@@ -6,6 +6,7 @@ import logging
 from collections import Counter
 from typing import Any
 
+from src.insights.column_labels import column_label
 from src.insights.common import normalize_list, run_signature
 
 logger = logging.getLogger(__name__)
@@ -96,8 +97,11 @@ def build_grounding(
     ranked = sorted(effects, key=_rank, reverse=True)
     rows = []
     for e in ranked[:8]:
+        # #1895: effects are named by their display label — the leaderboard
+        # rows above this insight read the same label, never the raw column.
         rows.append(
-            f"{e.get('treatment')}->{e.get('outcome')}: "
+            f"{column_label(str(e.get('treatment') or ''))}->"
+            f"{column_label(str(e.get('outcome') or ''))}: "
             f"ATE {float(e.get('ate') or 0):+.3f} "
             f"[{float(e.get('ate_ci_lower') or 0):+.3f}, {float(e.get('ate_ci_upper') or 0):+.3f}], "
             f"gate={e.get('status')}, est={e.get('selected_estimator')}"

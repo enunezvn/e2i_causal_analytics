@@ -85,3 +85,24 @@ def test_generate_insight_fallback_carries_grounding_chips():
     out = generate_insight(g)
     assert out["is_fallback"] is True
     assert any(c["label"] == "Registry chains" for c in out["grounding"])
+
+
+def test_design_names_the_pair_by_curated_label_and_keeps_confounders_raw():
+    # #1895: the /causal-analysis drill-down title reads the curated labels;
+    # the insight's "Design:" line under it must not re-expose the raw pair.
+    # Confounders stay raw on purpose — they are variable identifiers (one-hot
+    # dummies included) and the page's "Adjusted for" list prints them raw too.
+    g = _grounding(treatment_var="sample_dropped", outcome_var="treatment_initiated")
+    assert g["design"].startswith(
+        "Product samples provided (rep sample drop) -> Treatment initiated; adjusted for "
+    )
+    assert "disease_severity, academic_hcp" in g["design"]
+    assert "sample_dropped" not in g["design"]
+    out = _fallback(g)
+    assert (
+        "Design: Product samples provided (rep sample drop) -> Treatment initiated;"
+        in out["insight"]
+    )
+    assert "sample_dropped" not in out["insight"]
+    # Uncurated columns take the shared auto-label, same as every other surface.
+    assert _grounding()["design"].startswith("Rep detailing frequency -> Trx volume; adjusted for ")

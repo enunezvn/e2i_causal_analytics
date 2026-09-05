@@ -44,6 +44,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { columnLabel } from '@/lib/column-labels';
 import {
   Select,
   SelectContent,
@@ -736,7 +737,7 @@ export default function SegmentAnalysis() {
   // (≤30d)") when present; otherwise fall back to a title-cased column name. The
   // dropdowns previously always title-cased the raw column, so the curated labels
   // GET /segments/datasets returns never reached the user.
-  const labelFor = (col: string) => datasets?.labels?.[col] ?? titleCase(col);
+  const labelFor = (col: string) => columnLabel(datasets?.labels, col);
   // The backend's plain-language definition of a column (what 1 vs 0 means).
   // Rendered under each dropdown for the SELECTED option only; undefined when
   // the backend curates none — the page never invents a definition.
