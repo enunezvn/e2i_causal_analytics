@@ -739,12 +739,19 @@ class _CatalogCache:
     the running loop inside ``get()`` - never at import time, where an asyncio
     primitive would bind to whichever loop exists first. A build that
     ``reset()`` orphaned mid-flight still serves its own waiters but neither
-    writes the cache nor clears a newer build's future.
+    writes the cache nor clears a newer build's future; the guard is a
+    per-build token so an eager task factory (build finished inside
+    ``ensure_future``) publishes too.
     """
 
     def __init__(self) -> None:
         self._catalog: Optional[CapabilityCatalog] = None
         self._inflight: Optional["asyncio.Future[CapabilityCatalog]"] = None
+        # The build allowed to publish, as a token rather than the task object:
+        # under an eager task factory the build can finish inside
+        # ensure_future(), before ``_inflight`` is even assigned, and a
+        # task-identity check would then never publish nor clear (#1901 item 5).
+        self._generation: Optional[object] = None
 
     async def get(
         self,
@@ -760,13 +767,21 @@ class _CatalogCache:
             if current - cached.loaded_at < ttl:
                 return cached
         if self._inflight is None:
-            self._inflight = asyncio.ensure_future(
-                self._refresh(cached, now, coverage_loader, outcomes_loader)
+            token = object()
+            self._generation = token
+            future = asyncio.ensure_future(
+                self._refresh(token, cached, now, coverage_loader, outcomes_loader)
             )
+            # An eager build that never suspended has already published and
+            # cleared itself; storing its finished future would pin it forever.
+            if not future.done():
+                self._inflight = future
+            return await asyncio.shield(future)
         return await asyncio.shield(self._inflight)
 
     async def _refresh(
         self,
+        token: object,
         previous: Optional[CapabilityCatalog],
         now: Optional[float],
         coverage_loader: Optional[CoverageLoader],
@@ -779,16 +794,18 @@ class _CatalogCache:
             fresh = _keep_last_good_fields(fresh, previous)
             if now is not None:
                 fresh = dataclasses.replace(fresh, loaded_at=now)
-            if self._inflight is asyncio.current_task():
+            if self._generation is token:
                 self._catalog = fresh
             return fresh
         finally:
-            if self._inflight is asyncio.current_task():
+            if self._generation is token:
                 self._inflight = None
+                self._generation = None
 
     def reset(self) -> None:
         self._catalog = None
         self._inflight = None
+        self._generation = None
 
 
 _cache = _CatalogCache()

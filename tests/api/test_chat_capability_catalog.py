@@ -939,3 +939,25 @@ async def test_reset_mid_flight_discards_the_stale_build():
     assert stale is not second
     assert c._catalog is second
     assert c._inflight is None
+
+
+async def test_eager_task_factory_publishes_and_clears():
+    """Under asyncio.eager_task_factory a build whose loaders never suspend
+    finishes inside ensure_future(); it must still publish and clear so an
+    expired get() rebuilds instead of serving the first build forever."""
+    cov, out = _Counting(_coverage), _Counting(_outcomes)
+    c = cat._CatalogCache()
+    loop = asyncio.get_running_loop()
+    loop.set_task_factory(asyncio.eager_task_factory)
+    try:
+        first = await c.get(now=1000.0, coverage_loader=cov, outcomes_loader=out)
+        assert c._catalog is first
+        assert c._inflight is None
+        second = await c.get(
+            now=1000.0 + cat.CATALOG_TTL_SECONDS + 1, coverage_loader=cov, outcomes_loader=out
+        )
+    finally:
+        loop.set_task_factory(None)
+    assert second is not first
+    assert c._catalog is second
+    assert (cov.calls, out.calls) == (2, 2)
