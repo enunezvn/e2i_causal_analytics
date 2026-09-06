@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, asyncio, pytest (asyncio_mode=auto), ruff 0.14.10, mypy (scoped), GitHub Actions.
 
-**Environment for every task:** worktree `/home/enunez/Projects/e2i_causal_analytics/.worktrees/pill-catalog`, branch `claude/pill-followups-1901` (verify with `git branch --show-current` before every commit). Run tests with `.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider` from the worktree root. Never run whole-tree mypy or pytest. Never `git stash`, never amend, never squash. Commit trailers:
+**Environment for every task:** worktree `/home/enunez/Projects/e2i_causal_analytics/.worktrees/pill-catalog`, branch `claude/pill-followups-1901` (verify with `git branch --show-current` before every commit). Run tests with `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider` from the worktree root - always the MAIN checkout's venv (Python 3.12) by that absolute path; the worktree's own `.venv` is a stray Python 3.13 environment, never use it and never install into it. Never run whole-tree mypy or pytest. Never `git stash`, never amend, never squash. Commit trailers:
 
 ```
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -47,7 +47,7 @@ async def test_stalled_loader_times_out_and_degrades(monkeypatch):
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider -k stalled_loader`
+Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider -k stalled_loader`
 Expected: FAIL with `AttributeError: ... has no attribute 'CATALOG_LOADER_TIMEOUT_SECONDS'`
 
 - [ ] **Step 3: Implement**
@@ -104,15 +104,15 @@ and
 
 - [ ] **Step 4: Run the file's tests**
 
-Run: `.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider`
+Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider`
 Expected: all PASS (previous count + 1).
 
 - [ ] **Step 5: Lint and scoped type-check, then commit**
 
 ```bash
-.venv/bin/ruff check src/services/chat_capability_catalog.py tests/api/test_chat_capability_catalog.py
-.venv/bin/ruff format --check src/services/chat_capability_catalog.py tests/api/test_chat_capability_catalog.py
-.venv/bin/mypy --config-file pyproject.toml src/services/chat_capability_catalog.py
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff check src/services/chat_capability_catalog.py tests/api/test_chat_capability_catalog.py
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff format --check src/services/chat_capability_catalog.py tests/api/test_chat_capability_catalog.py
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/mypy --config-file pyproject.toml src/services/chat_capability_catalog.py
 git branch --show-current   # must print claude/pill-followups-1901
 git add src/services/chat_capability_catalog.py tests/api/test_chat_capability_catalog.py
 git commit -m "fix(chat): bound each catalog loader with its own timeout (#1901 item 1)"
@@ -153,7 +153,7 @@ async def test_eager_task_factory_publishes_and_clears():
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider -k eager_task_factory`
+Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider -k eager_task_factory`
 Expected: FAIL at `assert c._catalog is first` (the catalog is never published under the eager factory).
 
 - [ ] **Step 3: Implement**
@@ -229,7 +229,7 @@ Update the class docstring's last sentence to: "A build that ``reset()`` orphane
 
 - [ ] **Step 4: Run the file's tests** (all cache tests must stay green)
 
-Run: `.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider`
+Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider`
 Expected: all PASS.
 
 - [ ] **Step 5: Lint, scoped mypy, commit** (same commands as Task 1 Step 5)
@@ -278,7 +278,7 @@ Append to `DROP_FIXTURES`:
 
 - [ ] **Step 2: Run to verify the two keeps fail**
 
-Run: `.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider -k "supported_pills_are_kept or known_unsupported"`
+Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py -q -p no:cacheprovider -k "supported_pills_are_kept or known_unsupported"`
 Expected: 2 FAIL (the keeps are dropped as `territory_detail`), the drops PASS.
 
 - [ ] **Step 3: Implement**
@@ -445,7 +445,7 @@ Check `grep -n "CapabilityCatalog(" src/ tests/` still shows only the builder (n
 
 - [ ] **Step 4: Run the file's tests plus the suggestions tests**
 
-Run: `.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py tests/api/test_chat_suggestions.py -q -p no:cacheprovider`
+Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py tests/api/test_chat_suggestions.py -q -p no:cacheprovider`
 Expected: all PASS.
 
 - [ ] **Step 5: Lint, scoped mypy, commit**
