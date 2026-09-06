@@ -473,7 +473,9 @@ _CAUSAL_ASK_RE = re.compile(
 # with the rule's trigger words. Exemptions carved out below:
 #   - Geographic Consistency Gap (WS1-DQ-006) vs. gap_recompute
 #   - SHAP Coverage (WS1-MP-007) vs. shap_or_feature_importance
-#   - Conditional ATE (CATE) (CM-002) vs. uplift_by_segment
+#   - Conditional ATE (CATE) (CM-002) vs. uplift_by_segment - the exemption
+#     covers only the BARE value ask; "(CATE)" followed by a segment axis or
+#     a time form is re-caught by the trailing alternatives below
 _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     (
         "shap_or_feature_importance",
@@ -509,7 +511,11 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         re.compile(
             r"\bCATE\b(?<!\(CATE)|\bheterogen\w*\b|\btreatment effects? (?:by|across|for) (?:patient )?"
             r"(?:segment|tier|subgroup|cohort)s?\b|\bsubgroup analys\w*|\bsensitivity analys\w*|"
-            r"\bcontrolling for\b",
+            r"\bcontrolling for\b"
+            r"|\(CATE\)[^.?]{0,120}\b(?:by|across|for|per|between) (?:patient |each )?"
+            r"(?:segment|tier|subgroup|cohort|severity|biologic|IgE)\w*"
+            r"|\(CATE\)[^.?]{0,120}\b(?:trends?|over time|over the (?:past|last)|monthly|month-over-month)\b"
+            r"|\b(?:chart|plot|trend of)\b[^.?]{0,120}\(CATE\)",
             re.I,
         ),
     ),

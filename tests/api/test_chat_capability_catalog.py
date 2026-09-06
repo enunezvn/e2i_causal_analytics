@@ -359,6 +359,16 @@ DROP_FIXTURES = [
         "Discontinuation level",
         "What is the discontinued_180d percentage for Fabhalta?",
     ),
+    (
+        "uplift_by_segment",
+        "CATE by tier",
+        "How does the Conditional ATE (CATE) differ across severity tiers for Remibrutinib?",
+    ),
+    (
+        "uplift_by_segment",
+        "CATE trend",
+        "Chart the Conditional ATE (CATE) trend over time for high-severity patients.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
