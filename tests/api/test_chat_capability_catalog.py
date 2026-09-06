@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import re as _re
+import time
 from dataclasses import dataclass as _dataclass
 from typing import Any, Dict, List
 
@@ -135,6 +136,26 @@ async def test_empty_results_are_degraded_too(caplog):
     assert any("causal outcomes empty" in m for m in messages)
 
 
+async def test_stalled_loader_times_out_and_degrades(monkeypatch, caplog):
+    """A loader that never answers is bounded by CATALOG_LOADER_TIMEOUT_SECONDS and
+    marks its field degraded; the other loader still lands."""
+    monkeypatch.setattr(cat, "CATALOG_LOADER_TIMEOUT_SECONDS", 0.05)
+
+    async def stalled() -> List[Dict[str, Any]]:
+        await asyncio.sleep(10)
+        return await _coverage()
+
+    started = time.monotonic()
+    with caplog.at_level("WARNING", logger="src.services.chat_capability_catalog"):
+        c = await make_catalog(coverage=stalled, outcomes=_outcomes)
+    assert time.monotonic() - started < 2.0
+    assert c.degraded == ("trend_coverage",)
+    assert c.trend_kpi_ids == frozenset()
+    assert c.causal_outcomes  # the outcomes loader was not affected
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("trend coverage unavailable: TimeoutError" in m for m in messages)
+
+
 # =============================================================================
 # RENDERER
 # =============================================================================
@@ -165,6 +186,30 @@ async def test_render_trend_and_axis_kpis_by_name():
     # brand-specific registry KPIs carry their brand in section A
     brand_entry = next(e for e in c.kpis if e.brand)
     assert f"{brand_entry.name} ({brand_entry.brand} only)" in block
+
+
+async def test_windowable_kpis_come_from_the_registry():
+    from src.kpi.registry import get_registry
+
+    c = await make_catalog()
+    expected = frozenset(k.id for k in get_registry().get_all() if k.windowable != "not_applicable")
+    assert expected, "the registry must declare windowable KPIs (TRx, share, triggers)"
+    assert c.windowable_kpi_ids == expected
+    assert "WS3-BI-005" in c.windowable_kpi_ids  # Total Prescriptions (TRx)
+    assert "CM-002" not in c.windowable_kpi_ids  # Conditional ATE (CATE)
+
+
+async def test_render_window_clause_names_only_windowable_kpis():
+    c = await make_catalog()
+    block = cat.render_catalog_block(c)
+    clause = next((line for line in block.splitlines() if "applies ONLY to" in line), None)
+    assert clause is not None, "section A must carry the window clause"
+    for kpi_id in c.windowable_kpi_ids:
+        assert c.kpi_name(kpi_id) in clause
+    assert c.kpi_name("CM-002") not in clause
+    assert "optionally over a time window" not in block
+    # the axis rules keep the composition sentence but no longer promise a window
+    assert "time window" not in cat.AXIS_RULES or "composes with" in cat.AXIS_RULES
 
 
 async def test_render_empty_trend_set_falls_back_without_dangling_list():
@@ -232,6 +277,110 @@ def test_axis_vocabulary_matches_kpi_calculate_tool():
     for axis in cat.AXIS_PARAMETER_NAMES:
         assert axis in params, axis
         assert axis in cat.AXIS_RULES, axis
+
+
+async def test_axis_rules_window_composition_matches_calculators():
+    """AXIS_RULES' composition sentence is prose; pin each clause to the
+    calculators' query-id routing so the prompt cannot go stale against a
+    migration again (the pre-#1900 wording had already gone stale against
+    migration 120)."""
+    from src.kpi.calculators.business_impact import BusinessImpactCalculator
+    from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
+    from src.kpi.registry import get_registry
+    from src.kpi.synthetic_mode import _SYNTHETIC_SUFFIX
+
+    def suffix(query_id: str) -> str:
+        # The showcase flag appends _include_synthetic to every additive
+        # variant id; strip it so the assertions pin ROUTING, not the env.
+        return (
+            query_id[: -len(_SYNTHETIC_SUFFIX)]
+            if query_id.endswith(_SYNTHETIC_SUFFIX)
+            else query_id
+        )
+
+    class _NoQueries:
+        """Sentinel client: any attribute access means a guard moved after its query."""
+
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"routing test must not touch the DB client ({name})")
+
+    window = {"start": "2025-01-01", "end": "2025-03-31"}
+    # No query runs below: the routing helpers are pure and every guard raises
+    # before _execute_query. The sentinel PROVES it - a guard that moved after
+    # its query would reach this client and fail the test instead of the DB.
+    calc = BusinessImpactCalculator(db_client=_NoQueries())
+
+    # 1. Volume KPIs: a window composes with ANY ONE axis (migrations 084/105/108).
+    region_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx", brand="Kisqali", region="west", window=window, context={}
+    )
+    assert suffix(region_qid).endswith("_windowed_region")
+    segment_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Kisqali",
+        region=None,
+        window=window,
+        segment="high",
+        context={},
+    )
+    assert suffix(segment_qid).endswith("_segment_windowed")
+    # biologic is brand-gated to _BIOLOGIC_AXIS_BRANDS, so it needs Remibrutinib
+    biologic_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Remibrutinib",
+        region=None,
+        window=window,
+        biologic="naive",
+        context={},
+    )
+    assert suffix(biologic_qid).endswith("_biologic_windowed")
+    line_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Kisqali",
+        region=None,
+        window=window,
+        therapy_line="1",
+        context={},
+    )
+    assert suffix(line_qid).endswith("_line_windowed")
+    # ige_tier is brand-gated like biologic
+    ige_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Remibrutinib",
+        region=None,
+        window=window,
+        ige_tier="high",
+        context={},
+    )
+    assert suffix(ige_qid).endswith("_ige_tier_windowed")
+
+    # 2. TRx Share / Conversion Rate: a window does NOT compose with region.
+    for kpi_id in ("WS3-BI-008", "WS3-BI-009"):
+        kpi = get_registry().get(kpi_id)
+        assert kpi is not None, kpi_id
+        context = {"brand": "Kisqali", "window": window, "region": "west"}
+        guard = calc._calc_trx_share if kpi_id == "WS3-BI-008" else calc._calc_conversion_rate
+        with pytest.raises(RuntimeError, match=kpi_id):
+            guard(dict(context))
+        # calculate() records the guard instead of re-raising, so the chat layer
+        # reports the refusal rather than a fabricated number.
+        result = calc.calculate(kpi, dict(context))
+        assert result.value is None and kpi_id in (result.error or "")
+
+    # 3. Trigger KPIs: a window composes with region (migration 120, #1388).
+    trigger_qid, _ = TriggerPerformanceCalculator._effectiveness_scoped(
+        "precision", {"brand": "Kisqali", "region": "west", "trigger_type": None, "window": window}
+    )
+    assert suffix(trigger_qid).endswith("_windowed_region")
+
+    # The sentence's three families partition the windowable set exactly.
+    c = await make_catalog()
+    volume = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
+    share_conversion = {"WS3-BI-008", "WS3-BI-009"}
+    assert volume <= c.windowable_kpi_ids
+    assert share_conversion <= c.windowable_kpi_ids
+    triggers = c.windowable_kpi_ids - volume - share_conversion
+    assert triggers == {"WS2-TR-001", "WS2-TR-004", "WS2-TR-006", "WS2-TR-009"}
 
 
 # =============================================================================
@@ -512,6 +661,61 @@ DROP_FIXTURES = [
         "E2I model features",
         "What are the top features of the E2I model?",
     ),
+    (
+        "territory_detail",
+        "On-screen territories by region",
+        "Break down the on-screen territory table by census region.",
+    ),
+    (
+        "territory_detail",
+        "Trend of territories shown",
+        "Show the territory allocation trend over time for the territories shown.",
+    ),
+    (
+        "competitor_data",
+        "Outperforming the competition?",
+        "Is Fabhalta outperforming the competition?",
+    ),
+    (
+        "competitor_data",
+        "Outperforming competitors on share",
+        "Is Fabhalta outperforming competitors on market share?",
+    ),
+    (
+        "competitor_data",
+        "Beating the competition?",
+        "Is Kisqali beating the competition?",
+    ),
+    (
+        "territory_detail",
+        "On-screen territories by therapy line",
+        "Break the on-screen territory allocation down by line of therapy.",
+    ),
+    (
+        "shap_or_feature_importance",
+        "On-screen SHAP by therapy line",
+        "Split the on-screen SHAP features by line of therapy.",
+    ),
+    (
+        "territory_detail",
+        "Displayed territories by line-of-therapy",
+        "Break the displayed territory allocation down by line-of-therapy.",
+    ),
+    (
+        "territory_detail",
+        "Displayed territories by prior therapy line",
+        "Break the displayed territory allocation down by prior therapy line.",
+    ),
+    (
+        "shap_or_feature_importance",
+        "On-screen SHAP by patient severity tier",
+        "Split the on-screen SHAP features by patient severity tier.",
+    ),
+    (
+        "territory_detail",
+        "On-screen territories by US census region",
+        "Break the on-screen territory allocation down by US census region.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -629,6 +833,22 @@ KEEP_FIXTURES = [
     (
         "E2I features",
         "What are the top features of E2I?",
+    ),
+    (
+        "Largest reallocation shown",
+        "Which of the territories shown has the largest recommended reallocation?",
+    ),
+    (
+        "On-screen territory table",
+        "Read the on-screen territory table: which territory gains the most budget?",
+    ),
+    (
+        "MoA differences",
+        "How does Fabhalta's mechanism of action differ from competitors'?",
+    ),
+    (
+        "Competitor review",
+        "Perform the competitor landscape review for Fabhalta's PNH indication.",
     ),
 ]
 
@@ -918,3 +1138,50 @@ async def test_reset_mid_flight_discards_the_stale_build():
     assert stale is not second
     assert c._catalog is second
     assert c._inflight is None
+
+
+async def test_eager_task_factory_publishes_and_clears():
+    """Under asyncio.eager_task_factory a build whose loaders never suspend
+    finishes inside ensure_future(); it must still publish and clear so an
+    expired get() rebuilds instead of serving the first build forever."""
+    cov, out = _Counting(_coverage), _Counting(_outcomes)
+    c = cat._CatalogCache()
+    loop = asyncio.get_running_loop()
+    loop.set_task_factory(asyncio.eager_task_factory)
+    try:
+        first = await c.get(now=1000.0, coverage_loader=cov, outcomes_loader=out)
+        assert c._catalog is first
+        assert c._inflight is None
+        assert c._generation is None
+        second = await c.get(
+            now=1000.0 + cat.CATALOG_TTL_SECONDS + 1, coverage_loader=cov, outcomes_loader=out
+        )
+    finally:
+        loop.set_task_factory(None)
+    assert second is not first
+    assert c._catalog is second
+    assert (cov.calls, out.calls) == (2, 2)
+
+
+async def test_eager_task_factory_keeps_single_flight_when_build_suspends():
+    """Under asyncio.eager_task_factory a build that suspends must fall back to
+    the stored-future path: gathered cold callers share one build."""
+
+    async def slow_coverage() -> List[Dict[str, Any]]:
+        await asyncio.sleep(0.01)
+        return await _coverage()
+
+    cov, out = _Counting(slow_coverage), _Counting(_outcomes)
+    c = cat._CatalogCache()
+    loop = asyncio.get_running_loop()
+    loop.set_task_factory(asyncio.eager_task_factory)
+    try:
+        results = await asyncio.gather(
+            *(c.get(now=1000.0, coverage_loader=cov, outcomes_loader=out) for _ in range(5))
+        )
+    finally:
+        loop.set_task_factory(None)
+    assert all(r is results[0] for r in results)
+    assert c._catalog is results[0]
+    assert c._inflight is None and c._generation is None
+    assert (cov.calls, out.calls) == (1, 1)

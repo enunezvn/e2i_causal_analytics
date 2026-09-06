@@ -55,6 +55,16 @@ CATALOG_TTL_SECONDS = 600.0
 # A degraded catalog (a DB-backed field failed) retries sooner, but not on
 # every pill request - a down database must not be hammered.
 DEGRADED_TTL_SECONDS = 60.0
+# Each DB loader gets its own budget so a stalled connection cannot hold the
+# refreshing request for the client's full connect+read timeouts (10 s + 30 s
+# per loader). Measured 2026-09-06 on the droplet: 30-70 ms per query plus
+# 130 ms client creation; one unreproduced 18 s cold read. A timeout is an
+# ordinary exception below: the field is marked degraded, the last-good lists
+# carry forward and the refresh is retried after DEGRADED_TTL_SECONDS. The two
+# loaders stay sequential on purpose: one in-flight query at a time against a
+# possibly stalled database, so a refresh costs at most twice this budget
+# (#1901 item 1).
+CATALOG_LOADER_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +85,7 @@ class CapabilityCatalog:
     trend_kpi_ids: FrozenSet[str]  # have a materialized monthly series
     per_brand_only_trend_ids: FrozenSet[str]  # trend exists only in per-brand scopes
     axis_kpi_ids: FrozenSet[str]  # accept severity / therapy-line splits
+    windowable_kpi_ids: FrozenSet[str]  # registry windowable != "not_applicable" (code-derived)
     causal_outcomes: Tuple[str, ...]  # distinct end_node names in the causal registry
     agent_roster: str  # prompt-ready roster block from the factory
     degraded: Tuple[str, ...] = ()  # DB-backed fields that failed to load
@@ -116,6 +127,11 @@ def _kpi_entries() -> Tuple[KpiEntry, ...]:
     return tuple(sorted(entries, key=lambda e: (e.workstream, e.id)))
 
 
+def _windowable_ids() -> FrozenSet[str]:
+    """Registry KPIs the KPI tool can window; the rest answer window_status='not_applicable'."""
+    return frozenset(k.id for k in get_registry().get_all() if k.windowable != "not_applicable")
+
+
 def _trend_sets(rows: Sequence[Dict[str, Any]]) -> Tuple[FrozenSet[str], FrozenSet[str]]:
     scopes: Dict[str, set[str]] = {}
     for row in rows:
@@ -145,18 +161,32 @@ async def build_capability_catalog(
 
     rows: List[Dict[str, Any]] = []
     try:
-        rows = list(await (coverage_loader or _default_coverage_loader)())
+        rows = list(
+            await asyncio.wait_for(
+                (coverage_loader or _default_coverage_loader)(), CATALOG_LOADER_TIMEOUT_SECONDS
+            )
+        )
     except Exception as exc:  # noqa: BLE001 - degrade, never 502 the pills
-        logger.warning("capability catalog: trend coverage unavailable: %s", exc)
+        logger.warning(
+            "capability catalog: trend coverage unavailable: %s: %s", type(exc).__name__, exc
+        )
     if not rows:
         logger.warning("capability catalog: trend coverage empty; marking degraded")
         degraded.append("trend_coverage")
 
     outcomes: List[str] = []
     try:
-        outcomes = [str(o) for o in await (outcomes_loader or _default_outcomes_loader)() if o]
+        outcomes = [
+            str(o)
+            for o in await asyncio.wait_for(
+                (outcomes_loader or _default_outcomes_loader)(), CATALOG_LOADER_TIMEOUT_SECONDS
+            )
+            if o
+        ]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("capability catalog: causal outcomes unavailable: %s", exc)
+        logger.warning(
+            "capability catalog: causal outcomes unavailable: %s: %s", type(exc).__name__, exc
+        )
     if not outcomes:
         logger.warning("capability catalog: causal outcomes empty; marking degraded")
         degraded.append("causal_outcomes")
@@ -173,6 +203,7 @@ async def build_capability_catalog(
         trend_kpi_ids=trend,
         per_brand_only_trend_ids=per_brand_only,
         axis_kpi_ids=frozenset(SEGMENTED_KPI_QUERY_FAMILIES),
+        windowable_kpi_ids=_windowable_ids(),
         causal_outcomes=tuple(sorted(set(outcomes))),
         agent_roster=build_agent_roster_block(),
         degraded=tuple(degraded),
@@ -206,8 +237,9 @@ AXIS_RULES = (
     "Breakdown axes, AT MOST ONE per ask: segment = patient severity tier (low/medium/high); "
     "therapy_line = line of therapy (0-3); region = US census region (northeast/south/midwest/west); "
     "and - Remibrutinib ONLY - biologic status (naive/experienced) or ige_tier (low/medium/high). "
-    'An optional time window ("last 3 months", "Q1 2025", "2025-01-01 to 2025-03-31") composes with '
-    "segment/therapy_line but NOT with region/biologic/ige_tier for share, conversion or trigger KPIs. "
+    "The time window composes with any one axis for TRx, NRx and NBRx; only with segment/therapy_line "
+    "for TRx Share and Conversion Rate; and only with region for Trigger Precision, Acceptance Rate, "
+    "Override Rate and Trigger Funnel Conversion. "
     "TRx share is share of the tracked 3-brand portfolio, NOT share versus competitors."
 )
 
@@ -244,8 +276,7 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
     lines: List[str] = ["WHAT THE ASSISTANT CAN DO (every pill must map to exactly one of A-H):"]
 
     lines.append(
-        "A. KPI values - the current value of any registry KPI, per brand, optionally over a time "
-        "window. Registry KPIs by area:"
+        "A. KPI values - the current value of any registry KPI, per brand. Registry KPIs by area:"
     )
     for workstream, label in _WORKSTREAM_ORDER:
         names = [
@@ -255,6 +286,12 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
         ]
         if names:
             lines.append(f"   - {label}: {'; '.join(names)}")
+    window_names = _names(catalog, catalog.windowable_kpi_ids) or "none of the registry KPIs"
+    lines.append(
+        '   A time window ("last 3 months", "Q1 2025", "2025-01-01 to 2025-03-31") applies ONLY to '
+        f"{window_names}; every other KPI answers its current value and reports that a window "
+        "does not apply, so never promise a window for those."
+    )
     lines.append("   " + AXIS_RULES)
 
     axis_names = _names(catalog, catalog.axis_kpi_ids)
@@ -481,6 +518,12 @@ _CAUSAL_ASK_RE = re.compile(
 # Competitor SHARE / VOLUME / performance DATA is NEVER (the catalog's TRx share is
 # portfolio share); the competitor landscape as clinical context (section E) is
 # served, so "versus competitors" needs one of these words in the same clause.
+# An out-/underperform or beat verb directly before the noun ("outperforming the
+# competition") needs no data word: the ask is a commercial comparison the platform
+# cannot make. Bare "perform" before the noun is the transitive "perform the
+# competitor review" (served context), so the prefix is mandatory. A trial-endpoint
+# ask in the verb-noun shape is an accepted false drop (it costs only a backfill
+# pill); "compare versus competitors on <endpoint>" survives.
 _COMPETITOR_DATA_WORDS = (
     r"(?:share|volume|TRx|NRx|NBRx|sales|revenue|uptake|growth|prescriptions?|scripts?|"
     r"adoption|persistence|adherence|rates?|perform\w*|outperform\w*|benchmark\w*|"
@@ -559,7 +602,9 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         re.compile(
             rf"\bcompetit(?:ors?|ion)'?s? (?:market )?(?:share|volume|TRx|NRx|NBRx|sales)\b"
             rf"|\b{_COMPETITOR_DATA_WORDS}\b[^.?]{{0,80}}\b(?:vs\.?|versus|against|with) {_COMPETITOR_NOUN}\b"
-            rf"|\b(?:vs\.?|versus|against|with) {_COMPETITOR_NOUN}\b[^.?]{{0,80}}\b{_COMPETITOR_DATA_WORDS}\b",
+            rf"|\b(?:vs\.?|versus|against|with) {_COMPETITOR_NOUN}\b[^.?]{{0,80}}\b{_COMPETITOR_DATA_WORDS}\b"
+            rf"|\b(?:out|under)perform\w*\s+{_COMPETITOR_NOUN}\b"
+            rf"|\bbeat(?:s|ing|en)?\s+{_COMPETITOR_NOUN}\b",
             re.I,
         ),
     ),
@@ -567,16 +612,27 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 
 
 # Part C publishes the page summary to the assistant as a readable, so a pill
-# MAY read, rank or compare SHAP, CATE, gap or prediction values that are
-# literally on screen (the pill prompt says so). The four artefact rules
-# therefore yield when the question names the on-screen artefact AND asks for
-# nothing that would extend it (another axis, a trend, a recomputation). The
-# extends-list mirrors the pill prompt's own forbidden verbs (recompute,
-# validate, extend, explain WHY) and the artefact rules' own trend/axis
-# vocabulary, so the exemption can never keep what those rules were written
-# to drop.
+# MAY read, rank or compare SHAP, CATE, gap, prediction or optimizer territory
+# values that are literally on screen (the pill prompt says so; the
+# /resource-optimization summary publishes the allocation count, projected ROI
+# and outcome, and the largest increase and decrease, not the territory table
+# itself). The artefact rules listed below therefore yield when the question
+# names the on-screen artefact AND asks for nothing that would extend it
+# (another axis, a trend, a recomputation). The extends-list mirrors the pill
+# prompt's own forbidden verbs (recompute, validate, extend, explain WHY) and
+# the artefact rules' own trend/axis vocabulary, so the exemption drops the
+# recompute, why, trend and by-axis shapes that list names (every AXIS_RULES
+# axis plus territory, specialty, cohort and subgroup); an extension phrased
+# outside that vocabulary is kept, and the exemption never proves the summary
+# carries the row the pill names.
 _ON_SCREEN_ARTEFACT_RULES = frozenset(
-    {"shap_or_feature_importance", "gap_recompute", "uplift_by_segment", "individual_prediction"}
+    {
+        "shap_or_feature_importance",
+        "gap_recompute",
+        "uplift_by_segment",
+        "individual_prediction",
+        "territory_detail",
+    }
 )
 _ON_SCREEN_RE = re.compile(
     r"\bon[- ]screen\b|\bon the (?:page|screen)\b|\b(?:shown|displayed|visible)\b", re.I
@@ -584,7 +640,10 @@ _ON_SCREEN_RE = re.compile(
 _EXTENDS_ON_SCREEN_RE = re.compile(
     r"\bre-?comput\w*|\bre-?calculat\w*|\bre-?run\b|\bvalidat\w*|\bextend\w*|\banother\b|"
     r"\bmore features\b|\bwhy\b|\breasons?\b|\bbecause\b|\bdrivers? behind\b|\bwhat drives\b|"
-    r"\bby (?:census |HCP )?(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
+    # "by" + up to two modifier words + an axis noun: "by patient severity tier",
+    # "by US census region", "by prior therapy line", "by current line of therapy".
+    r"\bby (?:[\w-]+ ){0,2}(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
+    r"\bby (?:[\w-]+ ){0,2}(?:lines?[- ]of[- ]therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
     r"\bper[- ]territory\b|\btrends?\b|\bover time\b|\bover the (?:past|last)\b|\bmonth\w*|"
     r"\bsince\b|\bchang\w*|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
     re.I,
@@ -630,10 +689,11 @@ def journey_outcomes(catalog: CapabilityCatalog) -> Tuple[str, ...]:
 def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
     """Name of the rule ``text`` violates, or None when the pill is supported.
 
-    On-screen READ questions (Part C) bypass the four artefact rules unless
-    they also ask to extend the artefact. Aggregate HCP-segment likelihood
-    asks (by specialty or region, section D) bypass individual_prediction
-    unless an individual HCP or patient is named.
+    On-screen READ questions (Part C) bypass the artefact rules named in
+    ``_ON_SCREEN_ARTEFACT_RULES`` unless they also ask to extend the
+    artefact. Aggregate HCP-segment likelihood asks (by specialty or
+    region, section D) bypass individual_prediction unless an individual
+    HCP or patient is named.
     """
     on_screen_read = bool(_ON_SCREEN_RE.search(text)) and not _EXTENDS_ON_SCREEN_RE.search(text)
     for name, pattern in _OFF_PLATFORM_RULES:
@@ -715,12 +775,19 @@ class _CatalogCache:
     the running loop inside ``get()`` - never at import time, where an asyncio
     primitive would bind to whichever loop exists first. A build that
     ``reset()`` orphaned mid-flight still serves its own waiters but neither
-    writes the cache nor clears a newer build's future.
+    writes the cache nor clears a newer build's future; the guard is a
+    per-build token so an eager task factory (build finished inside
+    ``ensure_future``) publishes too.
     """
 
     def __init__(self) -> None:
         self._catalog: Optional[CapabilityCatalog] = None
         self._inflight: Optional["asyncio.Future[CapabilityCatalog]"] = None
+        # The build allowed to publish, as a token rather than the task object:
+        # under an eager task factory the build can finish inside
+        # ensure_future(), before ``_inflight`` is even assigned, and a
+        # task-identity check would then never publish nor clear (#1901 item 5).
+        self._generation: Optional[object] = None
 
     async def get(
         self,
@@ -736,13 +803,22 @@ class _CatalogCache:
             if current - cached.loaded_at < ttl:
                 return cached
         if self._inflight is None:
-            self._inflight = asyncio.ensure_future(
-                self._refresh(cached, now, coverage_loader, outcomes_loader)
+            token = object()
+            self._generation = token
+            future = asyncio.ensure_future(
+                self._refresh(token, cached, now, coverage_loader, outcomes_loader)
             )
+            # An eager build that never suspended has already finished, clearing
+            # itself and publishing if it succeeded; storing its finished future
+            # would pin it forever.
+            if not future.done():
+                self._inflight = future
+            return await asyncio.shield(future)
         return await asyncio.shield(self._inflight)
 
     async def _refresh(
         self,
+        token: object,
         previous: Optional[CapabilityCatalog],
         now: Optional[float],
         coverage_loader: Optional[CoverageLoader],
@@ -755,16 +831,20 @@ class _CatalogCache:
             fresh = _keep_last_good_fields(fresh, previous)
             if now is not None:
                 fresh = dataclasses.replace(fresh, loaded_at=now)
-            if self._inflight is asyncio.current_task():
+            if self._generation is token:
                 self._catalog = fresh
             return fresh
         finally:
-            if self._inflight is asyncio.current_task():
+            if self._generation is token:
                 self._inflight = None
+                self._generation = None
 
     def reset(self) -> None:
+        # _inflight and _generation are written and cleared together; clearing one
+        # without the other strands the cache (no build may ever clear the slot).
         self._catalog = None
         self._inflight = None
+        self._generation = None
 
 
 _cache = _CatalogCache()
