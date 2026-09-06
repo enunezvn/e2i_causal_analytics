@@ -953,6 +953,7 @@ async def test_eager_task_factory_publishes_and_clears():
         first = await c.get(now=1000.0, coverage_loader=cov, outcomes_loader=out)
         assert c._catalog is first
         assert c._inflight is None
+        assert c._generation is None
         second = await c.get(
             now=1000.0 + cat.CATALOG_TTL_SECONDS + 1, coverage_loader=cov, outcomes_loader=out
         )
@@ -961,3 +962,27 @@ async def test_eager_task_factory_publishes_and_clears():
     assert second is not first
     assert c._catalog is second
     assert (cov.calls, out.calls) == (2, 2)
+
+
+async def test_eager_task_factory_keeps_single_flight_when_build_suspends():
+    """Under asyncio.eager_task_factory a build that suspends must fall back to
+    the stored-future path: gathered cold callers share one build."""
+
+    async def slow_coverage() -> List[Dict[str, Any]]:
+        await asyncio.sleep(0.01)
+        return await _coverage()
+
+    cov, out = _Counting(slow_coverage), _Counting(_outcomes)
+    c = cat._CatalogCache()
+    loop = asyncio.get_running_loop()
+    loop.set_task_factory(asyncio.eager_task_factory)
+    try:
+        results = await asyncio.gather(
+            *(c.get(now=1000.0, coverage_loader=cov, outcomes_loader=out) for _ in range(5))
+        )
+    finally:
+        loop.set_task_factory(None)
+    assert all(r is results[0] for r in results)
+    assert c._catalog is results[0]
+    assert c._inflight is None and c._generation is None
+    assert (cov.calls, out.calls) == (1, 1)

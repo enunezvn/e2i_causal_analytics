@@ -772,8 +772,9 @@ class _CatalogCache:
             future = asyncio.ensure_future(
                 self._refresh(token, cached, now, coverage_loader, outcomes_loader)
             )
-            # An eager build that never suspended has already published and
-            # cleared itself; storing its finished future would pin it forever.
+            # An eager build that never suspended has already finished, clearing
+            # itself and publishing if it succeeded; storing its finished future
+            # would pin it forever.
             if not future.done():
                 self._inflight = future
             return await asyncio.shield(future)
@@ -803,6 +804,8 @@ class _CatalogCache:
                 self._generation = None
 
     def reset(self) -> None:
+        # _inflight and _generation are written and cleared together; clearing one
+        # without the other strands the cache (no build may ever clear the slot).
         self._catalog = None
         self._inflight = None
         self._generation = None
