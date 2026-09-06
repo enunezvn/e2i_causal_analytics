@@ -516,18 +516,47 @@ _CAUSAL_ASK_RE = re.compile(
     r"\b(?:driv\w*|caus\w*|paths?|effects?|why|influenc\w*|factors?|impacts?|refut\w*|confiden\w*)\b",
     re.I,
 )
-# A TIME-SERIES ask over the outcome is not exempted by a causal word (#1906):
-# section C is a static registry and the NEVER list names trends of effects, so
-# "chart the monthly trend of persistent_180d to see if its drivers shifted" and
-# "have the drivers of persistent_180d shifted over time" are served by no tool.
-# A bare time WINDOW ("in the last 6 months") is not in this set: "what drives
-# persistent_180d in the last 6 months" still gets the drivers, so it stays. A
-# frequency adjective on a driver ("do weekly rep visits drive persistent_180d")
-# is an accepted false drop: it costs one backfill pill, and the registry has no
-# such driver node to answer it with anyway.
-_TREND_ASK_RE = re.compile(
-    r"\b(?:trends?|over time|monthly|month-over-month|quarterly|weekly)\b", re.I
+# A TIME-SERIES or DISPLAY word that ATTACHES to the outcome is not exempted by a
+# causal word (#1906): section C is a static registry and the NEVER list names
+# trends of effects, so "chart the monthly trend of persistent_180d to see if its
+# drivers shifted", "plot persistent_180d values and explain the causal factors"
+# and "have the drivers of persistent_180d shifted over time" are served by no
+# tool. "Attaches" is lexical: the word sits within _ATTACH_SPAN_WORDS words of
+# the outcome with no causal word between them. A word BEFORE the outcome may be
+# any of the set; only "trend" / "over time" may FOLLOW it ("persistent_180d over
+# time"), because the frequency adjectives modify the noun after them, so "what
+# drives adherent_180d for weekly-dosed patients" stays. A causal word between
+# the two means the time word modifies a DRIVER ("does monthly copay support
+# drive persistent_180d?"), which section C answers, so it stays. "causal graph"
+# is section C's own vocabulary and never counts as a display word. A bare time
+# WINDOW ("in the last 6 months") is not in the set.
+_SERIES_BEFORE_OUTCOME_RE = re.compile(
+    r"\b(?:trends?|over time|monthly|month-over-month|quarterly|weekly|chart|plot|(?<!causal )graph)\b",
+    re.I,
 )
+_SERIES_AFTER_OUTCOME_RE = re.compile(r"\b(?:trends?|over time)\b", re.I)
+_ATTACH_SPAN_WORDS = 6
+
+
+def _series_attaches_to_outcome(lowered: str, spans: Sequence[Tuple[int, int]]) -> bool:
+    """True when a trend / display word attaches to one of the outcome mentions."""
+    for pattern, word_first in (
+        (_SERIES_BEFORE_OUTCOME_RE, True),
+        (_SERIES_AFTER_OUTCOME_RE, False),
+    ):
+        for hit in pattern.finditer(lowered):
+            for start, end in spans:
+                if word_first and hit.end() <= start:
+                    between = lowered[hit.end() : start]
+                elif not word_first and end <= hit.start():
+                    between = lowered[end : hit.start()]
+                else:
+                    continue
+                if len(between.split()) > _ATTACH_SPAN_WORDS or _CAUSAL_ASK_RE.search(between):
+                    continue
+                return True
+    return False
+
 
 # Competitor SHARE / VOLUME / performance DATA is NEVER (the catalog's TRx share is
 # portfolio share); the competitor landscape as clinical context (section E) is
@@ -725,12 +754,13 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
     for outcome in journey:
         needle = outcome.lower()
         spaced = needle.replace("_", " ")
-        if (
-            re.search(rf"\b{re.escape(needle)}\b", lowered) is None
-            and re.search(rf"\b{re.escape(spaced)}\b", lowered) is None
-        ):
+        spans = [
+            m.span()
+            for m in re.finditer(rf"\b(?:{re.escape(needle)}|{re.escape(spaced)})\b", lowered)
+        ]
+        if not spans:
             continue
-        if _TREND_ASK_RE.search(lowered) or (
+        if _series_attaches_to_outcome(lowered, spans) or (
             _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered)
         ):
             return f"outcome_as_kpi:{outcome}"

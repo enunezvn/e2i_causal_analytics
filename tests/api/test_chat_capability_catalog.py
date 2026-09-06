@@ -529,6 +529,23 @@ DROP_FIXTURES = [
         "Driver drift",
         "Have the causal drivers of persistent_180d shifted over time?",
     ),
+    # #1906 codex: a chart / plot / graph verb whose OBJECT is the outcome drops
+    # whatever causal tail follows
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence chart",
+        "Chart the persistent_180d rate for Remibrutinib to see if causal drivers shifted.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence plot",
+        "Plot persistent_180d values for Kisqali and explain causal factors.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by segment",
+        "Graph persistent_180d by segment and show which causal paths matter.",
+    ),
     (
         "uplift_by_segment",
         "CATE by tier",
@@ -757,6 +774,14 @@ KEEP_FIXTURES = [
     (
         "Causal graph paths",
         "In the causal graph, which paths lead to persistent_180d for Kisqali?",
+    ),
+    # #1906 codex: a frequency adjective on a DRIVER is not a trend of the outcome
+    ("Monthly copay support", "Does monthly copay support drive persistent_180d for Remibrutinib?"),
+    ("Weekly PSP touchpoints", "Do weekly PSP touchpoints influence adherent_180d for Fabhalta?"),
+    ("Weekly rep visits", "Do weekly rep visits drive persistent_180d for Remibrutinib?"),
+    (
+        "Chart causal drivers",
+        "Chart the causal drivers of persistent_180d for Remibrutinib.",
     ),
     ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
     ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),
