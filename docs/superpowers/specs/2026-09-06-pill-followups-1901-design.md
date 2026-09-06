@@ -27,7 +27,7 @@ fresh 92-pill grading run as its own gate.
 ### 3.1 Loader timeout (item 1)
 `CATALOG_LOADER_TIMEOUT_SECONDS = 5.0`. Each loader call in `build_capability_catalog` is wrapped
 in `asyncio.wait_for`. `asyncio.TimeoutError` is an `Exception`, so the existing handler logs a
-warning, marks the field degraded and `_keep_last_good_fields` carries the previous lists
+warning (the message names the exception class, since `str(TimeoutError())` is empty), marks the field degraded and `_keep_last_good_fields` carries the previous lists
 forward; the degraded catalog is retried after `DEGRADED_TTL_SECONDS`. Sequential execution is
 kept by choice (one in-flight query at a time against a possibly stalled database; the factory
 itself is concurrency-safe, see §2). Worst case per refresh drops from ~80 s to 10 s. `wait_for`

@@ -262,6 +262,29 @@ Append to `KEEP_FIXTURES` (before the closing `]`):
     ),
 ```
 
+Also (final review, commit `ed32bb5b6`): the deny-list `_EXTENDS_ON_SCREEN_RE` must name EVERY `AXIS_RULES` axis, and it omitted line of therapy, so once `territory_detail` joined the exemption "Break the on-screen territory allocation down by line of therapy." was kept (the same ask against SHAP/CATE was already kept). Add, directly after the existing `by (?:census |HCP )?(...)` alternation line, inside the same `re.compile`:
+
+```python
+    r"\bby (?:lines? of therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
+```
+
+and two more `DROP_FIXTURES` entries (last in the list):
+
+```python
+    (
+        "territory_detail",
+        "On-screen territories by therapy line",
+        "Break the on-screen territory allocation down by line of therapy.",
+    ),
+    (
+        "shap_or_feature_importance",
+        "On-screen SHAP by therapy line",
+        "Split the on-screen SHAP features by line of therapy.",
+    ),
+```
+
+Both are red before the alternation (rule `None`). A plain catalog ask ("Compare TRx by line of therapy for Kisqali.") is unaffected: the deny-list is consulted only inside the exemption.
+
 Append to `DROP_FIXTURES`:
 
 ```python
@@ -309,8 +332,10 @@ Replace the whole comment block above it (from "# Part C publishes the page summ
 # extend it (another axis, a trend, a recomputation). The extends-list
 # mirrors the pill prompt's own forbidden verbs (recompute, validate, extend,
 # explain WHY) and the artefact rules' own trend/axis vocabulary, so the
-# exemption cannot keep an ask that extends the artefact; it does not prove
-# the summary carries the row the pill names.
+# exemption drops the recompute, why, trend and by-axis shapes that list names
+# (every AXIS_RULES axis plus territory, specialty, cohort and subgroup); an
+# extension phrased outside that vocabulary is kept, and the exemption never
+# proves the summary carries the row the pill names.
 ```
 
 Also change the `match_unsupported_rule` docstring from "bypass the four artefact rules unless" to "bypass the artefact rules named in ``_ON_SCREEN_ARTEFACT_RULES`` unless", so the docstring refers to the set by name and the count cannot go stale.
@@ -491,6 +516,25 @@ async def test_axis_rules_window_composition_matches_calculators():
         context={},
     )
     assert suffix(biologic_qid).endswith("_biologic_windowed")
+    line_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Kisqali",
+        region=None,
+        window=window,
+        therapy_line="1",
+        context={},
+    )
+    assert suffix(line_qid).endswith("_line_windowed")
+    # ige_tier is brand-gated like biologic
+    ige_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Remibrutinib",
+        region=None,
+        window=window,
+        ige_tier="high",
+        context={},
+    )
+    assert suffix(ige_qid).endswith("_ige_tier_windowed")
 
     # 2. TRx Share / Conversion Rate: a window does NOT compose with region.
     for kpi_id in ("WS3-BI-008", "WS3-BI-009"):
@@ -577,7 +621,7 @@ Check `grep -n "CapabilityCatalog(" src/ tests/` still shows only the builder (n
 - [ ] **Step 4: Run the file's tests plus the suggestions tests**
 
 Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py tests/api/test_chat_suggestions.py -n 0 -q -p no:cacheprovider`
-Expected: all PASS (159 = 133 + 26 at this point on the branch).
+Expected: all PASS (161 = 135 + 26 at the end of the branch).
 
 - [ ] **Step 5: Lint, scoped mypy, commit**
 
