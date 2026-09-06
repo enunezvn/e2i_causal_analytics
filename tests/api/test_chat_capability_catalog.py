@@ -372,6 +372,20 @@ async def test_axis_rules_window_composition_matches_calculators():
         "precision", {"brand": "Kisqali", "region": "west", "trigger_type": None, "window": window}
     )
     assert suffix(trigger_qid).endswith("_windowed_region")
+    # #1901 item 4k: the tool's own prose (docstring + window Field) reaches the
+    # LLM as the tool description and must agree with the resolver above; it
+    # claimed the opposite from migration 120 (#1388) until #1901.
+    from src.api.routes.chatbot_tools import KpiCalculateInput, kpi_calculate_tool
+
+    tool_doc = kpi_calculate_tool.coroutine.__doc__ or ""
+    window_doc = KpiCalculateInput.model_fields["window"].description or ""
+    for stale in (
+        "does NOT compose with an explicit",
+        "nor with region for the trigger",
+        "NOT combinable with region",
+    ):
+        assert stale not in tool_doc and stale not in window_doc, stale
+    assert "brand/trigger_type/region" in window_doc
 
     # The sentence's three families partition the windowable set exactly.
     c = await make_catalog()
