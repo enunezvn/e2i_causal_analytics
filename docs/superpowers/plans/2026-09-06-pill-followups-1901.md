@@ -346,6 +346,11 @@ git commit -m "fix(chat): on-screen territory reads survive the validator (#1901
         "Outperforming competitors on share",
         "Is Fabhalta outperforming competitors on market share?",
     ),
+    (
+        "competitor_data",
+        "Beating the competition?",
+        "Is Kisqali beating the competition?",
+    ),
 ```
 
 `KEEP_FIXTURES`:
@@ -355,18 +360,31 @@ git commit -m "fix(chat): on-screen territory reads survive the validator (#1901
         "MoA differences",
         "How does Fabhalta's mechanism of action differ from competitors'?",
     ),
+    (
+        "Competitor review",
+        "Perform the competitor landscape review for Fabhalta's PNH indication.",
+    ),
 ```
 
-- [ ] **Step 2: Run** `-k "known_unsupported or supported_pills_are_kept"` — the two new drops FAIL (rule `None`), the keep PASSES.
+- [ ] **Step 2: Run** `-k "known_unsupported or supported_pills_are_kept"` — the "Outperforming …" drops FAIL (rule `None`), the "Beating …" drop FAILS too, and both keeps PASS on the old rule. (The "Competitor review" keep is the regression guard for the mandatory prefix below: with an optional `(?:out|under)?` it would be dropped, because bare "perform" before the noun is the transitive "perform the competitor review", a served section-E ask.)
 
 - [ ] **Step 3: Implement** — add two alternations to the `competitor_data` pattern (after the existing third alternation, inside the same `re.compile`):
 
 ```python
-            rf"|\b(?:out|under)?perform\w*\s+{_COMPETITOR_NOUN}\b"
+            rf"|\b(?:out|under)perform\w*\s+{_COMPETITOR_NOUN}\b"
             rf"|\bbeat(?:s|ing|en)?\s+{_COMPETITOR_NOUN}\b",
 ```
 
-(Keep `re.I`.) Update the comment above `_COMPETITOR_DATA_WORDS` with one sentence: "A performance verb directly before the noun ("outperforming the competition") needs no data word: there is no competitor performance data either way."
+(Keep `re.I`. The `out|under` prefix is MANDATORY: an optional prefix lets the bare transitive "perform the competitor landscape review" drop a served ask, and the bare-verb performance ask always carries a preposition that the second alternation already catches.) Extend the comment above `_COMPETITOR_DATA_WORDS` with these lines, after the three existing ones:
+
+```python
+# An out-/underperform or beat verb directly before the noun ("outperforming the
+# competition") needs no data word: the ask is a commercial comparison the platform
+# cannot make. Bare "perform" before the noun is the transitive "perform the
+# competitor review" (served context), so the prefix is mandatory. A trial-endpoint
+# ask in the verb-noun shape is an accepted false drop (it costs only a backfill
+# pill); "compare versus competitors on <endpoint>" survives.
+```
 
 - [ ] **Step 4: Run the file's tests** — all PASS.
 
