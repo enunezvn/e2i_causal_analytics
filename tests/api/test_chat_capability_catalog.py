@@ -390,6 +390,31 @@ DROP_FIXTURES = [
         "Monthly Conditional ATE",
         "Show the monthly Conditional ATE (CATE) for Remibrutinib.",
     ),
+    (
+        "shap_or_feature_importance",
+        "Why on-screen SHAP",
+        "Why is the on-screen SHAP value for age so high for Fabhalta?",
+    ),
+    (
+        "uplift_by_segment",
+        "Explain displayed CATE",
+        "Explain why the displayed CATE for high-severity patients is negative.",
+    ),
+    (
+        "gap_recompute",
+        "On-screen gap history",
+        "What is the on-screen gap for Kisqali over the past 6 months?",
+    ),
+    (
+        "uplift_by_segment",
+        "On-screen CATE by IgE",
+        "Break the on-screen CATE down by IgE level for Remibrutinib.",
+    ),
+    (
+        "shap_or_feature_importance",
+        "Visible SHAP since",
+        "Has the visible SHAP feature ranking changed since last month?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -446,7 +471,7 @@ KEEP_FIXTURES = [
     ),
     (
         "On-screen gap read",
-        "Which on-screen gap opportunity has the highest expected ROI for Kisqali?",
+        "Which of the on-screen gap bars is largest for Kisqali on the chart?",
     ),
     (
         "Chart Conditional ATE",
@@ -706,3 +731,22 @@ async def test_failed_build_propagates_and_clears_inflight(monkeypatch):
     monkeypatch.undo()
     good = await c.get(coverage_loader=_coverage, outcomes_loader=_outcomes)
     assert good.degraded == ()
+
+
+async def test_reset_mid_flight_discards_the_stale_build():
+    """A build orphaned by reset() still serves its own waiters but must not
+    overwrite the cache or clear a newer build's future."""
+    c = cat._CatalogCache()
+
+    async def slow_coverage():
+        await asyncio.sleep(0.02)
+        return await _coverage()
+
+    first = asyncio.ensure_future(c.get(coverage_loader=slow_coverage, outcomes_loader=_outcomes))
+    await asyncio.sleep(0)  # the first build is now in flight
+    c.reset()
+    second = await c.get(coverage_loader=_coverage, outcomes_loader=_outcomes)
+    stale = await first
+    assert stale is not second
+    assert c._catalog is second
+    assert c._inflight is None

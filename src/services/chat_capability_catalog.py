@@ -524,11 +524,9 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             r"|\(CATE\)[^.?]{0,120}\b(?:trends?|over time|over the (?:past|last)|monthly|month-over-month)\b"
             # Conditional ATE (CATE) is a registry KPI and section B advertises a
             # current-value chart for any registry KPI, so a bare "Chart the
-            # Conditional ATE (CATE)" is answerable; only TREND forms of CATE are
-            # NEVER (a chart/plot with a time word, "trend of ...", or a
-            # month/week/quarter word naming the KPI).
-            r"|\b(?:chart|plot)\b[^.?]{0,120}\(CATE\)[^.?]{0,80}"
-            r"\b(?:trends?|over time|over the (?:past|last)|monthly|month-over-month)\b"
+            # Conditional ATE (CATE)" is answerable; TREND forms are NEVER -
+            # "(CATE) ... <time word>" (the alternative above), "trend of ...
+            # (CATE)", and a month/week/quarter word before the KPI.
             r"|\btrend of\b[^.?]{0,120}\(CATE\)"
             r"|\b(?:monthly|weekly|quarterly)\b[^.?]{0,120}\(CATE\)",
             re.I,
@@ -557,7 +555,11 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 # MAY read, rank or compare SHAP, CATE, gap or prediction values that are
 # literally on screen (the pill prompt says so). The four artefact rules
 # therefore yield when the question names the on-screen artefact AND asks for
-# nothing that would extend it (another axis, a trend, a recomputation).
+# nothing that would extend it (another axis, a trend, a recomputation). The
+# extends-list mirrors the pill prompt's own forbidden verbs (recompute,
+# validate, extend, explain WHY) and the artefact rules' own trend/axis
+# vocabulary, so the exemption can never keep what those rules were written
+# to drop.
 _ON_SCREEN_ARTEFACT_RULES = frozenset(
     {"shap_or_feature_importance", "gap_recompute", "uplift_by_segment", "individual_prediction"}
 )
@@ -566,8 +568,10 @@ _ON_SCREEN_RE = re.compile(
 )
 _EXTENDS_ON_SCREEN_RE = re.compile(
     r"\bre-?comput\w*|\bre-?calculat\w*|\bre-?run\b|\bvalidat\w*|\bextend\w*|\banother\b|"
-    r"\bmore features\b|\bby (?:region|territory|segment|tier|specialty)\b|\bper[- ]territory\b|"
-    r"\btrends?\b|\bover time\b|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
+    r"\bmore features\b|\bwhy\b|\bexplain\w*|"
+    r"\bby (?:census )?(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
+    r"\bper[- ]territory\b|\btrends?\b|\bover time\b|\bover the (?:past|last)\b|\bmonth\w*|"
+    r"\bsince\b|\bchang\w*|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
     re.I,
 )
 
@@ -662,7 +666,9 @@ class _CatalogCache:
     build already in flight instead of each hitting the DB, and a slow degraded
     build can no longer overwrite a faster good one. The future is created on
     the running loop inside ``get()`` - never at import time, where an asyncio
-    primitive would bind to whichever loop exists first.
+    primitive would bind to whichever loop exists first. A build that
+    ``reset()`` orphaned mid-flight still serves its own waiters but neither
+    writes the cache nor clears a newer build's future.
     """
 
     def __init__(self) -> None:
@@ -702,10 +708,12 @@ class _CatalogCache:
             fresh = _keep_last_good_fields(fresh, previous)
             if now is not None:
                 fresh = dataclasses.replace(fresh, loaded_at=now)
-            self._catalog = fresh
+            if self._inflight is asyncio.current_task():
+                self._catalog = fresh
             return fresh
         finally:
-            self._inflight = None
+            if self._inflight is asyncio.current_task():
+                self._inflight = None
 
     def reset(self) -> None:
         self._catalog = None
