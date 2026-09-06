@@ -696,6 +696,11 @@ DROP_FIXTURES = [
         "On-screen SHAP by therapy line",
         "Split the on-screen SHAP features by line of therapy.",
     ),
+    (
+        "territory_detail",
+        "Displayed territories by line-of-therapy",
+        "Break the displayed territory allocation down by line-of-therapy.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
