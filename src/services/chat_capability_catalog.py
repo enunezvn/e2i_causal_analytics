@@ -521,38 +521,55 @@ _CAUSAL_ASK_RE = re.compile(
 # trends of effects, so "chart the monthly trend of persistent_180d to see if its
 # drivers shifted", "plot persistent_180d values and explain the causal factors",
 # "monthly causal driver strength for persistent_180d" and "have the drivers of
-# persistent_180d shifted over time" are served by no tool. "Attaches" is
-# lexical, over title + message:
-#   - a TIME word (trend, over time, monthly, month-over-month, quarterly, weekly)
-#     up to _ATTACH_SPAN_WORDS words BEFORE the outcome attaches unless a causal
-#     VERB sits between them - "does monthly copay support DRIVE persistent_180d?"
-#     makes the time word modify a driver, which section C answers, whereas a
-#     causal NOUN between ("monthly causal driver strength for ...") is a trend of
-#     the causal quantity and still drops;
+# persistent_180d shifted over time" are served by no tool, while a driver ask
+# whose driver carries a frequency adjective ("does monthly copay support drive /
+# boost / reduce persistent_180d?") is a section-C ask and stays - no verb list
+# decides that. "Attaches" is lexical, over title + message, and asks what the
+# time word modifies:
+#   - a TIME word (trend, over time, monthly, month-over-month, quarterly, weekly,
+#     by month / week / quarter) up to _ATTACH_SPAN_WORDS words BEFORE the outcome
+#     attaches when a SERIES noun (trend, rate, value, level, series, chart,
+#     breakdown, count, strength, confidence, estimate, ...) or a CHANGE verb
+#     (shift, change, evolve, drift, ...) sits between them - a series or a change
+#     OF the outcome or of the causal quantity - or when the gap holds no causal
+#     word and is at most one word ("weekly Fabhalta persistent_180d") or the time
+#     word is itself the series noun ("the trend in persistent_180d"). A gap with a
+#     driver noun phrase and its verb ("copay support reminders reduce") is none
+#     of these, so the time word modifies the driver and the pill stays; so does a
+#     title time word over a plain driver message ("Persistence over time - what
+#     are the causal drivers of persistent_180d?");
 #   - a DISPLAY word (chart, plot, graph) BEFORE the outcome attaches unless any
 #     causal word sits between ("chart the causal drivers of persistent_180d" is a
 #     section-C ask), and "causal graph" is section C's own vocabulary;
-#   - "trend" / "over time" AFTER the outcome attach unless a causal verb sits
-#     between ("what drives persistent_180d over time" still drops);
+#   - "trend" / "over time" AFTER the outcome attach when a change verb sits
+#     between or the gap holds no causal word ("what drives persistent_180d over
+#     time" still drops);
 #   - a frequency or display word IMMEDIATELY after the outcome or its rate /
-#     value attaches ("persistent_180d monthly rate", "persistent_180d chart"),
-#     while "adherent_180d for weekly-dosed patients" stays.
+#     value attaches ("persistent_180d monthly rate", "persistent_180d chart",
+#     "persistent_180d by month"), while "adherent_180d for weekly-dosed patients"
+#     stays.
 # Boundaries: an outcome mention farther than _ATTACH_SPAN_WORDS from the time
 # word is an accepted miss (a wider window drops compound pills such as "the
 # monthly TRx trend and what drives persistent_180d"), and a bare time WINDOW
-# ("in the last 6 months") is not in the set.
+# ("in the last 6 months", "over the last year") is not in the set.
 _TIME_WORD_RE = re.compile(
-    r"\b(?:trends?|over time|monthly|month-over-month|quarterly|weekly)\b", re.I
+    r"\b(?:trends?|over time|monthly|month-over-month|quarterly|weekly|by[- ](?:month|week|quarter))\b",
+    re.I,
 )
+# Time words that are themselves the series noun ("the trend in X", "X over time").
+_TREND_NOUN_RE = re.compile(r"\b(?:trends?|over time)\b", re.I)
 _DISPLAY_WORD_RE = re.compile(r"\b(?:chart|plot|(?<!causal )graph)\b", re.I)
-_SERIES_AFTER_OUTCOME_RE = re.compile(r"\b(?:trends?|over time)\b", re.I)
 _ADJACENT_AFTER_OUTCOME_RE = re.compile(
-    r"\b(?:monthly|month-over-month|quarterly|weekly|chart|plot|graph)\b", re.I
+    r"\b(?:monthly|month-over-month|quarterly|weekly|chart|plot|graph|by[- ](?:month|week|quarter))\b",
+    re.I,
 )
-# Causal VERBS only: "driver", "causal", "effect" as nouns do not exempt.
-_CAUSAL_VERB_RE = re.compile(
-    r"\b(?:driv(?:e|es|ing)|influenc(?:e|es|ing)|impact(?:s|ing)?|affect(?:s|ing)?|"
-    r"caus(?:e|es|ing)|predict(?:s|ing)?|lead(?:s|ing)?\s+to|explain(?:s|ing)?)\b",
+_SERIES_NOUN_RE = re.compile(
+    r"\b(?:trends?|rates?|values?|levels?|series|chart|plot|graph|breakdown|percentage|count|"
+    r"volume|strength|confidence|estimates?)\b",
+    re.I,
+)
+_CHANGE_VERB_RE = re.compile(
+    r"\b(?:shift\w*|chang\w*|evolv\w*|drift\w*|fluctuat\w*|var(?:y|ies|ied|ying)|mov(?:e|es|ed|ing))\b",
     re.I,
 )
 _ATTACH_SPAN_WORDS = 6
@@ -561,20 +578,35 @@ _OUTCOME_VALUE_NOUNS = frozenset({"", "rate", "rates", "value", "values"})
 
 def _series_attaches_to_outcome(lowered: str, spans: Sequence[Tuple[int, int]]) -> bool:
     """True when a trend / display word attaches to one of the outcome mentions."""
-    for pattern, exempt in ((_TIME_WORD_RE, _CAUSAL_VERB_RE), (_DISPLAY_WORD_RE, _CAUSAL_ASK_RE)):
-        for hit in pattern.finditer(lowered):
-            for start, _end in spans:
-                if hit.end() > start:
-                    continue
-                between = lowered[hit.end() : start]
-                if len(between.split()) <= _ATTACH_SPAN_WORDS and not exempt.search(between):
-                    return True
-    for hit in _SERIES_AFTER_OUTCOME_RE.finditer(lowered):
+    for hit in _TIME_WORD_RE.finditer(lowered):
+        for start, _end in spans:
+            if hit.end() > start:
+                continue
+            between = lowered[hit.end() : start]
+            gap = len(between.split())
+            if gap > _ATTACH_SPAN_WORDS:
+                continue
+            if _SERIES_NOUN_RE.search(between) or _CHANGE_VERB_RE.search(between):
+                return True
+            if not _CAUSAL_ASK_RE.search(between) and (
+                gap <= 1 or _TREND_NOUN_RE.fullmatch(hit.group(0))
+            ):
+                return True
+    for hit in _DISPLAY_WORD_RE.finditer(lowered):
+        for start, _end in spans:
+            if hit.end() > start:
+                continue
+            between = lowered[hit.end() : start]
+            if len(between.split()) <= _ATTACH_SPAN_WORDS and not _CAUSAL_ASK_RE.search(between):
+                return True
+    for hit in _TREND_NOUN_RE.finditer(lowered):
         for _start, end in spans:
             if end > hit.start():
                 continue
             between = lowered[end : hit.start()]
-            if len(between.split()) <= _ATTACH_SPAN_WORDS and not _CAUSAL_VERB_RE.search(between):
+            if len(between.split()) <= _ATTACH_SPAN_WORDS and (
+                _CHANGE_VERB_RE.search(between) or not _CAUSAL_ASK_RE.search(between)
+            ):
                 return True
     for hit in _ADJACENT_AFTER_OUTCOME_RE.finditer(lowered):
         for _start, end in spans:

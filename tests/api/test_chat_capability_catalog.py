@@ -575,6 +575,11 @@ DROP_FIXTURES = [
         "For Remibrutinib, persistent_180d chart with driver notes.",
     ),
     (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by month",
+        "Show persistent_180d by month with driver notes.",
+    ),
+    (
         "uplift_by_segment",
         "CATE by tier",
         "How does the Conditional ATE (CATE) differ across severity tiers for Remibrutinib?",
@@ -820,6 +825,26 @@ KEEP_FIXTURES = [
     (
         "Monthly impact",
         "What is the monthly impact of copay support on persistent_180d for Kisqali?",
+    ),
+    # #1906 codex: the driver's verb is free text - no verb whitelist decides this
+    ("Weekly visit lift", "Do weekly rep visits boost persistent_180d for Remibrutinib?"),
+    (
+        "Monthly reminders",
+        "Do monthly copay support reminders reduce persistent_180d for Remibrutinib?",
+    ),
+    ("Monthly access calls", "Do monthly access calls matter for persistent_180d for Kisqali?"),
+    (
+        "Weekly hub calls",
+        "Are weekly hub calls associated with persistent_180d for Remibrutinib?",
+    ),
+    # #1906 codex: a time word in the TITLE over a plain driver message stays
+    (
+        "Persistence over time",
+        "What are the causal drivers of persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Monthly persistence drivers",
+        "What factors matter for persistent_180d for Remibrutinib?",
     ),
     ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
     ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),
