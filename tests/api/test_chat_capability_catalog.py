@@ -202,7 +202,8 @@ async def test_windowable_kpis_come_from_the_registry():
 async def test_render_window_clause_names_only_windowable_kpis():
     c = await make_catalog()
     block = cat.render_catalog_block(c)
-    clause = next(line for line in block.splitlines() if "applies ONLY to" in line)
+    clause = next((line for line in block.splitlines() if "applies ONLY to" in line), None)
+    assert clause is not None, "section A must carry the window clause"
     for kpi_id in c.windowable_kpi_ids:
         assert c.kpi_name(kpi_id) in clause
     assert c.kpi_name("CM-002") not in clause
@@ -297,10 +298,17 @@ async def test_axis_rules_window_composition_matches_calculators():
             else query_id
         )
 
+    class _NoQueries:
+        """Sentinel client: any attribute access means a guard moved after its query."""
+
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"routing test must not touch the DB client ({name})")
+
     window = {"start": "2025-01-01", "end": "2025-03-31"}
     # No query runs below: the routing helpers are pure and every guard raises
-    # before _execute_query, so the calculator never resolves its db_client.
-    calc = BusinessImpactCalculator(db_client=None)
+    # before _execute_query. The sentinel PROVES it - a guard that moved after
+    # its query would reach this client and fail the test instead of the DB.
+    calc = BusinessImpactCalculator(db_client=_NoQueries())
 
     # 1. Volume KPIs: a window composes with ANY ONE axis (migrations 084/105/108).
     region_qid, _ = calc._resolve_windowed_call(
