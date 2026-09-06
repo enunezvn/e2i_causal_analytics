@@ -553,6 +553,11 @@ DROP_FIXTURES = [
         "Outperforming competitors on share",
         "Is Fabhalta outperforming competitors on market share?",
     ),
+    (
+        "competitor_data",
+        "Beating the competition?",
+        "Is Kisqali beating the competition?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -682,6 +687,10 @@ KEEP_FIXTURES = [
     (
         "MoA differences",
         "How does Fabhalta's mechanism of action differ from competitors'?",
+    ),
+    (
+        "Competitor review",
+        "Perform the competitor landscape review for Fabhalta's PNH indication.",
     ),
 ]
 

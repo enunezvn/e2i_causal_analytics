@@ -505,8 +505,12 @@ _CAUSAL_ASK_RE = re.compile(
 # Competitor SHARE / VOLUME / performance DATA is NEVER (the catalog's TRx share is
 # portfolio share); the competitor landscape as clinical context (section E) is
 # served, so "versus competitors" needs one of these words in the same clause.
-# A performance verb directly before the noun ("outperforming the competition")
-# needs no data word: there is no competitor performance data either way.
+# An out-/underperform or beat verb directly before the noun ("outperforming the
+# competition") needs no data word: the ask is a commercial comparison the platform
+# cannot make. Bare "perform" before the noun is the transitive "perform the
+# competitor review" (served context), so the prefix is mandatory. A trial-endpoint
+# ask in the verb-noun shape is an accepted false drop (it costs only a backfill
+# pill); "compare versus competitors on <endpoint>" survives.
 _COMPETITOR_DATA_WORDS = (
     r"(?:share|volume|TRx|NRx|NBRx|sales|revenue|uptake|growth|prescriptions?|scripts?|"
     r"adoption|persistence|adherence|rates?|perform\w*|outperform\w*|benchmark\w*|"
@@ -586,7 +590,7 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             rf"\bcompetit(?:ors?|ion)'?s? (?:market )?(?:share|volume|TRx|NRx|NBRx|sales)\b"
             rf"|\b{_COMPETITOR_DATA_WORDS}\b[^.?]{{0,80}}\b(?:vs\.?|versus|against|with) {_COMPETITOR_NOUN}\b"
             rf"|\b(?:vs\.?|versus|against|with) {_COMPETITOR_NOUN}\b[^.?]{{0,80}}\b{_COMPETITOR_DATA_WORDS}\b"
-            rf"|\b(?:out|under)?perform\w*\s+{_COMPETITOR_NOUN}\b"
+            rf"|\b(?:out|under)perform\w*\s+{_COMPETITOR_NOUN}\b"
             rf"|\bbeat(?:s|ing|en)?\s+{_COMPETITOR_NOUN}\b",
             re.I,
         ),
