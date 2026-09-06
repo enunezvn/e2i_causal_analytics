@@ -298,6 +298,8 @@ _ON_SCREEN_ARTEFACT_RULES = frozenset(
 
 In the comment block above it change "The four artefact rules" to "The five artefact rules (SHAP, gap, uplift, individual prediction, territory detail)" and "SHAP, CATE, gap or prediction values" to "SHAP, CATE, gap, prediction or optimizer territory values" (the /resource-optimization summary publishes the allocation count, ROI, largest increase and largest decrease).
 
+Also change the `match_unsupported_rule` docstring from "bypass the four artefact rules unless" to "bypass the artefact rules named in ``_ON_SCREEN_ARTEFACT_RULES`` unless", so the docstring refers to the set by name and the count cannot go stale.
+
 - [ ] **Step 4: Run the file's tests** — all PASS.
 
 - [ ] **Step 5: Lint, scoped mypy, commit**
