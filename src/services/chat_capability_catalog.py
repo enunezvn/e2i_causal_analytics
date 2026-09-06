@@ -290,3 +290,134 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
     lines.append("")
     lines.append(NEVER_BLOCK)
     return "\n".join(lines)
+
+
+# =============================================================================
+# ROUTE HINTS - used only when page_content is empty
+# =============================================================================
+# One sentence per app route (frontend/src/router/routes.tsx, auth routes
+# excluded): what the page shows and which catalog letters fit it. A renamed
+# route simply falls back to today's behaviour (path + brand only).
+
+ROUTE_HINTS: Dict[str, str] = {
+    "/": (
+        "Home dashboard: KPI tiles (TRx, market share, HCP reach), active campaigns, model accuracy, "
+        "system health and the top gap opportunity; pills should ask for KPI values or trends (A/B), "
+        "drivers of the gap's KPI (C) or platform health (F)."
+    ),
+    "/documentation": (
+        "How E2I Works: explains the platform, its agents and analyses; pills should ask what the "
+        "assistant can analyse, which agents exist (F) or where a KPI is defined (A)."
+    ),
+    "/ai-insights": (
+        "Executive Insights: brand-level narrative of KPI movements and causal drivers; pills should "
+        "ask for KPI values and trends (A/B) and causal drivers (C)."
+    ),
+    "/knowledge-graph": (
+        "Knowledge Graph: causal paths between drivers and outcomes; pills should ask for the drivers "
+        "of a registry outcome (C) or the KPIs those outcomes relate to (A)."
+    ),
+    "/causal-analysis": (
+        "Causal Analysis: treatment-effect estimates driver -> outcome with confidence and refutation; "
+        "pills should ask for drivers or paths of an outcome (C), never a trend of an effect."
+    ),
+    "/causal-discovery": (
+        "Causal Discovery: discovered causal graphs over the patient-journey data; pills should ask for "
+        "drivers of a registry outcome (C) or the related KPIs (A)."
+    ),
+    "/segment-analysis": (
+        "Segment Analysis: KPI and effect differences across patient axes (severity tier, line of "
+        "therapy, biologic/IgE for Remibrutinib); pills should ask for KPI breakdowns by ONE axis (A/D)."
+    ),
+    "/expert-reviews": (
+        "Expert Reviews: human review queue for agent outputs; pills should ask about agents and "
+        "platform status (F) or the KPIs under review (A)."
+    ),
+    "/predictive-analytics": (
+        "Predictive Analytics: scored cohorts and predicted probabilities from the ML models; pills "
+        "should ask for the HCP segment likelihood ranking (D), model-performance KPIs (A) or clinical "
+        "context (E), never per-patient predictions."
+    ),
+    "/model-performance": (
+        "Model Performance: ROC-AUC, PR-AUC, F1, calibration and PSI drift KPIs; pills should ask for "
+        "those KPI values or charts (A/B)."
+    ),
+    "/feature-importance": (
+        "Feature Importance: SHAP feature rankings for the brand models; pills should turn a feature "
+        "into a catalog ask - HCP segment likelihood (D), a KPI breakdown (A) or clinical context (E) - "
+        "never SHAP recomputation."
+    ),
+    "/time-series": (
+        "Time Series: monthly KPI history with nowcast; pills should ask for trend charts and period "
+        "comparisons of ONE KPI (B) or KPI values over a window (A)."
+    ),
+    "/intervention-impact": (
+        "Intervention Impact: measured effects of interventions on outcomes; pills should ask for "
+        "drivers or treatment effects of a registry outcome (C) and the affected KPIs (A/B)."
+    ),
+    "/digital-twin": (
+        "Digital Twin: simulated intervention scenarios; pills should ask for the causal drivers behind "
+        "a scenario's outcome (C) or the baseline KPI values (A)."
+    ),
+    "/gap-analysis": (
+        "Gap Analysis: KPI gaps versus target by segment with expected ROI; pills should ask for the "
+        "underlying KPI value or breakdown (A), its trend (B) or its drivers (C), never a trend of the "
+        "gap itself."
+    ),
+    "/resource-optimization": (
+        "Resource Optimization: recommended field-force allocation by territory; pills should ask for "
+        "regional KPI breakdowns (A), ROI (A/B) or causal drivers (C), never territory-level detail."
+    ),
+    "/experiments": (
+        "Experiments: designed A/B tests and experiment proposals; pills should ask for experiment "
+        "design through the orchestrator (F) or the KPIs an experiment targets (A), never live lift or "
+        "results."
+    ),
+    "/kpi-dictionary": (
+        "KPI Dictionary: registry definitions of every KPI; pills should ask for the value, definition, "
+        "chart or drivers of specific KPIs (A/B/C)."
+    ),
+    "/data-quality": (
+        "Data Quality: source coverage, match rate and freshness KPIs; pills should ask for those KPI "
+        "values or charts (A/B)."
+    ),
+    "/system-health": (
+        "System Health: platform health score and component status; pills should ask about the health "
+        "score and the agents (F)."
+    ),
+    "/monitoring": (
+        "Monitoring: drift and model-monitoring KPIs; pills should ask for PSI/drift and "
+        "model-performance KPI values or charts (A/B) or a drift check via the orchestrator (F)."
+    ),
+    "/analytics": (
+        "Analytics: cross-brand KPI overview; pills should ask for KPI values, comparisons and trends "
+        "(A/B)."
+    ),
+    "/agent-orchestration": (
+        "Agent Orchestration: the agent tiers and their recent activity; pills should ask which agents "
+        "exist, what they do and what they did recently (F)."
+    ),
+    "/memory-architecture": (
+        "Memory Architecture: how the assistant's memory tiers work; pills should ask about the "
+        "platform and agents (F) or search internal documents (G)."
+    ),
+    "/audit-chain": (
+        "Audit Chain: provenance of agent decisions; pills should ask about agents and their activity "
+        "(F), never audit-cycle metrics."
+    ),
+    "/feedback-learning": (
+        "Feedback Learning: how user feedback improves the agents; pills should ask about agents (F) "
+        "or internal documents (G)."
+    ),
+    "/admin": (
+        "Administration: users and settings; pills should stay on platform status and agents (F)."
+    ),
+}
+
+
+def route_hint(page: Optional[str]) -> str:
+    """Hint for ``page`` ('' when unknown). Tolerates a query string and a trailing slash."""
+    if not page:
+        return ""
+    path = page.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+    return ROUTE_HINTS.get(path, "")

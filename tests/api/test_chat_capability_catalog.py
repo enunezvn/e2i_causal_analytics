@@ -228,3 +228,32 @@ def test_axis_vocabulary_matches_kpi_calculate_tool():
     for axis in cat.AXIS_PARAMETER_NAMES:
         assert axis in params, axis
         assert axis in cat.AXIS_RULES, axis
+
+
+# =============================================================================
+# ROUTE HINTS
+# =============================================================================
+
+
+def test_route_hints_are_normalized_paths_with_a_catalog_letter():
+    assert "/" in cat.ROUTE_HINTS
+    for path, hint in cat.ROUTE_HINTS.items():
+        assert path.startswith("/"), path
+        assert path == "/" or not path.endswith("/"), path
+        assert hint.strip() == hint and hint.endswith("."), path
+        # every hint tells the model which catalog letters fit: "(A/B)", "(C)"
+        assert _re.search(r"\([A-H](?:/[A-H])*\)", hint), path
+
+
+def test_route_hint_lookup_tolerates_query_and_trailing_slash():
+    expected = cat.ROUTE_HINTS["/kpi-dictionary"]
+    assert cat.route_hint("/kpi-dictionary") == expected
+    assert cat.route_hint("/kpi-dictionary/") == expected
+    assert cat.route_hint("/kpi-dictionary?tab=ws3") == expected
+    assert cat.route_hint("/") == cat.ROUTE_HINTS["/"]
+
+
+def test_route_hint_unknown_or_missing_page_is_empty():
+    assert cat.route_hint("/nope") == ""
+    assert cat.route_hint(None) == ""
+    assert cat.route_hint("") == ""
