@@ -502,18 +502,129 @@ P = TypeVar("P", bound=SuggestionLike)
 # A time-boxed journey flag (persistent_180d) is never a KPI.
 _DURATION_OUTCOME_RE = re.compile(r"_\d+d$", re.I)
 
-# "the <outcome> rate / trend / by region ..." - the outcome used as a metric.
+# "the <outcome> rate / chart / by region ..." - the outcome used as a metric.
 _VALUE_ASK_RE = re.compile(
-    r"\b(?:rates?|values?|levels?|trends?|chart|plot|graph|over time|monthly|month-over-month|"
-    r"quarterly|weekly|by (?:census )?region|by (?:severity )?tier|by segment|by line|breakdown|"
-    r"distribution|percentage|how many|count|volume)\b",
+    r"\b(?:rates?|values?|levels?|chart|plot|graph|by (?:census )?region|by (?:severity )?tier|"
+    r"by segment|by line|breakdown|distribution|percentage|how many|count|volume)\b",
     re.I,
 )
-# ... unless the pill is a causal question, which section C serves.
+# ... unless the pill is a causal question, which section C serves: "what drives
+# the persistent_180d rate?" has the outcome's rate as the OBJECT of the ask, and
+# "the causal graph" is section C's own vocabulary, so a causal word anywhere in
+# title + message exempts the value shape above.
 _CAUSAL_ASK_RE = re.compile(
-    r"\b(?:driv\w*|caus\w*|paths?|effects?|why|influenc\w*|factors?|impacts?|refut\w*|confiden\w*)\b",
+    r"\b(?:driv\w*|caus\w*|paths?|effects?|why|influenc\w*|factors?|impacts?|refut\w*|confiden\w*|matters?)\b",
     re.I,
 )
+# A TIME-SERIES or DISPLAY word that ATTACHES to the outcome is not exempted by a
+# causal word (#1906): section C is a static registry and the NEVER list names
+# trends of effects, so "chart the monthly trend of persistent_180d to see if its
+# drivers shifted", "plot persistent_180d values and explain the causal factors",
+# "monthly causal driver strength for persistent_180d" and "have the drivers of
+# persistent_180d shifted over time" are served by no tool, while a driver ask
+# whose driver carries a frequency adjective ("does monthly copay support drive /
+# boost / reduce persistent_180d?", "do monthly changes in copay support influence
+# persistent_180d?") is a section-C ask and stays. "Attaches" is lexical, over
+# title + message, and asks whether the outcome is the OBJECT of the series:
+#   - a TIME word (trend, over time, time series, monthly, month-over-month /
+#     month-to-month / quarter-over-quarter, quarterly, weekly, by month / week /
+#     quarter) up to _ATTACH_SPAN_WORDS words BEFORE the outcome
+#     attaches when the gap ENDS with a series noun or change verb plus a
+#     preposition (and an optional article, possessive or brand) - "monthly trend
+#     of Remibrutinib's persistent_180d", "monthly ... strength for
+#     persistent_180d", "over time ... drivers shifted for persistent_180d" - or
+#     when the gap holds no causal word and is at most one word ("weekly Fabhalta
+#     persistent_180d") or is a bare preposition after "trend" / "over time"
+#     ("the trend in persistent_180d"). A gap that ends with a driver phrase and
+#     its verb ("changes in copay support influence", "TRx trend and what drives")
+#     is none of these, so the time word belongs to the driver or to another KPI
+#     and the pill stays;
+#   - a DISPLAY word (chart, plot, graph) BEFORE the outcome attaches unless any
+#     causal word sits between ("chart the causal drivers of persistent_180d" is a
+#     section-C ask), and "causal graph" is section C's own vocabulary;
+#   - "trend" / "over time" AFTER the outcome attach when a change verb sits
+#     between or the gap holds no causal word ("what drives persistent_180d over
+#     time" still drops);
+#   - a frequency or display word right after the outcome, its rate / value, or
+#     "rate as a" / "rates in a" attaches ("persistent_180d monthly rate",
+#     "persistent_180d rate as a chart", "persistent_180d by month"), while
+#     "adherent_180d for weekly-dosed patients" stays.
+# Boundaries: an outcome mention farther than _ATTACH_SPAN_WORDS from the time
+# word is an accepted miss, and a bare time WINDOW ("in the last 6 months",
+# "over the last year") is not in the set.
+_PERIOD_CHANGE = r"month[- ](?:over|to)[- ]month|quarter[- ]over[- ]quarter"
+_TIME_WORD_RE = re.compile(
+    rf"\b(?:trends?|over time|time[- ]?series|monthly|{_PERIOD_CHANGE}|quarterly|weekly|"
+    r"by[- ](?:month|week|quarter))\b",
+    re.I,
+)
+# Time words that are themselves the series noun ("the trend in X", "X over time",
+# "a time series of X").
+_TREND_NOUN_RE = re.compile(r"\b(?:trends?|over time|time[- ]?series)\b", re.I)
+_DISPLAY_WORD_RE = re.compile(r"\b(?:chart|plot|(?<!causal )graph)\b", re.I)
+_ADJACENT_AFTER_OUTCOME_RE = re.compile(
+    rf"\b(?:monthly|{_PERIOD_CHANGE}|quarterly|weekly|chart|plot|graph|by[- ](?:month|week|quarter))\b",
+    re.I,
+)
+_CHANGE_VERBS = (
+    r"shift\w*|chang\w*|evolv\w*|drift\w*|fluctuat\w*|var(?:y|ies|ied|ying)|mov(?:e|es|ed|ing)"
+)
+_CHANGE_VERB_RE = re.compile(rf"\b(?:{_CHANGE_VERBS})\b", re.I)
+# The gap between a time word and the outcome ends with "<series noun | change
+# verb> <preposition> [the | Brand's | one word]": the outcome owns the series.
+_OUTCOME_OWNED_GAP_RE = re.compile(
+    r"(?:^|\s)(?:trends?|rates?|values?|levels?|series|chart|plot|graph|breakdown|percentage|count|"
+    rf"volume|strength|confidence|estimates?|{_CHANGE_VERBS})"
+    r"\s+(?:of|for|in|on|to)\s+(?:the\s+|\w+'s\s+|\w+\s+)?$",
+    re.I,
+)
+_BARE_PREPOSITION_GAP_RE = re.compile(r"^\s*(?:of|for|in|on)\s+(?:the\s+|\w+'s\s+|\w+\s+)?$", re.I)
+_ADJACENT_GAP_RE = re.compile(r"^\s*(?:rates?|values?)?\s*(?:(?:as|in)\s+(?:an?|the)\s*)?$", re.I)
+_ATTACH_SPAN_WORDS = 6
+
+
+def _series_attaches_to_outcome(lowered: str, spans: Sequence[Tuple[int, int]]) -> bool:
+    """True when a trend / display word attaches to one of the outcome mentions."""
+    for hit in _TIME_WORD_RE.finditer(lowered):
+        for start, _end in spans:
+            if hit.end() > start:
+                continue
+            between = lowered[hit.end() : start]
+            gap = len(between.split())
+            if gap > _ATTACH_SPAN_WORDS:
+                continue
+            if _OUTCOME_OWNED_GAP_RE.search(between):
+                return True
+            if not _CAUSAL_ASK_RE.search(between) and (
+                gap <= 1
+                or (
+                    _TREND_NOUN_RE.fullmatch(hit.group(0))
+                    and _BARE_PREPOSITION_GAP_RE.match(between)
+                )
+            ):
+                return True
+    for hit in _DISPLAY_WORD_RE.finditer(lowered):
+        for start, _end in spans:
+            if hit.end() > start:
+                continue
+            between = lowered[hit.end() : start]
+            if len(between.split()) <= _ATTACH_SPAN_WORDS and not _CAUSAL_ASK_RE.search(between):
+                return True
+    for hit in _TREND_NOUN_RE.finditer(lowered):
+        for _start, end in spans:
+            if end > hit.start():
+                continue
+            between = lowered[end : hit.start()]
+            if len(between.split()) <= _ATTACH_SPAN_WORDS and (
+                _CHANGE_VERB_RE.search(between) or not _CAUSAL_ASK_RE.search(between)
+            ):
+                return True
+    for hit in _ADJACENT_AFTER_OUTCOME_RE.finditer(lowered):
+        for _start, end in spans:
+            if end <= hit.start() and _ADJACENT_GAP_RE.match(lowered[end : hit.start()]):
+                return True
+    return False
+
 
 # Competitor SHARE / VOLUME / performance DATA is NEVER (the catalog's TRx share is
 # portfolio share); the competitor landscape as clinical context (section E) is
@@ -711,12 +822,15 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
     for outcome in journey:
         needle = outcome.lower()
         spaced = needle.replace("_", " ")
-        if (
-            re.search(rf"\b{re.escape(needle)}\b", lowered) is None
-            and re.search(rf"\b{re.escape(spaced)}\b", lowered) is None
-        ):
+        spans = [
+            m.span()
+            for m in re.finditer(rf"\b(?:{re.escape(needle)}|{re.escape(spaced)})\b", lowered)
+        ]
+        if not spans:
             continue
-        if _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered):
+        if _series_attaches_to_outcome(lowered, spans) or (
+            _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered)
+        ):
             return f"outcome_as_kpi:{outcome}"
     return None
 
