@@ -281,6 +281,19 @@ benefit from the catalog and validator equally.
    not claim to have computed SHAP values. Hold the cert until the last
    deploy run is terminal, and grep lazy-chunk bundles by their own hash.
 
+**Gate 5.1 result (2026-09-06, worktree dfc361eb3, real catalog + claude-haiku-4-5
+via `get_fast_llm`, 23 scenarios, 92 pills, two blind graders reconciled):**
+NO 3.4% on kept pills / 8.7% on all generated (gate ≤ 10%); NO 3.3% kept /
+9.4% generated on the `page_context` pages (gate ≤ 10%); 12 distinct lead
+pills across the 12 no-context openers (gate ≥ 3); 0 parse failures. PASS on
+the first iteration. The validator dropped 5 pills, all graded NO (precision
+5/5) and missed 3 (responder-cohort extension, live experiment status, a
+non-journey outcome used as a rate). Kept-pill OK/PARTIAL/NO = 75/9/3 versus
+baseline 23/30/39 and prototype v2 70/14/8 on 92. Evidence:
+`docs/demos/results/2026-09-05_pill_suggestions_review/` — `proto_v3.py`,
+`proto_v3.log`, `prototype_v3_pills.json`, `prototype_v3_system_prompt.txt`,
+`v3_grades.md`.
+
 ## 6. Files
 
 | File | Change |
