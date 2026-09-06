@@ -432,6 +432,21 @@ DROP_FIXTURES = [
         "Per-HCP by specialty",
         "List each HCP's predicted probability by specialty for Kisqali.",
     ),
+    (
+        "individual_prediction",
+        "Top HCPs by region",
+        "Show the top 20 HCPs by predicted 90-day adoption probability by region for Kisqali.",
+    ),
+    (
+        "individual_prediction",
+        "Which HCPs by specialty",
+        "Which HCPs have the highest predicted probability by specialty for Kisqali?",
+    ),
+    (
+        "individual_prediction",
+        "Ranked HCPs per region",
+        "List the HCPs with a predicted probability above 0.8 per region.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -505,6 +520,14 @@ KEEP_FIXTURES = [
     (
         "Top specialty likelihood",
         "Which specialty has the highest mean predicted probability for Kisqali?",
+    ),
+    (
+        "Mean likelihood for HCPs",
+        "What is the mean predicted probability for HCPs by specialty for Kisqali?",
+    ),
+    (
+        "Main on-screen driver",
+        "Which on-screen SHAP feature is the main driver of Fabhalta adoption?",
     ),
 ]
 

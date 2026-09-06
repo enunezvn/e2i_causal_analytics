@@ -571,7 +571,7 @@ _ON_SCREEN_RE = re.compile(
 )
 _EXTENDS_ON_SCREEN_RE = re.compile(
     r"\bre-?comput\w*|\bre-?calculat\w*|\bre-?run\b|\bvalidat\w*|\bextend\w*|\banother\b|"
-    r"\bmore features\b|\bwhy\b|\breasons?\b|\bbecause\b|\bdrivers? (?:of|behind)\b|\bwhat drives\b|"
+    r"\bmore features\b|\bwhy\b|\breasons?\b|\bbecause\b|\bdrivers? behind\b|\bwhat drives\b|"
     r"\bby (?:census )?(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
     r"\bper[- ]territory\b|\btrends?\b|\bover time\b|\bover the (?:past|last)\b|\bmonth\w*|"
     r"\bsince\b|\bchang\w*|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
@@ -589,7 +589,11 @@ _AGGREGATE_LIKELIHOOD_RE = re.compile(
 )
 _INDIVIDUAL_ASK_RE = re.compile(
     r"\b(?:each|individual|specific|this|that|single) (?:HCP|patient|prescriber|doctor)s?\b|"
-    r"\b(?:HCP|patient)[- ]?\d+\b|\bpropensity scores?\b|\b(?:HCP|patient) (?:list|roster)s?\b",
+    r"\b(?:HCP|patient)[- ]?\d+\b|\bpropensity scores?\b|\b(?:HCP|patient) (?:list|roster)s?\b|"
+    # ranked or listed HCPs with an axis word are still an HCP list, not a segment aggregate
+    r"\btop \d* ?(?:HCP|prescriber|physician|doctor|patient)s\b|"
+    r"\b(?:which|list|name|rank) (?:the )?(?:HCP|prescriber|physician|doctor|patient)s\b|"
+    r"\b(?:HCP|prescriber)s (?:shown|with)\b",
     re.I,
 )
 
