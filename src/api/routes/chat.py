@@ -25,9 +25,14 @@ turn and falls back to static context-aware pills on any error, so this
 route fails FAST and LOUD (502) rather than degrade to invented output.
 
 Suggestion topics are constrained to what the chatbot's bound tools
-(``E2I_CHATBOT_TOOLS`` in ``chatbot_tools.py``) can actually answer: KPI
-queries/calculations, causal analysis, segments, clinical context, agent
-status, and document retrieval.
+(``E2I_CHATBOT_TOOLS`` in ``chatbot_tools.py``) and generative-UI actions can
+actually answer. Since 2026-09-05 that constraint is a capability CATALOG
+interpolated into the prompt from code and data
+(``src.services.chat_capability_catalog``: KPI registry, history coverage,
+causal outcomes, agent roster) plus a narrow deterministic post-filter that
+drops the pill families measured unanswerable (SHAP recomputation, territory
+detail, per-patient predictions, causal outcomes used as KPIs, ...). Drops are
+logged at INFO with their rule so the production drop rate is measurable.
 """
 
 from __future__ import annotations
@@ -43,6 +48,8 @@ from pydantic import BaseModel, Field, field_validator
 from src.api.dependencies.auth import require_auth
 from src.services.chat_capability_catalog import (
     CapabilityCatalog,
+    filter_unsupported_pills,
+    get_capability_catalog,
     render_catalog_block,
     route_hint,
 )
@@ -54,7 +61,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 # Transcript bounds: enough context for good follow-ups, small enough that
-# the fast-tier call stays ~1k input tokens.
+# the fast-tier call stays a few thousand input tokens (the catalog-filled
+# system prompt alone is ~2.1k; measured 2026-09-06).
 MAX_TRANSCRIPT_MESSAGES = 12
 MAX_MESSAGE_CHARS = 1500
 MAX_PAGE_CONTEXT_CHARS = 4000
@@ -225,8 +233,8 @@ def _parse_suggestions(raw: str) -> List[ChatSuggestionItem]:
         "One fast-tier LLM call; returns up to four pills. Non-empty "
         "messages → follow-ups from the recent transcript; empty messages "
         "(opener mode) → openers grounded in page_context. 502 on any "
-        "generation/parsing failure — the frontend falls back to its static "
-        "context-aware pills."
+        "generation/parsing failure or when the post-filter drops every pill — the "
+        "frontend falls back to its static context-aware pills."
     ),
 )
 async def generate_chat_suggestions(
@@ -240,11 +248,15 @@ async def generate_chat_suggestions(
         "page_content": payload.page_context or "",
         "conversation": [{"role": m.role, "content": m.content} for m in payload.messages],
     }
-    llm = get_fast_llm(max_tokens=500, timeout=8)
+    catalog = await get_capability_catalog()
+    system_prompt = build_system_prompt(catalog, payload.page)
+    # 600 (was 500): catalog-grounded pill messages name a brand and an axis and
+    # run a little longer; measured 2.0-3.3 s against the 8 s timeout.
+    llm = get_fast_llm(max_tokens=600, timeout=8)
     try:
         reply = await llm.ainvoke(
             [
-                SystemMessage(content=_SYSTEM_PROMPT),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=json.dumps(context, ensure_ascii=False)),
             ]
         )
@@ -261,4 +273,18 @@ async def generate_chat_suggestions(
             status_code=502, detail="suggestion generation returned no usable pills"
         ) from exc
 
-    return SuggestionsResponse(suggestions=suggestions)
+    kept, dropped = filter_unsupported_pills(suggestions, catalog)
+    for pill, rule in dropped:
+        # INFO, not DEBUG: the drop rate is the production measurement of how
+        # often the prompt still proposes an unanswerable pill.
+        logger.info(
+            "chat suggestion dropped rule=%s page=%s title=%r",
+            rule,
+            payload.page or "/",
+            pill.title,
+        )
+    if not kept:
+        raise HTTPException(
+            status_code=502, detail="suggestion generation returned no supported pills"
+        )
+    return SuggestionsResponse(suggestions=kept)
