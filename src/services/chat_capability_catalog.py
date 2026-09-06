@@ -213,7 +213,8 @@ AXIS_RULES = (
 
 NEVER_BLOCK = (
     "NEVER PROPOSE (no tool serves these): named HCP or patient lists / rosters / exports; "
-    'territory-level detail; competitor brands\' share or volume; TRx/NRx/NBRx "by HCP segment" '
+    "territory-level detail; per-HCP or per-patient predictions; model retraining; competitor brands' "
+    'share or volume; TRx/NRx/NBRx "by HCP segment" '
     "(patient axes only); trends over time of SHAP values, CATE / treatment effects, predicted "
     "probabilities, gap sizes or optimizer allocations; recomputing, validating, re-deriving or "
     "EXTENDING an on-screen SHAP, optimizer, prediction, gap or CATE result (another segment, more "
@@ -257,7 +258,9 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
     lines.append("   " + AXIS_RULES)
 
     axis_names = _names(catalog, catalog.axis_kpi_ids)
-    if "trend_coverage" in catalog.degraded or not catalog.trend_kpi_ids:
+    # fallbacks key on EMPTY data: a degraded refresh that carried last-good lists
+    # forward still renders them
+    if not catalog.trend_kpi_ids:
         trend_clause = (
             "a monthly trend line for the KPIs with a materialized history (the coverage list is "
             f"unavailable right now - the Rx-volume KPIs {axis_names} always have one; propose trends "
@@ -270,7 +273,7 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
         f"{axis_names}; any other registry KPI as a current-value chart; several KPIs side by side."
     )
 
-    if "causal_outcomes" in catalog.degraded:
+    if not catalog.causal_outcomes:
         lines.append(
             "C. Causal drivers, causal paths and treatment effects from the causal-path registry, per "
             "brand, with confidence and refutation evidence, for the registry's patient-journey and "
@@ -568,10 +571,25 @@ _ON_SCREEN_RE = re.compile(
 )
 _EXTENDS_ON_SCREEN_RE = re.compile(
     r"\bre-?comput\w*|\bre-?calculat\w*|\bre-?run\b|\bvalidat\w*|\bextend\w*|\banother\b|"
-    r"\bmore features\b|\bwhy\b|\bexplain\w*|"
+    r"\bmore features\b|\bwhy\b|\breasons?\b|\bbecause\b|\bdrivers? (?:of|behind)\b|\bwhat drives\b|"
     r"\bby (?:census )?(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
     r"\bper[- ]territory\b|\btrends?\b|\bover time\b|\bover the (?:past|last)\b|\bmonth\w*|"
     r"\bsince\b|\bchang\w*|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
+    re.I,
+)
+
+# Section D advertises segment-level likelihood (predict_hcp_segment_likelihood_tool:
+# mean propensity by specialty or geographic region), so an AGGREGATE likelihood ask
+# is answerable; individual_prediction yields to it unless an individual marker is
+# present.
+_AGGREGATE_LIKELIHOOD_RE = re.compile(
+    r"\b(?:by|per|across|for each|which|top) "
+    r"(?:specialty|specialties|(?:geographic |census )?regions?|(?:HCP )?segments?)\b",
+    re.I,
+)
+_INDIVIDUAL_ASK_RE = re.compile(
+    r"\b(?:each|individual|specific|this|that|single) (?:HCP|patient|prescriber|doctor)s?\b|"
+    r"\b(?:HCP|patient)[- ]?\d+\b|\bpropensity scores?\b|\b(?:HCP|patient) (?:list|roster)s?\b",
     re.I,
 )
 
@@ -597,12 +615,20 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
     """Name of the rule ``text`` violates, or None when the pill is supported.
 
     On-screen READ questions (Part C) bypass the four artefact rules unless
-    they also ask to extend the artefact.
+    they also ask to extend the artefact. Aggregate HCP-segment likelihood
+    asks (by specialty or region, section D) bypass individual_prediction
+    unless an individual HCP or patient is named.
     """
     on_screen_read = bool(_ON_SCREEN_RE.search(text)) and not _EXTENDS_ON_SCREEN_RE.search(text)
     for name, pattern in _OFF_PLATFORM_RULES:
         if pattern.search(text):
             if on_screen_read and name in _ON_SCREEN_ARTEFACT_RULES:
+                continue
+            if (
+                name == "individual_prediction"
+                and _AGGREGATE_LIKELIHOOD_RE.search(text)
+                and not _INDIVIDUAL_ASK_RE.search(text)
+            ):
                 continue
             return name
     lowered = text.lower()
@@ -644,7 +670,13 @@ def filter_unsupported_pills(
 def _keep_last_good_fields(
     fresh: CapabilityCatalog, previous: Optional[CapabilityCatalog]
 ) -> CapabilityCatalog:
-    """On a degraded refresh, carry the previous catalog's good DB-backed fields forward."""
+    """On a degraded refresh, carry the previous catalog's good DB-backed fields forward.
+
+    ``degraded`` still names the fields whose refresh failed, so the cache
+    retries in ``DEGRADED_TTL_SECONDS`` and the outage stays visible; the
+    renderer shows the carried-forward lists because it keys on empty data,
+    not on the marker.
+    """
     if previous is None or not fresh.degraded:
         return fresh
     updates: Dict[str, Any] = {}
@@ -655,8 +687,7 @@ def _keep_last_good_fields(
         updates["causal_outcomes"] = previous.causal_outcomes
     if not updates:
         return fresh
-    still_degraded = tuple(d for d in fresh.degraded if d in previous.degraded)
-    return dataclasses.replace(fresh, degraded=still_degraded, **updates)
+    return dataclasses.replace(fresh, **updates)
 
 
 class _CatalogCache:

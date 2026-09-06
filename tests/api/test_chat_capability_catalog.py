@@ -191,6 +191,8 @@ async def test_render_roster_never_block_and_letters():
     block = cat.render_catalog_block(c)
     assert "The E2I system has" in block
     assert "NEVER PROPOSE" in block
+    assert "model retraining" in block
+    assert "per-HCP or per-patient predictions" in block
     for letter in "ABCDEFGH":
         assert f"\n{letter}. " in block or block.startswith(f"{letter}. "), letter
     section_lines = [line for line in block.splitlines() if _re.match(r"^[A-Z]\. ", line)]
@@ -415,6 +417,21 @@ DROP_FIXTURES = [
         "Visible SHAP since",
         "Has the visible SHAP feature ranking changed since last month?",
     ),
+    (
+        "shap_or_feature_importance",
+        "Drivers of on-screen SHAP",
+        "What are the drivers behind the on-screen SHAP ranking for Fabhalta?",
+    ),
+    (
+        "individual_prediction",
+        "HCP-level probability",
+        "What is the predicted probability for HCP 12345?",
+    ),
+    (
+        "individual_prediction",
+        "Per-HCP by specialty",
+        "List each HCP's predicted probability by specialty for Kisqali.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -476,6 +493,18 @@ KEEP_FIXTURES = [
     (
         "Chart Conditional ATE",
         "Chart the Conditional ATE (CATE) for Kisqali sample drops.",
+    ),
+    (
+        "Explain on-screen SHAP",
+        "Explain what the on-screen SHAP chart shows for Fabhalta.",
+    ),
+    (
+        "Likelihood by specialty",
+        "What is the mean predicted probability by specialty for Kisqali?",
+    ),
+    (
+        "Top specialty likelihood",
+        "Which specialty has the highest mean predicted probability for Kisqali?",
     ),
 ]
 
@@ -635,7 +664,22 @@ async def test_refresh_failure_keeps_last_good_fields():
     assert after.causal_outcomes == good.causal_outcomes
     assert after.trend_kpi_ids == good.trend_kpi_ids
     assert after.per_brand_only_trend_ids == good.per_brand_only_trend_ids
-    assert after.degraded == ()  # stale-but-good is not degraded
+    # the failure is recorded (so the cache retries in 60 s and the outage is visible) ...
+    assert after.degraded == ("trend_coverage", "causal_outcomes")
+    # ... while the prompt still shows the carried-forward lists, not the fallbacks
+    block = cat.render_catalog_block(after)
+    assert "unavailable right now" not in block
+    assert "coverage list is unavailable" not in block
+    for outcome in good.causal_outcomes:
+        assert outcome in block
+    # and the degraded TTL applies: a good DB heals it after 60 s, not 10 min
+    healed = await cache.get(
+        now=cat.CATALOG_TTL_SECONDS + 1 + cat.DEGRADED_TTL_SECONDS + 1,
+        coverage_loader=_coverage,
+        outcomes_loader=_outcomes,
+    )
+    assert healed.degraded == ()
+    assert healed is not after
 
 
 async def test_module_level_accessor_and_reset(monkeypatch, request):
@@ -661,22 +705,22 @@ async def test_module_level_accessor_and_reset(monkeypatch, request):
 @pytest.mark.parametrize(
     "fresh_kind, prev_kind, expect_degraded, expect_trends, expect_outcomes",
     [
-        # (fresh, previous) -> merged degraded markers, trend count, outcome count
+        # (fresh, previous) -> this refresh's failed fields, trend count, outcome count
         # "full" = the healthy catalog's own counts, 0 = the field stayed empty
         ("trend_bad", None, ("trend_coverage",), 0, "full"),
-        ("trend_bad", "outcomes_bad", (), "full", "full"),
-        ("outcomes_bad", "trend_bad", (), "full", "full"),
+        ("trend_bad", "outcomes_bad", ("trend_coverage",), "full", "full"),
+        ("outcomes_bad", "trend_bad", ("causal_outcomes",), "full", "full"),
         ("trend_bad", "both_bad", ("trend_coverage",), 0, "full"),
-        ("both_bad", "healthy", (), "full", "full"),
-        ("both_bad", "trend_bad", ("trend_coverage",), 0, "full"),
+        ("both_bad", "healthy", ("trend_coverage", "causal_outcomes"), "full", "full"),
+        ("both_bad", "trend_bad", ("trend_coverage", "causal_outcomes"), 0, "full"),
         ("healthy", "both_bad", (), "full", "full"),
     ],
 )
 async def test_keep_last_good_fields_partial_cases(
     fresh_kind, prev_kind, expect_degraded, expect_trends, expect_outcomes
 ):
-    """A degraded refresh carries forward only the fields the PREVIOUS catalog
-    had good, and stays degraded only where both were bad."""
+    """A degraded refresh carries forward the fields the PREVIOUS catalog had
+    good; ``degraded`` always records the fields that failed in THIS refresh."""
 
     async def build(kind):
         if kind == "healthy":
