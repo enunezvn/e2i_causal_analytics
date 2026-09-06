@@ -447,6 +447,21 @@ DROP_FIXTURES = [
         "Ranked HCPs per region",
         "List the HCPs with a predicted probability above 0.8 per region.",
     ),
+    (
+        "competitor_data",
+        "Share vs competitors",
+        "Compare Kisqali's TRx share against competitors.",
+    ),
+    (
+        "competitor_data",
+        "Volume vs competitor brands",
+        "How does Kisqali's NBRx volume compare versus competitor brands?",
+    ),
+    (
+        "competitor_data",
+        "Perform vs competitors",
+        "How does Fabhalta perform against competitors in PNH?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -528,6 +543,18 @@ KEEP_FIXTURES = [
     (
         "Main on-screen driver",
         "Which on-screen SHAP feature is the main driver of Fabhalta adoption?",
+    ),
+    (
+        "HCP specialties likelihood",
+        "Which HCP specialties have the highest mean predicted probability for Kisqali?",
+    ),
+    (
+        "Likelihood by HCP specialty",
+        "What is the mean predicted probability by HCP specialty for Kisqali?",
+    ),
+    (
+        "Competitor context",
+        "How does Fabhalta compare versus competitors for its PNH indication?",
     ),
 ]
 

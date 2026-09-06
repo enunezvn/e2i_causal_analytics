@@ -547,7 +547,11 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         "competitor_data",
         re.compile(
             r"\bcompetitors?'?s? (?:market )?(?:share|volume|TRx|NRx|sales)\b|"
-            r"\b(?:vs\.?|versus|against) (?:the )?competitors?\b",
+            # competitor SHARE/VOLUME data is NEVER; the competitor landscape as
+            # clinical context (section E) is served, so a bare "versus
+            # competitors" is not enough.
+            r"\b(?:share|volume|TRx|NRx|NBRx|sales|revenue|uptake|growth|perform\w*|outperform\w*)\b"
+            r"[^.?]{0,80}\b(?:vs\.?|versus|against) (?:the )?competitors?\b",
             re.I,
         ),
     ),
@@ -584,7 +588,7 @@ _EXTENDS_ON_SCREEN_RE = re.compile(
 # present.
 _AGGREGATE_LIKELIHOOD_RE = re.compile(
     r"\b(?:by|per|across|for each|which|top) "
-    r"(?:specialty|specialties|(?:geographic |census )?regions?|(?:HCP )?segments?)\b",
+    r"(?:(?:HCP )?specialt(?:y|ies)|(?:geographic |census )?regions?|(?:HCP )?segments?)\b",
     re.I,
 )
 _INDIVIDUAL_ASK_RE = re.compile(
