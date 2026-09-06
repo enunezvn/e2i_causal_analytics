@@ -543,6 +543,16 @@ DROP_FIXTURES = [
         "Trend of territories shown",
         "Show the territory allocation trend over time for the territories shown.",
     ),
+    (
+        "competitor_data",
+        "Outperforming the competition?",
+        "Is Fabhalta outperforming the competition?",
+    ),
+    (
+        "competitor_data",
+        "Outperforming competitors on share",
+        "Is Fabhalta outperforming competitors on market share?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -668,6 +678,10 @@ KEEP_FIXTURES = [
     (
         "On-screen territory table",
         "Read the on-screen territory table: which territory gains the most budget?",
+    ),
+    (
+        "MoA differences",
+        "How does Fabhalta's mechanism of action differ from competitors'?",
     ),
 ]
 
