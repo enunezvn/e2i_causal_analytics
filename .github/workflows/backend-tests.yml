@@ -356,6 +356,9 @@ jobs:
             tests/unit/test_workflows_yaml_parse.py \
             tests/api/test_predictions_endpoints.py \
             tests/api/test_explain_endpoints.py \
+            tests/api/test_chat_suggestions.py \
+            tests/api/test_chat_capability_catalog.py \
+            tests/api/test_copilotkit_readables_note.py \
             --ignore=tests/unit/test_api/test_episodic_memory_bridge.py \
             --ignore=tests/unit/test_api/test_cors_configuration.py \
             --ignore=tests/unit/test_api/test_dependencies/test_auth.py \
