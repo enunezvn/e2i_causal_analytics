@@ -1025,6 +1025,15 @@ class ReflectorModule(dspy.Module):
             if state.evidence_board
             else 0.0
         )
+        # #1904: the investigator declares sufficiency at two items, but the
+        # /3 normaliser needs mean relevance >= 0.75 for two items to clear the
+        # bottom-anchored negative line (reward 0.5 = rating 3.0 on the feedback
+        # learner's 1-5 scale). Live: 8 of 8 two-item sufficient runs graded
+        # negative and fed a false "high negative feedback" pattern. A run the
+        # investigator itself judged sufficient never reads as negative; the
+        # explicit user-feedback adjustment below can still push it under.
+        if state.sufficient_evidence and state.evidence_board:
+            investigator_reward = max(investigator_reward, 0.5)
         # Synthesis reward graded by observable outcome quality, mirroring how
         # the two rewards above are derived. The previous constant
         # ``0.8 if state.response`` had zero variance, so every downstream
