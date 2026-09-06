@@ -611,11 +611,12 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     # Live experiment STATUS (#1907): the tool composer registers only
     # experiment_designer tools and the data-query tool's "experiments" type is a
     # semantic memory search, not a live read, so a read of which experiments or
-    # A/B tests are running / active / live / ongoing / in progress / in flight,
-    # or "currently designed" (the orchestrator's in-flight designs), cannot be
-    # answered. Five shapes match: "<noun> (are|is) currently|now <status>",
-    # "which|what <noun> (are|is) <status>", "list|show [me] [the|all] <noun>
-    # that (are|is) <status>", the adjective form "active / running / live /
+    # A/B tests are running / active / live / ongoing / in progress / in flight /
+    # being run, or "currently designed" (the orchestrator's in-flight designs),
+    # cannot be answered. Six shapes match: "<noun> (are|is) currently|now|
+    # presently|actively <status>", "which|what|are any|how many <noun> (are|is)
+    # <status>", "are any|how many <noun> <status>", "list|show [me] [the|all]
+    # <noun> that (are|is) <status>", the adjective form "active / running / live /
     # ongoing <noun>", and "<noun> in progress|in flight". A match is then
     # exempted by _EXPERIMENT_DESIGN_RE (below) when the pill carries DESIGN or
     # CALCULATION intent, which experiment_designer serves. A status read that
@@ -630,14 +631,17 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     (
         "live_experiment_status",
         re.compile(
-            r"\b(?:experiments?|a/b\s+tests?)\s+(?:that\s+)?(?:are\s+|is\s+)?(?:currently|now)\s+"
-            r"(?:running|active|live|ongoing|designed|in progress|in flight)\b"
-            r"|\b(?:which|what)\s+(?:experiments?|a/b\s+tests?)\s+(?:are|is)\s+"
-            r"(?:running|active|live|ongoing|designed|in progress|in flight)\b"
+            r"\b(?:experiments?|a/b\s+tests?)\s+(?:that\s+)?(?:are\s+|is\s+)?"
+            r"(?:currently|now|presently|actively)\s+"
+            r"(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run)\b"
+            r"|\b(?:which|what|are any|how many)\s+(?:experiments?|a/b\s+tests?)\s+(?:are|is)\s+"
+            r"(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run)\b"
+            r"|\b(?:are any|how many)\s+(?:experiments?|a/b\s+tests?)\s+"
+            r"(?:running|active|live|ongoing|in progress|in[- ]flight|being run)\b"
             r"|\b(?:list|show)\s+(?:me\s+)?(?:the\s+|all\s+)?(?:experiments?|a/b\s+tests?)\s+that\s+"
-            r"(?:are|is)\s+(?:running|active|live|ongoing|designed|in progress|in flight)\b"
+            r"(?:are|is)\s+(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run)\b"
             r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\b"
-            r"|\b(?:experiments?|a/b\s+tests?)\s+(?:in progress|in flight)\b",
+            r"|\b(?:experiments?|a/b\s+tests?)\s+(?:in progress|in[- ]flight)\b",
             re.I,
         ),
     ),
@@ -648,19 +652,25 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 # overlap ("design a live experiment", "how many HCPs do I need if the experiment
 # is running for 6 weeks?"). Exactly these forms count: an imperative design verb
 # on the noun ("design / plan / set up / size / power / run / launch a[n] [new]
-# [live] experiment | A/B test | test"), a modal design ask ("should / can / could
-# / would I / we run | design | plan | set up | size | launch"), a calculation
-# question (how many HCPs, how long should, minimum detectable, to detect, power
-# calculation), or a NEED / REQUIRE tied to N% power, statistical power or a
-# sample size within the same clause. A bare "80% power", "sample size" or
-# "for 6 weeks" does NOT exempt: those also describe a status read. Bare "design"
-# / "designed" as noun or participle ("experiment design status", "designed to
-# measure") is not design intent either.
+# [live] experiment | A/B test | test"); a modal design ask with any actor
+# ("should / can / could / would I | we | the orchestrator run | design | plan |
+# set up | size | launch"); a design NOUN right after the status adjective and
+# noun ("running experiment design | options | candidates | ideas | proposals"),
+# or "candidates | options | ideas to test | detect | improve | lift | measure";
+# a calculation question (how many HCPs, how long should, minimum detectable, to
+# detect / detecting, power calculation); or a NEED / REQUIRE within 40
+# characters of N% power, statistical power or a sample size. A bare "80%
+# power", "sample size" or "for 6 weeks" does NOT exempt: those also describe a
+# status read. Bare "design" / "designed" as noun or participle ("experiment
+# design status", "designed to measure") is not design intent either.
 _EXPERIMENT_DESIGN_RE = re.compile(
     r"\b(?:design|plan|set\s+up|size|power|run|launch)\s+(?:an?|the|my|this|new)\s+(?:\w+\s+){0,2}?"
     r"(?:experiments?|a/b\s+tests?|tests?)\b"
-    r"|\b(?:should|can|could|would)\s+(?:i|we)\s+(?:run|design|plan|set\s+up|size|launch)\b"
-    r"|\b(?:how many hcps|how long should|minimum detectable|to detect|power calculation)\b"
+    r"|\b(?:should|can|could|would)\s+(?:i|we|the\s+\w+|\w+)\s+(?:run|design|plan|set\s+up|size|launch)\b"
+    r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\s+"
+    r"(?:designs?|options?|candidates?|ideas?|proposals?)\b"
+    r"|\b(?:candidates?|options?|ideas?)\s+to\s+(?:test|detect|improve|lift|measure)\b"
+    r"|\b(?:how many hcps|how long should|minimum detectable|to detect|detecting|power calculation)\b"
     r"|\b(?:need|needs|needed|require|requires|required)\b[^.?!]{0,40}?"
     r"\b(?:\d+\s*%\s+power|statistical power|sample size)\b"
     r"|\b(?:\d+\s*%\s+power|statistical power|sample size)\b[^.?!]{0,40}?"

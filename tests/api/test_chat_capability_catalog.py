@@ -566,6 +566,20 @@ DROP_FIXTURES = [
         "Kisqali running list",
         "List the experiments that are running for Kisqali.",
     ),
+    # #1907 codex: status synonyms, yes/no and count reads, hyphenated in-flight
+    (
+        "live_experiment_status",
+        "Actively running",
+        "Which experiments are actively running for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Being run",
+        "What experiments are currently being run through the orchestrator?",
+    ),
+    ("live_experiment_status", "Any running?", "Are any experiments running for Kisqali?"),
+    ("live_experiment_status", "Running count", "How many experiments are running for Kisqali?"),
+    ("live_experiment_status", "In-flight", "Which experiments are in-flight for Kisqali?"),
     (
         "competitor_data",
         "Competitor share",
@@ -861,6 +875,17 @@ KEEP_FIXTURES = [
     ("Next live experiment", "What live experiment should I run for Kisqali NBRx?"),
     ("Live experiment setup", "Which live experiment should I set up for Kisqali NBRx?"),
     ("Live A/B sample size", "What sample size does a live A/B test on Remibrutinib need?"),
+    # #1907 codex: a design noun after the status adjective, a purpose infinitive,
+    # or a modal with any actor is design intent even when it collides with the
+    # adjective form
+    ("Running design", "Which running experiment design would detect a 5% NBRx lift?"),
+    ("Running options", "Show running experiment options for detecting a 5% NBRx lift."),
+    (
+        "Orchestrator launch",
+        "What active experiment should the orchestrator launch to improve Kisqali NBRx?",
+    ),
+    ("Active candidates", "What experiments are active candidates to test Kisqali NBRx lift?"),
+    ("Live ideas", "Which live experiment ideas could lift Fabhalta NBRx?"),
     (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",
