@@ -8,6 +8,7 @@ that its lists come from code.
 
 from __future__ import annotations
 
+import re as _re
 from typing import Any, Dict, List
 
 import pytest  # noqa: F401
@@ -29,6 +30,8 @@ COVERAGE_ROWS: List[Dict[str, Any]] = [
     {"kpi_id": "WS3-BI-010", "brand": "", "region": "", "points": 0},
     # region-scoped row does not make WS3-BI-010 trendable
     {"kpi_id": "WS3-BI-010", "brand": "", "region": "west", "points": 24},
+    # an id that is not in the registry is never offered
+    {"kpi_id": "WS3-BI-099", "brand": "", "region": "", "points": 12},
     # junk row is skipped
     {"kpi_id": "", "brand": None, "points": "x"},
 ]
@@ -91,6 +94,7 @@ async def test_trend_sets_from_coverage_rows():
     assert c.trend_kpi_ids == frozenset({"WS3-BI-005", "WS3-BI-007"})
     assert c.per_brand_only_trend_ids == frozenset({"WS3-BI-007"})
     assert "WS3-BI-010" not in c.trend_kpi_ids
+    assert "WS3-BI-099" not in c.trend_kpi_ids
 
 
 async def test_axis_kpis_from_segmented_history_families():
@@ -143,14 +147,33 @@ async def test_render_lists_registry_kpis_by_area():
     assert "Total Prescriptions (TRx)" in block
 
 
+def _section(block: str, letter: str) -> str:
+    return next(line for line in block.splitlines() if line.startswith(f"{letter}. "))
+
+
 async def test_render_trend_and_axis_kpis_by_name():
     c = await make_catalog()
     block = cat.render_catalog_block(c)
-    assert f"{c.kpi_name('WS3-BI-007')} (per brand only)" in block
-    assert c.kpi_name("WS3-BI-005") in block
+    b_line = _section(block, "B")
+    assert f"{c.kpi_name('WS3-BI-007')} (per brand only)" in b_line
+    assert c.kpi_name("WS3-BI-005") in b_line
     # axis KPIs are named in the comparison clause
     for kpi_id in SEGMENTED_KPI_QUERY_FAMILIES:
-        assert c.kpi_name(kpi_id) in block
+        assert c.kpi_name(kpi_id) in b_line
+    # brand-specific registry KPIs carry their brand in section A
+    brand_entry = next(e for e in c.kpis if e.brand)
+    assert f"{brand_entry.name} ({brand_entry.brand} only)" in block
+
+
+async def test_render_empty_trend_set_falls_back_without_dangling_list():
+    async def region_only() -> List[Dict[str, Any]]:
+        return [{"kpi_id": "WS3-BI-005", "brand": "", "region": "west", "points": 24}]
+
+    c = await make_catalog(coverage=region_only)
+    assert c.trend_kpi_ids == frozenset() and c.degraded == ()
+    b_line = _section(cat.render_catalog_block(c), "B")
+    assert "for ;" not in b_line
+    assert "coverage list is unavailable" in b_line
 
 
 async def test_render_causal_outcomes_as_registry_nodes():
@@ -168,6 +191,18 @@ async def test_render_roster_never_block_and_letters():
     assert "NEVER PROPOSE" in block
     for letter in "ABCDEFGH":
         assert f"\n{letter}. " in block or block.startswith(f"{letter}. "), letter
+    section_lines = [line for line in block.splitlines() if _re.match(r"^[A-Z]\. ", line)]
+    assert len(section_lines) == 8, section_lines
+
+
+async def test_workstream_order_covers_every_workstream_and_kpi():
+    from src.kpi.models import Workstream
+
+    assert {w for w, _ in cat._WORKSTREAM_ORDER} == set(Workstream)
+    c = await make_catalog()
+    block = cat.render_catalog_block(c)
+    for entry in c.kpis:
+        assert entry.name in block, entry.id
 
 
 async def test_render_degraded_fallbacks_invent_nothing():

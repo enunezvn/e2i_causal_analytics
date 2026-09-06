@@ -141,9 +141,15 @@ async def build_capability_catalog(
         logger.warning("capability catalog: causal outcomes empty; marking degraded")
         degraded.append("causal_outcomes")
 
+    kpis = _kpi_entries()
+    known = {e.id for e in kpis}
     trend, per_brand_only = _trend_sets(rows)
+    # Offer only registry KPIs: an id that lingers in the coverage view after a
+    # registry change must not reach the prompt as a bare id.
+    trend &= known
+    per_brand_only &= known
     return CapabilityCatalog(
-        kpis=_kpi_entries(),
+        kpis=kpis,
         trend_kpi_ids=trend,
         per_brand_only_trend_ids=per_brand_only,
         axis_kpi_ids=frozenset(SEGMENTED_KPI_QUERY_FAMILIES),
@@ -231,7 +237,7 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
     lines.append("   " + AXIS_RULES)
 
     axis_names = _names(catalog, catalog.axis_kpi_ids)
-    if "trend_coverage" in catalog.degraded:
+    if "trend_coverage" in catalog.degraded or not catalog.trend_kpi_ids:
         trend_clause = (
             "a monthly trend line for the KPIs with a materialized history (the coverage list is "
             f"unavailable right now - the Rx-volume KPIs {axis_names} always have one; propose trends "
