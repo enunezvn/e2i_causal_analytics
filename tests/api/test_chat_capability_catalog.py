@@ -548,6 +548,24 @@ DROP_FIXTURES = [
         "Orchestrator status",
         "Which experiments are designed or running through the orchestrator?",
     ),
+    # #1907: a status read that merely MENTIONS power, sample size or a duration is
+    # still a status read; only calculation or design intent exempts
+    ("live_experiment_status", "Powered experiments", "What active experiments have 80% power?"),
+    (
+        "live_experiment_status",
+        "Six-week experiments",
+        "Which experiments are running for 6 weeks?",
+    ),
+    (
+        "live_experiment_status",
+        "Powered A/B tests",
+        "What A/B tests are running for 6 weeks with 80% power?",
+    ),
+    (
+        "live_experiment_status",
+        "Kisqali running list",
+        "List the experiments that are running for Kisqali.",
+    ),
     (
         "competitor_data",
         "Competitor share",
@@ -835,7 +853,14 @@ KEEP_FIXTURES = [
         "Powered 6-week experiments",
         "Which experiments are running for 6 weeks and need 80% power?",
     ),
-    ("Powered A/B tests", "What A/B tests are running for 6 weeks with 80% power?"),
+    (
+        "Power calculation window",
+        "Which experiment is active for 6 weeks in the power calculation?",
+    ),
+    # #1907: a modal design ask ("what ... should I run / set up") is design intent
+    ("Next live experiment", "What live experiment should I run for Kisqali NBRx?"),
+    ("Live experiment setup", "Which live experiment should I set up for Kisqali NBRx?"),
+    ("Live A/B sample size", "What sample size does a live A/B test on Remibrutinib need?"),
     (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",

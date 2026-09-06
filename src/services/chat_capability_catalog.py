@@ -613,15 +613,17 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     # semantic memory search, not a live read, so a read of which experiments or
     # A/B tests are running / active / live / ongoing / in progress / in flight,
     # or "currently designed" (the orchestrator's in-flight designs), cannot be
-    # answered. Four shapes match: "<noun> (are|is) currently|now <status>",
-    # "which|what <noun> (are|is) <status>", the adjective form "active / running
-    # / live / ongoing <noun>", and "<noun> in progress|in flight". A DESIGN or
-    # POWER ask that happens to use these words ("design a live experiment",
-    # "which experiments are running for 6 weeks and need 80% power?") is
-    # exempted by _EXPERIMENT_DESIGN_RE in match_unsupported_rule, because
-    # experiment_designer serves it. Accepted misses: a bare "<noun> is running"
-    # with no which/what lead and no currently/now ("list the experiments that
-    # are running"), lift or results phrasings (left to the prompt until one
+    # answered. Five shapes match: "<noun> (are|is) currently|now <status>",
+    # "which|what <noun> (are|is) <status>", "list|show [me] [the|all] <noun>
+    # that (are|is) <status>", the adjective form "active / running / live /
+    # ongoing <noun>", and "<noun> in progress|in flight". A match is then
+    # exempted by _EXPERIMENT_DESIGN_RE (below) when the pill carries DESIGN or
+    # CALCULATION intent, which experiment_designer serves. A status read that
+    # merely mentions power, a sample size or a duration ("what active
+    # experiments have 80% power?", "which experiments are running for 6 weeks?")
+    # is still a status read and drops. Accepted misses: a bare "<noun> is
+    # running" with none of the leads above ("the experiment that is running
+    # for Kisqali"), lift or results phrasings (left to the prompt until one
     # appears in a probe), nouns other than experiment / A/B test, and
     # past-tense "designed" without a status lead ("what experiments have been
     # designed"), which is ambiguous and stays kept.
@@ -632,6 +634,8 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             r"(?:running|active|live|ongoing|designed|in progress|in flight)\b"
             r"|\b(?:which|what)\s+(?:experiments?|a/b\s+tests?)\s+(?:are|is)\s+"
             r"(?:running|active|live|ongoing|designed|in progress|in flight)\b"
+            r"|\b(?:list|show)\s+(?:me\s+)?(?:the\s+|all\s+)?(?:experiments?|a/b\s+tests?)\s+that\s+"
+            r"(?:are|is)\s+(?:running|active|live|ongoing|designed|in progress|in flight)\b"
             r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\b"
             r"|\b(?:experiments?|a/b\s+tests?)\s+(?:in progress|in flight)\b",
             re.I,
@@ -639,19 +643,28 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     ),
 )
 
-# An experiment DESIGN or POWER ask (#1907) - an imperative "design / plan / set up
-# / size / power / run a[n] [live] experiment", power or sample-size vocabulary,
-# or a planned duration "for N weeks" - is served by experiment_designer, so the
-# live_experiment_status rule stands down for it even when the words overlap
-# ("design a live experiment", "if the experiment is running for 6 weeks"). Bare
-# "design" / "designed" as a noun or participle ("experiment design status",
-# "designed to measure") is NOT design intent and does not exempt.
+# Experiment DESIGN or CALCULATION intent (#1907), served by experiment_designer,
+# for which the live_experiment_status rule stands down even when the words
+# overlap ("design a live experiment", "how many HCPs do I need if the experiment
+# is running for 6 weeks?"). Exactly these forms count: an imperative design verb
+# on the noun ("design / plan / set up / size / power / run / launch a[n] [new]
+# [live] experiment | A/B test | test"), a modal design ask ("should / can / could
+# / would I / we run | design | plan | set up | size | launch"), a calculation
+# question (how many HCPs, how long should, minimum detectable, to detect, power
+# calculation), or a NEED / REQUIRE tied to N% power, statistical power or a
+# sample size within the same clause. A bare "80% power", "sample size" or
+# "for 6 weeks" does NOT exempt: those also describe a status read. Bare "design"
+# / "designed" as noun or participle ("experiment design status", "designed to
+# measure") is not design intent either.
 _EXPERIMENT_DESIGN_RE = re.compile(
-    r"\b(?:design|plan|set up|size|power|run)\s+(?:an?|the|my|this|new)\s+(?:\w+\s+){0,2}?"
+    r"\b(?:design|plan|set\s+up|size|power|run|launch)\s+(?:an?|the|my|this|new)\s+(?:\w+\s+){0,2}?"
     r"(?:experiments?|a/b\s+tests?|tests?)\b"
-    r"|\b(?:\d+\s*%\s+power|statistical power|sample size|how many hcps|how long should|"
-    r"minimum detectable|to detect)\b"
-    r"|\bfor\s+\d+\s+(?:days?|weeks?|months?)\b",
+    r"|\b(?:should|can|could|would)\s+(?:i|we)\s+(?:run|design|plan|set\s+up|size|launch)\b"
+    r"|\b(?:how many hcps|how long should|minimum detectable|to detect|power calculation)\b"
+    r"|\b(?:need|needs|needed|require|requires|required)\b[^.?!]{0,40}?"
+    r"\b(?:\d+\s*%\s+power|statistical power|sample size)\b"
+    r"|\b(?:\d+\s*%\s+power|statistical power|sample size)\b[^.?!]{0,40}?"
+    r"\b(?:need|needs|needed|require|requires|required)\b",
     re.I,
 )
 
