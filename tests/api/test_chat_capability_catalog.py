@@ -580,6 +580,11 @@ DROP_FIXTURES = [
         "Show persistent_180d by month with driver notes.",
     ),
     (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence as a chart",
+        "Show persistent_180d rate as a chart and explain causal drivers for Remibrutinib.",
+    ),
+    (
         "uplift_by_segment",
         "CATE by tier",
         "How does the Conditional ATE (CATE) differ across severity tiers for Remibrutinib?",
@@ -846,6 +851,29 @@ KEEP_FIXTURES = [
         "Monthly persistence drivers",
         "What factors matter for persistent_180d for Remibrutinib?",
     ),
+    # #1906 codex: a series noun or change verb INSIDE the driver phrase does not
+    # make the time word a series of the outcome
+    (
+        "Copay changes",
+        "Do monthly changes in copay support influence persistent_180d for Remibrutinib?",
+    ),
+    ("Nurse call rate", "Does monthly rate of nurse calls influence persistent_180d for Fabhalta?"),
+    (
+        "Touchpoint volume",
+        "Does weekly volume of PSP touchpoints matter for adherent_180d for Fabhalta?",
+    ),
+    (
+        "Support strength",
+        "Is monthly strength of copay support associated with persistent_180d for Kisqali?",
+    ),
+    (
+        "Lab value changes",
+        "For patients with monthly lab value changes, what drives persistent_180d for Remibrutinib?",
+    ),
+    # #1906 codex: a close compound pill - KPI trend, then a driver ask - stays
+    ("TRx and persistence", "Show monthly TRx trend and what drives persistent_180d for Kisqali."),
+    ("TRx plus drivers", "Show monthly TRx trend plus the drivers of persistent_180d."),
+    ("TRx chart and drivers", "Show a monthly TRx chart alongside drivers of persistent_180d."),
     ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
     ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),
     (
