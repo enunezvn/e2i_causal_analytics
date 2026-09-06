@@ -608,6 +608,32 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             re.I,
         ),
     ),
+    # #1901 item 4c - NEVER "causal drivers scoped to a region, month or
+    # segment". causal_analysis_tool echoes region and time_period WITHOUT
+    # filtering (the causal-path registry has no region, time or segment
+    # dimension; #1694) and the composer's effect estimator takes only
+    # treatment / outcome / confounders, so nothing serves "drivers of X in the
+    # Northeast / in June / by severity tier". The causal word must come FIRST
+    # in the clause: "NBRx by severity tier to see which segments drive volume"
+    # is an answerable KPI breakdown whose rationale borrows the verb (live
+    # pills graded OK), while every live NO leads with the causal word. Brands
+    # are not an axis ("drivers ... for Remibrutinib" survives). Last in the
+    # tuple so every earlier drop keeps its reason (a CATE-by-tier ask is still
+    # uplift_by_segment).
+    (
+        "scoped_causal_drivers",
+        re.compile(
+            r"\b(?:driv\w*|drove|caus\w*|paths?|effects?)\b[^.?!]{0,120}"
+            r"\b(?:(?:(?:broken down|split|sliced|segmented|separated) )?by (?:[\w-]+ ){0,2}"
+            r"(?:region|territor|segment|tier|severity|specialt|cohort|subgroup|"
+            r"lines?[- ]of[- ]therapy|therapy[- ]lines?|month|quarter|week)\w*"
+            r"|in the (?:northeast|south|midwest|west)\b"
+            r"|in (?:Q[1-4]|January|February|March|April|May|June|July|August|September|"
+            r"October|November|December)(?: \d{4})?\b"
+            r"|for (?:high|medium|low)[- ]severity\b)",
+            re.I,
+        ),
+    ),
 )
 
 
@@ -691,11 +717,19 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
 
     On-screen READ questions (Part C) bypass the artefact rules named in
     ``_ON_SCREEN_ARTEFACT_RULES`` unless they also ask to extend the
-    artefact. Aggregate HCP-segment likelihood asks (by specialty or
-    region, section D) bypass individual_prediction unless an individual
-    HCP or patient is named.
+    artefact or name individual HCPs / patients. Aggregate HCP-segment
+    likelihood asks (by specialty or region, section D) bypass
+    individual_prediction unless an individual HCP or patient is named.
     """
-    on_screen_read = bool(_ON_SCREEN_RE.search(text)) and not _EXTENDS_ON_SCREEN_RE.search(text)
+    # #1901 item 4g: no page summary carries per-HCP or per-patient rows (each
+    # publishes counts, a mean, top-N feature names or two territory ids), so a
+    # roster or named-individual ask can never be an on-screen READ however it
+    # names the artefact - the exemption yields to the individual markers.
+    on_screen_read = (
+        bool(_ON_SCREEN_RE.search(text))
+        and not _EXTENDS_ON_SCREEN_RE.search(text)
+        and not _INDIVIDUAL_ASK_RE.search(text)
+    )
     for name, pattern in _OFF_PLATFORM_RULES:
         if pattern.search(text):
             if on_screen_read and name in _ON_SCREEN_ARTEFACT_RULES:

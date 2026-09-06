@@ -372,6 +372,20 @@ async def test_axis_rules_window_composition_matches_calculators():
         "precision", {"brand": "Kisqali", "region": "west", "trigger_type": None, "window": window}
     )
     assert suffix(trigger_qid).endswith("_windowed_region")
+    # #1901 item 4k: the tool's own prose (docstring + window Field) reaches the
+    # LLM as the tool description and must agree with the resolver above; it
+    # claimed the opposite from migration 120 (#1388) until #1901.
+    from src.api.routes.chatbot_tools import KpiCalculateInput, kpi_calculate_tool
+
+    tool_doc = kpi_calculate_tool.coroutine.__doc__ or ""
+    window_doc = KpiCalculateInput.model_fields["window"].description or ""
+    for stale in (
+        "does NOT compose with an explicit",
+        "nor with region for the trigger",
+        "NOT combinable with region",
+    ):
+        assert stale not in tool_doc and stale not in window_doc, stale
+    assert "brand/trigger_type/region" in window_doc
 
     # The sentence's three families partition the windowable set exactly.
     c = await make_catalog()
@@ -716,6 +730,42 @@ DROP_FIXTURES = [
         "On-screen territories by US census region",
         "Break the on-screen territory allocation down by US census region.",
     ),
+    # #1901 item 4g: a roster / named-individual ask is never an on-screen READ
+    # (no page summary carries per-HCP or per-patient rows), so an on-screen
+    # word no longer exempts it from territory_detail / individual_prediction.
+    (
+        "territory_detail",
+        "HCPs in T-003",
+        "Which HCPs are shown in territory T-003?",
+    ),
+    (
+        "territory_detail",
+        "Prescribers displayed for T-114",
+        "Name the prescribers displayed for territory T-114 with their predicted 90-day adoption probability.",
+    ),
+    (
+        "individual_prediction",
+        "Patients shown by probability",
+        "Which patients shown have the highest predicted probability?",
+    ),
+    # #1901 item 4c: causal drivers scoped to a segment, region or month (NEVER;
+    # the registry has no region, time or segment dimension). The first is the
+    # live pill graded NO on the causal follow-up turn.
+    (
+        "scoped_causal_drivers",
+        "Persistence drivers over segments",
+        "Show me the causal paths driving persistent_180d for Remibrutinib, broken down by patient severity tier.",
+    ),
+    (
+        "scoped_causal_drivers",
+        "Northeast TRx drivers",
+        "What are the causal drivers of trx_volume for Kisqali in the Northeast?",
+    ),
+    (
+        "scoped_causal_drivers",
+        "June NBRx drivers",
+        "What drove the Fabhalta NBRx change in June 2025?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -849,6 +899,31 @@ KEEP_FIXTURES = [
     (
         "Competitor review",
         "Perform the competitor landscape review for Fabhalta's PNH indication.",
+    ),
+    # #1901 item 4g: aggregate on-screen reads (a mean, a specialty ranking)
+    # keep the exemption; only roster / named-individual asks lose it.
+    (
+        "Cohort mean shown",
+        "What is the mean predicted probability of the scored cohort shown?",
+    ),
+    (
+        "Specialties shown by likelihood",
+        "Which HCP specialties shown have the highest mean predicted probability for Kisqali?",
+    ),
+    # #1901 item 4c: a brand is not an axis, and a KPI breakdown whose rationale
+    # borrows the verb ("... to see which segments drive volume", live pill
+    # graded OK) is not a scoped driver ask - the causal word must lead.
+    (
+        "Remibrutinib drivers",
+        "What are the causal drivers of persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Cross-brand paths",
+        "Which causal paths most reliably predict persistent_180d across all three brands?",
+    ),
+    (
+        "Fabhalta NRx by severity tier",
+        "Show Fabhalta New Prescriptions broken down by patient severity tier to see which segments drive volume.",
     ),
 ]
 
