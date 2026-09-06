@@ -645,6 +645,166 @@ async def test_list_patterns_with_limit(sample_detected_pattern):
 
 
 # =============================================================================
+# TESTS - Pattern staleness window (2026-09-06)
+#
+# The /feedback-learning "cognitive_investigator has high negative feedback
+# rate" card was a 2026-08-08 goldset-replay detection still pinned at the top
+# of the page a month later: feedback_patterns rows never expire, this listing
+# had no time window, and the page sorts by severity. No investigator signal
+# can arrive from prod chat (the copilot path grades only the `agent` step), so
+# nothing could ever confirm or clear it. Patterns age out of the default view.
+# =============================================================================
+
+
+def _aged_pattern(sample, pattern_id: str, days_old: float):
+    from datetime import timedelta
+
+    pattern = sample.model_copy()
+    pattern.pattern_id = pattern_id
+    pattern.detected_at = datetime.now(timezone.utc) - timedelta(days=days_old)
+    return pattern
+
+
+@pytest.mark.asyncio
+async def test_list_patterns_hides_patterns_older_than_the_window_by_default(
+    sample_detected_pattern,
+):
+    from src.api.routes.feedback import _patterns_store, list_patterns
+
+    fresh = _aged_pattern(sample_detected_pattern, "pat_fresh", days_old=2)
+    stale = _aged_pattern(sample_detected_pattern, "pat_stale", days_old=45)
+    _patterns_store[fresh.pattern_id] = fresh
+    _patterns_store[stale.pattern_id] = stale
+    try:
+        result = await list_patterns(
+            severity=None,
+            pattern_type=None,
+            agent=None,
+            limit=50,
+            max_age_days=30,
+            include_stale=False,
+        )
+    finally:
+        del _patterns_store[fresh.pattern_id]
+        del _patterns_store[stale.pattern_id]
+
+    ids = {p.pattern_id for p in result.patterns}
+    assert "pat_fresh" in ids
+    assert "pat_stale" not in ids
+    assert result.high_count == sum(1 for p in result.patterns if p.severity.value == "high")
+
+
+@pytest.mark.asyncio
+async def test_list_patterns_include_stale_returns_old_patterns(sample_detected_pattern):
+    from src.api.routes.feedback import _patterns_store, list_patterns
+
+    stale = _aged_pattern(sample_detected_pattern, "pat_stale", days_old=45)
+    _patterns_store[stale.pattern_id] = stale
+    try:
+        result = await list_patterns(
+            severity=None,
+            pattern_type=None,
+            agent=None,
+            limit=50,
+            max_age_days=30,
+            include_stale=True,
+        )
+    finally:
+        del _patterns_store[stale.pattern_id]
+
+    assert "pat_stale" in {p.pattern_id for p in result.patterns}
+
+
+@pytest.mark.asyncio
+async def test_list_patterns_max_age_days_narrows_the_window(sample_detected_pattern):
+    from src.api.routes.feedback import _patterns_store, list_patterns
+
+    ten_days = _aged_pattern(sample_detected_pattern, "pat_10d", days_old=10)
+    _patterns_store[ten_days.pattern_id] = ten_days
+    try:
+        wide = await list_patterns(
+            severity=None,
+            pattern_type=None,
+            agent=None,
+            limit=50,
+            max_age_days=30,
+            include_stale=False,
+        )
+        narrow = await list_patterns(
+            severity=None,
+            pattern_type=None,
+            agent=None,
+            limit=50,
+            max_age_days=7,
+            include_stale=False,
+        )
+    finally:
+        del _patterns_store[ten_days.pattern_id]
+
+    assert "pat_10d" in {p.pattern_id for p in wide.patterns}
+    assert "pat_10d" not in {p.pattern_id for p in narrow.patterns}
+
+
+@pytest.mark.asyncio
+async def test_list_patterns_keeps_patterns_with_unknown_detected_at(sample_detected_pattern):
+    """No detected_at is not evidence of staleness: keep it visible."""
+    from src.api.routes.feedback import _patterns_store, list_patterns
+
+    undated = sample_detected_pattern.model_copy()
+    undated.pattern_id = "pat_undated"
+    undated.detected_at = None
+    _patterns_store[undated.pattern_id] = undated
+    try:
+        result = await list_patterns(
+            severity=None,
+            pattern_type=None,
+            agent=None,
+            limit=50,
+            max_age_days=30,
+            include_stale=False,
+        )
+    finally:
+        del _patterns_store[undated.pattern_id]
+
+    assert "pat_undated" in {p.pattern_id for p in result.patterns}
+
+
+def test_list_patterns_default_window_is_thirty_days_and_not_stale():
+    """The route defaults (what the page gets) are the 30-day window."""
+    import inspect
+
+    from src.api.routes.feedback import PATTERN_MAX_AGE_DAYS, list_patterns
+
+    params = inspect.signature(list_patterns).parameters
+    assert PATTERN_MAX_AGE_DAYS == 30
+    assert params["max_age_days"].default.default == PATTERN_MAX_AGE_DAYS
+    assert params["include_stale"].default.default is False
+
+
+@pytest.mark.asyncio
+async def test_feedback_health_patterns_active_excludes_stale(sample_detected_pattern):
+    """patterns_active on /feedback/health uses the same window: a month-old
+    detection is not an "active pattern being tracked"."""
+    from src.api.routes.feedback import _patterns_store, get_feedback_health
+
+    with patch("src.agents.feedback_learner.FeedbackLearnerAgent"):
+        baseline = (await get_feedback_health()).patterns_active
+
+    fresh = _aged_pattern(sample_detected_pattern, "pat_fresh_h", days_old=2)
+    stale = _aged_pattern(sample_detected_pattern, "pat_stale_h", days_old=45)
+    _patterns_store[fresh.pattern_id] = fresh
+    _patterns_store[stale.pattern_id] = stale
+    try:
+        with patch("src.agents.feedback_learner.FeedbackLearnerAgent"):
+            result = await get_feedback_health()
+    finally:
+        del _patterns_store[fresh.pattern_id]
+        del _patterns_store[stale.pattern_id]
+
+    assert result.patterns_active == baseline + 1
+
+
+# =============================================================================
 # TESTS - Update Management
 # =============================================================================
 
