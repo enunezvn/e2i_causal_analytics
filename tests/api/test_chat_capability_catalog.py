@@ -584,6 +584,22 @@ DROP_FIXTURES = [
         "Persistence as a chart",
         "Show persistent_180d rate as a chart and explain causal drivers for Remibrutinib.",
     ),
+    # #1906 codex: "time series" and the spelled-out period-change forms
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence series",
+        "Show a time series of persistent_180d for Remibrutinib and explain causal drivers.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence changes",
+        "Show month over month persistent_180d changes and explain drivers.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Quarterly persistence changes",
+        "Show quarter-over-quarter persistent_180d changes and explain drivers.",
+    ),
     (
         "uplift_by_segment",
         "CATE by tier",

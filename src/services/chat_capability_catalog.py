@@ -526,8 +526,9 @@ _CAUSAL_ASK_RE = re.compile(
 # boost / reduce persistent_180d?", "do monthly changes in copay support influence
 # persistent_180d?") is a section-C ask and stays. "Attaches" is lexical, over
 # title + message, and asks whether the outcome is the OBJECT of the series:
-#   - a TIME word (trend, over time, monthly, month-over-month, quarterly, weekly,
-#     by month / week / quarter) up to _ATTACH_SPAN_WORDS words BEFORE the outcome
+#   - a TIME word (trend, over time, time series, monthly, month-over-month /
+#     month-to-month / quarter-over-quarter, quarterly, weekly, by month / week /
+#     quarter) up to _ATTACH_SPAN_WORDS words BEFORE the outcome
 #     attaches when the gap ENDS with a series noun or change verb plus a
 #     preposition (and an optional article, possessive or brand) - "monthly trend
 #     of Remibrutinib's persistent_180d", "monthly ... strength for
@@ -551,15 +552,18 @@ _CAUSAL_ASK_RE = re.compile(
 # Boundaries: an outcome mention farther than _ATTACH_SPAN_WORDS from the time
 # word is an accepted miss, and a bare time WINDOW ("in the last 6 months",
 # "over the last year") is not in the set.
+_PERIOD_CHANGE = r"month[- ](?:over|to)[- ]month|quarter[- ]over[- ]quarter"
 _TIME_WORD_RE = re.compile(
-    r"\b(?:trends?|over time|monthly|month-over-month|quarterly|weekly|by[- ](?:month|week|quarter))\b",
+    rf"\b(?:trends?|over time|time[- ]?series|monthly|{_PERIOD_CHANGE}|quarterly|weekly|"
+    r"by[- ](?:month|week|quarter))\b",
     re.I,
 )
-# Time words that are themselves the series noun ("the trend in X", "X over time").
-_TREND_NOUN_RE = re.compile(r"\b(?:trends?|over time)\b", re.I)
+# Time words that are themselves the series noun ("the trend in X", "X over time",
+# "a time series of X").
+_TREND_NOUN_RE = re.compile(r"\b(?:trends?|over time|time[- ]?series)\b", re.I)
 _DISPLAY_WORD_RE = re.compile(r"\b(?:chart|plot|(?<!causal )graph)\b", re.I)
 _ADJACENT_AFTER_OUTCOME_RE = re.compile(
-    r"\b(?:monthly|month-over-month|quarterly|weekly|chart|plot|graph|by[- ](?:month|week|quarter))\b",
+    rf"\b(?:monthly|{_PERIOD_CHANGE}|quarterly|weekly|chart|plot|graph|by[- ](?:month|week|quarter))\b",
     re.I,
 )
 _CHANGE_VERBS = (
