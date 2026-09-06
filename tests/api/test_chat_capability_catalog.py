@@ -734,6 +734,24 @@ DROP_FIXTURES = [
         "Patients shown by probability",
         "Which patients shown have the highest predicted probability?",
     ),
+    # #1901 item 4c: causal drivers scoped to a segment, region or month (NEVER;
+    # the registry has no region, time or segment dimension). The first is the
+    # live pill graded NO on the causal follow-up turn.
+    (
+        "scoped_causal_drivers",
+        "Persistence drivers over segments",
+        "Show me the causal paths driving persistent_180d for Remibrutinib, broken down by patient severity tier.",
+    ),
+    (
+        "scoped_causal_drivers",
+        "Northeast TRx drivers",
+        "What are the causal drivers of trx_volume for Kisqali in the Northeast?",
+    ),
+    (
+        "scoped_causal_drivers",
+        "June NBRx drivers",
+        "What drove the Fabhalta NBRx change in June 2025?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -877,6 +895,21 @@ KEEP_FIXTURES = [
     (
         "Specialties shown by likelihood",
         "Which HCP specialties shown have the highest mean predicted probability for Kisqali?",
+    ),
+    # #1901 item 4c: a brand is not an axis, and a KPI breakdown whose rationale
+    # borrows the verb ("... to see which segments drive volume", live pill
+    # graded OK) is not a scoped driver ask - the causal word must lead.
+    (
+        "Remibrutinib drivers",
+        "What are the causal drivers of persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Cross-brand paths",
+        "Which causal paths most reliably predict persistent_180d across all three brands?",
+    ),
+    (
+        "Fabhalta NRx by severity tier",
+        "Show Fabhalta New Prescriptions broken down by patient severity tier to see which segments drive volume.",
     ),
 ]
 

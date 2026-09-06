@@ -608,6 +608,32 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             re.I,
         ),
     ),
+    # #1901 item 4c - NEVER "causal drivers scoped to a region, month or
+    # segment". causal_analysis_tool echoes region and time_period WITHOUT
+    # filtering (the causal-path registry has no region, time or segment
+    # dimension; #1694) and the composer's effect estimator takes only
+    # treatment / outcome / confounders, so nothing serves "drivers of X in the
+    # Northeast / in June / by severity tier". The causal word must come FIRST
+    # in the clause: "NBRx by severity tier to see which segments drive volume"
+    # is an answerable KPI breakdown whose rationale borrows the verb (live
+    # pills graded OK), while every live NO leads with the causal word. Brands
+    # are not an axis ("drivers ... for Remibrutinib" survives). Last in the
+    # tuple so every earlier drop keeps its reason (a CATE-by-tier ask is still
+    # uplift_by_segment).
+    (
+        "scoped_causal_drivers",
+        re.compile(
+            r"\b(?:driv\w*|drove|caus\w*|paths?|effects?)\b[^.?!]{0,120}"
+            r"\b(?:(?:(?:broken down|split|sliced|segmented|separated) )?by (?:[\w-]+ ){0,2}"
+            r"(?:region|territor|segment|tier|severity|specialt|cohort|subgroup|"
+            r"lines?[- ]of[- ]therapy|therapy[- ]lines?|month|quarter|week)\w*"
+            r"|in the (?:northeast|south|midwest|west)\b"
+            r"|in (?:Q[1-4]|January|February|March|April|May|June|July|August|September|"
+            r"October|November|December)(?: \d{4})?\b"
+            r"|for (?:high|medium|low)[- ]severity\b)",
+            re.I,
+        ),
+    ),
 )
 
 
