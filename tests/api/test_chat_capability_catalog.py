@@ -490,6 +490,33 @@ DROP_FIXTURES = [
         "Email the summary",
         "Email this TRx summary for Kisqali to the brand team.",
     ),
+    # #1907: live experiment status - no chat tool reads running experiments
+    (
+        "live_experiment_status",
+        "Active experiments overview",
+        "What experiments are currently running and what KPIs is each one targeting?",
+    ),
+    (
+        "live_experiment_status",
+        "Experiment design status",
+        "What experiments are currently designed or running through the orchestrator?",
+    ),
+    (
+        "live_experiment_status",
+        "Active experiments",
+        "What experiments are currently running, and what KPIs is each one designed to measure?",
+    ),
+    (
+        "live_experiment_status",
+        "Kisqali experiments",
+        "Which experiments are active for Kisqali?",
+    ),
+    ("live_experiment_status", "Running experiments", "Show me the running experiments."),
+    (
+        "live_experiment_status",
+        "Live experiment lift",
+        "List live experiments and their lift.",
+    ),
     (
         "competitor_data",
         "Competitor share",
@@ -738,6 +765,25 @@ KEEP_FIXTURES = [
     ("Action rate uplift", "What is the action rate uplift for Kisqali?"),
     ("TRx volume drivers", "What are the causal drivers of trx_volume for Kisqali?"),
     ("Active agents", "Which agents are active right now and what are they working on?"),
+    # #1907: experiment DESIGN and power asks are served (experiment_designer tools);
+    # past-tense "designed" is ambiguous and stays kept
+    (
+        "Experiment design best practices",
+        "How should I design an experiment to test trigger precision improvements across the three brands?",
+    ),
+    (
+        "Experiment sample size",
+        "How many HCPs do I need for an experiment on Kisqali NBRx with 80% power?",
+    ),
+    (
+        "Sample-lift experiment",
+        "Design an experiment to test whether more samples lift Fabhalta conversion.",
+    ),
+    ("Designed experiments", "What experiments have been designed for Fabhalta?"),
+    (
+        "Experiment duration",
+        "How long should an experiment run to detect a 5% NBRx lift for Kisqali?",
+    ),
     (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",

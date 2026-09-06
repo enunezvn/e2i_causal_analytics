@@ -608,6 +608,26 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             re.I,
         ),
     ),
+    # Live experiment STATUS (#1907): the tool composer registers only
+    # experiment_designer tools and the data-query tool's "experiments" type is a
+    # semantic memory search, not a live read, so "which experiments are running /
+    # active / live / ongoing" and "currently designed" (the orchestrator's
+    # in-flight designs) cannot be answered. Deliberately NOT covered: lift or
+    # results phrasings (left to the prompt until one appears in a probe) and
+    # design / power asks ("design an experiment", "how many HCPs ... 80% power",
+    # "how long should an experiment run"), which experiment_designer serves.
+    # Past-tense "designed" without currently/now is ambiguous and stays kept.
+    (
+        "live_experiment_status",
+        re.compile(
+            r"\bexperiments?\s+(?:that\s+)?(?:are|is)\s+(?:currently\s+|now\s+)?"
+            r"(?:running|active|live|ongoing)\b"
+            r"|\bexperiments?\s+(?:are\s+|is\s+)?(?:currently|now)\s+"
+            r"(?:running|active|live|ongoing|designed)\b"
+            r"|\b(?:active|running|live|ongoing)\s+experiments?\b",
+            re.I,
+        ),
+    ),
 )
 
 
