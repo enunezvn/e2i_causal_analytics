@@ -925,6 +925,10 @@ KEEP_FIXTURES = [
     ),
     ("Use a live test", "Use a live A/B test to measure trigger precision for Kisqali."),
     (
+        "Brand analytics team",
+        "What active experiment should the US Kisqali brand team use to measure trigger precision?",
+    ),
+    (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",
     ),

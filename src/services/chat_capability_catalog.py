@@ -654,9 +654,9 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 # is running for 6 weeks?"). Exactly these forms count: an imperative design verb
 # on the noun ("design / plan / set up / size / power / run / launch / use a[n]
 # [new] [live] experiment | A/B test | test"); a modal design ask whose actor is
-# a noun phrase of up to three words ("should / can / could / would I | we | the
-# orchestrator | the brand team run | design | plan | set up | size | launch |
-# use"); a design NOUN right after the status adjective
+# a noun phrase of up to five words ("should / can / could / would I | we | the
+# orchestrator | the US Kisqali brand team run | design | plan | set up | size |
+# launch | use"); a design NOUN right after the status adjective
 # and noun ("running experiment design | options | candidates | ideas | proposals
 # | plans | setups | concepts | scenarios"), or one of those nouns "to test |
 # detect | improve | lift | measure"; a calculation question (how many HCPs, how
@@ -670,7 +670,7 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 _EXPERIMENT_DESIGN_RE = re.compile(
     r"\b(?:design|plan|set\s+up|size|power|run|launch|use)\s+(?:an?|the|my|this|new)\s+(?:\w+\s+){0,2}?"
     r"(?:experiments?|a/b\s+tests?|tests?)\b"
-    r"|\b(?:should|can|could|would)\s+(?:the\s+)?(?:\w+\s+){1,3}?(?:run|design|plan|set\s+up|size|launch|use)\b"
+    r"|\b(?:should|can|could|would)\s+(?:the\s+)?(?:\w+\s+){1,5}?(?:run|design|plan|set\s+up|size|launch|use)\b"
     r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\s+"
     r"(?:designs?|options?|candidates?|ideas?|proposals?|plans?|setups?|concepts?|scenarios?)\b"
     r"|\b(?:candidates?|options?|ideas?|plans?|concepts?|scenarios?)\s+to\s+(?:test|detect|improve|lift|measure)\b"
