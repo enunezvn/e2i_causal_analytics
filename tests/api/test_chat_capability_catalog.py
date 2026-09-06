@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import re as _re
+import time
 from dataclasses import dataclass as _dataclass
 from typing import Any, Dict, List
 
@@ -133,6 +134,23 @@ async def test_empty_results_are_degraded_too(caplog):
     messages = [r.getMessage() for r in caplog.records]
     assert any("trend coverage empty" in m for m in messages)
     assert any("causal outcomes empty" in m for m in messages)
+
+
+async def test_stalled_loader_times_out_and_degrades(monkeypatch):
+    """A loader that never answers is bounded by CATALOG_LOADER_TIMEOUT_SECONDS and
+    marks its field degraded; the other loader still lands."""
+    monkeypatch.setattr(cat, "CATALOG_LOADER_TIMEOUT_SECONDS", 0.05)
+
+    async def stalled() -> List[Dict[str, Any]]:
+        await asyncio.sleep(10)
+        return await _coverage()
+
+    started = time.monotonic()
+    c = await make_catalog(coverage=stalled, outcomes=_outcomes)
+    assert time.monotonic() - started < 2.0
+    assert c.degraded == ("trend_coverage",)
+    assert c.trend_kpi_ids == frozenset()
+    assert c.causal_outcomes  # the outcomes loader was not affected
 
 
 # =============================================================================

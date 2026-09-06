@@ -55,6 +55,15 @@ CATALOG_TTL_SECONDS = 600.0
 # A degraded catalog (a DB-backed field failed) retries sooner, but not on
 # every pill request - a down database must not be hammered.
 DEGRADED_TTL_SECONDS = 60.0
+# Each DB loader gets its own budget so a stalled connection cannot hold the
+# refreshing request for the client's full connect+read timeouts (10 s + 30 s
+# per loader). Measured 2026-09-06 on the droplet: 30-70 ms per query plus
+# 130 ms client creation; one unreproduced 18 s cold read. A timeout is an
+# ordinary exception below: the field is marked degraded, the last-good lists
+# carry forward and the refresh is retried after DEGRADED_TTL_SECONDS. The two
+# loaders stay sequential: get_async_supabase_client() is not safe for two
+# first-callers at once (#1901 item 1).
+CATALOG_LOADER_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -145,18 +154,32 @@ async def build_capability_catalog(
 
     rows: List[Dict[str, Any]] = []
     try:
-        rows = list(await (coverage_loader or _default_coverage_loader)())
+        rows = list(
+            await asyncio.wait_for(
+                (coverage_loader or _default_coverage_loader)(), CATALOG_LOADER_TIMEOUT_SECONDS
+            )
+        )
     except Exception as exc:  # noqa: BLE001 - degrade, never 502 the pills
-        logger.warning("capability catalog: trend coverage unavailable: %s", exc)
+        logger.warning(
+            "capability catalog: trend coverage unavailable: %s: %s", type(exc).__name__, exc
+        )
     if not rows:
         logger.warning("capability catalog: trend coverage empty; marking degraded")
         degraded.append("trend_coverage")
 
     outcomes: List[str] = []
     try:
-        outcomes = [str(o) for o in await (outcomes_loader or _default_outcomes_loader)() if o]
+        outcomes = [
+            str(o)
+            for o in await asyncio.wait_for(
+                (outcomes_loader or _default_outcomes_loader)(), CATALOG_LOADER_TIMEOUT_SECONDS
+            )
+            if o
+        ]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("capability catalog: causal outcomes unavailable: %s", exc)
+        logger.warning(
+            "capability catalog: causal outcomes unavailable: %s: %s", type(exc).__name__, exc
+        )
     if not outcomes:
         logger.warning("capability catalog: causal outcomes empty; marking degraded")
         degraded.append("causal_outcomes")
