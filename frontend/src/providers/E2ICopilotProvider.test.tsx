@@ -483,6 +483,7 @@ describe('CopilotHooksConnector', () => {
       );
     const lastSummaryCall = () => {
       const calls = summaryCalls();
+      expect(calls.length).toBeGreaterThan(0);
       return calls[calls.length - 1][0];
     };
 
@@ -514,6 +515,11 @@ describe('CopilotHooksConnector', () => {
     // sent as raw prose (not JSON.stringify'd with quotes and \n escapes).
     expect(lastSummaryCall().available).toBe('enabled');
     expect(lastSummaryCall().value).toBe('Home dashboard. Brand filter: Kisqali; region: All US.');
+    // The SDK runtime calls convert(value) with ONE argument (its typings say
+    // two); the converter must return the prose either way.
+    expect(lastSummaryCall().convert('Home dashboard. Brand filter: Kisqali; region: All US.')).toBe(
+      'Home dashboard. Brand filter: Kisqali; region: All US.'
+    );
     expect(lastSummaryCall().convert('ignored', 'raw text')).toBe('raw text');
   });
 

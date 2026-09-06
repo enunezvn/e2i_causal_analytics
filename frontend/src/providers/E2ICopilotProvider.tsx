@@ -41,6 +41,7 @@ import type { SupportedChartType } from '@/lib/flint-chart-types';
 import { routeKpiChart } from '@/lib/kpi-chart-router';
 import type { KpiChartData } from '@/lib/kpi-chart-router';
 import type { KPIHistoryResponse, KPISegmentedHistoryResponse } from '@/types/kpi';
+import { passThroughText } from './copilotReadableConverters';
 
 // -----------------------------------------------------------------------------
 // Internal Types (not exported - used within provider)
@@ -711,9 +712,6 @@ const VALID_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali', 'All'];
 // these values are directly speakable in the filters note.
 const VALID_REGIONS = ['All US', 'Northeast', 'South', 'Midwest', 'West'];
 const VALID_DETAIL_LEVELS = ['summary', 'detailed', 'expert'];
-
-// Readable converter for prose values: the SDK default is JSON.stringify.
-const passThroughText = (_description: string, value: unknown): string => String(value);
 
 /**
  * Component that conditionally renders hook registration.
