@@ -505,3 +505,87 @@ async def test_empty_outcomes_disable_outcome_rule():
         c,
     )
     assert len(kept) == 1 and dropped == []
+
+
+# =============================================================================
+# CACHE
+# =============================================================================
+
+
+class _Counting:
+    def __init__(self, fn):
+        self.fn, self.calls = fn, 0
+
+    async def __call__(self):
+        self.calls += 1
+        return await self.fn()
+
+
+async def test_cache_builds_once_within_ttl():
+    cov, out = _Counting(_coverage), _Counting(_outcomes)
+    cache = cat._CatalogCache()
+    first = await cache.get(now=1000.0, coverage_loader=cov, outcomes_loader=out)
+    second = await cache.get(
+        now=1000.0 + cat.CATALOG_TTL_SECONDS - 1, coverage_loader=cov, outcomes_loader=out
+    )
+    assert second is first
+    assert (cov.calls, out.calls) == (1, 1)
+
+
+async def test_cache_rebuilds_after_ttl():
+    cov, out = _Counting(_coverage), _Counting(_outcomes)
+    cache = cat._CatalogCache()
+    first = await cache.get(now=1000.0, coverage_loader=cov, outcomes_loader=out)
+    second = await cache.get(
+        now=1000.0 + cat.CATALOG_TTL_SECONDS + 1, coverage_loader=cov, outcomes_loader=out
+    )
+    assert second is not first
+    assert (cov.calls, out.calls) == (2, 2)
+
+
+async def test_degraded_catalog_retries_sooner_and_heals():
+    cache = cat._CatalogCache()
+    broken = await cache.get(now=0.0, coverage_loader=_boom, outcomes_loader=_boom)
+    assert broken.degraded
+    # still cached inside the short TTL
+    same = await cache.get(
+        now=cat.DEGRADED_TTL_SECONDS - 1, coverage_loader=_coverage, outcomes_loader=_outcomes
+    )
+    assert same is broken
+    healed = await cache.get(
+        now=cat.DEGRADED_TTL_SECONDS + 1, coverage_loader=_coverage, outcomes_loader=_outcomes
+    )
+    assert healed.degraded == ()
+    assert healed.causal_outcomes == tuple(sorted(set(OUTCOMES)))
+
+
+async def test_refresh_failure_keeps_last_good_fields():
+    cache = cat._CatalogCache()
+    good = await cache.get(now=0.0, coverage_loader=_coverage, outcomes_loader=_outcomes)
+    after = await cache.get(
+        now=cat.CATALOG_TTL_SECONDS + 1, coverage_loader=_boom, outcomes_loader=_boom
+    )
+    assert after is not good
+    assert after.causal_outcomes == good.causal_outcomes
+    assert after.trend_kpi_ids == good.trend_kpi_ids
+    assert after.per_brand_only_trend_ids == good.per_brand_only_trend_ids
+    assert after.degraded == ()  # stale-but-good is not degraded
+
+
+async def test_module_level_accessor_and_reset(monkeypatch):
+    calls = {"n": 0}
+    real_build = cat.build_capability_catalog
+
+    async def fake_build(**kwargs):
+        calls["n"] += 1
+        return await real_build(coverage_loader=_coverage, outcomes_loader=_outcomes)
+
+    monkeypatch.setattr(cat, "build_capability_catalog", fake_build)
+    cat.reset_capability_catalog_cache()
+    a = await cat.get_capability_catalog()
+    b = await cat.get_capability_catalog()
+    assert a is b and calls["n"] == 1
+    cat.reset_capability_catalog_cache()
+    c = await cat.get_capability_catalog()
+    assert c is not a and calls["n"] == 2
+    cat.reset_capability_catalog_cache()

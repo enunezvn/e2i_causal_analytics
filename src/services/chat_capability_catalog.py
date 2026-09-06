@@ -21,6 +21,7 @@ Design: docs/superpowers/specs/2026-09-05-copilot-pill-capability-catalog-design
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import time
@@ -48,6 +49,11 @@ logger = logging.getLogger(__name__)
 
 CoverageLoader = Callable[[], Awaitable[List[Dict[str, Any]]]]
 OutcomesLoader = Callable[[], Awaitable[List[str]]]
+
+CATALOG_TTL_SECONDS = 600.0
+# A degraded catalog (a DB-backed field failed) retries sooner, but not on
+# every pill request - a down database must not be hammered.
+DEGRADED_TTL_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -588,3 +594,70 @@ def filter_unsupported_pills(
         else:
             dropped.append((pill, rule))
     return kept, dropped
+
+
+# =============================================================================
+# CACHE - lazy, in-process, TTL; no startup hook (CI runs TestClient lifespans
+# on a 30 s thread timeout, and a lazy cache adds no work there)
+# =============================================================================
+
+
+def _keep_last_good_fields(
+    fresh: CapabilityCatalog, previous: Optional[CapabilityCatalog]
+) -> CapabilityCatalog:
+    """On a degraded refresh, carry the previous catalog's good DB-backed fields forward."""
+    if previous is None or not fresh.degraded:
+        return fresh
+    updates: Dict[str, Any] = {}
+    if "trend_coverage" in fresh.degraded and "trend_coverage" not in previous.degraded:
+        updates["trend_kpi_ids"] = previous.trend_kpi_ids
+        updates["per_brand_only_trend_ids"] = previous.per_brand_only_trend_ids
+    if "causal_outcomes" in fresh.degraded and "causal_outcomes" not in previous.degraded:
+        updates["causal_outcomes"] = previous.causal_outcomes
+    if not updates:
+        return fresh
+    still_degraded = tuple(d for d in fresh.degraded if d in previous.degraded)
+    return dataclasses.replace(fresh, degraded=still_degraded, **updates)
+
+
+class _CatalogCache:
+    def __init__(self) -> None:
+        self._catalog: Optional[CapabilityCatalog] = None
+
+    async def get(
+        self,
+        *,
+        now: Optional[float] = None,
+        coverage_loader: Optional[CoverageLoader] = None,
+        outcomes_loader: Optional[OutcomesLoader] = None,
+    ) -> CapabilityCatalog:
+        current = time.monotonic() if now is None else now
+        cached = self._catalog
+        if cached is not None:
+            ttl = DEGRADED_TTL_SECONDS if cached.degraded else CATALOG_TTL_SECONDS
+            if current - cached.loaded_at < ttl:
+                return cached
+        fresh = await build_capability_catalog(
+            coverage_loader=coverage_loader, outcomes_loader=outcomes_loader
+        )
+        fresh = _keep_last_good_fields(fresh, cached)
+        if now is not None:
+            fresh = dataclasses.replace(fresh, loaded_at=now)
+        self._catalog = fresh
+        return fresh
+
+    def reset(self) -> None:
+        self._catalog = None
+
+
+_cache = _CatalogCache()
+
+
+async def get_capability_catalog() -> CapabilityCatalog:
+    """The process-wide cached catalog (built lazily on first use)."""
+    return await _cache.get()
+
+
+def reset_capability_catalog_cache() -> None:
+    """Test hook: forget the cached catalog."""
+    _cache.reset()
