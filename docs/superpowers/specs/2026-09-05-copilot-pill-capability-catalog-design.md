@@ -220,12 +220,15 @@ In `CopilotHooksInner` (`E2ICopilotProvider.tsx`), add a fifth
 The backend already renders readables into the agent prompt through
 `_readables_context_note` in `copilotkit.py`: strings pass through, items are
 capped at 12,000 chars and the note at 32,000, and page summaries are at most
-4,000 chars. One wording change: the note currently says "values are JSON";
-it becomes "values are JSON or short prose summaries", and the reading
-instruction adds "an on-screen summary is a description of what the page
-shows, not a data table; cite it as on-screen context and do not present its
-figures as tool results". The existing instruction to answer from on-screen
-context first and call tools only for what is not on screen stays.
+4,000 chars. One wording change, applied only when a prose readable is
+present (the page summary is the only readable that bypasses the SDK's JSON
+encoding, so the note detects prose by value): the note then says "values
+are JSON or short prose summaries" and the reading instruction adds "an
+on-screen summary is a description of what the page shows, not a data table;
+cite it as on-screen context and do not present its figures as tool
+results". Pages that publish no summary keep the pre-existing note
+byte-identical. The existing instruction to answer from on-screen context
+first and call tools only for what is not on screen stays.
 
 PredictiveAnalytics publishes both data readables and a summary; both will
 appear in the note. This is redundant but within budget and harmless.
