@@ -511,6 +511,24 @@ DROP_FIXTURES = [
         "Discontinuation level",
         "What is the discontinued_180d percentage for Fabhalta?",
     ),
+    # #1906: a TREND of a journey outcome drops even when the pill also names a
+    # causal word (section C has no time dimension; the causal exemption is
+    # for "what drives the <outcome> rate?", not for a trend with a causal tail)
+    (
+        "outcome_as_kpi:persistent_180d",
+        "📈 Persistence drivers over time",
+        "Chart the monthly trend of Remibrutinib's persistent_180d rate to see if the causal drivers' strength has shifted.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "What drives persistent_180d?",
+        "Chart the monthly trend of Remibrutinib's persistent_180d rate.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Driver drift",
+        "Have the causal drivers of persistent_180d shifted over time?",
+    ),
     (
         "uplift_by_segment",
         "CATE by tier",
@@ -723,6 +741,22 @@ KEEP_FIXTURES = [
     (
         "Persistence drivers",
         "What drives persistent_180d for Remibrutinib, and how confident are those paths?",
+    ),
+    # #1906: causal asks whose OBJECT is the outcome (or its rate) stay kept; the
+    # trend split must not widen into "chart/plot/graph" - "the causal graph" is
+    # section C's own vocabulary
+    (
+        "Causal drivers",
+        "What are the causal drivers of persistent_180d for Remibrutinib, and how confident are those paths?",
+    ),
+    (
+        "Cross-brand paths",
+        "Which causal paths most reliably predict persistent_180d across all three brands?",
+    ),
+    ("Rate drivers", "What drives the persistent_180d rate for Kisqali?"),
+    (
+        "Causal graph paths",
+        "In the causal graph, which paths lead to persistent_180d for Kisqali?",
     ),
     ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
     ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),

@@ -502,17 +502,31 @@ P = TypeVar("P", bound=SuggestionLike)
 # A time-boxed journey flag (persistent_180d) is never a KPI.
 _DURATION_OUTCOME_RE = re.compile(r"_\d+d$", re.I)
 
-# "the <outcome> rate / trend / by region ..." - the outcome used as a metric.
+# "the <outcome> rate / chart / by region ..." - the outcome used as a metric.
 _VALUE_ASK_RE = re.compile(
-    r"\b(?:rates?|values?|levels?|trends?|chart|plot|graph|over time|monthly|month-over-month|"
-    r"quarterly|weekly|by (?:census )?region|by (?:severity )?tier|by segment|by line|breakdown|"
-    r"distribution|percentage|how many|count|volume)\b",
+    r"\b(?:rates?|values?|levels?|chart|plot|graph|by (?:census )?region|by (?:severity )?tier|"
+    r"by segment|by line|breakdown|distribution|percentage|how many|count|volume)\b",
     re.I,
 )
-# ... unless the pill is a causal question, which section C serves.
+# ... unless the pill is a causal question, which section C serves: "what drives
+# the persistent_180d rate?" has the outcome's rate as the OBJECT of the ask, and
+# "the causal graph" is section C's own vocabulary, so a causal word anywhere in
+# title + message exempts the value shape above.
 _CAUSAL_ASK_RE = re.compile(
     r"\b(?:driv\w*|caus\w*|paths?|effects?|why|influenc\w*|factors?|impacts?|refut\w*|confiden\w*)\b",
     re.I,
+)
+# A TIME-SERIES ask over the outcome is not exempted by a causal word (#1906):
+# section C is a static registry and the NEVER list names trends of effects, so
+# "chart the monthly trend of persistent_180d to see if its drivers shifted" and
+# "have the drivers of persistent_180d shifted over time" are served by no tool.
+# A bare time WINDOW ("in the last 6 months") is not in this set: "what drives
+# persistent_180d in the last 6 months" still gets the drivers, so it stays. A
+# frequency adjective on a driver ("do weekly rep visits drive persistent_180d")
+# is an accepted false drop: it costs one backfill pill, and the registry has no
+# such driver node to answer it with anyway.
+_TREND_ASK_RE = re.compile(
+    r"\b(?:trends?|over time|monthly|month-over-month|quarterly|weekly)\b", re.I
 )
 
 # Competitor SHARE / VOLUME / performance DATA is NEVER (the catalog's TRx share is
@@ -716,7 +730,9 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
             and re.search(rf"\b{re.escape(spaced)}\b", lowered) is None
         ):
             continue
-        if _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered):
+        if _TREND_ASK_RE.search(lowered) or (
+            _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered)
+        ):
             return f"outcome_as_kpi:{outcome}"
     return None
 

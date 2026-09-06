@@ -170,9 +170,12 @@ enables it; not part of this change.
 narrow, tuned only to the pill families graded NO in the baseline sample:
 
 1. **Outcome-as-KPI.** A message that names a `causal_outcomes` entry and
-   also asks for a value, rate, trend, chart, breakdown, region or time
-   window, without also asking for drivers, causes or paths. The outcome
-   names come from the cached catalog, not a hardcoded list.
+   also asks for a value, rate, chart, breakdown or region, without also
+   asking for drivers, causes or paths; or one that asks for the outcome's
+   trend or time series (trend, over time, monthly, quarterly, weekly) at
+   all, because a causal clause does not make a section-C outcome trendable
+   (#1906). The outcome names come from the cached catalog, not a hardcoded
+   list.
 2. **Off-platform asks.** Word-boundary patterns for SHAP, feature
    importance, territory detail (which is how optimizer allocations were
    phrased in the sample), individual-HCP or individual-patient prediction
