@@ -701,6 +701,21 @@ DROP_FIXTURES = [
         "Displayed territories by line-of-therapy",
         "Break the displayed territory allocation down by line-of-therapy.",
     ),
+    (
+        "territory_detail",
+        "Displayed territories by prior therapy line",
+        "Break the displayed territory allocation down by prior therapy line.",
+    ),
+    (
+        "shap_or_feature_importance",
+        "On-screen SHAP by patient severity tier",
+        "Split the on-screen SHAP features by patient severity tier.",
+    ),
+    (
+        "territory_detail",
+        "On-screen territories by US census region",
+        "Break the on-screen territory allocation down by US census region.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.

@@ -640,8 +640,10 @@ _ON_SCREEN_RE = re.compile(
 _EXTENDS_ON_SCREEN_RE = re.compile(
     r"\bre-?comput\w*|\bre-?calculat\w*|\bre-?run\b|\bvalidat\w*|\bextend\w*|\banother\b|"
     r"\bmore features\b|\bwhy\b|\breasons?\b|\bbecause\b|\bdrivers? behind\b|\bwhat drives\b|"
-    r"\bby (?:census |HCP )?(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
-    r"\bby (?:lines?[- ]of[- ]therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
+    # "by" + up to two modifier words + an axis noun: "by patient severity tier",
+    # "by US census region", "by prior therapy line", "by current line of therapy".
+    r"\bby (?:[\w-]+ ){0,2}(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
+    r"\bby (?:[\w-]+ ){0,2}(?:lines?[- ]of[- ]therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
     r"\bper[- ]territory\b|\btrends?\b|\bover time\b|\bover the (?:past|last)\b|\bmonth\w*|"
     r"\bsince\b|\bchang\w*|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
     re.I,
