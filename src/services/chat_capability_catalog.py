@@ -453,7 +453,7 @@ class SuggestionLike(Protocol):
 P = TypeVar("P", bound=SuggestionLike)
 
 # A time-boxed journey flag (persistent_180d) is never a KPI.
-_DURATION_OUTCOME_RE = re.compile(r"_\d+d$")
+_DURATION_OUTCOME_RE = re.compile(r"_\d+d$", re.I)
 
 # "the <outcome> rate / trend / by region ..." - the outcome used as a metric.
 _VALUE_ASK_RE = re.compile(
@@ -468,11 +468,18 @@ _CAUSAL_ASK_RE = re.compile(
     re.I,
 )
 
+# Registry KPI NAMES the catalog prompt offers as answerable must never be
+# dropped by an off-platform rule, even though their names share vocabulary
+# with the rule's trigger words. Exemptions carved out below:
+#   - Geographic Consistency Gap (WS1-DQ-006) vs. gap_recompute
+#   - SHAP Coverage (WS1-MP-007) vs. shap_or_feature_importance
+#   - Conditional ATE (CATE) (CM-002) vs. uplift_by_segment
 _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     (
         "shap_or_feature_importance",
         re.compile(
-            r"\bSHAP\b|\bfeature[- ]importances?\b|\bfeature rankings?\b|\btop(?:-| )?\d* ?features\b",
+            r"\bSHAP\b(?! coverage)|\bfeature[- ]importances?\b|\bfeature rankings?\b|"
+            r"\btop(?:-| )?\d* ?features\b",
             re.I,
         ),
     ),
@@ -481,7 +488,9 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         "individual_prediction",
         re.compile(
             r"\bpredicted (?:\d+-day )?(?:[a-z_]+ )?probabilit(?:y|ies)\b|\bmean predicted probability\b|"
-            r"\bpropensity scores?\b|\b(?:each|individual|specific) (?:HCP|patient|prescriber)s?\b|"
+            r"\bpropensity scores?\b|"
+            r"\b(?:each|individual|specific) (?:HCP|patient|prescriber)s?\b"
+            r"(?!\s+(?:segment|specialt|tier|group|cohort))|"
             r"\b(?:HCP|patient) (?:list|roster)s?\b",
             re.I,
         ),
@@ -489,15 +498,16 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     (
         "gap_recompute",
         re.compile(
-            r"\bgap\b[^.?]*\b(?:trend|evolv\w*|evolution|over the (?:past|last)|chart|plot|month)\b|"
-            r"\b(?:chart|plot|trend of)\b[^.?]*\bgap\b",
+            r"(?<!consistency )\bgap\b[^.?]{0,160}\b(?:trend|evolv\w*|evolution|over the (?:past|last)|"
+            r"chart|plot|month)\b|"
+            r"\b(?:chart|plot|trend of)\b[^.?]{0,160}(?<!consistency )\bgap\b",
             re.I,
         ),
     ),
     (
         "uplift_by_segment",
         re.compile(
-            r"\bCATE\b|\bheterogen\w*\b|\btreatment effects? (?:by|across|for) (?:patient )?"
+            r"\bCATE\b(?<!\(CATE)|\bheterogen\w*\b|\btreatment effects? (?:by|across|for) (?:patient )?"
             r"(?:segment|tier|subgroup|cohort)s?\b|\bsubgroup analys\w*|\bsensitivity analys\w*|"
             r"\bcontrolling for\b",
             re.I,
@@ -546,9 +556,10 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
             return name
     lowered = text.lower()
     for outcome in journey:
-        spaced = outcome.replace("_", " ")
+        needle = outcome.lower()
+        spaced = needle.replace("_", " ")
         if (
-            re.search(rf"\b{re.escape(outcome)}\b", lowered) is None
+            re.search(rf"\b{re.escape(needle)}\b", lowered) is None
             and re.search(rf"\b{re.escape(spaced)}\b", lowered) is None
         ):
             continue

@@ -390,6 +390,17 @@ KEEP_FIXTURES = [
         "How does the nba_trigger_accepted -> persistent_180d effect for Remibrutinib compare in confidence to the uas7_baseline path?",
     ),
     ("Regional TRx", "What is Fabhalta's TRx by census region?"),
+    ("Consistency gap trend", "Chart the Geographic Consistency Gap trend for Kisqali."),
+    (
+        "Monthly consistency gap",
+        "Show the monthly Geographic Consistency Gap for Fabhalta over the last 12 months.",
+    ),
+    ("SHAP coverage", "What is the current SHAP Coverage for the Kisqali model?"),
+    ("Conditional ATE", "What is the Conditional ATE (CATE) for Kisqali sample drops?"),
+    (
+        "Specialty uptake",
+        "Which specific HCP specialties are most likely to increase Kisqali prescriptions?",
+    ),
 ]
 
 
@@ -452,3 +463,35 @@ async def test_filter_preserves_order_and_returns_rules():
     kept, dropped = cat.filter_unsupported_pills(pills, c)
     assert [p.title for p in kept] == ["keep-1", "keep-2"]
     assert [(p.title, r) for p, r in dropped] == [("drop", "shap_or_feature_importance")]
+
+
+async def test_off_platform_rule_wins_over_outcome_rule():
+    """Rules are checked in tuple order; the first off-platform match names the drop."""
+    c = await make_catalog()
+    kept, dropped = cat.filter_unsupported_pills(
+        [
+            _Pill(
+                "Territory persistence",
+                "Chart the predicted persistent_180d probability by territory.",
+            )
+        ],
+        c,
+    )
+    assert kept == []
+    assert [r for _, r in dropped] == ["territory_detail"]
+
+
+async def test_empty_outcomes_disable_outcome_rule():
+    """A degraded catalog with no outcomes leaves the outcome rule inert; off-platform rules still apply."""
+    c = await make_catalog(outcomes=_empty)
+    assert cat.journey_outcomes(c) == ()
+    kept, dropped = cat.filter_unsupported_pills(
+        [
+            _Pill(
+                "Persistence by region",
+                "Chart the persistent_180d rate for Remibrutinib by census region.",
+            )
+        ],
+        c,
+    )
+    assert len(kept) == 1 and dropped == []
