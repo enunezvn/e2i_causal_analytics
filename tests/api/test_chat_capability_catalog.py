@@ -9,9 +9,10 @@ that its lists come from code.
 from __future__ import annotations
 
 import re as _re
+from dataclasses import dataclass as _dataclass
 from typing import Any, Dict, List
 
-import pytest  # noqa: F401
+import pytest
 
 from src.kpi.segmented_history import SEGMENTED_KPI_QUERY_FAMILIES
 from src.services import chat_capability_catalog as cat
@@ -272,3 +273,182 @@ def test_route_hints_cover_every_non_auth_frontend_route():
     paths = set(_re.findall(r"path:\s*['\"](/[^'\"]*)['\"]", routes_tsx.read_text()))
     assert paths, "no route paths parsed from routes.tsx"
     assert paths - _AUTH_ROUTES == set(cat.ROUTE_HINTS)
+
+
+# =============================================================================
+# VALIDATOR
+# =============================================================================
+
+
+@_dataclass
+class _Pill:
+    title: str
+    message: str
+
+
+# Live pills graded NO on 2026-09-05, by rule family.
+DROP_FIXTURES = [
+    (
+        "gap_recompute",
+        "Market share gap trend",
+        "Can you chart how Kisqali's market share gap in the midwest has evolved over the past 12 months?",
+    ),
+    (
+        "shap_or_feature_importance",
+        "Champion cohort vs. all HCPs",
+        "How do feature importances differ between the fabhalta_hcp_adoption_champion cohort and all Fabhalta-prescribing HCPs?",
+    ),
+    (
+        "individual_prediction",
+        "Persistence trend by baseline UAS7",
+        "Can you chart the predicted 180-day persistence probability for Remibrutinib across baseline UAS7 severity tiers?",
+    ),
+    (
+        "individual_prediction",
+        "Persistence by IgE tier",
+        "What is the distribution of predicted 180-day persistence probability for Remibrutinib across IgE tiers?",
+    ),
+    (
+        "individual_prediction",
+        "Model performance & calibration",
+        "What is the validation accuracy of the patient_persistence model for Remibrutinib, and how reliable is the 61.3% mean predicted probability?",
+    ),
+    (
+        "territory_detail",
+        "Why T-114 gained the most",
+        "What are the key drivers behind the +6 field force increase recommended for territory T-114 in Fabhalta's optimization?",
+    ),
+    (
+        "territory_detail",
+        "Impact of T-072 reduction",
+        "What is the expected TRx impact on Fabhalta if we reduce field force in territory T-072 by 4 as suggested?",
+    ),
+    (
+        "uplift_by_segment",
+        "Why naive > experienced?",
+        "Run a causal analysis to identify the drivers behind biologic-naive patients showing +0.16 CATE versus +0.07 for biologic-experienced on Remibrutinib.",
+    ),
+    (
+        "uplift_by_segment",
+        "Validate persistence model",
+        "Can we run a sensitivity analysis on the uas7_baseline -> persistent_180d treatment effect for Remibrutinib to test robustness across patient subgroups?",
+    ),
+    (
+        "off_platform_action",
+        "Email the summary",
+        "Email this TRx summary for Kisqali to the brand team.",
+    ),
+    (
+        "competitor_data",
+        "Competitor share",
+        "What is Kisqali's TRx versus competitors in the Northeast?",
+    ),
+    # outcome-as-KPI: the residual family the prototype still produced
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by region",
+        "Chart the persistent_180d rate for Remibrutinib by census region.",
+    ),
+    (
+        "outcome_as_kpi:adherent_180d",
+        "Adherence trend",
+        "What is the adherent 180d trend for Kisqali over the last 6 months?",
+    ),
+    (
+        "outcome_as_kpi:discontinued_180d",
+        "Discontinuation level",
+        "What is the discontinued_180d percentage for Fabhalta?",
+    ),
+]
+
+# Pills the assistant CAN answer; every one must survive.
+KEEP_FIXTURES = [
+    (
+        "Persistence drivers",
+        "What drives persistent_180d for Remibrutinib, and how confident are those paths?",
+    ),
+    ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
+    ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),
+    (
+        "Midwest conversion",
+        "What is Kisqali's conversion rate in the Midwest over the last 3 months?",
+    ),
+    (
+        "Likely specialties",
+        "Which HCP specialties are most likely to increase Fabhalta prescriptions?",
+    ),
+    ("ROI trend", "Chart the ROI trend for Remibrutinib."),
+    ("Action rate uplift", "What is the action rate uplift for Kisqali?"),
+    ("TRx volume drivers", "What are the causal drivers of trx_volume for Kisqali?"),
+    ("Active agents", "Which agents are active right now and what are they working on?"),
+    (
+        "Competitive landscape",
+        "Give me the competitive landscape context for Fabhalta's PNH indication.",
+    ),
+    (
+        "Effect comparison",
+        "How does the nba_trigger_accepted -> persistent_180d effect for Remibrutinib compare in confidence to the uas7_baseline path?",
+    ),
+    ("Regional TRx", "What is Fabhalta's TRx by census region?"),
+]
+
+
+async def test_journey_outcomes_exclude_kpi_named_outcomes():
+    c = await make_catalog()
+    journey = set(cat.journey_outcomes(c))
+    assert {
+        "persistent_180d",
+        "discontinued_180d",
+        "adherent_180d",
+        "low_gap_180d",
+        "adopted",
+    } <= journey
+    # KPI-named outcomes (a trend of ROI or TRx volume IS answerable) stay out
+    for kpi_like in ("roi", "trx_volume", "nrx_volume", "nbrx_volume", "trx_market_share"):
+        assert kpi_like not in journey, kpi_like
+
+
+async def test_treatment_initiated_is_left_to_the_prompt():
+    """The KPI recognizer reads 'treatment initiated' as a causal-metric KPI
+    mention (CM-001), so the outcome rule does not fire on it; the prompt's
+    section C carries that case. Pinned so a recognizer change is visible."""
+    c = await make_catalog()
+    assert "treatment_initiated" not in cat.journey_outcomes(c)
+    kept, dropped = cat.filter_unsupported_pills(
+        [
+            _Pill(
+                "LoT depth",
+                "What is the treatment_initiated conversion rate for Fabhalta in line-of-therapy 0?",
+            )
+        ],
+        c,
+    )
+    assert len(kept) == 1 and dropped == []
+
+
+@pytest.mark.parametrize("rule,title,message", DROP_FIXTURES)
+async def test_known_unsupported_pills_are_dropped(rule, title, message):
+    c = await make_catalog()
+    kept, dropped = cat.filter_unsupported_pills([_Pill(title, message)], c)
+    assert kept == []
+    assert [r for _, r in dropped] == [rule]
+
+
+@pytest.mark.parametrize("title,message", KEEP_FIXTURES)
+async def test_supported_pills_are_kept(title, message):
+    c = await make_catalog()
+    kept, dropped = cat.filter_unsupported_pills([_Pill(title, message)], c)
+    assert dropped == []
+    assert [p.title for p in kept] == [title]
+
+
+async def test_filter_preserves_order_and_returns_rules():
+    c = await make_catalog()
+    pills = [
+        _Pill("keep-1", "Chart the TRx trend for Kisqali."),
+        _Pill("drop", "Which SHAP features matter most for Kisqali adoption?"),
+        _Pill("keep-2", "What drives adopted for Kisqali?"),
+    ]
+    kept, dropped = cat.filter_unsupported_pills(pills, c)
+    assert [p.title for p in kept] == ["keep-1", "keep-2"]
+    assert [(p.title, r) for p, r in dropped] == [("drop", "shap_or_feature_importance")]

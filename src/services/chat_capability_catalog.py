@@ -22,9 +22,22 @@ Design: docs/superpowers/specs/2026-09-05-copilot-pill-capability-catalog-design
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeVar,
+)
 
 from src.agents.factory import build_agent_roster_block
 from src.kpi.models import Workstream
@@ -422,3 +435,139 @@ def route_hint(page: Optional[str]) -> str:
         return ""
     path = page.split("?", 1)[0].split("#", 1)[0].rstrip("/").lower() or "/"
     return ROUTE_HINTS.get(path, "")
+
+
+# =============================================================================
+# VALIDATOR - narrow, deterministic, tuned to the pill families graded NO
+# =============================================================================
+
+
+class SuggestionLike(Protocol):
+    @property
+    def title(self) -> str: ...
+
+    @property
+    def message(self) -> str: ...
+
+
+P = TypeVar("P", bound=SuggestionLike)
+
+# A time-boxed journey flag (persistent_180d) is never a KPI.
+_DURATION_OUTCOME_RE = re.compile(r"_\d+d$")
+
+# "the <outcome> rate / trend / by region ..." - the outcome used as a metric.
+_VALUE_ASK_RE = re.compile(
+    r"\b(?:rates?|values?|levels?|trends?|chart|plot|graph|over time|monthly|month-over-month|"
+    r"quarterly|weekly|by (?:census )?region|by (?:severity )?tier|by segment|by line|breakdown|"
+    r"distribution|percentage|how many|count|volume)\b",
+    re.I,
+)
+# ... unless the pill is a causal question, which section C serves.
+_CAUSAL_ASK_RE = re.compile(
+    r"\b(?:driv\w*|caus\w*|paths?|effects?|why|influenc\w*|factors?|impacts?|refut\w*|confiden\w*)\b",
+    re.I,
+)
+
+_OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
+    (
+        "shap_or_feature_importance",
+        re.compile(
+            r"\bSHAP\b|\bfeature[- ]importances?\b|\bfeature rankings?\b|\btop(?:-| )?\d* ?features\b",
+            re.I,
+        ),
+    ),
+    ("territory_detail", re.compile(r"\bterritor(?:y|ies)\b|\bT-\d{3}\b", re.I)),
+    (
+        "individual_prediction",
+        re.compile(
+            r"\bpredicted (?:\d+-day )?(?:[a-z_]+ )?probabilit(?:y|ies)\b|\bmean predicted probability\b|"
+            r"\bpropensity scores?\b|\b(?:each|individual|specific) (?:HCP|patient|prescriber)s?\b|"
+            r"\b(?:HCP|patient) (?:list|roster)s?\b",
+            re.I,
+        ),
+    ),
+    (
+        "gap_recompute",
+        re.compile(
+            r"\bgap\b[^.?]*\b(?:trend|evolv\w*|evolution|over the (?:past|last)|chart|plot|month)\b|"
+            r"\b(?:chart|plot|trend of)\b[^.?]*\bgap\b",
+            re.I,
+        ),
+    ),
+    (
+        "uplift_by_segment",
+        re.compile(
+            r"\bCATE\b|\bheterogen\w*\b|\btreatment effects? (?:by|across|for) (?:patient )?"
+            r"(?:segment|tier|subgroup|cohort)s?\b|\bsubgroup analys\w*|\bsensitivity analys\w*|"
+            r"\bcontrolling for\b",
+            re.I,
+        ),
+    ),
+    (
+        "off_platform_action",
+        re.compile(
+            r"\be-?mails?\b|\bexport(?:s|ed|ing)?\b|\bCRM\b|\bVeeva\b|"
+            r"\bsend (?:a |an )?(?:report|message|alert|email)\b",
+            re.I,
+        ),
+    ),
+    (
+        "competitor_data",
+        re.compile(
+            r"\bcompetitors?'?s? (?:market )?(?:share|volume|TRx|NRx|sales)\b|"
+            r"\b(?:vs\.?|versus|against) (?:the )?competitors?\b",
+            re.I,
+        ),
+    ),
+)
+
+
+def journey_outcomes(catalog: CapabilityCatalog) -> Tuple[str, ...]:
+    """Outcomes with no KPI counterpart - the ones a pill can mistake for a metric.
+
+    Time-boxed journey flags (``persistent_180d``) are never KPIs; anything else
+    the KPI recognizer cannot resolve (``adopted``) is treated the same. Outcomes
+    the recognizer reads as a KPI mention (``roi``, ``trx_volume``, and also
+    ``treatment_initiated`` -> the causal-metric KPI) are left to the prompt.
+    """
+    from src.services.kpi_resolution import recognize_kpi
+
+    out: List[str] = []
+    for outcome in catalog.causal_outcomes:
+        if _DURATION_OUTCOME_RE.search(outcome) or recognize_kpi(outcome.replace("_", " ")) is None:
+            out.append(outcome)
+    return tuple(out)
+
+
+def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
+    """Name of the rule ``text`` violates, or None when the pill is supported."""
+    for name, pattern in _OFF_PLATFORM_RULES:
+        if pattern.search(text):
+            return name
+    lowered = text.lower()
+    for outcome in journey:
+        spaced = outcome.replace("_", " ")
+        if (
+            re.search(rf"\b{re.escape(outcome)}\b", lowered) is None
+            and re.search(rf"\b{re.escape(spaced)}\b", lowered) is None
+        ):
+            continue
+        if _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered):
+            return f"outcome_as_kpi:{outcome}"
+    return None
+
+
+def filter_unsupported_pills(
+    pills: Sequence[P], catalog: CapabilityCatalog
+) -> Tuple[List[P], List[Tuple[P, str]]]:
+    """Split ``pills`` into (kept, [(dropped, rule), ...]) preserving order."""
+    journey = journey_outcomes(catalog)
+    kept: List[P] = []
+    dropped: List[Tuple[P, str]] = []
+    for pill in pills:
+        rule = match_unsupported_rule(f"{pill.title} {pill.message}", journey)
+        if rule is None:
+            kept.append(pill)
+        else:
+            dropped.append((pill, rule))
+    return kept, dropped
