@@ -170,9 +170,21 @@ enables it; not part of this change.
 narrow, tuned only to the pill families graded NO in the baseline sample:
 
 1. **Outcome-as-KPI.** A message that names a `causal_outcomes` entry and
-   also asks for a value, rate, trend, chart, breakdown, region or time
-   window, without also asking for drivers, causes or paths. The outcome
-   names come from the cached catalog, not a hardcoded list.
+   also asks for a value, rate, breakdown or region, without also asking
+   for drivers, causes or paths; or one where a trend, time-series or
+   chart word (trend, over time, time series, monthly, month-over-month
+   and its spelled-out kin, quarterly, weekly, by month / week / quarter,
+   chart, plot, graph) attaches to the outcome itself - within a few
+   words of it -
+   whatever causal clause follows, because a causal tail does not make a
+   section-C outcome trendable (#1906). Attachment means the outcome is
+   the object of the series - the gap ends with a series noun or change
+   verb plus a preposition ("monthly trend of X", "driver strength for X",
+   "drivers shifted for X") - or the time word is adjacent; a time word
+   that modifies a driver ("does monthly copay support drive / boost /
+   reduce X?", "do monthly changes in copay support influence X?") is a
+   section-C ask and stays. The outcome names come from the cached
+   catalog, not a hardcoded list.
 2. **Off-platform asks.** Word-boundary patterns for SHAP, feature
    importance, territory detail (which is how optimizer allocations were
    phrased in the sample), individual-HCP or individual-patient prediction
