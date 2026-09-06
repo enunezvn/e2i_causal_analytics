@@ -10,6 +10,9 @@ on:
       # matrix unnecessarily. (3B-M-3)
       - 'src/**'
       - 'tests/**'
+      # The catalog's route-hint coverage test reads the frontend router, so a
+      # route add/rename must run backend CI on its own PR (#1901 item 2).
+      - 'frontend/src/router/routes.tsx'
       # Generated-Bento package floors live in this script; its unit guard
       # (tests/unit/test_scripts/test_deploy_model_service_packages.py) must
       # run when the script alone changes (#869 codex R2).
@@ -60,7 +63,7 @@ jobs:
         run: |
           set -uo pipefail
           # Mirrors the `push:` paths filter at the top of this file.
-          PATTERN='^(src/|tests/|scripts/deploy_model\.py$|pyproject\.toml$|requirements\.txt$|\.github/workflows/backend-tests\.yml$)'
+          PATTERN='^(src/|tests/|frontend/src/router/routes\.tsx$|scripts/deploy_model\.py$|pyproject\.toml$|requirements\.txt$|\.github/workflows/backend-tests\.yml$)'
 
           # FAIL OPEN, always. The only dangerous answer this job can give is a
           # false "no backend changes", which would land untested backend code
