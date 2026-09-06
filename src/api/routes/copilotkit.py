@@ -729,13 +729,17 @@ def _readables_context_note(copilotkit_state: Any) -> str:
 
     return (
         "\n\nON-SCREEN APP CONTEXT (what the user is currently looking at, shared "
-        "live by the dashboard via AG-UI readables; values are JSON):\n"
+        "live by the dashboard via AG-UI readables; values are JSON or short prose "
+        "summaries):\n"
         + "\n".join(lines)
         + "\n\nWhen the user asks about 'the data on the page/screen/GUI', 'these "
         "results', or the analysis they are viewing, answer from this context "
         "first — compute counts, ranks and percentages directly from it (a "
         "histogram's bin_counts cover the FULL scored cohort; top_rows are only "
         "the rows shown on screen) and say which on-screen values you used. "
+        "A prose page summary is a description of what the page shows, not a "
+        "data table: cite it as on-screen context and never present its figures "
+        "as the result of a tool you ran. "
         "Call tools only for data that is not on screen."
     )
 
