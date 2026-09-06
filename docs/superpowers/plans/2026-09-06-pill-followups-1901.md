@@ -421,7 +421,8 @@ async def test_windowable_kpis_come_from_the_registry():
 async def test_render_window_clause_names_only_windowable_kpis():
     c = await make_catalog()
     block = cat.render_catalog_block(c)
-    clause = next(line for line in block.splitlines() if "applies ONLY to" in line)
+    clause = next((line for line in block.splitlines() if "applies ONLY to" in line), None)
+    assert clause is not None, "section A must carry the window clause"
     for kpi_id in c.windowable_kpi_ids:
         assert c.kpi_name(kpi_id) in clause
     assert c.kpi_name("CM-002") not in clause
@@ -454,10 +455,17 @@ async def test_axis_rules_window_composition_matches_calculators():
             else query_id
         )
 
+    class _NoQueries:
+        """Sentinel client: any attribute access means a guard moved after its query."""
+
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"routing test must not touch the DB client ({name})")
+
     window = {"start": "2025-01-01", "end": "2025-03-31"}
     # No query runs below: the routing helpers are pure and every guard raises
-    # before _execute_query, so the calculator never resolves its db_client.
-    calc = BusinessImpactCalculator(db_client=None)
+    # before _execute_query. The sentinel PROVES it - a guard that moved after
+    # its query would reach this client and fail the test instead of the DB.
+    calc = BusinessImpactCalculator(db_client=_NoQueries())
 
     # 1. Volume KPIs: a window composes with ANY ONE axis (migrations 084/105/108).
     region_qid, _ = calc._resolve_windowed_call(
@@ -541,12 +549,13 @@ AXIS_RULES = (
     "therapy_line = line of therapy (0-3); region = US census region (northeast/south/midwest/west); "
     "and - Remibrutinib ONLY - biologic status (naive/experienced) or ige_tier (low/medium/high). "
     "The time window composes with any one axis for TRx, NRx and NBRx; only with segment/therapy_line "
-    "for TRx Share and Conversion Rate; and only with region for the trigger KPIs. "
+    "for TRx Share and Conversion Rate; and only with region for Trigger Precision, Acceptance Rate, "
+    "Override Rate and Trigger Funnel Conversion. "
     "TRx share is share of the tracked 3-brand portfolio, NOT share versus competitors."
 )
 ```
 
-(The composition sentence is per KPI family because the calculators differ: TRx/NRx/NBRx route a window with any one axis (`BusinessImpactCalculator._resolve_windowed_call`, migrations 084/105/108); TRx Share and Conversion Rate raise for window + region/biologic/ige_tier; the trigger KPIs route window + region to the migration-120 `_windowed_region` variant (#1388). A blanket "NOT with region/biologic/ige_tier" is true only for share/conversion, and the pre-#1900 wording was already stale for trigger + region. Step 1b pins each clause to the calculators.)
+(The composition sentence is per KPI family because the calculators differ: TRx/NRx/NBRx route a window with any one axis (`BusinessImpactCalculator._resolve_windowed_call`, migrations 084/105/108); TRx Share and Conversion Rate raise for window + region/biologic/ige_tier; the four windowable trigger KPIs route window + region to the migration-120 `_windowed_region` variant (#1388); they are named individually because "the trigger KPIs" would be ambiguous next to section A's nine trigger-performance KPIs and the Conversion Rate / Trigger Funnel Conversion name collision. A blanket "NOT with region/biologic/ige_tier" is true only for share/conversion, and the pre-#1900 wording was already stale for trigger + region. Step 1b pins each clause to the calculators.)
 
 `render_catalog_block` section A: change the opening line and add the window clause before the axis rules:
 
