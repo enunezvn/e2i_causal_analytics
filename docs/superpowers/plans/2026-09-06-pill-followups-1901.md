@@ -265,7 +265,7 @@ Append to `KEEP_FIXTURES` (before the closing `]`):
 Also (final review, commit `ed32bb5b6`): the deny-list `_EXTENDS_ON_SCREEN_RE` must name EVERY `AXIS_RULES` axis, and it omitted line of therapy, so once `territory_detail` joined the exemption "Break the on-screen territory allocation down by line of therapy." was kept (the same ask against SHAP/CATE was already kept). Add, directly after the existing `by (?:census |HCP )?(...)` alternation line, inside the same `re.compile`:
 
 ```python
-    r"\bby (?:lines? of therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
+    r"\bby (?:lines?[- ]of[- ]therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
 ```
 
 and two more `DROP_FIXTURES` entries (last in the list):
@@ -281,9 +281,14 @@ and two more `DROP_FIXTURES` entries (last in the list):
         "On-screen SHAP by therapy line",
         "Split the on-screen SHAP features by line of therapy.",
     ),
+    (
+        "territory_detail",
+        "Displayed territories by line-of-therapy",
+        "Break the displayed territory allocation down by line-of-therapy.",
+    ),
 ```
 
-Both are red before the alternation (rule `None`). A plain catalog ask ("Compare TRx by line of therapy for Kisqali.") is unaffected: the deny-list is consulted only inside the exemption.
+All three are red before the alternation (rule `None`); the hyphenated one is how this codebase spells the axis in prose (codex iter2 MEDIUM, commit `0af5effbc`), hence `[- ]` between the words. A plain catalog ask ("Compare TRx by line of therapy for Kisqali.") is unaffected: the deny-list is consulted only inside the exemption.
 
 Append to `DROP_FIXTURES`:
 
@@ -621,7 +626,7 @@ Check `grep -n "CapabilityCatalog(" src/ tests/` still shows only the builder (n
 - [ ] **Step 4: Run the file's tests plus the suggestions tests**
 
 Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py tests/api/test_chat_suggestions.py -n 0 -q -p no:cacheprovider`
-Expected: all PASS (161 = 135 + 26 at the end of the branch).
+Expected: all PASS (162 = 136 + 26 at the end of the branch).
 
 - [ ] **Step 5: Lint, scoped mypy, commit**
 
