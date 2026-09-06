@@ -716,6 +716,24 @@ DROP_FIXTURES = [
         "On-screen territories by US census region",
         "Break the on-screen territory allocation down by US census region.",
     ),
+    # #1901 item 4g: a roster / named-individual ask is never an on-screen READ
+    # (no page summary carries per-HCP or per-patient rows), so an on-screen
+    # word no longer exempts it from territory_detail / individual_prediction.
+    (
+        "territory_detail",
+        "HCPs in T-003",
+        "Which HCPs are shown in territory T-003?",
+    ),
+    (
+        "territory_detail",
+        "Prescribers displayed for T-114",
+        "Name the prescribers displayed for territory T-114 with their predicted 90-day adoption probability.",
+    ),
+    (
+        "individual_prediction",
+        "Patients shown by probability",
+        "Which patients shown have the highest predicted probability?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -849,6 +867,16 @@ KEEP_FIXTURES = [
     (
         "Competitor review",
         "Perform the competitor landscape review for Fabhalta's PNH indication.",
+    ),
+    # #1901 item 4g: aggregate on-screen reads (a mean, a specialty ranking)
+    # keep the exemption; only roster / named-individual asks lose it.
+    (
+        "Cohort mean shown",
+        "What is the mean predicted probability of the scored cohort shown?",
+    ),
+    (
+        "Specialties shown by likelihood",
+        "Which HCP specialties shown have the highest mean predicted probability for Kisqali?",
     ),
 ]
 

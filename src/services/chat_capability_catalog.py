@@ -691,11 +691,19 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
 
     On-screen READ questions (Part C) bypass the artefact rules named in
     ``_ON_SCREEN_ARTEFACT_RULES`` unless they also ask to extend the
-    artefact. Aggregate HCP-segment likelihood asks (by specialty or
-    region, section D) bypass individual_prediction unless an individual
-    HCP or patient is named.
+    artefact or name individual HCPs / patients. Aggregate HCP-segment
+    likelihood asks (by specialty or region, section D) bypass
+    individual_prediction unless an individual HCP or patient is named.
     """
-    on_screen_read = bool(_ON_SCREEN_RE.search(text)) and not _EXTENDS_ON_SCREEN_RE.search(text)
+    # #1901 item 4g: no page summary carries per-HCP or per-patient rows (each
+    # publishes counts, a mean, top-N feature names or two territory ids), so a
+    # roster or named-individual ask can never be an on-screen READ however it
+    # names the artefact - the exemption yields to the individual markers.
+    on_screen_read = (
+        bool(_ON_SCREEN_RE.search(text))
+        and not _EXTENDS_ON_SCREEN_RE.search(text)
+        and not _INDIVIDUAL_ASK_RE.search(text)
+    )
     for name, pattern in _OFF_PLATFORM_RULES:
         if pattern.search(text):
             if on_screen_read and name in _ON_SCREEN_ARTEFACT_RULES:
