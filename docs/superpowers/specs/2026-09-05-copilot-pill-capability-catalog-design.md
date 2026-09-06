@@ -172,8 +172,10 @@ narrow, tuned only to the pill families graded NO in the baseline sample:
 1. **Outcome-as-KPI.** A message that names a `causal_outcomes` entry and
    also asks for a value, rate, breakdown or region, without also asking
    for drivers, causes or paths; or one where a trend, time-series or
-   chart word (trend, over time, monthly, quarterly, weekly, chart, plot,
-   graph) attaches to the outcome itself - within a few words of it -
+   chart word (trend, over time, time series, monthly, month-over-month
+   and its spelled-out kin, quarterly, weekly, by month / week / quarter,
+   chart, plot, graph) attaches to the outcome itself - within a few
+   words of it -
    whatever causal clause follows, because a causal tail does not make a
    section-C outcome trendable (#1906). Attachment means the outcome is
    the object of the series - the gap ends with a series noun or change

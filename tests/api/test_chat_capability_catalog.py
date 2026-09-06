@@ -890,6 +890,19 @@ KEEP_FIXTURES = [
     ("TRx and persistence", "Show monthly TRx trend and what drives persistent_180d for Kisqali."),
     ("TRx plus drivers", "Show monthly TRx trend plus the drivers of persistent_180d."),
     ("TRx chart and drivers", "Show a monthly TRx chart alongside drivers of persistent_180d."),
+    # #1906 codex: the newer time words on the DRIVER side stay too
+    (
+        "Visit series",
+        "Is a time series of rep visits associated with persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Copay changes by month",
+        "Are month over month changes in copay support associated with persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Hub changes by quarter",
+        "Are quarter-over-quarter changes in hub touchpoints associated with persistent_180d for Remibrutinib?",
+    ),
     ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
     ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),
     (
