@@ -2274,6 +2274,8 @@ Not in the original plan; added from the per-task reviews during subagent-driven
 - `ci(tests)`: the Unit Tests lane enumerates test paths explicitly and never collected `tests/api/test_chat_suggestions.py`; the three `tests/api/` files of this branch are now listed in `.github/workflows/backend-tests.yml`.
 - `fix(frontend)`: the readable converter takes the SDK's single runtime argument (see Task 10 Step 3).
 - `fix(chat)` hygiene commit: `topUpChatSuggestions` also dedups on the normalized message; the seven partial carry-forward cases of `_keep_last_good_fields` are parametrized; the accessor test resets the cache via a finalizer; a route test covers the degraded catalog; the real-hook readable contract test and ESM-chunk fence.
+- `fix(chat)` after the independent codex audit (iteration 1, three findings, all reproduced): the on-screen READ exemption for the four artefact rules (`_ON_SCREEN_RE`, `_EXTENDS_ON_SCREEN_RE`, `_ON_SCREEN_ARTEFACT_RULES`), the current-value "(CATE)" chart kept while trend forms drop (incl. a month/week/quarter word before the KPI), and the single-flight `_CatalogCache` refresh; then hardened after review: the extends-list also carries `why|explain`, the rules' trend/axis vocabulary and `by <axis>` words, the dead chart/plot alternative is gone, and `_refresh` only writes the cache while it is still the current build. Catalog tests 68 -> 85.
+- `chore(types)`: `frontend/src/types/generated/api.ts` regenerated for the suggestions route's new description (the `verify-types` gate failed on the drift).
 
 ---
 

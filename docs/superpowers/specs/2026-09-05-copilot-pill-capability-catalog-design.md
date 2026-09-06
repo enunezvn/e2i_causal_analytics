@@ -142,8 +142,12 @@ different catalog sections, which addresses the diversity regression directly
 rather than through the hint alone.
 
 **Caching.** The catalog is built lazily on first request and cached
-in-process with a 10-minute TTL. On refresh failure the last good catalog is
-kept and the failing fields are recorded in `degraded`. If the very first
+in-process with a 10-minute TTL (60 s while degraded). The refresh is
+single-flight: concurrent cold or expired callers await the one build in
+flight, so a failing DB is not hammered and a slower degraded build cannot
+overwrite a faster good one; a build orphaned by the test-only `reset()`
+serves its own waiters but stays out of the cache. On refresh failure the
+last good catalog is kept and the failing fields are recorded in `degraded`. If the very first
 build fails for a DB-backed field, the section renders an honest one-line
 fallback ("outcome list unavailable; propose at most one causal-driver pill
 and name no outcome") rather than an invented list. Registry and roster never
@@ -173,6 +177,16 @@ narrow, tuned only to the pill families graded NO in the baseline sample:
    importance, territory or optimizer allocation, individual-HCP or
    individual-patient prediction, gap-size recomputation, uplift or CATE by
    segment, email, export, CRM, competitor share.
+3. **On-screen reads are kept.** Because Part C gives the agent the same
+   summary, a pill that only reads, ranks or compares SHAP, gap, CATE or
+   prediction values that are literally on screen is answerable and the
+   four artefact rules yield to it — unless the text also asks to
+   recompute, validate, extend, explain *why*, or trend the artefact
+   (the extends-list mirrors the prompt's forbidden verbs and the rules'
+   own trend and axis vocabulary). Registry KPI names the rules collide
+   with (Geographic Consistency Gap, SHAP Coverage, Conditional ATE (CATE)
+   as a current-value ask or chart) are exempt; trend and segment forms of
+   CATE still drop.
 
 Each drop is logged at INFO with the rule name and the pill title, so the
 production drop rate is measurable from logs. The route returns the survivors
@@ -315,6 +329,12 @@ baseline 23/30/39 and prototype v2 70/14/8 on 92. Evidence:
 
 - **Validator over-blocking.** Kept narrow to two measured families; logs
   make false positives visible. Widening the denylist is a separate decision.
+  Known fail-safe residual (2026-09-06): the validator matches on title plus
+  message, so a pill whose short title uses the bare token "CATE" while its
+  message asks an answerable current-value question is still dropped by the
+  bare-CATE alternative; closing it needs a wider subgroup alternative
+  first ("for high-severity patients" currently relies on the bare token).
+  The 92-pill gate run had no such title and drop precision 5/5.
 - **Catalog drift.** Lists come from code and data. The only prose that can
   rot is the axis and composition rules in section A and the `ROUTE_HINTS`
   map; the axis test guards the former, and a route rename shows up as an
