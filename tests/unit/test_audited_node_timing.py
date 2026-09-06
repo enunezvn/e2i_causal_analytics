@@ -328,3 +328,34 @@ async def test_audited_node_passthrough_of_failed_state_is_not_an_error(
     entry = recording_service.entries[0]
     assert entry["action_type"] == "optimize"
     assert entry["validation_passed"] is None
+
+
+@pytest.mark.asyncio
+async def test_audited_node_status_failed_without_failure_payload_is_a_verdict(
+    recording_service: _RecordingService,
+) -> None:
+    """resource_optimizer's optimizer sets status="failed" for an INFEASIBLE
+    solve with only ``warnings`` (no ``errors``/``error``): the solver ran and
+    honestly reported that no allocation satisfies the constraints — a
+    verdict, not an execution failure (codex iter-3). Normal row."""
+
+    async def optimize(state: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            **state,
+            "solver_status": "infeasible",
+            "warnings": ["Solver returned: infeasible"],
+            "status": "failed",
+        }
+
+    wrapped = audited_node(
+        optimize,
+        agent_name="resource_optimizer",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+        node_name="optimize",
+    )
+
+    await wrapped({"audit_workflow_id": uuid4(), "status": "analyzing"})
+
+    entry = recording_service.entries[0]
+    assert entry["action_type"] == "optimize"
+    assert entry["validation_passed"] is None

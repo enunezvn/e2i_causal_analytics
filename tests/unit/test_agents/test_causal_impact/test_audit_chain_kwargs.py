@@ -354,3 +354,74 @@ async def test_traced_node_audit_entry_does_not_warning_log_failure(mock_opik, b
         "indicates kwarg/signature mismatch is still present. "
         f"Warnings: {[r.getMessage() for r in failure_warnings]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed outcomes must be readable from the audit row (codex iter-3,
+# 2026-09-06): this local wrapper is what the PRODUCTION causal_impact graph
+# uses, and it always recorded ``action_type=node_name`` — a fail-closed
+# estimation (``estimation_error`` + status failed) or a raising node left no
+# ``<node>_error`` row, the one marker the /system-health and /analytics
+# readers count (``src.api.utils.audit_outcomes``).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_traced_node_fail_closed_result_records_error_action(
+    mock_audit_service, mock_opik, base_state
+):
+    @traced_node("estimation")
+    async def _node(state):
+        return {
+            **state,
+            "estimation_error": "no estimator",
+            "status": "failed",
+            "errors": [{"phase": "estimation", "message": "no estimator"}],
+        }
+
+    result = await _node(base_state)
+
+    assert result["estimation_error"] == "no estimator"
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert kwargs["action_type"] == "estimation_error"
+    assert kwargs["validation_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_traced_node_raising_node_records_error_action_then_reraises(
+    mock_audit_service, mock_opik, base_state
+):
+    @traced_node("sensitivity")
+    async def _node(state):
+        raise RuntimeError("dowhy exploded")
+
+    with pytest.raises(RuntimeError, match="dowhy exploded"):
+        await _node(base_state)
+
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert kwargs["action_type"] == "sensitivity_error"
+    assert kwargs["validation_passed"] is False
+    assert kwargs["agent_name"] == "causal_impact"
+    assert kwargs["agent_tier"] is AgentTier.CAUSAL_ANALYTICS
+
+
+@pytest.mark.asyncio
+async def test_traced_node_non_robust_refutation_is_not_an_error_action(
+    mock_audit_service, mock_opik, base_state
+):
+    """The refutation VERDICT (overall_robust False) is validation_passed=False
+    on a normal ``refutation`` row, never an error action."""
+
+    @traced_node("refutation")
+    async def _node(state):
+        return {
+            **state,
+            "status": "completed",
+            "refutation_results": {"overall_robust": False, "individual_tests": {}},
+        }
+
+    await _node(base_state)
+
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert kwargs["action_type"] == "refutation"
+    assert kwargs["validation_passed"] is False

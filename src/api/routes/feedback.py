@@ -637,7 +637,7 @@ async def _all_patterns() -> List[DetectedPattern]:
 # goldset-replay "cognitive_investigator has high negative feedback rate"
 # detection stayed pinned at the top of /feedback-learning (sorted by severity)
 # with no signal path that could ever confirm or clear it (2026-09-06).
-# Matches the 30-day agent-telemetry window on /system-health.
+# Matches the 30-day telemetry window the /system-health agent card uses.
 PATTERN_MAX_AGE_DAYS = 30
 
 

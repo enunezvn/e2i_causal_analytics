@@ -531,6 +531,10 @@ def create_workflow_initializer(
 # pass/fail. Mirrors the honest-null convention used by the analytics latency
 # panel (avg_latency_ms null == unmeasured, not zero).
 _VALIDATION_RESULT_KEYS = ("validation_passed", "validation_result", "validated")
+# What a fail-closed node carries besides ``status="failed"`` (LangGraph state
+# contract: ``errors`` accumulates via operator.add; some graphs use ``error`` /
+# ``error_message``).
+_FAILURE_PAYLOAD_KEYS = ("errors", "error", "error_message")
 
 
 def node_failed_closed(node_name: str, state: Mapping[str, Any], result: Mapping[str, Any]) -> bool:
@@ -544,18 +548,27 @@ def node_failed_closed(node_name: str, state: Mapping[str, Any], result: Mapping
       graph routes to an UNaudited error handler (resource_optimizer,
       gap_analyzer, explainer, feedback_learner, prediction_synthesizer, ...).
 
-    Only the node that FLIPS the status to failed is the failure; a downstream
-    node passing an already-failed state through (``if state["status"] ==
-    "failed": return state``) did not fail, so a failed run is not spelled as
-    N error rows. A ``validation_passed`` verdict on a completed node is never
-    a failure. The audit row's ``output_data`` is persisted only as a hash, so
-    the ``<node>_error`` action_type this drives is the one readable execution
+    Only the node that FLIPS the status to failed AND carries a failure
+    payload (``errors`` / ``error`` / ``error_message``) is the failure:
+
+    * a downstream node passing an already-failed state through (``if
+      state["status"] == "failed": return state``) did not fail, so a failed
+      run is not spelled as N error rows;
+    * a node that sets status failed with only ``warnings`` reported a
+      VERDICT — resource_optimizer's optimizer on an infeasible solve ("no
+      allocation satisfies the constraints") — not a crash (codex iter-3).
+
+    A ``validation_passed`` verdict on a completed node is never a failure.
+    The audit row's ``output_data`` is persisted only as a hash, so the
+    ``<node>_error`` action_type this drives is the one readable execution
     outcome the /system-health and /analytics readers can count
     (``src.api.utils.audit_outcomes``).
     """
     if result.get(f"{node_name}_error"):
         return True
-    return result.get("status") == "failed" and state.get("status") != "failed"
+    if result.get("status") != "failed" or state.get("status") == "failed":
+        return False
+    return any(result.get(key) for key in _FAILURE_PAYLOAD_KEYS)
 
 
 def _elapsed_ms(start: float) -> int:
