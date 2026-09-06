@@ -30,7 +30,7 @@ import functools
 import inspect
 import logging
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar, cast
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, TypeVar, cast
 from uuid import UUID
 
 from src.mlops.opik_connector import get_opik_connector
@@ -415,12 +415,23 @@ def audited_traced_node(
                                 est = result.get("estimation_result", {})
                                 confidence_score = est.get("energy_score")
 
+                            # A node that caught its own failure (returned
+                            # ``{node}_error`` or flipped ``status`` to failed)
+                            # is recorded as ``<node>_error`` exactly like a
+                            # raising node — see node_failed_closed.
+                            if node_failed_closed(node_name, state, result):
+                                action_type = f"{node_name}_error"
+                                validation_passed = False
+                                output_summary["has_error"] = True
+                            else:
+                                action_type = node_name
+
                             # Record the audit entry
                             service.add_entry(
                                 workflow_id=workflow_id,
                                 agent_name=agent_name,
                                 agent_tier=agent_tier,
-                                action_type=node_name,
+                                action_type=action_type,
                                 input_data=input_hash_data,
                                 output_data=output_summary,
                                 duration_ms=duration_ms,
@@ -520,6 +531,44 @@ def create_workflow_initializer(
 # pass/fail. Mirrors the honest-null convention used by the analytics latency
 # panel (avg_latency_ms null == unmeasured, not zero).
 _VALIDATION_RESULT_KEYS = ("validation_passed", "validation_result", "validated")
+# What a fail-closed node carries besides ``status="failed"`` (LangGraph state
+# contract: ``errors`` accumulates via operator.add; some graphs use ``error`` /
+# ``error_message``).
+_FAILURE_PAYLOAD_KEYS = ("errors", "error", "error_message")
+
+
+def node_failed_closed(node_name: str, state: Mapping[str, Any], result: Mapping[str, Any]) -> bool:
+    """True when an audited node that did NOT raise still failed its run.
+
+    Two fail-closed conventions exist in the graphs (2026-09-06):
+
+    * the node returns a ``{node_name}_error`` key (causal_impact estimation /
+      refutation, heterogeneous_optimizer hierarchical analysis, ...);
+    * the node returns ``status="failed"`` (plus ``errors``/``error``) and the
+      graph routes to an UNaudited error handler (resource_optimizer,
+      gap_analyzer, explainer, feedback_learner, prediction_synthesizer, ...).
+
+    Only the node that FLIPS the status to failed AND carries a failure
+    payload (``errors`` / ``error`` / ``error_message``) is the failure:
+
+    * a downstream node passing an already-failed state through (``if
+      state["status"] == "failed": return state``) did not fail, so a failed
+      run is not spelled as N error rows;
+    * a node that sets status failed with only ``warnings`` reported a
+      VERDICT — resource_optimizer's optimizer on an infeasible solve ("no
+      allocation satisfies the constraints") — not a crash (codex iter-3).
+
+    A ``validation_passed`` verdict on a completed node is never a failure.
+    The audit row's ``output_data`` is persisted only as a hash, so the
+    ``<node>_error`` action_type this drives is the one readable execution
+    outcome the /system-health and /analytics readers can count
+    (``src.api.utils.audit_outcomes``).
+    """
+    if result.get(f"{node_name}_error"):
+        return True
+    if result.get("status") != "failed" or state.get("status") == "failed":
+        return False
+    return any(result.get(key) for key in _FAILURE_PAYLOAD_KEYS)
 
 
 def _elapsed_ms(start: float) -> int:
@@ -567,8 +616,10 @@ def audited_node(
       is fabricated.
     * ``validation_passed`` is read from a conventional result key only if the
       node actually set one; otherwise it stays ``None`` (unmeasured).
-    * On exception the wrapper records a timed ``{node_name}_error`` entry with
-      ``validation_passed=False`` and then re-raises — execution semantics are
+    * On exception — or when the node returns a ``{node_name}_error`` key, the
+      fail-closed convention — the wrapper records a timed ``{node_name}_error``
+      entry with ``validation_passed=False``; on exception it then re-raises —
+      execution semantics are
       unchanged, telemetry is added.
 
     Accepts sync or async node callables and always returns an async node, so
@@ -610,16 +661,23 @@ def audited_node(
                         raw = result_dict[key]
                         validation_passed = bool(raw) if raw is not None else None
                         break
+                # Fail-closed node (returned ``{node}_error`` or flipped status
+                # to failed instead of raising) -> recorded as ``<node>_error``
+                # like a raise; see node_failed_closed.
+                has_error = node_failed_closed(node_name, state, result_dict)
+                action_type = f"{node_name}_error" if has_error else node_name
+                if has_error:
+                    validation_passed = False
                 try:
                     service.add_entry(
                         workflow_id=workflow_id,
                         agent_name=agent_name,
                         agent_tier=agent_tier,
-                        action_type=node_name,
+                        action_type=action_type,
                         input_data={"node": node_name},
                         output_data={
                             "status": result_dict.get("status"),
-                            "has_error": bool(result_dict.get(f"{node_name}_error")),
+                            "has_error": has_error,
                         },
                         duration_ms=duration_ms,
                         validation_passed=validation_passed,

@@ -405,6 +405,23 @@ class ToolComposer:
                     "(no fabricated response).",
                     execution_trace.tools_executed,
                 )
+                # The run FAILED: say so in the audit chain with an ``*_error``
+                # row, the one execution-failure marker the /system-health and
+                # /analytics readers count. The ``execute`` row's
+                # validation_passed=False above is a tool verdict, which on a
+                # PARTIAL composition does not fail the run (2026-09-06).
+                self._record_audit_entry(
+                    audit_service,
+                    audit_workflow_id,
+                    "execute_error",
+                    phase_durations["execute"],
+                    {
+                        "tools_executed": execution_trace.tools_executed,
+                        "tools_succeeded": 0,
+                        "error": "all executed tools failed; failed closed without synthesis",
+                    },
+                    validation_passed=False,
+                )
                 return self._create_total_failure_result(
                     query,
                     decomposition,
@@ -485,7 +502,9 @@ class ToolComposer:
             return result
 
         except DecompositionError as e:
-            return self._create_error_result(
+            return self._fail_closed(
+                audit_service,
+                audit_workflow_id,
                 query,
                 started_at,
                 phase_durations,
@@ -494,12 +513,20 @@ class ToolComposer:
             )
 
         except PlanningError as e:
-            return self._create_error_result(
-                query, started_at, phase_durations, f"Planning failed: {e}", CompositionPhase.PLAN
+            return self._fail_closed(
+                audit_service,
+                audit_workflow_id,
+                query,
+                started_at,
+                phase_durations,
+                f"Planning failed: {e}",
+                CompositionPhase.PLAN,
             )
 
         except ExecutionError as e:
-            return self._create_error_result(
+            return self._fail_closed(
+                audit_service,
+                audit_workflow_id,
                 query,
                 started_at,
                 phase_durations,
@@ -509,9 +536,44 @@ class ToolComposer:
 
         except Exception as e:
             logger.exception(f"Unexpected error during composition: {e}")
-            return self._create_error_result(
-                query, started_at, phase_durations, f"Unexpected error: {e}", None
+            return self._fail_closed(
+                audit_service,
+                audit_workflow_id,
+                query,
+                started_at,
+                phase_durations,
+                f"Unexpected error: {e}",
+                None,
             )
+
+    def _fail_closed(
+        self,
+        audit_service: Any,
+        audit_workflow_id: Optional[UUID],
+        query: str,
+        started_at: datetime,
+        phase_durations: Dict[str, int],
+        error: str,
+        failed_phase: Optional[CompositionPhase],
+    ) -> CompositionResult:
+        """Record the failed run in the audit chain, then build the error result.
+
+        The ``<phase>_error`` row (``compose_error`` when no phase is known) is
+        the one execution-failure marker the /system-health and /analytics
+        readers count (``src.api.utils.audit_outcomes``); without it a run
+        that failed closed read as a successful invocation (codex iter-2,
+        2026-09-06). Best-effort like every audit write here.
+        """
+        phase = failed_phase.value if failed_phase else "compose"
+        self._record_audit_entry(
+            audit_service,
+            audit_workflow_id,
+            f"{phase}_error",
+            self._elapsed_ms(started_at),
+            {"error": error[:500], "phase": phase},
+            validation_passed=False,
+        )
+        return self._create_error_result(query, started_at, phase_durations, error, failed_phase)
 
     def _elapsed_ms(self, start: datetime) -> int:
         """Calculate elapsed milliseconds since start"""

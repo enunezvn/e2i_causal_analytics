@@ -22,6 +22,7 @@ from langgraph.graph import END, StateGraph
 from src.agents.base.audit_chain_mixin import (
     create_workflow_initializer,
     get_audit_chain_service,
+    node_failed_closed,
 )
 from src.agents.causal_impact.nodes.adjustment_set_policy import (
     apply_adjustment_set_policy,
@@ -192,6 +193,17 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     if latency_key in result:
                         span.set_attribute("node_latency_ms", result[latency_key])
 
+                    # A fail-closed node (``{node}_error`` key, or status
+                    # flipped to failed with an error payload) is recorded as
+                    # ``<node>_error`` like a raising node — the one readable
+                    # execution outcome in audit_chain_entries; see
+                    # audit_chain_mixin.node_failed_closed (2026-09-06).
+                    failed_closed = node_failed_closed(node_name, state, result)
+                    if failed_closed:
+                        output_summary["has_error"] = True
+                        validation_passed = False
+                    action_type = f"{node_name}_error" if failed_closed else node_name
+
                     # Record audit chain entry. add_entry hashes input_data /
                     # output_data internally via AuditChainService.hash_payload;
                     # user_id / session_id / brand are inherited from the
@@ -202,7 +214,7 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                                 workflow_id=workflow_id,
                                 agent_name="causal_impact",
                                 agent_tier=AgentTier.CAUSAL_ANALYTICS,
-                                action_type=node_name,
+                                action_type=action_type,
                                 duration_ms=duration_ms,
                                 input_data=sanitized_input,
                                 output_data=output_summary,
@@ -221,6 +233,23 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     span.set_attribute("error", str(e))
                     span.set_attribute("error_type", type(e).__name__)
                     logger.error(f"Node {node_name} failed: {e}")
+                    # Same ``<node>_error`` row the shared wrappers write on a
+                    # raise; best-effort, never masks the real error.
+                    if workflow_id and audit_service:
+                        try:
+                            elapsed = time.time() - start_time
+                            audit_service.add_entry(
+                                workflow_id=workflow_id,
+                                agent_name="causal_impact",
+                                agent_tier=AgentTier.CAUSAL_ANALYTICS,
+                                action_type=f"{node_name}_error",
+                                duration_ms=max(1, int(elapsed * 1000)) if elapsed > 0 else 0,
+                                input_data=sanitized_input,
+                                output_data={"error": str(e)},
+                                validation_passed=False,
+                            )
+                        except Exception as ae:
+                            logger.warning(f"Failed to record error audit entry: {ae}")
                     raise
 
         return wrapper  # type: ignore

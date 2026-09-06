@@ -38,6 +38,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+from src.api.utils.audit_outcomes import WorkflowOutcomeTally
 
 logger = logging.getLogger(__name__)
 
@@ -1618,6 +1619,12 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
     (success_rate/latency/invocations) are measured only where recent telemetry
     exists; otherwise they are left null (NOT a fabricated 1.0/0.0) and the
     provenance is PARTIAL.
+
+    success_rate and invocations count workflow RUNS, and a run fails only when
+    a node raised (its ``<node>_error`` row) — see
+    ``src.api.utils.audit_outcomes``. A row's ``validation_passed`` is a
+    scientific verdict (cross-library agreement, refutation robustness), not an
+    execution outcome, and is deliberately NOT read here.
     """
     db = _health_source_client()
     if db is None:
@@ -1640,7 +1647,7 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
     try:
         telemetry = (
             db.table("audit_chain_entries")
-            .select("agent_name, duration_ms, validation_passed, created_at")
+            .select("agent_name, workflow_id, action_type, duration_ms, created_at")
             .gte("created_at", start)
             .execute()
             .data
@@ -1660,20 +1667,15 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
             if not name:
                 continue
             d = agg.setdefault(
-                name, {"latencies": [], "ok": 0, "total": 0, "last": None, "count_24h": 0}
+                name, {"latencies": [], "runs": WorkflowOutcomeTally(), "last": None}
             )
-            d["total"] += 1
             dur = entry.get("duration_ms")
             if isinstance(dur, (int, float)) and dur > 0:
                 d["latencies"].append(dur)
-            if entry.get("validation_passed") is not False:  # True or None -> counted ok
-                d["ok"] += 1
             ts = entry.get("created_at")
-            if ts:
-                if d["last"] is None or str(ts) > str(d["last"]):
-                    d["last"] = ts
-                if str(ts) >= cutoff_24h:
-                    d["count_24h"] += 1
+            if ts and (d["last"] is None or str(ts) > str(d["last"])):
+                d["last"] = ts
+            d["runs"].add(entry, recent=bool(ts) and str(ts) >= cutoff_24h)
 
         agents: List[AgentHealth] = []
         missing_telemetry = False
@@ -1681,7 +1683,8 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
             name = str(r.get("agent_name") or "unknown")
             a = agg.get(name)
             lat = a["latencies"] if a else []
-            if a and a["total"] > 0:
+            runs: Optional[WorkflowOutcomeTally] = a["runs"] if a else None
+            if a and runs is not None and runs.total > 0:
                 avg_latency = int(sum(lat) / len(lat)) if lat else None
                 # Fully sourced only if BOTH the rate and a latency are measured;
                 # telemetry rows without any valid duration leave latency null ->
@@ -1694,9 +1697,9 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
                         tier=_agent_tier_int(r),
                         available=bool(r.get("is_active")),
                         avg_latency_ms=avg_latency,
-                        success_rate=round(a["ok"] / a["total"], 4),
+                        success_rate=round(runs.successful / runs.total, 4),
                         last_invocation=str(a["last"]) if a["last"] else None,
-                        invocations_24h=a["count_24h"],
+                        invocations_24h=runs.recent,
                     )
                 )
             else:

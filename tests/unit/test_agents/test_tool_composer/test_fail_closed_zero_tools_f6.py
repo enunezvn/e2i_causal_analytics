@@ -72,3 +72,102 @@ async def test_partial_success_still_synthesizes_and_reports_partial():
     assert result.status == CompositionStatus.PARTIAL
     assert result.success is True
     composer.synthesizer.synthesize.assert_awaited()
+
+
+class _RecordingAuditService:
+    """Faithful stand-in for AuditChainService: mints a workflow id the way
+    ``start_workflow`` does and records every ``add_entry`` kwargs."""
+
+    def __init__(self):
+        from uuid import uuid4
+
+        self.workflow_id = uuid4()
+        self.entries = []
+
+    def start_workflow(self, **kwargs):
+        class _Entry:
+            workflow_id = self.workflow_id
+
+        return _Entry()
+
+    def add_entry(self, **kwargs):
+        self.entries.append(kwargs)
+        return object()
+
+
+@pytest.fixture
+def recording_audit():
+    from src.agents.base.audit_chain_mixin import set_audit_chain_service
+
+    svc = _RecordingAuditService()
+    set_audit_chain_service(svc)
+    yield svc
+    set_audit_chain_service(None)
+
+
+@pytest.mark.asyncio
+async def test_zero_tools_succeeded_writes_execute_error_audit_row(recording_audit):
+    """The F6 fail-closed return is a FAILED run; the audit chain must say so
+    with an ``execute_error`` row — the one execution-failure marker the
+    /system-health and /analytics readers count (2026-09-06). The ``execute``
+    row's validation_passed=False alone is a tool verdict, not a run outcome."""
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire(composer, tools_executed=2, tools_succeeded=0, synth_confidence=0.8)
+
+    result = await composer.compose("compare causal impact of X and predict Y")
+
+    assert result.status == CompositionStatus.FAILED
+    actions = [e["action_type"] for e in recording_audit.entries]
+    assert "execute_error" in actions
+    error_row = next(e for e in recording_audit.entries if e["action_type"] == "execute_error")
+    assert error_row["validation_passed"] is False
+    assert error_row["workflow_id"] == recording_audit.workflow_id
+
+
+@pytest.mark.asyncio
+async def test_partial_success_writes_no_error_audit_row(recording_audit):
+    """A PARTIAL composition completed (synthesis ran over the tools that
+    succeeded): the tool verdict stays on the ``execute`` row, no error row."""
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire(composer, tools_executed=2, tools_succeeded=1, synth_confidence=0.6)
+
+    result = await composer.compose("compare causal impact of X and predict Y")
+
+    assert result.status == CompositionStatus.PARTIAL
+    actions = [e["action_type"] for e in recording_audit.entries]
+    assert not any(a.endswith("_error") for a in actions), actions
+    execute_row = next(e for e in recording_audit.entries if e["action_type"] == "execute")
+    assert execute_row["validation_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_phase_exception_writes_phase_error_audit_row(recording_audit):
+    """A phase exception returns a FAILED result via ``_create_error_result``;
+    the audit chain must carry a ``<phase>_error`` row for it too (codex
+    iter-2), or the run reads as successful on /system-health and /analytics."""
+    from src.agents.tool_composer.decomposer import DecompositionError
+
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire(composer, tools_executed=1, tools_succeeded=1, synth_confidence=0.6)
+    composer.decomposer.decompose = AsyncMock(side_effect=DecompositionError("llm down"))
+
+    result = await composer.compose("compare causal impact of X and predict Y")
+
+    assert result.status == CompositionStatus.FAILED
+    error_rows = [e for e in recording_audit.entries if e["action_type"].endswith("_error")]
+    assert [e["action_type"] for e in error_rows] == ["decompose_error"]
+    assert error_rows[0]["validation_passed"] is False
+    assert error_rows[0]["workflow_id"] == recording_audit.workflow_id
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_writes_compose_error_audit_row(recording_audit):
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire(composer, tools_executed=1, tools_succeeded=1, synth_confidence=0.6)
+    composer.planner.plan = AsyncMock(side_effect=RuntimeError("unexpected"))
+
+    result = await composer.compose("compare causal impact of X and predict Y")
+
+    assert result.status == CompositionStatus.FAILED
+    error_rows = [e for e in recording_audit.entries if e["action_type"].endswith("_error")]
+    assert [e["action_type"] for e in error_rows] == ["compose_error"]

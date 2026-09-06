@@ -243,3 +243,119 @@ def test_audited_node_preserves_sync_callable(recording_service: _RecordingServi
     assert result == {"status": "done"}
     assert len(recording_service.entries) == 1
     assert recording_service.entries[0]["duration_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_audited_node_soft_failure_records_error_entry(
+    recording_service: _RecordingService,
+) -> None:
+    """A node that catches its own failure and returns ``{node}_error`` (the
+    fail-closed convention, e.g. causal_impact estimation) records the same
+    ``<node>_error`` entry a raising node does — the only readable execution
+    outcome in audit_chain_entries (output_data is hashed, 2026-09-06). The
+    result is still returned unchanged; nothing raises."""
+
+    async def fail_closed(state: Dict[str, Any]) -> Dict[str, Any]:
+        return {"optimize_error": "solver unavailable", "status": "failed"}
+
+    wrapped = audited_node(
+        fail_closed,
+        agent_name="resource_optimizer",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+        node_name="optimize",
+    )
+
+    result = await wrapped({"audit_workflow_id": uuid4()})
+
+    assert result["optimize_error"] == "solver unavailable"
+    assert len(recording_service.entries) == 1
+    entry = recording_service.entries[0]
+    assert entry["action_type"] == "optimize_error"
+    assert entry["validation_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_audited_node_status_failed_flip_records_error_entry(
+    recording_service: _RecordingService,
+) -> None:
+    """Most fail-closed nodes carry no ``{node}_error`` key: they return
+    ``{**state, "status": "failed", "errors": [...]}`` (resource_optimizer's
+    formulator, gap_analyzer, explainer, ...) and the graph routes to an
+    UNaudited error handler. The node that FLIPS status to failed is the one
+    that failed: recorded as ``<node>_error`` (codex iter-2, 2026-09-06)."""
+
+    async def formulate(state: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            **state,
+            "errors": [{"node": "formulator", "error": "no targets"}],
+            "status": "failed",
+        }
+
+    wrapped = audited_node(
+        formulate,
+        agent_name="resource_optimizer",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+        node_name="formulate",
+    )
+
+    await wrapped({"audit_workflow_id": uuid4(), "status": "running"})
+
+    entry = recording_service.entries[0]
+    assert entry["action_type"] == "formulate_error"
+    assert entry["validation_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_audited_node_passthrough_of_failed_state_is_not_an_error(
+    recording_service: _RecordingService,
+) -> None:
+    """A downstream node that merely passes an already-failed state through
+    (``if state["status"] == "failed": return state``) did not fail: normal
+    row, so a failed run is not spelled as N error rows."""
+
+    async def optimize(state: Dict[str, Any]) -> Dict[str, Any]:
+        return state
+
+    wrapped = audited_node(
+        optimize,
+        agent_name="resource_optimizer",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+        node_name="optimize",
+    )
+
+    await wrapped({"audit_workflow_id": uuid4(), "status": "failed", "errors": [{"e": 1}]})
+
+    entry = recording_service.entries[0]
+    assert entry["action_type"] == "optimize"
+    assert entry["validation_passed"] is None
+
+
+@pytest.mark.asyncio
+async def test_audited_node_status_failed_without_failure_payload_is_a_verdict(
+    recording_service: _RecordingService,
+) -> None:
+    """resource_optimizer's optimizer sets status="failed" for an INFEASIBLE
+    solve with only ``warnings`` (no ``errors``/``error``): the solver ran and
+    honestly reported that no allocation satisfies the constraints — a
+    verdict, not an execution failure (codex iter-3). Normal row."""
+
+    async def optimize(state: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            **state,
+            "solver_status": "infeasible",
+            "warnings": ["Solver returned: infeasible"],
+            "status": "failed",
+        }
+
+    wrapped = audited_node(
+        optimize,
+        agent_name="resource_optimizer",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+        node_name="optimize",
+    )
+
+    await wrapped({"audit_workflow_id": uuid4(), "status": "analyzing"})
+
+    entry = recording_service.entries[0]
+    assert entry["action_type"] == "optimize"
+    assert entry["validation_passed"] is None

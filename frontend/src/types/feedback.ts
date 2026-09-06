@@ -161,6 +161,10 @@ export interface ListPatternsParams {
   agent?: string;
   /** Maximum results */
   limit?: number;
+  /** Only patterns detected within this many days (server default 30) */
+  max_age_days?: number;
+  /** Also return patterns older than max_age_days */
+  include_stale?: boolean;
 }
 
 /**

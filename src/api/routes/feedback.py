@@ -30,9 +30,9 @@ Version: 4.3.0 (Opik Feedback Loop Integration)
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -630,6 +630,36 @@ async def _all_patterns() -> List[DetectedPattern]:
     return await repo.list_patterns()
 
 
+# Default age, in days, past which a detected pattern leaves the "active" view.
+# Persisted patterns never expire and the learning cycle (24h window, ~every
+# 6h) re-detects a pattern that still exists, so one not re-detected for a
+# month is history, not an open finding. Before this window the 2026-08-08
+# goldset-replay "cognitive_investigator has high negative feedback rate"
+# detection stayed pinned at the top of /feedback-learning (sorted by severity)
+# with no signal path that could ever confirm or clear it (2026-09-06).
+# Matches the 30-day telemetry window the /system-health agent card uses.
+PATTERN_MAX_AGE_DAYS = 30
+
+
+def recent_patterns(
+    patterns: List[DetectedPattern], max_age_days: int = PATTERN_MAX_AGE_DAYS
+) -> List[DetectedPattern]:
+    """Patterns detected within ``max_age_days``. A pattern with no
+    ``detected_at`` is kept: an unknown age is not evidence of staleness."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    kept = []
+    for p in patterns:
+        detected = p.detected_at
+        if detected is None:
+            kept.append(p)
+            continue
+        if detected.tzinfo is None:
+            detected = detected.replace(tzinfo=timezone.utc)
+        if detected >= cutoff:
+            kept.append(p)
+    return kept
+
+
 async def _all_updates() -> List[KnowledgeUpdate]:
     if _use_inmemory_fallback():
         return list(_updates_store.values())
@@ -836,23 +866,39 @@ async def process_feedback(
     "/patterns",
     response_model=PatternListResponse,
     summary="List detected patterns",
-    description="List all detected patterns with optional filtering.",
+    description=(
+        "List detected patterns with optional filtering. By default only patterns "
+        "detected in the last 30 days are returned; pass include_stale=true for "
+        "older ones."
+    ),
     operation_id="list_feedback_patterns",
 )
 async def list_patterns(
-    severity: Optional[PatternSeverity] = Query(default=None, description="Filter by severity"),
-    pattern_type: Optional[PatternType] = Query(default=None, description="Filter by type"),
-    agent: Optional[str] = Query(default=None, description="Filter by affected agent"),
-    limit: int = Query(default=50, description="Maximum results", ge=1, le=200),
+    # ``Annotated[..., Query()] = default`` so a direct call of this function
+    # gets the same plain defaults the HTTP route applies (codex iter-1: with
+    # ``= Query(default=...)`` a direct call receives Query placeholder objects).
+    severity: Annotated[Optional[PatternSeverity], Query(description="Filter by severity")] = None,
+    pattern_type: Annotated[Optional[PatternType], Query(description="Filter by type")] = None,
+    agent: Annotated[Optional[str], Query(description="Filter by affected agent")] = None,
+    limit: Annotated[int, Query(description="Maximum results", ge=1, le=200)] = 50,
+    max_age_days: Annotated[
+        int,
+        Query(description="Only patterns detected within this many days", ge=1, le=365),
+    ] = PATTERN_MAX_AGE_DAYS,
+    include_stale: Annotated[
+        bool, Query(description="Also return patterns older than max_age_days")
+    ] = False,
 ) -> PatternListResponse:
     """
-    List all detected patterns.
+    List detected patterns.
 
     Args:
         severity: Optional severity filter
         pattern_type: Optional type filter
         agent: Optional agent filter
         limit: Maximum number of results
+        max_age_days: Detection-age window (days); default PATTERN_MAX_AGE_DAYS
+        include_stale: Return patterns older than the window too
 
     Returns:
         List of patterns matching filters
@@ -860,6 +906,8 @@ async def list_patterns(
     patterns = await _all_patterns()
 
     # Apply filters
+    if not include_stale:
+        patterns = recent_patterns(patterns, max_age_days)
     if severity:
         patterns = [p for p in patterns if p.severity == severity]
     if pattern_type:
@@ -1163,7 +1211,7 @@ async def get_feedback_health() -> FeedbackHealthResponse:
 
     # Count active items
     updates = await _all_updates()
-    patterns_active = len(await _all_patterns())
+    patterns_active = len(recent_patterns(await _all_patterns()))
     pending_updates = sum(1 for u in updates if u.status == UpdateStatus.PROPOSED)
 
     # #1661: the optimizer half of the loop. Read here rather than left to a

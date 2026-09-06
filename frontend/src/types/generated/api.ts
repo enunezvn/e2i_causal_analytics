@@ -2523,7 +2523,7 @@ export interface paths {
         };
         /**
          * List detected patterns
-         * @description List all detected patterns with optional filtering.
+         * @description List detected patterns with optional filtering. By default only patterns detected in the last 30 days are returned; pass include_stale=true for older ones.
          */
         get: operations["list_feedback_patterns"];
         put?: never;
@@ -24475,6 +24475,10 @@ export interface operations {
                 agent?: string | null;
                 /** @description Maximum results */
                 limit?: number;
+                /** @description Only patterns detected within this many days */
+                max_age_days?: number;
+                /** @description Also return patterns older than max_age_days */
+                include_stale?: boolean;
             };
             header?: never;
             path?: never;

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from src.api.dependencies.auth import require_auth
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+from src.api.utils.audit_outcomes import is_execution_failure
 
 logger = logging.getLogger(__name__)
 
@@ -382,12 +383,14 @@ def _humanize_slug(slug: str) -> str:
 
 
 def _row_status(validation_passed: Optional[bool], action_type: str) -> str:
-    """Per-row activity status. Mirrors the analytics convention: a NULL
-    validation counts as completed — only an explicit ``False`` or an
-    ``*_error`` action is a failure (never a fabricated success/failure)."""
-    if validation_passed is False or (action_type or "").endswith("_error"):
-        return "failed"
-    return "completed"
+    """Per-row activity status. Mirrors the /system-health and /analytics
+    convention (``src.api.utils.audit_outcomes``): only a ``*_error`` row — a
+    node that raised — is a failure. ``validation_passed`` is a scientific
+    verdict (cross-library agreement, refutation robustness) recorded on a
+    node that completed, so ``False`` there is still "completed"; the verdict
+    itself is shown on the analysis pages. Never a fabricated success/failure.
+    """
+    return "failed" if is_execution_failure({"action_type": action_type}) else "completed"
 
 
 def _parse_ts(value: Optional[str]) -> Optional[datetime]:

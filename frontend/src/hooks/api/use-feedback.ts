@@ -93,7 +93,7 @@ export function usePatterns(
   options?: Omit<UseQueryOptions<PatternListResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<PatternListResponse, ApiError>({
-    queryKey: [...queryKeys.feedback.patterns(), params?.severity, params?.pattern_type, params?.agent, params?.limit],
+    queryKey: [...queryKeys.feedback.patterns(), params?.severity, params?.pattern_type, params?.agent, params?.limit, params?.max_age_days, params?.include_stale],
     queryFn: () => listPatterns(params),
     staleTime: 60 * 1000, // 1 minute
     ...options,
