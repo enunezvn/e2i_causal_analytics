@@ -511,6 +511,95 @@ DROP_FIXTURES = [
         "Discontinuation level",
         "What is the discontinued_180d percentage for Fabhalta?",
     ),
+    # #1906: a TREND of a journey outcome drops even when the pill also names a
+    # causal word (section C has no time dimension; the causal exemption is
+    # for "what drives the <outcome> rate?", not for a trend with a causal tail)
+    (
+        "outcome_as_kpi:persistent_180d",
+        "📈 Persistence drivers over time",
+        "Chart the monthly trend of Remibrutinib's persistent_180d rate to see if the causal drivers' strength has shifted.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "What drives persistent_180d?",
+        "Chart the monthly trend of Remibrutinib's persistent_180d rate.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Driver drift",
+        "Have the causal drivers of persistent_180d shifted over time?",
+    ),
+    # #1906 codex: a chart / plot / graph verb whose OBJECT is the outcome drops
+    # whatever causal tail follows
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence chart",
+        "Chart the persistent_180d rate for Remibrutinib to see if causal drivers shifted.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence plot",
+        "Plot persistent_180d values for Kisqali and explain causal factors.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by segment",
+        "Graph persistent_180d by segment and show which causal paths matter.",
+    ),
+    # #1906 codex: a time series OF the causal quantity (driver strength, path
+    # confidence, effect estimates) is a trend of effects, not a driver read
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Monthly driver strength",
+        "Show monthly causal driver strength for persistent_180d for Remibrutinib.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Effect estimate trend",
+        "Show the trend in causal effect estimates for persistent_180d over the last year.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Driver shift",
+        "Over time, have causal drivers shifted for persistent_180d in Remibrutinib?",
+    ),
+    # #1906 codex: display / frequency words right AFTER the outcome
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence with notes",
+        "For Remibrutinib, persistent_180d monthly rate with driver notes.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence picture",
+        "For Remibrutinib, persistent_180d chart with driver notes.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by month",
+        "Show persistent_180d by month with driver notes.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence as a chart",
+        "Show persistent_180d rate as a chart and explain causal drivers for Remibrutinib.",
+    ),
+    # #1906 codex: "time series" and the spelled-out period-change forms
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence series",
+        "Show a time series of persistent_180d for Remibrutinib and explain causal drivers.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence changes",
+        "Show month over month persistent_180d changes and explain drivers.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Quarterly persistence changes",
+        "Show quarter-over-quarter persistent_180d changes and explain drivers.",
+    ),
     (
         "uplift_by_segment",
         "CATE by tier",
@@ -723,6 +812,96 @@ KEEP_FIXTURES = [
     (
         "Persistence drivers",
         "What drives persistent_180d for Remibrutinib, and how confident are those paths?",
+    ),
+    # #1906: causal asks whose OBJECT is the outcome (or its rate) stay kept; the
+    # trend split must not widen into "chart/plot/graph" - "the causal graph" is
+    # section C's own vocabulary
+    (
+        "Causal drivers",
+        "What are the causal drivers of persistent_180d for Remibrutinib, and how confident are those paths?",
+    ),
+    (
+        "Cross-brand paths",
+        "Which causal paths most reliably predict persistent_180d across all three brands?",
+    ),
+    ("Rate drivers", "What drives the persistent_180d rate for Kisqali?"),
+    (
+        "Causal graph paths",
+        "In the causal graph, which paths lead to persistent_180d for Kisqali?",
+    ),
+    # #1906 codex: a frequency adjective on a DRIVER is not a trend of the outcome
+    ("Monthly copay support", "Does monthly copay support drive persistent_180d for Remibrutinib?"),
+    ("Weekly PSP touchpoints", "Do weekly PSP touchpoints influence adherent_180d for Fabhalta?"),
+    ("Weekly rep visits", "Do weekly rep visits drive persistent_180d for Remibrutinib?"),
+    (
+        "Chart causal drivers",
+        "Chart the causal drivers of persistent_180d for Remibrutinib.",
+    ),
+    # #1906 codex: a causal VERB between the time word and the outcome means the
+    # time word modifies a driver; a KPI trend in the same pill does not spoil it
+    (
+        "TRx trend and persistence drivers",
+        "Show the monthly TRx trend for Kisqali and what drives persistent_180d.",
+    ),
+    (
+        "Monthly impact",
+        "What is the monthly impact of copay support on persistent_180d for Kisqali?",
+    ),
+    # #1906 codex: the driver's verb is free text - no verb whitelist decides this
+    ("Weekly visit lift", "Do weekly rep visits boost persistent_180d for Remibrutinib?"),
+    (
+        "Monthly reminders",
+        "Do monthly copay support reminders reduce persistent_180d for Remibrutinib?",
+    ),
+    ("Monthly access calls", "Do monthly access calls matter for persistent_180d for Kisqali?"),
+    (
+        "Weekly hub calls",
+        "Are weekly hub calls associated with persistent_180d for Remibrutinib?",
+    ),
+    # #1906 codex: a time word in the TITLE over a plain driver message stays
+    (
+        "Persistence over time",
+        "What are the causal drivers of persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Monthly persistence drivers",
+        "What factors matter for persistent_180d for Remibrutinib?",
+    ),
+    # #1906 codex: a series noun or change verb INSIDE the driver phrase does not
+    # make the time word a series of the outcome
+    (
+        "Copay changes",
+        "Do monthly changes in copay support influence persistent_180d for Remibrutinib?",
+    ),
+    ("Nurse call rate", "Does monthly rate of nurse calls influence persistent_180d for Fabhalta?"),
+    (
+        "Touchpoint volume",
+        "Does weekly volume of PSP touchpoints matter for adherent_180d for Fabhalta?",
+    ),
+    (
+        "Support strength",
+        "Is monthly strength of copay support associated with persistent_180d for Kisqali?",
+    ),
+    (
+        "Lab value changes",
+        "For patients with monthly lab value changes, what drives persistent_180d for Remibrutinib?",
+    ),
+    # #1906 codex: a close compound pill - KPI trend, then a driver ask - stays
+    ("TRx and persistence", "Show monthly TRx trend and what drives persistent_180d for Kisqali."),
+    ("TRx plus drivers", "Show monthly TRx trend plus the drivers of persistent_180d."),
+    ("TRx chart and drivers", "Show a monthly TRx chart alongside drivers of persistent_180d."),
+    # #1906 codex: the newer time words on the DRIVER side stay too
+    (
+        "Visit series",
+        "Is a time series of rep visits associated with persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Copay changes by month",
+        "Are month over month changes in copay support associated with persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Hub changes by quarter",
+        "Are quarter-over-quarter changes in hub touchpoints associated with persistent_180d for Remibrutinib?",
     ),
     ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
     ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),
