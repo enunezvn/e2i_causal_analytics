@@ -654,23 +654,25 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 # on the noun ("design / plan / set up / size / power / run / launch a[n] [new]
 # [live] experiment | A/B test | test"); a modal design ask with any actor
 # ("should / can / could / would I | we | the orchestrator run | design | plan |
-# set up | size | launch"); a design NOUN right after the status adjective and
-# noun ("running experiment design | options | candidates | ideas | proposals"),
-# or "candidates | options | ideas to test | detect | improve | lift | measure";
-# a calculation question (how many HCPs, how long should, minimum detectable, to
-# detect / detecting, power calculation); or a NEED / REQUIRE within 40
-# characters of N% power, statistical power or a sample size. A bare "80%
-# power", "sample size" or "for 6 weeks" does NOT exempt: those also describe a
-# status read. Bare "design" / "designed" as noun or participle ("experiment
-# design status", "designed to measure") is not design intent either.
+# set up | size | launch | use"); a design NOUN right after the status adjective
+# and noun ("running experiment design | options | candidates | ideas | proposals
+# | plans | setups | concepts | scenarios"), or one of those nouns "to test |
+# detect | improve | lift | measure"; a calculation question (how many HCPs, how
+# long should, minimum detectable, power calculation); or a NEED / REQUIRE within
+# 40 characters of N% power, statistical power or a sample size. NOT design
+# intent: a bare "80% power", "sample size" or "for 6 weeks" (those also describe
+# a status read), a detection PURPOSE on its own ("which experiments are running
+# to detect a 5% lift?" reads which experiments exist, like the live pill "what
+# KPIs is each one targeting?"), and bare "design" / "designed" as noun or
+# participle ("experiment design status", "designed to measure").
 _EXPERIMENT_DESIGN_RE = re.compile(
     r"\b(?:design|plan|set\s+up|size|power|run|launch)\s+(?:an?|the|my|this|new)\s+(?:\w+\s+){0,2}?"
     r"(?:experiments?|a/b\s+tests?|tests?)\b"
-    r"|\b(?:should|can|could|would)\s+(?:i|we|the\s+\w+|\w+)\s+(?:run|design|plan|set\s+up|size|launch)\b"
+    r"|\b(?:should|can|could|would)\s+(?:i|we|the\s+\w+|\w+)\s+(?:run|design|plan|set\s+up|size|launch|use)\b"
     r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\s+"
-    r"(?:designs?|options?|candidates?|ideas?|proposals?)\b"
-    r"|\b(?:candidates?|options?|ideas?)\s+to\s+(?:test|detect|improve|lift|measure)\b"
-    r"|\b(?:how many hcps|how long should|minimum detectable|to detect|detecting|power calculation)\b"
+    r"(?:designs?|options?|candidates?|ideas?|proposals?|plans?|setups?|concepts?|scenarios?)\b"
+    r"|\b(?:candidates?|options?|ideas?|plans?|concepts?|scenarios?)\s+to\s+(?:test|detect|improve|lift|measure)\b"
+    r"|\b(?:how many hcps|how long should|minimum detectable|power calculation)\b"
     r"|\b(?:need|needs|needed|require|requires|required)\b[^.?!]{0,40}?"
     r"\b(?:\d+\s*%\s+power|statistical power|sample size)\b"
     r"|\b(?:\d+\s*%\s+power|statistical power|sample size)\b[^.?!]{0,40}?"

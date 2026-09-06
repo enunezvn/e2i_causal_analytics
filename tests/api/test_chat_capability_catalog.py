@@ -512,6 +512,8 @@ DROP_FIXTURES = [
         "Which experiments are active for Kisqali?",
     ),
     ("live_experiment_status", "Running experiments", "Show me the running experiments."),
+    # live-status wording that also mentions lift; lift / results-only phrasings
+    # ("what experiments have lift results?") are deliberately NOT covered
     (
         "live_experiment_status",
         "Live experiment lift",
@@ -580,6 +582,22 @@ DROP_FIXTURES = [
     ("live_experiment_status", "Any running?", "Are any experiments running for Kisqali?"),
     ("live_experiment_status", "Running count", "How many experiments are running for Kisqali?"),
     ("live_experiment_status", "In-flight", "Which experiments are in-flight for Kisqali?"),
+    # #1907 codex: a detection PURPOSE on a status read is still a status read
+    (
+        "live_experiment_status",
+        "Lift detection",
+        "Which active experiments are designed to detect a 5% NBRx lift?",
+    ),
+    (
+        "live_experiment_status",
+        "Running to detect",
+        "Which experiments are running to detect a 5% NBRx lift?",
+    ),
+    (
+        "live_experiment_status",
+        "Detecting lift",
+        "Show active experiments detecting Fabhalta conversion lift.",
+    ),
     (
         "competitor_data",
         "Competitor share",
@@ -886,6 +904,12 @@ KEEP_FIXTURES = [
     ),
     ("Active candidates", "What experiments are active candidates to test Kisqali NBRx lift?"),
     ("Live ideas", "Which live experiment ideas could lift Fabhalta NBRx?"),
+    ("Active plans", "Show active experiment plans to test Kisqali NBRx lift."),
+    ("Running setup", "Which running experiment setup would detect a 5% NBRx lift?"),
+    (
+        "Ongoing test plan",
+        "What ongoing A/B test plan should we use to measure trigger precision?",
+    ),
     (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",
