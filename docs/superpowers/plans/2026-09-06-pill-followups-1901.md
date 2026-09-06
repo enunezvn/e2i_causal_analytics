@@ -296,7 +296,22 @@ _ON_SCREEN_ARTEFACT_RULES = frozenset(
 )
 ```
 
-In the comment block above it change "The four artefact rules" to "The five artefact rules (SHAP, gap, uplift, individual prediction, territory detail)" and "SHAP, CATE, gap or prediction values" to "SHAP, CATE, gap, prediction or optimizer territory values" (the /resource-optimization summary publishes the allocation count, ROI, largest increase and largest decrease).
+Replace the whole comment block above it (from "# Part C publishes the page summary" to the end of that block) with this text. It states the exemption's boundary rather than an absolute guarantee, refers to the rules by "listed below" instead of a count that goes stale, and says what the /resource-optimization summary does NOT carry:
+
+```python
+# Part C publishes the page summary to the assistant as a readable, so a pill
+# MAY read, rank or compare SHAP, CATE, gap, prediction or optimizer territory
+# values that are literally on screen (the pill prompt says so; the
+# /resource-optimization summary publishes the allocation count, projected
+# ROI and outcome, and the largest increase and decrease, not the territory
+# table itself). The artefact rules listed below therefore yield when the
+# question names the on-screen artefact AND asks for nothing that would
+# extend it (another axis, a trend, a recomputation). The extends-list
+# mirrors the pill prompt's own forbidden verbs (recompute, validate, extend,
+# explain WHY) and the artefact rules' own trend/axis vocabulary, so the
+# exemption cannot keep an ask that extends the artefact; it does not prove
+# the summary carries the row the pill names.
+```
 
 Also change the `match_unsupported_rule` docstring from "bypass the four artefact rules unless" to "bypass the artefact rules named in ``_ON_SCREEN_ARTEFACT_RULES`` unless", so the docstring refers to the set by name and the count cannot go stale.
 
