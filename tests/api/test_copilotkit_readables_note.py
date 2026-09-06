@@ -1,5 +1,7 @@
 """_readables_context_note wording: readables can be JSON or prose page summaries (2026-09-05)."""
 
+import json
+
 from src.api.routes.copilotkit import _readables_context_note
 
 
@@ -67,3 +69,15 @@ def test_note_survives_a_pathologically_nested_value():
     state = {"context": [{"description": "Weird readable", "value": "[" * 100_000}]}
     note = _readables_context_note(state)
     assert "[truncated: 100000 chars total]" in note
+
+
+def test_oversized_json_readable_keeps_the_json_only_wording():
+    """A JSON readable over the per-item cap is still JSON: the note truncates it
+    and keeps the pre-summary wording (no prose rule)."""
+    big = json.dumps([{"hcp_id": f"h{i}", "p": 0.5} for i in range(2000)])
+    assert len(big) > 12_000
+    state = {"context": [{"description": "Scored cohort", "value": big}]}
+    note = _readables_context_note(state)
+    assert "[truncated:" in note
+    assert "values are JSON):\n" in note
+    assert "prose" not in note

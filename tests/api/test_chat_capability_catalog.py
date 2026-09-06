@@ -507,6 +507,11 @@ DROP_FIXTURES = [
         "Initiations vs the competition",
         "Compare Remibrutinib's treatment initiations versus the competition.",
     ),
+    (
+        "shap_or_feature_importance",
+        "E2I model features",
+        "What are the top features of the E2I model?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
