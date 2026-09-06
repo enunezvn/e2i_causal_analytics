@@ -235,3 +235,61 @@ def test_prompt_requires_brand_in_pill_messages_when_filter_set():
     assert "brand_filter is set" in prompt
     assert "name that brand" in prompt
     assert '"All"' in prompt
+
+
+# =============================================================================
+# PROMPT TEMPLATE (2026-09-05 capability catalog)
+# =============================================================================
+
+import asyncio
+
+from src.services import chat_capability_catalog as catalog_module
+
+
+async def _fake_coverage():
+    return [
+        {"kpi_id": "WS3-BI-005", "brand": "", "points": 24},
+        {"kpi_id": "WS3-BI-007", "brand": "Kisqali", "points": 24},
+    ]
+
+
+async def _fake_outcomes():
+    return ["persistent_180d", "treatment_initiated", "roi", "adopted"]
+
+
+def make_fake_catalog():
+    return asyncio.run(
+        catalog_module.build_capability_catalog(
+            coverage_loader=_fake_coverage, outcomes_loader=_fake_outcomes
+        )
+    )
+
+
+def test_build_system_prompt_interpolates_catalog_and_route_hint():
+    catalog = make_fake_catalog()
+    prompt = chat_module.build_system_prompt(catalog, "/time-series")
+    assert "{capability_catalog}" not in prompt and "{route_hint}" not in prompt
+    assert "WHAT THE ASSISTANT CAN DO" in prompt
+    assert "Total Prescriptions (TRx)" in prompt
+    assert "persistent_180d" in prompt
+    assert "The E2I system has" in prompt
+    assert "PAGE HINT" in prompt
+    assert catalog_module.ROUTE_HINTS["/time-series"] in prompt
+    # the JSON output instruction survives the placeholder fill
+    assert '{"suggestions": [{"title": "...", "message": "..."}, ...]}' in prompt
+
+
+def test_build_system_prompt_omits_hint_block_for_unknown_page():
+    catalog = make_fake_catalog()
+    prompt = chat_module.build_system_prompt(catalog, "/nope")
+    assert "PAGE HINT" not in prompt
+    assert "\n\n\n" not in prompt
+
+
+def test_prompt_tells_the_model_the_assistant_sees_page_content():
+    """Part C of the design publishes page_content to the assistant, so the
+    prompt must say pills MAY read on-screen values and must NOT extend them."""
+    prompt = chat_module.build_system_prompt(make_fake_catalog(), "/")
+    assert "ALSO shown to the assistant" in prompt
+    assert "must NOT ask for anything beyond those literal values" in prompt
+    assert "at least two different letters" in prompt
