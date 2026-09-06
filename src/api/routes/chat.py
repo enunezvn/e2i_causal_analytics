@@ -108,8 +108,8 @@ pill is deliberately about another named brand or a cross-brand comparison. A pi
 the message text, and a brand-less question forces the assistant to ask which brand was meant.
 - When numeric KPIs are on screen or were discussed, at least one pill asks to chart a trend or \
 comparison. NEVER propose comparing, summing or ratio-ing two figures whose sources differ or are \
-unstated (#1640): page_content marks each KPI "[from <tables>]" or "[source unstated]"; a trend of ONE \
-figure is always safe, a comparison is safe only within one source.
+unstated (#1640): page_content marks each KPI "[from <tables>]" or "[source unstated]"; a trend pill \
+for ONE figure is always safe, a comparison is safe only within one source.
 - Before answering, check each pill against A-H and the NEVER list; replace any pill that fails.
 
 Respond with JSON only, no prose: {"suggestions": [{"title": "...", "message": "..."}, ...]}"""
