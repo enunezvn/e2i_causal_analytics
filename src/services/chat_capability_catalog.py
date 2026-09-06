@@ -369,9 +369,9 @@ ROUTE_HINTS: Dict[str, str] = {
         "regional KPI breakdowns (A), ROI (A/B) or causal drivers (C), never territory-level detail."
     ),
     "/experiments": (
-        "Experiments: designed A/B tests and experiment proposals; pills should ask for experiment "
-        "design through the orchestrator (F) or the KPIs an experiment targets (A), never live lift or "
-        "results."
+        "Experiments: health, enrollment and interim analyses of running A/B tests; pills should ask "
+        "for experiment design through the orchestrator (F) or the KPIs an experiment targets (A), "
+        "never live lift, enrollment or results."
     ),
     "/kpi-dictionary": (
         "KPI Dictionary: registry definitions of every KPI; pills should ask for the value, definition, "
@@ -390,8 +390,9 @@ ROUTE_HINTS: Dict[str, str] = {
         "model-performance KPI values or charts (A/B) or a drift check via the orchestrator (F)."
     ),
     "/analytics": (
-        "Analytics: cross-brand KPI overview; pills should ask for KPI values, comparisons and trends "
-        "(A/B)."
+        "Agent Analytics: query volume, latency and success counts per agent; pills should ask which "
+        "agents exist, what they do and what they did recently (F), never agent accuracy, latency or "
+        "error rates."
     ),
     "/agent-orchestration": (
         "Agent Orchestration: the agent tiers and their recent activity; pills should ask which agents "
@@ -419,5 +420,5 @@ def route_hint(page: Optional[str]) -> str:
     """Hint for ``page`` ('' when unknown). Tolerates a query string and a trailing slash."""
     if not page:
         return ""
-    path = page.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+    path = page.split("?", 1)[0].split("#", 1)[0].rstrip("/").lower() or "/"
     return ROUTE_HINTS.get(path, "")

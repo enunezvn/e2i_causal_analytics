@@ -250,6 +250,8 @@ def test_route_hint_lookup_tolerates_query_and_trailing_slash():
     assert cat.route_hint("/kpi-dictionary") == expected
     assert cat.route_hint("/kpi-dictionary/") == expected
     assert cat.route_hint("/kpi-dictionary?tab=ws3") == expected
+    assert cat.route_hint("/kpi-dictionary/?tab=ws3#top") == expected
+    assert cat.route_hint("/KPI-Dictionary") == expected
     assert cat.route_hint("/") == cat.ROUTE_HINTS["/"]
 
 
@@ -257,3 +259,16 @@ def test_route_hint_unknown_or_missing_page_is_empty():
     assert cat.route_hint("/nope") == ""
     assert cat.route_hint(None) == ""
     assert cat.route_hint("") == ""
+
+
+_AUTH_ROUTES = {"/login", "/signup", "/forgot-password", "/reset-password", "/accept-invite"}
+
+
+def test_route_hints_cover_every_non_auth_frontend_route():
+    """A renamed or added frontend route must show up here, not as a silent fallback."""
+    from pathlib import Path
+
+    routes_tsx = Path(__file__).resolve().parents[2] / "frontend" / "src" / "router" / "routes.tsx"
+    paths = set(_re.findall(r"path:\s*['\"](/[^'\"]*)['\"]", routes_tsx.read_text()))
+    assert paths, "no route paths parsed from routes.tsx"
+    assert paths - _AUTH_ROUTES == set(cat.ROUTE_HINTS)
