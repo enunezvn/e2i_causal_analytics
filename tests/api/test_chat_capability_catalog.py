@@ -188,6 +188,29 @@ async def test_render_trend_and_axis_kpis_by_name():
     assert f"{brand_entry.name} ({brand_entry.brand} only)" in block
 
 
+async def test_windowable_kpis_come_from_the_registry():
+    from src.kpi.registry import get_registry
+
+    c = await make_catalog()
+    expected = frozenset(k.id for k in get_registry().get_all() if k.windowable != "not_applicable")
+    assert expected, "the registry must declare windowable KPIs (TRx, share, triggers)"
+    assert c.windowable_kpi_ids == expected
+    assert "WS3-BI-005" in c.windowable_kpi_ids  # Total Prescriptions (TRx)
+    assert "CM-002" not in c.windowable_kpi_ids  # Conditional ATE (CATE)
+
+
+async def test_render_window_clause_names_only_windowable_kpis():
+    c = await make_catalog()
+    block = cat.render_catalog_block(c)
+    clause = next(line for line in block.splitlines() if "applies ONLY to" in line)
+    for kpi_id in c.windowable_kpi_ids:
+        assert c.kpi_name(kpi_id) in clause
+    assert c.kpi_name("CM-002") not in clause
+    assert "optionally over a time window" not in block
+    # the axis rules keep the composition sentence but no longer promise a window
+    assert "time window" not in cat.AXIS_RULES or "composes with" in cat.AXIS_RULES
+
+
 async def test_render_empty_trend_set_falls_back_without_dangling_list():
     async def region_only() -> List[Dict[str, Any]]:
         return [{"kpi_id": "WS3-BI-005", "brand": "", "region": "west", "points": 24}]

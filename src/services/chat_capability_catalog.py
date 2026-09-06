@@ -85,6 +85,7 @@ class CapabilityCatalog:
     trend_kpi_ids: FrozenSet[str]  # have a materialized monthly series
     per_brand_only_trend_ids: FrozenSet[str]  # trend exists only in per-brand scopes
     axis_kpi_ids: FrozenSet[str]  # accept severity / therapy-line splits
+    windowable_kpi_ids: FrozenSet[str]  # registry windowable != "not_applicable" (code-derived)
     causal_outcomes: Tuple[str, ...]  # distinct end_node names in the causal registry
     agent_roster: str  # prompt-ready roster block from the factory
     degraded: Tuple[str, ...] = ()  # DB-backed fields that failed to load
@@ -124,6 +125,11 @@ def _kpi_entries() -> Tuple[KpiEntry, ...]:
         for k in get_registry().get_all()
     ]
     return tuple(sorted(entries, key=lambda e: (e.workstream, e.id)))
+
+
+def _windowable_ids() -> FrozenSet[str]:
+    """Registry KPIs the KPI tool can window; the rest answer window_status='not_applicable'."""
+    return frozenset(k.id for k in get_registry().get_all() if k.windowable != "not_applicable")
 
 
 def _trend_sets(rows: Sequence[Dict[str, Any]]) -> Tuple[FrozenSet[str], FrozenSet[str]]:
@@ -197,6 +203,7 @@ async def build_capability_catalog(
         trend_kpi_ids=trend,
         per_brand_only_trend_ids=per_brand_only,
         axis_kpi_ids=frozenset(SEGMENTED_KPI_QUERY_FAMILIES),
+        windowable_kpi_ids=_windowable_ids(),
         causal_outcomes=tuple(sorted(set(outcomes))),
         agent_roster=build_agent_roster_block(),
         degraded=tuple(degraded),
@@ -230,8 +237,7 @@ AXIS_RULES = (
     "Breakdown axes, AT MOST ONE per ask: segment = patient severity tier (low/medium/high); "
     "therapy_line = line of therapy (0-3); region = US census region (northeast/south/midwest/west); "
     "and - Remibrutinib ONLY - biologic status (naive/experienced) or ige_tier (low/medium/high). "
-    'An optional time window ("last 3 months", "Q1 2025", "2025-01-01 to 2025-03-31") composes with '
-    "segment/therapy_line but NOT with region/biologic/ige_tier for share, conversion or trigger KPIs. "
+    "The time window composes with segment/therapy_line but NOT with region/biologic/ige_tier. "
     "TRx share is share of the tracked 3-brand portfolio, NOT share versus competitors."
 )
 
@@ -268,8 +274,7 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
     lines: List[str] = ["WHAT THE ASSISTANT CAN DO (every pill must map to exactly one of A-H):"]
 
     lines.append(
-        "A. KPI values - the current value of any registry KPI, per brand, optionally over a time "
-        "window. Registry KPIs by area:"
+        "A. KPI values - the current value of any registry KPI, per brand. Registry KPIs by area:"
     )
     for workstream, label in _WORKSTREAM_ORDER:
         names = [
@@ -279,6 +284,12 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
         ]
         if names:
             lines.append(f"   - {label}: {'; '.join(names)}")
+    window_names = _names(catalog, catalog.windowable_kpi_ids) or "none of the registry KPIs"
+    lines.append(
+        '   A time window ("last 3 months", "Q1 2025", "2025-01-01 to 2025-03-31") applies ONLY to '
+        f"{window_names}; every other KPI answers its current value and reports that a window "
+        "does not apply, so never promise a window for those."
+    )
     lines.append("   " + AXIS_RULES)
 
     axis_names = _names(catalog, catalog.axis_kpi_ids)
