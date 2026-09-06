@@ -550,7 +550,7 @@ DROP_FIXTURES = [
     # confidence, effect estimates) is a trend of effects, not a driver read
     (
         "outcome_as_kpi:persistent_180d",
-        "Driver strength by month",
+        "Monthly driver strength",
         "Show monthly causal driver strength for persistent_180d for Remibrutinib.",
     ),
     (
