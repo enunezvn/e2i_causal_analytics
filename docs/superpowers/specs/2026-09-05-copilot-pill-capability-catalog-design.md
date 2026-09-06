@@ -1,7 +1,7 @@
 # Copilot suggestion pills: capability catalog, validator, and page summaries as readables
 
 **Date:** 2026-09-05
-**Status:** draft for user review (no implementation yet)
+**Status:** approved by the user 2026-09-05; implemented on branch claude/copilot-pill-capability-catalog (PR opened 2026-09-06)
 **Evidence:** `docs/demos/results/2026-09-05_pill_suggestions_review/`
 
 ## 1. Problem
@@ -80,7 +80,7 @@ derived from code, never transcribed.
 
 | Field | Source | Notes |
 |---|---|---|
-| `kpis` | `src.kpi.registry.get_registry().get_all()` | id, display name, workstream, `windowable`, `brand` for 45 KPIs. Loads YAML only; no DB. |
+| `kpis` | `src.kpi.registry.get_registry().get_all()` | id, display name, workstream, `brand` for 45 KPIs. Loads YAML only; no DB. |
 | `trend_kpi_ids` | `KPIHistoryRepository.get_coverage()` (view `v_kpi_history_coverage`) | KPI ids with a materialized monthly series, and whether each has a global scope or per-brand only. One small read. |
 | `axis_kpi_ids` | `src.kpi.segmented_history.SEGMENTED_KPI_QUERY_FAMILIES` keys | The three Rx-volume KPIs that accept severity / therapy-line splits. |
 | `causal_outcomes` | `CausalPathRepository.get_distinct_outcomes(include_synthetic=kpi_include_synthetic())` | 14 names in prod (both synthetic flags are `true` in `.env`). |
@@ -95,7 +95,7 @@ prototype prompt (`prototype_v2_system_prompt.txt`):
   census region, biologic and IgE tier (Remibrutinib only); axes are mutually
   exclusive; region does not compose with an explicit time window for share,
   conversion and trigger KPIs. The axis vocabulary is checked by a unit test
-  against `inspect.signature(kpi_calculate_tool)` parameter names so the
+  against `inspect.signature(kpi_calculate_tool.coroutine)` parameter names so the
   prose cannot name an axis the tool does not accept.
 - **B. Charts.** Monthly trend lines for the KPIs in `trend_kpi_ids`
   (per-brand-only ones marked), severity or therapy-line comparison lines for
@@ -306,6 +306,9 @@ baseline 23/30/39 and prototype v2 70/14/8 on 92. Evidence:
 | `tests/api/test_chat_capability_catalog.py` | New. |
 | `tests/api/test_chat_suggestions.py` | Extended. |
 | `frontend/src/providers/E2ICopilotProvider.test.tsx`, `frontend/src/components/chat/E2IChatSidebar.suggestions.test.tsx` | Extended. |
+| `frontend/src/providers/copilotReadableConverters.ts`, `frontend/src/providers/copilotReadableConverters.test.tsx` | New (added in review): rest-args readable converter for CopilotKit's single-argument `convert(value)` runtime call; pure-function, SDK-fence and real-hook contract tests. |
+| `tests/api/test_copilotkit_readables_note.py` | New: `_readables_context_note` wording for prose summaries. |
+| `.github/workflows/backend-tests.yml` | Unit Tests lane collects the three `tests/api/` files above (`test_chat_suggestions.py` was never run in CI before). |
 | `docs/demos/results/2026-09-05_pill_suggestions_review/` | Add the re-measurement output from step 5.1. |
 
 ## 7. Risks and open points

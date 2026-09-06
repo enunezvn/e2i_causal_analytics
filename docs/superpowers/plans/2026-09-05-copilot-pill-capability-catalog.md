@@ -433,7 +433,7 @@ def test_axis_vocabulary_matches_kpi_calculate_tool():
 
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 
-    params = set(inspect.signature(kpi_calculate_tool).parameters)
+    params = set(inspect.signature(kpi_calculate_tool.coroutine).parameters)
     for axis in cat.AXIS_PARAMETER_NAMES:
         assert axis in params, axis
         assert axis in cat.AXIS_RULES, axis
@@ -1123,7 +1123,7 @@ def filter_unsupported_pills(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `$PY -m pytest tests/api/test_chat_capability_catalog.py -n 0 -q -p no:cacheprovider 2>&1 | tail -3`
-Expected: `44 passed` (15 earlier + 2 + 14 parametrized drops + 12 parametrized keeps + 1)
+Expected: `56 passed` (the fixture lists grew during review: 16 DROP and 17 KEEP fixtures, incl. KEEP fixtures for the registry KPI names the rules collided with and DROP fixtures for the segment/trend forms of CATE, plus two rule-interaction tests)
 
 If a DROP fixture is kept or a KEEP fixture is dropped, fix the regex for that family; do not delete the fixture.
 
@@ -1215,10 +1215,13 @@ async def test_refresh_failure_keeps_last_good_fields():
 
 async def test_module_level_accessor_and_reset(monkeypatch):
     calls = {"n": 0}
+    real_build = cat.build_capability_catalog
 
     async def fake_build(**kwargs):
         calls["n"] += 1
-        return await make_catalog()
+        # NOT make_catalog(): that helper calls cat.build_capability_catalog, which
+        # is fake_build itself once patched (infinite recursion).
+        return await real_build(coverage_loader=_coverage, outcomes_loader=_outcomes)
 
     monkeypatch.setattr(cat, "build_capability_catalog", fake_build)
     cat.reset_capability_catalog_cache()
@@ -1320,7 +1323,7 @@ def reset_capability_catalog_cache() -> None:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `$PY -m pytest tests/api/test_chat_capability_catalog.py -n 0 -q -p no:cacheprovider 2>&1 | tail -3`
-Expected: `49 passed`
+Expected: `61 passed`
 
 - [ ] **Step 5: Lint the module and commit**
 
@@ -1469,7 +1472,7 @@ deepen or branch from what was discussed, never repeat an answered question, sta
 in play (brand, KPI, outcome, segment, window).
 
 If the conversation is EMPTY, propose exactly 4 openers grounded in page_content (name the specific \
-brand / KPI / outcome / segment on screen); if page_content is empty, ground them in the PAGE HINT, \
+brand / KPI / outcome / segment on screen); if page_content is empty, ground them in the page hint, \
 the page path and the brand filter. Mix capability letters - the 4 pills must cover at least two \
 different letters, and at most two pills may share a letter.
 
@@ -1481,8 +1484,8 @@ pill is deliberately about another named brand or a cross-brand comparison. A pi
 the message text, and a brand-less question forces the assistant to ask which brand was meant.
 - When numeric KPIs are on screen or were discussed, at least one pill asks to chart a trend or \
 comparison. NEVER propose comparing, summing or ratio-ing two figures whose sources differ or are \
-unstated (#1640): page_content marks each KPI "[from <tables>]" or "[source unstated]"; a trend of ONE \
-figure is always safe, a comparison is safe only within one source.
+unstated (#1640): page_content marks each KPI "[from <tables>]" or "[source unstated]"; a trend pill \
+for ONE figure is always safe, a comparison is safe only within one source.
 - Before answering, check each pill against A-H and the NEVER list; replace any pill that fails.
 
 Respond with JSON only, no prose: {"suggestions": [{"title": "...", "message": "..."}, ...]}"""
@@ -1492,7 +1495,9 @@ def build_system_prompt(catalog: CapabilityCatalog, page: Optional[str]) -> str:
     """Fill the prompt template with the rendered catalog and the page's route hint."""
     hint = route_hint(page)
     hint_block = (
-        f"PAGE HINT (what this route shows and which catalog letters fit it): {hint}" if hint else ""
+        f"PAGE HINT (what this route shows and which catalog letters fit it): {hint}"
+        if hint
+        else ""
     )
     prompt = _SYSTEM_PROMPT.replace("{capability_catalog}", render_catalog_block(catalog))
     prompt = prompt.replace("{route_hint}", hint_block)
@@ -1763,7 +1768,8 @@ def test_all_pills_dropped_returns_502(test_client, auth_headers, monkeypatch):
     resp = test_client.post("/api/chat/suggestions", json=_payload(), headers=auth_headers)
 
     assert resp.status_code == 502
-    assert "no supported pills" in resp.json()["detail"]
+    # the app's HTTPException handler returns an E2IError envelope keyed "message"
+    assert "no supported pills" in resp.json()["message"]
 
 
 def test_fast_llm_gets_600_tokens(test_client, auth_headers, monkeypatch):
@@ -1781,7 +1787,7 @@ def test_fast_llm_gets_600_tokens(test_client, auth_headers, monkeypatch):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `$PY -m pytest tests/api/test_chat_suggestions.py -n 0 -q -p no:cacheprovider 2>&1 | tail -3`
-Expected: the 4 new tests fail (`WHAT THE ASSISTANT CAN DO` not in the old prompt; dropped pills still returned; 200 instead of 502; `max_tokens` 500).
+Expected: RED for the whole file - the autouse fixture's `monkeypatch.setattr(chat_module, "get_capability_catalog", ...)` raises at setup because the attribute does not exist until Step 3 adds the import (25 errors). That is the intended failing state.
 
 - [ ] **Step 3: Rewire the handler**
 
@@ -1855,7 +1861,7 @@ Also update the route decorator's `description=` string: after "502 on any gener
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `$PY -m pytest tests/api/test_chat_suggestions.py tests/api/test_chat_capability_catalog.py -n 0 -q -p no:cacheprovider 2>&1 | tail -3`
-Expected: `74 passed` (25 route + 49 catalog)
+Expected: `86 passed` (25 route + 61 catalog)
 
 - [ ] **Step 5: Lint and commit**
 
@@ -2007,6 +2013,7 @@ Then add, inside the same `describe('CopilotHooksConnector', ...)` block after t
       );
     const lastSummaryCall = () => {
       const calls = summaryCalls();
+      expect(calls.length).toBeGreaterThan(0);
       return calls[calls.length - 1][0];
     };
 
@@ -2038,6 +2045,11 @@ Then add, inside the same `describe('CopilotHooksConnector', ...)` block after t
     // sent as raw prose (not JSON.stringify'd with quotes and \n escapes).
     expect(lastSummaryCall().available).toBe('enabled');
     expect(lastSummaryCall().value).toBe('Home dashboard. Brand filter: Kisqali; region: All US.');
+    // The SDK runtime calls convert(value) with ONE argument (its typings say
+    // two); the converter must return the prose either way.
+    expect(lastSummaryCall().convert('Home dashboard. Brand filter: Kisqali; region: All US.')).toBe(
+      'Home dashboard. Brand filter: Kisqali; region: All US.'
+    );
     expect(lastSummaryCall().convert('ignored', 'raw text')).toBe('raw text');
   });
 ```
@@ -2070,17 +2082,18 @@ In `frontend/src/providers/E2ICopilotProvider.tsx`, change the readables banner 
   });
 ```
 
-Add this module-level helper next to `VALID_BRANDS` (above `CopilotHooksConnector`):
+Create `frontend/src/providers/copilotReadableConverters.ts` and import `passThroughText` from it in the provider. CopilotKit react-core 1.51.2 TYPES `convert(description, value)` but its runtime CALLS `convert(value)` with one argument (`dist/index.js` and the ESM chunk: `(convert != null ? convert : JSON.stringify)(value)`), so a positional `(description, value) => String(value)` converter ships the string "undefined" (found in review):
 
 ```ts
-// Readable converter for prose values: the SDK default is JSON.stringify.
-const passThroughText = (_description: string, value: unknown): string => String(value);
+export const passThroughText = (...args: unknown[]): string => String(args[args.length - 1]);
 ```
+
+Add `frontend/src/providers/copilotReadableConverters.test.tsx`: pure-function tests for both call shapes, a text fence over `dist/index.js` and `dist/chunk-*.mjs` for the single-argument call site, and a real-hook contract test (`vi.unmock('@copilotkit/react-core')` plus a wholesale stub of `@copilotkitnext/react`, whose katex CSS import is what the global test setup mocks around).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd frontend && npx vitest run src/providers/E2ICopilotProvider.test.tsx 2>&1 | tail -6`
-Expected: `73 passed` (72 existing + 1)
+Expected: `73 passed` in the provider file (72 existing + 1); the converters test file adds its own (79 across `src/providers/`)
 
 - [ ] **Step 5: Commit**
 
@@ -2254,6 +2267,16 @@ EOF
 
 ---
 
+### Task 11b: Review follow-ups landed during execution
+
+Not in the original plan; added from the per-task reviews during subagent-driven execution (2026-09-06):
+
+- `ci(tests)`: the Unit Tests lane enumerates test paths explicitly and never collected `tests/api/test_chat_suggestions.py`; the three `tests/api/` files of this branch are now listed in `.github/workflows/backend-tests.yml`.
+- `fix(frontend)`: the readable converter takes the SDK's single runtime argument (see Task 10 Step 3).
+- `fix(chat)` hygiene commit: `topUpChatSuggestions` also dedups on the normalized message; the seven partial carry-forward cases of `_keep_last_good_fields` are parametrized; the accessor test resets the cache via a finalizer; a route test covers the degraded catalog; the real-hook readable contract test and ESM-chunk fence.
+
+---
+
 ### Task 12: Static checks on the changed files only
 
 **Files:** none new; verification only.
@@ -2272,7 +2295,7 @@ Expected: `All checks passed!` and `5 files already formatted`. Fix and re-run t
 - [ ] **Step 2: Scoped mypy on the two touched modules only**
 
 Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/mypy --config-file pyproject.toml src/services/chat_capability_catalog.py src/api/routes/chat.py 2>&1 | tail -5`
-Expected: `Success: no issues found in 2 source files`. This is scoped (two files); never run whole-tree mypy on this box. If it exceeds ~3 minutes or the box swaps, kill it and rely on CI's `Type Check (MyPy)` gate.
+Expected: no error line naming either module. mypy also reports pre-existing errors in transitively imported files ("Found N errors in M files (checked 2 source files)") - ignore those; CI's `Type Check (MyPy)` gate is the arbiter. This is scoped (two files); never run whole-tree mypy on this box. If it exceeds ~3 minutes or the box swaps, kill it and rely on CI's `Type Check (MyPy)` gate.
 
 - [ ] **Step 3: Frontend typecheck and lint**
 
@@ -2334,7 +2357,7 @@ Expected: rebase clean (if a conflict appears in `copilotkit.py` or the provider
 git branch --show-current
 git add docs/superpowers/specs/2026-09-05-copilot-pill-capability-catalog-design.md docs/superpowers/plans/2026-09-05-copilot-pill-capability-catalog.md
 git commit -F - <<'EOF'
-docs: mark the pill capability catalog spec approved and add the plan
+docs: mark the pill capability catalog spec approved; align plan text with what shipped
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01QCr4zzEYNQDCrLaM4gFHGr
