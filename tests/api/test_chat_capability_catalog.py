@@ -598,6 +598,9 @@ DROP_FIXTURES = [
         "Detecting lift",
         "Show active experiments detecting Fabhalta conversion lift.",
     ),
+    # #1907 codex: live ENROLLMENT is a status read (the /experiments hint names it)
+    ("live_experiment_status", "Enrolling", "What experiments are currently enrolling patients?"),
+    ("live_experiment_status", "Kisqali enrolling", "Which experiments are enrolling for Kisqali?"),
     (
         "competitor_data",
         "Competitor share",
@@ -910,6 +913,17 @@ KEEP_FIXTURES = [
         "Ongoing test plan",
         "What ongoing A/B test plan should we use to measure trigger precision?",
     ),
+    # #1907 codex: the modal actor is a short noun phrase, and "use a live
+    # experiment to measure" is an imperative design ask
+    (
+        "Brand team experiment",
+        "Should the brand team use a live experiment to measure trigger precision?",
+    ),
+    (
+        "Brand team A/B test",
+        "What live experiment should the brand team use to measure trigger precision?",
+    ),
+    ("Use a live test", "Use a live A/B test to measure trigger precision for Kisqali."),
     (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",

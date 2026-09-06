@@ -612,7 +612,8 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     # experiment_designer tools and the data-query tool's "experiments" type is a
     # semantic memory search, not a live read, so a read of which experiments or
     # A/B tests are running / active / live / ongoing / in progress / in flight /
-    # being run, or "currently designed" (the orchestrator's in-flight designs),
+    # being run / enrolling, or "currently designed" (the orchestrator's in-flight
+    # designs),
     # cannot be answered. Six shapes match: "<noun> (are|is) currently|now|
     # presently|actively <status>", "which|what|are any|how many <noun> (are|is)
     # <status>", "are any|how many <noun> <status>", "list|show [me] [the|all]
@@ -633,13 +634,13 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         re.compile(
             r"\b(?:experiments?|a/b\s+tests?)\s+(?:that\s+)?(?:are\s+|is\s+)?"
             r"(?:currently|now|presently|actively)\s+"
-            r"(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run)\b"
+            r"(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run|enrolling)\b"
             r"|\b(?:which|what|are any|how many)\s+(?:experiments?|a/b\s+tests?)\s+(?:are|is)\s+"
-            r"(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run)\b"
+            r"(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run|enrolling)\b"
             r"|\b(?:are any|how many)\s+(?:experiments?|a/b\s+tests?)\s+"
-            r"(?:running|active|live|ongoing|in progress|in[- ]flight|being run)\b"
+            r"(?:running|active|live|ongoing|in progress|in[- ]flight|being run|enrolling)\b"
             r"|\b(?:list|show)\s+(?:me\s+)?(?:the\s+|all\s+)?(?:experiments?|a/b\s+tests?)\s+that\s+"
-            r"(?:are|is)\s+(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run)\b"
+            r"(?:are|is)\s+(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run|enrolling)\b"
             r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\b"
             r"|\b(?:experiments?|a/b\s+tests?)\s+(?:in progress|in[- ]flight)\b",
             re.I,
@@ -651,10 +652,11 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 # for which the live_experiment_status rule stands down even when the words
 # overlap ("design a live experiment", "how many HCPs do I need if the experiment
 # is running for 6 weeks?"). Exactly these forms count: an imperative design verb
-# on the noun ("design / plan / set up / size / power / run / launch a[n] [new]
-# [live] experiment | A/B test | test"); a modal design ask with any actor
-# ("should / can / could / would I | we | the orchestrator run | design | plan |
-# set up | size | launch | use"); a design NOUN right after the status adjective
+# on the noun ("design / plan / set up / size / power / run / launch / use a[n]
+# [new] [live] experiment | A/B test | test"); a modal design ask whose actor is
+# a noun phrase of up to three words ("should / can / could / would I | we | the
+# orchestrator | the brand team run | design | plan | set up | size | launch |
+# use"); a design NOUN right after the status adjective
 # and noun ("running experiment design | options | candidates | ideas | proposals
 # | plans | setups | concepts | scenarios"), or one of those nouns "to test |
 # detect | improve | lift | measure"; a calculation question (how many HCPs, how
@@ -666,9 +668,9 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 # KPIs is each one targeting?"), and bare "design" / "designed" as noun or
 # participle ("experiment design status", "designed to measure").
 _EXPERIMENT_DESIGN_RE = re.compile(
-    r"\b(?:design|plan|set\s+up|size|power|run|launch)\s+(?:an?|the|my|this|new)\s+(?:\w+\s+){0,2}?"
+    r"\b(?:design|plan|set\s+up|size|power|run|launch|use)\s+(?:an?|the|my|this|new)\s+(?:\w+\s+){0,2}?"
     r"(?:experiments?|a/b\s+tests?|tests?)\b"
-    r"|\b(?:should|can|could|would)\s+(?:i|we|the\s+\w+|\w+)\s+(?:run|design|plan|set\s+up|size|launch|use)\b"
+    r"|\b(?:should|can|could|would)\s+(?:the\s+)?(?:\w+\s+){1,3}?(?:run|design|plan|set\s+up|size|launch|use)\b"
     r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\s+"
     r"(?:designs?|options?|candidates?|ideas?|proposals?|plans?|setups?|concepts?|scenarios?)\b"
     r"|\b(?:candidates?|options?|ideas?|plans?|concepts?|scenarios?)\s+to\s+(?:test|detect|improve|lift|measure)\b"
