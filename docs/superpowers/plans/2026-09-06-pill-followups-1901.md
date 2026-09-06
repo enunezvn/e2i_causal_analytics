@@ -430,7 +430,90 @@ async def test_render_window_clause_names_only_windowable_kpis():
     assert "time window" not in cat.AXIS_RULES or "composes with" in cat.AXIS_RULES
 ```
 
-- [ ] **Step 2: Run** `-k "windowable or window_clause"` — both FAIL (`AttributeError: windowable_kpi_ids`).
+- [ ] **Step 1b: Pin the composition sentence to the calculators (regression guard, DB-free)**
+
+Add after `test_axis_vocabulary_matches_kpi_calculate_tool`. It passes on its own once Step 3 is in (it pins query-id routing, not prose), so it is a guard against the sentence going stale, not a red-first test. `calculate()` for WS3-BI-008/009 records the guard's RuntimeError in `result.error` instead of re-raising, and no query runs before the guard, so `db_client=None` is safe.
+
+```python
+async def test_axis_rules_window_composition_matches_calculators():
+    """AXIS_RULES' composition sentence is prose; pin each clause to the
+    calculators' query-id routing so the prompt cannot go stale against a
+    migration again (the pre-#1900 wording had already gone stale against
+    migration 120)."""
+    from src.kpi.calculators.business_impact import BusinessImpactCalculator
+    from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
+    from src.kpi.registry import get_registry
+    from src.kpi.synthetic_mode import _SYNTHETIC_SUFFIX
+
+    def suffix(query_id: str) -> str:
+        # The showcase flag appends _include_synthetic to every additive
+        # variant id; strip it so the assertions pin ROUTING, not the env.
+        return (
+            query_id[: -len(_SYNTHETIC_SUFFIX)]
+            if query_id.endswith(_SYNTHETIC_SUFFIX)
+            else query_id
+        )
+
+    window = {"start": "2025-01-01", "end": "2025-03-31"}
+    # No query runs below: the routing helpers are pure and every guard raises
+    # before _execute_query, so the calculator never resolves its db_client.
+    calc = BusinessImpactCalculator(db_client=None)
+
+    # 1. Volume KPIs: a window composes with ANY ONE axis (migrations 084/105/108).
+    region_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx", brand="Kisqali", region="west", window=window, context={}
+    )
+    assert suffix(region_qid).endswith("_windowed_region")
+    segment_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Kisqali",
+        region=None,
+        window=window,
+        segment="high",
+        context={},
+    )
+    assert suffix(segment_qid).endswith("_segment_windowed")
+    # biologic is brand-gated to _BIOLOGIC_AXIS_BRANDS, so it needs Remibrutinib
+    biologic_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Remibrutinib",
+        region=None,
+        window=window,
+        biologic="naive",
+        context={},
+    )
+    assert suffix(biologic_qid).endswith("_biologic_windowed")
+
+    # 2. TRx Share / Conversion Rate: a window does NOT compose with region.
+    for kpi_id in ("WS3-BI-008", "WS3-BI-009"):
+        kpi = get_registry().get(kpi_id)
+        assert kpi is not None, kpi_id
+        context = {"brand": "Kisqali", "window": window, "region": "west"}
+        guard = calc._calc_trx_share if kpi_id == "WS3-BI-008" else calc._calc_conversion_rate
+        with pytest.raises(RuntimeError, match=kpi_id):
+            guard(dict(context))
+        # calculate() records the guard instead of re-raising, so the chat layer
+        # reports the refusal rather than a fabricated number.
+        result = calc.calculate(kpi, dict(context))
+        assert result.value is None and kpi_id in (result.error or "")
+
+    # 3. Trigger KPIs: a window composes with region (migration 120, #1388).
+    trigger_qid, _ = TriggerPerformanceCalculator._effectiveness_scoped(
+        "precision", {"brand": "Kisqali", "region": "west", "trigger_type": None, "window": window}
+    )
+    assert suffix(trigger_qid).endswith("_windowed_region")
+
+    # The sentence's three families partition the windowable set exactly.
+    c = await make_catalog()
+    volume = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
+    share_conversion = {"WS3-BI-008", "WS3-BI-009"}
+    assert volume <= c.windowable_kpi_ids
+    assert share_conversion <= c.windowable_kpi_ids
+    triggers = c.windowable_kpi_ids - volume - share_conversion
+    assert triggers == {"WS2-TR-001", "WS2-TR-004", "WS2-TR-006", "WS2-TR-009"}
+```
+
+- [ ] **Step 2: Run** `-k "windowable or window_clause"` — both Step 1 tests FAIL (`AttributeError: windowable_kpi_ids`); the Step 1b test is not selected by that filter; run alone it fails the same way until Step 3 adds the field.
 
 - [ ] **Step 3: Implement**
 
@@ -457,10 +540,13 @@ AXIS_RULES = (
     "Breakdown axes, AT MOST ONE per ask: segment = patient severity tier (low/medium/high); "
     "therapy_line = line of therapy (0-3); region = US census region (northeast/south/midwest/west); "
     "and - Remibrutinib ONLY - biologic status (naive/experienced) or ige_tier (low/medium/high). "
-    "The time window composes with segment/therapy_line but NOT with region/biologic/ige_tier. "
+    "The time window composes with any one axis for TRx, NRx and NBRx; only with segment/therapy_line "
+    "for TRx Share and Conversion Rate; and only with region for the trigger KPIs. "
     "TRx share is share of the tracked 3-brand portfolio, NOT share versus competitors."
 )
 ```
+
+(The composition sentence is per KPI family because the calculators differ: TRx/NRx/NBRx route a window with any one axis (`BusinessImpactCalculator._resolve_windowed_call`, migrations 084/105/108); TRx Share and Conversion Rate raise for window + region/biologic/ige_tier; the trigger KPIs route window + region to the migration-120 `_windowed_region` variant (#1388). A blanket "NOT with region/biologic/ige_tier" is true only for share/conversion, and the pre-#1900 wording was already stale for trigger + region. Step 1b pins each clause to the calculators.)
 
 `render_catalog_block` section A: change the opening line and add the window clause before the axis rules:
 
@@ -481,8 +567,8 @@ Check `grep -n "CapabilityCatalog(" src/ tests/` still shows only the builder (n
 
 - [ ] **Step 4: Run the file's tests plus the suggestions tests**
 
-Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py tests/api/test_chat_suggestions.py -q -p no:cacheprovider`
-Expected: all PASS.
+Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py tests/api/test_chat_suggestions.py -n 0 -q -p no:cacheprovider`
+Expected: all PASS (159 = 133 + 26 at this point on the branch).
 
 - [ ] **Step 5: Lint, scoped mypy, commit**
 
