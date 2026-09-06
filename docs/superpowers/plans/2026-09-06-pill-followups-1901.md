@@ -61,8 +61,9 @@ After `DEGRADED_TTL_SECONDS = 60.0` add:
 # 130 ms client creation; one unreproduced 18 s cold read. A timeout is an
 # ordinary exception below: the field is marked degraded, the last-good lists
 # carry forward and the refresh is retried after DEGRADED_TTL_SECONDS. The two
-# loaders stay sequential: get_async_supabase_client() is not safe for two
-# first-callers at once (#1901 item 1).
+# loaders stay sequential on purpose: one in-flight query at a time against a
+# possibly stalled database, so a refresh costs at most twice this budget
+# (#1901 item 1).
 CATALOG_LOADER_TIMEOUT_SECONDS = 5.0
 ```
 
