@@ -173,12 +173,14 @@ narrow, tuned only to the pill families graded NO in the baseline sample:
    also asks for a value, rate, breakdown or region, without also asking
    for drivers, causes or paths; or one where a trend, time-series or
    chart word (trend, over time, monthly, quarterly, weekly, chart, plot,
-   graph) attaches to the outcome itself - within a few words of it with no
-   causal word between - whatever causal clause follows, because a causal
-   tail does not make a section-C outcome trendable (#1906). A time word
-   that modifies a driver ("does monthly copay support drive
-   persistent_180d?") is a section-C ask and stays. The outcome names come
-   from the cached catalog, not a hardcoded list.
+   graph) attaches to the outcome itself - within a few words of it -
+   whatever causal clause follows, because a causal tail does not make a
+   section-C outcome trendable (#1906). A time word that modifies a driver
+   through a causal verb ("does monthly copay support drive
+   persistent_180d?") is a section-C ask and stays; a time series of the
+   causal quantity ("monthly causal driver strength for persistent_180d")
+   is a trend of effects and drops. The outcome names come from the cached
+   catalog, not a hardcoded list.
 2. **Off-platform asks.** Word-boundary patterns for SHAP, feature
    importance, territory detail (which is how optimizer allocations were
    phrased in the sample), individual-HCP or individual-patient prediction

@@ -546,6 +546,34 @@ DROP_FIXTURES = [
         "Persistence by segment",
         "Graph persistent_180d by segment and show which causal paths matter.",
     ),
+    # #1906 codex: a time series OF the causal quantity (driver strength, path
+    # confidence, effect estimates) is a trend of effects, not a driver read
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Driver strength by month",
+        "Show monthly causal driver strength for persistent_180d for Remibrutinib.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Effect estimate trend",
+        "Show the trend in causal effect estimates for persistent_180d over the last year.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Driver shift",
+        "Over time, have causal drivers shifted for persistent_180d in Remibrutinib?",
+    ),
+    # #1906 codex: display / frequency words right AFTER the outcome
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence with notes",
+        "For Remibrutinib, persistent_180d monthly rate with driver notes.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence picture",
+        "For Remibrutinib, persistent_180d chart with driver notes.",
+    ),
     (
         "uplift_by_segment",
         "CATE by tier",
@@ -782,6 +810,16 @@ KEEP_FIXTURES = [
     (
         "Chart causal drivers",
         "Chart the causal drivers of persistent_180d for Remibrutinib.",
+    ),
+    # #1906 codex: a causal VERB between the time word and the outcome means the
+    # time word modifies a driver; a KPI trend in the same pill does not spoil it
+    (
+        "TRx trend and persistence drivers",
+        "Show the monthly TRx trend for Kisqali and what drives persistent_180d.",
+    ),
+    (
+        "Monthly impact",
+        "What is the monthly impact of copay support on persistent_180d for Kisqali?",
     ),
     ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
     ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),
