@@ -490,6 +490,117 @@ DROP_FIXTURES = [
         "Email the summary",
         "Email this TRx summary for Kisqali to the brand team.",
     ),
+    # #1907: live experiment status - no chat tool reads running experiments
+    (
+        "live_experiment_status",
+        "Active experiments overview",
+        "What experiments are currently running and what KPIs is each one targeting?",
+    ),
+    (
+        "live_experiment_status",
+        "Experiment design status",
+        "What experiments are currently designed or running through the orchestrator?",
+    ),
+    (
+        "live_experiment_status",
+        "Active experiments",
+        "What experiments are currently running, and what KPIs is each one designed to measure?",
+    ),
+    (
+        "live_experiment_status",
+        "Kisqali experiments",
+        "Which experiments are active for Kisqali?",
+    ),
+    ("live_experiment_status", "Running experiments", "Show me the running experiments."),
+    # live-status wording that also mentions lift; lift / results-only phrasings
+    # ("what experiments have lift results?") are deliberately NOT covered
+    (
+        "live_experiment_status",
+        "Live experiment lift",
+        "List live experiments and their lift.",
+    ),
+    (
+        "live_experiment_status",
+        "Kisqali A/B tests",
+        "Which A/B tests are running for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Experiments in progress",
+        "What experiments are in progress for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Orchestrator experiments",
+        "What experiments are currently in flight through the orchestrator?",
+    ),
+    ("live_experiment_status", "Running A/B tests", "Show me running A/B tests for Kisqali."),
+    (
+        "live_experiment_status",
+        "Ongoing A/B tests",
+        "List ongoing A/B tests and their target KPIs.",
+    ),
+    (
+        "live_experiment_status",
+        "Experiments in flight",
+        "Show experiments in flight through the orchestrator.",
+    ),
+    (
+        "live_experiment_status",
+        "Orchestrator status",
+        "Which experiments are designed or running through the orchestrator?",
+    ),
+    # #1907: a status read that merely MENTIONS power, sample size or a duration is
+    # still a status read; only calculation or design intent exempts
+    ("live_experiment_status", "Powered experiments", "What active experiments have 80% power?"),
+    (
+        "live_experiment_status",
+        "Six-week experiments",
+        "Which experiments are running for 6 weeks?",
+    ),
+    (
+        "live_experiment_status",
+        "Powered A/B tests",
+        "What A/B tests are running for 6 weeks with 80% power?",
+    ),
+    (
+        "live_experiment_status",
+        "Kisqali running list",
+        "List the experiments that are running for Kisqali.",
+    ),
+    # #1907 codex: status synonyms, yes/no and count reads, hyphenated in-flight
+    (
+        "live_experiment_status",
+        "Actively running",
+        "Which experiments are actively running for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Being run",
+        "What experiments are currently being run through the orchestrator?",
+    ),
+    ("live_experiment_status", "Any running?", "Are any experiments running for Kisqali?"),
+    ("live_experiment_status", "Running count", "How many experiments are running for Kisqali?"),
+    ("live_experiment_status", "In-flight", "Which experiments are in-flight for Kisqali?"),
+    # #1907 codex: a detection PURPOSE on a status read is still a status read
+    (
+        "live_experiment_status",
+        "Lift detection",
+        "Which active experiments are designed to detect a 5% NBRx lift?",
+    ),
+    (
+        "live_experiment_status",
+        "Running to detect",
+        "Which experiments are running to detect a 5% NBRx lift?",
+    ),
+    (
+        "live_experiment_status",
+        "Detecting lift",
+        "Show active experiments detecting Fabhalta conversion lift.",
+    ),
+    # #1907 codex: live ENROLLMENT is a status read (the /experiments hint names it)
+    ("live_experiment_status", "Enrolling", "What experiments are currently enrolling patients?"),
+    ("live_experiment_status", "Kisqali enrolling", "Which experiments are enrolling for Kisqali?"),
     (
         "competitor_data",
         "Competitor share",
@@ -738,6 +849,85 @@ KEEP_FIXTURES = [
     ("Action rate uplift", "What is the action rate uplift for Kisqali?"),
     ("TRx volume drivers", "What are the causal drivers of trx_volume for Kisqali?"),
     ("Active agents", "Which agents are active right now and what are they working on?"),
+    # #1907: experiment DESIGN and power asks are served (experiment_designer tools);
+    # past-tense "designed" is ambiguous and stays kept
+    (
+        "Experiment design best practices",
+        "How should I design an experiment to test trigger precision improvements across the three brands?",
+    ),
+    (
+        "Experiment sample size",
+        "How many HCPs do I need for an experiment on Kisqali NBRx with 80% power?",
+    ),
+    (
+        "Sample-lift experiment",
+        "Design an experiment to test whether more samples lift Fabhalta conversion.",
+    ),
+    ("Designed experiments", "What experiments have been designed for Fabhalta?"),
+    (
+        "Experiment duration",
+        "How long should an experiment run to detect a 5% NBRx lift for Kisqali?",
+    ),
+    # #1907: "the experiment is running for N weeks" is a planned DURATION inside a
+    # power ask, not a live-status read - the same words must not drop it
+    (
+        "Sample size for a 6-week experiment",
+        "How many HCPs do I need if the experiment is running for 6 weeks?",
+    ),
+    (
+        "Power for a 6-week experiment",
+        "For an experiment that is running for 6 weeks, how many HCPs do I need for 80% power?",
+    ),
+    (
+        "Active-window power",
+        "If the experiment is active for 6 weeks, how many HCPs do I need for 80% power?",
+    ),
+    # #1907: a DESIGN ask keeps its status adjective and its which/what lead
+    ("Live experiment design", "Design a live experiment for Kisqali NBRx."),
+    (
+        "Powered 6-week experiments",
+        "Which experiments are running for 6 weeks and need 80% power?",
+    ),
+    (
+        "Power calculation window",
+        "Which experiment is active for 6 weeks in the power calculation?",
+    ),
+    # #1907: a modal design ask ("what ... should I run / set up") is design intent
+    ("Next live experiment", "What live experiment should I run for Kisqali NBRx?"),
+    ("Live experiment setup", "Which live experiment should I set up for Kisqali NBRx?"),
+    ("Live A/B sample size", "What sample size does a live A/B test on Remibrutinib need?"),
+    # #1907 codex: a design noun after the status adjective, a purpose infinitive,
+    # or a modal with any actor is design intent even when it collides with the
+    # adjective form
+    ("Running design", "Which running experiment design would detect a 5% NBRx lift?"),
+    ("Running options", "Show running experiment options for detecting a 5% NBRx lift."),
+    (
+        "Orchestrator launch",
+        "What active experiment should the orchestrator launch to improve Kisqali NBRx?",
+    ),
+    ("Active candidates", "What experiments are active candidates to test Kisqali NBRx lift?"),
+    ("Live ideas", "Which live experiment ideas could lift Fabhalta NBRx?"),
+    ("Active plans", "Show active experiment plans to test Kisqali NBRx lift."),
+    ("Running setup", "Which running experiment setup would detect a 5% NBRx lift?"),
+    (
+        "Ongoing test plan",
+        "What ongoing A/B test plan should we use to measure trigger precision?",
+    ),
+    # #1907 codex: the modal actor is a short noun phrase, and "use a live
+    # experiment to measure" is an imperative design ask
+    (
+        "Brand team experiment",
+        "Should the brand team use a live experiment to measure trigger precision?",
+    ),
+    (
+        "Brand team A/B test",
+        "What live experiment should the brand team use to measure trigger precision?",
+    ),
+    ("Use a live test", "Use a live A/B test to measure trigger precision for Kisqali."),
+    (
+        "Brand analytics team",
+        "What active experiment should the US Kisqali brand team use to measure trigger precision?",
+    ),
     (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",
