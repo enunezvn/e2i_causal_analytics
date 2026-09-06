@@ -16,7 +16,7 @@ fresh 92-pill grading run as its own gate.
 | item | assumption | measurement |
 |---|---|---|
 | 1 | the loaders are fast on the normal path, so a small budget never trips | client creation 130 ms; coverage 30–70 ms; outcomes ~45 ms (two fresh processes). One unreproduced 18 s cold coverage read. First prod probe call after the deploy: 3.2 s (normal). |
-| 1 | the client factory is safe to call concurrently | it is NOT: `get_async_supabase_client` checks a module global and awaits `acreate_client` without a lock, so two first-callers would create two clients. Loaders stay sequential. |
+| 1 | the client factory is safe to call concurrently | it IS: `get_async_supabase_client` serializes initialization under `_async_client_init_lock` (#694; `src/memory/services/factories.py` lines 654–659 and 807–810) with a double-check inside the lock; a scratch run with two concurrent first-callers created one client. The first draft of this row (and the Task 1 comment as first committed) claimed the opposite from a misread of the early-return path; corrected during the Task 1 quality review. Loaders still stay sequential, by choice: one in-flight query at a time against a possibly stalled database, worst case twice the budget per refresh; a `gather` form is a legitimate follow-up if a 5 s worst case is ever needed. |
 | 3 | pure on-screen territory reads drop today and the page publishes what they read | `match_unsupported_rule` returns `territory_detail` for "Which of the territories shown has the largest recommended reallocation?"; the /resource-optimization summary publishes allocation count, ROI, total outcome, largest increase and largest decrease. |
 | 4d | the no-preposition form slips | "Is Fabhalta outperforming the competition?" and "… outperforming competitors on market share" both return `None`. |
 | 5 | an eager task factory breaks the identity guard | under `asyncio.eager_task_factory` with non-suspending loaders: published=False and `_inflight` stays set to the finished task, so the first build would be served forever (worse than the issue's "rebuild every call"). |
@@ -29,7 +29,8 @@ fresh 92-pill grading run as its own gate.
 in `asyncio.wait_for`. `asyncio.TimeoutError` is an `Exception`, so the existing handler logs a
 warning, marks the field degraded and `_keep_last_good_fields` carries the previous lists
 forward; the degraded catalog is retried after `DEGRADED_TTL_SECONDS`. Sequential execution is
-kept (see the factory premise). Worst case per refresh drops from ~80 s to 10 s. `wait_for`
+kept by choice (one in-flight query at a time against a possibly stalled database; the factory
+itself is concurrency-safe, see §2). Worst case per refresh drops from ~80 s to 10 s. `wait_for`
 cancels the inner coroutine; `KPIHistoryRepository.get_coverage` catches `Exception` only, so the
 `CancelledError` propagates as intended.
 
