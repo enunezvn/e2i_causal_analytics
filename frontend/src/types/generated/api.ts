@@ -4739,7 +4739,7 @@ export interface paths {
         put?: never;
         /**
          * Generate conversation- and page-adaptive chat suggestion pills
-         * @description One fast-tier LLM call; returns up to four pills. Non-empty messages → follow-ups from the recent transcript; empty messages (opener mode) → openers grounded in page_context. 502 on any generation/parsing failure — the frontend falls back to its static context-aware pills.
+         * @description One fast-tier LLM call; returns up to four pills. Non-empty messages → follow-ups from the recent transcript; empty messages (opener mode) → openers grounded in page_context. 502 on any generation/parsing failure or when the post-filter drops every pill — the frontend falls back to its static context-aware pills.
          */
         post: operations["generate_chat_suggestions_api_chat_suggestions_post"];
         delete?: never;
