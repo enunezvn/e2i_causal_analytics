@@ -462,6 +462,36 @@ DROP_FIXTURES = [
         "Perform vs competitors",
         "How does Fabhalta perform against competitors in PNH?",
     ),
+    (
+        "competitor_data",
+        "Kisqali comparison",
+        "How does Kisqali compare against competitors on NBRx?",
+    ),
+    (
+        "competitor_data",
+        "Scripts vs competitors",
+        "Rank Fabhalta vs competitors by total scripts.",
+    ),
+    (
+        "competitor_data",
+        "Adoption vs competitors",
+        "How does Kisqali's adoption compare versus competitors?",
+    ),
+    (
+        "competitor_data",
+        "Share vs the competition",
+        "What is Kisqali's market share versus the competition?",
+    ),
+    (
+        "competitor_data",
+        "Competition's share",
+        "What is the competition's share of PNH prescriptions?",
+    ),
+    (
+        "individual_prediction",
+        "Shown HCPs by HCP specialty",
+        "Show the predicted probabilities for the HCPs shown, by HCP specialty.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -555,6 +585,14 @@ KEEP_FIXTURES = [
     (
         "Competitor context",
         "How does Fabhalta compare versus competitors for its PNH indication?",
+    ),
+    (
+        "MoA vs competition",
+        "How does Fabhalta compare versus the competition on mechanism of action?",
+    ),
+    (
+        "Differentiators vs competitors",
+        "What are Fabhalta's differentiators against competitors in PNH?",
     ),
 ]
 

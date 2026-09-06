@@ -478,6 +478,15 @@ _CAUSAL_ASK_RE = re.compile(
     re.I,
 )
 
+# Competitor SHARE / VOLUME / performance DATA is NEVER (the catalog's TRx share is
+# portfolio share); the competitor landscape as clinical context (section E) is
+# served, so "versus competitors" needs one of these words in the same clause.
+_COMPETITOR_DATA_WORDS = (
+    r"(?:share|volume|TRx|NRx|NBRx|sales|revenue|uptake|growth|prescriptions?|scripts?|"
+    r"adoption|persistence|adherence|rates?|perform\w*|outperform\w*|benchmark\w*)"
+)
+_COMPETITOR_NOUN = r"(?:the )?competit(?:ors?|ion)"
+
 # Registry KPI NAMES the catalog prompt offers as answerable must never be
 # dropped by an off-platform rule, even though their names share vocabulary
 # with the rule's trigger words. Exemptions carved out below:
@@ -546,12 +555,9 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     (
         "competitor_data",
         re.compile(
-            r"\bcompetitors?'?s? (?:market )?(?:share|volume|TRx|NRx|sales)\b|"
-            # competitor SHARE/VOLUME data is NEVER; the competitor landscape as
-            # clinical context (section E) is served, so a bare "versus
-            # competitors" is not enough.
-            r"\b(?:share|volume|TRx|NRx|NBRx|sales|revenue|uptake|growth|perform\w*|outperform\w*)\b"
-            r"[^.?]{0,80}\b(?:vs\.?|versus|against) (?:the )?competitors?\b",
+            rf"\bcompetit(?:ors?|ion)'?s? (?:market )?(?:share|volume|TRx|NRx|NBRx|sales)\b"
+            rf"|\b{_COMPETITOR_DATA_WORDS}\b[^.?]{{0,80}}\b(?:vs\.?|versus|against|with) {_COMPETITOR_NOUN}\b"
+            rf"|\b(?:vs\.?|versus|against|with) {_COMPETITOR_NOUN}\b[^.?]{{0,80}}\b{_COMPETITOR_DATA_WORDS}\b",
             re.I,
         ),
     ),
@@ -576,7 +582,7 @@ _ON_SCREEN_RE = re.compile(
 _EXTENDS_ON_SCREEN_RE = re.compile(
     r"\bre-?comput\w*|\bre-?calculat\w*|\bre-?run\b|\bvalidat\w*|\bextend\w*|\banother\b|"
     r"\bmore features\b|\bwhy\b|\breasons?\b|\bbecause\b|\bdrivers? behind\b|\bwhat drives\b|"
-    r"\bby (?:census )?(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
+    r"\bby (?:census |HCP )?(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
     r"\bper[- ]territory\b|\btrends?\b|\bover time\b|\bover the (?:past|last)\b|\bmonth\w*|"
     r"\bsince\b|\bchang\w*|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
     re.I,
