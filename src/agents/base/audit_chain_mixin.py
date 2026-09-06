@@ -30,7 +30,7 @@ import functools
 import inspect
 import logging
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar, cast
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, TypeVar, cast
 from uuid import UUID
 
 from src.mlops.opik_connector import get_opik_connector
@@ -415,17 +415,14 @@ def audited_traced_node(
                                 est = result.get("estimation_result", {})
                                 confidence_score = est.get("energy_score")
 
-                            # A node that caught its own failure and returned
-                            # ``{node}_error`` (fail-closed) is recorded as
-                            # ``<node>_error`` exactly like a raising node:
-                            # output_data is persisted only as a hash, so the
-                            # action_type is the one readable execution outcome
-                            # the health/analytics readers can count. A
-                            # ``validation_passed`` verdict on a completed node
-                            # is NOT a failure (2026-09-06).
-                            if output_summary["has_error"]:
+                            # A node that caught its own failure (returned
+                            # ``{node}_error`` or flipped ``status`` to failed)
+                            # is recorded as ``<node>_error`` exactly like a
+                            # raising node — see node_failed_closed.
+                            if node_failed_closed(node_name, state, result):
                                 action_type = f"{node_name}_error"
                                 validation_passed = False
+                                output_summary["has_error"] = True
                             else:
                                 action_type = node_name
 
@@ -536,6 +533,31 @@ def create_workflow_initializer(
 _VALIDATION_RESULT_KEYS = ("validation_passed", "validation_result", "validated")
 
 
+def node_failed_closed(node_name: str, state: Mapping[str, Any], result: Mapping[str, Any]) -> bool:
+    """True when an audited node that did NOT raise still failed its run.
+
+    Two fail-closed conventions exist in the graphs (2026-09-06):
+
+    * the node returns a ``{node_name}_error`` key (causal_impact estimation /
+      refutation, heterogeneous_optimizer hierarchical analysis, ...);
+    * the node returns ``status="failed"`` (plus ``errors``/``error``) and the
+      graph routes to an UNaudited error handler (resource_optimizer,
+      gap_analyzer, explainer, feedback_learner, prediction_synthesizer, ...).
+
+    Only the node that FLIPS the status to failed is the failure; a downstream
+    node passing an already-failed state through (``if state["status"] ==
+    "failed": return state``) did not fail, so a failed run is not spelled as
+    N error rows. A ``validation_passed`` verdict on a completed node is never
+    a failure. The audit row's ``output_data`` is persisted only as a hash, so
+    the ``<node>_error`` action_type this drives is the one readable execution
+    outcome the /system-health and /analytics readers can count
+    (``src.api.utils.audit_outcomes``).
+    """
+    if result.get(f"{node_name}_error"):
+        return True
+    return result.get("status") == "failed" and state.get("status") != "failed"
+
+
 def _elapsed_ms(start: float) -> int:
     """Whole-millisecond elapsed time since ``start`` (time.perf_counter), floored
     to 1 for any positive duration.
@@ -626,10 +648,10 @@ def audited_node(
                         raw = result_dict[key]
                         validation_passed = bool(raw) if raw is not None else None
                         break
-                # Fail-closed node (returned ``{node}_error`` instead of raising)
-                # -> recorded as ``<node>_error`` like a raise; see the class
-                # decorator above for why the action_type carries this.
-                has_error = bool(result_dict.get(f"{node_name}_error"))
+                # Fail-closed node (returned ``{node}_error`` or flipped status
+                # to failed instead of raising) -> recorded as ``<node>_error``
+                # like a raise; see node_failed_closed.
+                has_error = node_failed_closed(node_name, state, result_dict)
                 action_type = f"{node_name}_error" if has_error else node_name
                 if has_error:
                     validation_passed = False

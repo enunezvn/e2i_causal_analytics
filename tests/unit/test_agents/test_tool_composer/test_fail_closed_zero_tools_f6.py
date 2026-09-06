@@ -138,3 +138,36 @@ async def test_partial_success_writes_no_error_audit_row(recording_audit):
     assert not any(a.endswith("_error") for a in actions), actions
     execute_row = next(e for e in recording_audit.entries if e["action_type"] == "execute")
     assert execute_row["validation_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_phase_exception_writes_phase_error_audit_row(recording_audit):
+    """A phase exception returns a FAILED result via ``_create_error_result``;
+    the audit chain must carry a ``<phase>_error`` row for it too (codex
+    iter-2), or the run reads as successful on /system-health and /analytics."""
+    from src.agents.tool_composer.decomposer import DecompositionError
+
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire(composer, tools_executed=1, tools_succeeded=1, synth_confidence=0.6)
+    composer.decomposer.decompose = AsyncMock(side_effect=DecompositionError("llm down"))
+
+    result = await composer.compose("compare causal impact of X and predict Y")
+
+    assert result.status == CompositionStatus.FAILED
+    error_rows = [e for e in recording_audit.entries if e["action_type"].endswith("_error")]
+    assert [e["action_type"] for e in error_rows] == ["decompose_error"]
+    assert error_rows[0]["validation_passed"] is False
+    assert error_rows[0]["workflow_id"] == recording_audit.workflow_id
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_writes_compose_error_audit_row(recording_audit):
+    composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
+    _wire(composer, tools_executed=1, tools_succeeded=1, synth_confidence=0.6)
+    composer.planner.plan = AsyncMock(side_effect=RuntimeError("unexpected"))
+
+    result = await composer.compose("compare causal impact of X and predict Y")
+
+    assert result.status == CompositionStatus.FAILED
+    error_rows = [e for e in recording_audit.entries if e["action_type"].endswith("_error")]
+    assert [e["action_type"] for e in error_rows] == ["compose_error"]

@@ -272,3 +272,59 @@ async def test_audited_node_soft_failure_records_error_entry(
     entry = recording_service.entries[0]
     assert entry["action_type"] == "optimize_error"
     assert entry["validation_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_audited_node_status_failed_flip_records_error_entry(
+    recording_service: _RecordingService,
+) -> None:
+    """Most fail-closed nodes carry no ``{node}_error`` key: they return
+    ``{**state, "status": "failed", "errors": [...]}`` (resource_optimizer's
+    formulator, gap_analyzer, explainer, ...) and the graph routes to an
+    UNaudited error handler. The node that FLIPS status to failed is the one
+    that failed: recorded as ``<node>_error`` (codex iter-2, 2026-09-06)."""
+
+    async def formulate(state: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            **state,
+            "errors": [{"node": "formulator", "error": "no targets"}],
+            "status": "failed",
+        }
+
+    wrapped = audited_node(
+        formulate,
+        agent_name="resource_optimizer",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+        node_name="formulate",
+    )
+
+    await wrapped({"audit_workflow_id": uuid4(), "status": "running"})
+
+    entry = recording_service.entries[0]
+    assert entry["action_type"] == "formulate_error"
+    assert entry["validation_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_audited_node_passthrough_of_failed_state_is_not_an_error(
+    recording_service: _RecordingService,
+) -> None:
+    """A downstream node that merely passes an already-failed state through
+    (``if state["status"] == "failed": return state``) did not fail: normal
+    row, so a failed run is not spelled as N error rows."""
+
+    async def optimize(state: Dict[str, Any]) -> Dict[str, Any]:
+        return state
+
+    wrapped = audited_node(
+        optimize,
+        agent_name="resource_optimizer",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+        node_name="optimize",
+    )
+
+    await wrapped({"audit_workflow_id": uuid4(), "status": "failed", "errors": [{"e": 1}]})
+
+    entry = recording_service.entries[0]
+    assert entry["action_type"] == "optimize"
+    assert entry["validation_passed"] is None

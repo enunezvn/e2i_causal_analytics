@@ -404,6 +404,32 @@ class TestAuditedTracedNodeDecorator:
         assert call_kwargs["validation_passed"] is False
 
     @pytest.mark.asyncio
+    async def test_decorator_records_error_entry_when_node_flips_status_failed(
+        self, mock_audit_service, sample_state
+    ):
+        """Fail-closed nodes without a ``{node}_error`` key return
+        ``status="failed"``; the node that flips it is recorded as
+        ``<node>_error`` (codex iter-2, 2026-09-06)."""
+        set_audit_chain_service(mock_audit_service)
+
+        @audited_traced_node("sensitivity", "causal_impact", AgentTier.CAUSAL_ANALYTICS)
+        async def fail_closed_node(state: Dict[str, Any]) -> Dict[str, Any]:
+            return {**state, "status": "failed", "errors": [{"phase": "sensitivity"}]}
+
+        with patch("src.agents.base.audit_chain_mixin.get_opik_connector") as mock_opik:
+            mock_span = MagicMock()
+            mock_ctx = MagicMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_span)
+            mock_ctx.__aexit__ = AsyncMock(return_value=None)
+            mock_opik.return_value.trace_agent.return_value = mock_ctx
+
+            await fail_closed_node({**sample_state, "status": "running"})
+
+        call_kwargs = mock_audit_service.add_entry.call_args.kwargs
+        assert call_kwargs["action_type"] == "sensitivity_error"
+        assert call_kwargs["validation_passed"] is False
+
+    @pytest.mark.asyncio
     async def test_decorator_works_without_audit_service(self, sample_state):
         """Decorator works when audit service is unavailable."""
         # Clear workflow_id to simulate no audit

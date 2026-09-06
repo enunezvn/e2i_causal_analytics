@@ -877,9 +877,7 @@ async def list_patterns(
     # ``Annotated[..., Query()] = default`` so a direct call of this function
     # gets the same plain defaults the HTTP route applies (codex iter-1: with
     # ``= Query(default=...)`` a direct call receives Query placeholder objects).
-    severity: Annotated[
-        Optional[PatternSeverity], Query(description="Filter by severity")
-    ] = None,
+    severity: Annotated[Optional[PatternSeverity], Query(description="Filter by severity")] = None,
     pattern_type: Annotated[Optional[PatternType], Query(description="Filter by type")] = None,
     agent: Annotated[Optional[str], Query(description="Filter by affected agent")] = None,
     limit: Annotated[int, Query(description="Maximum results", ge=1, le=200)] = 50,
