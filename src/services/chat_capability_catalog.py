@@ -613,27 +613,46 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     # semantic memory search, not a live read, so a read of which experiments or
     # A/B tests are running / active / live / ongoing / in progress / in flight,
     # or "currently designed" (the orchestrator's in-flight designs), cannot be
-    # answered. Three shapes match: "<noun> (are|is) currently|now <status>",
-    # "which|what <noun> (are|is) <status>", and the adjective form "active /
-    # running / live / ongoing experiments". A bare "<noun> is running" without
-    # currently/now or a which/what lead is NOT matched on purpose: the same words
-    # describe a planned DURATION in a power ask ("how many HCPs do I need if the
-    # experiment is running for 6 weeks?"), which experiment_designer serves, so
-    # "list the experiments that are running" is an accepted miss. Also not
-    # covered: lift or results phrasings (left to the prompt until one appears in
-    # a probe), nouns other than experiment / A/B test, and past-tense "designed"
-    # without currently/now, which is ambiguous and stays kept.
+    # answered. Four shapes match: "<noun> (are|is) currently|now <status>",
+    # "which|what <noun> (are|is) <status>", the adjective form "active / running
+    # / live / ongoing <noun>", and "<noun> in progress|in flight". A DESIGN or
+    # POWER ask that happens to use these words ("design a live experiment",
+    # "which experiments are running for 6 weeks and need 80% power?") is
+    # exempted by _EXPERIMENT_DESIGN_RE in match_unsupported_rule, because
+    # experiment_designer serves it. Accepted misses: a bare "<noun> is running"
+    # with no which/what lead and no currently/now ("list the experiments that
+    # are running"), lift or results phrasings (left to the prompt until one
+    # appears in a probe), nouns other than experiment / A/B test, and
+    # past-tense "designed" without a status lead ("what experiments have been
+    # designed"), which is ambiguous and stays kept.
     (
         "live_experiment_status",
         re.compile(
             r"\b(?:experiments?|a/b\s+tests?)\s+(?:that\s+)?(?:are\s+|is\s+)?(?:currently|now)\s+"
             r"(?:running|active|live|ongoing|designed|in progress|in flight)\b"
             r"|\b(?:which|what)\s+(?:experiments?|a/b\s+tests?)\s+(?:are|is)\s+"
-            r"(?:running|active|live|ongoing|in progress|in flight)\b"
-            r"|\b(?:active|running|live|ongoing)\s+experiments?\b",
+            r"(?:running|active|live|ongoing|designed|in progress|in flight)\b"
+            r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\b"
+            r"|\b(?:experiments?|a/b\s+tests?)\s+(?:in progress|in flight)\b",
             re.I,
         ),
     ),
+)
+
+# An experiment DESIGN or POWER ask (#1907) - an imperative "design / plan / set up
+# / size / power / run a[n] [live] experiment", power or sample-size vocabulary,
+# or a planned duration "for N weeks" - is served by experiment_designer, so the
+# live_experiment_status rule stands down for it even when the words overlap
+# ("design a live experiment", "if the experiment is running for 6 weeks"). Bare
+# "design" / "designed" as a noun or participle ("experiment design status",
+# "designed to measure") is NOT design intent and does not exempt.
+_EXPERIMENT_DESIGN_RE = re.compile(
+    r"\b(?:design|plan|set up|size|power|run)\s+(?:an?|the|my|this|new)\s+(?:\w+\s+){0,2}?"
+    r"(?:experiments?|a/b\s+tests?|tests?)\b"
+    r"|\b(?:\d+\s*%\s+power|statistical power|sample size|how many hcps|how long should|"
+    r"minimum detectable|to detect)\b"
+    r"|\bfor\s+\d+\s+(?:days?|weeks?|months?)\b",
+    re.I,
 )
 
 
@@ -731,6 +750,8 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
                 and _AGGREGATE_LIKELIHOOD_RE.search(text)
                 and not _INDIVIDUAL_ASK_RE.search(text)
             ):
+                continue
+            if name == "live_experiment_status" and _EXPERIMENT_DESIGN_RE.search(text):
                 continue
             return name
     lowered = text.lower()

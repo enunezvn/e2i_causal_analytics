@@ -532,6 +532,22 @@ DROP_FIXTURES = [
         "Orchestrator experiments",
         "What experiments are currently in flight through the orchestrator?",
     ),
+    ("live_experiment_status", "Running A/B tests", "Show me running A/B tests for Kisqali."),
+    (
+        "live_experiment_status",
+        "Ongoing A/B tests",
+        "List ongoing A/B tests and their target KPIs.",
+    ),
+    (
+        "live_experiment_status",
+        "Experiments in flight",
+        "Show experiments in flight through the orchestrator.",
+    ),
+    (
+        "live_experiment_status",
+        "Orchestrator status",
+        "Which experiments are designed or running through the orchestrator?",
+    ),
     (
         "competitor_data",
         "Competitor share",
@@ -813,6 +829,13 @@ KEEP_FIXTURES = [
         "Active-window power",
         "If the experiment is active for 6 weeks, how many HCPs do I need for 80% power?",
     ),
+    # #1907: a DESIGN ask keeps its status adjective and its which/what lead
+    ("Live experiment design", "Design a live experiment for Kisqali NBRx."),
+    (
+        "Powered 6-week experiments",
+        "Which experiments are running for 6 weeks and need 80% power?",
+    ),
+    ("Powered A/B tests", "What A/B tests are running for 6 weeks with 80% power?"),
     (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",
