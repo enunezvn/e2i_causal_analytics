@@ -265,8 +265,13 @@ Append to `KEEP_FIXTURES` (before the closing `]`):
 Also (final review, commit `ed32bb5b6`): the deny-list `_EXTENDS_ON_SCREEN_RE` must name EVERY `AXIS_RULES` axis, and it omitted line of therapy, so once `territory_detail` joined the exemption "Break the on-screen territory allocation down by line of therapy." was kept (the same ask against SHAP/CATE was already kept). Add, directly after the existing `by (?:census |HCP )?(...)` alternation line, inside the same `re.compile`:
 
 ```python
-    r"\bby (?:lines?[- ]of[- ]therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
+    # "by" + up to two modifier words + an axis noun: "by patient severity tier",
+    # "by US census region", "by prior therapy line", "by current line of therapy".
+    r"\bby (?:[\w-]+ ){0,2}(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
+    r"\bby (?:[\w-]+ ){0,2}(?:lines?[- ]of[- ]therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
 ```
+
+(These two lines REPLACE the original `\bby (?:census |HCP )?(...)` line: codex iterations 2 and 3 found the hyphenated spelling and "by prior therapy line" kept, and measuring the class showed the fixed `census |HCP ` modifiers were the real gap — "by patient severity tier", "by US census region" and "by current line of therapy" were all kept inside the exemption. Up to two modifier words are tolerated; on-screen reads that use "by" without an axis noun ("by importance", "by far") are unaffected and no KEEP fixture changes — commits `0af5effbc`, `140ff6156`.)
 
 and two more `DROP_FIXTURES` entries (last in the list):
 
@@ -286,9 +291,24 @@ and two more `DROP_FIXTURES` entries (last in the list):
         "Displayed territories by line-of-therapy",
         "Break the displayed territory allocation down by line-of-therapy.",
     ),
+    (
+        "territory_detail",
+        "Displayed territories by prior therapy line",
+        "Break the displayed territory allocation down by prior therapy line.",
+    ),
+    (
+        "shap_or_feature_importance",
+        "On-screen SHAP by patient severity tier",
+        "Split the on-screen SHAP features by patient severity tier.",
+    ),
+    (
+        "territory_detail",
+        "On-screen territories by US census region",
+        "Break the on-screen territory allocation down by US census region.",
+    ),
 ```
 
-All three are red before the alternation (rule `None`); the hyphenated one is how this codebase spells the axis in prose (codex iter2 MEDIUM, commit `0af5effbc`), hence `[- ]` between the words. A plain catalog ask ("Compare TRx by line of therapy for Kisqali.") is unaffected: the deny-list is consulted only inside the exemption.
+All six are red before the alternations (rule `None`); the hyphenated one is how this codebase spells the axis in prose, hence `[- ]` between the words. A plain catalog ask ("Compare TRx by line of therapy for Kisqali.") is unaffected: the deny-list is consulted only inside the exemption.
 
 Append to `DROP_FIXTURES`:
 
@@ -626,7 +646,7 @@ Check `grep -n "CapabilityCatalog(" src/ tests/` still shows only the builder (n
 - [ ] **Step 4: Run the file's tests plus the suggestions tests**
 
 Run: `/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -m pytest tests/api/test_chat_capability_catalog.py tests/api/test_chat_suggestions.py -n 0 -q -p no:cacheprovider`
-Expected: all PASS (162 = 136 + 26 at the end of the branch).
+Expected: all PASS (165 = 139 + 26 at the end of the branch).
 
 - [ ] **Step 5: Lint, scoped mypy, commit**
 
