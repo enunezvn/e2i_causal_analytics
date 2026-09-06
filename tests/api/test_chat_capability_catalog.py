@@ -278,6 +278,84 @@ def test_axis_vocabulary_matches_kpi_calculate_tool():
         assert axis in cat.AXIS_RULES, axis
 
 
+async def test_axis_rules_window_composition_matches_calculators():
+    """AXIS_RULES' composition sentence is prose; pin each clause to the
+    calculators' query-id routing so the prompt cannot go stale against a
+    migration again (the pre-#1900 wording had already gone stale against
+    migration 120)."""
+    from src.kpi.calculators.business_impact import BusinessImpactCalculator
+    from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
+    from src.kpi.registry import get_registry
+    from src.kpi.synthetic_mode import _SYNTHETIC_SUFFIX
+
+    def suffix(query_id: str) -> str:
+        # The showcase flag appends _include_synthetic to every additive
+        # variant id; strip it so the assertions pin ROUTING, not the env.
+        return (
+            query_id[: -len(_SYNTHETIC_SUFFIX)]
+            if query_id.endswith(_SYNTHETIC_SUFFIX)
+            else query_id
+        )
+
+    window = {"start": "2025-01-01", "end": "2025-03-31"}
+    # No query runs below: the routing helpers are pure and every guard raises
+    # before _execute_query, so the calculator never resolves its db_client.
+    calc = BusinessImpactCalculator(db_client=None)
+
+    # 1. Volume KPIs: a window composes with ANY ONE axis (migrations 084/105/108).
+    region_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx", brand="Kisqali", region="west", window=window, context={}
+    )
+    assert suffix(region_qid).endswith("_windowed_region")
+    segment_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Kisqali",
+        region=None,
+        window=window,
+        segment="high",
+        context={},
+    )
+    assert suffix(segment_qid).endswith("_segment_windowed")
+    # biologic is brand-gated to _BIOLOGIC_AXIS_BRANDS, so it needs Remibrutinib
+    biologic_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Remibrutinib",
+        region=None,
+        window=window,
+        biologic="naive",
+        context={},
+    )
+    assert suffix(biologic_qid).endswith("_biologic_windowed")
+
+    # 2. TRx Share / Conversion Rate: a window does NOT compose with region.
+    for kpi_id in ("WS3-BI-008", "WS3-BI-009"):
+        kpi = get_registry().get(kpi_id)
+        assert kpi is not None, kpi_id
+        context = {"brand": "Kisqali", "window": window, "region": "west"}
+        guard = calc._calc_trx_share if kpi_id == "WS3-BI-008" else calc._calc_conversion_rate
+        with pytest.raises(RuntimeError, match=kpi_id):
+            guard(dict(context))
+        # calculate() records the guard instead of re-raising, so the chat layer
+        # reports the refusal rather than a fabricated number.
+        result = calc.calculate(kpi, dict(context))
+        assert result.value is None and kpi_id in (result.error or "")
+
+    # 3. Trigger KPIs: a window composes with region (migration 120, #1388).
+    trigger_qid, _ = TriggerPerformanceCalculator._effectiveness_scoped(
+        "precision", {"brand": "Kisqali", "region": "west", "trigger_type": None, "window": window}
+    )
+    assert suffix(trigger_qid).endswith("_windowed_region")
+
+    # The sentence's three families partition the windowable set exactly.
+    c = await make_catalog()
+    volume = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
+    share_conversion = {"WS3-BI-008", "WS3-BI-009"}
+    assert volume <= c.windowable_kpi_ids
+    assert share_conversion <= c.windowable_kpi_ids
+    triggers = c.windowable_kpi_ids - volume - share_conversion
+    assert triggers == {"WS2-TR-001", "WS2-TR-004", "WS2-TR-006", "WS2-TR-009"}
+
+
 # =============================================================================
 # ROUTE HINTS
 # =============================================================================

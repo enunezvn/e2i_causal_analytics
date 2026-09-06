@@ -237,7 +237,8 @@ AXIS_RULES = (
     "Breakdown axes, AT MOST ONE per ask: segment = patient severity tier (low/medium/high); "
     "therapy_line = line of therapy (0-3); region = US census region (northeast/south/midwest/west); "
     "and - Remibrutinib ONLY - biologic status (naive/experienced) or ige_tier (low/medium/high). "
-    "The time window composes with segment/therapy_line but NOT with region/biologic/ige_tier. "
+    "The time window composes with any one axis for TRx, NRx and NBRx; only with segment/therapy_line "
+    "for TRx Share and Conversion Rate; and only with region for the trigger KPIs. "
     "TRx share is share of the tracked 3-brand portfolio, NOT share versus competitors."
 )
 
