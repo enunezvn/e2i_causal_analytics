@@ -73,7 +73,7 @@ export interface E2IChatSidebarProps {
 // SUGGESTIONS
 // =============================================================================
 
-type ChatSuggestion = { title: string; message: string };
+export type ChatSuggestion = { title: string; message: string };
 
 /**
  * Suggestion pills rendered above the input. Three tiers:
@@ -90,9 +90,12 @@ type ChatSuggestion = { title: string; message: string };
  * 2. PER-TURN (conversation exists): after each completed assistant turn,
  *    the same endpoint generates conversation-adaptive follow-ups from the
  *    recent transcript (one fast-tier LLM call, no orchestrator).
- * 3. STATIC FALLBACK: the route+brand template set below shows instantly
- *    while a generation is in flight and whenever generation fails (502) —
- *    never a blank pill row, never invented output.
+ * 3. STATIC FALLBACK + TOP-UP: the route+brand template set below shows
+ *    instantly while a generation is in flight and whenever generation fails
+ *    (502) — never a blank pill row, never invented output. Since 2026-09-05
+ *    the backend post-filters generated pills against the assistant's
+ *    capability catalog and may return fewer than four; topUpChatSuggestions
+ *    fills the row back up from the same static set.
  *
  * A suggestions array bypasses CopilotKit's suggestion engine and is passed
  * through reactively, so pills swap live as new generations arrive.
@@ -106,8 +109,12 @@ type ChatSuggestion = { title: string; message: string };
  *
  * Keep fallback pill topics inside what the bound backend tools can actually
  * answer (KPIs, causal paths, agents — see E2I_CHATBOT_TOOLS in
- * chatbot_tools.py); the chart pills route through the renderKpiTrend /
- * renderChart generative-UI actions so users discover inline visuals.
+ * chatbot_tools.py and the capability catalog in
+ * src/services/chat_capability_catalog.py); the chart pills route through the
+ * renderKpiTrend / renderChart generative-UI actions so users discover inline
+ * visuals. The page summary a page publishes via usePageChatContext reaches
+ * BOTH the pill endpoint (page_context) and the agent (readable #5 in
+ * E2ICopilotProvider), so pills may refer to on-screen values.
  */
 const PAGE_SUGGESTIONS: Record<string, ChatSuggestion> = {
   '/': {
@@ -169,6 +176,37 @@ export function buildChatSuggestions(
         'Which KPIs moved the most recently? Summarize the biggest movers in a table.',
     },
   ];
+}
+
+/**
+ * Top the adaptive pills back up to four with the static route+brand set.
+ *
+ * The backend post-filters generated pills against the assistant's
+ * capability catalog (2026-09-05) and may return fewer than four; the static
+ * pills are the guaranteed floor, so they fill the gap. Adaptive pills come
+ * first, duplicates (case-insensitive title OR message) are skipped, never
+ * more than four.
+ * Exported for tests.
+ */
+export function topUpChatSuggestions(
+  adaptive: ChatSuggestion[] | null,
+  pathname: string,
+  brand: E2IFilters['brand']
+): ChatSuggestion[] {
+  const statics = buildChatSuggestions(pathname, brand);
+  if (!adaptive || adaptive.length === 0) return statics;
+  const out = adaptive.slice(0, 4);
+  const norm = (s: string) => s.trim().toLowerCase();
+  const seenTitles = new Set(out.map((p) => norm(p.title)));
+  const seenMessages = new Set(out.map((p) => norm(p.message)));
+  for (const pill of statics) {
+    if (out.length >= 4) break;
+    if (seenTitles.has(norm(pill.title)) || seenMessages.has(norm(pill.message))) continue;
+    seenTitles.add(norm(pill.title));
+    seenMessages.add(norm(pill.message));
+    out.push(pill);
+  }
+  return out;
 }
 
 /**
@@ -346,7 +384,7 @@ export function E2IChatSidebar({
     adaptive: ChatSuggestion[] | null;
   }>({ hasUserMessage: false, adaptive: null });
   const chatSuggestions = React.useMemo(() => {
-    return pillState.adaptive ?? buildChatSuggestions(pathname, filters.brand);
+    return topUpChatSuggestions(pillState.adaptive, pathname, filters.brand);
   }, [pillState, pathname, filters.brand]);
   const [showAgents, setShowAgents] = React.useState(false);
   const [traceIdCopied, setTraceIdCopied] = React.useState(false);

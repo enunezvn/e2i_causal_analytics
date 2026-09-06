@@ -41,6 +41,7 @@ import type { SupportedChartType } from '@/lib/flint-chart-types';
 import { routeKpiChart } from '@/lib/kpi-chart-router';
 import type { KpiChartData } from '@/lib/kpi-chart-router';
 import type { KPIHistoryResponse, KPISegmentedHistoryResponse } from '@/types/kpi';
+import { passThroughText } from './copilotReadableConverters';
 
 // -----------------------------------------------------------------------------
 // Internal Types (not exported - used within provider)
@@ -737,7 +738,7 @@ const CopilotHooksInner: React.FC = () => {
   const location = useLocation();
 
   // ---------------------------------------------------------------------------
-  // Readables - Make app state visible to agents (4 readables)
+  // Readables - Make app state visible to agents (5 readables)
   // ---------------------------------------------------------------------------
 
   // 1. Current filter context (dashboard filters)
@@ -762,6 +763,23 @@ const CopilotHooksInner: React.FC = () => {
   useCopilotReadable({
     description: 'User preferences including detail level and theme',
     value: context?.preferences || DEFAULT_PREFERENCES,
+  });
+
+  // 5. On-screen page summary (2026-09-05 pill review). Eight pages publish a
+  // prose summary of what they show via usePageChatContext; until now it
+  // reached ONLY the suggestion-pill endpoint, so pills asked about SHAP
+  // features and gap sizes the agent could not see. Publishing the SAME
+  // string here keeps the two channels identical by construction. Disabled
+  // (not sent) when nothing is published, so the agent prompt is unchanged
+  // on those pages. convert passes the prose through instead of the default
+  // JSON.stringify, which would wrap it in quotes and escape newlines.
+  const pageSummary = context?.pageChatContext ?? '';
+  useCopilotReadable({
+    description:
+      'Summary of the data currently visible on the page, as published by the page itself (prose; same text used to ground suggestion pills)',
+    value: pageSummary,
+    convert: passThroughText,
+    available: pageSummary ? 'enabled' : 'disabled',
   });
 
   // ---------------------------------------------------------------------------

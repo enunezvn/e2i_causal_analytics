@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildChatSuggestions } from './E2IChatSidebar';
+import { buildChatSuggestions, topUpChatSuggestions } from './E2IChatSidebar';
 
 describe('buildChatSuggestions (#1749)', () => {
   it('names the SELECTED brand in the market-share pill', () => {
@@ -44,5 +44,41 @@ describe('buildChatSuggestions (#1749)', () => {
       expect(p.title).not.toContain('All market share');
       expect(p.message).not.toMatch(/for All\b/);
     }
+  });
+});
+
+describe('topUpChatSuggestions (2026-09-05 validator top-up)', () => {
+  it('returns the static pills when no adaptive pills exist', () => {
+    expect(topUpChatSuggestions(null, '/', 'Kisqali')).toEqual(buildChatSuggestions('/', 'Kisqali'));
+    expect(topUpChatSuggestions([], '/', 'Kisqali')).toEqual(buildChatSuggestions('/', 'Kisqali'));
+  });
+
+  it('fills up to four with static pills, adaptive first, no duplicate titles', () => {
+    const adaptive = [
+      { title: '  📈 CHART THE TRX TREND ', message: 'Chart the TRx trend for Kisqali' },
+      { title: 'Persistence drivers', message: 'What drives persistent_180d for Kisqali?' },
+    ];
+    const pills = topUpChatSuggestions(adaptive, '/', 'Kisqali');
+
+    expect(pills).toHaveLength(4);
+    expect(pills.slice(0, 2)).toEqual(adaptive);
+    const titles = pills.map((p) => p.title.toLowerCase());
+    expect(new Set(titles).size).toBe(4);
+    // the duplicated static "Chart the TRx trend" was skipped, the others filled in
+    expect(pills.some((p) => p.title.includes('Kisqali market share'))).toBe(true);
+  });
+
+  it('never exceeds four and keeps a full adaptive set untouched', () => {
+    const adaptive = [1, 2, 3, 4, 5].map((i) => ({ title: `Pill ${i}`, message: `Question ${i}?` }));
+    expect(topUpChatSuggestions(adaptive, '/', 'All')).toEqual(adaptive.slice(0, 4));
+  });
+
+  it('skips a static pill whose message duplicates an adaptive one even when the title differs', () => {
+    // The backend prompt lets titles start with an emoji; an emoji-less adaptive
+    // title must not let the identical static question through twice.
+    const adaptive = [{ title: 'Chart the TRx trend', message: 'Chart the TRx trend' }];
+    const pills = topUpChatSuggestions(adaptive, '/', 'Kisqali');
+    expect(pills).toHaveLength(4);
+    expect(pills.filter((p) => p.message.trim().toLowerCase() === 'chart the trx trend')).toHaveLength(1);
   });
 });

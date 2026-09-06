@@ -77,6 +77,7 @@ import {
   CopilotKitWrapper,
   useE2ICopilot,
   useCopilotEnabled,
+  usePageChatContext,
   type E2IFilters,
   type UserPreferences,
   type AgentInfo,
@@ -436,8 +437,9 @@ describe('CopilotHooksConnector', () => {
       </CopilotKitWrapper>
     );
 
-    // Should register 4 readables: filters, page context, agents, preferences
-    expect(mockUseCopilotReadable).toHaveBeenCalledTimes(4);
+    // Should register 5 readables: filters, page path, agents, preferences,
+    // on-screen page summary (2026-09-05)
+    expect(mockUseCopilotReadable).toHaveBeenCalledTimes(5);
 
     // Check filters readable
     const filtersCall = mockUseCopilotReadable.mock.calls.find((call) =>
@@ -468,6 +470,57 @@ describe('CopilotHooksConnector', () => {
       call[0]?.description?.includes('User preferences')
     );
     expect(prefsCall).toBeDefined();
+  });
+
+  it('publishes the page summary as a readable only when a page has published one', () => {
+    const Publisher: React.FC<{ summary: string | null }> = ({ summary }) => {
+      usePageChatContext(summary);
+      return null;
+    };
+    const summaryCalls = () =>
+      mockUseCopilotReadable.mock.calls.filter((call) =>
+        call[0]?.description?.includes('visible on the page')
+      );
+    const lastSummaryCall = () => {
+      const calls = summaryCalls();
+      expect(calls.length).toBeGreaterThan(0);
+      return calls[calls.length - 1][0];
+    };
+
+    const { rerender } = render(
+      <CopilotKitWrapper enabled={true}>
+        <E2ICopilotProvider>
+          <Publisher summary={null} />
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    // Nothing published: the readable is registered but DISABLED, so the
+    // agent prompt stays byte-identical to before on such pages.
+    expect(summaryCalls().length).toBeGreaterThan(0);
+    expect(lastSummaryCall().available).toBe('disabled');
+    expect(lastSummaryCall().value).toBe('');
+
+    rerender(
+      <CopilotKitWrapper enabled={true}>
+        <E2ICopilotProvider>
+          <Publisher summary="Home dashboard. Brand filter: Kisqali; region: All US." />
+          <TestConsumer />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    // Published: enabled, carrying the exact string the pill endpoint receives,
+    // sent as raw prose (not JSON.stringify'd with quotes and \n escapes).
+    expect(lastSummaryCall().available).toBe('enabled');
+    expect(lastSummaryCall().value).toBe('Home dashboard. Brand filter: Kisqali; region: All US.');
+    // The SDK runtime calls convert(value) with ONE argument (its typings say
+    // two); the converter must return the prose either way.
+    expect(lastSummaryCall().convert('Home dashboard. Brand filter: Kisqali; region: All US.')).toBe(
+      'Home dashboard. Brand filter: Kisqali; region: All US.'
+    );
+    expect(lastSummaryCall().convert('ignored', 'raw text')).toBe('raw text');
   });
 
   it('registers actions when CopilotKit is enabled', () => {

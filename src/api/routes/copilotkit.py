@@ -678,6 +678,21 @@ def _coerce_agui_context(raw: Any) -> list[dict[str, str]]:
     return out
 
 
+def _is_json_text(value: str) -> bool:
+    """True when a readable's value is JSON (the SDK's default converter); a page
+    summary arrives as plain prose and is the only readable that is not.
+
+    Sees the full (pre-truncation) value. Deep nesting raises RecursionError,
+    not ValueError; either way it is not JSON we can parse, so it is caught the
+    same way.
+    """
+    try:
+        json.loads(value)
+    except (ValueError, RecursionError):
+        return False
+    return True
+
+
 def _readables_context_note(copilotkit_state: Any) -> str:
     """Render the frontend's readables (``state["copilotkit"]["context"]``) as a
     system-prompt suffix — the AG-UI "what the user is looking at" channel.
@@ -692,7 +707,9 @@ def _readables_context_note(copilotkit_state: Any) -> str:
     Accepts the SDK's ``ag_ui.core.Context`` pydantic objects AND plain dicts
     (checkpoint round-trips), skips junk, caps per-item and total size, and
     returns "" when nothing usable — readable-less runs keep the prompt
-    byte-identical.
+    byte-identical. The prose-summary wording appears only when a prose
+    readable is present, so pages that publish no summary keep the
+    pre-summary prompt byte-identical.
     """
     if not isinstance(copilotkit_state, dict):
         return ""
@@ -701,6 +718,7 @@ def _readables_context_note(copilotkit_state: Any) -> str:
         return ""
 
     rendered: list[str] = []
+    has_prose = False
     for item in items:
         if isinstance(item, dict):
             description, value = item.get("description"), item.get("value")
@@ -709,6 +727,9 @@ def _readables_context_note(copilotkit_state: Any) -> str:
             value = getattr(item, "value", None)
         if not isinstance(description, str) or not isinstance(value, str) or not value.strip():
             continue
+        is_json = _is_json_text(value)
+        if not is_json:
+            has_prose = True
         if len(value) > _READABLE_ITEM_MAX_CHARS:
             value = value[:_READABLE_ITEM_MAX_CHARS] + f" … [truncated: {len(value)} chars total]"
         rendered.append(f"- {description}: {value}")
@@ -727,16 +748,25 @@ def _readables_context_note(copilotkit_state: Any) -> str:
     if omitted:
         lines.append(f"- [{omitted} readable(s) omitted: context budget exceeded]")
 
+    kinds = "JSON or short prose summaries" if has_prose else "JSON"
+    prose_rule = (
+        "A prose page summary is a description of what the page shows, not a "
+        "data table: cite it as on-screen context and never present its figures "
+        "as the result of a tool you ran. "
+        if has_prose
+        else ""
+    )
     return (
         "\n\nON-SCREEN APP CONTEXT (what the user is currently looking at, shared "
-        "live by the dashboard via AG-UI readables; values are JSON):\n"
+        f"live by the dashboard via AG-UI readables; values are {kinds}):\n"
         + "\n".join(lines)
         + "\n\nWhen the user asks about 'the data on the page/screen/GUI', 'these "
         "results', or the analysis they are viewing, answer from this context "
         "first — compute counts, ranks and percentages directly from it (a "
         "histogram's bin_counts cover the FULL scored cohort; top_rows are only "
         "the rows shown on screen) and say which on-screen values you used. "
-        "Call tools only for data that is not on screen."
+        + prose_rule
+        + "Call tools only for data that is not on screen."
     )
 
 

@@ -25,9 +25,14 @@ turn and falls back to static context-aware pills on any error, so this
 route fails FAST and LOUD (502) rather than degrade to invented output.
 
 Suggestion topics are constrained to what the chatbot's bound tools
-(``E2I_CHATBOT_TOOLS`` in ``chatbot_tools.py``) can actually answer: KPI
-queries/calculations, causal analysis, segments, clinical context, agent
-status, and document retrieval.
+(``E2I_CHATBOT_TOOLS`` in ``chatbot_tools.py``) and generative-UI actions can
+actually answer. Since 2026-09-05 that constraint is a capability CATALOG
+interpolated into the prompt from code and data
+(``src.services.chat_capability_catalog``: KPI registry, history coverage,
+causal outcomes, agent roster) plus a narrow deterministic post-filter that
+drops the pill families measured unanswerable (SHAP recomputation, territory
+detail, per-patient predictions, causal outcomes used as KPIs, ...). Drops are
+logged at INFO with their rule so the production drop rate is measurable.
 """
 
 from __future__ import annotations
@@ -41,6 +46,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
 from src.api.dependencies.auth import require_auth
+from src.services.chat_capability_catalog import (
+    CapabilityCatalog,
+    filter_unsupported_pills,
+    get_capability_catalog,
+    render_catalog_block,
+    route_hint,
+)
 from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_fast_llm
 
@@ -49,7 +61,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 # Transcript bounds: enough context for good follow-ups, small enough that
-# the fast-tier call stays ~1k input tokens.
+# the fast-tier call stays a few thousand input tokens (the catalog-filled
+# system prompt alone is ~2.1k; measured 2026-09-06).
 MAX_TRANSCRIPT_MESSAGES = 12
 MAX_MESSAGE_CHARS = 1500
 MAX_PAGE_CONTEXT_CHARS = 4000
@@ -57,51 +70,72 @@ MAX_SUGGESTIONS = 4
 MAX_TITLE_CHARS = 60
 MAX_MESSAGE_TEXT_CHARS = 500
 
-_SYSTEM_PROMPT = """You generate suggestion pills for the E2I Assistant, \
-a pharmaceutical commercial-analytics chatbot (brands: Remibrutinib, Fabhalta, Kisqali).
+# The prompt is a TEMPLATE: {capability_catalog} and {route_hint} are filled per
+# request by build_system_prompt() (str.replace, not str.format - the JSON
+# example below has braces). Everything list-shaped comes from
+# src.services.chat_capability_catalog, derived from code and data (#1638
+# pattern); measured 2026-09-05, the one-sentence capability description this
+# replaces let 42% of live pills ask for analyses no tool serves.
+_SYSTEM_PROMPT = """You generate suggestion pills for the E2I Assistant, a pharmaceutical \
+commercial-analytics chatbot (brands: Remibrutinib, Fabhalta, Kisqali). A pill is a question the \
+analyst clicks; the assistant must be able to ANSWER it with the capabilities below. A pill that asks \
+for an analysis, grain, axis or metric outside this catalog is a defect.
 
-The assistant can ONLY: query and calculate KPIs (TRx, NRx, NBRx, market share, \
-conversion rate, ROI) and chart their trends over time, run causal analyses (drivers, \
-causal paths, treatment effects), compare patient/HCP segments, give clinical context \
-for the brands, report on the platform's agents, and retrieve internal documents. \
-Never suggest anything outside those capabilities (no emails, no external data, no \
-CRM actions, no writing to systems).
+{capability_catalog}
 
-Input is JSON with the current page path, brand filter, page_content (a compact \
-summary of the data currently visible on the page; may be empty), and the \
+ON-SCREEN CONTENT: page_content (when present) is ALSO shown to the assistant as on-screen context, \
+so a pill MAY ask it to read, compare, rank or summarize values that appear literally in page_content \
+(e.g. "Which of the on-screen SHAP features ranks highest for Fabhalta?"). A pill must NOT ask for \
+anything beyond those literal values - no recomputing, validating, extending or explaining WHY an \
+on-screen SHAP, optimizer, prediction, gap or CATE number is what it is (another segment, more \
+features, per-territory detail, robustness, thresholds). Prefer turning an on-screen entity into a \
+catalog analysis: an on-screen "sample_drop -> persistent_180d" effect becomes "What drives \
+persistent_180d for Remibrutinib, and how confident are those paths?"; an on-screen SHAP feature \
+specialty_hematology becomes "Which HCP specialties are most likely to increase Fabhalta \
+prescriptions?"; an on-screen territory allocation becomes "What is Fabhalta's TRx by census region?".
+
+{route_hint}
+
+Input is JSON with the current page path, brand filter, page_content (may be empty) and the \
 conversation so far (may be empty).
 
-If the conversation is NON-EMPTY, propose exactly 4 follow-up questions the analyst \
-is most likely to want next. Deepen or branch from what was just discussed — never \
-repeat a question that was already asked or fully answered. Stay specific to the \
-entities already in play (brand, KPI, segment, time window); use the page and brand \
-context only as a tiebreaker.
+If the conversation is NON-EMPTY, propose exactly 4 follow-ups the analyst most likely wants next - \
+deepen or branch from what was discussed, never repeat an answered question, stay with the entities \
+in play (brand, KPI, outcome, segment, window).
 
-If the conversation is EMPTY (the analyst just opened the chat), propose exactly 4 \
-opener questions grounded in page_content: reference the specific entities and \
-values on screen (the named KPIs, segments, drivers, gaps, models) so each pill \
-reads as being about THIS page, not generic. If page_content is empty, ground the \
-openers in the page path and brand filter instead.
+If the conversation is EMPTY, propose exactly 4 openers grounded in page_content (name the specific \
+brand / KPI / outcome / segment on screen); if page_content is empty, ground them in the page hint, \
+the page path and the brand filter. Mix capability letters - the 4 pills must cover at least two \
+different letters, and at most two pills may share a letter.
 
 Rules:
-- "title": the pill label, at most 42 characters, imperative or noun phrase; it MAY \
-start with a single emoji when it aids scanning (e.g. 📈 for a chart/trend follow-up).
-- "message": the full question the pill sends, one sentence.
-- When brand_filter is set (and is not "All"), every "message" MUST name that brand \
-explicitly (e.g. "... for Remibrutinib ..."), unless that pill is deliberately about \
-a different named brand or a cross-brand comparison. A pill click sends only the \
-message text, and a brand-less question forces the assistant to ask which brand \
-was meant. The title may omit the brand when space is tight; the message never.
-- When numeric KPIs were discussed or are shown on the page, at least one suggestion \
-should ask to chart a trend or comparison. NEVER propose comparing, summing, or \
-ratio-ing two figures whose sources differ or are unstated (#1640): page_content \
-marks each KPI with "[from <tables>]" or "[source unstated]", and figures resting on \
-different tables are different quantities that merely share a name — a TRx count from \
-treatment_events is ~73x smaller than a modelled business_metrics TRx level. A trend \
-pill for ONE figure is always safe; a comparison pill is only safe within one source.
+- "title": at most 42 characters, imperative or noun phrase; MAY start with one emoji (📈 for a chart).
+- "message": the full one-sentence question the pill sends.
+- When brand_filter is set (not "All"), every "message" MUST name that brand explicitly, unless the \
+pill is deliberately about another named brand or a cross-brand comparison. A pill click sends only \
+the message text, and a brand-less question forces the assistant to ask which brand was meant.
+- When numeric KPIs are on screen or were discussed, at least one pill asks to chart a trend or \
+comparison. NEVER propose comparing, summing or ratio-ing two figures whose sources differ or are \
+unstated (#1640): page_content marks each KPI "[from <tables>]" or "[source unstated]"; a trend pill \
+for ONE figure is always safe, a comparison is safe only within one source.
+- Before answering, check each pill against A-H and the NEVER list; replace any pill that fails.
 
-Respond with JSON only, no prose: \
-{"suggestions": [{"title": "...", "message": "..."}, ...]}"""
+Respond with JSON only, no prose: {"suggestions": [{"title": "...", "message": "..."}, ...]}"""
+
+
+def build_system_prompt(catalog: CapabilityCatalog, page: Optional[str]) -> str:
+    """Fill the prompt template with the rendered catalog and the page's route hint."""
+    hint = route_hint(page)
+    hint_block = (
+        f"PAGE HINT (what this route shows and which catalog letters fit it): {hint}"
+        if hint
+        else ""
+    )
+    prompt = _SYSTEM_PROMPT.replace("{capability_catalog}", render_catalog_block(catalog))
+    prompt = prompt.replace("{route_hint}", hint_block)
+    while "\n\n\n" in prompt:
+        prompt = prompt.replace("\n\n\n", "\n\n")
+    return prompt
 
 
 class TranscriptMessage(BaseModel):
@@ -199,8 +233,8 @@ def _parse_suggestions(raw: str) -> List[ChatSuggestionItem]:
         "One fast-tier LLM call; returns up to four pills. Non-empty "
         "messages → follow-ups from the recent transcript; empty messages "
         "(opener mode) → openers grounded in page_context. 502 on any "
-        "generation/parsing failure — the frontend falls back to its static "
-        "context-aware pills."
+        "generation/parsing failure or when the post-filter drops every pill — the "
+        "frontend falls back to its static context-aware pills."
     ),
 )
 async def generate_chat_suggestions(
@@ -214,11 +248,15 @@ async def generate_chat_suggestions(
         "page_content": payload.page_context or "",
         "conversation": [{"role": m.role, "content": m.content} for m in payload.messages],
     }
-    llm = get_fast_llm(max_tokens=500, timeout=8)
+    catalog = await get_capability_catalog()
+    system_prompt = build_system_prompt(catalog, payload.page)
+    # 600 (was 500): catalog-grounded pill messages name a brand and an axis and
+    # run a little longer; measured 2.0-3.3 s against the 8 s timeout.
+    llm = get_fast_llm(max_tokens=600, timeout=8)
     try:
         reply = await llm.ainvoke(
             [
-                SystemMessage(content=_SYSTEM_PROMPT),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=json.dumps(context, ensure_ascii=False)),
             ]
         )
@@ -235,4 +273,18 @@ async def generate_chat_suggestions(
             status_code=502, detail="suggestion generation returned no usable pills"
         ) from exc
 
-    return SuggestionsResponse(suggestions=suggestions)
+    kept, dropped = filter_unsupported_pills(suggestions, catalog)
+    for pill, rule in dropped:
+        # INFO, not DEBUG: the drop rate is the production measurement of how
+        # often the prompt still proposes an unanswerable pill.
+        logger.info(
+            "chat suggestion dropped rule=%s page=%s title=%r",
+            rule,
+            payload.page or "/",
+            pill.title,
+        )
+    if not kept:
+        raise HTTPException(
+            status_code=502, detail="suggestion generation returned no supported pills"
+        )
+    return SuggestionsResponse(suggestions=kept)
