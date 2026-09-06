@@ -32,7 +32,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -641,7 +641,7 @@ async def _all_patterns() -> List[DetectedPattern]:
 PATTERN_MAX_AGE_DAYS = 30
 
 
-def _recent_patterns(
+def recent_patterns(
     patterns: List[DetectedPattern], max_age_days: int = PATTERN_MAX_AGE_DAYS
 ) -> List[DetectedPattern]:
     """Patterns detected within ``max_age_days``. A pattern with no
@@ -874,19 +874,22 @@ async def process_feedback(
     operation_id="list_feedback_patterns",
 )
 async def list_patterns(
-    severity: Optional[PatternSeverity] = Query(default=None, description="Filter by severity"),
-    pattern_type: Optional[PatternType] = Query(default=None, description="Filter by type"),
-    agent: Optional[str] = Query(default=None, description="Filter by affected agent"),
-    limit: int = Query(default=50, description="Maximum results", ge=1, le=200),
-    max_age_days: int = Query(
-        default=PATTERN_MAX_AGE_DAYS,
-        description="Only patterns detected within this many days",
-        ge=1,
-        le=365,
-    ),
-    include_stale: bool = Query(
-        default=False, description="Also return patterns older than max_age_days"
-    ),
+    # ``Annotated[..., Query()] = default`` so a direct call of this function
+    # gets the same plain defaults the HTTP route applies (codex iter-1: with
+    # ``= Query(default=...)`` a direct call receives Query placeholder objects).
+    severity: Annotated[
+        Optional[PatternSeverity], Query(description="Filter by severity")
+    ] = None,
+    pattern_type: Annotated[Optional[PatternType], Query(description="Filter by type")] = None,
+    agent: Annotated[Optional[str], Query(description="Filter by affected agent")] = None,
+    limit: Annotated[int, Query(description="Maximum results", ge=1, le=200)] = 50,
+    max_age_days: Annotated[
+        int,
+        Query(description="Only patterns detected within this many days", ge=1, le=365),
+    ] = PATTERN_MAX_AGE_DAYS,
+    include_stale: Annotated[
+        bool, Query(description="Also return patterns older than max_age_days")
+    ] = False,
 ) -> PatternListResponse:
     """
     List detected patterns.
@@ -906,7 +909,7 @@ async def list_patterns(
 
     # Apply filters
     if not include_stale:
-        patterns = _recent_patterns(patterns, max_age_days)
+        patterns = recent_patterns(patterns, max_age_days)
     if severity:
         patterns = [p for p in patterns if p.severity == severity]
     if pattern_type:
@@ -1210,7 +1213,7 @@ async def get_feedback_health() -> FeedbackHealthResponse:
 
     # Count active items
     updates = await _all_updates()
-    patterns_active = len(_recent_patterns(await _all_patterns()))
+    patterns_active = len(recent_patterns(await _all_patterns()))
     pending_updates = sum(1 for u in updates if u.status == UpdateStatus.PROPOSED)
 
     # #1661: the optimizer half of the loop. Read here rather than left to a

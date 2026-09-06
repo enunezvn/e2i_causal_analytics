@@ -375,6 +375,35 @@ class TestAuditedTracedNodeDecorator:
         assert call_kwargs["validation_passed"] is False
 
     @pytest.mark.asyncio
+    async def test_decorator_records_error_entry_for_soft_failure(
+        self, mock_audit_service, sample_state
+    ):
+        """A node that catches its failure and returns ``{node}_error`` /
+        ``status="failed"`` (fail-closed, e.g. estimation) is recorded as
+        ``<node>_error`` like a raising node — the only readable execution
+        outcome in audit_chain_entries (2026-09-06). The result is returned."""
+        set_audit_chain_service(mock_audit_service)
+
+        @audited_traced_node("estimation", "causal_impact", AgentTier.CAUSAL_ANALYTICS)
+        async def fail_closed_node(state: Dict[str, Any]) -> Dict[str, Any]:
+            return {"estimation_error": "no estimator", "status": "failed"}
+
+        with patch("src.agents.base.audit_chain_mixin.get_opik_connector") as mock_opik:
+            mock_span = MagicMock()
+            mock_ctx = MagicMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_span)
+            mock_ctx.__aexit__ = AsyncMock(return_value=None)
+            mock_opik.return_value.trace_agent.return_value = mock_ctx
+
+            result = await fail_closed_node(sample_state)
+
+        assert result["estimation_error"] == "no estimator"
+        mock_audit_service.add_entry.assert_called_once()
+        call_kwargs = mock_audit_service.add_entry.call_args.kwargs
+        assert call_kwargs["action_type"] == "estimation_error"
+        assert call_kwargs["validation_passed"] is False
+
+    @pytest.mark.asyncio
     async def test_decorator_works_without_audit_service(self, sample_state):
         """Decorator works when audit service is unavailable."""
         # Clear workflow_id to simulate no audit

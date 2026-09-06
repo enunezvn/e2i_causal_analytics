@@ -770,15 +770,40 @@ async def test_list_patterns_keeps_patterns_with_unknown_detected_at(sample_dete
 
 
 def test_list_patterns_default_window_is_thirty_days_and_not_stale():
-    """The route defaults (what the page gets) are the 30-day window."""
+    """The route defaults (what the page gets) are the 30-day window, as plain
+    Python defaults (``Annotated[..., Query()] = default``) so a direct call
+    behaves exactly like the HTTP route (codex iter-1)."""
     import inspect
 
     from src.api.routes.feedback import PATTERN_MAX_AGE_DAYS, list_patterns
 
     params = inspect.signature(list_patterns).parameters
     assert PATTERN_MAX_AGE_DAYS == 30
-    assert params["max_age_days"].default.default == PATTERN_MAX_AGE_DAYS
-    assert params["include_stale"].default.default is False
+    assert params["max_age_days"].default == PATTERN_MAX_AGE_DAYS
+    assert params["include_stale"].default is False
+    assert params["limit"].default == 50
+    assert params["severity"].default is None
+
+
+@pytest.mark.asyncio
+async def test_list_patterns_direct_call_defaults_apply_the_window(sample_detected_pattern):
+    """Calling the route function with NO arguments must apply the production
+    defaults (30-day window, filters off) — not FastAPI Query placeholders."""
+    from src.api.routes.feedback import _patterns_store, list_patterns
+
+    fresh = _aged_pattern(sample_detected_pattern, "pat_fresh_d", days_old=2)
+    stale = _aged_pattern(sample_detected_pattern, "pat_stale_d", days_old=45)
+    _patterns_store[fresh.pattern_id] = fresh
+    _patterns_store[stale.pattern_id] = stale
+    try:
+        result = await list_patterns()
+    finally:
+        del _patterns_store[fresh.pattern_id]
+        del _patterns_store[stale.pattern_id]
+
+    ids = {p.pattern_id for p in result.patterns}
+    assert "pat_fresh_d" in ids
+    assert "pat_stale_d" not in ids
 
 
 @pytest.mark.asyncio

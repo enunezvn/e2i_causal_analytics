@@ -405,6 +405,23 @@ class ToolComposer:
                     "(no fabricated response).",
                     execution_trace.tools_executed,
                 )
+                # The run FAILED: say so in the audit chain with an ``*_error``
+                # row, the one execution-failure marker the /system-health and
+                # /analytics readers count. The ``execute`` row's
+                # validation_passed=False above is a tool verdict, which on a
+                # PARTIAL composition does not fail the run (2026-09-06).
+                self._record_audit_entry(
+                    audit_service,
+                    audit_workflow_id,
+                    "execute_error",
+                    phase_durations["execute"],
+                    {
+                        "tools_executed": execution_trace.tools_executed,
+                        "tools_succeeded": 0,
+                        "error": "all executed tools failed; failed closed without synthesis",
+                    },
+                    validation_passed=False,
+                )
                 return self._create_total_failure_result(
                     query,
                     decomposition,

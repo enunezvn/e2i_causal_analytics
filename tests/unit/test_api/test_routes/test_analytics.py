@@ -750,11 +750,11 @@ class TestExecutionFailureIsNotValidationVerdict:
         entries = [
             self._row("w1", "workflow_start"),
             self._row("w1", "estimation_error", validation=False),
+            # Legacy pre-instrumentation genesis row (no workflow_id): the
+            # wrapper that writes *_error rows always has a workflow_id, so a
+            # legacy window is genesis-only and counts one successful query.
             {**self._row(None, "workflow_start"), "workflow_id": None},
-            {**self._row(None, "estimation_error", validation=False), "workflow_id": None},
         ]
-        # w1 failed; the legacy partition counts its genesis row only and the
-        # error row is not a genesis row -> 1 legacy query, successful.
         assert _count_query_volume(entries) == (2, 1)
 
     def test_dashboard_agent_success_rate_ignores_validation_verdicts(self, client):

@@ -243,3 +243,32 @@ def test_audited_node_preserves_sync_callable(recording_service: _RecordingServi
     assert result == {"status": "done"}
     assert len(recording_service.entries) == 1
     assert recording_service.entries[0]["duration_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_audited_node_soft_failure_records_error_entry(
+    recording_service: _RecordingService,
+) -> None:
+    """A node that catches its own failure and returns ``{node}_error`` (the
+    fail-closed convention, e.g. causal_impact estimation) records the same
+    ``<node>_error`` entry a raising node does — the only readable execution
+    outcome in audit_chain_entries (output_data is hashed, 2026-09-06). The
+    result is still returned unchanged; nothing raises."""
+
+    async def fail_closed(state: Dict[str, Any]) -> Dict[str, Any]:
+        return {"optimize_error": "solver unavailable", "status": "failed"}
+
+    wrapped = audited_node(
+        fail_closed,
+        agent_name="resource_optimizer",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+        node_name="optimize",
+    )
+
+    result = await wrapped({"audit_workflow_id": uuid4()})
+
+    assert result["optimize_error"] == "solver unavailable"
+    assert len(recording_service.entries) == 1
+    entry = recording_service.entries[0]
+    assert entry["action_type"] == "optimize_error"
+    assert entry["validation_passed"] is False

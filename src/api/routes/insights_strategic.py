@@ -972,6 +972,7 @@ async def feedback_learning_insight(
     from datetime import timedelta
 
     from src.api.repositories.feedback_repository import FeedbackRepository
+    from src.api.routes.feedback import recent_patterns
     from src.memory.services.factories import get_async_supabase_client
     from src.repositories.chatbot_feedback import get_chatbot_feedback_repository
     from src.repositories.learning_signals_feedback import (
@@ -981,7 +982,9 @@ async def feedback_learning_insight(
     try:
         repo = FeedbackRepository()
         batches = await repo.count_recent_and_last()
-        patterns = await repo.list_patterns()
+        # Same active window as the page's Patterns card: a month-old
+        # detection hidden there must not steer the interpretation either.
+        patterns = recent_patterns(await repo.list_patterns())
         updates = await repo.list_updates()
 
         now = datetime.now(timezone.utc)

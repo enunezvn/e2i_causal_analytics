@@ -415,12 +415,26 @@ def audited_traced_node(
                                 est = result.get("estimation_result", {})
                                 confidence_score = est.get("energy_score")
 
+                            # A node that caught its own failure and returned
+                            # ``{node}_error`` (fail-closed) is recorded as
+                            # ``<node>_error`` exactly like a raising node:
+                            # output_data is persisted only as a hash, so the
+                            # action_type is the one readable execution outcome
+                            # the health/analytics readers can count. A
+                            # ``validation_passed`` verdict on a completed node
+                            # is NOT a failure (2026-09-06).
+                            if output_summary["has_error"]:
+                                action_type = f"{node_name}_error"
+                                validation_passed = False
+                            else:
+                                action_type = node_name
+
                             # Record the audit entry
                             service.add_entry(
                                 workflow_id=workflow_id,
                                 agent_name=agent_name,
                                 agent_tier=agent_tier,
-                                action_type=node_name,
+                                action_type=action_type,
                                 input_data=input_hash_data,
                                 output_data=output_summary,
                                 duration_ms=duration_ms,
@@ -567,8 +581,10 @@ def audited_node(
       is fabricated.
     * ``validation_passed`` is read from a conventional result key only if the
       node actually set one; otherwise it stays ``None`` (unmeasured).
-    * On exception the wrapper records a timed ``{node_name}_error`` entry with
-      ``validation_passed=False`` and then re-raises — execution semantics are
+    * On exception — or when the node returns a ``{node_name}_error`` key, the
+      fail-closed convention — the wrapper records a timed ``{node_name}_error``
+      entry with ``validation_passed=False``; on exception it then re-raises —
+      execution semantics are
       unchanged, telemetry is added.
 
     Accepts sync or async node callables and always returns an async node, so
@@ -610,16 +626,23 @@ def audited_node(
                         raw = result_dict[key]
                         validation_passed = bool(raw) if raw is not None else None
                         break
+                # Fail-closed node (returned ``{node}_error`` instead of raising)
+                # -> recorded as ``<node>_error`` like a raise; see the class
+                # decorator above for why the action_type carries this.
+                has_error = bool(result_dict.get(f"{node_name}_error"))
+                action_type = f"{node_name}_error" if has_error else node_name
+                if has_error:
+                    validation_passed = False
                 try:
                     service.add_entry(
                         workflow_id=workflow_id,
                         agent_name=agent_name,
                         agent_tier=agent_tier,
-                        action_type=node_name,
+                        action_type=action_type,
                         input_data={"node": node_name},
                         output_data={
                             "status": result_dict.get("status"),
-                            "has_error": bool(result_dict.get(f"{node_name}_error")),
+                            "has_error": has_error,
                         },
                         duration_ms=duration_ms,
                         validation_passed=validation_passed,

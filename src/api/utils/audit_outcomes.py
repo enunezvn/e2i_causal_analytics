@@ -15,10 +15,14 @@ once per node. Counting them as failed invocations made /system-health warn
 which no node of any agent raised. Verdicts belong on the analysis pages
 (Library Validation / Refutation cards), where they already surface.
 
-Execution failure has exactly one marker: the wrapper writes an
-``action_type = "<node>_error"`` row when a node raises. And the unit of an
-"invocation" is the workflow run (``workflow_id``), not the row — a run writes
-one genesis row plus one row per node.
+Execution failure has exactly one marker, the ``action_type = "<node>_error"``
+row, and every fail-closed path writes it: the audited-node wrappers when a
+node raises OR returns a ``{node}_error`` key (its ``output_data`` is persisted
+only as a hash, so the action_type is the readable outcome), and the tool
+composer's total-tool-failure gate (``execute_error``). ``validation_passed``
+is reserved for verdicts. The unit of an "invocation" is the workflow run
+(``workflow_id``), not the row — a run writes one genesis row plus one row per
+node.
 """
 
 from __future__ import annotations
