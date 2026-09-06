@@ -614,15 +614,17 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 # Part C publishes the page summary to the assistant as a readable, so a pill
 # MAY read, rank or compare SHAP, CATE, gap, prediction or optimizer territory
 # values that are literally on screen (the pill prompt says so; the
-# /resource-optimization summary publishes the allocation count, projected
-# ROI and outcome, and the largest increase and decrease, not the territory
-# table itself). The artefact rules listed below therefore yield when the
-# question names the on-screen artefact AND asks for nothing that would
-# extend it (another axis, a trend, a recomputation). The extends-list
-# mirrors the pill prompt's own forbidden verbs (recompute, validate, extend,
-# explain WHY) and the artefact rules' own trend/axis vocabulary, so the
-# exemption cannot keep an ask that extends the artefact; it does not prove
-# the summary carries the row the pill names.
+# /resource-optimization summary publishes the allocation count, projected ROI
+# and outcome, and the largest increase and decrease, not the territory table
+# itself). The artefact rules listed below therefore yield when the question
+# names the on-screen artefact AND asks for nothing that would extend it
+# (another axis, a trend, a recomputation). The extends-list mirrors the pill
+# prompt's own forbidden verbs (recompute, validate, extend, explain WHY) and
+# the artefact rules' own trend/axis vocabulary, so the exemption drops the
+# recompute, why, trend and by-axis shapes that list names (every AXIS_RULES
+# axis plus territory, specialty, cohort and subgroup); an extension phrased
+# outside that vocabulary is kept, and the exemption never proves the summary
+# carries the row the pill names.
 _ON_SCREEN_ARTEFACT_RULES = frozenset(
     {
         "shap_or_feature_importance",
@@ -639,6 +641,7 @@ _EXTENDS_ON_SCREEN_RE = re.compile(
     r"\bre-?comput\w*|\bre-?calculat\w*|\bre-?run\b|\bvalidat\w*|\bextend\w*|\banother\b|"
     r"\bmore features\b|\bwhy\b|\breasons?\b|\bbecause\b|\bdrivers? behind\b|\bwhat drives\b|"
     r"\bby (?:census |HCP )?(?:region|territory|segment|tier|specialty|severity|biologic|IgE|cohort|subgroup)\w*|"
+    r"\bby (?:lines? of therapy|therapy[- ]lines?|therapy_line|LoT)\b|"
     r"\bper[- ]territory\b|\btrends?\b|\bover time\b|\bover the (?:past|last)\b|\bmonth\w*|"
     r"\bsince\b|\bchang\w*|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
     re.I,

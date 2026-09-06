@@ -334,6 +334,25 @@ async def test_axis_rules_window_composition_matches_calculators():
         context={},
     )
     assert suffix(biologic_qid).endswith("_biologic_windowed")
+    line_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Kisqali",
+        region=None,
+        window=window,
+        therapy_line="1",
+        context={},
+    )
+    assert suffix(line_qid).endswith("_line_windowed")
+    # ige_tier is brand-gated like biologic
+    ige_qid, _ = calc._resolve_windowed_call(
+        "business_impact_trx",
+        brand="Remibrutinib",
+        region=None,
+        window=window,
+        ige_tier="high",
+        context={},
+    )
+    assert suffix(ige_qid).endswith("_ige_tier_windowed")
 
     # 2. TRx Share / Conversion Rate: a window does NOT compose with region.
     for kpi_id in ("WS3-BI-008", "WS3-BI-009"):
@@ -666,6 +685,16 @@ DROP_FIXTURES = [
         "competitor_data",
         "Beating the competition?",
         "Is Kisqali beating the competition?",
+    ),
+    (
+        "territory_detail",
+        "On-screen territories by therapy line",
+        "Break the on-screen territory allocation down by line of therapy.",
+    ),
+    (
+        "shap_or_feature_importance",
+        "On-screen SHAP by therapy line",
+        "Split the on-screen SHAP features by line of therapy.",
     ),
 ]
 
