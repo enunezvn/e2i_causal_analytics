@@ -21,6 +21,7 @@ Design: docs/superpowers/specs/2026-09-05-copilot-pill-capability-catalog-design
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import re
@@ -521,7 +522,15 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             r"|\(CATE\)[^.?]{0,120}\b(?:by|across|for|per|between) (?:patient |each )?"
             r"(?:segment|tier|subgroup|cohort|severity|biologic|IgE)\w*"
             r"|\(CATE\)[^.?]{0,120}\b(?:trends?|over time|over the (?:past|last)|monthly|month-over-month)\b"
-            r"|\b(?:chart|plot|trend of)\b[^.?]{0,120}\(CATE\)",
+            # Conditional ATE (CATE) is a registry KPI and section B advertises a
+            # current-value chart for any registry KPI, so a bare "Chart the
+            # Conditional ATE (CATE)" is answerable; only TREND forms of CATE are
+            # NEVER (a chart/plot with a time word, "trend of ...", or a
+            # month/week/quarter word naming the KPI).
+            r"|\b(?:chart|plot)\b[^.?]{0,120}\(CATE\)[^.?]{0,80}"
+            r"\b(?:trends?|over time|over the (?:past|last)|monthly|month-over-month)\b"
+            r"|\btrend of\b[^.?]{0,120}\(CATE\)"
+            r"|\b(?:monthly|weekly|quarterly)\b[^.?]{0,120}\(CATE\)",
             re.I,
         ),
     ),
@@ -544,6 +553,25 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 )
 
 
+# Part C publishes the page summary to the assistant as a readable, so a pill
+# MAY read, rank or compare SHAP, CATE, gap or prediction values that are
+# literally on screen (the pill prompt says so). The four artefact rules
+# therefore yield when the question names the on-screen artefact AND asks for
+# nothing that would extend it (another axis, a trend, a recomputation).
+_ON_SCREEN_ARTEFACT_RULES = frozenset(
+    {"shap_or_feature_importance", "gap_recompute", "uplift_by_segment", "individual_prediction"}
+)
+_ON_SCREEN_RE = re.compile(
+    r"\bon[- ]screen\b|\bon the (?:page|screen)\b|\b(?:shown|displayed|visible)\b", re.I
+)
+_EXTENDS_ON_SCREEN_RE = re.compile(
+    r"\bre-?comput\w*|\bre-?calculat\w*|\bre-?run\b|\bvalidat\w*|\bextend\w*|\banother\b|"
+    r"\bmore features\b|\bby (?:region|territory|segment|tier|specialty)\b|\bper[- ]territory\b|"
+    r"\btrends?\b|\bover time\b|\bthreshold\w*|\brobust\w*|\bsensitivit\w*",
+    re.I,
+)
+
+
 def journey_outcomes(catalog: CapabilityCatalog) -> Tuple[str, ...]:
     """Outcomes with no KPI counterpart - the ones a pill can mistake for a metric.
 
@@ -562,9 +590,16 @@ def journey_outcomes(catalog: CapabilityCatalog) -> Tuple[str, ...]:
 
 
 def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
-    """Name of the rule ``text`` violates, or None when the pill is supported."""
+    """Name of the rule ``text`` violates, or None when the pill is supported.
+
+    On-screen READ questions (Part C) bypass the four artefact rules unless
+    they also ask to extend the artefact.
+    """
+    on_screen_read = bool(_ON_SCREEN_RE.search(text)) and not _EXTENDS_ON_SCREEN_RE.search(text)
     for name, pattern in _OFF_PLATFORM_RULES:
         if pattern.search(text):
+            if on_screen_read and name in _ON_SCREEN_ARTEFACT_RULES:
+                continue
             return name
     lowered = text.lower()
     for outcome in journey:
@@ -621,8 +656,18 @@ def _keep_last_good_fields(
 
 
 class _CatalogCache:
+    """Process-wide catalog with a TTL and a single-flight refresh.
+
+    One build runs at a time: concurrent cold (or expired) callers await the
+    build already in flight instead of each hitting the DB, and a slow degraded
+    build can no longer overwrite a faster good one. The future is created on
+    the running loop inside ``get()`` - never at import time, where an asyncio
+    primitive would bind to whichever loop exists first.
+    """
+
     def __init__(self) -> None:
         self._catalog: Optional[CapabilityCatalog] = None
+        self._inflight: Optional["asyncio.Future[CapabilityCatalog]"] = None
 
     async def get(
         self,
@@ -637,17 +682,34 @@ class _CatalogCache:
             ttl = DEGRADED_TTL_SECONDS if cached.degraded else CATALOG_TTL_SECONDS
             if current - cached.loaded_at < ttl:
                 return cached
-        fresh = await build_capability_catalog(
-            coverage_loader=coverage_loader, outcomes_loader=outcomes_loader
-        )
-        fresh = _keep_last_good_fields(fresh, cached)
-        if now is not None:
-            fresh = dataclasses.replace(fresh, loaded_at=now)
-        self._catalog = fresh
-        return fresh
+        if self._inflight is None:
+            self._inflight = asyncio.ensure_future(
+                self._refresh(cached, now, coverage_loader, outcomes_loader)
+            )
+        return await asyncio.shield(self._inflight)
+
+    async def _refresh(
+        self,
+        previous: Optional[CapabilityCatalog],
+        now: Optional[float],
+        coverage_loader: Optional[CoverageLoader],
+        outcomes_loader: Optional[OutcomesLoader],
+    ) -> CapabilityCatalog:
+        try:
+            fresh = await build_capability_catalog(
+                coverage_loader=coverage_loader, outcomes_loader=outcomes_loader
+            )
+            fresh = _keep_last_good_fields(fresh, previous)
+            if now is not None:
+                fresh = dataclasses.replace(fresh, loaded_at=now)
+            self._catalog = fresh
+            return fresh
+        finally:
+            self._inflight = None
 
     def reset(self) -> None:
         self._catalog = None
+        self._inflight = None
 
 
 _cache = _CatalogCache()

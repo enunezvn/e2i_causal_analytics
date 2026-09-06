@@ -8,6 +8,7 @@ that its lists come from code.
 
 from __future__ import annotations
 
+import asyncio
 import re as _re
 from dataclasses import dataclass as _dataclass
 from typing import Any, Dict, List
@@ -369,6 +370,26 @@ DROP_FIXTURES = [
         "CATE trend",
         "Chart the Conditional ATE (CATE) trend over time for high-severity patients.",
     ),
+    (
+        "shap_or_feature_importance",
+        "Recompute on-screen SHAP",
+        "Recompute the on-screen SHAP values for Kisqali by region.",
+    ),
+    (
+        "uplift_by_segment",
+        "On-screen CATE trend",
+        "Chart the trend of the on-screen CATE for high-severity Remibrutinib patients.",
+    ),
+    (
+        "gap_recompute",
+        "Extend on-screen gap",
+        "Extend the on-screen gap chart to the west region for Kisqali.",
+    ),
+    (
+        "uplift_by_segment",
+        "Monthly Conditional ATE",
+        "Show the monthly Conditional ATE (CATE) for Remibrutinib.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -410,6 +431,26 @@ KEEP_FIXTURES = [
     (
         "Specialty uptake",
         "Which specific HCP specialties are most likely to increase Kisqali prescriptions?",
+    ),
+    (
+        "On-screen SHAP rank",
+        "Which of the on-screen SHAP features ranks highest for Fabhalta?",
+    ),
+    (
+        "On-screen SHAP by value",
+        "Rank the on-screen SHAP features for Fabhalta by mean |SHAP|.",
+    ),
+    (
+        "On-screen CATE compare",
+        "Which of the on-screen segments has the largest CATE for Remibrutinib?",
+    ),
+    (
+        "On-screen gap read",
+        "Which on-screen gap opportunity has the highest expected ROI for Kisqali?",
+    ),
+    (
+        "Chart Conditional ATE",
+        "Chart the Conditional ATE (CATE) for Kisqali sample drops.",
     ),
 ]
 
@@ -631,3 +672,37 @@ async def test_keep_last_good_fields_partial_cases(
     assert merged.degraded == expect_degraded
     assert len(merged.trend_kpi_ids) == (full_trends if expect_trends == "full" else 0)
     assert len(merged.causal_outcomes) == (full_outcomes if expect_outcomes == "full" else 0)
+
+
+async def test_concurrent_cold_gets_build_once():
+    """Single-flight: concurrent first callers share ONE build - no DB herd, and a
+    slower degraded build can never overwrite a faster good one."""
+    calls = {"n": 0}
+
+    async def slow_coverage():
+        calls["n"] += 1
+        await asyncio.sleep(0.01)
+        return await _coverage()
+
+    c = cat._CatalogCache()
+    results = await asyncio.gather(
+        *(c.get(coverage_loader=slow_coverage, outcomes_loader=_outcomes) for _ in range(5))
+    )
+    assert calls["n"] == 1
+    assert all(r is results[0] for r in results)
+    assert c._inflight is None
+
+
+async def test_failed_build_propagates_and_clears_inflight(monkeypatch):
+    c = cat._CatalogCache()
+
+    async def boom_build(**kwargs):
+        raise RuntimeError("registry broke")
+
+    monkeypatch.setattr(cat, "build_capability_catalog", boom_build)
+    with pytest.raises(RuntimeError):
+        await c.get()
+    assert c._inflight is None
+    monkeypatch.undo()
+    good = await c.get(coverage_loader=_coverage, outcomes_loader=_outcomes)
+    assert good.degraded == ()
