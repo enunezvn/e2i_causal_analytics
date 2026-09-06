@@ -184,7 +184,8 @@ export function buildChatSuggestions(
  * The backend post-filters generated pills against the assistant's
  * capability catalog (2026-09-05) and may return fewer than four; the static
  * pills are the guaranteed floor, so they fill the gap. Adaptive pills come
- * first, duplicates (case-insensitive title) are skipped, never more than four.
+ * first, duplicates (case-insensitive title OR message) are skipped, never
+ * more than four.
  * Exported for tests.
  */
 export function topUpChatSuggestions(
@@ -195,12 +196,14 @@ export function topUpChatSuggestions(
   const statics = buildChatSuggestions(pathname, brand);
   if (!adaptive || adaptive.length === 0) return statics;
   const out = adaptive.slice(0, 4);
-  const seen = new Set(out.map((p) => p.title.trim().toLowerCase()));
+  const norm = (s: string) => s.trim().toLowerCase();
+  const seenTitles = new Set(out.map((p) => norm(p.title)));
+  const seenMessages = new Set(out.map((p) => norm(p.message)));
   for (const pill of statics) {
     if (out.length >= 4) break;
-    const key = pill.title.trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seenTitles.has(norm(pill.title)) || seenMessages.has(norm(pill.message))) continue;
+    seenTitles.add(norm(pill.title));
+    seenMessages.add(norm(pill.message));
     out.push(pill);
   }
   return out;

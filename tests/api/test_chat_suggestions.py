@@ -385,3 +385,49 @@ def test_fast_llm_gets_600_tokens(test_client, auth_headers, monkeypatch):
     monkeypatch.setattr(chat_module, "get_fast_llm", _factory)
     test_client.post("/api/chat/suggestions", json=_payload(), headers=auth_headers)
     assert seen == {"max_tokens": 600, "timeout": 8}
+
+
+def test_degraded_catalog_still_serves_pills(test_client, auth_headers, monkeypatch):
+    """Both DB-backed catalog fields failed: the route still answers 200 with
+    pills grounded in registry KPIs, the prompt says the data is unavailable,
+    and the static validator rules still apply. Outcome-as-KPI pills are NOT
+    dropped in this state (there are no known outcomes to match) - the
+    accepted trade-off; the cache retries within 60 s."""
+
+    async def _nothing():
+        return []
+
+    degraded = asyncio.run(
+        catalog_module.build_capability_catalog(coverage_loader=_nothing, outcomes_loader=_nothing)
+    )
+    assert degraded.degraded == ("trend_coverage", "causal_outcomes")
+
+    async def _get():
+        return degraded
+
+    monkeypatch.setattr(chat_module, "get_capability_catalog", _get)
+    reply = json.dumps(
+        {
+            "suggestions": [
+                {"title": "TRx trend", "message": "Chart the TRx trend for Kisqali."},
+                {
+                    "title": "T-114",
+                    "message": "Why did territory T-114 gain field force for Kisqali?",
+                },
+                {
+                    "title": "Persistence rate",
+                    "message": "Chart the persistent_180d rate for Kisqali by region.",
+                },
+            ]
+        }
+    )
+    fake = _FakeLLM(content=reply)
+    monkeypatch.setattr(chat_module, "get_fast_llm", lambda **kwargs: fake)
+
+    resp = test_client.post("/api/chat/suggestions", json=_payload(), headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert "unavailable right now" in fake.calls[0][0].content
+    titles = [s["title"] for s in resp.json()["suggestions"]]
+    assert "T-114" not in titles  # static rule still applies
+    assert titles == ["TRx trend", "Persistence rate"]  # outcome rule inert while outcomes unknown

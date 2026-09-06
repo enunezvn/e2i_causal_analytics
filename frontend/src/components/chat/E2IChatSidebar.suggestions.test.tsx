@@ -55,7 +55,7 @@ describe('topUpChatSuggestions (2026-09-05 validator top-up)', () => {
 
   it('fills up to four with static pills, adaptive first, no duplicate titles', () => {
     const adaptive = [
-      { title: '📈 Chart the TRx trend', message: 'Chart the TRx trend for Kisqali' },
+      { title: '  📈 CHART THE TRX TREND ', message: 'Chart the TRx trend for Kisqali' },
       { title: 'Persistence drivers', message: 'What drives persistent_180d for Kisqali?' },
     ];
     const pills = topUpChatSuggestions(adaptive, '/', 'Kisqali');
@@ -71,5 +71,14 @@ describe('topUpChatSuggestions (2026-09-05 validator top-up)', () => {
   it('never exceeds four and keeps a full adaptive set untouched', () => {
     const adaptive = [1, 2, 3, 4, 5].map((i) => ({ title: `Pill ${i}`, message: `Question ${i}?` }));
     expect(topUpChatSuggestions(adaptive, '/', 'All')).toEqual(adaptive.slice(0, 4));
+  });
+
+  it('skips a static pill whose message duplicates an adaptive one even when the title differs', () => {
+    // The backend prompt lets titles start with an emoji; an emoji-less adaptive
+    // title must not let the identical static question through twice.
+    const adaptive = [{ title: 'Chart the TRx trend', message: 'Chart the TRx trend' }];
+    const pills = topUpChatSuggestions(adaptive, '/', 'Kisqali');
+    expect(pills).toHaveLength(4);
+    expect(pills.filter((p) => p.message.trim().toLowerCase() === 'chart the trx trend')).toHaveLength(1);
   });
 });

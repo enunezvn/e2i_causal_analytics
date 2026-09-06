@@ -572,7 +572,8 @@ async def test_refresh_failure_keeps_last_good_fields():
     assert after.degraded == ()  # stale-but-good is not degraded
 
 
-async def test_module_level_accessor_and_reset(monkeypatch):
+async def test_module_level_accessor_and_reset(monkeypatch, request):
+    request.addfinalizer(cat.reset_capability_catalog_cache)
     calls = {"n": 0}
     real_build = cat.build_capability_catalog
 
@@ -589,3 +590,44 @@ async def test_module_level_accessor_and_reset(monkeypatch):
     c = await cat.get_capability_catalog()
     assert c is not a and calls["n"] == 2
     cat.reset_capability_catalog_cache()
+
+
+@pytest.mark.parametrize(
+    "fresh_kind, prev_kind, expect_degraded, expect_trends, expect_outcomes",
+    [
+        # (fresh, previous) -> merged degraded markers, trend count, outcome count
+        # "full" = the healthy catalog's own counts, 0 = the field stayed empty
+        ("trend_bad", None, ("trend_coverage",), 0, "full"),
+        ("trend_bad", "outcomes_bad", (), "full", "full"),
+        ("outcomes_bad", "trend_bad", (), "full", "full"),
+        ("trend_bad", "both_bad", ("trend_coverage",), 0, "full"),
+        ("both_bad", "healthy", (), "full", "full"),
+        ("both_bad", "trend_bad", ("trend_coverage",), 0, "full"),
+        ("healthy", "both_bad", (), "full", "full"),
+    ],
+)
+async def test_keep_last_good_fields_partial_cases(
+    fresh_kind, prev_kind, expect_degraded, expect_trends, expect_outcomes
+):
+    """A degraded refresh carries forward only the fields the PREVIOUS catalog
+    had good, and stays degraded only where both were bad."""
+
+    async def build(kind):
+        if kind == "healthy":
+            return await make_catalog()
+        if kind == "trend_bad":
+            return await make_catalog(coverage=_empty)
+        if kind == "outcomes_bad":
+            return await make_catalog(outcomes=_empty)
+        return await make_catalog(coverage=_empty, outcomes=_empty)
+
+    healthy = await make_catalog()
+    full_trends, full_outcomes = len(healthy.trend_kpi_ids), len(healthy.causal_outcomes)
+    fresh = await build(fresh_kind)
+    prev = await build(prev_kind) if prev_kind else None
+
+    merged = cat._keep_last_good_fields(fresh, prev)
+
+    assert merged.degraded == expect_degraded
+    assert len(merged.trend_kpi_ids) == (full_trends if expect_trends == "full" else 0)
+    assert len(merged.causal_outcomes) == (full_outcomes if expect_outcomes == "full" else 0)
