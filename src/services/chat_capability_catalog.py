@@ -483,7 +483,8 @@ _CAUSAL_ASK_RE = re.compile(
 # served, so "versus competitors" needs one of these words in the same clause.
 _COMPETITOR_DATA_WORDS = (
     r"(?:share|volume|TRx|NRx|NBRx|sales|revenue|uptake|growth|prescriptions?|scripts?|"
-    r"adoption|persistence|adherence|rates?|perform\w*|outperform\w*|benchmark\w*)"
+    r"adoption|persistence|adherence|rates?|perform\w*|outperform\w*|benchmark\w*|"
+    r"(?:patient |treatment |new |brand )?starts?|initiations?|switch(?:es|ing)?|units|demand)"
 )
 _COMPETITOR_NOUN = r"(?:the )?competit(?:ors?|ion)"
 
@@ -500,7 +501,8 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         "shap_or_feature_importance",
         re.compile(
             r"\bSHAP\b(?! coverage)|\bfeature[- ]importances?\b|\bfeature rankings?\b|"
-            r"\btop(?:-| )?\d* ?features\b",
+            r"\btop(?:-| )?\d* ?features\b(?!\s+(?:of|in|on) (?:the |this |our )?(?:E2I |e2i )?"
+            r"(?:platform|dashboard|app|application|tool|product|site)\b)",
             re.I,
         ),
     ),

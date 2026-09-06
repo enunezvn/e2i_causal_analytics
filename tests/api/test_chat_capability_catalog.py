@@ -492,6 +492,21 @@ DROP_FIXTURES = [
         "Shown HCPs by HCP specialty",
         "Show the predicted probabilities for the HCPs shown, by HCP specialty.",
     ),
+    (
+        "shap_or_feature_importance",
+        "Top model features",
+        "What are the top 5 features driving Kisqali adoption predictions?",
+    ),
+    (
+        "competitor_data",
+        "Starts vs competitors",
+        "How does Kisqali compare against competitors on patient starts?",
+    ),
+    (
+        "competitor_data",
+        "Initiations vs the competition",
+        "Compare Remibrutinib's treatment initiations versus the competition.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -593,6 +608,18 @@ KEEP_FIXTURES = [
     (
         "Differentiators vs competitors",
         "What are Fabhalta's differentiators against competitors in PNH?",
+    ),
+    (
+        "Platform features",
+        "What are the top features of the E2I platform?",
+    ),
+    (
+        "Dashboard features",
+        "What are the top 3 features of this dashboard?",
+    ),
+    (
+        "Trial endpoint vs competitors",
+        "How does Fabhalta compare versus competitors on hemoglobin response in trials?",
     ),
 ]
 
