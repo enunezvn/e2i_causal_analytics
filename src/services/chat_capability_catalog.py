@@ -662,10 +662,11 @@ def journey_outcomes(catalog: CapabilityCatalog) -> Tuple[str, ...]:
 def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
     """Name of the rule ``text`` violates, or None when the pill is supported.
 
-    On-screen READ questions (Part C) bypass the four artefact rules unless
-    they also ask to extend the artefact. Aggregate HCP-segment likelihood
-    asks (by specialty or region, section D) bypass individual_prediction
-    unless an individual HCP or patient is named.
+    On-screen READ questions (Part C) bypass the artefact rules named in
+    ``_ON_SCREEN_ARTEFACT_RULES`` unless they also ask to extend the
+    artefact. Aggregate HCP-segment likelihood asks (by specialty or
+    region, section D) bypass individual_prediction unless an individual
+    HCP or patient is named.
     """
     on_screen_read = bool(_ON_SCREEN_RE.search(text)) and not _EXTENDS_ON_SCREEN_RE.search(text)
     for name, pattern in _OFF_PLATFORM_RULES:
