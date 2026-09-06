@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import get_current_user, require_auth
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+from src.api.utils.audit_outcomes import WorkflowOutcomeTally, is_execution_failure
 
 logger = logging.getLogger(__name__)
 
@@ -224,10 +225,13 @@ def _count_query_volume(entries: List[Dict[str, Any]]) -> tuple[int, int]:
       1. distinct ``workflow_id`` (authoritative, when the column is selected)
       2. count of ``workflow_start`` genesis entries (fallback)
 
-    A workflow is counted "successful" unless any of its entries failed
-    (``validation_passed is False`` or an ``*_error`` action_type). When grouping
-    by workflow_id is unavailable, success is approximated entry-wise on the
-    genesis rows, which is honest for the genesis-only legacy windows.
+    A workflow is counted "successful" unless a node of it RAISED (an
+    ``*_error`` action_type — see ``src.api.utils.audit_outcomes``). A row's
+    ``validation_passed`` is a scientific verdict (cross-library agreement,
+    refutation robustness), not an execution outcome, and does not fail the
+    query. When grouping by workflow_id is unavailable, success is approximated
+    entry-wise on the genesis rows, which is honest for the genesis-only legacy
+    windows.
 
     Mixed windows are partitioned: rows WITH a workflow_id are counted by
     distinct workflow; rows WITHOUT one (legacy pre-instrumentation rows that may
@@ -248,8 +252,7 @@ def _count_query_volume(entries: List[Dict[str, Any]]) -> tuple[int, int]:
         for e in with_id:
             wid = e.get("workflow_id")
             all_ids.add(wid)
-            action = e.get("action_type") or ""
-            if e.get("validation_passed") is False or action.endswith("_error"):
+            if is_execution_failure(e):
                 failed_ids.add(wid)
         total += len(all_ids)
         successful += len(all_ids) - len(failed_ids)
@@ -261,7 +264,7 @@ def _count_query_volume(entries: List[Dict[str, Any]]) -> tuple[int, int]:
         genesis = [e for e in without_id if e.get("action_type") == _WORKFLOW_GENESIS_ACTION]
         source = genesis if genesis else without_id
         total += len(source)
-        successful += sum(1 for e in source if e.get("validation_passed") is not False)
+        successful += sum(1 for e in source if not is_execution_failure(e))
 
     return total, successful
 
@@ -306,7 +309,15 @@ async def _fetch_audit_metrics(
 
 
 def _aggregate_agent_metrics(entries: List[Dict[str, Any]]) -> List[AgentMetrics]:
-    """Aggregate entries into per-agent metrics."""
+    """Aggregate entries into per-agent metrics.
+
+    Invocations are workflow RUNS (grouped by ``workflow_id``; legacy rows
+    without one count per row), and a run failed only when a node raised its
+    ``<node>_error`` row — the same definition as the /system-health agent
+    reader (``src.api.utils.audit_outcomes``). ``validation_passed`` is a
+    scientific verdict re-recorded once per node and is deliberately not read.
+    Latency and confidence stay per timed row (node durations).
+    """
     agent_data: Dict[str, Dict[str, Any]] = {}
 
     for entry in entries:
@@ -316,28 +327,16 @@ def _aggregate_agent_metrics(entries: List[Dict[str, Any]]) -> List[AgentMetrics
                 "agent_tier": entry.get("agent_tier", 0),
                 "latencies": [],
                 "confidences": [],
-                "successful": 0,
-                "failed": 0,
-                "total": 0,
+                "runs": WorkflowOutcomeTally(),
             }
 
         data = agent_data[agent_name]
-        data["total"] += 1
+        data["runs"].add(entry)
 
         # Track latencies
         duration = entry.get("duration_ms")
         if duration is not None and duration > 0:
             data["latencies"].append(duration)
-
-        # Track validation status
-        validation = entry.get("validation_passed")
-        if validation is True:
-            data["successful"] += 1
-        elif validation is False:
-            data["failed"] += 1
-        else:
-            # No explicit validation, count as successful if action completed
-            data["successful"] += 1
 
         # Track confidence
         confidence = entry.get("confidence_score")
@@ -349,8 +348,9 @@ def _aggregate_agent_metrics(entries: List[Dict[str, Any]]) -> List[AgentMetrics
     for agent_name, data in agent_data.items():
         latencies = data["latencies"]
         confidences = data["confidences"]
-        total = data["total"]
-        successful = data["successful"]
+        runs: WorkflowOutcomeTally = data["runs"]
+        total = runs.total
+        successful = runs.successful
 
         metrics.append(
             AgentMetrics(
@@ -358,7 +358,7 @@ def _aggregate_agent_metrics(entries: List[Dict[str, Any]]) -> List[AgentMetrics
                 agent_tier=data["agent_tier"],
                 total_invocations=total,
                 successful_invocations=successful,
-                failed_invocations=data["failed"],
+                failed_invocations=runs.failed,
                 success_rate=round(successful / total * 100, 2) if total > 0 else 0.0,
                 # No timed entries for this agent -> latency UNMEASURED (None),
                 # not a fabricated 0ms.
@@ -742,7 +742,9 @@ async def get_agent_metrics(
     try:
         query = (
             db.table("audit_chain_entries")
-            .select("agent_name, agent_tier, duration_ms, validation_passed, confidence_score")
+            .select(
+                "workflow_id, action_type, agent_name, agent_tier, duration_ms, confidence_score"
+            )
             .eq("agent_name", agent_name)
             .gte("created_at", start_date.isoformat())
         )

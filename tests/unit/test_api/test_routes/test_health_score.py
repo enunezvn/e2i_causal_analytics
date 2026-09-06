@@ -2264,7 +2264,8 @@ def test_fetch_agent_health_partial_null_metrics_without_telemetry():
 
 def test_fetch_agent_health_measured_with_telemetry():
     """Telemetry with valid latencies -> MEASURED. success_rate/latency aggregate
-    the wider window; invocations_24h counts ONLY the last 24h (its name)."""
+    the wider window; invocations_24h counts ONLY the last 24h (its name).
+    A run FAILS only when a node raised (its ``<node>_error`` row)."""
     now = datetime.now(timezone.utc)
     recent = (now - timedelta(hours=2)).isoformat()  # within 24h
     older = (now - timedelta(days=10)).isoformat()  # within 30d window, not 24h
@@ -2275,13 +2276,17 @@ def test_fetch_agent_health_measured_with_telemetry():
             ],
             "audit_chain_entries": [
                 {
+                    "workflow_id": "w-recent",
                     "agent_name": "gap_analyzer",
+                    "action_type": "gap_detector",
                     "duration_ms": 100,
                     "validation_passed": True,
                     "created_at": recent,
                 },
                 {
+                    "workflow_id": "w-older",
                     "agent_name": "gap_analyzer",
+                    "action_type": "gap_detector_error",
                     "duration_ms": 300,
                     "validation_passed": False,
                     "created_at": older,
@@ -2293,9 +2298,83 @@ def test_fetch_agent_health_measured_with_telemetry():
         agents, prov = _fetch_agent_health()
     assert prov == DataProvenance.MEASURED
     a = agents[0]
-    assert a.invocations_24h == 1  # only the recent (<24h) entry
-    assert a.success_rate == 0.5  # 1 ok / 2 total over the wider window
+    assert a.invocations_24h == 1  # only the recent (<24h) run
+    assert a.success_rate == 0.5  # 1 ok run / 2 runs over the wider window
     assert a.avg_latency_ms == 200  # mean(100, 300)
+
+
+def test_fetch_agent_health_validation_verdict_is_not_a_failure():
+    """The /system-health "heterogeneous_optimizer has low success rate (89.7%)"
+    warning (2026-09-06): ``validation_passed=false`` on the uplift_analysis /
+    learn_policy / generate_profiles rows is the EconML<->CausalML cross-library
+    agreement verdict — a scientific result about the data, re-recorded by every
+    node returning ``{**state}`` — not an execution failure. The run completed:
+    success_rate 1.0, and the three rows are ONE invocation."""
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(hours=1)).isoformat()
+    rows = [
+        {
+            "workflow_id": "w1",
+            "agent_name": "heterogeneous_optimizer",
+            "action_type": node,
+            "duration_ms": 50,
+            "validation_passed": False,
+            "created_at": recent,
+        }
+        for node in ("uplift_analysis", "learn_policy", "generate_profiles")
+    ]
+    db = _FakeDB(
+        {
+            "agent_registry": [
+                {"agent_name": "heterogeneous_optimizer", "agent_tier": 3, "is_active": True},
+            ],
+            "audit_chain_entries": rows,
+        }
+    )
+    with _patch_health_client(db):
+        agents, prov = _fetch_agent_health()
+    assert prov == DataProvenance.MEASURED
+    a = agents[0]
+    assert a.success_rate == 1.0
+    assert a.invocations_24h == 1
+
+
+def test_fetch_agent_health_error_row_fails_its_workflow_once():
+    """A node that raised writes a ``<node>_error`` row: that run failed, once,
+    no matter how many rows it wrote before the error. Success is per run."""
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(hours=1)).isoformat()
+
+    def row(wid, node, ok=True):
+        return {
+            "workflow_id": wid,
+            "agent_name": "causal_impact",
+            "action_type": node,
+            "duration_ms": 10,
+            "validation_passed": None if ok else False,
+            "created_at": recent,
+        }
+
+    db = _FakeDB(
+        {
+            "agent_registry": [
+                {"agent_name": "causal_impact", "agent_tier": 3, "is_active": True},
+            ],
+            "audit_chain_entries": [
+                row("w-failed", "workflow_start"),
+                row("w-failed", "preprocessing"),
+                row("w-failed", "estimation_error", ok=False),
+                row("w-ok", "workflow_start"),
+                row("w-ok", "preprocessing"),
+                row("w-ok", "estimation"),
+            ],
+        }
+    )
+    with _patch_health_client(db):
+        agents, _ = _fetch_agent_health()
+    a = agents[0]
+    assert a.success_rate == 0.5  # 1 failed run of 2, not 1 error row of 6
+    assert a.invocations_24h == 2  # runs, not rows
 
 
 def test_fetch_agent_health_partial_when_telemetry_lacks_latency():

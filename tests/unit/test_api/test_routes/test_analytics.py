@@ -675,3 +675,112 @@ class TestTierMetricsEndpoint:
         ):
             resp = client.get("/analytics/tier-metrics?hours=24")
         assert resp.status_code == 503
+
+
+# =============================================================================
+# EXECUTION FAILURE != VALIDATION VERDICT (2026-09-06)
+#
+# ``validation_passed`` on an audit row carries SCIENTIFIC verdicts (the
+# heterogeneous optimizer's EconML<->CausalML agreement, causal_impact's
+# refutation ``overall_robust``), re-recorded by every node returning
+# ``{**state}``. Counting those as failed invocations made /analytics (and the
+# /system-health twin) report an 89.7% "success rate" over a window with ZERO
+# node errors. A run fails only when a node raised (``<node>_error`` row), and
+# the run — not the row — is the invocation.
+# =============================================================================
+
+
+class TestExecutionFailureIsNotValidationVerdict:
+    @staticmethod
+    def _row(wid, node, *, validation=None, agent="heterogeneous_optimizer", tier=3):
+        return {
+            "workflow_id": wid,
+            "agent_name": agent,
+            "agent_tier": tier,
+            "duration_ms": 10.0,
+            "validation_passed": validation,
+            "confidence_score": None,
+            "created_at": "2026-09-01T12:00:00Z",
+            "action_type": node,
+        }
+
+    def test_aggregate_agent_metrics_validation_false_is_not_a_failure(self):
+        from src.api.routes.analytics import _aggregate_agent_metrics
+
+        entries = [
+            self._row("w1", node, validation=False)
+            for node in ("uplift_analysis", "learn_policy", "generate_profiles")
+        ]
+        m = _aggregate_agent_metrics(entries)[0]
+        assert m.total_invocations == 1  # one run, three rows
+        assert m.failed_invocations == 0
+        assert m.successful_invocations == 1
+        assert m.success_rate == 100.0
+
+    def test_aggregate_agent_metrics_error_row_fails_its_run_once(self):
+        from src.api.routes.analytics import _aggregate_agent_metrics
+
+        entries = [
+            self._row("w-failed", "workflow_start"),
+            self._row("w-failed", "uplift_analysis"),
+            self._row("w-failed", "learn_policy_error", validation=False),
+            self._row("w-ok", "workflow_start"),
+            self._row("w-ok", "uplift_analysis", validation=True),
+        ]
+        m = _aggregate_agent_metrics(entries)[0]
+        assert m.total_invocations == 2
+        assert m.failed_invocations == 1
+        assert m.successful_invocations == 1
+        assert m.success_rate == 50.0
+
+    def test_count_query_volume_validation_false_is_not_a_failed_query(self):
+        from src.api.routes.analytics import _count_query_volume
+
+        entries = [
+            self._row("w1", "workflow_start"),
+            self._row("w1", "uplift_analysis", validation=False),
+            # Legacy genesis row (no workflow_id) with a failed verdict.
+            {**self._row(None, "workflow_start", validation=False), "workflow_id": None},
+        ]
+        assert _count_query_volume(entries) == (2, 2)
+
+    def test_count_query_volume_error_row_fails_the_query(self):
+        from src.api.routes.analytics import _count_query_volume
+
+        entries = [
+            self._row("w1", "workflow_start"),
+            self._row("w1", "estimation_error", validation=False),
+            {**self._row(None, "workflow_start"), "workflow_id": None},
+            {**self._row(None, "estimation_error", validation=False), "workflow_id": None},
+        ]
+        # w1 failed; the legacy partition counts its genesis row only and the
+        # error row is not a genesis row -> 1 legacy query, successful.
+        assert _count_query_volume(entries) == (2, 1)
+
+    def test_dashboard_agent_success_rate_ignores_validation_verdicts(self, client):
+        async def _fetch(*args, **kwargs):
+            return {
+                "success": True,
+                "data": [
+                    self._row("w1", "workflow_start"),
+                    *[
+                        self._row("w1", node, validation=False)
+                        for node in ("uplift_analysis", "learn_policy", "generate_profiles")
+                    ],
+                ],
+            }
+
+        with (
+            patch("src.api.routes.analytics._get_supabase_client", return_value=_FakeDB()),
+            patch("src.api.routes.analytics._fetch_audit_metrics", side_effect=_fetch),
+        ):
+            response = client.get("/analytics/dashboard?period=7d")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["summary"]["successful_queries"] == 1
+        assert body["summary"]["failed_queries"] == 0
+        (m,) = body["agent_metrics"]
+        assert m["total_invocations"] == 1
+        assert m["failed_invocations"] == 0
+        assert m["success_rate"] == 100.0

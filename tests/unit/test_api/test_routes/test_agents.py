@@ -433,7 +433,14 @@ class TestHumanizeSlug:
 
 
 class TestRowStatus:
-    """NULL validation == completed; only explicit False / *_error == failed."""
+    """Only a ``*_error`` row (a node that raised) is a failed activity.
+
+    ``validation_passed=False`` is a scientific verdict — the heterogeneous
+    optimizer's cross-library agreement, causal_impact's refutation — recorded
+    on ordinary node rows; the node completed and honestly reported it. Same
+    definition as /system-health and /analytics (``src.api.utils.audit_outcomes``,
+    2026-09-06).
+    """
 
     def test_null_is_completed(self):
         assert _row_status(None, "agent") == "completed"
@@ -441,11 +448,13 @@ class TestRowStatus:
     def test_true_is_completed(self):
         assert _row_status(True, "agent") == "completed"
 
-    def test_false_is_failed(self):
-        assert _row_status(False, "agent") == "failed"
+    def test_false_verdict_is_completed(self):
+        assert _row_status(False, "uplift_analysis") == "completed"
+        assert _row_status(False, "refutation") == "completed"
 
     def test_error_action_is_failed(self):
         assert _row_status(None, "estimate_error") == "failed"
+        assert _row_status(False, "estimate_error") == "failed"
 
 
 class TestDeriveLiveStatuses:
@@ -472,11 +481,26 @@ class TestDeriveLiveStatuses:
                 "agent_name": "drift_monitor",
                 "created_at": _iso(now),
                 "validation_passed": False,
-                "action_type": "agent",
+                "action_type": "agent_error",
             }
         ]
         live = _derive_live_statuses(rows, now)
         assert live["drift-monitor"]["status"] == AgentStatusEnum.ERROR
+
+    def test_failed_verdict_latest_is_not_error(self):
+        """A run whose last node recorded a FAILED cross-library verdict is a
+        completed run, not a crashed agent (it was ACTIVE/IDLE, never ERROR)."""
+        now = datetime.now(timezone.utc)
+        rows = [
+            {
+                "agent_name": "heterogeneous_optimizer",
+                "created_at": _iso(now),
+                "validation_passed": False,
+                "action_type": "generate_profiles",
+            }
+        ]
+        live = _derive_live_statuses(rows, now)
+        assert live["heterogeneous-optimizer"]["status"] == AgentStatusEnum.ACTIVE
 
     def test_newest_first_dedup_keeps_latest(self):
         now = datetime.now(timezone.utc)
