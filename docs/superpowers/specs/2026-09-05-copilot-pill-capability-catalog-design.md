@@ -174,14 +174,17 @@ narrow, tuned only to the pill families graded NO in the baseline sample:
    window, without also asking for drivers, causes or paths. The outcome
    names come from the cached catalog, not a hardcoded list.
 2. **Off-platform asks.** Word-boundary patterns for SHAP, feature
-   importance, territory or optimizer allocation, individual-HCP or
-   individual-patient prediction, gap-size recomputation, uplift or CATE by
-   segment, email, export, CRM, competitor share.
+   importance, territory detail (which is how optimizer allocations were
+   phrased in the sample), individual-HCP or individual-patient prediction
+   (aggregate HCP-segment likelihood by specialty or region is served and
+   stays), gap-size recomputation, uplift or CATE by segment, email, export,
+   CRM, competitor share.
 3. **On-screen reads are kept.** Because Part C gives the agent the same
    summary, a pill that only reads, ranks or compares SHAP, gap, CATE or
    prediction values that are literally on screen is answerable and the
    four artefact rules yield to it — unless the text also asks to
-   recompute, validate, extend, explain *why*, or trend the artefact
+   recompute, validate, extend, explain *why* (describing what a chart
+   shows is a read), or trend the artefact
    (the extends-list mirrors the prompt's forbidden verbs and the rules'
    own trend and axis vocabulary). Registry KPI names the rules collide
    with (Geographic Consistency Gap, SHAP Coverage, Conditional ATE (CATE)
@@ -257,7 +260,7 @@ benefit from the catalog and validator equally.
 | Failure | Behaviour |
 |---|---|
 | DB unavailable on first catalog build | Section renders honest fallback line; request proceeds; `degraded` logged once per refresh attempt. |
-| DB unavailable on refresh | Last good catalog kept; retry on next TTL expiry. |
+| DB unavailable on refresh | Last good catalog kept and rendered; `degraded` names the failed fields, so the next retry is after the degraded TTL (60 s), not the full TTL. |
 | LLM timeout or error | 502 as today; frontend static pills. |
 | All pills dropped by validator | 502 with detail "no supported pills"; frontend static pills. |
 | Validator false positive | Pill lost, replaced by a static pill; INFO log carries rule and title so false positives can be found and the pattern narrowed. |
