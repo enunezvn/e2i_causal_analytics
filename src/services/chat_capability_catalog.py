@@ -591,16 +591,24 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
 
 
 # Part C publishes the page summary to the assistant as a readable, so a pill
-# MAY read, rank or compare SHAP, CATE, gap or prediction values that are
-# literally on screen (the pill prompt says so). The four artefact rules
-# therefore yield when the question names the on-screen artefact AND asks for
-# nothing that would extend it (another axis, a trend, a recomputation). The
-# extends-list mirrors the pill prompt's own forbidden verbs (recompute,
-# validate, extend, explain WHY) and the artefact rules' own trend/axis
-# vocabulary, so the exemption can never keep what those rules were written
-# to drop.
+# MAY read, rank or compare SHAP, CATE, gap, prediction or optimizer territory
+# values that are literally on screen (the pill prompt says so; the
+# /resource-optimization summary publishes the allocation count, ROI, largest
+# increase and largest decrease). The five artefact rules (SHAP, gap, uplift,
+# individual prediction, territory detail) therefore yield when the question
+# names the on-screen artefact AND asks for nothing that would extend it
+# (another axis, a trend, a recomputation). The extends-list mirrors the pill
+# prompt's own forbidden verbs (recompute, validate, extend, explain WHY) and
+# the artefact rules' own trend/axis vocabulary, so the exemption can never
+# keep what those rules were written to drop.
 _ON_SCREEN_ARTEFACT_RULES = frozenset(
-    {"shap_or_feature_importance", "gap_recompute", "uplift_by_segment", "individual_prediction"}
+    {
+        "shap_or_feature_importance",
+        "gap_recompute",
+        "uplift_by_segment",
+        "individual_prediction",
+        "territory_detail",
+    }
 )
 _ON_SCREEN_RE = re.compile(
     r"\bon[- ]screen\b|\bon the (?:page|screen)\b|\b(?:shown|displayed|visible)\b", re.I

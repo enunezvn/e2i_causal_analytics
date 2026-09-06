@@ -533,6 +533,16 @@ DROP_FIXTURES = [
         "E2I model features",
         "What are the top features of the E2I model?",
     ),
+    (
+        "territory_detail",
+        "On-screen territories by region",
+        "Break down the on-screen territory table by census region.",
+    ),
+    (
+        "territory_detail",
+        "Trend of territories shown",
+        "Show the territory allocation trend over time for the territories shown.",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -650,6 +660,14 @@ KEEP_FIXTURES = [
     (
         "E2I features",
         "What are the top features of E2I?",
+    ),
+    (
+        "Largest reallocation shown",
+        "Which of the territories shown has the largest recommended reallocation?",
+    ),
+    (
+        "On-screen territory table",
+        "Read the on-screen territory table: which territory gains the most budget?",
     ),
 ]
 
