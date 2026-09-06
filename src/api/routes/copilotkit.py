@@ -681,10 +681,13 @@ def _coerce_agui_context(raw: Any) -> list[dict[str, str]]:
 def _is_json_text(value: str) -> bool:
     """True when a readable's value is JSON (the SDK's default converter); a page
     summary arrives as plain prose and is the only readable that is not.
+
+    Deep nesting raises RecursionError, not ValueError; either way it is not a
+    page summary we can trust, so treat it as prose only after truncation.
     """
     try:
         json.loads(value)
-    except ValueError:
+    except (ValueError, RecursionError):
         return False
     return True
 
@@ -723,10 +726,10 @@ def _readables_context_note(copilotkit_state: Any) -> str:
             value = getattr(item, "value", None)
         if not isinstance(description, str) or not isinstance(value, str) or not value.strip():
             continue
-        if not _is_json_text(value):
-            has_prose = True
         if len(value) > _READABLE_ITEM_MAX_CHARS:
             value = value[:_READABLE_ITEM_MAX_CHARS] + f" … [truncated: {len(value)} chars total]"
+        if not _is_json_text(value):
+            has_prose = True
         rendered.append(f"- {description}: {value}")
     if not rendered:
         return ""

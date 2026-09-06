@@ -621,6 +621,10 @@ KEEP_FIXTURES = [
         "Trial endpoint vs competitors",
         "How does Fabhalta compare versus competitors on hemoglobin response in trials?",
     ),
+    (
+        "E2I features",
+        "What are the top features of E2I?",
+    ),
 ]
 
 

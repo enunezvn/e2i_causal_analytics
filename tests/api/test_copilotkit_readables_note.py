@@ -58,3 +58,12 @@ def test_note_mixed_json_and_prose_uses_the_prose_wording():
     assert "values are JSON or short prose summaries" in note
     assert "not a data table" in note
     assert "top drivers are age" in note
+
+
+def test_note_survives_a_pathologically_nested_value():
+    """json.loads raises RecursionError, not ValueError, on deep nesting; a
+    browser-supplied readable must never make the note raise (origin/main
+    rendered it truncated)."""
+    state = {"context": [{"description": "Weird readable", "value": "[" * 100_000}]}
+    note = _readables_context_note(state)
+    assert "[truncated: 100000 chars total]" in note

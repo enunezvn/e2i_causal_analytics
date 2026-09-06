@@ -501,8 +501,8 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         "shap_or_feature_importance",
         re.compile(
             r"\bSHAP\b(?! coverage)|\bfeature[- ]importances?\b|\bfeature rankings?\b|"
-            r"\btop(?:-| )?\d* ?features\b(?!\s+(?:of|in|on) (?:the |this |our )?(?:E2I |e2i )?"
-            r"(?:platform|dashboard|app|application|tool|product|site)\b)",
+            r"\btop(?:-| )?\d* ?features\b(?!\s+(?:of|in|on) (?:the |this |our )?"
+            r"(?:(?:E2I|e2i)\b|(?:E2I |e2i )?(?:platform|dashboard|app|application|tool|product|site)\b))",
             re.I,
         ),
     ),
