@@ -610,20 +610,26 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     ),
     # Live experiment STATUS (#1907): the tool composer registers only
     # experiment_designer tools and the data-query tool's "experiments" type is a
-    # semantic memory search, not a live read, so "which experiments are running /
-    # active / live / ongoing" and "currently designed" (the orchestrator's
-    # in-flight designs) cannot be answered. Deliberately NOT covered: lift or
-    # results phrasings (left to the prompt until one appears in a probe) and
-    # design / power asks ("design an experiment", "how many HCPs ... 80% power",
-    # "how long should an experiment run"), which experiment_designer serves.
-    # Past-tense "designed" without currently/now is ambiguous and stays kept.
+    # semantic memory search, not a live read, so a read of which experiments or
+    # A/B tests are running / active / live / ongoing / in progress / in flight,
+    # or "currently designed" (the orchestrator's in-flight designs), cannot be
+    # answered. Three shapes match: "<noun> (are|is) currently|now <status>",
+    # "which|what <noun> (are|is) <status>", and the adjective form "active /
+    # running / live / ongoing experiments". A bare "<noun> is running" without
+    # currently/now or a which/what lead is NOT matched on purpose: the same words
+    # describe a planned DURATION in a power ask ("how many HCPs do I need if the
+    # experiment is running for 6 weeks?"), which experiment_designer serves, so
+    # "list the experiments that are running" is an accepted miss. Also not
+    # covered: lift or results phrasings (left to the prompt until one appears in
+    # a probe), nouns other than experiment / A/B test, and past-tense "designed"
+    # without currently/now, which is ambiguous and stays kept.
     (
         "live_experiment_status",
         re.compile(
-            r"\bexperiments?\s+(?:that\s+)?(?:are|is)\s+(?:currently\s+|now\s+)?"
-            r"(?:running|active|live|ongoing)\b"
-            r"|\bexperiments?\s+(?:are\s+|is\s+)?(?:currently|now)\s+"
-            r"(?:running|active|live|ongoing|designed)\b"
+            r"\b(?:experiments?|a/b\s+tests?)\s+(?:that\s+)?(?:are\s+|is\s+)?(?:currently|now)\s+"
+            r"(?:running|active|live|ongoing|designed|in progress|in flight)\b"
+            r"|\b(?:which|what)\s+(?:experiments?|a/b\s+tests?)\s+(?:are|is)\s+"
+            r"(?:running|active|live|ongoing|in progress|in flight)\b"
             r"|\b(?:active|running|live|ongoing)\s+experiments?\b",
             re.I,
         ),

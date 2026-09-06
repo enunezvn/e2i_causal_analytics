@@ -518,6 +518,21 @@ DROP_FIXTURES = [
         "List live experiments and their lift.",
     ),
     (
+        "live_experiment_status",
+        "Kisqali A/B tests",
+        "Which A/B tests are running for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Experiments in progress",
+        "What experiments are in progress for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Orchestrator experiments",
+        "What experiments are currently in flight through the orchestrator?",
+    ),
+    (
         "competitor_data",
         "Competitor share",
         "What is Kisqali's TRx versus competitors in the Northeast?",
@@ -783,6 +798,20 @@ KEEP_FIXTURES = [
     (
         "Experiment duration",
         "How long should an experiment run to detect a 5% NBRx lift for Kisqali?",
+    ),
+    # #1907: "the experiment is running for N weeks" is a planned DURATION inside a
+    # power ask, not a live-status read - the same words must not drop it
+    (
+        "Sample size for a 6-week experiment",
+        "How many HCPs do I need if the experiment is running for 6 weeks?",
+    ),
+    (
+        "Power for a 6-week experiment",
+        "For an experiment that is running for 6 weeks, how many HCPs do I need for 80% power?",
+    ),
+    (
+        "Active-window power",
+        "If the experiment is active for 6 weeks, how many HCPs do I need for 80% power?",
     ),
     (
         "Competitive landscape",
