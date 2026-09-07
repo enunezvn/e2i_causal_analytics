@@ -24,6 +24,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { PerformanceTrendResponse } from '@/types/monitoring';
 
 // =============================================================================
 // HOOK MOCKS — wired BEFORE page import so vi.mock can hoist
@@ -104,13 +105,13 @@ const mockModelsStatus = {
   timestamp: '2026-05-17T10:00:00Z',
 };
 
-const mockTrend = {
+const mockTrend: PerformanceTrendResponse = {
   model_id: 'propensity_v2.1.0',
   metric_name: 'accuracy',
   current_value: 0.918,
   baseline_value: 0.9,
   change_percent: 2.0,
-  trend: 'improving' as const,
+  trend: 'improving',
   is_significant: true,
   alert_threshold_breached: false,
   alert_threshold: 0.81,
@@ -258,7 +259,7 @@ function setHooksToSuccess() {
 }
 
 /** Override the trend hook with a given metric/value/breach state. */
-function setTrend(overrides: Partial<typeof mockTrend>) {
+function setTrend(overrides: Partial<PerformanceTrendResponse>) {
   (usePerformanceTrend as ReturnType<typeof vi.fn>).mockReturnValue({
     data: { ...mockTrend, ...overrides },
     isLoading: false,

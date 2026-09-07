@@ -722,10 +722,15 @@ class TestSamplingAwareTrend:
     @pytest.mark.asyncio
     async def test_alerts_carry_sampling_context(self):
         tracker = PerformanceTracker()
-        records = [self._rec(0.60, n=230, p=0.35)] + [self._rec(0.85, n=230, p=0.35)] * 8
+        # A slightly scattered baseline so precision/f1 — which have no
+        # closed-form SE — are judged on the (t-adjusted) fold spread rather
+        # than falling back to the legacy rule.
+        baseline = [self._rec(v, n=230, p=0.35) for v in (0.84, 0.86) * 4]
+        records = [self._rec(0.60, n=230, p=0.35)] + baseline
         with self._patched_repo(records):
             alerts = await tracker.check_performance_alerts("m")
         assert alerts, "a 29% drop on full months must alert"
+        assert {a["metric_name"] for a in alerts} == set(tracker.config.tracked_metrics)
         for a in alerts:
             assert a["sample_size"] == 230
             assert a["basis"] == "level"

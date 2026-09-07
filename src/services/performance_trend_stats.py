@@ -17,17 +17,34 @@ What this module does
 Pure functions (no I/O) that the :class:`PerformanceTracker` calls:
 
 * :func:`metric_standard_error` — analytic SE of one fold's metric from its
-  sample size and positive rate (Hanley-McNeil for AUC, binomial for the
-  rate-like metrics).
+  sample size and positive rate, ONLY where a closed form exists: binomial on
+  n for accuracy, binomial on the positive count for recall, Hanley-McNeil
+  for AUC. Precision (denominator = PREDICTED positives, not persisted) and
+  F1 (no binomial variance) get none — an invented interval would understate
+  their noise and re-create the false alarms this module exists to remove.
 * :func:`slope_t_stat` — OLS slope t-statistic over the window, the signal a
   level test cannot see (a steady 0.01/month slide).
 * :func:`assess_trend` — the classifier: ``degrading`` / ``improving`` only
-  when the change is BOTH statistically distinguishable from sampling noise
-  (level z beyond ``z_threshold`` OR slope t beyond ``slope_t_threshold``)
-  AND material (the historical ±5% floor, kept as a materiality gate).
-  Rows without a sample size cannot be tested and fall back to the legacy
-  relative rule, labelled ``basis="legacy_relative"`` so the caller can see
-  which rule produced the label.
+  when the change is BOTH statistically distinguishable from noise (level z
+  beyond ``z_threshold`` OR slope t beyond ``slope_t_threshold``) AND
+  material (the historical ±5% floor, kept as a materiality gate).
+
+Noise scales (the level test's denominator)
+-------------------------------------------
+Two independent estimates; the classifier uses the LARGER available one:
+
+* ``analytic`` — sqrt(SE_current² + SE_baseline-mean²), available only when the
+  newest fold AND every baseline fold have an analytic SE. A baseline fold of
+  unknown precision is never treated as exact.
+* ``empirical`` — the fold-to-fold standard deviation of the baseline
+  (×sqrt(1+1/k) for a new observation), available with ≥6 baseline folds.
+  Because that sd is itself estimated from k folds, it is inflated by
+  t_{k-1}/z so the reported z compares with ``z_threshold`` at the intended
+  tail probability (a Student-t test, not a z-test).
+
+With neither scale the row falls back to the legacy relative rule, labelled
+``basis="legacy_relative"`` with the reason, so the caller can see which rule
+produced the label.
 
 Thresholds: 2.5 standard errors (two-sided p ≈ 0.012). The page trends 12
 models × 5 metrics = 60 series every week; at ±2.0 the expected false alarms
@@ -43,10 +60,10 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-# Metrics that are rates on [0, 1] with a binomial-style sampling variance.
-# ``auc_roc`` is handled separately (Hanley-McNeil) but is also a [0, 1] value.
-_POSITIVE_CLASS_METRICS = frozenset({"precision", "recall", "f1"})
-_RATE_METRICS = frozenset({"accuracy", "auc_roc", "auc_pr", "pr_auc"}) | _POSITIVE_CLASS_METRICS
+# Metrics with a closed-form sampling variance from (n, positive_rate).
+_ANALYTIC_SE_METRICS = frozenset({"accuracy", "recall", "auc_roc"})
+# Of those, the ones whose SE needs the fold's positive rate.
+_NEEDS_POSITIVE_RATE = frozenset({"recall", "auc_roc"})
 
 
 @dataclass(frozen=True)
@@ -62,13 +79,16 @@ class TrendPoint:
 class TrendAssessment:
     """Classifier output. ``basis`` says WHICH rule produced ``trend``:
 
-    * ``level`` — newest fold vs baseline beyond ``z_threshold`` SEs and material
+    * ``level`` — newest fold vs baseline beyond ``z_threshold`` noise units and material
     * ``slope`` — OLS slope over the window beyond ``slope_t_threshold`` and material
-    * ``within_noise`` — change is inside the sampling-error band
+    * ``within_noise`` — change is inside the noise band
     * ``immaterial`` — statistically distinguishable but below the materiality floor
-    * ``legacy_relative`` — no sample size on the newest fold; ±5% relative rule
+    * ``legacy_relative`` — no noise scale could be derived; ±5% relative rule
     * ``insufficient_history`` — one fold only; nothing to compare against
     * ``no_data`` — empty window
+
+    ``noise_source`` names the scale the level test used: ``analytic``,
+    ``empirical`` (t-adjusted fold spread), or None on the fallback paths.
     """
 
     trend: str
@@ -83,6 +103,7 @@ class TrendAssessment:
     standard_error: Optional[float] = None
     z_score: Optional[float] = None
     slope_t_stat: Optional[float] = None
+    noise_source: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -117,45 +138,60 @@ def proportion_se(value: float, n: int) -> float:
     return math.sqrt(v * (1.0 - v) / n)
 
 
+def student_t_quantile(z: float, df: int) -> float:
+    """Student-t quantile with the same tail probability as the normal quantile
+    ``z`` — Cornish-Fisher expansion in 1/df (five terms). Within 0.3% of
+    ``scipy.stats.t.ppf`` for df ≥ 5 and |z| ≤ 3 (checked 2026-09-07); kept
+    dependency-free so this module stays pure and import-light."""
+    if df <= 0:
+        return float(z)
+    d = float(df)
+    z3, z5, z7, z9 = z**3, z**5, z**7, z**9
+    return float(
+        z
+        + (z3 + z) / (4.0 * d)
+        + (5.0 * z5 + 16.0 * z3 + 3.0 * z) / (96.0 * d**2)
+        + (3.0 * z7 + 19.0 * z5 + 17.0 * z3 - 15.0 * z) / (384.0 * d**3)
+        + (79.0 * z9 + 776.0 * z7 + 1482.0 * z5 - 1920.0 * z3 - 945.0 * z) / (92160.0 * d**4)
+    )
+
+
 def metric_standard_error(
     metric_name: str,
     value: float,
     sample_size: Optional[int],
     positive_rate: Optional[float],
 ) -> Optional[float]:
-    """Analytic SE of ``value`` for one fold, or None when it cannot be derived.
+    """Analytic SE of ``value`` for one fold, or None when no closed form applies.
 
-    * ``auc_roc`` with a known positive rate → Hanley-McNeil on the implied class
-      counts. Without the positive rate the binomial form is used — an
-      OPTIMISTIC (smaller) approximation, acceptable only until the recorder
-      has populated ``positive_rate`` on the fold rows.
-    * ``precision`` / ``recall`` / ``f1`` → binomial on the positive count when
-      the positive rate is known (recall's exact denominator; precision's and
-      F1's are approximations of the same order), else on ``n``.
-    * other rate metrics → binomial on ``n``.
-    * anything that is not a rate on [0, 1] (calibration slope, Brier on a
-      different scale, unknown names) → None; the caller falls back to the
-      legacy rule rather than inventing an interval.
+    * ``accuracy`` → binomial on ``n``.
+    * ``recall`` → binomial on the actual-positive count ``n·p`` (its exact
+      denominator); None without the positive rate.
+    * ``auc_roc`` → Hanley-McNeil on the implied class counts; None without
+      the positive rate (the binomial form understates an AUC's SE, so it is
+      NOT used as a stand-in).
+    * ``precision`` / ``f1`` / anything else (pr_auc, calibration slope,
+      unknown names) → None. Precision's denominator is the predicted-positive
+      count, which the fold rows do not carry; F1 has no binomial variance.
+      The classifier then uses the empirical fold spread (≥6 folds) or the
+      legacy rule — never a fabricated interval.
     """
     if sample_size is None or sample_size <= 0:
         return None
     if value is None or not math.isfinite(value):
         return None
-    if metric_name not in _RATE_METRICS or not (0.0 <= value <= 1.0):
+    if metric_name not in _ANALYTIC_SE_METRICS or not (0.0 <= value <= 1.0):
         return None
-    p = float(positive_rate) if positive_rate is not None else None
-    if p is not None and not (0.0 < p < 1.0):
-        p = None
-    if metric_name == "auc_roc":
-        if p is not None:
-            n_pos = max(1, int(round(sample_size * p)))
-            n_neg = max(1, sample_size - n_pos)
-            return hanley_mcneil_se(value, n_pos, n_neg)
+    if metric_name == "accuracy":
         return proportion_se(value, sample_size)
-    if metric_name in _POSITIVE_CLASS_METRICS and p is not None:
-        n_eff = max(1, int(round(sample_size * p)))
-        return proportion_se(value, n_eff)
-    return proportion_se(value, sample_size)
+    p = float(positive_rate) if positive_rate is not None else None
+    if p is None or not (0.0 < p < 1.0):
+        return None
+    n_pos = max(1, int(round(sample_size * p)))
+    if metric_name == "recall":
+        return proportion_se(value, n_pos)
+    n_neg = max(1, sample_size - n_pos)
+    return hanley_mcneil_se(value, n_pos, n_neg)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +243,25 @@ def _opt_n(v: object) -> Optional[int]:
     """A positive sample size, else None."""
     f = _opt_float(v)
     return int(f) if f is not None and f > 0 else None
+
+
+def _no_analytic_reason(
+    metric_name: str,
+    current: TrendPoint,
+    se_current: Optional[float],
+    baseline_ses: Sequence[Optional[float]],
+) -> str:
+    """Why the analytic noise scale could not be formed (for the reason text)."""
+    if _opt_n(current.sample_size) is None:
+        return "no sample size on the newest fold"
+    if metric_name not in _ANALYTIC_SE_METRICS:
+        return f"{metric_name} has no closed-form standard error"
+    if se_current is None and metric_name in _NEEDS_POSITIVE_RATE:
+        return f"{metric_name} needs the fold's positive rate for its standard error"
+    if se_current is None:
+        return f"no standard error for the newest {metric_name} value"
+    missing = sum(1 for s in baseline_ses if s is None)
+    return f"sampling error unknown for {missing} of {len(baseline_ses)} baseline folds"
 
 
 def assess_trend(
@@ -268,24 +323,59 @@ def assess_trend(
         else 0.0
     )
 
-    # ---- Legacy fallback: no sample size → no standard error → ±5% rule. ----
+    # ---- Noise scale 1: analytic — needs an SE for the newest fold AND for
+    # every baseline fold (a baseline of unknown precision is never "exact").
     se_current = metric_standard_error(
         metric_name, current_value, sample_size, _opt_float(current.positive_rate)
     )
-    if se_current is None:
+    baseline_ses = [
+        metric_standard_error(
+            metric_name, float(p.value), _opt_n(p.sample_size), _opt_float(p.positive_rate)
+        )
+        for p in baseline_pts
+    ]
+    analytic: Optional[float] = None
+    if se_current is not None and all(s is not None for s in baseline_ses):
+        se_mean = math.sqrt(sum(s * s for s in baseline_ses if s is not None)) / k
+        analytic = math.sqrt(se_current * se_current + se_mean * se_mean)
+
+    # ---- Noise scale 2: empirical — the fold-to-fold spread of the baseline,
+    # widened for a new observation and t-adjusted because the sd itself is
+    # estimated from only k folds.
+    empirical: Optional[float] = None
+    if k >= max(int(min_points_for_dispersion), 2):
+        sd = float(baseline_values.std(ddof=1))
+        if sd > 0.0:
+            t_factor = (
+                student_t_quantile(float(z_threshold), k - 1) / float(z_threshold)
+                if z_threshold > 0.0
+                else 1.0
+            )
+            empirical = sd * math.sqrt(1.0 + 1.0 / k) * t_factor
+
+    # ---- Legacy fallback: no noise scale at all → the ±5% rule, labelled. ----
+    if analytic is None and empirical is None:
         if change_percent > min_change_percent:
             trend = "improving"
         elif change_percent < -min_change_percent:
             trend = "degrading"
         else:
             trend = "stable"
+        why_analytic = _no_analytic_reason(metric_name, current, se_current, baseline_ses)
+        if k < min_points_for_dispersion:
+            why_empirical = (
+                f"fewer than {min_points_for_dispersion} baseline folds for the "
+                f"empirical spread ({k})"
+            )
+        else:
+            why_empirical = "the baseline folds are identical (zero empirical spread)"
         return TrendAssessment(
             trend=trend,
             change_percent=change_percent,
             is_significant=abs(change_percent) > legacy_significance_percent,
             basis="legacy_relative",
             reason=(
-                "sample size unavailable for the newest fold; classified by the "
+                f"{why_analytic}; {why_empirical}; classified by the "
                 f"relative-change rule (±{min_change_percent:g}%)"
             ),
             current_value=current_value,
@@ -294,23 +384,27 @@ def assess_trend(
             sample_size=sample_size,
         )
 
-    # ---- Level test: newest fold vs the baseline mean on the SE scale. --------
-    baseline_ses = [
-        metric_standard_error(
-            metric_name, float(p.value), _opt_n(p.sample_size), _opt_float(p.positive_rate)
-        )
-        for p in baseline_pts
-    ]
-    known = [s for s in baseline_ses if s is not None]
-    se_mean = math.sqrt(sum(s * s for s in known) / len(known) / k) if known else 0.0
-    noise = math.sqrt(se_current * se_current + se_mean * se_mean)
-    # With enough history the empirical fold-to-fold spread is a second noise
-    # estimate that also captures month-composition variation; take the
-    # larger of the two so a normally-scattered fold is not called a drop.
-    if k >= min_points_for_dispersion:
-        sd = float(baseline_values.std(ddof=1))
-        noise = max(noise, sd * math.sqrt(1.0 + 1.0 / k))
-    z = (current_value - baseline_value) / noise if noise > 0.0 else 0.0
+    # ---- Level test on the larger available scale. ---------------------------
+    if analytic is not None and empirical is not None:
+        if analytic >= empirical:
+            noise, noise_source = analytic, "analytic"
+            scale_txt = (
+                f"analytic sampling error at n={sample_size}, which exceeds the {k}-fold spread"
+            )
+        else:
+            noise, noise_source = empirical, "empirical"
+            scale_txt = (
+                f"the t-adjusted spread of the {k} baseline folds, which exceeds the "
+                f"analytic sampling error at n={sample_size}"
+            )
+    elif analytic is not None:
+        noise, noise_source = analytic, "analytic"
+        scale_txt = f"analytic sampling error at n={sample_size}"
+    else:
+        assert empirical is not None
+        noise, noise_source = empirical, "empirical"
+        scale_txt = f"the t-adjusted spread of the {k} baseline folds"
+    z = (current_value - baseline_value) / noise
     level_reject = abs(z) > z_threshold
     level_material = abs(change_percent) >= min_change_percent
 
@@ -349,12 +443,11 @@ def assess_trend(
         trend = "stable"
         basis = "within_noise"
 
-    n_txt = f"n={sample_size}"
     if basis == "level":
         reason = (
             f"{metric_name} {current_value:.3f} is {abs(z):.1f} standard errors "
             f"{'below' if z < 0 else 'above'} the {k}-fold baseline {baseline_value:.3f} "
-            f"({n_txt}, {change_percent:+.1f}%)"
+            f"({change_percent:+.1f}%; scale: {scale_txt})"
         )
     elif basis == "slope":
         reason = (
@@ -368,8 +461,8 @@ def assess_trend(
         )
     else:
         reason = (
-            f"{change_percent:+.1f}% vs the {k}-fold baseline is within sampling noise at "
-            f"{n_txt} (z={z:+.1f}; ±{z_threshold:g} needed)"
+            f"{change_percent:+.1f}% vs the {k}-fold baseline is within sampling noise "
+            f"(z={z:+.1f}; ±{z_threshold:g} needed; scale: {scale_txt})"
         )
 
     return TrendAssessment(
@@ -387,6 +480,7 @@ def assess_trend(
         # A perfect linear fit yields an infinite t (see slope_t_stat); JSON
         # cannot carry it, so the statistic is reported as None in that case.
         slope_t_stat=(float(slope_t) if slope_t is not None and math.isfinite(slope_t) else None),
+        noise_source=noise_source,
     )
 
 
@@ -398,4 +492,5 @@ __all__ = [
     "metric_standard_error",
     "proportion_se",
     "slope_t_stat",
+    "student_t_quantile",
 ]

@@ -24,6 +24,7 @@ from src.services.performance_trend_stats import (
     metric_standard_error,
     proportion_se,
     slope_t_stat,
+    student_t_quantile,
 )
 
 # ---------------------------------------------------------------------------
@@ -56,13 +57,18 @@ def test_metric_standard_error_dispatch():
     # AUC with a known class balance uses Hanley-McNeil.
     hm = metric_standard_error("auc_roc", 0.71, 134, 0.38)
     assert hm == pytest.approx(hanley_mcneil_se(0.71, 51, 83), rel=1e-6)
-    # AUC WITHOUT a class balance falls back to the (optimistic) proportion form.
-    assert metric_standard_error("auc_roc", 0.71, 134, None) == pytest.approx(
-        proportion_se(0.71, 134), rel=1e-6
-    )
-    # Recall's effective n is the positive count.
+    # AUC WITHOUT a class balance has NO analytic SE. (Codex iter-1 MEDIUM: the
+    # binomial stand-in understated an AUC's SE — an optimistic interval is a
+    # false alarm waiting to happen, so it is None, never a substitute.)
+    assert metric_standard_error("auc_roc", 0.71, 134, None) is None
+    # Recall's exact denominator is the positive count; without it → None.
     assert metric_standard_error("recall", 0.6, 200, 0.25) == pytest.approx(
         proportion_se(0.6, 50), rel=1e-6
+    )
+    assert metric_standard_error("recall", 0.6, 200, None) is None
+    # Accuracy is binomial on n and needs no positive rate.
+    assert metric_standard_error("accuracy", 0.8, 500, None) == pytest.approx(
+        proportion_se(0.8, 500), rel=1e-6
     )
     # Unknown n → no SE (caller falls back to the legacy rule).
     assert metric_standard_error("accuracy", 0.8, None, None) is None
@@ -70,6 +76,27 @@ def test_metric_standard_error_dispatch():
     # A metric that is not a [0, 1] rate (e.g. calibration_slope ≈ 1.2) has no
     # closed-form SE here → None, never a fabricated interval.
     assert metric_standard_error("calibration_slope", 1.2, 500, 0.3) is None
+
+
+def test_precision_and_f1_have_no_analytic_standard_error():
+    """Codex iter-1 HIGH: precision's denominator is the PREDICTED-positive
+    count (not on the fold rows) and F1 has no binomial variance. The old code
+    gave precision 0.50 at n=100, p=0.4 an SE of 0.079 — but on two predicted
+    positives the true SE is ≈0.35. No closed form → None."""
+    assert metric_standard_error("precision", 0.5, 100, 0.4) is None
+    assert metric_standard_error("f1", 0.5, 100, 0.4) is None
+    assert metric_standard_error("pr_auc", 0.5, 100, 0.4) is None
+
+
+def test_student_t_quantile_matches_scipy_reference_values():
+    # scipy.stats.t.ppf(1 - norm.sf(2.5), df) computed 2026-09-07.
+    for df, expected in ((5, 3.816), (7, 3.340), (11, 2.984), (30, 2.660), (40, 2.618)):
+        assert student_t_quantile(2.5, df) == pytest.approx(expected, abs=0.01), df
+    assert student_t_quantile(2.0, 7) == pytest.approx(2.429, abs=0.01)
+    assert student_t_quantile(1.0, 5) == pytest.approx(1.111, abs=0.01)
+    # Large df → the normal quantile; odd in z.
+    assert student_t_quantile(2.5, 10**6) == pytest.approx(2.5, abs=1e-3)
+    assert student_t_quantile(-2.5, 7) == pytest.approx(-3.340, abs=0.01)
 
 
 def test_slope_t_stat_positive_control_and_guards():
@@ -109,7 +136,8 @@ def test_single_low_fold_within_noise_is_stable_not_degrading():
     assert a.basis == "within_noise"
     assert a.z_score is not None and -2.5 < a.z_score < -1.5
     assert a.sample_size == 134
-    assert "sampling noise" in a.reason
+    assert a.noise_source == "analytic"  # HM at n=134 exceeds the 8-fold spread
+    assert "sampling noise" in a.reason and "n=134" in a.reason
 
 
 def test_partial_month_fold_is_stable():
@@ -194,7 +222,67 @@ def test_empirical_fold_dispersion_widens_the_noise_scale():
     a = assess_trend(_pts(window, n=5000, p=0.4), "auc_roc")  # tiny analytic SE
     assert a.standard_error is not None
     assert a.standard_error > metric_standard_error("auc_roc", 0.70, 5000, 0.4)
+    assert a.noise_source == "empirical"
     assert a.trend == "stable"
+
+
+def test_unknown_baseline_uncertainty_is_never_treated_as_exact():
+    """Codex iter-1 HIGH: a newest fold at n=1e6 vs ONE baseline fold with no
+    sample size used to get a baseline SE of 0 and a huge z. A baseline of
+    unknown precision is not exact: no analytic scale; with k=1 no empirical
+    scale either → the legacy rule, labelled with both reasons."""
+    a = assess_trend([TrendPoint(0.70, 1_000_000, 0.4), TrendPoint(0.80)], "auc_roc")
+    assert a.basis == "legacy_relative"
+    assert a.z_score is None and a.standard_error is None and a.noise_source is None
+    assert "1 of 1 baseline folds" in a.reason
+    assert "fewer than 6 baseline folds" in a.reason
+
+    # With ≥6 baseline folds (still no sample sizes) the fold spread carries
+    # the test instead — and 0.70 against a tight 0.80 baseline IS an outlier.
+    tight = [TrendPoint(v) for v in (0.79, 0.81, 0.80, 0.78, 0.82, 0.80)]
+    b = assess_trend([TrendPoint(0.70, 1_000_000, 0.4)] + tight, "auc_roc")
+    assert b.noise_source == "empirical"
+    assert b.trend == "degrading" and b.basis == "level"
+    assert "t-adjusted spread of the 6 baseline folds" in b.reason
+
+
+def test_auc_without_positive_rate_uses_the_fold_spread_not_an_optimistic_binomial():
+    """Rows written before the recorder persisted ``positive_rate`` (every
+    backtest_wf row until the first post-fix eval run). The optimistic binomial
+    stand-in is gone; the t-adjusted 8-fold spread judges the same hcp_remi
+    series a level outlier (z ≈ −3.2) — it is the Hanley-McNeil scale at
+    n=134 that makes it "stable", which is exactly why the positive rate must
+    be on the row. With <6 folds and no positive rate: the legacy rule."""
+    a = assess_trend(_pts(_HCP_REMI, n=134, p=None), "auc_roc")
+    assert a.noise_source == "empirical"
+    assert a.trend == "degrading" and a.basis == "level"
+    assert a.z_score is not None and -3.6 < a.z_score < -2.8
+
+    b = assess_trend(_pts(_HCP_REMI[:4], n=134, p=None), "auc_roc")
+    assert b.basis == "legacy_relative"
+    assert "positive rate" in b.reason
+
+
+def test_precision_is_judged_on_the_fold_spread_or_the_legacy_rule():
+    """No closed-form SE for precision: ≥6 baseline folds → the t-adjusted
+    spread (labelled), fewer → the legacy rule (labelled)."""
+    window = [0.55] + [0.58, 0.62] * 5  # baseline mean 0.60, sd ≈ 0.021
+    a = assess_trend(_pts(window, n=100, p=0.4), "precision")
+    assert a.noise_source == "empirical"
+    assert a.trend == "stable" and a.basis == "within_noise"
+    assert "t-adjusted spread of the 10 baseline folds" in a.reason
+
+    b = assess_trend(_pts([0.55, 0.58, 0.62, 0.60], n=100, p=0.4), "precision")
+    assert b.basis == "legacy_relative"
+    assert "precision has no closed-form standard error" in b.reason
+
+
+def test_identical_baseline_folds_without_an_analytic_se_fall_back_to_legacy():
+    window = [0.50] + [0.60] * 8  # zero empirical spread, no SE for f1
+    a = assess_trend(_pts(window, n=100, p=0.4), "f1")
+    assert a.basis == "legacy_relative"
+    assert "zero empirical spread" in a.reason
+    assert a.trend == "degrading"  # −16.7% under the legacy rule
 
 
 def test_nan_and_non_finite_values_do_not_crash():
