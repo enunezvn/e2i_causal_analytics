@@ -44,7 +44,7 @@ import logging
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -467,6 +467,26 @@ def _strict_metric_vocabulary() -> Tuple[Tuple[str, str], ...]:
     return tuple(sorted(vocab.items(), key=lambda kv: len(kv[0]), reverse=True))
 
 
+def strict_metric_vocabulary() -> Tuple[Tuple[str, str], ...]:
+    """Public view of :func:`_strict_metric_vocabulary` for callers outside the
+    dispatcher: (phrase, kpi_id) pairs, longest phrase first. The pill
+    validator (``chat_capability_catalog``, #1901 items 4a / 4q) uses it to
+    decide whether a pill names a real KPI."""
+    return _strict_metric_vocabulary()
+
+
+def metric_phrase_regex(phrases: Iterable[str], *, group: Optional[str] = None) -> str:
+    """Regex SOURCE matching any of ``phrases`` under the boundary and plural
+    rule of :func:`_alias_pattern` (bounded on both sides, ``_PLURAL_SUFFIX``
+    tolerated), so a third matcher cannot drift from the two in this module.
+    ``group`` names a capture group around the bare phrase so the caller can
+    map a hit back to its KPI id. Pass phrases longest first when one is a
+    prefix of another."""
+    alternation = "|".join(re.escape(p) for p in phrases)
+    core = f"(?P<{group}>{alternation})" if group else f"(?:{alternation})"
+    return rf"(?<![\w'-]){core}{_PLURAL_SUFFIX}(?![\w'-])"
+
+
 @lru_cache(maxsize=1)
 def _case_sensitive_metric_abbrevs() -> Tuple[Tuple[str, str], ...]:
     """Blocklisted common-word initialisms in their ORIGINAL uppercase form —
@@ -846,6 +866,14 @@ def _build_conversion_frame(
 _BUILDERS: Dict[str, Callable[..., Optional[KpiFrame]]] = {
     CONVERSION_KPI_ID: _build_conversion_frame,
 }
+
+
+def substrate_kpi_ids() -> FrozenSet[str]:
+    """Ids of the KPIs :func:`resolve_kpi_frame` can materialize as a causal
+    OUTCOME frame (today: Conversion Rate). The tool composer's KPI path (#810)
+    serves a "what drives <KPI>" ask only for these; every other KPI falls
+    back to the patient cohort, where the KPI is not an outcome column."""
+    return frozenset(_BUILDERS)
 
 
 def resolve_kpi_frame(

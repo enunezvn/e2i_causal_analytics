@@ -1077,6 +1077,127 @@ DROP_FIXTURES = [
         "June NBRx drivers",
         "What drove the Fabhalta NBRx change in June 2025?",
     ),
+    # #1901 item 4a: a registry outcome that the KPI recognizer reads as a KPI
+    # only through its name-token fallback (treatment_initiated -> CM-001,
+    # action_taken -> WS2-TR-003) has no series, window or axis, so a trend or
+    # rate of it is NEVER; the live pill was kept on four consecutive runs.
+    (
+        "outcome_as_kpi:treatment_initiated",
+        "📈 Remibrutinib treatment_initiated trend",
+        "Show me the monthly trend of treatment_initiated rate for Remibrutinib over the last 12 months.",
+    ),
+    (
+        "outcome_as_kpi:action_taken",
+        "Action taken by region",
+        "What is the action_taken rate for Kisqali by census region?",
+    ),
+    # codex iter-1: a KPI merely CO-MENTIONED (side-by-side chart, "and" / "next
+    # to") does not make the outcome's rate servable - the stand-down is local
+    (
+        "outcome_as_kpi:treatment_initiated",
+        "Initiation and TRx",
+        "Chart treatment_initiated rate and TRx for Kisqali.",
+    ),
+    (
+        "outcome_as_kpi:treatment_initiated",
+        "Initiation by region",
+        "Chart treatment_initiated rate by census region and show Acceptance Rate for Kisqali.",
+    ),
+    (
+        "outcome_as_kpi:action_taken",
+        "Action taken and acceptance",
+        "Chart the action_taken rate next to the Acceptance Rate for Kisqali.",
+    ),
+    # codex iter-2: the stand-down is per MENTION - a second, bare mention of
+    # the outcome is still checked
+    (
+        "outcome_as_kpi:treatment_initiated",
+        "Conversion and trend",
+        "Compare treatment_initiated conversion rate and treatment_initiated monthly trend for Fabhalta.",
+    ),
+    # #1901 item 4q: a registry KPI asked as a causal OUTCOME. Section C serves
+    # drivers / paths / effects only for the causal-path registry's end nodes,
+    # and the tool composer's KPI path only for KPIs with a substrate builder
+    # (Conversion Rate); a KPI outside both sets has nothing to return. The rule
+    # fires only when the KPI phrase is the OBJECT of a causal ask.
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Trigger performance drivers",
+        "What causal drivers influence Trigger Precision, Acceptance Rate, and Override Rate, and how confident are those paths for each brand?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Trigger precision drivers",
+        "What drives Trigger Precision for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS3-BI-004",
+        "Coverage paths",
+        "Which causal paths lead to HCP Coverage for Fabhalta?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-006",
+        "Copay effect on overrides",
+        "What is the effect of copay support on Override Rate for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-006",
+        "Why overrides are high",
+        "Why is the Override Rate for Kisqali so high?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS1-MP-001",
+        "ROC-AUC drivers",
+        "What factors drive ROC-AUC differences across the three brand models?",
+    ),
+    # hyphens and dashes are normalized to spaces before the shapes run, so a
+    # registry name written as the registry spells it still matches its
+    # space-normalized vocabulary phrase
+    (
+        "kpi_as_causal_outcome:WS1-DQ-003",
+        "Match rate causes",
+        "What causes the Cross-source Match Rate to drop for Fabhalta?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Hyphenated precision",
+        "What drives Trigger-Precision for Kisqali?",
+    ),
+    # codex iter-1: an auxiliary between the causal noun and its verb, and
+    # past-tense leads, are the same ask
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Factors driving precision",
+        "Which factors are driving Trigger Precision for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Drivers behind precision",
+        "Which causal drivers are behind Trigger Precision for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-006",
+        "Override drop cause",
+        "What caused Override Rate to drop for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Precision drove lower",
+        "What drove Trigger Precision lower for Kisqali?",
+    ),
+    # codex iter-3: a coordinated object list with NO served member (no causal
+    # outcome, no allow-set KPI) still drops - the yield is for a served
+    # co-object, not for coordination itself
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Precision and acceptance drivers",
+        "What drives Trigger Precision and Acceptance Rate for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Precision drivers and confidence",
+        "What drives Trigger Precision for Kisqali, and how confident are those paths?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -1405,6 +1526,85 @@ KEEP_FIXTURES = [
         "Fabhalta NRx by severity tier",
         "Show Fabhalta New Prescriptions broken down by patient severity tier to see which segments drive volume.",
     ),
+    # #1901 item 4a: treatment_initiated / action_taken join the journey set, so
+    # every causal ask that names them (live pills graded OK / PARTIAL) must
+    # keep surviving the outcome rule's causal-word exemption ...
+    (
+        "What drives treatment initiation?",
+        "What are the causal drivers of treatment_initiated for Remibrutinib, and how confident are those paths?",
+    ),
+    (
+        "Kisqali treatment initiation",
+        "What causal factors most strongly influence treatment_initiated for Kisqali?",
+    ),
+    (
+        "Treatment effect on adoption",
+        "What is the Average Treatment Effect (ATE) of action_taken on adopted outcomes across the three brands?",
+    ),
+    (
+        "Sample drop -> adherence chain",
+        "Does sample_drop drive adherent_180d for Remibrutinib, and what is the mediation effect through treatment_initiated?",
+    ),
+    (
+        "Compare sample_drop effect",
+        "How does the causal impact of sample_drop on treatment_initiated for Remibrutinib compare to its effect on other outcomes?",
+    ),
+    # ... and the two widened outcomes stand down when the pill also names a
+    # strict-vocabulary KPI ("conversion rate"): the ask is then a KPI read
+    # decorated with the outcome name (baseline segment-turn pill graded PARTIAL:
+    # Conversion Rate by line of therapy is answerable).
+    (
+        "Line-of-therapy depth",
+        "What is the treatment_initiated conversion rate for Fabhalta in line-of-therapy 0 versus lines 1+ when sample drops are deployed, and how does sample volume affect each?",
+    ),
+    # codex iter-1: the stand-down is LOCAL - the KPI phrase must be the
+    # outcome's own noun phrase (within two words, no coordinator between), so
+    # "conversion rate of treatment_initiated patients" also stands down ...
+    (
+        "Conversion of initiators",
+        "What is the conversion rate of treatment_initiated patients for Fabhalta by therapy line?",
+    ),
+    # #1901 item 4q: a KPI in TREATMENT position (the object is a causal
+    # outcome) is a section-C ask ...
+    ("HCP coverage effect", "What is the effect of HCP Coverage on persistent_180d for Kisqali?"),
+    ("Trigger precision and NBRx", "Does trigger precision drive NBRx for Kisqali?"),
+    ("Precision and adoption", "How does Trigger Precision affect adopted for Fabhalta?"),
+    # ... a KPI that a causal outcome resolves to (the fallback-resolved
+    # allow-set: TRx, NRx, NBRx, TRx Share, Conversion Rate, ROI, and via the
+    # name-token fallback Action Rate Uplift, ATE and Intent-to-Prescribe) is
+    # an answerable object ...
+    ("TRx drivers", "What drives TRx volume for Kisqali?"),
+    ("NBRx drivers", "What are the causal drivers of NBRx for Remibrutinib?"),
+    ("Conversion drivers", "What drives conversion rate for Fabhalta?"),
+    ("ROI drivers", "What are the primary drivers of ROI variance across the three brands?"),
+    (
+        "Market share paths",
+        "How do the causal paths to market share differ between Remibrutinib, Fabhalta, and Kisqali?",
+    ),
+    ("Action rate uplift drivers", "What drives Action Rate Uplift for Kisqali?"),
+    # ... "paths", "confident" / "confidence" and "refutation" alone never fire
+    # it, nor does a definition or value ask about a non-outcome KPI ...
+    (
+        "Path confidence",
+        "How confident are the causal paths into persistent_180d for Kisqali, and what refutation evidence backs them?",
+    ),
+    ("Why precision matters", "Why does Trigger Precision matter for Kisqali?"),
+    ("Explain trigger KPIs", "Explain Trigger Precision and Override Rate for Kisqali."),
+    ("Override rate value", "What is the Override Rate for Kisqali?"),
+    # ... and a mixed ask whose first object is a causal outcome is at least
+    # partly served (precision-first: the gap between the lead and the KPI
+    # phrase admits no outcome id and no conjunction).
+    ("Persistence and precision", "What drives persistent_180d and Trigger Precision for Kisqali?"),
+    # ... and so is one whose SERVED object follows the KPI phrase - a catalog
+    # causal outcome or an allow-set KPI later in the same coordinated object
+    # list yields the rule, whatever the order (codex iter-3: dropping by
+    # object order alone is not precision-first).
+    ("Precision and persistence", "What drives Trigger Precision and persistent_180d for Kisqali?"),
+    (
+        "Precision and action factors",
+        "What causal factors influence Trigger Precision and action_taken for Kisqali?",
+    ),
+    ("Precision and TRx drivers", "What drives Trigger Precision and TRx for Kisqali?"),
 ]
 
 
@@ -1417,28 +1617,60 @@ async def test_journey_outcomes_exclude_kpi_named_outcomes():
         "adherent_180d",
         "low_gap_180d",
         "adopted",
+        # #1901 item 4a: resolvable only through the recognizer's name-token
+        # fallback (CM-001 / WS2-TR-003), which is not a KPI counterpart
+        "treatment_initiated",
+        "action_taken",
     } <= journey
     # KPI-named outcomes (a trend of ROI or TRx volume IS answerable) stay out
     for kpi_like in ("roi", "trx_volume", "nrx_volume", "nbrx_volume", "trx_market_share"):
         assert kpi_like not in journey, kpi_like
+    # "conversion" is a strict alias of Conversion Rate
+    assert "conversion_flag" not in journey
 
 
-async def test_treatment_initiated_is_left_to_the_prompt():
-    """The KPI recognizer reads 'treatment initiated' as a causal-metric KPI
-    mention (CM-001), so the outcome rule does not fire on it; the prompt's
-    section C carries that case. Pinned so a recognizer change is visible."""
+async def test_intent_to_prescribe_stays_out_by_normalized_containment():
+    """intent_to_prescribe has no strict-vocabulary hit; it is kept out of the
+    journey because its spaced form sits inside the registry name
+    "Remi - Intent-to-Prescribe" once punctuation is normalized to spaces.
+    Pinned with the raw name so the normalization stays load-bearing."""
     c = await make_catalog()
-    assert "treatment_initiated" not in cat.journey_outcomes(c)
+    assert "Intent-to-Prescribe" in c.kpi_name("BR-002")
+    assert "intent_to_prescribe" not in cat.journey_outcomes(c)
+
+
+async def test_treatment_initiated_joins_the_journey_but_yields_to_a_named_kpi():
+    """#1901 item 4a. treatment_initiated resolves to CM-001 (ATE) only through
+    the name-token fallback; CM-001 has no series, window or axis, so a trend
+    or rate of the outcome is unservable and drops. The widened outcomes stand
+    down when the pill also names a strict-vocabulary KPI: the ask is then a
+    KPI read (Conversion Rate by line of therapy, graded PARTIAL live)."""
+    c = await make_catalog()
+    assert "treatment_initiated" in cat.journey_outcomes(c)
     kept, dropped = cat.filter_unsupported_pills(
         [
             _Pill(
+                "Treatment initiation trend",
+                "Show me the monthly trend of treatment_initiated rate for Remibrutinib over the last 12 months.",
+            ),
+            _Pill(
                 "LoT depth",
                 "What is the treatment_initiated conversion rate for Fabhalta in line-of-therapy 0?",
-            )
+            ),
         ],
         c,
     )
-    assert len(kept) == 1 and dropped == []
+    assert [p.title for p in kept] == ["LoT depth"]
+    assert [(p.title, r) for p, r in dropped] == [
+        ("Treatment initiation trend", "outcome_as_kpi:treatment_initiated")
+    ]
+    # the stand-down is scoped to the fallback-resolved outcomes: a duration flag
+    # next to a strict KPI phrase still drops
+    kept, dropped = cat.filter_unsupported_pills(
+        [_Pill("Persistence and TRx", "Chart the persistent_180d rate by census region with TRx.")],
+        c,
+    )
+    assert kept == [] and [r for _, r in dropped] == ["outcome_as_kpi:persistent_180d"]
 
 
 @pytest.mark.parametrize("rule,title,message", DROP_FIXTURES)
@@ -1499,6 +1731,74 @@ async def test_empty_outcomes_disable_outcome_rule():
         c,
     )
     assert len(kept) == 1 and dropped == []
+
+
+async def test_empty_outcomes_disable_kpi_as_causal_outcome():
+    """#1901 item 4q. With no outcome list the prompt invites "what drives <the
+    outcome or KPI named on screen>", so the KPI-as-causal-outcome check must be
+    inert on a degraded catalog."""
+    c = await make_catalog(outcomes=_empty)
+    assert cat.catalog_rules(c).kpi_as_causal_outcome == ()
+    kept, dropped = cat.filter_unsupported_pills(
+        [_Pill("Trigger precision drivers", "What drives Trigger Precision for Kisqali?")], c
+    )
+    assert len(kept) == 1 and dropped == []
+
+
+async def test_kpi_as_causal_outcome_allow_set_is_fallback_resolved_plus_substrate(monkeypatch):
+    """#1901 item 4q. The allow-set is every KPI id a causal outcome resolves to
+    through recognize_kpi (aliases AND the name-token fallback - the broader,
+    precision-first set) plus the KPIs with a substrate builder; only phrases
+    of the remaining KPIs can be a dropped causal object."""
+    from src.services import kpi_resolution
+
+    c = await make_catalog()
+    rules = cat.catalog_rules(c)
+    dropped_ids = set(rules.kpi_ids.values())
+    allowed = {
+        "WS3-BI-005",  # trx_volume -> "trx"
+        "WS3-BI-006",  # nrx_volume -> "nrx"
+        "WS3-BI-007",  # nbrx_volume -> "nbrx"
+        "WS3-BI-008",  # trx_market_share -> "market share"
+        "WS3-BI-009",  # conversion_flag -> "conversion"; also the substrate builder
+        "WS3-BI-010",  # roi
+        "CM-001",  # treatment_initiated, via the name-token fallback
+        "WS2-TR-003",  # action_taken, via the name-token fallback
+        "BR-002",  # intent_to_prescribe, via the name-token fallback
+    }
+    assert allowed.isdisjoint(dropped_ids), allowed & dropped_ids
+    assert {"WS2-TR-001", "WS3-BI-004", "WS2-TR-006"} <= dropped_ids
+    # a KPI with a substrate builder is served by the composer's KPI path even
+    # when no registry outcome resolves to it
+    monkeypatch.setattr(
+        kpi_resolution,
+        "_BUILDERS",
+        {**kpi_resolution._BUILDERS, "WS2-TR-001": lambda *a, **k: None},
+    )
+    kept, dropped = cat.filter_unsupported_pills(
+        [_Pill("Trigger precision drivers", "What drives Trigger Precision for Kisqali?")], c
+    )
+    assert len(kept) == 1 and dropped == []
+
+
+async def test_off_platform_rule_wins_over_kpi_as_causal_outcome():
+    c = await make_catalog()
+    kept, dropped = cat.filter_unsupported_pills(
+        [_Pill("Territory precision", "What drives Trigger Precision in territory T-001?")], c
+    )
+    assert kept == [] and [r for _, r in dropped] == ["territory_detail"]
+
+
+async def test_bare_match_unsupported_rule_keeps_working_without_rules():
+    """The positional signature stays: without ``rules`` the outcome loop runs on
+    the journey alone and the catalog-derived checks (4a stand-down, 4q) are inert."""
+    assert (
+        cat.match_unsupported_rule(
+            "Chart the persistent_180d rate by census region.", ("persistent_180d",)
+        )
+        == "outcome_as_kpi:persistent_180d"
+    )
+    assert cat.match_unsupported_rule("What drives Trigger Precision for Kisqali?", ()) is None
 
 
 # =============================================================================
