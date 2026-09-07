@@ -1,6 +1,6 @@
 # KPI Reference
 
-**Version**: 3.2.0 | **Last Updated**: 2026-07-30 | **Calculable KPIs**: 45 | **Decommissioned**: 2 (WS1-MP-008, WS1-DQ-008) | **Gaps**: 0
+**Version**: 3.2.0 | **Last Updated**: 2026-09-07 | **Calculable KPIs**: 45 | **Decommissioned**: 2 (WS1-MP-008, WS1-DQ-008) | **Gaps**: 0
 
 ---
 
@@ -38,8 +38,8 @@ All 45 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row
 | 16 | WS1-MP-007 | SHAP Coverage | WS1 MP | `has_shap / total_predictions` | 0.95 | 0.80 | 0.60 | Daily |
 | 17 | WS1-MP-008 | Fairness Gap (dRecall) — ⚠️ DECOMMISSIONED (#1068) | WS1 MP | `max_group(R) - min_group(R)` | 0.05 | 0.10 | 0.20 | Weekly |
 | 18 | WS1-MP-009 | Feature Drift (PSI) | WS1 MP | `sum (q-p) * ln(q/p)` | 0.10 | 0.20 | 0.25 | Daily |
-| 19 | WS2-TR-001 | Trigger Precision | WS2 TR | `TP / (TP + FP)` | 0.70 | 0.55 | 0.40 | Daily |
-| 20 | WS2-TR-002 | Trigger Recall | WS2 TR | `TP / (TP + FN)` | 0.60 | 0.45 | 0.30 | Daily |
+| 19 | WS2-TR-001 | Trigger Precision | WS2 TR | `accepted_and_converted / accepted_and_tracked` (v2, mig 113) | 0.70 | 0.55 | 0.40 | Daily |
+| 20 | WS2-TR-002 | Trigger Recall | WS2 TR | `new_starts_with_prior_trigger / new_starts` (v2, mig 113) | 0.60 | 0.45 | 0.30 | Daily |
 | 21 | WS2-TR-003 | Action Rate Uplift | WS2 TR | `(rate_trt - rate_ctrl) / rate_ctrl` | 0.15 | 0.10 | 0.05 | Weekly |
 | 22 | WS2-TR-004 | Acceptance Rate | WS2 TR | `accepted / delivered` | 0.60 | 0.45 | 0.30 | Daily |
 | 23 | WS2-TR-005 | False Alert Rate | WS2 TR | `false_positives / total` | 0.10 | 0.20 | 0.30 | Daily |
@@ -103,10 +103,20 @@ Accepted forms (case-insensitive; all half-open `[start, end)` UTC):
 | Bare year | `2025` | absolute |
 | ISO range | `2025-01-01 to 2025-06-30` | absolute |
 
-**Not supported**: `ytd`, `qtd`, `this year`, `this month` — a bare unit
-requires the `last/past/trailing/previous` prefix. An unparseable window
-raises `WindowParseError` and comes back as a user-input error with a hint —
-**never a silent default**. No window at all means the KPI's standard
+| Calendar-aligned — `this/current week\|month\|quarter\|year`, `last/previous quarter` | `this month`, `current quarter`, `last quarter` | absolute, whole calendar period |
+
+**Calendar-aligned phrases are accepted** (#1546). `this month` is the **full
+calendar month containing now** — the whole period, deliberately *not* clamped
+to `.. now` — which keeps the window valid even at the period's first instant;
+future dates inside it simply hold no data. `last quarter` is the most recent
+*completed* calendar quarter. **`last month` and `last year` keep their rolling
+meaning**: the rolling branch matches them first, so only `quarter`, which has
+no rolling unit, carries a `last`/`previous` calendar form.
+
+**Still not supported**: `ytd`, `qtd`. Every other bare unit requires the
+`last/past/trailing/previous` prefix or a `this/current` prefix. An unparseable
+window raises `WindowParseError` and comes back as a user-input error with a
+hint — **never a silent default**. No window at all means the KPI's standard
 frontier-anchored window (see the migration-089 callout above).
 
 Every response stamps `window_status`:
@@ -128,8 +138,12 @@ Every response stamps `window_status`:
 | Region | `region` | territory mapping | predates the axis work; **loses to any patient axis** |
 
 Joins are on `patient_id` (not `patient_journey_id`). Patient axes take
-precedence over `region`, and axes do **not** combine with each other (the
-registry RPC caps at 4 parameters). The biologic / IgE axes are
+precedence over `region`, and axes do **not** combine with each other. That
+non-combination is a *registration* fact, not an arity ceiling: **the
+`kpi_query` positional cap is 6, raised from 4 by migration 120** (#1388), and
+`_windowed_region` variants exist precisely because the 5th and 6th slots
+opened up. A combination is refused because no variant is registered for it,
+not because the RPC cannot bind the params. The biologic / IgE axes are
 **brand-gated fail-closed**: requesting them for a brand whose rows are NULL
 by design (anything but Remibrutinib) errors before any query rather than
 fabricating a split.
@@ -154,7 +168,18 @@ twins for the four view-backed WS1 DQ KPIs — see the DQ-003/004/007/009 notes)
 **099** (WS3-BI-004 HCP Coverage tier-scoped + twin), **105** (severity/line
 variants for TRx/NRx/NBRx/TRx Share), **108** (biologic/IgE variants,
 Remibrutinib-only), **110** (monthly series by segment/line), **111**
-(Conversion Rate brand/axis/window + TRx Share windowed).
+(Conversion Rate brand/axis/window + TRx Share windowed), **113** (WS2 truth
+metrics redefined in place + brand variants), **116** (claims-lag triangles),
+**118** (trigger_effectiveness family), **120** (the 6-param cap + the 5-param
+regioned+windowed trigger-effectiveness variants), **124** (WS3-BI-010
+per-slice trailing-12-month statistics), **125** (WS3-BI-010 brand/region
+scoped headline), **127** (`brand_specific_*_region` x6 + BR-002 twins),
+**128** (`business_impact_conversion_rate_brand_region`), **129**
+(`cohort_profiler_hcp_trx_cohort_region`), **130**
+(`cohort_profiler_hcp_volume_tiers`).
+
+`grep -ln kpi_query_registry database/migrations/*.sql` is the current list —
+prefer re-running it to trusting this sentence.
 
 ### Fail-loud on unregistered combinations (PR #1271)
 
@@ -165,12 +190,105 @@ number for every question). Examples of refused combinations: conversion ×
 biologic/IgE (conversion is computed over triggers, which carry no
 biologic/IgE dimension); conversion × window × region; TRx Share × window ×
 region/biologic/IgE. The error text names the missing variant and the
-supported alternatives.
+supported alternatives. (Conversion × brand × region is **no longer** in this
+list — migration 128 registered it; see WS3-BI-009.)
+
+### A patient axis on a KPI that does not bind it is REFUSED, not dropped (#1911/#1913)
+
+Region carries a provenance marker (`region_status`, below), so a region that
+could not be applied is at least *disclosed*. **The four patient axes carry no
+such marker** — `src/kpi/calculator.py` stamps region only. So on a KPI whose
+calculator does not bind the axis, the filter was silently dropped while the
+answer still read as segment-scoped: the migration-111 conversion-rate incident
+shape, one tier up. `kpi_calculate_tool` now refuses instead.
+
+Only these KPIs **bind** each axis — the allowlist is
+`_PATIENT_AXIS_KPI_IDS` in `src/api/routes/chatbot_tools.py`, and
+`tests/unit/test_api/test_chatbot_kpi_axis_gate_1911.py` re-derives every set
+by running the real calculators against a recording client, so it cannot drift
+from the code:
+
+| Axis | KPIs that bind it |
+|---|---|
+| `segment` | WS3-BI-005, -006, -007, -008, **WS3-BI-009**, **CM-002** |
+| `therapy_line` | WS3-BI-005, -006, -007, -008, **WS3-BI-009** |
+| `biologic` | WS3-BI-005, -006, -007, -008 |
+| `ige_tier` | WS3-BI-005, -006, -007, -008 |
+
+Notes on the edges, because they are deliberate:
+
+- **WS3-BI-009** binds `segment` and `therapy_line` (migration 111) but refuses
+  `biologic`/`ige_tier` *itself* — triggers carry no biologic/IgE dimension. It
+  is left out of those two sets on purpose so the allowlist keeps one meaning
+  ("binds the axis") and the refusal names only KPIs that do; the calculator's
+  own guard remains as defence in depth for `/api/kpis`.
+- **CM-002** binds `segment` as `ml_predictions.segment_assignment = $1`
+  (migration 044), over the same label space this tool's `segment` field uses
+  (`low`/`medium`/`high_severity`). "CATE" and "conditional ATE" resolve to
+  CM-002, so refusing it would drop a combination the calculator serves. It
+  reads none of the other three axes.
+
+The refusal (#1565: a next step, not a dead end) names the served KPIs in
+registry order and offers both ways out — ask for this KPI without the filter,
+or ask for one of the served KPIs by that filter.
+
+### Region provenance (#1538)
+
+The window idiom applied to geography. Only a fixed set of calculators route to
+region-scoped variants (migrations 077/078/113/118/125/127/128); **every other
+calculator keeps its global/portfolio value even when the context carries a
+region**. Three fields on the response disclose which happened:
+
+| Field | Meaning |
+|---|---|
+| `region_requested` | The region the caller asked for (or `null`) |
+| `region_applied` | The region a region-scoped variant actually computed for |
+| `region_status` | `default` \| `applied` \| `not_applicable` |
+
+| `region_status` | Meaning |
+|---|---|
+| `default` | No region requested |
+| `applied` | A region-scoped variant computed this value |
+| `not_applicable` | A region was requested but **not** applied — no variant exists, or a combination (e.g. a patient axis) dropped it |
+
+> **A `not_applicable` value is global and must NOT be captioned with the
+> region.** That is the whole point of the marker: the number is portfolio-wide
+> and labelling it "west" would be a fabrication.
+
+Defined on `KPIResult` in `src/kpi/models.py`; round-tripped through
+`src/kpi/cache.py`, which deliberately treats a pre-#1538 cache entry as
+`region_status="default"`.
+
+### Measure basis (#1640/#1647)
+
+`src/kpi/measure_basis.py` is the SSOT for **what a KPI figure measures and
+what it may be compared with**. The rule:
+
+> Two figures are comparable only if their substrate declarations are **equal**,
+> and an **undeclared substrate is never comparable with anything**.
+
+`measure_basis` is a field on four response models in
+`src/api/schemas/kpi.py`. **Figures with different bases must not share an
+axis** — a chart that plots them together is asserting a comparison the data
+does not support.
+
+The motivating measurement: `business_metrics.value` and a
+`treatment_events` prescription count are not the same quantity. Measured
+against the live DB on 2026-08-15, the national `business_metrics` TRx total
+for 2026-08 was 825,242 against 11,298 trailing-30-day `treatment_events`
+prescription events for the same brand — a stable **~73x** ratio month over
+month.
+
+The module is deliberately cheap to import (it lives under `src.kpi`, not
+`src.services`, because `src/services/__init__.py` eagerly pulls in
+`alert_routing` and hence `aiohttp`) so every surface that emits a figure — the
+chat tools, the orchestrator's `kpi_lookup` payload, the Home KPI summary tiles
+— can carry it without importing the chat stack.
 
 ### `semantic_note` (fabrication guard)
 
 WS3-BI-008 responses always carry this note, verbatim from
-`src/api/routes/chatbot_tools.py` (`KPI_SEMANTIC_NOTES`):
+`KPI_SEMANTIC_NOTES` in `src/services/kpi_resolution.py` (moved out of `src/api/routes/chatbot_tools.py` by #1475 so surfaces can import it without paying the chat stack's import cost):
 
 > TRx Share is the brand's share of the tracked portfolio's prescriptions
 > (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share
@@ -269,7 +387,7 @@ WHERE ($1::text IS NULL OR pj.brand = $1 OR ru.brand = $1)
 | **Unit** | Ratio (0.0 - 1.0) |
 | **Frequency** | Daily |
 | **Source Tables** | `data_source_tracking` |
-| **Source Columns** | `data_source_tracking.match_rate_vs_claims`, `data_source_tracking.match_rate_vs_ehr`, `data_source_tracking.match_rate_vs_specialty` |
+| **Source Columns** | `data_source_tracking.match_rate_vs_iqvia`, `match_rate_vs_healthverity`, `match_rate_vs_komodo`, `match_rate_vs_veeva` — the four columns the table actually declares. (`match_rate_vs_claims` / `_ehr` / `_specialty`, cited here before 2026-09-07, exist in no DDL.) |
 | **Helper View** | `v_kpi_cross_source_match` (retained, but the live registry query reads the table directly since migration 095) |
 | **Target** | >= 0.75 |
 | **Warning** | < 0.75 and >= 0.60 |
@@ -497,6 +615,56 @@ WHERE status = 'success'
 These KPIs monitor the predictive quality, calibration, explainability, and fairness of the ML models powering the engagement triggers. Metrics are sourced from MLflow experiment tracking and the `ml_predictions` table.
 
 > **Note:** 8 of these 9 are currently calculable. **WS1-MP-008 (Fairness Gap) is decommissioned** (#1068) — it needs protected-group `fairness_metrics` the synthetic substrate does not populate. It is retained below as a designed KPI.
+
+### Sampling-aware trend classification (#1916, 2026-09-07)
+
+The `/model-performance` page's "Performance trend" label is **not** a plain
+threshold on the metric. It used to be: newest walk-forward fold vs the mean of
+the older folds, ±5% relative, with no notion of sample size. A walk-forward
+fold is **one calendar month of rows** (~80–230 patients, ~130 HCPs), so its
+AUC carries a Hanley–McNeil standard error of 0.04–0.07 — *larger* than the 5%
+threshold (~0.04). Simulated under a perfectly stationary model, the old rule
+reported something other than "stable" **38% of the time at n=130 and 56% at
+n=54**, and on 2026-09-07 it flagged four gold-standard models "degrading" on
+single folds that sat 0.8–2.2 standard errors below baseline with no slope.
+
+`src/services/performance_trend_stats.py` replaces it. A row is labelled
+`degrading` / `improving` only when the change is **both**:
+
+1. **statistically distinguishable from noise** — level `z` beyond 2.5 **OR**
+   the OLS slope `t` beyond its threshold (the slope catches a steady
+   0.01/month slide a level test cannot see); and
+2. **material** — the historical ±5% floor, kept as a materiality gate.
+
+**Analytic standard errors are computed only where a closed form exists**:
+binomial on n for `accuracy`, binomial on the positive count for `recall`,
+Hanley–McNeil for `auc_roc`. **`precision` and `f1` get none** — precision's
+denominator (predicted positives) is not persisted and F1 has no binomial
+variance, and an invented interval would understate their noise, re-creating
+the false alarms this module exists to remove.
+
+**Two noise scales; the classifier uses the larger available one:**
+
+| Basis | Definition | Availability |
+|---|---|---|
+| `analytic` | `sqrt(SE_current² + SE_baseline_mean²)` | Only when the newest fold **and every baseline fold** have an analytic SE — a baseline fold of unknown precision is never treated as exact |
+| `empirical` | Fold-to-fold sd of the baseline, ×`sqrt(1 + 1/k)` for a new observation, inflated by `t_{k-1}/z` because that sd is itself estimated from k folds (a Student-t test, not a z-test) | k >= 6 baseline folds |
+| `legacy_relative` | The old ±5% rule, with the reason attached | Fallback when neither scale is available |
+
+Every row carries its **basis code**, so a reader can see which rule produced
+the label.
+
+**The open month is skipped.** A calendar month that has not closed is a
+partial fold; `src/mlops/gold_standard_eval/walk_forward.py` skips the month
+containing `as_of` and anything later, in both the runner and the reader.
+
+> **`alert_threshold` is an alert FLOOR, not a boundary.** Crossing it makes a
+> row eligible for an alert; it does not by itself define "degrading". The
+> classification above does.
+
+At ±2.5 the page's 12 models × 5 metrics = 60 weekly series expect ~0.4 false
+"degrading" labels per run from the level test alone, bounded by ~0.7 with the
+slope test OR'd in, before the ±5% materiality floor removes the shallow ones.
 
 ### WS1-MP-001: ROC-AUC
 
@@ -748,8 +916,8 @@ These KPIs evaluate the quality and effectiveness of engagement triggers sent to
 |-------|-------|
 | **ID** | `WS2-TR-001` |
 | **Name** | Trigger Precision |
-| **Definition** | Percentage of fired triggers resulting in positive outcome |
-| **Formula** | `true_positives / (true_positives + false_positives)` |
+| **Definition** | Of the triggers that were **accepted** and whose outcome was tracked, the share that converted |
+| **Formula** | `count(accepted AND outcome_tracked AND outcome_value > 0) / count(accepted AND outcome_tracked)` — **v2, migration 113** |
 | **Calculation Type** | Derived |
 | **Direction** | Higher is better |
 | **Unit** | Ratio (0.0 - 1.0) |
@@ -761,6 +929,21 @@ These KPIs evaluate the quality and effectiveness of engagement triggers sent to
 | **Warning** | < 0.70 and >= 0.55 |
 | **Critical** | < 0.40 |
 
+> **Definition break, 2026-07-20 (migration 113, #1300).** The v1 formula was
+> the generic `TP / (TP + FP)`. v2 is the declared truth shape — "trigger
+> accepted **and** downstream outcome achieved" — applied **in place** on all
+> four existing variants.
+>
+> It also **shifts the scored window** from `[frontier-30d, frontier]` to
+> `(frontier-60d, frontier-30d]`. A trigger's 30-day conversion window must
+> fully elapse inside the data before the trigger can be scored; one fired five
+> days before the frontier has had no chance to convert and would read as a
+> false precision decline. `history_backfill`'s TR-001 recast carries the same
+> 30-day maturity guard, in lockstep.
+>
+> Because this changed in place, **`kpi_history` shows a definition-driven step
+> at 2026-07-20, not a performance change.** Do not read across it.
+
 **Calculator**: `TriggerPerformanceCalculator._calc_trigger_precision`
 
 ---
@@ -771,8 +954,8 @@ These KPIs evaluate the quality and effectiveness of engagement triggers sent to
 |-------|-------|
 | **ID** | `WS2-TR-002` |
 | **Name** | Trigger Recall |
-| **Definition** | Percentage of positive outcomes preceded by a trigger |
-| **Formula** | `true_positives / (true_positives + false_negatives)` |
+| **Definition** | Of the **new starts** in the window, the share that had a trigger dated on or before their first prescription |
+| **Formula** | `new_starts_with_prior_trigger / new_starts` — **v2, migration 113** |
 | **Calculation Type** | Derived |
 | **Direction** | Higher is better |
 | **Unit** | Ratio (0.0 - 1.0) |
@@ -784,7 +967,23 @@ These KPIs evaluate the quality and effectiveness of engagement triggers sent to
 | **Warning** | < 0.60 and >= 0.45 |
 | **Critical** | < 0.30 |
 
-Measures whether the system identified opportunities before they happened. Looks for positive outcomes (prescriptions, conversions) that were preceded by at least one trigger.
+Measures whether the system identified opportunities before they happened.
+
+> **Definition break, 2026-07-20 (migration 113, #1300).** v2 applied **in
+> place** on all four variants:
+>
+> - **Denominator = NEW STARTS** — patients whose *first-ever* prescription
+>   lands in the frontier-anchored 30-day window `[frontier-30d, frontier]`.
+>   The v1 migration-044 proxy used an any-Rx-in-30d denominator.
+> - **Numerator** = those new starts with a trigger dated on or before the
+>   first Rx. The boundary is **DATE-granular**: a same-calendar-day trigger
+>   counts as preceding, because `event_date` carries no time of day.
+>
+> The v1 proxy read structurally ~0.10 regardless of model quality.
+> Disproof-validated 2026-07-20: 0.1025 -> 0.6750 portfolio, ~0.673–0.676 per
+> brand. **The historical 0.10 was a measurement artefact, not model
+> performance** — `kpi_history` shows a definition-driven step here, not an
+> improvement. Do not read a trend across 2026-07-20.
 
 **Calculator**: `TriggerPerformanceCalculator._calc_trigger_recall`
 
@@ -957,7 +1156,7 @@ High override rates indicate triggers that do not align with rep judgment and ma
 | **Helper View** | None |
 | **Target** | — (informational until a target is ratified) |
 
-**Note**: Added by the #1360 ruling (2026-07-30) — trigger-effectiveness KPIs are chat-KPI-path, served by `kpi_calculate_tool` over the migration-118 `trigger_effectiveness_funnel_conversion` statements. The response carries the full stage counts (`funnel_stages`: delivered → viewed → accepted → actioned → outcome). The headline deliberately stops at **actioned** — the outcome stage reflects outcome-*tracking* coverage, not effectiveness (the v1 trigger-precision trap; see WS2-TR-001) — and `viewed` is a `delivery_status` progression state, not a funnel prerequisite for acceptance. "Delivered" follows the migration-090/092 convention: `delivery_status IN ('delivered', 'viewed')`. Accepts `brand` / `region` / `trigger_type` filters and an explicit time window (region and window are mutually exclusive — the RPC binds at most 4 positional params).
+**Note**: Added by the #1360 ruling (2026-07-30) — trigger-effectiveness KPIs are chat-KPI-path, served by `kpi_calculate_tool` over the migration-118 `trigger_effectiveness_funnel_conversion` statements. The response carries the full stage counts (`funnel_stages`: delivered → viewed → accepted → actioned → outcome). The headline deliberately stops at **actioned** — the outcome stage reflects outcome-*tracking* coverage, not effectiveness (the v1 trigger-precision trap; see WS2-TR-001) — and `viewed` is a `delivery_status` progression state, not a funnel prerequisite for acceptance. "Delivered" follows the migration-090/092 convention: `delivery_status IN ('delivered', 'viewed')`. Accepts `brand` / `region` / `trigger_type` filters and an explicit time window. **Region and window are no longer mutually exclusive**: migration 120 raised the `kpi_query` positional cap from 4 to 6 (#1388) and registered the 5-param `trigger_effectiveness_*_windowed_region[_include_synthetic]` variants — `$1` brand, `$2` region (via a `patient_journeys` join, since `triggers` carries no region column), `$3` trigger_type, `$4`/`$5` the half-open window, all filters nullable.
 
 **Calculator**: `TriggerPerformanceCalculator._calc_funnel_conversion`
 
@@ -1187,9 +1386,21 @@ Looks for prescription events that occur between trigger fire date and 30 days a
 
 **Axes & windows** (see [Time Windows & Dimension Axes](#time-windows--dimension-axes-july-2026-engine)):
 routed variants for brand, severity tier, line of therapy, and their
-windowed forms (migration 111). Unsupported combinations **fail loud**:
-biologic/IgE axes (triggers carry no biologic/IgE dimension), window ×
-region, and brand × region are all refused with an explanatory error.
+windowed forms (migration 111), plus **brand x region** since **migration 128**
+(#1575): `business_impact_conversion_rate_brand_region`. Before 128 the family
+had a `_brand` leg (111) and a `_region` leg (077/089) but no joint — its
+certified base is param-less by original design, so unlike every Rx-volume
+sibling (whose nullable `$1` brand makes their `_region` leg
+`[brand, region]` already) "conversion rate for Kisqali in the west" could only
+be answered brand-scoped *or* region-scoped, and the chat layer said "KPI
+unavailable" for a combination that was unserved rather than unservable. The
+128 statements are derived byte-wise from the vetted migration-111 `_segment`
+statement with the patient-axis CTE swapped for the 077/078 region CTE. A
+2026-08-13 registry sweep found conversion_rate was the only
+`business_impact` family with this split-legs gap.
+
+Still refused with an explanatory error: the **biologic / IgE axes** (triggers
+carry no biologic/IgE dimension) and **window x region**.
 Before PR #1271 this KPI silently routed region-only and dropped
 brand/segment/line dimensions, returning one flat number for every
 question — the fail-loud routing is the fix.
@@ -1219,6 +1430,33 @@ question — the fail-loud routing is the fix.
 
 Falls back from `business_metrics.roi` to `agent_activities.roi_estimate` when the primary source is unavailable.
 
+**Brand/region scoping (migration 125, #1534).** The headline was a 0-param
+portfolio-wide aggregate since the 044 allowlist restore, while every surface
+that batched it — dashboard grid, `insights_strategic` grounding, the chatbot
+`kpi_calculate_tool` — passed brand/region context and *labelled the figure
+with it*. Migration 125 registers a 2-nullable-param scoped variant of the
+exact migration-089 headline: same `AVG(roi)`, same inclusive >= 30-day window,
+same frontier anchoring, same `data_through` disclosure. Called with
+`[NULL, NULL]` it is value-identical to the 0-param query. **The frontier
+(`MAX(metric_date)`) stays global**, not scope-narrowed.
+
+**Temporal-variability band (migration 124, #1532).** The KPI is a pooled point
+estimate with no dispersion, and #1527 established that **no interval is
+possible within the 30-day headline window**: `business_metrics` ROI data is
+monthly, so every (metric_name, brand, region) slice has exactly n=1 there
+(measured 2026-08-10: 9,840 ROI rows, one per slice per month, 164 months
+deep). A pooled STDDEV would measure cross-slice heterogeneity, not
+uncertainty. Migration 124 instead registers per-slice descriptive statistics
+over the **trailing 12 months** (n <= 12 monthly observations per slice), from
+which `src/kpi/calculators/business_impact.py` assembles the range of the
+slice's recent monthly ROI values.
+
+> **It is a temporal-variability band, not a confidence interval, and is never
+> named as one** (the #1526 `sensitivity_band` naming discipline). It is
+> **suppressed below n = 6** (`_ROI_BAND_MIN_N`): the entry comes back with
+> `band = None` and `band_suppressed = True` rather than a 3-month range
+> dressed up as a 12-month band. See `docs/roi_methodology.md` §8.2.
+
 **Calculator**: `BusinessImpactCalculator._calc_roi`
 
 ---
@@ -1226,6 +1464,33 @@ Falls back from `business_metrics.roi` to `agent_activities.roi_estimate` when t
 ## Brand-Specific (5 KPIs)
 
 These KPIs track therapeutic-area-specific outcomes for the three Novartis brands supported by the platform: Remibrutinib (chronic spontaneous urticaria), Fabhalta (PNH), and Kisqali (breast cancer).
+
+### Region axis (migration 127, #1564)
+
+All five BR KPIs accept a **region** scope. Before migration 127 the region
+axis (#1536/#1538, migrations 077/078/113/125) covered three of the six KPI
+calculator families and `brand_specific` was not one of them, so a region+brand
+ask ("Kisqali oncologist reach in the northeast") always answered
+portfolio-level under the honest `not_applicable` hedge.
+
+Region exists in every BR source: `patient_journeys.geographic_region` for the
+patient-based KPIs (BR-001, BR-003, BR-004) and `hcp_profiles.geographic_region`
+for the HCP-based ones (BR-002, BR-005).
+
+Registered variants — **additive, not in-place**, on the same contract as
+migration 077: the base statements feed certified reads, and the parallel
+`*_region` ids are routed to **only when a region is selected**, so
+`region = None` stays byte-identical to before.
+
+| KPI | `query_id` |
+|-----|-----------|
+| BR-001 | `brand_specific_remi_ah_uncontrolled_region` |
+| BR-002 | `brand_specific_remi_intent_delta_primary_region` **and** `..._fallback_region` — BR-002 has primary/fallback **twins**, so both legs get a region variant |
+| BR-003 | `brand_specific_fabhalta_pnh_tested_region` |
+| BR-004 | `brand_specific_kisqali_dx_adoption_region` |
+| BR-005 | `brand_specific_kisqali_oncologist_reach_region` |
+
+Each also has an `_include_synthetic` twin (12 statements in all).
 
 ### BR-001: Remi - AH Uncontrolled %
 
@@ -1293,13 +1558,13 @@ Identifies patients with CSU diagnosis on antihistamine/H1-blocker therapy whose
 | **Unit** | Ratio (0.0 - 1.0) |
 | **Frequency** | Weekly |
 | **Source Tables** | `treatment_events` |
-| **Source Columns** | `treatment_events.event_type`, `treatment_events.test_type` |
+| **Source Columns** | `patient_journeys.primary_diagnosis_code`, `treatment_events.event_subtype`, `treatment_events.loinc_codes`. (`treatment_events.test_type`, cited here before 2026-09-07, exists in no DDL.) |
 | **Helper View** | None |
 | **Target** | >= 0.60 |
 | **Warning** | < 0.60 and >= 0.45 |
 | **Critical** | < 0.30 |
 
-Eligible patients are those with a PNH diagnosis or an anemia diagnosis flagged as eligible. Testing is identified by `test_type` values: `flow_cytometry`, `pnh_panel`, or `gpi_anchor`.
+Eligible patients are the distinct `patient_journeys` rows with `brand = 'Fabhalta'` **and** `primary_diagnosis_code = 'D59.5'`. Testing is identified in `treatment_events` by `event_subtype = 'pnh_flow_cytometry'` **and** a `loinc_codes` overlap with `ARRAY['55164-8','35468-8','90735-2','44007-3']` — both conditions, not a `test_type` vocabulary.
 
 **Calculator**: `BrandSpecificCalculator._calc_fabhalta_pnh_tested`
 
@@ -1313,19 +1578,27 @@ Eligible patients are those with a PNH diagnosis or an anemia diagnosis flagged 
 | **Name** | Kisqali - Dx Adoption |
 | **Brand** | Kisqali |
 | **Definition** | Median time from diagnosis to first Kisqali prescription |
-| **Formula** | `median(first_kisqali_date - diagnosis_date)` |
+| **Formula** | `median(first_kisqali_rx_date - journey_start_date)` |
 | **Calculation Type** | Derived |
 | **Direction** | Lower is better |
 | **Unit** | Days |
 | **Frequency** | Weekly |
 | **Source Tables** | `patient_journeys`, `treatment_events` |
-| **Source Columns** | `patient_journeys.diagnosis_date`, `treatment_events.event_date` |
+| **Source Columns** | `patient_journeys.journey_start_date`, `treatment_events.event_date`, `treatment_events.event_type`. (`patient_journeys.diagnosis_date`, cited here before 2026-09-07, exists in no DDL.) |
 | **Helper View** | None |
 | **Target** | <= 30 days |
 | **Warning** | > 30 days and <= 45 days |
 | **Critical** | > 60 days |
 
-Measures speed of adoption for breast cancer patients. Joins `treatment_events` (first Kisqali prescription) with `patient_journeys` (diagnosis date) and computes the median gap.
+Measures speed of adoption for breast cancer patients. Joins `treatment_events`
+(`MIN(event_date)` where `brand = 'Kisqali'` and `event_type = 'prescription'`)
+with `patient_journeys` and takes `PERCENTILE_CONT(0.5)` of the gap, restricted
+to rows where the first Rx is on or after the journey start.
+
+> **This is a proxy, and the registry note says so.** There is **no
+> `diagnosis_date` column**; diagnosis date is approximated by
+> `patient_journeys.journey_start_date`. Read the figure as time-from-journey-start,
+> not time-from-diagnosis.
 
 **Calculator**: `BrandSpecificCalculator._calc_kisqali_dx_adoption`
 
@@ -1531,7 +1804,7 @@ The following KPIs use lower-is-better evaluation:
 | WS1-DQ-006 | Geographic Consistency Gap | 0.05 | 0.10 | 0.20 |
 | WS1-DQ-007 | Data Lag (Median) | 3 days | 7 days | 14 days |
 | WS1-DQ-009 | Time-to-Release (TTR) | 24 hrs | 48 hrs | 72 hrs |
-| WS1-MP-005 | Brier Score | 0.15 | 0.25 | 0.35 |
+| WS1-MP-005 | Brier Score | 0.185 | 0.25 | 0.35 |
 | WS1-MP-008 | Fairness Gap — ⚠️ DECOMMISSIONED (#1068) | 0.05 | 0.10 | 0.20 |
 | WS1-MP-009 | Feature Drift (PSI) | 0.10 | 0.20 | 0.25 |
 | WS2-TR-005 | False Alert Rate | 0.10 | 0.20 | 0.30 |
@@ -1584,9 +1857,95 @@ def evaluate(self, value: float | None, lower_is_better: bool = False) -> KPISta
 
 ---
 
+## KPI history (`kpi_history`, migration 079)
+
+The durable KPI time series behind the Time-Series page. Schema in
+[02 Core Data Dictionary](02-CORE-DATA-DICTIONARY.md#kpi_history); the
+behaviour that affects how a series should be read is here.
+
+**Two writers**, both under `src/kpi/`:
+
+| Writer | Role |
+|---|---|
+| `src.kpi.history_backfill` | Reconstructs history from the source tables (`python -m src.kpi.history_backfill [KPI_ID]`) |
+| `src.kpi.history_capture` | Going-forward companion, wired into `scripts/reseed_synthetic.sh`; appends the current period weekly |
+
+**Scope keys use `''`, never NULL.** `brand = ''` means all-brands and
+`region = ''` means all-regions; NULLs would compare as distinct in the
+`(kpi_id, brand, region, metric_date)` UNIQUE constraint and let duplicate
+points through.
+
+**Brand axis (#1896).** `history_capture` also captures a per-brand line for
+the KPIs in `BRAND_CAPTURE_KPI_IDS`, over `CAPTURE_BRANDS`, by calling the same
+calculator with `context={"brand": <brand>}`. **Only KPIs whose calculator
+returns a genuinely distinct brand-scoped reading are on that list.** A KPI
+that ignores or lacks a brand parameter is captured globally only — three
+identical lines would be a fabricated brand axis.
+
+**Partial months are dropped.** `_complete_months()` keeps only calendar months
+fully covered by the data span: a leading month counts only if the data starts
+on its 1st, a trailing month only if it reaches the last day. A mid-month
+frontier would otherwise render a truncated point that reads as a real collapse
+or spike.
+
+**Definition breaks are visible in the series.** Migration 113 redefined
+WS2-TR-001 and WS2-TR-002 in place on 2026-07-20, so those series carry a step
+at that date that is a *definition* change, not a performance change. See
+[WS2-TR-001](#ws2-tr-001-trigger-precision) and
+[WS2-TR-002](#ws2-tr-002-trigger-recall).
+
+**Coverage** is exposed by `v_kpi_history_coverage` (migration 098, re-grained
+by region in 126) behind `GET /api/kpis/history/coverage`.
+
+---
+
+## Claims-lag nowcast
+
+`GET /api/kpis/{kpi_id}/history/nowcast` — the honest as-of-frontier view of
+the Rx-volume trend KPIs, plus a grossed-up estimate of where the month will
+land. **Gated to the Rx-volume family**: TRx (WS3-BI-005), NRx (WS3-BI-006),
+NBRx (WS3-BI-007). Any other `kpi_id` gets an explicit "no claims-lag nowcast
+series" refusal, not an empty chart.
+
+**Why it exists.** The DGP stamps every claims-derived `treatment_events` row
+with `claim_available_date` (= event date + adjudication lag; migration 115).
+**Base KPIs never read that column** — they report the *mature*, omniscient,
+all-events value. But a recent month has not finished arriving, so its honest
+as-of-frontier count is an under-count.
+
+**Three series per month** (`src/kpi/nowcast/completion_factor.py`):
+
+| Series | Definition |
+|---|---|
+| `mature` | The all-events total — omniscient, what the base KPI reports |
+| `provisional` | Events with `claim_available_date <= frontier` — the under-count actually visible as of now |
+| `nowcast` | `provisional / CF(x_m)` — the under-count grossed up by the completion factor |
+
+**The completion curve is estimated, never read from the generating
+distribution.** Migration 116's lag-triangle registry queries return, per
+calendar service month, the histogram of `arrival_offset_days` plus global
+`data_min` / `frontier` scalars (query-time live compute, mirroring the
+migration-110 segmented-history pattern). `CF(x) = P(offset <= x)` is the
+pooled delay CDF over **mature months only**, where a month is mature iff its
+age reaches the maximum *observed* arrived offset — so its inclusion cannot be
+selection-biased by a lucky fast tail — **and** every one of its events has
+arrived. (That second check is possible only because the synthetic substrate is
+omniscient; a real-feed deployment would substitute a fixed maturity horizon.)
+
+**The self-check is the point.** On mature-enough months the nowcast should
+recover the known `mature` value. If it does not, the estimator is wrong — and
+displaying all three series is what makes that visible rather than hidden.
+Uncertainty is a percentile bootstrap CI combining estimation noise in CF
+(cluster resampling of mature months) with the sampling noise of the
+provisional count.
+
+The Time-Series page renders it as an overlay on the mature line.
+
+---
+
 ## Helper Views
 
-Eight Postgres views pre-compute KPI aggregations for performance. These are defined in the V3 schema and referenced by the `view` field in `config/kpi_definitions.yaml`.
+Postgres views that pre-compute KPI aggregations. The first eight are defined in the V3 schema and referenced by the `view` field in `config/kpi_definitions.yaml`; `v_kpi_history_coverage` came later, from migrations 098/126. Seven of the nine are still referenced by a live KPI — `v_kpi_label_quality` is retained after its KPI was decommissioned, and `v_kpi_history_coverage` backs an endpoint rather than a KPI.
 
 | View Name | Description | Source Table(s) | Used By |
 |-----------|-------------|-----------------|---------|
