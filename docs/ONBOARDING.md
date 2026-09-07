@@ -261,7 +261,9 @@ done
 
 ```bash
 make data-generate
-# Or: python src/ml/data_generator.py
+# Equivalent to the two steps it runs, in order:
+#   python src/ml/data_generator.py   # generate
+#   python src/ml/data_loader.py      # load into Supabase
 ```
 
 ---
@@ -272,7 +274,7 @@ make data-generate
 
 | Category | Technologies |
 |----------|-------------|
-| **AI/ML** | LangGraph, LangChain, Claude (Anthropic), scikit-learn, LightGBM |
+| **AI/ML** | LangGraph, LangChain, DSPy, OpenAI + Anthropic (see `src/utils/llm_factory.py`), scikit-learn, LightGBM |
 | **Causal Inference** | DoWhy, EconML (CausalForestDML), CausalML (UpliftRandomForest), NetworkX |
 | **MLOps** | MLflow, Feast, BentoML, Great Expectations, Optuna, SHAP (Opik: stopped May 2026) |
 | **Backend** | FastAPI, Pydantic, Celery, Redis |
@@ -301,7 +303,8 @@ e2i_causal_analytics/
 │   └── utils/              # Shared utilities
 ├── frontend/               # React/TypeScript/Vite frontend
 │   └── src/
-│       ├── components/     # React components (30+ pages)
+│       ├── pages/          # Route-level pages (31 page components)
+│       ├── components/     # Shared React components
 │       ├── api/            # API client layer
 │       ├── lib/            # Utility libraries
 │       └── providers/      # Context providers
@@ -315,16 +318,18 @@ e2i_causal_analytics/
 │   ├── agent_config.yaml   # 22-agent definitions
 │   ├── kpi_definitions.yaml
 │   └── observability.yaml
-├── database/               # SQL schemas (37+ tables)
-│   ├── core/               # 8 core data tables
-│   ├── ml/                 # 17 ML tables
-│   ├── memory/             # 4 memory tables
-│   └── audit/              # Audit trail
+├── database/               # SQL schemas — 8 dirs applied by scripts/run_migrations.sh
+│   ├── migrations/         # Numbered cross-cutting migrations
+│   ├── core/               # Core data tables
+│   ├── ml/                 # ML / MLOps tables
+│   ├── memory/             # Tri-memory tables + the FalkorDB graph schema
+│   ├── causal/ chat/ rag/  # Domain schemas
+│   └── audit/              # Audit trail (hash-chained)
 ├── docker/                 # Docker Compose & Dockerfiles
 │   ├── docker-compose.yml       # Base (21+ services)
 │   ├── docker-compose.dev.yml   # Dev overlay (hot-reload)
 │   └── docker-compose.opik.yml  # Opik overlay (legacy — stopped May 2026)
-├── scripts/                # 36+ operational scripts
+├── scripts/                # Operational scripts (~140 files)
 ├── feature_repo/           # Feast feature definitions
 ├── .github/workflows/      # 20+ CI/CD workflows
 ├── CLAUDE.md               # AI assistant instructions
@@ -345,8 +350,13 @@ TIER 0: ML Foundation (9 agents)
   cohort_profiler (dispatched by the orchestrator, not on the sequential chain)
 
 TIER 1: Coordination (2 agents)
-  orchestrator (intent classifier [regex → Haiku LLM fallback] + router;
-                routes dependent multi-part queries to tool_composer)
+  orchestrator (intent classification + routing. Classification is a staged
+                rule-based pipeline in src/agents/orchestrator/classifier/
+                — feature extraction → domain mapping → dependency detection →
+                pattern selection — with a fast-tier LLM fallback used only for
+                ambiguous queries (Haiku on Anthropic, the fast GPT tier on
+                OpenAI; see src/utils/llm_factory.py). Routes dependent
+                multi-part queries to tool_composer)
   tool_composer (multi-part query decomposition: sub-questions + dependency DAG)
 
 TIER 2: Causal Analytics (3 agents)
@@ -461,6 +471,8 @@ gh pr create --title "feat: description" --body "## Summary\n..."
 - **check-yaml** validation
 - **check-added-large-files** (>1MB blocked)
 - **no-commit-to-branch** (prevents commits to `main`)
+- **detect-secrets** (Yelp baseline scan — a new secret-looking string fails the commit
+  until it is removed or audited into `.secrets.baseline`)
 
 ### PR Requirements
 
@@ -589,7 +601,36 @@ pytest -m "not slow" tests/
 pytest -m requires_falkordb tests/
 ```
 
-Available markers: `unit`, `integration`, `e2e`, `slow`, `requires_redis`, `requires_falkordb`, `requires_supabase`, `heavy_ml`, `xdist_group`
+Available markers (authoritative list: the `markers = [...]` block in `pyproject.toml`):
+`unit`, `integration`, `e2e`, `slow`, `requires_redis`, `requires_falkordb`,
+`requires_supabase`, `heavy_ml`, `xdist_group`, `real_data` (needs real CSU/Optum cohort
+data on disk), `benchmark` (retrieval Recall@10 / MRR — excluded from the default sweep),
+`live_llm` and `live_lm` (need a live LM key; CI-skipped without one), and
+`real_supabase` (opt out of the unit-tree dead-Supabase pin — read-only checks only).
+
+### Test Environment Guarantees
+
+**Unit tests can never touch a real Supabase.** An autouse fixture in
+`tests/unit/conftest.py` pins the whole unit tree to dead credentials —
+`SUPABASE_URL=http://127.0.0.1:1` (a reserved port that is never listening, so any
+attempt fails immediately with ECONNREFUSED) plus placeholder keys. This matters
+specifically on the droplet, where dev and prod are the same box and CI's nominal
+`localhost:54321` is the **live production** Supabase. The pin is locked by
+`tests/unit/test_utils/test_unit_tree_dead_supabase_1420.py`. Two deliberate escape
+hatches exist: `@pytest.mark.real_supabase` (read-only, reachability-gated checks only)
+and a per-test `monkeypatch.setenv`.
+
+**Stall and crash guards.** `--timeout` only arms a timer *inside* an xdist worker's
+runtest protocol, so a stall in the controller — or in a worker holding the GIL in
+native code — has no timer at all and burns the job's whole timeout budget with no
+diagnosis. Two controller-side guards in `tests/conftest.py` cover that:
+
+- a session inactivity watchdog, inert unless `E2I_PYTEST_STALL_TIMEOUT` is set (opt-in
+  per lane, because a safe window depends on that lane's longest per-test budget, which
+  ranges from 30s to 2700s here);
+- an xdist crash guard that refuses a green exit when a worker dies during collection —
+  xdist synthesises no failure for a worker that was running no item, so pytest would
+  otherwise return 0 with nothing run.
 
 ### Tier Tests (ML Pipeline Validation)
 
@@ -754,9 +795,15 @@ All API responses include:
 |----------|-------|--------|
 | Default | 100 req | 60s |
 | Auth endpoints | 20 req | 60s |
-| CopilotKit chat | 30 req | 1 hour |
+| Calculations (`/calculate`, and any POST) | 30 req | 60s |
 | Batch operations | 10 req | 60s |
 | Health checks | 300 req | 60s |
+| CopilotKit chat | 30 req | 1 hour |
+| CopilotKit status/info | 100 req | 60s |
+| CopilotKit other (analytics, feedback) | 60 req | 60s |
+
+Source of truth: `DEFAULT_LIMITS` in `src/api/middleware/rate_limit_middleware.py`
+(`/health`, `/healthz`, `/ready`, `/metrics` and `/api/kpis/health` are exempt).
 
 ### CI Security Scanning (8 Checks)
 
@@ -905,7 +952,7 @@ def run_analysis(self, params: dict):
    - Add a test
 
 8. **Fix a "good first issue"**
-   Check GitHub Issues labeled `good-first-issue`.
+   Check GitHub Issues labeled `good first issue` (with spaces — `gh issue list --label "good first issue"`).
 
 ### Week 3: Deeper Work
 
@@ -937,8 +984,9 @@ def run_analysis(self, params: dict):
 | Tool | Purpose | Access |
 |------|---------|--------|
 | **GitHub** | Code, PRs, CI/CD | Repo collaborator access |
-| **Supabase** | Database, auth | Project member |
-| **Anthropic Console** | Claude API | API key |
+| **Supabase** | Database, auth | **Self-hosted** on the droplet — there is no hosted project to be added to. Credentials come from `/opt/supabase/docker/.env`; Studio is reachable at http://localhost:3001 through the SSH tunnel |
+| **OpenAI Platform** | Default LLM provider + RAG embeddings | API key |
+| **Anthropic Console** | Claude API (`LLM_PROVIDER=anthropic`, routing judge, adaptive-validity evaluator) | API key |
 | **Codecov** | Coverage tracking | Auto via GitHub |
 
 ### Development Tools
@@ -1116,4 +1164,4 @@ open http://localhost:9091  # Prometheus (via tunnel)
 
 ---
 
-*Last Updated: 2026-02-07*
+*Last Updated: 2026-09-07*
