@@ -44,7 +44,7 @@ help:
 curate-candidates:
 	@if [ -z "$$ADAPTIVE_VALIDITY_ARTIFACTS_DIR" ]; then \
 	    echo "ERROR: ADAPTIVE_VALIDITY_ARTIFACTS_DIR is not set."; \
-	    echo "       See .env.example or docker/env.example for the var."; \
+	    echo "       See .env.example (section 11) for the var."; \
 	    echo "       Inside docker-compose this defaults to /app/data/audit_artifacts."; \
 	    exit 1; \
 	fi
