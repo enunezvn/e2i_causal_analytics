@@ -69,6 +69,16 @@ export function useE2IHighlights(): UseE2IHighlightsReturn {
   const [localHighlights, setLocalHighlights] = React.useState<string[]>([]);
 
   // Try to get context
+  //
+  // #1942: rules-of-hooks *smell*, not a latent crash — see the detailed
+  // reasoning in use-e2i-filters.ts (same pattern, same provider). Gating this
+  // on useCopilotEnabled() instead was measured to be unsafe: RootLayout
+  // mounts <E2ICopilotProvider> unconditionally inside
+  // <CopilotKitWrapper enabled={env.copilotEnabled}>, so the provider (and
+  // this real context) is present even when useCopilotEnabled() reports false
+  // (dev default, CI e2e build) — useCopilotEnabled() cannot distinguish "no
+  // provider" from "provider mounted, copilot disabled". Keeping the
+  // try/catch here rather than introducing that regression.
   let contextHighlights: string[] | null = null;
   let setContextHighlights: React.Dispatch<React.SetStateAction<string[]>> | null = null;
 

@@ -4,8 +4,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { render, renderHook, act, screen } from '@testing-library/react';
 import { useE2IHighlights } from './use-e2i-highlights';
+import {
+  CopilotKitWrapper,
+  E2ICopilotProvider,
+  useE2ICopilot,
+} from '@/providers/E2ICopilotProvider';
 
 describe('useE2IHighlights', () => {
   it('should return empty highlights initially', () => {
@@ -103,5 +108,53 @@ describe('useE2IHighlights', () => {
 
     expect(result.current.isHighlighted('path-1')).toBe(true);
     expect(result.current.isHighlighted('path-2')).toBe(false);
+  });
+});
+
+// #1942: the two cases the try/catch inside useE2IHighlights() must keep
+// telling apart correctly. See use-e2i-filters.test.tsx for the full
+// reasoning — same pattern, same provider.
+describe('useE2IHighlights — provider-presence fallback (#1942)', () => {
+  it('rendered with NO CopilotKit/E2I provider above it: does not throw and returns the local-state fallback', () => {
+    expect(() => {
+      const { result } = renderHook(() => useE2IHighlights());
+      expect(result.current.enabled).toBe(false);
+      expect(result.current.highlightedPaths).toEqual([]);
+    }).not.toThrow();
+  });
+
+  it('rendered inside E2ICopilotProvider with CopilotKit disabled: still uses the REAL shared context, not an isolated local copy', () => {
+    // Matches RootLayout's actual wiring (frontend/src/router/index.tsx):
+    // <E2ICopilotProvider> is mounted unconditionally inside
+    // <CopilotKitWrapper enabled={env.copilotEnabled}> — dev (default) and
+    // the CI e2e build run with copilot disabled but the provider present.
+    // useCopilotEnabled() reports `false` in this case too, indistinguishable
+    // from "no provider at all" — a naive useCopilotEnabled()-gated rewrite
+    // of the try/catch would silently stop sharing this state.
+    function Setter() {
+      const { addHighlight } = useE2IHighlights();
+      return <button onClick={() => addHighlight('path-1')}>set</button>;
+    }
+    function DirectReader() {
+      const { highlightedPaths } = useE2ICopilot();
+      return <span data-testid="count">{highlightedPaths.length}</span>;
+    }
+
+    render(
+      <CopilotKitWrapper enabled={false}>
+        <E2ICopilotProvider>
+          <Setter />
+          <DirectReader />
+        </E2ICopilotProvider>
+      </CopilotKitWrapper>
+    );
+
+    expect(screen.getByTestId('count').textContent).toBe('0');
+
+    act(() => {
+      screen.getByText('set').click();
+    });
+
+    expect(screen.getByTestId('count').textContent).toBe('1');
   });
 });
