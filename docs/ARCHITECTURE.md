@@ -629,12 +629,12 @@ The scaffolded `health-check` and `cache-cleanup` entries were removed in #897.
 ```mermaid
 graph LR
     subgraph "Supabase (PostgreSQL + pgvector)"
-        CORE["Core Tables (8)<br/>patient_journeys, hcp_profiles,<br/>treatment_events, triggers, ..."]
-        ML["ML Tables (8)<br/>ml_split_registry, ml_predictions,<br/>ml_preprocessing_metadata, ..."]
-        MEM["Memory Tables (4)<br/>episodic_memories,<br/>procedural_memories, ..."]
-        RAG["RAG Tables (2)<br/>rag_document_chunks,<br/>rag_search_logs"]
-        FS["Feature Store (3)<br/>feature_groups, features,<br/>feature_values"]
-        AUDIT["Audit Tables (2)<br/>audit_chain_entries,<br/>causal_validations"]
+        CORE["Core tables<br/>patient_journeys, hcp_profiles,<br/>treatment_events, triggers, ..."]
+        ML["ML pipeline tables<br/>ml_split_registry, ml_predictions,<br/>ml_preprocessing_metadata, ..."]
+        MEM["Memory tables<br/>episodic_memories,<br/>procedural_memories, ..."]
+        RAG["RAG tables<br/>rag_document_chunks,<br/>rag_search_logs"]
+        FS["Feature store tables<br/>feature_groups, features,<br/>feature_values"]
+        AUDIT["Audit tables<br/>audit_chain_entries,<br/>causal_validations"]
     end
 
     subgraph "Redis"
@@ -645,7 +645,7 @@ graph LR
     end
 
     subgraph "FalkorDB"
-        GRAPH["Knowledge Graph<br/>8 node types, 11 edge types<br/>Cypher queries"]
+        GRAPH["Knowledge Graph<br/>10 node types, 11 relationship types<br/>Cypher queries"]
     end
 
     subgraph "Feast"
@@ -654,11 +654,14 @@ graph LR
     end
 ```
 
-### 4.2 Database Schema (140+ tables)
+### 4.2 Database Schema
 
-> **Comprehensive documentation**: See [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary covering all tables, columns, constraints, enums, views, and functions.
+> **Comprehensive documentation**: See [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary covering all tables, columns, constraints, enums, views, and functions — that index, not this section, carries the table counts.
 
-#### Core Tables (8)
+The tables below are the load-bearing ones referenced elsewhere in this document; each family
+has more members than are listed here.
+
+#### Core tables
 
 | Table | Purpose | Key Columns |
 |-------|---------|-------------|
@@ -671,7 +674,7 @@ graph LR
 | `business_metrics` | KPI measurements | metric_type, value, target, statistical_significance |
 | `causal_paths` | Discovered causal relationships | causal_chain, effect_size, method_used, validation_status |
 
-#### ML Pipeline Tables (4)
+#### ML pipeline tables
 
 | Table | Purpose |
 |-------|---------|
@@ -680,36 +683,46 @@ graph LR
 | `ml_preprocessing_metadata` | Preprocessing stats (train-only) |
 | `ml_leakage_audit` | Automated leakage detection |
 
-#### Memory Tables (4)
+#### Memory tables
 
 | Table | Store | Indexing |
 |-------|-------|---------|
 | `episodic_memories` | Supabase + pgvector | HNSW vector index (1536-dim) |
 | `procedural_memories` | Supabase + pgvector | HNSW vector index |
-| `dspy_training_signals` | Supabase | signal_type, agent_name |
+| `dspy_agent_training_signals` | Supabase | signal_type, source_agent (migration `database/memory/014_dspy_training_signals.sql`) |
 | Working memory (sessions) | Redis | Key-value (24h TTL) |
 
 ### 4.3 FalkorDB Knowledge Graph Schema
 
-**8 Node Types:**
-Patient, HCP, Brand, Region, KPI, CausalPath, Trigger, Agent
+The canonical machine-readable schema is the `E2IEntityType` / `E2IRelationshipType` enums in
+`src/memory/graphiti_config.py`. (`src/memory/episodic_memory.py` defines a *different*, older
+`E2IEntityType` with 8 members for its own episodic payloads — do not read that one as the graph
+schema.)
 
-**Edge Types** — the canonical machine-readable set is the `E2IRelationshipType`
-enum in `src/memory/graphiti_config.py` (11 types). The table below shows the
-primary commercial-graph edges (illustrative, not exhaustive):
+**Node types (10, `E2IEntityType`):**
+PATIENT, HCP, BRAND, REGION, KPI, CAUSAL_PATH, TRIGGER, AGENT, EPISODE, COMMUNITY
 
-| Edge | From -> To | Key Properties |
+`EPISODE` and `COMMUNITY` are the Graphiti-side nodes — an ingested episode and a detected
+community — rather than commercial-domain entities.
+
+**Relationship types (11, `E2IRelationshipType`):**
+
+| Relationship | From -> To | Key Properties |
 |------|-----------|----------------|
 | TREATED_BY | Patient -> HCP | is_primary_hcp, visit_count |
 | PRESCRIBED | Patient -> Brand | is_first_line, line_of_therapy |
 | PRESCRIBES | HCP -> Brand | volume_monthly, market_share |
-| PRACTICES_IN | HCP -> Region | primary_location |
-| INFLUENCES | HCP -> HCP | influence_strength, network_type |
 | CAUSES | any -> any | effect_size, confidence, method_used |
 | IMPACTS | CausalPath -> KPI | impact_magnitude, direction |
-| ANALYZES | Agent -> any | analysis_date, analysis_type |
+| INFLUENCES | HCP -> HCP | influence_strength, network_type |
 | DISCOVERED | Agent -> CausalPath | discovery_date, method |
 | GENERATED | Agent -> Trigger | generation_date, reasoning |
+| MENTIONS | Episode -> any | what an ingested episode refers to |
+| MEMBER_OF | any -> Community | community membership |
+| RELATES_TO | any -> any | generic fallback edge |
+
+`PRACTICES_IN` and `ANALYZES` were previously documented here; neither is a member of
+`E2IRelationshipType`.
 
 ### 4.4 Hybrid RAG Pipeline
 
@@ -738,15 +751,31 @@ Vector Search      Full-Text Search   Graph Search
 
 ### 4.5 Feature Store (Feast + Lightweight)
 
-**Feast Feature Views:**
+The repository is `feature_repo/` — 11 `FeatureView`s over 65 `Field`s, fed by 7
+`PostgreSQLSource`s (5 in `feature_repo/data_sources.py`, 2 alongside the gold-standard views).
+The serving sidecar is a local build `FROM feastdev/feature-server:0.43.0`
+(`docker/Dockerfile.feast`); the Feast SDK is **not** installed in the API venv, so nothing in
+`src/` imports `feast` directly. There is no checked-in `feature_store.yaml`: the entrypoint
+(`docker/feast/_populate_feast.sh`) renders `/feast/feature_store.yaml` from
+`feature_repo/feature_store.yaml.tmpl` with secrets injected at container start. The canonical
+reference is
+[`docs/data/05-FEATURE-STORE-REFERENCE.md`](data/05-FEATURE-STORE-REFERENCE.md).
 
-| Feature View | Entity | TTL | Key Features |
-|-------------|--------|-----|-------------|
-| hcp_conversion_fv | hcp | 7d | trx_count, nrx_count, market_share, conversion_rate |
-| hcp_profile_fv | hcp | 30d | specialty, years_of_practice, patient_volume_tier |
-| hcp_engagement_fv | hcp | 1d | engagement_score, call_frequency |
-| patient_journey_fv | patient | 7d | days_on_therapy, adherence_rate, churn_risk_score |
-| patient_adherence_fv | patient | 1d | adherence_rate, gap_days |
+| Feature view | Entities | TTL | Fields |
+|-------------|----------|-----|--------|
+| `hcp_conversion_features` | hcp, hcp_brand | 7 d | 7 |
+| `hcp_profile_features` | hcp | 30 d | 6 |
+| `hcp_engagement_features` | hcp, hcp_brand | 1 d | 3 |
+| `patient_journey_features` | patient, patient_brand | 7 d | 7 |
+| `patient_adherence_features` | patient, patient_brand | 1 d | 4 |
+| `trigger_effectiveness_features` | trigger, hcp, hcp_brand | 7 d | 6 |
+| `trigger_response_features` | trigger | 1 d | 3 |
+| `market_dynamics_features` | territory, brand | 7 d | 6 |
+| `territory_performance_features` | territory | 1 d | 6 |
+| `goldstd_cohort_features` | patient | 7 d | 12 |
+| `goldstd_hcp_cohort_features` | hcp | 30 d | 5 |
+
+The two `goldstd_*` views (June 2026) serve the gold-standard evaluation cohorts.
 
 **Lightweight Feature Store** (Supabase + Redis + MLflow):
 - Online: Redis (<1ms cache hits, <50ms misses)
@@ -817,10 +846,10 @@ page, checked 2026-05-15). A unit test pins the constants; when
 Anthropic re-prices Haiku, operators bump the constants and the test
 trips, surfacing a deliberate update.
 
-Plans:
-- Producer (shipped 2026-05-15): `.claude/plans/layer4_evaluator_audit_signal.md`
-- Persistence + curation CLI (shipped 2026-05-15): `.claude/plans/layer4_evaluator_audit_consumer.md`
-- Cost + latency telemetry (issue #241, shipped 2026-05-15)
+Plans (local, untracked planning notes; historical — all shipped 2026-05-15 and since archived):
+- Producer: `.claude/plans/archive/15_layer4_evaluator_audit_signal_DONE_*.md`
+- Persistence + curation CLI: `.claude/plans/archive/14_layer4_evaluator_audit_consumer_DONE_*.md`
+- Cost + latency telemetry: issue #241
 
 ### 4.7 KG External APIs — Offline mode (rxnav-in-a-box)
 
