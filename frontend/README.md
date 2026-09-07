@@ -64,7 +64,8 @@ frontend/src/
 ├── providers/      # AuthProvider, E2ICopilotProvider (agent registry + actions)
 ├── hooks/          # use-auth and friends, plus…
 │   └── api/        #   24 per-domain TanStack Query hooks (use-causal, use-kpi,
-│                   #   use-segments, …) re-exported from hooks/api/index.ts
+│                   #   use-segments, …). index.ts re-exports only 10 of them —
+│                   #   import the rest from their own module.
 ├── config/env.ts   # accessor for the VITE_* env vars (two exceptions — see
 │                   #   "Environment variables")
 ├── mocks/          # MSW: handlers.ts, browser.ts (dev), server.ts (vitest),
@@ -90,9 +91,13 @@ frontend/src/
   2. **A `routeConfigs` entry** (`export const routeConfigs: RouteConfig[]`,
      L69) — `path`, `title`, `description`, plus the nav metadata `icon`,
      `section` (`main | causal | predictive | decisions | data | system`),
-     `showInNav`, and `adminOnly`. This drives **only** the sidebar, via
-     `getNavigationSections(includeAdmin)` (L636), which filters and groups it.
-     An entry here with no element below renders a link to nothing.
+     `showInNav`, and `adminOnly`. It drives the sidebar via
+     `getNavigationSections(includeAdmin)` (L636), **and** the page title and
+     description in the header via `getRouteConfig(path)` (L608, consumed by
+     `components/layout/Header.tsx:107`). So it is still required for a page
+     that is deliberately kept out of the nav (`showInNav: false`) — skip it
+     and the page renders with no header title. An entry here with no element
+     below renders a link to nothing.
   3. **A `RouteObject` element** in `export const routes: RouteObject[]` (L285)
      — the actual react-router table. Protected pages wrap the component in
      `<ProtectedRoute>` (`<ProtectedRoute requireAdmin>` for `/admin`, L590)
@@ -285,7 +290,8 @@ model only says *what* to chart**:
   explicit error state instead of a blank plot.
 - **Both the compiler and Plotly are dynamically imported.** Importing
   `lib/flint-chart` statically from the provider added ~136 kB gzip to the main
-  chunk (1,054 → 1,191 kB); loading it inside `FlintChart` returns the main
+  chunk (1,054 → 1,191 kB — figure recorded at `components/chat/FlintChart.tsx:14`,
+  not re-measured here); loading it inside `FlintChart` returns the main
   chunk to baseline. Keep it that way — this is why the router hands over a
   *logical* encoding rather than Flint template channels.
 
@@ -310,9 +316,10 @@ time — never put secrets here**. Precedence: `.env`/`.env.local` (gitignored)
 
 `src/config/env.ts` is the accessor for the first five. Note it reads the two
 Supabase vars through the dynamic-key helper `getEnvVar('SUPABASE_URL')`, so a
-literal `grep VITE_SUPABASE_URL src/config/env.ts` finds nothing — `lib/supabase.ts`
-and `providers/AuthProvider.tsx` consume `env.supabaseUrl` / `env.supabaseAnonKey`,
-they do not read `import.meta.env` themselves. The only two vars read **outside**
+literal `grep VITE_SUPABASE_URL src/config/env.ts` finds nothing. `lib/supabase.ts`
+is the **only** consumer of `env.supabaseUrl` / `env.supabaseAnonKey`;
+`providers/AuthProvider.tsx` imports the ready-made `supabase` client and
+`isSupabaseConfigured` from it and never touches the env accessor. The only two vars read **outside**
 `config/env.ts` are `VITE_DEBUG` and `VITE_MSW_ENABLED`; `api-client.ts` appears
 to honour `VITE_DEBUG` but does so indirectly, through the logger.
 
@@ -349,8 +356,12 @@ to honour `VITE_DEBUG` but does so indirectly, through the logger.
   quarantined.
 - **Live validation** (`playwright.noserver.config.ts`, which is
   `playwright.config.ts` with `webServer: undefined`): the four `e2e/live-*.spec.ts`
-  files run against a **real running deployment**, not a local build. They are
-  post-deploy certification, not part of the CI e2e shards.
+  files run against a **real running deployment**, not a local build — they are
+  post-deploy certification. Note they are **not excluded at config level**:
+  `testMatch` collects `**/e2e/**/*.spec.ts` and `testIgnore` drops only
+  quarantined `**/specs/` entries, so CI's bare `npx playwright test --shard=N/4`
+  does distribute them across the shards. What keeps them inert there is the
+  runtime skip below, not a filter.
 
   | Spec | Env it needs |
   |---|---|
