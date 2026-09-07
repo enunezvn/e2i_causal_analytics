@@ -52,13 +52,13 @@ Decisions that are load-bearing and easy to undo by accident, but too narrow for
 
 | Decision | PR | Where it lives |
 |---|---|---|
-| A required CI context is made **conditional, never path-filtered** — a path filter makes the context never report, so a required check waits forever | #1445 | `.github/workflows/`, plus the #618 path-gate guard test |
+| A required CI context is made **conditional, never path-filtered** — a path filter makes the context never report, so a required check waits forever | #1445 | `.github/workflows/backend-tests.yml`, `.github/workflows/tier1-5-test.yml`; guard `tests/integration/test_tier1_5_workflow_alarm_only.py` |
 | Gunicorn runs with **preload on** (`GUNICORN_PRELOAD` defaults true; kill switch in the host `.env`) — the master imports once pre-fork | #1589 | `docker/docker-compose.yml` (comment at the env block), `config/gunicorn.conf.py` |
-| `causal_impact` heavy compute runs in a **dedicated bounded pool sized per process**, with the compute budget re-checked on the worker thread | #1606 | `src/agents/causal_impact/` |
-| Frontend **mutations never retry** (app-wide react-query mutation retry 1 → 0) — a replayed non-idempotent mutation is worse than a visible failure | #1852 | frontend query-client defaults |
+| `causal_impact` heavy compute runs in a **dedicated bounded pool sized per process**, with the compute budget re-checked on the worker thread | #1606 | `src/api/dependencies/compute.py`; guard `tests/unit/test_agents/test_causal_impact/test_bounded_agent_compute_1601.py` |
+| Frontend **mutations never retry** (app-wide react-query mutation retry 1 → 0) — a replayed non-idempotent mutation is worse than a visible failure | #1852 | `frontend/src/lib/query-client.ts` (+ `query-client.test.ts`) |
 | FalkorDB persists to the **`/data` volume explicitly** — the image's `run.sh` otherwise defaults `--dir` to a container-local path despite declaring `VOLUME /data` | #1759 | `docker/docker-compose.yml`, guard test `tests/unit/test_docker/test_compose_falkordb_data_volume_1758.py` |
-| Celery **beat state persists on a volume** and daily entries run on wall-clock crontabs, not interval timers | #1653 | `docker/docker-compose.yml`, beat schedule |
-| Security findings on an **unused surface are allowlisted with the reason**, not force-upgraded (PYSEC-2026-3716, `datasets` path traversal) | #1731 | the vulnerability allowlist file |
+| Celery **beat state persists on a volume** and daily entries run on wall-clock crontabs, not interval timers | #1653 | `docker/docker-compose.yml`; guard `tests/unit/test_workers/test_beat_daily_wallclock_1645.py` |
+| Security findings on an **unused surface are allowlisted with the reason**, not force-upgraded (PYSEC-2026-3716, `datasets` path traversal) | #1731 | `.github/workflows/security.yml` |
 | **RAGAS posture** — see below | #1491–#1494 (origin #504) | `.github/workflows/ragas-evaluation.yml`, `.github/workflows/ragas-smoke.yml` |
 
 ### RAGAS posture (three jobs, three different questions)
