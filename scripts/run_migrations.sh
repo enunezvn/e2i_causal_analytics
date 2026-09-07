@@ -2,9 +2,10 @@
 # =============================================================================
 # E2I Causal Analytics - Database Migration Runner
 # =============================================================================
-# Applies SQL migrations from all 8 database/ schema dirs (migrations, memory,
-# core, ml, causal, chat, rag, audit) in alphabetical order per dir, tracking
-# applied migrations in public.schema_migrations.
+# Applies SQL migrations from every database/ schema dir listed in
+# MIGRATION_DIRS below, in alphabetical order per dir, tracking applied
+# migrations in public.schema_migrations. MIGRATION_DIRS is the only source
+# of that scope -- do not restate the dir count here, it has gone stale twice.
 #
 # Connection (auto-detected, in priority order):
 #   1. SUPABASE_DB_URL  - psql connection string (CI / remote), OR
