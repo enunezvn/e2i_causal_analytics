@@ -739,7 +739,9 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     # how many <noun> (have|has|had) been|were|was run|running|launched|started|
     # <status>", and a status predicate COORDINATED behind another predicate,
     # "which|what|how many <noun> <up to 40 chars> (are|is) currently|now|
-    # presently|actively <status>". A match is then
+    # presently|actively <status>" (with an "are any" lead the copula is the
+    # lead itself: "are any <noun> <up to 40 chars> currently <status>"). A
+    # match is then
     # exempted by _EXPERIMENT_DESIGN_RE (below) when the pill carries DESIGN or
     # CALCULATION intent, which experiment_designer serves. A status read that
     # merely mentions power, a sample size or a duration ("what active
@@ -773,6 +775,11 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             # #1914: "what experiments <...> or are currently enrolling"
             r"|\b(?:which|what|how many)\s+(?:experiments?|a/b\s+tests?)\b[^.?!]{0,40}?"
             r"\b(?:are|is)\s+(?:currently|now|presently|actively)\s+"
+            r"(?:running|active|live|ongoing|in progress|in[- ]flight|being run|enrolling)\b"
+            # #1914 codex: "are any experiments <...> currently enrolling" (the
+            # lead is the copula, so no second are|is precedes the adverb)
+            r"|\bare any\s+(?:experiments?|a/b\s+tests?)\b[^.?!]{0,40}?"
+            r"\b(?:currently|now|presently|actively)\s+"
             r"(?:running|active|live|ongoing|in progress|in[- ]flight|being run|enrolling)\b",
             re.I,
         ),

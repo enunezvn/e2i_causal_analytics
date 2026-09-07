@@ -750,6 +750,13 @@ DROP_FIXTURES = [
         "Tracked and enrolling",
         "What experiments does the orchestrator track that are now enrolling for Kisqali?",
     ),
+    # #1914 codex: an "are any" lead carries its own copula, so the coordinated
+    # form has no second (are|is) before the adverb
+    (
+        "live_experiment_status",
+        "Any enrolling",
+        "Are any experiments tracked by the orchestrator currently enrolling for Kisqali?",
+    ),
     (
         "competitor_data",
         "Competitor share",
