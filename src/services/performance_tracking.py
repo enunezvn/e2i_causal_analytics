@@ -10,6 +10,7 @@ Tracks model performance metrics over time:
 """
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -114,6 +115,23 @@ class PerformanceTrackingConfig:
     trend_z_threshold: float = 2.5
     trend_slope_t_threshold: float = 2.5
     trend_min_change_percent: float = 5.0
+
+    def __post_init__(self) -> None:
+        # A zero/negative/NaN threshold would make every non-zero z "significant"
+        # (assess_trend rejects it too); fail at construction, not at trend time.
+        for name in ("trend_z_threshold", "trend_slope_t_threshold"):
+            val = getattr(self, name)
+            if not (isinstance(val, (int, float)) and math.isfinite(val) and val > 0):
+                raise ValueError(f"{name} must be a finite positive number, got {val!r}")
+        if not (
+            isinstance(self.trend_min_change_percent, (int, float))
+            and math.isfinite(self.trend_min_change_percent)
+            and self.trend_min_change_percent >= 0
+        ):
+            raise ValueError(
+                "trend_min_change_percent must be a finite non-negative number, "
+                f"got {self.trend_min_change_percent!r}"
+            )
 
 
 class PerformanceTracker:

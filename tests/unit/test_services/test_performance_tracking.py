@@ -735,8 +735,21 @@ class TestSamplingAwareTrend:
             assert a["sample_size"] == 230
             assert a["basis"] == "level"
             assert a["z_score"] < -2.5
-            assert "standard errors below" in a["reason"]
+            if a["metric_name"] in ("accuracy", "recall", "auc_roc"):
+                assert "standard errors below" in a["reason"]  # analytic scale
+            else:  # precision / f1: no closed-form SE → historical fold variation
+                assert "historical fold variation below" in a["reason"]
             assert a["severity"] == "high"
+
+    def test_config_rejects_invalid_thresholds(self):
+        for bad in (0.0, -2.5, float("nan")):
+            with pytest.raises(ValueError):
+                PerformanceTrackingConfig(trend_z_threshold=bad)
+            with pytest.raises(ValueError):
+                PerformanceTrackingConfig(trend_slope_t_threshold=bad)
+        with pytest.raises(ValueError):
+            PerformanceTrackingConfig(trend_min_change_percent=-1.0)
+        assert PerformanceTrackingConfig(trend_min_change_percent=0.0).trend_z_threshold == 2.5
 
     @pytest.mark.asyncio
     async def test_noisy_partial_fold_raises_no_alerts(self):

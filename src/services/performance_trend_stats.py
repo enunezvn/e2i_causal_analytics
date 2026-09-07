@@ -140,9 +140,10 @@ def proportion_se(value: float, n: int) -> float:
 
 def student_t_quantile(z: float, df: int) -> float:
     """Student-t quantile with the same tail probability as the normal quantile
-    ``z`` — Cornish-Fisher expansion in 1/df (five terms). Within 0.3% of
-    ``scipy.stats.t.ppf`` for df ≥ 5 and |z| ≤ 3 (checked 2026-09-07); kept
-    dependency-free so this module stays pure and import-light."""
+    ``z`` — Cornish-Fisher expansion in 1/df (five terms). Checked against
+    ``scipy.stats.t.ppf`` 2026-09-07: within 0.3% for df ≥ 5 and within 0.7%
+    at df = 4 for |z| ≤ 3 (the slope test's smallest df); kept dependency-free
+    so this module stays pure and import-light."""
     if df <= 0:
         return float(z)
     d = float(df)
@@ -240,9 +241,12 @@ def _opt_float(v: object) -> Optional[float]:
 
 
 def _opt_n(v: object) -> Optional[int]:
-    """A positive sample size, else None."""
+    """A sample size of at least one row, else None (0, 0.5, NaN, doubles)."""
     f = _opt_float(v)
-    return int(f) if f is not None and f > 0 else None
+    if f is None:
+        return None
+    n = int(f)
+    return n if n >= 1 else None
 
 
 def _no_analytic_reason(
@@ -281,7 +285,19 @@ def assess_trend(
     ``points_newest_first`` is the series exactly as the repository returns it
     (``measured_at`` descending). The first ``current_window`` points are the
     "current" side (the tracker uses 1); the remainder is the baseline.
+
+    Raises ``ValueError`` for a non-finite or non-positive ``z_threshold`` /
+    ``slope_t_threshold`` (a zero threshold would make every non-zero z
+    "significant") or a negative ``min_change_percent``.
     """
+    for name, val in (("z_threshold", z_threshold), ("slope_t_threshold", slope_t_threshold)):
+        if not (_finite(val) and float(val) > 0.0):
+            raise ValueError(f"{name} must be a finite positive number, got {val!r}")
+    if not (_finite(min_change_percent) and float(min_change_percent) >= 0.0):
+        raise ValueError(
+            f"min_change_percent must be a finite non-negative number, got {min_change_percent!r}"
+        )
+
     pts = [p for p in points_newest_first if _finite(p.value)]
     if not pts:
         return TrendAssessment(
@@ -346,11 +362,7 @@ def assess_trend(
     if k >= max(int(min_points_for_dispersion), 2):
         sd = float(baseline_values.std(ddof=1))
         if sd > 0.0:
-            t_factor = (
-                student_t_quantile(float(z_threshold), k - 1) / float(z_threshold)
-                if z_threshold > 0.0
-                else 1.0
-            )
+            t_factor = student_t_quantile(float(z_threshold), k - 1) / float(z_threshold)
             empirical = sd * math.sqrt(1.0 + 1.0 / k) * t_factor
 
     # ---- Legacy fallback: no noise scale at all → the ±5% rule, labelled. ----
@@ -385,31 +397,43 @@ def assess_trend(
         )
 
     # ---- Level test on the larger available scale. ---------------------------
+    # "Sampling noise" is claimed ONLY for the analytic scale. The empirical
+    # spread also carries real month-composition shifts and any earlier
+    # decline, so its band is called what it is: historical fold variation.
+    volatile_note = ""
     if analytic is not None and empirical is not None:
         if analytic >= empirical:
             noise, noise_source = analytic, "analytic"
             scale_txt = (
-                f"analytic sampling error at n={sample_size}, which exceeds the {k}-fold spread"
+                f"analytic sampling error at n={sample_size}, which exceeds the "
+                f"{k}-fold historical variation"
             )
         else:
             noise, noise_source = empirical, "empirical"
             scale_txt = (
-                f"the t-adjusted spread of the {k} baseline folds, which exceeds the "
-                f"analytic sampling error at n={sample_size}"
+                f"the t-adjusted historical variation of the {k} baseline folds, which "
+                f"exceeds the analytic sampling error at n={sample_size}"
             )
+            z_analytic = (current_value - baseline_value) / analytic
+            if abs(z_analytic) > z_threshold:
+                volatile_note = (
+                    f"; on the analytic scale alone z={z_analytic:+.1f} — the history is "
+                    "volatile, so this fold is not called an outlier"
+                )
     elif analytic is not None:
         noise, noise_source = analytic, "analytic"
         scale_txt = f"analytic sampling error at n={sample_size}"
     else:
         assert empirical is not None
         noise, noise_source = empirical, "empirical"
-        scale_txt = f"the t-adjusted spread of the {k} baseline folds"
+        scale_txt = f"the t-adjusted historical variation of the {k} baseline folds"
     z = (current_value - baseline_value) / noise
     level_reject = abs(z) > z_threshold
     level_material = abs(change_percent) >= min_change_percent
 
     # ---- Slope test over the whole window (oldest → newest). -----------------
     slope_t: Optional[float] = None
+    slope_crit: Optional[float] = None
     slope_reject = False
     slope_material = False
     fitted_change = 0.0
@@ -417,7 +441,11 @@ def assess_trend(
         st = slope_t_stat([float(p.value) for p in reversed(pts)])
         if st is not None:
             slope_t, fitted_change = st
-            slope_reject = abs(slope_t) > slope_t_threshold
+            # The OLS slope t-statistic has n_points-2 degrees of freedom; the
+            # threshold is a NORMAL quantile, so compare against the Student-t
+            # quantile at the same tail probability (t(4) needs ≈4.3, not 2.5).
+            slope_crit = student_t_quantile(float(slope_t_threshold), n_points - 2)
+            slope_reject = abs(slope_t) > slope_crit
             slope_material = (
                 baseline_value > 0.0
                 and abs(fitted_change) / baseline_value * 100.0 >= min_change_percent
@@ -444,15 +472,19 @@ def assess_trend(
         basis = "within_noise"
 
     if basis == "level":
+        units = (
+            "standard errors" if noise_source == "analytic" else "× the historical fold variation"
+        )
         reason = (
-            f"{metric_name} {current_value:.3f} is {abs(z):.1f} standard errors "
+            f"{metric_name} {current_value:.3f} is {abs(z):.1f} {units} "
             f"{'below' if z < 0 else 'above'} the {k}-fold baseline {baseline_value:.3f} "
             f"({change_percent:+.1f}%; scale: {scale_txt})"
         )
     elif basis == "slope":
         reason = (
             f"{metric_name} has a significant {'downward' if (slope_t or 0.0) < 0 else 'upward'} "
-            f"slope across {n_points} folds (t={slope_t:+.1f}, fitted change {fitted_change:+.3f})"
+            f"slope across {n_points} folds (t={slope_t:+.1f} vs ±{slope_crit:.1f} needed at "
+            f"{n_points - 2} df; fitted change {fitted_change:+.3f})"
         )
     elif basis == "immaterial":
         reason = (
@@ -460,9 +492,10 @@ def assess_trend(
             f"but below the {min_change_percent:g}% materiality floor"
         )
     else:
+        band = "sampling noise" if noise_source == "analytic" else "historical fold variation"
         reason = (
-            f"{change_percent:+.1f}% vs the {k}-fold baseline is within sampling noise "
-            f"(z={z:+.1f}; ±{z_threshold:g} needed; scale: {scale_txt})"
+            f"{change_percent:+.1f}% vs the {k}-fold baseline is within {band} "
+            f"(z={z:+.1f}; ±{z_threshold:g} needed; scale: {scale_txt}{volatile_note})"
         )
 
     return TrendAssessment(

@@ -224,6 +224,10 @@ def test_empirical_fold_dispersion_widens_the_noise_scale():
     assert a.standard_error > metric_standard_error("auc_roc", 0.70, 5000, 0.4)
     assert a.noise_source == "empirical"
     assert a.trend == "stable"
+    # ...and the reason says so honestly: the analytic scale alone would have
+    # called this fold an outlier; the history is volatile.
+    assert "within historical fold variation" in a.reason
+    assert "volatile" in a.reason and "on the analytic scale alone z=" in a.reason
 
 
 def test_unknown_baseline_uncertainty_is_never_treated_as_exact():
@@ -243,7 +247,8 @@ def test_unknown_baseline_uncertainty_is_never_treated_as_exact():
     b = assess_trend([TrendPoint(0.70, 1_000_000, 0.4)] + tight, "auc_roc")
     assert b.noise_source == "empirical"
     assert b.trend == "degrading" and b.basis == "level"
-    assert "t-adjusted spread of the 6 baseline folds" in b.reason
+    assert "historical variation of the 6 baseline folds" in b.reason
+    assert "historical fold variation below" in b.reason
 
 
 def test_auc_without_positive_rate_uses_the_fold_spread_not_an_optimistic_binomial():
@@ -270,7 +275,11 @@ def test_precision_is_judged_on_the_fold_spread_or_the_legacy_rule():
     a = assess_trend(_pts(window, n=100, p=0.4), "precision")
     assert a.noise_source == "empirical"
     assert a.trend == "stable" and a.basis == "within_noise"
-    assert "t-adjusted spread of the 10 baseline folds" in a.reason
+    # Codex iter-2 HIGH: the empirical band also carries real composition
+    # shifts, so it is never called "sampling noise".
+    assert "within historical fold variation" in a.reason
+    assert "historical variation of the 10 baseline folds" in a.reason
+    assert "sampling noise" not in a.reason
 
     b = assess_trend(_pts([0.55, 0.58, 0.62, 0.60], n=100, p=0.4), "precision")
     assert b.basis == "legacy_relative"
@@ -283,6 +292,46 @@ def test_identical_baseline_folds_without_an_analytic_se_fall_back_to_legacy():
     assert a.basis == "legacy_relative"
     assert "zero empirical spread" in a.reason
     assert a.trend == "degrading"  # −16.7% under the legacy rule
+
+
+def test_slope_test_uses_a_df_aware_critical_value():
+    """Codex iter-2 HIGH: the OLS slope t has n-2 degrees of freedom. Six
+    points → df=4, where |t|=2.5 is p≈0.067 two-sided, not the documented
+    ≈0.012; the matching critical value is ≈4.3. This series (oldest first)
+    has a material fitted −0.05 change and t≈−3: the old comparison called it
+    degrading by slope."""
+    oldest_first = [0.863944, 0.826056, 0.830000, 0.820000, 0.796056, 0.813944]
+    a = assess_trend(_pts(list(reversed(oldest_first)), n=230, p=0.35), "auc_roc")
+    assert a.slope_t_stat is not None and a.slope_t_stat < -2.5  # raw t would have tripped 2.5
+    assert a.basis != "slope"
+    assert a.trend == "stable"
+
+    # Positive control at the same df: a perfect 6-point line has t=∞ → slope.
+    line = [0.90 - 0.02 * i for i in range(6)]
+    b = assess_trend(_pts(list(reversed(line)), n=230, p=0.35), "auc_roc")
+    assert b.trend == "degrading" and b.basis == "slope"
+    assert "at 4 df" in b.reason
+
+
+def test_invalid_thresholds_are_rejected():
+    pts = _pts([0.8, 0.8, 0.8], n=100)
+    for bad in (0.0, -1.0, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            assess_trend(pts, "accuracy", z_threshold=bad)
+        with pytest.raises(ValueError):
+            assess_trend(pts, "accuracy", slope_t_threshold=bad)
+    with pytest.raises(ValueError):
+        assess_trend(pts, "accuracy", min_change_percent=-1.0)
+    assert assess_trend(pts, "accuracy", min_change_percent=0.0).trend == "stable"
+
+
+def test_fractional_sample_size_is_not_a_sample_size():
+    a = assess_trend(
+        [TrendPoint(0.7, sample_size=0.5, positive_rate=0.4), TrendPoint(0.8)], "auc_roc"
+    )
+    assert a.sample_size is None
+    assert a.basis == "legacy_relative"
+    assert a.reason.startswith("no sample size on the newest fold")
 
 
 def test_nan_and_non_finite_values_do_not_crash():
