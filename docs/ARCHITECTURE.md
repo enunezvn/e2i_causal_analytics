@@ -936,7 +936,8 @@ References:
 The platform ships four memory subsystems atop the tri-memory architecture
 described in [ADR-003](#adr-003-tri-memory-architecture). These were added
 in PRs #250, #375-#388 per the plan
-`.claude/plans/e2i_memory_subsystems_implementation_plan.md`.
+`.claude/plans/archive/e2i_memory_subsystems_implementation_plan_archived_20260520.md`
+(local, untracked planning note; historical).
 
 ```mermaid
 graph TB
@@ -950,7 +951,7 @@ graph TB
     end
 
     subgraph "Crystallization (subsystem 2)"
-        CR["Crystallizer<br/>src/memory/crystallization/<br/>crystallizer.py:102"]
+        CR["Crystallizer<br/>src/memory/crystallization/<br/>crystallizer.py"]
         EI["executive_insights<br/>15 CrystalDigest fields<br/>+ invalidated_at"]
     end
 
@@ -961,7 +962,7 @@ graph TB
     end
 
     subgraph "Triple-stream RAG (subsystem 4)"
-        HR["HybridRetriever<br/>src/rag/<br/>hybrid_retriever.py:41"]
+        HR["HybridRetriever<br/>src/rag/<br/>hybrid_retriever.py"]
     end
 
     EM -->|deduplicate then promote| CON
@@ -1018,7 +1019,7 @@ enforced at every cascade hop (see plan §"Tenancy Model").
 
 ### 5.2 Subsystem 2 — Crystallization
 
-**Crystallizer** (`src/memory/crystallization/crystallizer.py:102-117`)
+**Crystallizer** (the `Crystallizer` class in `src/memory/crystallization/crystallizer.py`)
 aggregates 2+ related episodic memories (different agents, same brand,
 within a 7-day window, on the same `causal_path` or KPI) into a single
 durable `executive_insights` row plus `insight_edges` rows linking back
@@ -1031,20 +1032,21 @@ Public entrypoints:
   (#376 DoD §D).
 - `crystallize_portfolio(brands=None)` — iterates the configured
   portfolio brand list (default: `("remibrutinib", "fabhalta",
-  "kisqali")` per `src/memory/crystallization/crystallizer.py:62`).
+  "kisqali")` — `DEFAULT_PORTFOLIO_BRANDS` in
+  `src/memory/crystallization/crystallizer.py`).
 
 **Schema shape (Decision 2 = HYBRID)**: 13 deterministic fields derived
 from estimator state / `insight_edges` / `episodic` `raw_content` + 2
 LLM-narrative prose fields wrapped in `LLMCrystalNarrativeAudit`
-(`src/data/kg/types.py:407-470`). The LLM path is gated by
-`E2I_CRYSTAL_LLM_NARRATIVES_ENABLED`
-(`src/memory/crystallization/crystallizer.py:55`); flag-off falls back
+(`LLMCrystalNarrativeAudit` in `src/data/kg/types.py`). The LLM path is gated by
+`E2I_CRYSTAL_LLM_NARRATIVES_ENABLED` (`LLM_NARRATIVE_ENV_VAR` in
+`src/memory/crystallization/crystallizer.py`); flag-off falls back
 to a deterministic heuristic. See `docs/api/crystal_digests.md` for the
 full 15-field reference.
 
 **Schema migration**: `database/memory/025_crystaldigest_schema_completion.sql`
 adds the 15 columns to `executive_insights` in lockstep with the Pydantic
-`ExecutiveInsightResponse` (`src/api/routes/executive_insights.py:66-129`).
+`ExecutiveInsightResponse` model in `src/api/routes/executive_insights.py`.
 
 **Decision 3 = KEEP BINARY**: the `staleness_score` field is intentionally
 omitted from the schema. Staleness remains boolean via `invalidated_at
@@ -1052,11 +1054,12 @@ IS NULL`.
 
 ### 5.3 Subsystem 3 — Sentinels (data-driven watchers)
 
-**Registry** (`src/memory/sentinels/registry.py:91-101`) ships 5 shipped
-pattern types and 4 plan-vocabulary triggers. A single Celery beat task
-`sentinel_dispatcher` runs every 5 minutes
-(`src/memory/sentinels/registry.py:457-509`) and evaluates each enabled
-sentinel; errors in one sentinel never block others.
+**Registry** (`VALID_PATTERN_TYPES` in `src/memory/sentinels/registry.py`) ships 5
+shipped pattern types and 4 plan-vocabulary triggers; the `_eval_*` functions in the
+same module implement them. A single Celery beat task, `sentinel_dispatcher`
+(`src/tasks/insight_lifecycle_tasks.py`, beat entry `insight-lifecycle-sentinels`),
+runs every 5 minutes and evaluates each enabled sentinel; errors in one sentinel
+never block others.
 
 **YAML configuration**: `config/sentinels.yaml` ships 4 plan-specified
 sentinels with `lifecycle_state: advisory` and per-sentinel
@@ -1071,20 +1074,20 @@ skips re-fires within `now - last_fired_at < cooldown_minutes`. NULL or
 0 means no cooldown.
 
 **Redis alert channel**: `e2i:alerts`, a `Final[str]` constant at
-`src/tasks/sentinel_actions.py:70`. Four action handlers
+`ALERTS_CHANNEL` in `src/tasks/sentinel_actions.py`. Four action handlers
 (`rerun_all_active_cohorts`, `notify_and_queue_reanalysis`,
 `flag_for_review`, `run_full_consolidation`) publish JSON-serialized
 payloads via the best-effort `publish_alert()` helper.
 
-**SSE bridge to CopilotKit**: `src/api/routes/staleness_alerts.py:395-435`
-exposes `GET /api/alerts/stream?brand=<brand>` returning
-`text/event-stream` with per-connection bounded queue (cap 100,
-drop-oldest backpressure). Authentication is `Depends(require_auth)` at
-`src/api/routes/staleness_alerts.py:407`. Added in PR #394.
+**SSE bridge to CopilotKit**: the `alerts_stream` route in
+`src/api/routes/staleness_alerts.py` exposes `GET /api/alerts/stream?brand=<brand>`
+returning `text/event-stream`, fed by the `AlertBridge` class in the same module with
+a per-connection bounded queue (`MAX_QUEUE_DEPTH = 100`, drop-oldest backpressure).
+Authentication is `Depends(require_auth)` on the route. Added in PR #394.
 
 ### 5.4 Subsystem 4 — Triple-stream Retrieval
 
-The **HybridRetriever** (`src/rag/hybrid_retriever.py:41`) orchestrates
+The **HybridRetriever** (`src/rag/hybrid_retriever.py`) orchestrates
 three parallel search backends and fuses their results via Reciprocal
 Rank Fusion (RRF):
 
@@ -1093,20 +1096,18 @@ Rank Fusion (RRF):
 2. **Full-text** (`FulltextBackend`) — PostgreSQL GIN index keyword
    search.
 3. **Graph** (`GraphBackend`) — FalkorDB Cypher traversal on the
-   knowledge graph (8 node types, 11 edge types).
+   knowledge graph (10 node types, 11 relationship types — see §4.3).
 
-**Fusion algorithm**: `_apply_rrf_fusion`
-(`src/rag/hybrid_retriever.py:316-382`):
+**Fusion algorithm**: `HybridRetriever._apply_rrf_fusion`:
 
 ```
 RRF Score = sum(weight_i / (k + rank_i)) for each backend i
-where k = 60 (RRF_K, src/rag/hybrid_retriever.py:82)
+where k = 60 (HybridRetriever.RRF_K)
 ```
 
 Backend weights are configurable via `RAGConfig.search.fusion_weights`
-(default ~0.33 each). After fusion, `_apply_graph_boost`
-(`src/rag/hybrid_retriever.py:384-410`) multiplies graph-connected
-results by 1.3× (`GRAPH_BOOST`, `src/rag/hybrid_retriever.py:85`).
+(default ~0.33 each). After fusion, `HybridRetriever._apply_graph_boost` multiplies
+graph-connected results by 1.3× (`HybridRetriever.GRAPH_BOOST`).
 
 **Health + degradation**: `health_check()` returns per-backend health.
 The retriever gracefully degrades to fewer backends on failure rather
