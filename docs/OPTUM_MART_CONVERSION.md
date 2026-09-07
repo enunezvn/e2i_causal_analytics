@@ -365,7 +365,7 @@ The decision is documented in
   (engagement, adoption, market share, referral network) cannot be joined to any
   patient cohort. Initiation / discontinuation / persistence top out at AUC
   0.54–0.64 and the deployer correctly fail-closes (see
-  [`disc_feature_bound_verdict_20260607.md`](results/disc_feature_bound_verdict_20260607.md)).
+  the same-day deployable-cohort decision record [`results/deployable_cohort_decision_20260607.md`](results/deployable_cohort_decision_20260607.md) — the originally cited `disc_feature_bound_verdict_20260607.md` is no longer in the repo).
 - **Commercial HCP targeting is *natively* an HCP-grain problem.** The
   `optum_hcp` entity (2,753,238 rows) is the **only** grain where a strong target
   and admissible features co-exist: it carries both `adoption_status`
@@ -636,7 +636,7 @@ Each is an honest fix that honors the ratified use case (commercial HCP targetin
 cheap false positives) — **not** a loosened quality gate; discrimination,
 calibration, and overfit all pass on their merits. Full detail:
 [`deployable_cohort_decision_20260607.md`](results/deployable_cohort_decision_20260607.md)
-and [`disc_feature_bound_verdict_20260607.md`](results/disc_feature_bound_verdict_20260607.md).
+and the same-day deployable-cohort decision record [`results/deployable_cohort_decision_20260607.md`](results/deployable_cohort_decision_20260607.md) — the originally cited `disc_feature_bound_verdict_20260607.md` is no longer in the repo.
 
 > **Cosmetic follow-up — still open (re-verified 2026-09-07).** Step 7 builds
 > `deployment_name = f"kisqali_discontinuation_{experiment_id[:8]}"`

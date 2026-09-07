@@ -488,7 +488,7 @@ The table below lists the route groups; re-derive the set with
 | agents | `/api/agents/` | Status of all 22 agents | - |
 | analytics | `/api/analytics/` | Dashboard, agent metrics, trends | AUTH/ANALYST |
 | audit | `/api/audit/` | Workflow audit chain, verification | AUTH |
-| causal | `/api/causal/` | Hierarchical CATE, pipeline, validation | ANALYST |
+| causal | `/api/causal/` | Hierarchical CATE, pipeline, validation, and the **guided discovery job**: `GET /discover-effects/questions` (candidate subset, strongest-first) → `POST /discover-effects` (submit) → `GET /discover-effects/{job_id}` (poll) → `POST /discover-effects/{job_id}/cancel` (cooperative, job-store marker). Jobs live 8 h in the durable store; liveness is a 15 s heartbeat with a 120 s TTL, so a run orphaned by a restart is read-repaired to `failed` on the next poll rather than polling `running` forever (ADR-016). Refuses with **400** rather than guessing: an unknown brand for the dataset, and an empty question selection | ANALYST |
 | cognitive | `/api/cognitive/` | 4-phase cognitive workflow, RAG | - |
 | chat (orchestrator brain) | `/api/copilotkit/` | `POST /chat/stream` (SSE, `dispatch_info`) and `POST /chat` — classify → orchestrator → synthesize. On a **complete** orchestrator failure the #1336 conversational bridge (`src/api/routes/chat_bridge.py`) re-runs the turn through the AG-UI brain behind an honest preamble, failing open to the original summary | Rate-limited |
 | chat (AG-UI runtime) | `/api/copilotkit/{path}` | The CopilotKit AG-UI agent runtime (`chat_node` + bound tools), registered by `add_api_route` at both `/api/copilotkit` and `/api/copilotkit/{path:path}`; this is the brain the frontend chat panel talks to | Rate-limited |
@@ -507,7 +507,7 @@ The table below lists the route groups; re-derive the set with
 | predictions | `/api/models/` | Churn, conversion model inference | AUTH |
 | rag | `/api/v1/rag/` | Hybrid RAG search | AUTH |
 | resources | `/api/resources/` | Resource allocation optimization | AUTH |
-| segments | `/api/segments/` | Treatment effect segmentation | AUTH |
+| segments | `/api/segments/` | Treatment effect segmentation. `POST /analyze` is asynchronous (submit + poll) under a wall-clock run budget (`SEGMENT_ANALYSIS_BUDGET_SECONDS`, default 900 s). An unmodeled treatment/outcome pair is refused with **400** and a named reason rather than silently returning an unmodeled estimate | AUTH |
 | admin | `/api/admin/` | User administration, activity log, observability panel | ADMIN |
 | alerts | `/api/alerts/` | Staleness alert stream (SSE, drop-oldest backpressure) | AUTH |
 | executive-insights | `/api/executive-insights/` | Executive insight rows (JIT provenance-verified) | ANALYST |
