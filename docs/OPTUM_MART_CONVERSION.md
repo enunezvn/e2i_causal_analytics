@@ -3,10 +3,16 @@
 Converts the **pre-engineered Optum mart** into canonical per-cohort E2I parquet
 that the Tier-0 pipeline consumes identically to synthetic data. The default
 input is the **enriched patient-grain drop**
-(`data/rwd/Optum_Parquet/Optum_enriched.parquet`, 205 cols × 814,587 rows —
-2026-06-09); the **legacy entity-stacked mart** (`Optum.parquet`, 252 cols ×
-3,758,007 rows) still works via `--input`. Both yield the same 814,587-patient
+(`data/rwd/Optum_Parquet/Optum_enriched.parquet`); the **legacy entity-stacked
+mart** (`Optum.parquet`) still works via `--input`. Both yield the same patient
 panel (see "Input" below).
+
+> **Shapes UNVERIFIED as of 2026-09-07.** The figures previously quoted here
+> (enriched 205 cols × 814,587 rows, legacy 252 cols × 3,758,007 rows, both dated
+> 2026-06-09) were **not** re-read during this pass — reading these parquets is
+> memory-heavy on the dev/prod droplet. Treat them as of that date and re-measure
+> before relying on them:
+> `python -c "import pyarrow.parquet as pq; f=pq.ParquetFile('data/rwd/Optum_Parquet/Optum_enriched.parquet'); print(f.metadata.num_rows, f.metadata.num_columns)"`
 
 > **This is NOT the legacy raw-claims converter.** `scripts/convert_optum_rwd.py`
 > (documented in [`OPTUM_CONVERSION.md`](OPTUM_CONVERSION.md)) ingests the 6 raw
@@ -438,12 +444,14 @@ exclusion ledgers (asserted by the contract tests; the explanatory complement to
 the positive enumeration, not the enforcement mechanism) record *why* each
 non-emitted column is dropped:
 
-- **`_LEAKY_HCP_COLS`** — adoption-**derived** columns the target is computed from
-  (`adoption_status`, `adoption_category`, `adopter_rank`, `adopter_count`,
+- **`_LEAKY_HCP_COLS`** — **13** adoption-**derived** columns the target is
+  computed from (`adoption_status`, `adoption_category`,
+  `adoption_category_method`, `adopter_rank`, `adopter_count`,
   `adoption_cumulative_share`, `days_to_first`, `first_adoption_dt`,
-  `target_patient_count`, `target_event_count`, `distinct_target_code_count`,
+  `target_event_count`, `target_patient_count`, `distinct_target_code_count`,
   `target_match_methods`, `event_sources`). Feeding any would be catastrophic
-  leakage.
+  leakage. Re-derive with
+  `grep -n '_LEAKY_HCP_COLS' -A 15 scripts/convert_optum_hcp_adoption.py`.
 - **`_ID_COLS`** — identifiers / high-cardinality provider-id-like columns
   (`hcp_id`, `npi`, `hcp_npi`, `patid`, `dea`, `hcp_name`, `grp_practice`,
   `hosp_affil`, `prov`).
@@ -552,7 +560,7 @@ python scripts/convert_optum_hcp_adoption.py --sample-n 100000
 
 # Run tier-0 — BOTH flags matter:
 #   --feature-manifest-source optum_hcp  → Layer-5 leakage verdicts fire
-#   --deployment-intent commercial       → commercial AUC bar (0.65) + commercial operating gates
+#   --deployment-intent commercial       → commercial adaptive gates (AUC floor max(0.60, baseline+0.05))
 python scripts/run_optum_tier0_test.py --cohort hcp_adoption \
     --feature-manifest-source optum_hcp --deployment-intent commercial
 ```
@@ -574,11 +582,21 @@ Two runner nuances specific to `hcp_adoption` (distinct from the `*_mart` cohort
   `data/rwd/mart/hcp_adoption` autodetects to no manifest. Pass
   `--feature-manifest-source optum_hcp` explicitly so the Layer-5 defense-in-depth
   fires.
-- **`--deployment-intent` defaults to `clinical` (AUC 0.75).** The HCP model
-  clears even that, but pass `commercial` so the commercial AUC bar (0.65) and the
-  prevalence-aware operating gates (recall 0.50, MCC 0.10, net-benefit at the
-  commercial cost ratio `p_t = 0.05`) are applied — these are the gates the
-  commercial-targeting use case ratifies.
+- **`--deployment-intent` defaults to `clinical`** (AUC floor
+  `max(0.75, baseline+0.20)`). The HCP model clears even that, but pass
+  `commercial` so the commercial adaptive gates apply: AUC floor
+  `max(0.60, baseline+0.05)` (`0.58`/`+0.03` on an adverse regime), recall 0.50,
+  MCC 0.10, lift 0.08, and net benefit at the commercial cost ratio `p_t = 0.05`
+  — the gates the commercial-targeting use case ratifies.
+
+> **Two different 0.6x numbers, two different mechanisms — do not merge them.**
+> The **adaptive commercial AUC floor** is `max(0.60, baseline+0.05)`
+> (`_INTENT_AUC_PARAMS` in
+> `src/agents/ml_foundation/scope_definer/nodes/criteria_validator.py`; see
+> `docs/model_success_criteria.md` §2.0). The **`0.65`** is
+> `scripts/run_optum_tier0_test.py --min-auc`, the *runner's own* step gate on
+> validation AUC, default `0.65`, independent of `--deployment-intent`. A run can
+> clear the adaptive floor and still be failed by `--min-auc`, and vice versa.
 
 `apply_overrides` pushes the cohort's target into `tier0.CONFIG.target_outcome`
 (`hcp_adoption → adopted_target_brand`). The runner's `_single_class_error`
@@ -620,10 +638,14 @@ calibration, and overfit all pass on their merits. Full detail:
 [`deployable_cohort_decision_20260607.md`](results/deployable_cohort_decision_20260607.md)
 and [`disc_feature_bound_verdict_20260607.md`](results/disc_feature_bound_verdict_20260607.md).
 
-> **Cosmetic follow-up:** the runner's `deployment_id` label
-> (`kisqali_discontinuation_tier0_e2`) and `problem_description` are hardcoded for
-> the patient test harness — not cohort-accurate for the HCP / XOLAIR cohort. The
-> model and metrics are correct; only the label string is a carryover.
+> **Cosmetic follow-up — still open (re-verified 2026-09-07).** Step 7 builds
+> `deployment_name = f"kisqali_discontinuation_{experiment_id[:8]}"`
+> (`scripts/run_tier0_test.py`, the MODEL DEPLOYER step) and the scope's
+> `problem_description` is `f"Predict patient discontinuation risk for {CONFIG.brand}"`.
+> Both are hardcoded for the patient test harness and are **not** cohort-accurate
+> for the HCP / XOLAIR cohort — the run log's `kisqali_discontinuation_tier0_e2:v62`
+> is that f-string with a `tier0_e2` experiment id, not a separate literal. The
+> model and metrics are correct; only the label strings are a carryover.
 
 ## Related files
 
@@ -655,5 +677,7 @@ and [`disc_feature_bound_verdict_20260607.md`](results/disc_feature_bound_verdic
 - `docs/results/hcp_adoption_ablation_20260607.py` — the leakage ablation
   (network-vs-volume-vs-geo standalone + leave-one-out AUC)
 - `.claude/plans/optum-initiation-adapter/IMPLEMENTATION-PLAN.md` — the original
-  (now SUPERSEDED) plan; see its as-built banner for the deltas
+  (now SUPERSEDED) plan. **Absent from the repo** (local, untracked planning
+  note; historical) — the as-built truth is this document plus
+  `src/data/manifests/optum_mart_feature_manifest.py`
 - `docs/OPTUM_CONVERSION.md` — the **legacy raw-claims** converter (different input)
