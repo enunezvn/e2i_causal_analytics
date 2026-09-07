@@ -17,17 +17,27 @@ How to run the full stack using the compose files with the dev overlay.
 - Docker Engine 24+
 - Docker Compose v2+
 - Git
+- **A running self-hosted Supabase stack.** `docker-compose.yml` joins
+  `supabase-network` as an `external: true` network and several services resolve
+  the `supabase-db` container over it, so on a machine where that stack has never
+  run `up` fails on the missing network before anything starts.
 
 ## Quick Start
 
 ```bash
+# 0. Bring up self-hosted Supabase first (this creates the external supabase-network)
+./docker/supabase/start.sh
+
 # 1. Clone
 git clone git@github.com:enunezvn/e2i_causal_analytics.git
 cd e2i_causal_analytics
 
 # 2. Create env file from template
 cp .env.example .env
-# Edit .env — fill in required keys (see Environment Variables below)
+# Edit .env — fill in required keys (see Environment Variables below).
+# SUPABASE_POSTGRES_PASSWORD is easy to miss and compose refuses to start
+# without it; validate before starting anything:
+docker compose --env-file .env -f docker/docker-compose.yml config -q
 
 # 3. Start everything
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
@@ -202,9 +212,20 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml res
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | Base service definitions (shared across environments) |
-| `docker-compose.dev.yml` | Dev overlay: volume mounts, hot reload, debug settings |
+| `docker-compose.yml` | Base service definitions. **This alone is production** |
+| `docker-compose.dev.yml` | Dev overlay: bind mounts, hot reload, `_dev` names, `dev-tools` profile |
+| `docker-compose.frontend-dev.yml` | Legacy (#528-A rollback era); `pick_overlay()` can no longer select it |
+| `docker-compose.monitoring.yml` | Superseded by the `monitoring` profile in the base file |
+| `docker-compose.opik.yml` | Opik LLM observability overlay (10 services) |
+| `docker-compose.rxnav.yml` | RxNav stub |
+| `docker-compose.secure.yml` | Hardened variant, not used by the deploy |
 | `Dockerfile` | Multi-stage build for API + workers |
-| `frontend/Dockerfile` | Multi-stage build for React app |
+| `frontend/Dockerfile` | Multi-stage build for React app; `AS production` at L106 is what makes `pick_overlay()` return empty |
 | `Dockerfile.feast` | Feast feature server |
-| `nginx/nginx.conf` | Docker nginx (for full-Docker deployments) |
+| `frontend/nginx.conf` | **Baked into the frontend image** at `/etc/nginx/nginx.conf` (`frontend/Dockerfile:112`) — the config actually serving the app |
+| `nginx/host-nginx.conf` | Canonical source for the **host** nginx site (`/etc/nginx/sites-available/e2i-analytics`) |
+| `nginx/nginx.secure.conf` | Mounted only by `docker-compose.secure.yml` |
+| `nginx/nginx.conf` | **No consumer** — not baked into any image, not mounted by any compose file |
+
+See `../DEPLOYMENT.md` for the persistent-volume inventory and the production
+deploy pipeline.
