@@ -1168,7 +1168,7 @@ Internet
 ┌─────────────────────────────────┐
 │ Host Nginx                       │
 │ - SSL/TLS termination (Certbot) │
-│ - Rate limiting (100 req/s API) │
+│ - Rate limiting (see zones below)│
 │ - server_tokens off             │
 │ - CSP headers (CDN for Swagger) │
 └───────────┬─────────────────────┘
@@ -1176,13 +1176,16 @@ Internet
             ▼
 ┌─────────────────────────────────┐
 │ FastAPI Middleware Stack         │
+│ (innermost → outermost)          │
 │ 1. CORS (origin validation)     │
-│ 2. JWT Auth (Supabase tokens)   │
-│ 3. Security Headers (CSP, etc.) │
-│ 4. Rate Limiting (per-endpoint) │
-│ 5. Timing (latency tracking)    │
-│ 6. Tracing (request correlation)│
-│ 7. OpenTelemetry (distributed)  │
+│ 2. Insight Verifier (410 stale) │
+│ 3. Activity Tracking (per-user) │
+│ 4. JWT Auth (Supabase tokens)   │
+│ 5. Security Headers (CSP, etc.) │
+│ 6. Rate Limiting (per-endpoint) │
+│ 7. Timing (latency tracking)    │
+│ 8. Tracing (request correlation)│
+│ 9. OpenTelemetry (distributed)  │
 └───────────┬─────────────────────┘
             │
             ▼
@@ -1194,6 +1197,20 @@ Internet
 │ - Security audit logging        │
 └─────────────────────────────────┘
 ```
+
+**Host nginx rate-limit zones.** The `limit_req_zone` definitions live in the http block of
+`/etc/nginx/nginx.conf` on the droplet (not in the repo — `docker/nginx/host-nginx.conf` only
+*references* them, as its own header note says):
+
+| Zone | Rate | Applied to (in `docker/nginx/host-nginx.conf`) |
+|------|------|-----------------------------------------------|
+| `api_limit` | 10 r/s, burst 20 nodelay | `location /api/` |
+| `copilot_limit` | 30 r/s, burst 10 nodelay | `location /copilotkit/` |
+| `general_limit` | 100 r/s, burst 50 nodelay | `location /` (the SPA) |
+
+The "100 req/s API" figure this section used to carry was the `general_limit` rate applied to
+the SPA, not the API limit — `/api/` is an order of magnitude tighter. The application-level
+limits in §6.4 are a second, independent layer.
 
 ### 6.2 Authentication & Authorization
 
@@ -1235,14 +1252,28 @@ ADMIN (level 4)    → Full system access
 | Batch operations | 10 req | 60s |
 | CopilotKit chat | 30 req | 3600s |
 | CopilotKit status | 100 req | 60s |
+| CopilotKit other (analytics/feedback) | 60 req | 60s |
+
+Source: `RateLimitMiddleware.DEFAULT_LIMITS` in
+`src/api/middleware/rate_limit_middleware.py`. `EXEMPT_PATHS` bypasses the limiter entirely for
+`/health`, `/healthz`, `/ready`, `/metrics` and `/api/kpis/health` (the last is polled by the
+frontend); any other path containing `/health` falls into the 300/60s health bucket rather than
+being exempt.
 
 ### 6.5 Network Security
 
 - Management ports (MLflow, Grafana, Prometheus, Opik) bound to `127.0.0.1`
-- Redis and FalkorDB require passwords (`REDIS_PASSWORD`, `FALKORDB_PASSWORD`)
+- Redis and FalkorDB require passwords (`REDIS_PASSWORD`, `FALKORDB_PASSWORD`); the one-shot
+  `config-check` service fails the stack if either is unset or `changeme` under
+  `ENVIRONMENT=production`
 - No default passwords anywhere in compose configuration
-- API container has `read_only: true` filesystem
-- Worker containers use `tmpfs` with mode `1770`
+- API, frontend, worker and scheduler containers all set `read_only: true`
+- Writable scratch is `tmpfs` only: `/app/tmp` is `uid=1000,gid=1000,mode=0700` on every app
+  service (256 MB on worker_light, 2 GB on worker_medium and worker_heavy, 100 MB on the API,
+  64 MB on the scheduler); the shared `/tmp` stays `mode=1777` (512 MB on the API, 50 MB on the
+  scheduler)
+- Celery beat state is a **named volume** (`e2i_celerybeat_state`), deliberately not the `/tmp`
+  tmpfs — a tmpfs resets `last_run_at` on every deploy, and no 24-hour entry would ever come due
 - MLflow UI behind nginx `auth_basic`
 
 ### 6.6 CI/CD Security Pipeline
@@ -1256,6 +1287,11 @@ ADMIN (level 4)    → Full system access
 | Frontend audit | npm audit | Every push/PR |
 | Container scan | Trivy | Every push/PR |
 | Dockerfile lint | Hadolint | Every push/PR |
+
+**Host cron (droplet).** Two project jobs run outside Docker from the `enunez` crontab:
+a nightly backup at 02:00 (`scripts/backup_cron.sh` → `~/logs/e2i-backup.log`) and a weekly
+synthetic reseed Mondays at 03:00 (`scripts/reseed_synthetic.sh` → `~/logs/e2i-reseed.log`).
+The Monday reseed is a known source of drift in the DQ Consistency panel and is intentional.
 
 ---
 
