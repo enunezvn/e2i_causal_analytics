@@ -455,6 +455,24 @@ All agents share common patterns:
 - **Memory**: Tri-memory hooks (working/episodic/procedural/semantic)
 - **Dependencies**: Lazy imports to avoid circular deps; all external services optional
 
+**Synthesis honesty guard** (`src/api/routes/synthesis_guard.py`, #1691/#1694). The chat
+synthesis streams token by token, so a superlative that contradicts the answer's own table
+cannot be rewritten after the fact. Instead `find_superlative_contradictions` re-reads the
+completed text against the tables in it and `build_superlative_correction` appends a
+deterministic correction note; visible-tier findings are emitted to the user, the rest are
+logged for monitoring. The companion system-prompt rule is that a superlative over a metric
+ranges only over rows that actually carry that metric.
+
+**Per-request latency spans** (`src/api/routes/chatbot_graph.py`, #1454 + #1475). Every node in
+the compiled chatbot graph is wrapped by `_timed_node` — a structural test asserts the wrapper
+covers every node, so a new node cannot silently reopen the attribution hole. The final item
+`stream_chatbot` yields carries `LATENCY_SPAN_KEY` (`__latency_span__`): per-node wall time,
+orchestrator-internal stage times, an `untimed_overhead_ms` bucket for time outside any node
+(checkpointer writes, scheduling, generator gaps — a large value there is itself the answer), and
+the emitting `worker_pid`. It is observability data, never answer text. The first request a
+worker serves is labelled so cold and warm latency populations stay separable, and unmeasured
+stages are `{}`/`None` — an honest absence, never fabricated zeros.
+
 ### 3.4 API Layer
 
 The route modules live in `src/api/routes/` and are mounted in `src/api/main.py`
@@ -619,6 +637,68 @@ Daily jobs moved from 86400-second intervals to wall-clock `crontab()` entries i
 | `monitor-dead-letter-queue` (post-literal) | 1800.0 (30 min) | quick |
 
 The scaffolded `health-check` and `cache-cleanup` entries were removed in #897.
+
+### 3.6 Application Services
+
+Four surfaces shipped since the July 2026 audit that are load-bearing but had no home in this
+document. Each is a *service* layer under `src/services/` or `src/insights/` with a thin route
+in front of it.
+
+#### Clinical-context service
+
+`src/services/clinical_context/` backs `GET /api/causal/clinical-context?brand=…&outcome=…`
+(`get_causal_clinical_context`), which enriches a discovered causal effect with brand-faithful,
+*sourced* clinical context. Structure:
+
+- `brand_map.py` — `BrandClinicalProfile` / `TreatmentContext` per analysed brand, resolved by
+  `resolve_brand_profile`. A brand with no profile is a 404, not a guess.
+- `providers.py` — one provider per evidence source behind a `ClinicalContextProvider` ABC:
+  `ChEMBLMechanismProvider`, `ClinicalTrialsEndpointProvider`, `PubMedRWEProvider`,
+  `OpenFDAIndicationsProvider`, `CuratedCompetitorProvider`. `clients.py` holds the HTTP clients.
+- `causal_evidence.py` — Open Targets / Europe PMC evidence for the specific *indication* node.
+  The module's own header documents the trap it is built around: Open Targets reports a
+  drug-wide `maximumClinicalStage`, so reading it per-drug would assert approvals Open Targets
+  never made for that indication, and its staging lags the FDA label.
+- `label_gate.py` / `label_criteria_provider.py` / `label_considerations.py` — the label gate.
+- `analysis_grounding.py` — composes the grounding text, and **refuses** rather than
+  extrapolating when the sources describe the therapy but not the analysed relationship.
+
+#### Strategic insights
+
+`src/api/routes/insights_strategic.py` mounts `/api/insights/` — 14 `POST` endpoints, one per
+page surface (`/knowledge-graph`, `/home-kpis`, `/digital-twin`, `/model-performance`,
+`/causal-discovery`, `/treatment-effect`, `/predictive-cohort`, `/predictive-whatif`,
+`/executive-brief`, `/hte`, `/resource-optimization`, `/feedback-learning`, `/experiments`,
+`/clinical-narrative`), all returning `StrategicInsightResponse`. `POST /insights/clinical-narrative`
+is the one that composes over the clinical-context service above; a context-fetch or grounding
+failure degrades that endpoint rather than failing the page.
+
+#### Feedback-learner optimizer gate
+
+`GET /api/feedback/health` returns an `optimizer` block (`OptimizerGateStatus`) describing the
+daily prompt-optimization trigger: `optimization_runs`, `min_trainset_examples`, `would_trigger`
+and a human-readable `reason`. `would_trigger` is deliberately the **whole** decision — cooldown,
+forced interval, reward delta and trainset size — not the size gate alone, so the panel cannot
+show "enough examples" while the beat declines to run. It is read live from the signal store; if
+that read fails the block degrades to the configured minimum rather than disappearing.
+
+`GET /api/feedback/patterns` defaults to `max_age_days = PATTERN_MAX_AGE_DAYS` (30). Pass
+`include_stale=true` to see older patterns — without it, a pattern last detected 31 days ago is
+absent from the list, which is the intended behaviour and a common source of "the pattern
+vanished" reports.
+
+#### RAG chunk corpus
+
+There are two RAG substrates and they are not interchangeable. The chat `HybridRetriever` reads
+`rag_document_chunks`, embedded in the `text-embedding-3-small` space; the memory path's
+episodic corpus is embedded in the ada-002 space and is **invisible to chat queries**. The chunk
+corpus is populated by:
+
+- `scripts/rag/ingest_chunk_corpus.py` — the one-off/backfill path.
+- the `sync-chunk-corpus` beat entry (nightly, `analytics` queue) →
+  `src/tasks/corpus_ingestion_tasks.py::sync_chunk_corpus`, which indexes the latest snapshot of
+  every (brand, metric, region) combination. It is idempotent via content-hash dedup, so a daily
+  run only embeds what changed, and it is scheduled after the business-metrics ETL.
 
 ---
 
