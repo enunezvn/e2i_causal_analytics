@@ -1,6 +1,21 @@
 # Runbook: Frontend Serving Flip (static /var/www/html -> e2i_frontend container)
 
-**Owner:** deploy orchestrator (manual, one-time at deploy)
+> ## ✅ COMPLETED 2026-06 — point-in-time record. **Do not re-run.**
+>
+> This was a **one-time** migration and it is done. Verified on the live box
+> 2026-09-07 (read-only):
+>
+> - host nginx `location / { … proxy_pass http://127.0.0.1:3002; }`
+>   (`/etc/nginx/sites-enabled/e2i-analytics`) — the static `/var/www/html`
+>   web root is no longer served;
+> - `docker ps` → `e2i_frontend  Up (healthy)  0.0.0.0:3002->80/tcp`.
+>
+> Re-running the steps below — in particular the `rm -rf /var/www/html/...`
+> and the nginx site swap — would act on a box that is already flipped. Read
+> this for history and for the "Ongoing operation" section; do not execute it.
+> For today's deploy behaviour see [`deploy-operations.md`](deploy-operations.md).
+
+**Owner:** deploy orchestrator (manual, one-time at deploy — **completed 2026-06**)
 **Branch that prepared this:** `fix/fe-serving-auth-build`
 **Canonical config:** `docker/nginx/host-nginx.conf` (tracked) -> `/etc/nginx/sites-available/e2i-analytics` (live)
 
@@ -114,8 +129,24 @@ sudo certbot renew --dry-run
 
 ## Ongoing operation
 
-- CI (`deploy.yml` `build-and-push-frontend` + `deploy`) builds and pulls the
-  frontend image on every main push; the container restart picks up new
+- CI (`deploy.yml` `build-and-push-frontend` + `deploy`) builds and pushes the
+  frontend image, and the droplet pulls it; the container recreate picks up new
   bundles automatically. No web-root copying is involved anymore.
+- Three corrections to that summary, current as of 2026-09-07 — see
+  [`deploy-operations.md`](deploy-operations.md) for the detail:
+  1. An **`ensure-main-image`** job runs between the build jobs and the SSH
+     deploy. If `main` has moved to a sha with no published image, it builds and
+     pushes that sha so the droplet never has to.
+  2. The droplet does **not** deploy `origin/main` unconditionally. It walks
+     `origin/main` newest-first (bounded at 30 commits) and deploys the newest
+     ancestor that has **both** the `e2i-api` and `e2i-frontend` images
+     published, subject to a downgrade floor anchored on the running `e2i_api`
+     image tag. So prod can legitimately lag `origin/main` by a commit.
+  3. An **on-box frontend build is refused**, not attempted: if the resolved
+     target has no published GHCR image the deploy fails with
+     `Deploy FAILED before any change was made` and
+     `Recover: gh workflow run deploy.yml`. A locally built image would exist
+     only on this box (no rollback target) and the React/esbuild build is the
+     OOM that turned the 2026-06-23 rollback into a double fault.
 - Any future host nginx edits MUST be made in `docker/nginx/host-nginx.conf`
   first and copied to the box (this file is how the 2026-02-09 drift happened).
