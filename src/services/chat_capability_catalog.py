@@ -728,20 +728,20 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     # A/B tests are running / active / live / ongoing / in progress / in flight /
     # being run / enrolling, or "currently designed" (the orchestrator's in-flight
     # designs),
-    # cannot be answered. Eight shapes match: "<noun> (are|is) currently|now|
+    # cannot be answered. Nine shapes match: "<noun> (are|is) currently|now|
     # presently|actively <status>", "which|what|are any|how many <noun> (are|is)
     # <status>", "are any|how many <noun> <status>", "list|show [me] [the|all]
     # <noun> that (are|is) <status>", the adjective form "active / running / live /
-    # ongoing <noun>", "<noun> in progress|in flight", and two from #1914 (the
+    # ongoing <noun>", "<noun> in progress|in flight", and three from #1914 (the
     # /experiments pill "what experiments have been run or are currently
     # enrolling ... in the last 30 days?" survived three probes): the
     # perfect-tense or past passive status after a lead, "which|what|are any|
     # how many <noun> (have|has|had) been|were|was run|running|launched|started|
     # <status>", and a status predicate COORDINATED behind another predicate,
     # "which|what|how many <noun> <up to 40 chars> (are|is) currently|now|
-    # presently|actively <status>" (with an "are any" lead the copula is the
-    # lead itself: "are any <noun> <up to 40 chars> currently <status>"). A
-    # match is then
+    # presently|actively <status>", and its "are any" variant, where the copula
+    # is the lead itself: "are any <noun> <up to 40 chars> currently|now|
+    # presently|actively <status>". A match is then
     # exempted by _EXPERIMENT_DESIGN_RE (below) when the pill carries DESIGN or
     # CALCULATION intent, which experiment_designer serves. A status read that
     # merely mentions power, a sample size or a duration ("what active
