@@ -340,7 +340,13 @@ export interface PerformanceTrendResponse {
   trend: 'improving' | 'stable' | 'degrading';
   is_significant: boolean;
   alert_threshold_breached: boolean;
-  /** Metric level below which an alert fires (lower-bound line for the chart). */
+  /**
+   * The alert FLOOR the chart plots as its red line: max(baseline − 10%,
+   * absolute minimum). Necessary, not sufficient — a fold under the relative
+   * floor breaches only when `trend` is also 'degrading' (outside sampling
+   * noise); only a fold under the absolute minimum always breaches. 0 when
+   * there is no baseline history.
+   */
   alert_threshold: number;
   /**
    * Sampling-aware classification context (2026-09-07). The newest fold's
