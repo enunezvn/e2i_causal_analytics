@@ -1108,7 +1108,7 @@ A: Via SSH tunnel. Run `bash scripts/ssh-tunnels/tunnels.sh` from your local mac
 A: Branch protection is enabled. Create a feature branch, push it, and open a PR. Pre-commit hooks also block commits to `main`.
 
 **Q: How do I add a new API endpoint?**
-A: Create a route in `src/api/routes/`, register it in `src/api/main.py`, add auth requirements via `Depends(require_analyst)`, and write tests in `tests/unit/test_api/`.
+A: Create a route in `src/api/routes/` with `APIRouter(prefix="/<domain>")` — **not** `/api/v1/...`; `src/api/main.py` supplies the `/api` mount when it registers the router. Add auth requirements via `Depends(require_analyst)`, write tests in `tests/unit/test_api/`, and if the change alters a response model, run `make generate-types` and commit the regenerated `frontend/src/types/generated/api.ts` in the same PR.
 
 **Q: How do I add a new agent?**
 A: Create a directory in `src/agents/<agent_name>/` with `graph.py` (LangGraph state machine), node functions, and tools. Add the agent definition to `config/agent_config.yaml`. Write tests in `tests/unit/test_agents/`.
