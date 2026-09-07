@@ -70,11 +70,22 @@ The system uses 21 AI agents organized in 6 tiers to perform causal analysis, pr
 
 ### API Keys Required
 
-| Service | Variable | How to Get |
-|---------|----------|------------|
-| **Anthropic** | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
-| **Supabase** | `SUPABASE_URL`, `SUPABASE_KEY` | Self-hosted Supabase — see `config/supabase_self_hosted.example.env` |
-| **OpenAI** (optional) | `OPENAI_API_KEY` | For RAGAS evaluation and embeddings |
+| Service | Variable | Required? | How to Get |
+|---------|----------|-----------|------------|
+| **OpenAI** | `OPENAI_API_KEY` | **Always** | [platform.openai.com](https://platform.openai.com). The default provider is OpenAI (`LLM_PROVIDER` defaults to `openai` in `src/utils/llm_factory.py`), and RAG embeddings (`text-embedding-3-small`, `src/rag/config.py`) are OpenAI **regardless** of `LLM_PROVIDER`. Also used by the RAGAS evaluations. |
+| **Supabase** | `SUPABASE_URL`, `SUPABASE_KEY` | **Always** | Self-hosted Supabase — see `config/supabase_self_hosted.example.env` |
+| **Anthropic** | `ANTHROPIC_API_KEY` | With `LLM_PROVIDER=anthropic` | [console.anthropic.com](https://console.anthropic.com). Independently of the provider it also gates (fail-open — the feature disables itself, nothing errors) the nightly routing-label judge (`src/tasks/routing_label_tasks.py`) and the Layer-4 adaptive-validity evaluator (`src/data/causal_role_evaluator.py`). |
+
+> **Do not configure only `ANTHROPIC_API_KEY`.** The code default is
+> `LLM_PROVIDER=openai`, so an Anthropic-only `.env` leaves the configured provider
+> with no key. Per-provider model tiers (`fast` / `standard` / `reasoning`) are
+> defined in `src/utils/llm_factory.py`.
+>
+> **As deployed on the droplet**, both keys are set: `LLM_PROVIDER=anthropic` **and**
+> `DSPY_LM_MODEL=openai/gpt-5.6-terra` — the LangChain agents run on Anthropic while
+> the DSPy modules stay on OpenAI. See
+> [`docs/decisions/adr-010-dspy-terra-scoped-anthropic-flip.md`](decisions/adr-010-dspy-terra-scoped-anthropic-flip.md)
+> and `docs/LLM_CONFIGURATION.md`.
 
 ---
 
@@ -97,7 +108,8 @@ Edit `.env` with your credentials. Required variables:
 
 ```env
 # API Keys
-ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...          # always required (default provider + RAG embeddings)
+ANTHROPIC_API_KEY=sk-ant-...   # required when LLM_PROVIDER=anthropic
 SUPABASE_URL=http://172.17.0.1:54321
 SUPABASE_KEY=eyJhbG...
 SUPABASE_SERVICE_KEY=eyJhbG...
@@ -105,11 +117,28 @@ SUPABASE_SERVICE_KEY=eyJhbG...
 # Passwords (choose strong values, no defaults allowed)
 REDIS_PASSWORD=your-redis-password
 FALKORDB_PASSWORD=your-falkordb-password
+SUPABASE_POSTGRES_PASSWORD=your-supabase-db-password
 GRAFANA_ADMIN_PASSWORD=your-grafana-password
 
 # Database
 SUPABASE_DB_URL=postgresql://postgres:PASSWORD@127.0.0.1:5432/postgres
 ```
+
+> **`SUPABASE_POSTGRES_PASSWORD` is mandatory and easy to miss.** It is the password of
+> the self-hosted `supabase-db` container (the same value as `POSTGRES_PASSWORD` in
+> `/opt/supabase/docker/.env`). Compose builds the *container-internal*
+> `SUPABASE_DB_URL` from it (`docker/docker-compose.yml`) and also injects it into the
+> Feast services and `postgres-exporter`.
+>
+> Compose hard-fails on four `${VAR:?…}`-enforced variables — `REDIS_PASSWORD`,
+> `FALKORDB_PASSWORD`, `SUPABASE_POSTGRES_PASSWORD` and `GRAFANA_ADMIN_PASSWORD`. The
+> Grafana one is checked even when the `monitoring` profile is off, because `config`
+> evaluates every service definition. Verify your `.env` before starting anything:
+>
+> ```bash
+> docker compose --env-file .env -f docker/docker-compose.yml config -q   # rc 0 = OK
+> grep -o '\${[A-Z_]*:?' docker/docker-compose.yml | sort -u             # the live list
+> ```
 
 > **Note**: `docker/.env` is a symlink to `../.env` so Docker Compose picks up these values automatically.
 
@@ -168,25 +197,45 @@ cd ..
 
 ### Step 7: Initialize Database
 
-Apply schemas in order:
+Use the migration runner. It is the **same script every deploy runs**
+(`.github/workflows/deploy.yml`), so a fresh box ends up with exactly the deployed
+schema:
 
 ```bash
-# Core tables (8 tables)
-psql $SUPABASE_DB_URL < database/core/e2i_ml_complete_v3_schema.sql
+./scripts/run_migrations.sh --dry-run   # list pending files, apply nothing
+./scripts/run_migrations.sh             # apply every pending file
+```
 
-# ML tables (17 tables)
-psql $SUPABASE_DB_URL < database/ml/mlops_tables.sql
-psql $SUPABASE_DB_URL < database/ml/010_causal_validation_tables.sql
-psql $SUPABASE_DB_URL < database/ml/011_realtime_shap_audit.sql
-psql $SUPABASE_DB_URL < database/ml/012_digital_twin_tables.sql
-psql $SUPABASE_DB_URL < database/ml/013_tool_composer_tables.sql
+`scripts/run_migrations.sh`:
 
-# Feature store
-python scripts/run_migration.py database/migrations/004_create_feature_store_schema.sql
+- Applies **every** `.sql` file, in alphabetical order, from the eight schema
+  directories listed in its `MIGRATION_DIRS` array — `database/migrations`, `memory`,
+  `core`, `ml`, `causal`, `chat`, `rag`, `audit`. Each directory contributes a key
+  prefix so identically-numbered files in different directories (e.g. `ml/011` vs
+  `migrations/011`) never collide in the ledger.
+- Records what it applied in `public.schema_migrations`, so it is **idempotent** —
+  re-running it is a clean no-op.
+- Skips non-forward-migration files by name (`rollback_*.sql`, `*_rollback.sql`,
+  `*_validation_queries.sql`); those DROP live objects and must never be auto-applied.
+- Auto-detects its connection: `SUPABASE_DB_URL` if set (CI / remote), otherwise
+  `docker exec` into `$SUPABASE_DB_CONTAINER` (default `supabase-db`) — which is how it
+  runs **on the droplet**, where the self-hosted Supabase stack exposes REST
+  credentials but no `SUPABASE_DB_URL`.
 
-# Memory & audit tables
-psql $SUPABASE_DB_URL < database/memory/*.sql
-psql $SUPABASE_DB_URL < database/audit/*.sql
+> **Do not hand-apply a subset with `psql`.** Picking individual files leaves a partial
+> schema *and* an empty `public.schema_migrations`, so the next
+> `./scripts/run_migrations.sh` cannot tell what is already there.
+>
+> **`make db-init` is a stub** — it only echoes "Run your database initialization
+> scripts here" and touches no database.
+
+Re-derive the directory list and the file counts at any time:
+
+```bash
+sed -n '/^MIGRATION_DIRS=(/,/^)/p' scripts/run_migrations.sh
+for d in migrations memory core ml causal chat rag audit; do
+  printf '%s: %s\n' "$d" "$(ls database/$d/*.sql 2>/dev/null | wc -l)"
+done
 ```
 
 ### Step 8: Generate Synthetic Data
@@ -316,6 +365,13 @@ Each agent is a **LangGraph state machine** with:
 | **Prometheus** | `e2i_prometheus` | 9091 | N/A |
 | **Grafana** | `e2i_grafana` | 3200 | N/A |
 
+> **These are the dev-overlay names.** The `_dev` suffix and the auto-reload column come
+> from `docker-compose.dev.yml`. **Production runs the base compose only**, where the
+> same services are `e2i_api` (gunicorn, no reload) and `e2i_frontend` (nginx serving
+> the built bundle on `3002:80`) — see [section 8](#8-deployment). Prometheus and
+> Grafana carry no `_dev` suffix in either set, but a plain `up -d` does not start them
+> at all: they sit behind the `monitoring` compose profile.
+
 ### Worker Queue Architecture
 
 | Worker | Concurrency | Queues | Use Case |
@@ -416,8 +472,6 @@ make format         # Black + Ruff fix
 make docker-up      # Start all Docker services
 make docker-down    # Stop all Docker services
 make docker-logs    # Tail API + frontend logs
-make deploy         # Quick deploy (git pull + restart workers)
-make deploy-build   # Deploy with image rebuild
 make api-docs       # Generate OpenAPI spec + Redoc HTML
 make clean          # Remove build artifacts
 ```
@@ -526,24 +580,55 @@ Available markers: `unit`, `integration`, `e2e`, `slow`, `requires_redis`, `requ
 
 ### Architecture
 
-Dev and prod are the **same machine** - a single DigitalOcean droplet (8 vCPU / 32 GB RAM). All services run via Docker Compose. Host nginx handles SSL termination.
+Dev and prod are the **same machine** — a single DigitalOcean droplet
+(8 vCPU / 16 GB RAM). All services run via Docker Compose. Host nginx handles SSL
+termination.
+
+> The box runs under memory pressure. **Do not run whole-tree `mypy` or the full
+> `pytest` suite on it** — a whole-tree mypy spikes ~1.6 GiB. Scope local checks to the
+> files you changed; CI is the arbiter (see `CLAUDE.md`).
+
+### What production actually runs
+
+**Production is the base `docker/docker-compose.yml` alone — no overlay.** The deploy
+workflow's `pick_overlay()` returns an empty overlay because
+`docker/frontend/Dockerfile` has a `FROM nginx:alpine AS production` stage; the two
+other branches (`docker-compose.frontend-dev.yml`, `docker-compose.dev.yml`) are
+rollback targets from earlier eras. Live containers are `e2i_api` (gunicorn with
+UvicornWorker, `read_only: true`, GHCR image tagged by commit sha, `8000:8000`) and
+`e2i_frontend` (nginx serving the pre-built bundle, `3002:80`).
+
+**Local development** is base + `docker-compose.dev.yml`: `e2i_*_dev` container names,
+`uvicorn --reload`, and Vite HMR on `3002:5173`.
+
+There are seven compose files in `docker/` (`docker-compose.yml`, `.dev`,
+`.frontend-dev`, `.monitoring`, `.opik`, `.rxnav`, `.secure`); only the base one is
+deployed.
 
 ### Deploy Process
 
+**Deploys happen only by merging to `main`**, which runs `.github/workflows/deploy.yml`
+(build + push images to GHCR, apply DB migrations, flip the app services, health-check,
+roll back to the previous sha on failure). To redeploy the current `main` without a new
+commit:
+
 ```bash
-# Most common: pull changes + restart workers
-./scripts/deploy.sh
+gh workflow run deploy.yml
 
-# When dependencies change (requirements.txt, package.json, Dockerfiles)
-./scripts/deploy.sh --build
-
-# Verify
+# Verify (read-only, safe on the droplet)
 ./scripts/health_check.sh
 ```
 
-- **API**: Auto-reloads via `uvicorn --reload` (bind mount)
-- **Frontend**: Auto-reloads via Vite HMR (bind mount)
-- **Workers**: Must be explicitly restarted (Celery doesn't auto-reload)
+> ⚠️ **`make deploy` / `make deploy-build` / `./scripts/deploy.sh` is a legacy
+> local-dev path — never run it on the droplet.** It starts the **dev overlay**
+> (`docker-compose.dev.yml`), skips the feast/bentoml gates, does
+> `git reset --hard origin/main` and `git checkout <sha>` in the checkout it runs from
+> — and the droplet checkout is the shared deploy target. Use `deploy.yml`.
+
+In production nothing hot-reloads: the API and frontend images are rebuilt and the
+containers replaced by the workflow. `uvicorn --reload` and Vite HMR only exist in the
+dev overlay, where Celery workers still need an explicit restart (Celery does not
+auto-reload).
 
 ### CI/CD Pipeline
 
@@ -552,7 +637,9 @@ Push to `main` triggers the deploy workflow:
 1. **Backend Tests** (lint, type-check, unit tests, integration tests)
 2. **Build & Push** API image to GHCR
 3. **Build & Push** Frontend image to GHCR
-4. **SSH Deploy** to droplet (git pull + restart workers + health check)
+4. **SSH Deploy** to droplet: apply DB migrations (`scripts/run_migrations.sh`), pull
+   the new sha-tagged images, recreate the app services, run the health check, and roll
+   back to the previous sha if any gate fails
 
 ### Accessing Services (via SSH Tunnel)
 
@@ -946,9 +1033,9 @@ make format         # Fix
 # View logs
 make docker-logs
 
-# Deploy
-make deploy         # Quick (git pull + restart workers)
-make deploy-build   # With image rebuild
+# Deploy (merge to main; or re-run the workflow on the current main)
+gh workflow run deploy.yml
+# NEVER `make deploy` on the droplet — legacy dev-overlay path, see section 8
 
 # API docs
 open http://localhost:8000/api/docs
