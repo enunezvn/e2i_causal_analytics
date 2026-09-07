@@ -312,7 +312,7 @@ Two entries are worth calling out because they surprise people:
   That is deliberate (#1783): the alternative left prod running a stale baked copy
   until some unrelated `src/**` push rebuilt incidentally.
 - **`database/**` is NOT a trigger** — migrations apply on every deploy anyway
-  (step 4 below), so a migration lands with the next code deploy rather than
+  (step 3 below), so a migration lands with the next code deploy rather than
   provoking one of its own.
 
 `data/kg_cache/**`, `docker/frontend/**` and `scripts/deploy/**` are also inputs.
@@ -353,12 +353,13 @@ build cannot hold that queue hostage.
    The droplet is a deploy target, not a dev box — don't leave tracked edits or a
    branch checkout on it.
 3. **Migrations apply automatically**: `scripts/run_migrations.sh` runs
-   **unconditionally** on every deploy. It auto-detects the connection
-   (`SUPABASE_DB_URL` if set, else docker-exec into the `supabase-db`
-   container), covers every `database/` schema dir, and tracks applied files in
-   `public.schema_migrations`. See `docs/runbooks/migrations.md`.
-4. **Ordered rollout with gates** (after the image assertion, so nothing is
-   migrated or flipped on a run that was going to fail on a missing image):
+   **unconditionally** on every deploy — but only *after* the image assertion in
+   step 1, so a run that was going to fail on a missing image never migrates.
+   It auto-detects the connection (`SUPABASE_DB_URL` if set, else docker-exec into
+   the `supabase-db` container), covers every `database/` schema dir, and tracks
+   applied files in `public.schema_migrations`. See
+   [`docs/runbooks/migrations.md`](docs/runbooks/migrations.md).
+4. **Ordered rollout with gates**:
    - `feast` + `feast-materializer` recreate first; the deploy waits (up to
      10 min) for a **fresh materialize heartbeat** before the app is allowed
      to flip — the API must never serve against a stale/empty online store.

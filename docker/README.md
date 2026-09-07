@@ -132,8 +132,8 @@ value for the same name is ignored:
 
 The remaining forwarded entries are optional runtime knobs (chatbot warm, RAG
 chain, routing labeler, DSPy/GEPA legs, synthetic visibility) plus the optional
-biomedical API keys. `DEPLOYMENT.md` § *Runtime knobs forwarded by compose*
-carries the full derived table with each one's compose default, purpose and the
+biomedical API keys. `../DEPLOYMENT.md` § *Environment Variables* carries the
+full derived table with each one's compose default, purpose and the
 issue its rationale lives in — and the list of variables that application code
 reads but compose does **not** forward, where an `.env` edit is inert.
 
