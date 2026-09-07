@@ -878,6 +878,76 @@ _INDIVIDUAL_ASK_RE = re.compile(
 )
 
 
+# #1901 item 4q - a registry KPI asked as a causal OUTCOME ("What causal drivers
+# influence Trigger Precision, Acceptance Rate, and Override Rate ...", live on
+# /kpi-dictionary). Section C serves drivers, paths and effects only for the
+# causal-path registry's end nodes (catalog.causal_outcomes), and the tool
+# composer's KPI path (#810) only for the KPIs with a substrate builder
+# (kpi_resolution.substrate_kpi_ids(): Conversion Rate today); a KPI outside
+# both has nothing to return. The check is catalog-derived, so it lives in
+# CatalogRules rather than in _OFF_PLATFORM_RULES:
+#   - the KPI phrase comes from the STRICT vocabulary (aliases, full registry
+#     names, initialisms - never single name tokens, which mark scope), and
+#   - its KPI id is outside the ALLOW-SET = {recognize_kpi(<spaced outcome>).id
+#     for every causal outcome that resolves} | substrate_kpi_ids(). The
+#     recognizer's name-token fallback is included on purpose: it is the
+#     broader set (Action Rate Uplift via action_taken, ATE via
+#     treatment_initiated, Intent-to-Prescribe via intent_to_prescribe), and a
+#     miss there costs nothing while a false drop costs an answerable ask.
+#     "What drives TRx volume / NBRx / conversion rate / ROI / market share"
+#     all stay kept.
+# The phrase must be the OBJECT of a causal ask - one of four bounded shapes on
+# title + message, with a gap of at most three words that admits no outcome id
+# (no underscore) and no conjunction, so a treatment-position mention ("effect
+# of HCP Coverage on persistent_180d", "does trigger precision drive NBRx?",
+# "how does Trigger Precision affect adoption") and a mixed ask whose first
+# object is an outcome ("what drives persistent_180d and Trigger Precision")
+# never fire it, and neither do "paths", "confident" or "refutation" on their
+# own, nor a definition or value ask ("why does Trigger Precision matter",
+# "explain Override Rate", "what is the Override Rate"). Shapes:
+#   1. "<causal> drivers | factors | paths | causes | determinants of | behind |
+#      for | that drive | influencing ... <KPI>", and "paths (leading) to <KPI>"
+#   2. "what drives | causes | influences | affects | explains | is driving <KPI>"
+#   3. "effect | impact | influence of <treatment> on <KPI>"
+#   4. "why is <KPI> (so) low | high | falling ...", "why did <KPI> drop"
+# Hyphens and dashes are normalized to spaces before the shapes run (the
+# vocabulary phrases are space-normalized: "cross source match rate"), so a
+# KPI written as the registry spells it ("Cross-source Match Rate",
+# "Trigger-Precision") still matches. Accepted misses: any other phrasing
+# ("root cause analysis for <KPI>", "<KPI> drivers" as a noun compound,
+# "which factors to watch for <KPI>") and the near-synonym Trigger Funnel
+# Conversion (WS2-TR-009), which drops even though conversion_flag is a
+# section-C outcome.
+# With an empty outcome list (degraded catalog) the check is inert: the prompt
+# then invites "what drives <the outcome or KPI named on screen>".
+_KPI_GAP = r"(?:(?!(?:and|or|nor|vs|versus|than)\b)[a-z0-9'’.-]+\s+){0,3}?"
+_CAUSAL_LEAD_NOUN = r"(?:causal\s+)?(?:drivers?|factors?|paths?|causes?|determinants?)"
+_CAUSAL_ADVERB = r"(?:(?:most|strongly|primarily|mainly|significantly|really|actually)\s+){0,2}"
+_CAUSAL_VERB = (
+    r"(?:drives?|driving|causes?|causing|influences?|influencing|affects?|affecting|explains?|"
+    r"explaining|determines?|determining|impacts?|impacting|shapes?|shaping|leads?\s+to|"
+    r"leading\s+to|contributes?\s+to|contributing\s+to)"
+)
+_KPI_STATE = (
+    r"(?:so\s+|still\s+|now\s+)?(?:low\w*|high\w*|fall\w*|fell|dropp?\w*|declin\w*|ris\w*|rose|"
+    r"down|up|flat|below|above|lagg\w*|underperform\w*|outperform\w*|volatile|stuck|worse|"
+    r"worsen\w*|better|improv\w*|chang\w*|increas\w*|decreas\w*|deteriorat\w*|jump\w*|surg\w*|"
+    r"spik\w*|dip\w*|slip\w*|slid\w*|plateau\w*|stagnat\w*|trending|moving|shift\w*|"
+    r"var(?:y|ies|ied|ying))"
+)
+# a KPI followed by a definition noun is a section-A ask, not a causal one
+_KPI_DEFINITION_TAIL = r"(?!\s+(?:calculation|definition|formula|computation|methodolog)\w*)"
+_DASH_RE = re.compile(r"[-\u2013\u2014]")
+_KPI_AS_CAUSAL_OUTCOME_SHAPES: Tuple[str, ...] = (
+    rf"\b{_CAUSAL_LEAD_NOUN}\s+(?:of|behind|for|(?:(?:that|which)\s+)?{_CAUSAL_ADVERB}{_CAUSAL_VERB})"
+    rf"\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
+    rf"\b(?:causal\s+)?paths?\s+(?:to|into|towards?)\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
+    rf"\bwhat\s+(?:is\s+|are\s+)?{_CAUSAL_ADVERB}{_CAUSAL_VERB}\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
+    rf"\b(?:effects?|impacts?|influence)\s+of\s+[^.?!,]{{1,60}}?\s+on\s+{_KPI_GAP}<KPI>",
+    rf"\bwhy\s+{_KPI_GAP}<KPI>\s+(?:[a-z'’-]+\s+){{0,3}}?{_KPI_STATE}\b",
+)
+
+
 def _normalized_name(text: str) -> str:
     """Lower case with every punctuation run collapsed to one space, so
     ``"Remi - Intent-to-Prescribe Δ"`` and ``"intent to prescribe"`` compare."""
@@ -938,6 +1008,11 @@ class CatalogRules:
     # them does not change what the outcome mention means.
     kpi_backed_outcomes: FrozenSet[str]
     strict_kpi_re: Optional["re.Pattern[str]"]  # any strict phrase; None when nothing yields
+    # #1901 item 4q: the object shapes above, each with the strict phrases of the
+    # KPIs OUTSIDE the allow-set in a named group "kpi"; empty when the catalog
+    # has no outcomes (degraded) or every strict phrase is allowed.
+    kpi_as_causal_outcome: Tuple["re.Pattern[str]", ...] = ()
+    kpi_ids: Dict[str, str] = dataclasses.field(default_factory=dict)  # phrase -> KPI id
 
 
 def catalog_rules(catalog: CapabilityCatalog) -> CatalogRules:
@@ -946,14 +1021,17 @@ def catalog_rules(catalog: CapabilityCatalog) -> CatalogRules:
         metric_phrase_regex,
         recognize_kpi,
         strict_metric_vocabulary,
+        substrate_kpi_ids,
     )
 
     journey = journey_outcomes(catalog)
+    resolved = {
+        outcome: recognize_kpi(outcome.replace("_", " ")) for outcome in catalog.causal_outcomes
+    }
     kpi_backed = frozenset(
         outcome
         for outcome in journey
-        if not _DURATION_OUTCOME_RE.search(outcome)
-        and recognize_kpi(outcome.replace("_", " ")) is not None
+        if not _DURATION_OUTCOME_RE.search(outcome) and resolved.get(outcome) is not None
     )
     vocabulary = strict_metric_vocabulary()
     strict_re = (
@@ -961,10 +1039,24 @@ def catalog_rules(catalog: CapabilityCatalog) -> CatalogRules:
         if kpi_backed
         else None
     )
+    allowed = {kpi.id for kpi in resolved.values() if kpi is not None} | substrate_kpi_ids()
+    # the vocabulary is longest-first, which the alternation needs so that
+    # "trigger funnel conversion" wins over "trigger funnel"
+    causal_phrases = tuple(
+        (phrase, kpi_id) for phrase, kpi_id in vocabulary if kpi_id not in allowed
+    )
+    patterns: Tuple["re.Pattern[str]", ...] = ()
+    if catalog.causal_outcomes and causal_phrases:
+        kpi = metric_phrase_regex((phrase for phrase, _ in causal_phrases), group="kpi")
+        patterns = tuple(
+            re.compile(shape.replace("<KPI>", kpi), re.I) for shape in _KPI_AS_CAUSAL_OUTCOME_SHAPES
+        )
     return CatalogRules(
         journey=journey,
         kpi_backed_outcomes=kpi_backed,
         strict_kpi_re=strict_re,
+        kpi_as_causal_outcome=patterns,
+        kpi_ids=dict(causal_phrases),
     )
 
 
@@ -981,7 +1073,8 @@ def match_unsupported_rule(
 
     ``rules`` (:func:`catalog_rules`, passed by :func:`filter_unsupported_pills`)
     carries the catalog-derived checks; without it the outcome loop runs on
-    ``journey`` alone and the fallback-resolved outcomes never stand down.
+    ``journey`` alone, the fallback-resolved outcomes never stand down and the
+    KPI-as-causal-outcome check (``kpi_as_causal_outcome:<kpi_id>``) is inert.
     """
     # #1901 item 4g: no page summary carries per-HCP or per-patient rows (each
     # publishes counts, a mean, top-N feature names or two territory ids), so a
@@ -1028,6 +1121,12 @@ def match_unsupported_rule(
             _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered)
         ):
             return f"outcome_as_kpi:{outcome}"
+    if rules is not None and rules.kpi_as_causal_outcome:
+        dashless = _DASH_RE.sub(" ", lowered)
+        for pattern in rules.kpi_as_causal_outcome:
+            hit = pattern.search(dashless)
+            if hit is not None:
+                return f"kpi_as_causal_outcome:{rules.kpi_ids[hit.group('kpi')]}"
     return None
 
 

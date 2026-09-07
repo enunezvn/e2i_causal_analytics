@@ -980,6 +980,54 @@ DROP_FIXTURES = [
         "Action taken by region",
         "What is the action_taken rate for Kisqali by census region?",
     ),
+    # #1901 item 4q: a registry KPI asked as a causal OUTCOME. Section C serves
+    # drivers / paths / effects only for the causal-path registry's end nodes,
+    # and the tool composer's KPI path only for KPIs with a substrate builder
+    # (Conversion Rate); a KPI outside both sets has nothing to return. The rule
+    # fires only when the KPI phrase is the OBJECT of a causal ask.
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Trigger performance drivers",
+        "What causal drivers influence Trigger Precision, Acceptance Rate, and Override Rate, and how confident are those paths for each brand?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Trigger precision drivers",
+        "What drives Trigger Precision for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS3-BI-004",
+        "Coverage paths",
+        "Which causal paths lead to HCP Coverage for Fabhalta?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-006",
+        "Copay effect on overrides",
+        "What is the effect of copay support on Override Rate for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-006",
+        "Why overrides are high",
+        "Why is the Override Rate for Kisqali so high?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS1-MP-001",
+        "ROC-AUC drivers",
+        "What factors drive ROC-AUC differences across the three brand models?",
+    ),
+    # hyphens and dashes are normalized to spaces before the shapes run, so a
+    # registry name written as the registry spells it still matches its
+    # space-normalized vocabulary phrase
+    (
+        "kpi_as_causal_outcome:WS1-DQ-003",
+        "Match rate causes",
+        "What causes the Cross-source Match Rate to drop for Fabhalta?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Hyphenated precision",
+        "What drives Trigger-Precision for Kisqali?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -1343,6 +1391,37 @@ KEEP_FIXTURES = [
         "Action taken and acceptance",
         "Chart the action_taken rate next to the Acceptance Rate for Kisqali.",
     ),
+    # #1901 item 4q: a KPI in TREATMENT position (the object is a causal
+    # outcome) is a section-C ask ...
+    ("HCP coverage effect", "What is the effect of HCP Coverage on persistent_180d for Kisqali?"),
+    ("Trigger precision and NBRx", "Does trigger precision drive NBRx for Kisqali?"),
+    ("Precision and adoption", "How does Trigger Precision affect adopted for Fabhalta?"),
+    # ... a KPI that a causal outcome resolves to (the fallback-resolved
+    # allow-set: TRx, NRx, NBRx, TRx Share, Conversion Rate, ROI, and via the
+    # name-token fallback Action Rate Uplift, ATE and Intent-to-Prescribe) is
+    # an answerable object ...
+    ("TRx drivers", "What drives TRx volume for Kisqali?"),
+    ("NBRx drivers", "What are the causal drivers of NBRx for Remibrutinib?"),
+    ("Conversion drivers", "What drives conversion rate for Fabhalta?"),
+    ("ROI drivers", "What are the primary drivers of ROI variance across the three brands?"),
+    (
+        "Market share paths",
+        "How do the causal paths to market share differ between Remibrutinib, Fabhalta, and Kisqali?",
+    ),
+    ("Action rate uplift drivers", "What drives Action Rate Uplift for Kisqali?"),
+    # ... "paths", "confident" / "confidence" and "refutation" alone never fire
+    # it, nor does a definition or value ask about a non-outcome KPI ...
+    (
+        "Path confidence",
+        "How confident are the causal paths into persistent_180d for Kisqali, and what refutation evidence backs them?",
+    ),
+    ("Why precision matters", "Why does Trigger Precision matter for Kisqali?"),
+    ("Explain trigger KPIs", "Explain Trigger Precision and Override Rate for Kisqali."),
+    ("Override rate value", "What is the Override Rate for Kisqali?"),
+    # ... and a mixed ask whose first object is a causal outcome is at least
+    # partly served (precision-first: the gap between the lead and the KPI
+    # phrase admits no outcome id and no conjunction).
+    ("Persistence and precision", "What drives persistent_180d and Trigger Precision for Kisqali?"),
 ]
 
 
@@ -1469,6 +1548,74 @@ async def test_empty_outcomes_disable_outcome_rule():
         c,
     )
     assert len(kept) == 1 and dropped == []
+
+
+async def test_empty_outcomes_disable_kpi_as_causal_outcome():
+    """#1901 item 4q. With no outcome list the prompt invites "what drives <the
+    outcome or KPI named on screen>", so the KPI-as-causal-outcome check must be
+    inert on a degraded catalog."""
+    c = await make_catalog(outcomes=_empty)
+    assert cat.catalog_rules(c).kpi_as_causal_outcome == ()
+    kept, dropped = cat.filter_unsupported_pills(
+        [_Pill("Trigger precision drivers", "What drives Trigger Precision for Kisqali?")], c
+    )
+    assert len(kept) == 1 and dropped == []
+
+
+async def test_kpi_as_causal_outcome_allow_set_is_fallback_resolved_plus_substrate(monkeypatch):
+    """#1901 item 4q. The allow-set is every KPI id a causal outcome resolves to
+    through recognize_kpi (aliases AND the name-token fallback - the broader,
+    precision-first set) plus the KPIs with a substrate builder; only phrases
+    of the remaining KPIs can be a dropped causal object."""
+    from src.services import kpi_resolution
+
+    c = await make_catalog()
+    rules = cat.catalog_rules(c)
+    dropped_ids = set(rules.kpi_ids.values())
+    allowed = {
+        "WS3-BI-005",  # trx_volume -> "trx"
+        "WS3-BI-006",  # nrx_volume -> "nrx"
+        "WS3-BI-007",  # nbrx_volume -> "nbrx"
+        "WS3-BI-008",  # trx_market_share -> "market share"
+        "WS3-BI-009",  # conversion_flag -> "conversion"; also the substrate builder
+        "WS3-BI-010",  # roi
+        "CM-001",  # treatment_initiated, via the name-token fallback
+        "WS2-TR-003",  # action_taken, via the name-token fallback
+        "BR-002",  # intent_to_prescribe, via the name-token fallback
+    }
+    assert allowed.isdisjoint(dropped_ids), allowed & dropped_ids
+    assert {"WS2-TR-001", "WS3-BI-004", "WS2-TR-006"} <= dropped_ids
+    # a KPI with a substrate builder is served by the composer's KPI path even
+    # when no registry outcome resolves to it
+    monkeypatch.setattr(
+        kpi_resolution,
+        "_BUILDERS",
+        {**kpi_resolution._BUILDERS, "WS2-TR-001": lambda *a, **k: None},
+    )
+    kept, dropped = cat.filter_unsupported_pills(
+        [_Pill("Trigger precision drivers", "What drives Trigger Precision for Kisqali?")], c
+    )
+    assert len(kept) == 1 and dropped == []
+
+
+async def test_off_platform_rule_wins_over_kpi_as_causal_outcome():
+    c = await make_catalog()
+    kept, dropped = cat.filter_unsupported_pills(
+        [_Pill("Territory precision", "What drives Trigger Precision in territory T-001?")], c
+    )
+    assert kept == [] and [r for _, r in dropped] == ["territory_detail"]
+
+
+async def test_bare_match_unsupported_rule_keeps_working_without_rules():
+    """The positional signature stays: without ``rules`` the outcome loop runs on
+    the journey alone and the catalog-derived checks (4a stand-down, 4q) are inert."""
+    assert (
+        cat.match_unsupported_rule(
+            "Chart the persistent_180d rate by census region.", ("persistent_180d",)
+        )
+        == "outcome_as_kpi:persistent_180d"
+    )
+    assert cat.match_unsupported_rule("What drives Trigger Precision for Kisqali?", ()) is None
 
 
 # =============================================================================
