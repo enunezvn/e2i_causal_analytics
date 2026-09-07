@@ -92,17 +92,117 @@ OpenAI key" is wrong twice over — the DSPy pin and the embeddings both need it
 
 See `docs/LLM_CONFIGURATION.md` for tiers, model mappings, and overrides.
 
-### Auto-configured (set by compose, no action needed)
+### How a `.env` value reaches the containers
 
-These are defined in `docker-compose.yml` via the `x-common-env` anchor:
+**Compose forwards no `.env` file wholesale.** The `x-common-env` anchor in
+`docker/docker-compose.yml` is a *whitelist*: a host variable reaches `api`,
+`worker_*` and `scheduler` only if that anchor names it. Setting anything else in
+`.env` is a silent no-op inside the containers — the in-code default governs and
+nothing warns you. This has bitten the platform repeatedly (`OPIK_ENABLED`,
+`OPENAI_API_KEY`, the three biomedical keys), and the compose comments say so at
+each entry.
 
-| Variable | Docker Value | Purpose |
-|----------|-------------|---------|
-| `REDIS_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/0` | Authenticated container networking |
-| `FALKORDB_URL` | `redis://:${FALKORDB_PASSWORD}@falkordb:6379/0` | Authenticated container networking |
-| `MLFLOW_TRACKING_URI` | `http://mlflow:5000` | Docker DNS resolution |
-| `CELERY_BROKER_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/1` | Task queue |
-| `CELERY_RESULT_BACKEND` | `redis://:${REDIS_PASSWORD}@redis:6379/2` | Results store |
+Derive the current list rather than trusting any copy of it, this one included:
+
+```bash
+# every host variable the anchor forwards
+sed -n '/^x-common-env:/,/^x-common-worker:/p' docker/docker-compose.yml \
+  | grep -o '\${[A-Z_0-9]*' | tr -d '${' | sort -u
+```
+
+At the time of writing that yields 39 variables.
+
+#### Derived inside the network — do not set these
+
+These are computed by compose from the passwords above; a host-side value for the
+same name is ignored.
+
+| Variable | Docker value |
+|----------|--------------|
+| `SUPABASE_DB_URL` | `postgresql://postgres:${SUPABASE_POSTGRES_PASSWORD}@supabase-db:5432/postgres` |
+| `REDIS_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/0` |
+| `FALKORDB_URL` | `redis://:${FALKORDB_PASSWORD}@falkordb:6379/0` |
+| `CELERY_BROKER_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/1` |
+| `CELERY_RESULT_BACKEND` | `redis://:${REDIS_PASSWORD}@redis:6379/2` |
+| `MLFLOW_TRACKING_URI` | `http://mlflow:5000` |
+| `BENTOML_SERVICE_URL` | `http://bentoml:3000` |
+| `FEAST_URL` | `http://feast:6566` |
+| `OPIK_URL` | `http://opik-backend:8080` |
+| `ENVIRONMENT` / `LOG_LEVEL` | hardcoded `production` / `INFO` — the host values feed only `config-check` |
+| `ADAPTIVE_VALIDITY_ARTIFACTS_DIR` | `/app/data/audit_artifacts` |
+| `SUPABASE_ANON_KEY` | alias of `SUPABASE_KEY` |
+
+Note the `SUPABASE_DB_URL` split: the host `.env` value points at the Supavisor
+pooler and is used by host-side tools (`scripts/run_migrations.sh` psql mode);
+inside the network compose connects to `supabase-db` directly as `postgres`.
+
+#### Runtime knobs forwarded with a compose default
+
+Every one of these is optional — the compose default is what production runs
+unless the host `.env` overrides it. `Ref` is the issue/PR the compose comment
+cites; read that comment for the full rationale.
+
+| Variable | Compose default | Purpose | Ref |
+|----------|-----------------|---------|-----|
+| `OPIK_ENABLED` | `true` | Opt-**out** switch for Opik tracing. Production keeps `false` in the host `.env` so the tracers skip client construction against the intentionally-stopped `opik-backend` | #952 |
+| `ORCHESTRATOR_CLASSIFIER_MODE` | `shadow` | 4-stage query classifier: `off` \| `shadow` (classify + log, legacy routing) \| `active` (classifier routes when confident) | — |
+| `E2I_REQUIRE_FULL_AGENT_REGISTRY` | `false` | Arm to turn a partial agent registry into a raised `PartialAgentRegistryError`. A one-boot post-deploy verification, not a steady-state setting | #1448 |
+| `GUNICORN_PRELOAD` | `true` | Gunicorn preload — the stream-tear fix (workers fork warm instead of each re-importing the app on its event loop). Kill switch: `false`. Only the `api` service reads it | #1560 |
+| `CHATBOT_STARTUP_WARM_ENABLED` | `true` | Pre-build the DSPy LM config, retrieval clients, orchestrator registry and intent classifier per worker at boot, fail-open | #1454 |
+| `CHATBOT_STARTUP_WARM_LLM_ENABLED` | `true` | The warm's two synthetic-LLM legs (classify + RAG rewriter); ~2 small completions per worker per boot. `false` keeps the construction-only warm | #1475 |
+| `CHATBOT_RAG_LLM_TIMEOUT_S` | `20` | Fail-open ceiling per `retrieve_rag` chain LLM call (rewrite / score / hop-decider) | #1484 |
+| `CHATBOT_RAG_DRY_HOP_LIMIT` | `2` | Consecutive zero-new-keep hops before the multi-hop loop stops; `0` = legacy run-to-max | #1484 |
+| `CHATBOT_RAG_REWRITE_COT` | *(empty)* | Empty = Predict-only rewriter; `true` restores ChainOfThought | #1518 |
+| `CHATBOT_RAG_SKIP_EMPTY_DECIDER` | *(empty)* | Empty/`true` = skip the decider LLM call when hop-1 kept nothing; `false` restores the LLM decider | #1518 |
+| `ROUTING_LABEL_MIN_NEW_ROWS` | `10` | Skip the nightly routing labeler below this many unlabeled `classification_logs` rows | #1341 |
+| `ROUTING_LABEL_JUDGE_CAP` | `50` | Max LLM-judge calls per labeler run (token-spend bound) | #1341 |
+| `ROUTING_LABEL_JUDGE_MODEL` | `claude-haiku-4-5-20251001` | Labeler judge model (needs `ANTHROPIC_API_KEY`; fail-open) | #1341 |
+| `ROUTING_LABEL_LOOKBACK_DAYS` | `30` | How far back the labeler looks for unlabeled rows | #1341 |
+| `DSPY_RAG_RECORDS_PATH` | *(empty)* | Records file for the nightly RAG-prompt GEPA leg. **Resolved inside the container** — must be a path under a named volume the service mounts read-write (`/app/optimized_modules` is the natural pick); a host path skips forever while looking configured | #1486 |
+| `DSPY_RAG_MAX_METRIC_CALLS` | *(empty)* | Judge-call budget for that leg. Empty on purpose: the in-code default (40) is the single source of truth | #1486 |
+| `DSPY_RAG_DB_FEEDSTOCK_ENABLED` | *(empty)* | Live-traffic feedstock — the only way the nightly cycle runs unattended. Off by default because enabling it spends judge budget; parsed fail-closed | #1489 |
+| `DSPY_RAG_DB_LOOKBACK_DAYS` | *(empty)* | Read window in days for that feedstock (in-code default 30) | #1489 |
+| `CHATBOT_OPT_DRAIN_ENABLED` | *(empty)* | Gate for the nightly chatbot DSPy optimization queue drainer; unset = drain skipped. Enabling it spends real GEPA budget | #1515 |
+| `CHATBOT_OPT_DRAIN_MAX_PER_CYCLE` | *(empty)* | GEPA executions per drain cycle (in-code default 1) | #1515 |
+| `CHATBOT_OPT_STALE_HOURS` | *(empty)* | Staleness bound for the drainer (in-code default 168) | #1515 |
+| `CHATBOT_OPT_ZOMBIE_HOURS` | *(empty)* | Zombie bound for the drainer (in-code default 12) | #1515 |
+| `CHATBOT_OPT_MIN_SIGNALS` | *(empty)* | Producer minimum signals (in-code default 50) | #1515 |
+| `E2I_KPI_INCLUDE_SYNTHETIC` | `0` | KPI reads swap to the `*_include_synthetic` twins and the frontend badges the figures as synthetic | — |
+| `E2I_INCLUDE_SYNTHETIC` | `0` | Deployment-wide synthetic showcase switch: every read-path chokepoint (`apply_provenance_filter`) and the orchestrator resolver include synthetic. Reversible — unset restores the strict gate | — |
+| `LLM_PROVIDER` | `openai` | Factory-lane provider (see Optional LLM configuration above) | — |
+| `LLM_MODEL` | *(empty)* | OpenAI workhorse pin | — |
+| `DSPY_LM_MODEL` | *(empty)* | Verbatim litellm model string for the DSPy lane; takes precedence there | — |
+
+#### Optional external biomedical API credentials (soft-degrade)
+
+All three use `:-`, so an unset host value never blocks container start — it
+buys a quieter, smaller degradation instead.
+
+| Variable | Absent | Present |
+|----------|--------|---------|
+| `NCBI_API_KEY` | PubMed E-utilities on the anonymous ~3 req/s tier. Measured over 8 rapid `esearch` calls, same host and params: 5 of 8 throttled (HTTP 429) | 0 of 8 throttled |
+| `UMLS_UTS_API_KEY` | `src/data/kg/umls_uts.py` raises `UMLSAuthError`; `CitationResolver` catches it and degrades to `umls=None`, disabling synonym expansion — genuine supporting citations can score as unverified | Synonym expansion on |
+| `OPENFDA_API_KEY` | Unauthenticated client, which returns no rate-limit headers at all | openFDA reports `x-ratelimit-limit: 240` |
+
+#### Read by code but NOT forwarded — setting these in `.env` is inert in containers
+
+Same whitelist rule, other direction. Each of these is read via `os.environ` in
+application code but does not appear in `x-common-env`, so a host `.env` value
+never reaches the containers and the in-code default governs. Verify with
+`grep -c '<VAR>' docker/docker-compose.yml` (comment-only hits do not count).
+
+| Variable | In-code default | Where it is read |
+|----------|-----------------|------------------|
+| `SEGMENT_ANALYSIS_BUDGET_SECONDS` | `900.0` | `src/api/routes/segments.py` |
+| `AGENT_COMPUTE_EXECUTOR_WORKERS` | `1` | `src/api/dependencies/compute.py` |
+| `HEAVY_COMPUTE_EXECUTOR_WORKERS`, `HEAVY_COMPUTE_MAX_CONCURRENCY`, `HEAVY_OFFLOAD_ENABLED` | see module | `src/api/dependencies/compute.py` |
+| `ADAPTIVE_CRITERIA` | `true` | ML training path — so the documented rollback switch is inert in containers |
+| `ADAPTIVE_VALIDITY_EVALUATOR_ENABLED`, `ADAPTIVE_VALIDITY_EVALUATOR_MODEL` | off / Haiku 4.5 | Layer-4 evaluator |
+| `ANTHROPIC_MODEL` | in-code default | Deliberately not forwarded — the host `.env` pins an id meant for interactive use, not the platform lanes |
+| `CORS_ORIGINS` | — | No reader in `src/` at all |
+| `SUPABASE_JWT_SECRET` | — | `src/api/dependencies/auth.py` logs about it, but verification goes through `client.auth.get_user()`; currently optional and unused |
+
+Changing any of those on the droplet needs a compose change, not an `.env` change.
 
 ---
 

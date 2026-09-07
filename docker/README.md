@@ -95,17 +95,37 @@ docker compose --env-file .env -f docker/docker-compose.yml config -q   # rc 0 =
 
 See `docs/LLM_CONFIGURATION.md` for tiers, model mappings and overrides.
 
-### Auto-configured (set by compose, no action needed)
+### How a `.env` value reaches the containers
 
-These are set in `docker-compose.yml` via the `x-common-env` anchor:
+**Compose forwards no `.env` file wholesale.** The `x-common-env` anchor in
+`docker-compose.yml` is a *whitelist*: a host variable reaches `api`, `worker_*`
+and `scheduler` only if that anchor names it. Anything else you put in `.env` is a
+silent no-op inside the containers — the in-code default governs and nothing warns
+you. Derive the current list rather than trusting a copy of it:
 
-| Variable | Docker Value | Why |
-|----------|-------------|-----|
-| `REDIS_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/0` | Authenticated container networking |
-| `FALKORDB_URL` | `redis://:${FALKORDB_PASSWORD}@falkordb:6379/0` | Authenticated container networking |
-| `MLFLOW_TRACKING_URI` | `http://mlflow:5000` | Docker DNS resolution |
-| `CELERY_BROKER_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/1` | Authenticated task queue |
-| `CELERY_RESULT_BACKEND` | `redis://:${REDIS_PASSWORD}@redis:6379/2` | Authenticated results store |
+```bash
+sed -n '/^x-common-env:/,/^x-common-worker:/p' docker/docker-compose.yml \
+  | grep -o '\${[A-Z_0-9]*' | tr -d '${' | sort -u
+```
+
+A few entries are computed by compose and must **not** be set by hand — a host
+value for the same name is ignored:
+
+| Variable | Docker value |
+|----------|--------------|
+| `SUPABASE_DB_URL` | `postgresql://postgres:${SUPABASE_POSTGRES_PASSWORD}@supabase-db:5432/postgres` |
+| `REDIS_URL` | `redis://:${REDIS_PASSWORD}@redis:6379/0` |
+| `FALKORDB_URL` | `redis://:${FALKORDB_PASSWORD}@falkordb:6379/0` |
+| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | `redis://:${REDIS_PASSWORD}@redis:6379/1` and `/2` |
+| `MLFLOW_TRACKING_URI` / `BENTOML_SERVICE_URL` / `FEAST_URL` / `OPIK_URL` | in-network service URLs |
+| `ENVIRONMENT` / `LOG_LEVEL` | hardcoded `production` / `INFO` |
+
+The remaining forwarded entries are optional runtime knobs (chatbot warm, RAG
+chain, routing labeler, DSPy/GEPA legs, synthetic visibility) plus the optional
+biomedical API keys. `DEPLOYMENT.md` § *Runtime knobs forwarded by compose*
+carries the full derived table with each one's compose default, purpose and the
+issue its rationale lives in — and the list of variables that application code
+reads but compose does **not** forward, where an `.env` edit is inert.
 
 ## Common Commands
 
