@@ -1317,15 +1317,30 @@ The Monday reseed is a known source of drift in the DQ Consistency panel and is 
               │            │            │
     ┌─────────┤      ┌─────┤      ┌─────┤
     │         │      │     │      │     │
-  API    Node    Promtail  │    Agents  │
-/metrics Exporter (Docker  │   @track   │
- (15s)  (system)  logs)    │  decorator │
+  API    Node    Promtail  │   Agent    │
+/metrics Exporter (Docker  │  tracers   │
+ (15s)  (system)  logs)    │ (disabled) │
                            │            │
                     Alertmanager        │
-                    (webhook → API)     │
+                    (webhook — see 7.3) │
                                   Supabase
-                                  (span persist)
+                                  (llm_usage_events)
 ```
+
+**Prometheus, Grafana, Loki, Alertmanager, promtail and the two exporters are behind the
+`monitoring` compose profile** (#1806) — a plain `up -d` does not start them, and
+`scripts/health_check.sh` reports them SKIPPED rather than failing. An unmanaged service is not
+an outage. See the ADR-008 amendment.
+
+**On the "@track decorator" arrow.** There is no Opik `@track` decorator in `src/` — the only
+`@track_*` decorators (`track_cohort_step`, `track_cohort_construction`,
+`track_feature_retrieval`) are project-local and unrelated to Opik. Opik integration is 8
+modules under `src/agents/*/opik_tracer.py` and `src/mlops/`, all gated on `OPIK_ENABLED`
+(opt-out, default `"true"`). On the droplet the API container has **`OPIK_ENABLED=false`**
+(`docker exec e2i_api printenv | grep -i opik`), so none of them construct a client. That gate is
+load-bearing, not cosmetic: against a dead Opik endpoint the SDK's background uploader does
+**not** no-op — it raises `httpx.ConnectTimeout` and retries forever, leaking a thread per call
+(#952). Do not "simplify" the gate away.
 
 ### 7.2 Prometheus Scrape Targets
 
@@ -1338,6 +1353,12 @@ The Monday reseed is a known source of drift in the DQ Consistency panel and is 
 | bentoml | bentoml:3000/metrics | 30s | Model serving latency |
 
 ### 7.3 Alert Rules
+
+> **Caveat (verified 2026-09-07):** the configured receiver URL
+> `http://api:8000/api/v1/webhooks/alertmanager` has **no matching route in the API** —
+> `grep -rn '/webhooks' src/api/` returns nothing. Alerts that fire are grouped and routed by
+> Alertmanager but the webhook delivery 404s. This is a code/config gap, not a doc gap; it is
+> tracked separately. Alertmanager only runs under the `monitoring` profile in any case.
 
 Alertmanager routes to `http://api:8000/api/v1/webhooks/alertmanager` with:
 - Group by: alertname, severity
