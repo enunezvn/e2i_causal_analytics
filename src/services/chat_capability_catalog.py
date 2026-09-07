@@ -237,6 +237,8 @@ AXIS_RULES = (
     "Breakdown axes, AT MOST ONE per ask: segment = patient severity tier (low/medium/high); "
     "therapy_line = line of therapy (0-3); region = US census region (northeast/south/midwest/west); "
     "and - Remibrutinib ONLY - biologic status (naive/experienced) or ige_tier (low/medium/high). "
+    "The patient axes are served for TRx, NRx, NBRx and TRx Share (all four axes) and Conversion Rate "
+    "(segment/therapy_line only), plus CATE by segment; NO other KPI can be broken down by a patient axis. "
     "The time window composes with any one axis for TRx, NRx and NBRx; only with segment/therapy_line "
     "for TRx Share and Conversion Rate; and only with region for Trigger Precision, Acceptance Rate, "
     "Override Rate and Trigger Funnel Conversion. "
@@ -329,7 +331,8 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
         )
 
     lines.append(
-        "D. Segments: KPI breakdowns by ONE of the axes in A; a ranking of HCP segments by predicted "
+        "D. Segments: KPI breakdowns by ONE of the axes in A (a patient axis only for TRx, NRx, NBRx, "
+        "TRx Share, Conversion Rate and CATE, per A); a ranking of HCP segments by predicted "
         "likelihood to prescribe a brand, by specialty OR by geographic region; aggregate HCP / "
         "patient cohort profiles (counts by specialty, tier, severity - never named individuals)."
     )
