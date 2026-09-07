@@ -303,3 +303,103 @@ class TestWrapperTextPins:
         assert 'PYTHONPATH="$PROJECT_ROOT"' in text
         # venv preflight still fails loud before any stage
         assert ".venv/bin/dotenv or .venv/bin/python missing" in text
+
+
+# ---------------------------------------------------------------------------
+# #1930: --dry-run reached only 2 of the 5 stages
+# ---------------------------------------------------------------------------
+
+
+def _bash_function_body(text: str, name: str) -> str:
+    """Slice one bash function body out of the wrapper (definitions in this
+    file close with a ``}`` at column 0)."""
+    start = text.index(f"{name}() {{")
+    end = text.index("\n}\n", start)
+    body = text[start:end]
+    assert len(body.splitlines()) > 1, f"{name} body not extracted"
+    return body
+
+
+class TestDryRunGuards:
+    """``reseed_synthetic.sh --dry-run`` printed DRY RUN and then wrote to the
+    production DB twice and to the model registry once: the flag is an
+    argparse flag of ``load_synthetic_data.py``, so it reached stages 1 and 5
+    only. Stages 2/3/4 are different entrypoints that cannot take it —
+    ``history_backfill`` reads ``sys.argv[1:]`` as KPI ids, ``history_capture``
+    filters ``--``-prefixed args and would swallow it silently, and
+    ``retrain_goldstd.sh`` never reads ``"$@"`` at all — so they are SKIPPED
+    under --dry-run instead of being handed the flag.
+    """
+
+    def test_dry_run_skips_the_three_writing_stages(self, fake_tree):
+        proc = _run_wrapper(fake_tree, "--dry-run")
+        out = proc.stdout
+        assert proc.returncode == 0, out + proc.stderr
+        # positive: each write stage announces itself as skipped
+        assert "=== kpi_history backfill SKIPPED (--dry-run)" in out
+        assert "=== kpi_history weekly capture SKIPPED (--dry-run)" in out
+        assert "=== goldstd retrain SKIPPED (--dry-run)" in out
+        # negative: none of them actually executed
+        assert "src.kpi.history_backfill" not in out
+        assert "src.kpi.history_capture" not in out
+        assert "FAKE_RETRAIN ran" not in out
+        assert "(all stages OK)" in out
+
+    def test_dry_run_full_does_not_purge_the_weekly_captures(self, fake_tree):
+        """The irrecoverable one: ``--full`` runs ``history_capture --purge``,
+        a delete_source across every CAPTURE_KPI_ID whose points that module's
+        docstring says 'can never be recomputed later'."""
+        proc = _run_wrapper(fake_tree, "--full", "--dry-run")
+        out = proc.stdout
+        assert proc.returncode == 0, out + proc.stderr
+        assert "--anchor-to-now" in out, "full mode must still be detected"
+        assert "history_capture --purge" not in out
+        assert "=== kpi_history weekly capture SKIPPED (--dry-run)" in out
+
+    def test_dry_run_detected_from_any_position(self, fake_tree):
+        proc = _run_wrapper(fake_tree, "--small", "--dry-run", "--verbose")
+        out = proc.stdout
+        assert proc.returncode == 0, out + proc.stderr
+        assert "=== kpi_history backfill SKIPPED (--dry-run)" in out
+
+    def test_dry_run_still_forwarded_to_loader_and_ab_stages(self, fake_tree):
+        """--dry-run must NOT be consumed like --skip-retrain: stages 1 and 5
+        are the two that genuinely implement it."""
+        proc = _run_wrapper(fake_tree, "--dry-run")
+        fake_lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("FAKE_PYTHON")]
+        loader_lines = [ln for ln in fake_lines if "--append-frontier" in ln]
+        ab_lines = [ln for ln in fake_lines if "--refresh-ab" in ln]
+        assert loader_lines and "--dry-run" in loader_lines[0]
+        assert ab_lines and "--dry-run" in ab_lines[0]
+
+    def test_skip_retrain_message_survives_alongside_dry_run(self, fake_tree):
+        proc = _run_wrapper(fake_tree, "--dry-run", "--skip-retrain")
+        out = proc.stdout
+        assert proc.returncode == 0, out + proc.stderr
+        assert "goldstd retrain SKIPPED (--skip-retrain)" in out
+        assert "FAKE_RETRAIN ran" not in out
+        assert "=== kpi_history backfill SKIPPED (--dry-run)" in out
+
+    def test_default_run_still_executes_every_write_stage(self, fake_tree):
+        """Negative control: the guard must fire ONLY under --dry-run."""
+        proc = _run_wrapper(fake_tree)
+        out = proc.stdout
+        assert proc.returncode == 0, out + proc.stderr
+        assert "SKIPPED (--dry-run)" not in out
+        assert "src.kpi.history_backfill" in out
+        assert "src.kpi.history_capture" in out
+        assert "FAKE_RETRAIN ran" in out
+
+    def test_bare_entrypoint_stages_never_receive_forwarded_args(self):
+        """THE TRAP: forwarding "$@" to stages 2/3/4 is strictly worse than the
+        bug. history_capture strips ``--``-prefixed args and would keep writing
+        on a false green; history_backfill would read --dry-run as a KPI id."""
+        text = WRAPPER.read_text()
+        # positive control — the extraction really does see FORWARD_ARGS where
+        # it belongs, so its absence below is a measurement, not an artefact
+        assert "FORWARD_ARGS" in _bash_function_body(text, "stage_loader")
+        assert "FORWARD_ARGS" in _bash_function_body(text, "stage_ab_refresh")
+        for fn in ("stage_kpi_backfill", "stage_weekly_capture", "stage_goldstd_retrain"):
+            body = _bash_function_body(text, fn)
+            assert "FORWARD_ARGS" not in body, f"{fn} must not be handed the forwarded args"
+            assert '"$@"' not in body, f"{fn} must not be handed the forwarded args"
