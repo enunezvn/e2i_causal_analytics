@@ -1040,8 +1040,11 @@ class PerformanceTrendResponse(BaseModel):
     trend: str  # improving, stable, degrading
     is_significant: bool
     alert_threshold_breached: bool
-    # Metric level below which an alert fires (lower-bound line for the chart).
-    # 0.0 when there is no history to derive a baseline from.
+    # The alert FLOOR (the chart's red line): max(baseline × 0.9, absolute
+    # minimum). Necessary, not sufficient — a fold under the relative floor
+    # breaches only when ``trend`` is also "degrading" (outside sampling
+    # noise); a fold under the absolute minimum always breaches. 0.0 when
+    # there is no history to derive a baseline from.
     alert_threshold: float = 0.0
     # Sampling-aware classification (2026-09-07): the newest fold's sample
     # size, the noise scale the label was judged on, the level-test z-score,

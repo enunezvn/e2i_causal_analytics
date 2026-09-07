@@ -25,10 +25,25 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PerformanceTrendResponse } from '@/types/monitoring';
+import type { ComponentProps } from 'react';
 
 // =============================================================================
 // HOOK MOCKS — wired BEFORE page import so vi.mock can hoist
 // =============================================================================
+
+// Capture the props the page hands MetricTrend (the chart renders as usual):
+// the trend chart's threshold lines are only visible as SVG labels, which
+// jsdom's zero-size ResponsiveContainer never paints.
+const metricTrendSpy = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>> }));
+vi.mock('@/components/visualizations/charts/MetricTrend', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/components/visualizations/charts/MetricTrend')>();
+  const Spied = (props: ComponentProps<typeof actual.MetricTrend>) => {
+    metricTrendSpy.calls.push(props as unknown as Record<string, unknown>);
+    return <actual.MetricTrend {...props} />;
+  };
+  return { ...actual, MetricTrend: Spied };
+});
 
 vi.mock('@/hooks/api/use-monitoring', () => ({
   usePerformanceTrend: vi.fn(),
@@ -763,6 +778,26 @@ describe('ModelPerformance', () => {
       expect(note).toHaveTextContent(/not the calibrated champion/i);
       // mockTrend's latest history point is 2026-05-17 — the data boundary.
       expect(note).toHaveTextContent(/data coverage through May 17/i);
+    });
+
+    it('plots the red line as the alert FLOOR, not an alert boundary', () => {
+      // 2026-09-07: the relative-drop alert also needs a degrading trend
+      // outside sampling noise, so a fold under the line is not necessarily
+      // an alert. The line's label and the card caption must say so.
+      metricTrendSpy.calls.length = 0;
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      type Threshold = { value: number; label: string; type: string };
+      const last = metricTrendSpy.calls[metricTrendSpy.calls.length - 1] as
+        | { thresholds?: Threshold[] }
+        | undefined;
+      expect(last?.thresholds).toBeDefined();
+      const lower = last?.thresholds?.find((t) => t.type === 'lower');
+      expect(lower).toMatchObject({ label: 'Alert floor', value: mockTrend.alert_threshold });
+      expect(last?.thresholds?.some((t) => /threshold/i.test(t.label))).toBe(false);
+      expect(
+        screen.getByText(/An alert needs a fold under the floor whose trend is degrading/i)
+      ).toBeInTheDocument();
     });
   });
 

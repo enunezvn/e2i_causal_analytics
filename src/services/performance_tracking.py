@@ -60,10 +60,13 @@ class PerformanceTrend:
     trend: str  # improving, stable, degrading
     is_significant: bool
     alert_threshold_breached: bool
-    # The metric level below which an alert fires — the higher of the relative
-    # floor (baseline * (1 - degradation_threshold)) and the absolute floor
-    # (absolute_min_accuracy). 0.0 when there is no data. Surfaced so the UI can
-    # plot it as the trend chart's alert-threshold line.
+    # The alert FLOOR: the higher of the relative floor
+    # (baseline * (1 - degradation_threshold)) and the absolute floor
+    # (absolute_min_accuracy). A fold must be at/below it for an alert to fire,
+    # but since 2026-09-07 the relative-drop alert ALSO requires ``trend ==
+    # "degrading"`` (outside sampling noise), so a fold below the floor is not
+    # necessarily an alert — only a fold below absolute_min_accuracy always is.
+    # 0.0 when there is no data. Surfaced so the UI can plot the floor.
     alert_threshold: float = 0.0
     # Sampling-aware classification (2026-09-07; see performance_trend_stats):
     # the newest fold's sample size, the noise scale the label was judged on,
@@ -109,9 +112,11 @@ class PerformanceTrackingConfig:
     # standard errors of the baseline (or the window's OLS slope t-statistic is
     # beyond ``trend_slope_t_threshold``) AND at least ``trend_min_change_percent``
     # relative — the historical ±5% kept as a materiality floor, no longer the
-    # whole test. 2.5 SE ≈ two-sided p 0.012: ≈0.4 expected false alarms per
-    # weekly run across the 60 trended series, while a genuine 0.10 AUC drop on
-    # a full month (n≈230) still trips it (z ≈ −2.7).
+    # whole test. 2.5 SE ≈ one-sided p 0.006 per test: across the 60 trended
+    # series a weekly run expects ≈0.4 false "degrading" labels from the level
+    # test alone and at most ≈0.7 with the slope test OR'd in (union bound),
+    # before the ±5% floor removes the shallow ones — while a genuine 0.10 AUC
+    # drop on a full month (n≈230) still trips it (z ≈ −2.7).
     trend_z_threshold: float = 2.5
     trend_slope_t_threshold: float = 2.5
     trend_min_change_percent: float = 5.0
@@ -352,9 +357,12 @@ class PerformanceTracker:
         alert_threshold_breached = (trend == "degrading" and change_percent < -threshold) or float(
             current_value
         ) < float(self.config.absolute_min_accuracy)
-        # The accuracy level below which the breach above triggers: the stricter
-        # (higher) of the relative floor and the absolute floor. Mirrors the two
-        # OR'd conditions so a value at/below this line == breached.
+        # The alert FLOOR the chart plots: the stricter (higher) of the relative
+        # floor and the absolute floor. Necessary, not sufficient — a fold under
+        # the relative floor still needs ``trend == "degrading"`` to breach (the
+        # 2026-09-07 hcp_adoption_remibrutinib fold sat at 0.709 under a 0.734
+        # floor and was correctly NOT an alert: within sampling noise at n=134).
+        # Only the absolute floor alerts unconditionally.
         alert_threshold = max(
             float(baseline_value) * (1.0 - float(self.config.degradation_threshold)),
             float(self.config.absolute_min_accuracy),

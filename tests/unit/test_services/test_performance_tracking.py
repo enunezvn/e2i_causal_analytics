@@ -661,8 +661,12 @@ class TestSamplingAwareTrend:
         assert trend.n_points == 9
         assert trend.z_score is not None and -2.5 < trend.z_score < -1.5
         assert "sampling noise" in trend.reason
-        # The chart's alert line is unchanged: max(baseline*0.9, 0.5).
+        # The chart's alert FLOOR is unchanged: max(baseline*0.9, 0.5) — and this
+        # fold sits UNDER it without alerting. The floor is necessary, not
+        # sufficient: the relative-drop alert also needs a degrading trend.
         assert trend.alert_threshold == pytest.approx(trend.baseline_value * 0.9)
+        assert trend.current_value < trend.alert_threshold
+        assert trend.alert_threshold_breached is False
 
     @pytest.mark.asyncio
     async def test_genuine_drop_is_degrading_and_breaches(self):

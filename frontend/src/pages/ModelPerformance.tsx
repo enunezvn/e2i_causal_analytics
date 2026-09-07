@@ -809,8 +809,9 @@ function ModelPerformance() {
                 <div>
                   <CardTitle>Performance Trend</CardTitle>
                   <CardDescription>
-                    {trendMetricLabel} over the last {trendDays} days, with baseline + alert
-                    thresholds.
+                    {trendMetricLabel} over the last {trendDays} days, with the baseline and
+                    the alert floor. An alert needs a fold under the floor whose trend is
+                    degrading outside sampling noise, or a fold under the absolute minimum.
                   </CardDescription>
                   {/* #969 + #970 (ported from TimeSeries): be honest about what
                       this trend is. It is a per-month walk-forward backtest
@@ -937,15 +938,18 @@ function ModelPerformance() {
                             type: 'target' as const,
                             color: '#22c55e',
                           },
-                          // Alert-threshold line: the level below which a
-                          // performance alert fires. Only plotted when the API
-                          // reports a real (>0) threshold (it is 0 when there
-                          // is no baseline history to derive it from).
+                          // Alert-floor line: max(baseline − 10%, absolute
+                          // minimum). A fold must be under it for an alert, but
+                          // the relative-drop alert ALSO needs a degrading
+                          // trend outside sampling noise (see the card's
+                          // basis/reason) — so "Below minimum" here is not by
+                          // itself an alert. Only plotted when the API reports
+                          // a real (>0) floor (0 = no baseline history).
                           ...(trendQuery.data.alert_threshold > 0
                             ? [
                                 {
                                   value: trendQuery.data.alert_threshold,
-                                  label: 'Alert threshold',
+                                  label: 'Alert floor',
                                   type: 'lower' as const,
                                   color: '#ef4444',
                                 },

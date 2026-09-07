@@ -46,10 +46,14 @@ With neither scale the row falls back to the legacy relative rule, labelled
 ``basis="legacy_relative"`` with the reason, so the caller can see which rule
 produced the label.
 
-Thresholds: 2.5 standard errors (two-sided p ≈ 0.012). The page trends 12
-models × 5 metrics = 60 series every week; at ±2.0 the expected false alarms
-per weekly run were ≈1.4, at ±2.5 ≈0.4. Shewhart's ±3 would miss a genuine
-0.10 AUC drop on a normal month; 2.5 catches it (z ≈ −2.7 at n=230).
+Thresholds: 2.5 standard errors (one-sided p ≈ 0.006 per test). The page
+trends 12 models × 5 metrics = 60 series every week; from the level test alone
+a run expects ≈1.4 false "degrading" labels at ±2.0 and ≈0.4 at ±2.5. The
+slope test is OR'd in at the same nominal tail, so the joint rate is bounded
+by ≈0.7 per run at ±2.5 (union bound; the two statistics share the newest
+fold, so the true rate sits between 0.4 and 0.7), before the ±5% materiality
+floor removes the shallow ones. Shewhart's ±3 would miss a genuine 0.10 AUC
+drop on a normal month; 2.5 catches it (z ≈ −2.7 at n=230).
 """
 
 from __future__ import annotations
