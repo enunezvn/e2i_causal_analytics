@@ -1,4 +1,40 @@
-# Backend ↔ Frontend API Connectivity Review
+# Backend ↔ Frontend API Connectivity Review (ARCHIVED)
+
+> ## ARCHIVED — point-in-time audit, 2026-05-16
+>
+> **Do not use the counts below as current state.** This was a one-off
+> connectivity sweep; its inventory method is not reproducible and its numbers
+> were deliberately **not** refreshed when it was archived on 2026-09-07. It is
+> kept for the reasoning and the per-endpoint evidence, not for the totals.
+>
+> **Re-verified 2026-09-07 — what is resolved:**
+>
+> - Headline issues **1–7** are fixed. `RAG_BASE = '/v1/rag'`
+>   (`frontend/src/api/rag.ts`); explain calls `/explain/predict` and
+>   `/explain/predict/batch` (`frontend/src/api/explain.ts`); the cognitive
+>   session routes and the memory verbs agree on both sides; the digital-twin
+>   `simulations/history` and `simulations/compare` endpoints exist server-side;
+>   `ResourceOptimization.tsx` reads `runOptimization.data` rather than a
+>   `sampleOptimizationResult` constant; the "8 mock-only pages" are wired to
+>   `hooks/`/`api/` clients and `CausalDiscovery.tsx` no longer exists (the
+>   feature moved to `/causal-analysis`).
+> - §8 actions **1–6** and **8** are done, and **9** partly: `executive-insights`
+>   has a client (`frontend/src/api/executive-insights.ts`) consumed by
+>   `Home.tsx`, and `sentinels` is reached through `E2ICopilotProvider` /
+>   `lib/api-schemas.ts` rather than a page client.
+>
+> **What is still open:**
+>
+> - **§8 action 7** — `AgentOrchestration.tsx` still holds inline `useQuery`
+>   calls (three of them) instead of a `useAgentStatus` hook in
+>   `frontend/src/hooks/api/use-agents.ts` backed by `frontend/src/api/agents.ts`;
+>   neither file exists. Tracked as ledger item N10.
+> - **§8 action 10** — `frontend/src/components/audit/AuditHistory.tsx` is still
+>   an orphan: nothing imports it.
+>
+> **For current wiring status** read
+> [`docs/decisions/m5-backend-orphans-triage-20260608.md`](../decisions/m5-backend-orphans-triage-20260608.md),
+> not this file.
 
 **Date:** 2026-05-16
 **Branch:** `claude/plan-api-integration-review-JQCVn`

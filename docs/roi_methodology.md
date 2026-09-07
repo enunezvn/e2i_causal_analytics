@@ -1,6 +1,8 @@
 # E2I ROI Methodology
 
-**Status:** Derived from the implementation, 2026-08-09.
+**Status:** Derived from the implementation, 2026-08-09; constants and formulas
+re-verified 2026-09-07 (unchanged), when the drifted `file.py:NNN` citations were
+replaced with symbol anchors.
 **Authoritative source:** `src/services/roi_calculation.py` (`methodology_version = "1.0"`).
 
 This document was written because six code sites referenced `docs/roi_methodology.md`
@@ -24,7 +26,7 @@ is the most common error when reading ROI numbers out of this system.
 | | **Projected ROI** | **Observed ROI** |
 |---|---|---|
 | Question | "What return should we expect if we fund this initiative?" | "What ROI did we record over the last 30 days?" |
-| Path | `ROICalculationService` (this document) | KPI `WS3-BI-010` → `src/kpi/calculators/business_impact.py:557` |
+| Path | `ROICalculationService` (this document) | KPI `WS3-BI-010` → `BusinessImpactCalculator._calc_roi` in `src/kpi/calculators/business_impact.py` |
 | Method | Monte Carlo over input distributions | `AVG(roi)` over `business_metrics` rows |
 | Output | Point estimate + 95% CI + P(ROI > target) | A single scalar |
 | Uncertainty | Yes — see §4 | None — see §8 |
@@ -46,7 +48,7 @@ cost inputs (§7) ────┘                                              �
                                                                     └──> NPV (§10, optional)
 ```
 
-Entry point: `ROICalculationService.calculate_roi()` (`roi_calculation.py:854`).
+Entry point: `ROICalculationService.calculate_roi()` (`src/services/roi_calculation.py`).
 Returns an `ROIResult` carrying every intermediate above, so a caller can always
 show its work.
 
@@ -83,9 +85,9 @@ Notes carried from the code:
 
 ## 4. Monte Carlo confidence intervals
 
-`BootstrapSimulator` (`roi_calculation.py:433`), 1,000 simulations by default,
+`BootstrapSimulator` (`roi_calculation.py`), 1,000 simulations by default,
 seedable for reproducibility. Each simulation draws every input independently, then
-recomputes ROI end-to-end (`_simulate_roi`, `roi_calculation.py:977`).
+recomputes ROI end-to-end (`ROICalculationService._simulate_roi`).
 
 | Input class | Distribution | Rationale |
 |---|---|---|
@@ -185,7 +187,7 @@ If an interval is wanted on observed ROI, the correct move is to **condition fir
 slice, together with `n`. Do not add `STDDEV` to the pooled query.
 
 Contrast `causal_metrics_ate`, which does return `ate_std` and `n_samples` and builds
-a CI (`src/kpi/calculators/causal_metrics.py:124`): there the rows are repeated
+a CI (the `causal_metrics_ate` branch in `src/kpi/calculators/causal_metrics.py`): there the rows are repeated
 estimates of one estimand, so the interval is meaningful. That precedent does not
 transfer to ROI.
 
@@ -256,10 +258,10 @@ years. Single-year initiatives should use `calculate_roi()` and ignore NPV.
 
 ## 11. Where this runs
 
-- **`gap_analyzer` agent** — `ROICalculatorNode` (`nodes/roi_calculator.py:234`) calls the
+- **`gap_analyzer` agent** — `ROICalculatorNode` (`src/agents/gap_analyzer/nodes/roi_calculator.py`) calls the
   service per detected gap; results land in `ROIEstimate` records
-  (`gap_analyzer/state.py:47`) carrying `confidence_interval`, attribution, and risk fields.
-- **Gaps API / frontend** — `src/api/routes/gaps.py:195` exposes `confidence_interval` through
+  (the `ROIEstimate` TypedDict in `src/agents/gap_analyzer/state.py`) carrying `confidence_interval`, attribution, and risk fields.
+- **Gaps API / frontend** — `src/api/routes/gaps.py` exposes `confidence_interval` through
   to `frontend/src/types/gaps.ts`.
 - **Chat** — the narrative in `gap_analyzer/nodes/formatter.py` renders the band via
   `_format_uncertainty_clause`, e.g.

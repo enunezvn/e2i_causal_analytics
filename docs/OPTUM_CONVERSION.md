@@ -2,8 +2,13 @@
 
 Converts the Optum claims parquet drop in `data/rwd/Optum_Parquet/` into
 canonical per-cohort E2I parquet that the Tier-0 pipeline consumes identically
-to synthetic data. Implements the leakage-safe cohort shaping specified in
-`.claude/plans/csu-rwd-analyst-spec.md` (§3-§8).
+to synthetic data. Implements the leakage-safe cohort shaping specified in the
+CSU RWD analyst spec (§3-§8) — a **local, untracked planning note that is no
+longer present in the repo** (`.claude/plans/csu-rwd-analyst-spec.md`, and not
+under `.claude/plans/archive/` either). The shaping it specified is now
+documented by the allow/forbid lists in
+`src/data/manifests/optum_feature_manifest.py` and by the cohort tables below;
+treat the spec reference as historical.
 
 Paired with the domain-agnostic file-ingestion capability added to
 `data_preparer` (see `CONTRACT_VALIDATION.md`) and the shared RWD helpers in
@@ -498,9 +503,31 @@ python scripts/run_optum_tier0_test.py --cohort discontinuation
 python scripts/run_optum_tier0_test.py --cohort persistence
 ```
 
-The runner sets `OptumTestConfig.min_auc_threshold = 0.65` (higher than CSU
-V1's 0.55) on the assumption that leakage-safe V2-style shaping produces
-cleaner feature-target relationships.
+Runner flags beyond `--cohort` and `--step`, re-derived from its `argparse`
+(`grep -n 'add_argument' -A 6 scripts/run_optum_tier0_test.py`):
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--min-auc F` | `0.65` | The runner's own validation-AUC step gate (`OptumTestConfig.min_auc_threshold`, pushed into `tier0.CONFIG`) |
+| `--deployment-intent {clinical,commercial}` | `clinical` | Selects the adaptive success-criteria bar — **a different mechanism from `--min-auc`** (see below) |
+| `--feature-manifest-source NAME` | autodetected | Pins the Layer-5 `FeatureContract` registry (e.g. `optum`, `optum_mart`, `optum_hcp`) |
+| `--single-model` | off | Train one model instead of the full selection sweep |
+| `--min-samples-per-split N` | `10` | `split_enforcer` floor; lower it for small cohorts (e.g. `5` at Optum n=47) |
+| `--cohort-min-quality F` | `0.5` | Minimum cohort quality score |
+| `--auc-significance-gate` | off | Require the AUC to clear its own significance test |
+| `--smoke-test-only` | off | Short-circuit run for wiring checks |
+| `--data-root PATH` | project root | Root used to resolve `data/rwd/optum/<cohort>` |
+| `--hpo-trials N` | `10` | HPO trials |
+| `--dry-run`, `--no-bentoml`, `--disable-mlflow`, `--enable-opik` | — | As in `run_tier0_test.py` |
+
+`--min-auc` defaults to `0.65`, higher than CSU V1's 0.55, on the assumption that
+leakage-safe V2-style shaping produces cleaner feature-target relationships.
+
+> **`--min-auc 0.65` is not the "commercial AUC bar".** It is this runner's own
+> step gate. The adaptive **commercial** floor selected by
+> `--deployment-intent commercial` is `max(0.60, baseline+0.05)`
+> (`_INTENT_AUC_PARAMS`; `docs/model_success_criteria.md` §2.0). The two are
+> independent — a run can clear one and be failed by the other.
 
 The data_preparer loads the cohort parquet directly — no JSON conversion
 needed — via the generic `FileIngestor` capability. The precomputed
@@ -529,6 +556,23 @@ python scripts/persist_hcp_influence_to_falkordb.py ... --replace
 # Dry run (build graph + log counts, no FalkorDB writes):
 python scripts/persist_hcp_influence_to_falkordb.py ... --dry-run
 ```
+
+Full flag set, re-derived from the script's `argparse`:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--parquet-dir DIR` | — | Directory holding `medication.parquet` + `procedure.parquet` |
+| `--cohort-dir DIR` | — | Directory holding `e2i_ml_v3_patient_journeys.parquet` |
+| `--cohort-id TAG` | — | Cohort tag stored on every node and edge (e.g. `optum_initiation_v3`) |
+| `--lookback-days N` | `180` (`LOOKBACK_DAYS`) | Per-patient temporal gate — the PR #168 contract |
+| `--replace` | off | Wipe the cohort's prior nodes/edges before reload |
+| `--dry-run` | off | Build the graph and log counts, write nothing |
+| `--batch-size N` | `1000` | Cypher `UNWIND` batch size |
+| `--log-level LEVEL` | `INFO` | Logging level |
+
+If a prior load left ID-only `(:HCP)` shells behind,
+`scripts/cleanup_falkordb_shells.py` reports them; it is **dry-run by default**
+and only deletes with `--execute`.
 
 The script rebuilds the EXACT graph PR #168 builds via the shared
 `build_hcp_influence_graph` helper (same temporal gate, same edge weight
@@ -562,9 +606,10 @@ the round-trip parity contract against an in-process FalkorDB fake.
 - `src/agents/ml_foundation/data_preparer/CONTRACT_VALIDATION.md` — documents
   the `data_source` shape used to trigger file-based ingestion
 - `.claude/plans/csu-rwd-analyst-spec.md` — the analyst spec (§3–§8 cohort
-  definitions, exclusion lists, feature catalog, target derivations)
+  definitions, exclusion lists, feature catalog, target derivations).
+  **Absent from the repo** (local, untracked planning note; historical)
 - `.claude/plans/optum-rwd-ingestion.md` — the implementation plan this work
-  executes
+  executes. **Absent from the repo** (local, untracked planning note; historical)
 
 ## Feast freshness on file-sourced runs
 

@@ -3,9 +3,16 @@
 Canonical design reference for the `rwd_realistic` synthetic data regime that
 ships in [`src/repositories/synthetic_rwd_realistic.py`](../src/repositories/synthetic_rwd_realistic.py).
 
-Closes Phase S.3 of `.claude/plans/adaptive_temporal_validity_redesign.md`
-(line 266; host-side plan file — `.claude/` is git-ignored so the path is
-relative to the project root, not the repo working tree).
+Closes Phase S.3 of `.claude/plans/adaptive_temporal_validity_redesign.md`.
+**That plan file is absent** (verified 2026-09-07): `.claude/` is git-ignored, it
+is not in the working tree and there is no archived copy, so treat the reference
+as a historical, local, untracked planning note. This document plus the regime
+source are the as-built truth.
+
+> **Citation convention (2026-09-07).** Line numbers into
+> `synthetic_rwd_realistic.py` were re-verified and still hold; cross-file
+> citations into `evaluator.py`, the manifests and the tests had drifted and are
+> now **symbol anchors**. Prefer `grep -n '<SYMBOL>' <file>` over a line number.
 
 > **Premise corrections (issue #200, verified 2026-05-14 against source):**
 > the issue body says "5 leakage variants"; the regime's `LeakagePattern`
@@ -92,10 +99,12 @@ unrealistic generators.
 
 > **T2.3 lifecycle note:** the hardcoded `[0.62, 0.68]` literal predates
 > the per-cohort honest-band derivation in
-> [`evaluator.py:117-120` (`T2_3_HONEST_BAND_*_DEFAULT`)](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py);
-> the literal is preserved as a `synthetic_rwd_realistic` calibration
-> anchor at
-> [`evaluator.py:153-157`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py).
+> the `T2_3_HONEST_BAND_*_DEFAULT` constants in
+> [`evaluator.py`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py)
+> (`T2_3_HONEST_BAND_MIN_LIFT_DEFAULT` 0.05, `_MAX_LIFT_DEFAULT` 0.30,
+> `_CEILING_DEFAULT` 0.95, `_NOISE_SIGMA_DEFAULT` 1.0); the literal is preserved
+> as a `synthetic_rwd_realistic` calibration anchor in the same file — find it
+> with `grep -n '0.62, 0.68' src/agents/ml_foundation/model_trainer/nodes/evaluator.py`.
 > Currently **advisory-observability-only** — band violations flag, do
 > not block the deployer.
 
@@ -146,7 +155,8 @@ at
 [`:120-124`](../src/repositories/synthetic_rwd_realistic.py)). The
 injected feature is declared `knowable_at=index_date` in the synthetic
 manifest
-([`synthetic_feature_manifest.py:52`](../src/data/manifests/synthetic_feature_manifest.py)),
+(`BORDERLINE_GENUINE_FEATURE_NAME` in
+[`synthetic_feature_manifest.py`](../src/data/manifests/synthetic_feature_manifest.py)),
 so the pipeline sees it as Layer 1 declared-safe.
 
 **Contract (post-issue-#194):** the Layer 5 joint check
@@ -159,10 +169,9 @@ is verified separately by `test_v5_c2_hblp_relaxation_actually_fired`.
 Pre-issue-#194 the contract was "legacy DROPS, HBLP RETAINS" via the z
 threshold alone; the executable spec is now
 [`test_synthetic_borderline_genuine_hblp_contrast.py`](../tests/integration/test_synthetic_borderline_genuine_hblp_contrast.py)
-(see `test_v5_c2_legacy_drops_hblp_retains_borderline_genuine` line 158
-— the function name preserves the historical phrasing; the retain
-assertions at lines 200-205 and the relaxation-fired test at line 289
-pin the post-#194 behavior).
+(see `test_v5_c2_legacy_drops_hblp_retains_borderline_genuine` — the function
+name preserves the historical phrasing; its retain assertions and
+`test_v5_c2_hblp_relaxation_actually_fired` pin the post-#194 behavior).
 
 **This is a v5 Gate C2 engineering CI sanity-check, NOT RWD positive
 evidence** — the generator can produce any AUC by construction; the test
@@ -220,17 +229,19 @@ The T2.2 perm-anchored AUC buffer is calibrated via
 constants at `:71-73`, feature extraction at `:79-96` — must stay
 lockstep with `_generate_target`). The aggregator
 [`aggregate_t22_sweep.py`](../scripts/calibration/aggregate_t22_sweep.py)
-emits the calibrated buffer pinned at
-[`evaluator.py:93`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py)
-(`T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT`; last result 0.05
-provisional → 0.04 calibrated).
+emits the calibrated buffer pinned as
+`T2_2_PERMUTATION_ANCHORED_AUC_BUFFER_DEFAULT` in
+[`evaluator.py`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py)
+(last result 0.05 provisional → **0.04 calibrated**, which is the value in the
+source today).
 
 ### 5.3 Other consumers
 
 - [`src/data/manifests/synthetic_feature_manifest.py`](../src/data/manifests/synthetic_feature_manifest.py)
   — declares the `borderline_genuine_feature` as `knowable_at=index_date`
   so Layer 1 sees it as declared-safe.
-- [`src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py:273-284`](../src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py)
+- [`src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py`](../src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py)
+  (`hblp_classify` and the HBLP prior block — `grep -n HBLP` in that file)
   — Layer-1-conditional HBLP inflation: declared-safe features
   (`knowable_at <= index_date`) get the 1.5× prior multiplier on the
   Layer 3 z-threshold (encodes the structural prior that manifest-cleared
@@ -254,9 +265,11 @@ calibration. The reviewer must verify:
    silently breaks the T2.2 sweep.
 2. **The `[0.62, 0.68]` honest-band band** is currently hardcoded as a
    calibration anchor in the regime docstring (line 276) AND repeated in
-   `evaluator.py:156`. Both must move together if the band is widened.
+   `evaluator.py` (`grep -n '0.62, 0.68'` — several sites). All must move
+   together if the band is widened.
 3. **The `BORDERLINE_GENUINE_*` constants** (regime lines 120-124) AND
-   the manifest declaration (`synthetic_feature_manifest.py:52`) AND the
+   the manifest declaration (`BORDERLINE_GENUINE_FEATURE_NAME` in
+   `synthetic_feature_manifest.py`) AND the
    HBLP threshold (5σ × 1.5) must agree, otherwise the v5 Gate C2 sanity
    test passes / fails for the wrong reason.
 4. **The `LeakagePattern` Literal type** (lines 76-84) is the canonical
@@ -269,13 +282,17 @@ calibration. The reviewer must verify:
 
 - Real-Optum calibration (separate document tree under `docs/results/`).
 - T2.3 cohort-derived honest band derivation logic (see
-  `docs/calibration/t23_cohort_bands_20260510.md` per
-  [`evaluator.py:158-160`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py)).
+  `docs/calibration/t23_cohort_bands_20260510.md`, cross-referenced from the
+  T2.3 block in
+  [`evaluator.py`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py)).
 - T2.2 calibration result interpretation (see
-  `docs/calibration/t22_perm_anchored_synth_20260510_results.md` per
-  [`evaluator.py:88`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py)).
+  `docs/calibration/t22_perm_anchored_synth_20260510_results.md`,
+  cross-referenced from the T2.2 buffer block in
+  [`evaluator.py`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py)).
 
 ---
 
-*Document last verified against source: 2026-05-14.*
+*Document last verified against source: 2026-05-14; constants, formulas and
+the `synthetic_rwd_realistic.py` line citations re-verified 2026-09-07, when the
+cross-file citations were converted to symbol anchors.*
 *Issue: [#200](https://github.com/enunezvn/e2i_causal_analytics/issues/200).*
