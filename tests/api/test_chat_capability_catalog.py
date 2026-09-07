@@ -726,6 +726,37 @@ DROP_FIXTURES = [
     # #1907 codex: live ENROLLMENT is a status read (the /experiments hint names it)
     ("live_experiment_status", "Enrolling", "What experiments are currently enrolling patients?"),
     ("live_experiment_status", "Kisqali enrolling", "Which experiments are enrolling for Kisqali?"),
+    # #1914: perfect-tense / past passive status after a lead, and a status
+    # predicate coordinated behind another predicate (the live /experiments pill
+    # that survived three probes)
+    (
+        "live_experiment_status",
+        "Recent experiment activity",
+        "What experiments have been run or are currently enrolling across Remibrutinib, "
+        "Fabhalta, and Kisqali in the last 30 days?",
+    ),
+    (
+        "live_experiment_status",
+        "Launched A/B tests",
+        "Which A/B tests have been launched for Kisqali this quarter?",
+    ),
+    (
+        "live_experiment_status",
+        "Past active",
+        "How many experiments were active for Fabhalta in August?",
+    ),
+    (
+        "live_experiment_status",
+        "Tracked and enrolling",
+        "What experiments does the orchestrator track that are now enrolling for Kisqali?",
+    ),
+    # #1914 codex: an "are any" lead carries its own copula, so the coordinated
+    # form has no second (are|is) before the adverb
+    (
+        "live_experiment_status",
+        "Any enrolling",
+        "Are any experiments tracked by the orchestrator currently enrolling for Kisqali?",
+    ),
     (
         "competitor_data",
         "Competitor share",
@@ -1325,6 +1356,23 @@ KEEP_FIXTURES = [
         "Design an experiment to test whether more samples lift Fabhalta conversion.",
     ),
     ("Designed experiments", "What experiments have been designed for Fabhalta?"),
+    # #1914: the design pill generated next to the live NO pill and kept (graded
+    # OK); a results / completed ask stays a documented miss (#1907); a
+    # perfect-tense duration inside a calculation ask is still design intent
+    (
+        "Orchestrator experiment designs",
+        "What experiment designs does the E2I orchestrator support, and how do I set up a new "
+        "A/B test for one of our brands?",
+    ),
+    (
+        "Completed experiment results",
+        "What experiments have been completed for Kisqali and what lift did they show?",
+    ),
+    (
+        "Sample size after a run",
+        "How many HCPs do I need for 80% power now that the pilot experiment has been running "
+        "for 6 weeks?",
+    ),
     (
         "Experiment duration",
         "How long should an experiment run to detect a 5% NBRx lift for Kisqali?",

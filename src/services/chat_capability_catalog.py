@@ -728,21 +728,32 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     # A/B tests are running / active / live / ongoing / in progress / in flight /
     # being run / enrolling, or "currently designed" (the orchestrator's in-flight
     # designs),
-    # cannot be answered. Six shapes match: "<noun> (are|is) currently|now|
+    # cannot be answered. Nine shapes match: "<noun> (are|is) currently|now|
     # presently|actively <status>", "which|what|are any|how many <noun> (are|is)
     # <status>", "are any|how many <noun> <status>", "list|show [me] [the|all]
     # <noun> that (are|is) <status>", the adjective form "active / running / live /
-    # ongoing <noun>", and "<noun> in progress|in flight". A match is then
+    # ongoing <noun>", "<noun> in progress|in flight", and three from #1914 (the
+    # /experiments pill "what experiments have been run or are currently
+    # enrolling ... in the last 30 days?" survived three probes): the
+    # perfect-tense or past passive status after a lead, "which|what|are any|
+    # how many <noun> (have|has|had) been|were|was run|running|launched|started|
+    # <status>", and a status predicate COORDINATED behind another predicate,
+    # "which|what|how many <noun> <up to 40 chars> (are|is) currently|now|
+    # presently|actively <status>", and its "are any" variant, where the copula
+    # is the lead itself: "are any <noun> <up to 40 chars> currently|now|
+    # presently|actively <status>". A match is then
     # exempted by _EXPERIMENT_DESIGN_RE (below) when the pill carries DESIGN or
     # CALCULATION intent, which experiment_designer serves. A status read that
     # merely mentions power, a sample size or a duration ("what active
     # experiments have 80% power?", "which experiments are running for 6 weeks?")
     # is still a status read and drops. Accepted misses: a bare "<noun> is
     # running" with none of the leads above ("the experiment that is running
-    # for Kisqali"), lift or results phrasings (left to the prompt until one
-    # appears in a probe), nouns other than experiment / A/B test, and
-    # past-tense "designed" without a status lead ("what experiments have been
-    # designed"), which is ambiguous and stays kept.
+    # for Kisqali"), lift or results phrasings including "have been completed"
+    # (left to the prompt until one appears in a probe), nouns other than
+    # experiment / A/B test, a subject-inverted lead ("which experiments is the
+    # orchestrator currently running?"), and past-tense "designed" without a
+    # status lead ("what experiments have been designed"), which is ambiguous
+    # and stays kept in every shape.
     (
         "live_experiment_status",
         re.compile(
@@ -756,7 +767,20 @@ _OFF_PLATFORM_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
             r"|\b(?:list|show)\s+(?:me\s+)?(?:the\s+|all\s+)?(?:experiments?|a/b\s+tests?)\s+that\s+"
             r"(?:are|is)\s+(?:running|active|live|ongoing|designed|in progress|in[- ]flight|being run|enrolling)\b"
             r"|\b(?:active|running|live|ongoing)\s+(?:experiments?|a/b\s+tests?)\b"
-            r"|\b(?:experiments?|a/b\s+tests?)\s+(?:in progress|in[- ]flight)\b",
+            r"|\b(?:experiments?|a/b\s+tests?)\s+(?:in progress|in[- ]flight)\b"
+            # #1914: "what experiments have been run / were active ..."
+            r"|\b(?:which|what|are any|how many)\s+(?:experiments?|a/b\s+tests?)\s+"
+            r"(?:(?:have|has|had)\s+been|were|was)\s+"
+            r"(?:run|running|launched|started|active|live|ongoing|enrolling|in progress|in[- ]flight)\b"
+            # #1914: "what experiments <...> or are currently enrolling"
+            r"|\b(?:which|what|how many)\s+(?:experiments?|a/b\s+tests?)\b[^.?!]{0,40}?"
+            r"\b(?:are|is)\s+(?:currently|now|presently|actively)\s+"
+            r"(?:running|active|live|ongoing|in progress|in[- ]flight|being run|enrolling)\b"
+            # #1914 codex: "are any experiments <...> currently enrolling" (the
+            # lead is the copula, so no second are|is precedes the adverb)
+            r"|\bare any\s+(?:experiments?|a/b\s+tests?)\b[^.?!]{0,40}?"
+            r"\b(?:currently|now|presently|actively)\s+"
+            r"(?:running|active|live|ongoing|in progress|in[- ]flight|being run|enrolling)\b",
             re.I,
         ),
     ),
