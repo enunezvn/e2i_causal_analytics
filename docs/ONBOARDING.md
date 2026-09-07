@@ -1,7 +1,7 @@
 # E2I Causal Analytics - Developer Onboarding Guide
 
 **Healthcare Engagement Intelligence Platform** (v4.2.1)
-21-Agent, 6-Tier Causal Analytics System for Pharmaceutical Drug Adoption Analysis
+22-Agent, 6-Tier Causal Analytics System for Pharmaceutical Drug Adoption Analysis
 
 ---
 
@@ -34,7 +34,7 @@ E2I Causal Analytics helps pharmaceutical companies understand and optimize drug
 | **Fabhalta** | Factor B inhibitor | Paroxysmal nocturnal hemoglobinuria (PNH) |
 | **Kisqali** | CDK4/6 inhibitor (ribociclib) | Breast cancer |
 
-The system uses 21 AI agents organized in 6 tiers to perform causal analysis, predict drug adoption, design experiments, and explain model outputs in natural language.
+The system uses the agent roster in `config/agent_config.yaml` (22 agents today), organized in 6 tiers, to perform causal analysis, predict drug adoption, design experiments, and explain model outputs in natural language.
 
 ### Key Capabilities
 
@@ -145,8 +145,17 @@ SUPABASE_DB_URL=postgresql://postgres:PASSWORD@127.0.0.1:5432/postgres
 ### Step 3: Start All Services (Docker)
 
 ```bash
-# Start core services (API, frontend, workers, Redis, FalkorDB, MLflow, observability)
+# Start core services (API, frontend, workers, Redis, FalkorDB, MLflow, BentoML, Feast)
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+
+# Observability is OPT-IN: prometheus, alertmanager, node-exporter, postgres-exporter,
+# loki, promtail and grafana sit behind the `monitoring` compose profile, so a plain
+# `up -d` does NOT start them.
+COMPOSE_PROFILES=monitoring \
+  docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+
+# falkordb-browser is behind the `debug` profile; Flower and Redis Commander are
+# `dev-tools` in the dev overlay.
 
 # Legacy (do NOT start by default): the Opik observability overlay.
 # Opik was intentionally stopped in May 2026 — LLM usage tracking now lives in
@@ -174,18 +183,28 @@ curl http://localhost:8000/health
 # Check frontend
 curl -s http://localhost:3002 | head -5
 
-# Full health check (24 services)
+# Full health check
 ./scripts/health_check.sh
 ```
+
+> `health_check.sh` derives its service list at runtime from
+> `docker compose config --services`, so the total is not a fixed number. Anything
+> behind a profile you did not start reports **SKIPPED**, not a failure. Opik reports
+> **UNHEALTHY by design** — it was intentionally stopped in May 2026 and its containers
+> are not started.
 
 ### Step 5: Set Up Local Python Environment (for tests & linting)
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+make dev-install        # pip install -r requirements.txt, THEN pip install -e ".[dev]"
 pre-commit install
 ```
+
+> **Install `requirements.txt` first.** `pip install -e ".[dev]"` on its own resolves
+> unpinned tool versions and can give you a different toolchain from CI, which installs
+> `requirements.txt` first — exactly what `make dev-install` does.
 
 ### Step 6: Set Up Frontend Development (optional)
 
@@ -278,7 +297,7 @@ e2i_causal_analytics/
 │   ├── workers/            # Celery task definitions
 │   ├── nlp/                # Query processing, entity extraction
 │   ├── feature_store/      # Feature store client
-│   ├── kpi/                # 44 KPI definitions
+│   ├── kpi/                # KPI implementations (registry: config/kpi_definitions.yaml)
 │   └── utils/              # Shared utilities
 ├── frontend/               # React/TypeScript/Vite frontend
 │   └── src/
@@ -320,9 +339,10 @@ e2i_causal_analytics/
 ### 6-Tier Agent System
 
 ```
-TIER 0: ML Foundation (8 agents)
+TIER 0: ML Foundation (9 agents)
   scope_definer → cohort_constructor → data_preparer → feature_analyzer
   → model_selector → model_trainer → model_deployer → observability_connector
+  cohort_profiler (dispatched by the orchestrator, not on the sequential chain)
 
 TIER 1: Coordination (2 agents)
   orchestrator (intent classifier [regex → Haiku LLM fallback] + router;
@@ -374,12 +394,14 @@ Each agent is a **LangGraph state machine** with:
 
 ### Worker Queue Architecture
 
-| Worker | Concurrency | Queues | Use Case |
-|--------|-------------|--------|----------|
-| **worker_light** (x2) | 4 | quick, api, default | Fast tasks (<30s) |
-| **worker_medium** | 1 | analytics, reports, ml | Medium analysis (1-5 min) |
-| **worker_heavy** | 1 | causal, training, heavy | Heavy ML (5-30 min, on-demand) |
-| **scheduler** | - | celery-beat | Periodic tasks |
+| Worker | Replicas | Concurrency | Queues | Memory limit | Use Case |
+|--------|----------|-------------|--------|--------------|----------|
+| **worker_light** | 2 | 2 | `default`, `quick`, `api` | 1.5G | Fast tasks (<30s) |
+| **worker_medium** | 1 | 2 | `analytics`, `reports`, `aggregations` | 4G | Medium analysis (1–5 min) |
+| **worker_heavy** | 0 (on-demand, scales 0–4) | 1 | `shap`, `causal`, `ml`, `twins` | 3G | Heavy ML — `--time-limit=3600`, `--soft-time-limit=3300` |
+| **scheduler** | 1 | - | celery-beat | 1G | Periodic tasks |
+
+Re-derive with `grep -nE 'queues=|concurrency=|replicas:' docker/docker-compose.yml`.
 
 ### Tri-Memory System
 
@@ -399,8 +421,14 @@ Each agent is a **LangGraph state machine** with:
 - **RAG** (2): rag_document_chunks (HNSW), rag_search_logs
 - **Chat** (6+): chat_threads, chat_messages, user_preferences (RLS)
 - **Audit** (2): audit_chain_entries (SHA-256 hash chain), verification_log
-- **FalkorDB Graph**: 8 node types, 15 edge types (HCP, Patient, Treatment, Brand, etc.)
-- **Feast Feature Store**: 9 feature views, 48 features
+- **FalkorDB Graph**: the ontology in `config/ontology/` declares 8 node types
+  (`node_types.yaml`) and 15 edge types (`edge_types.yaml`); the deployed memory graph
+  schema (`database/memory/002_semantic_graph_schema.cypher`) uses a wider set —
+  12 labels and 18 relationship types — because it adds the memory/causal layer on top
+- **Feast Feature Store**: 11 feature views / 65 fields over 7 PostgreSQL sources
+  (`feature_repo/features/*.py`), served by `feastdev/feature-server` pinned in
+  `docker/Dockerfile.feast`. Canonical reference:
+  [`docs/data/05-FEATURE-STORE-REFERENCE.md`](data/05-FEATURE-STORE-REFERENCE.md)
 
 > **Full data documentation**: See [`docs/data/00-INDEX.md`](data/00-INDEX.md) for the complete data dictionary, conversion guide, and CSV templates for onboarding real data.
 
@@ -440,15 +468,20 @@ gh pr create --title "feat: description" --body "## Summary\n..."
 2. **0 approvals required** (solo-dev repo) - there is no CODEOWNERS gate and stale reviews are not auto-dismissed
 3. Merge policy: **always preserve history** via `--merge` merge-commits, **never squash** (branch protection keeps `required_linear_history=false` so merge commits stay legal)
 
-> **Footgun**: both required checks are **path-filtered** (they only run when matching paths change), so a docs-only or scripts-only PR can stall waiting for a check that never reports. Because `enforce_admins=false`, an admin can override-merge such a PR. See `scripts/setup_branch_protection.sh` for the full applied policy and rationale.
+> **Not a footgun any more**: the two required workflows are **deliberately not**
+> path-filtered — both `backend-tests.yml` and `tier1-5-test.yml` carry a
+> `DELIBERATELY NOT path-filtered` banner, and the path gating moved *inside* a
+> `changes` job. The required contexts therefore always report, and a docs-only or
+> frontend-only PR merges normally. `enforce_admins=false` remains as an escape hatch.
+> See `scripts/setup_branch_protection.sh` for the full applied policy and rationale.
 
 ### Code Style
 
 | Tool | Purpose | Config Location |
 |------|---------|----------------|
-| **Ruff** | Linting + formatting | `pyproject.toml` [tool.ruff] |
-| **Black** | Python formatting | `pyproject.toml` [tool.black] |
-| **MyPy** | Type checking (non-blocking) | `pyproject.toml` [tool.mypy] |
+| **Ruff** | Linting, formatting, and the CI formatter gate (`ruff format --check src/ tests/`) | `pyproject.toml` [tool.ruff] |
+| **Black** | Python formatting — run by `make format` only; CI checks Ruff's formatter, not Black | `pyproject.toml` [tool.black] |
+| **MyPy** | Type checking — **enforced** in CI against a `MYPY_CEILING` inside the required `Backend CI Success` gate | `pyproject.toml` [tool.mypy] |
 | **ESLint** | Frontend linting | `frontend/eslint.config.js` |
 | **TypeScript** | Frontend type checking | `frontend/tsconfig.app.json` |
 
@@ -467,14 +500,21 @@ make test           # Run tests with coverage
 make test-fast      # Run tests without coverage
 make test-seq       # Sequential tests (for debugging)
 make test-cov       # Full coverage (HTML + XML reports)
-make lint           # Ruff check + MyPy
-make format         # Black + Ruff fix
+make lint           # ruff check src/ tests/ + whole-tree mypy src/  (see caveat below)
+make format         # black src/ tests/ + ruff check --fix src/ tests/
+make generate-types # Export OpenAPI + regenerate frontend/src/types/generated/api.ts
 make docker-up      # Start all Docker services
 make docker-down    # Stop all Docker services
 make docker-logs    # Tail API + frontend logs
 make api-docs       # Generate OpenAPI spec + Redoc HTML
 make clean          # Remove build artifacts
 ```
+
+> ⚠️ **`make lint` runs whole-tree `mypy src/`, which spikes ~1.6 GiB.** Do not run it
+> on the droplet (dev and prod are the same box — see [section 8](#8-deployment)).
+> Scope local type checks to the files you changed (`mypy <changed_file.py>`) and let
+> CI's `Type Check (MyPy)` gate be the arbiter; read its `mypy-report` artifact for the
+> actual errors.
 
 ---
 
@@ -517,7 +557,7 @@ make clean          # Remove build artifacts
 # Standard test suite (4 parallel workers, 30s timeout per test)
 .venv/bin/pytest tests/
 
-# With coverage (fail_under=70%)
+# With coverage (backend gate: pyproject.toml fail_under)
 .venv/bin/pytest tests/ --cov --cov-report=term-missing
 
 # Batched suite (43 batches, RAM-aware, ~20 min)
@@ -569,10 +609,15 @@ Available markers: `unit`, `integration`, `e2e`, `slow`, `requires_redis`, `requ
 
 ### Coverage Thresholds
 
-| Component | Lines | Branches | Functions | Statements |
-|-----------|-------|----------|-----------|------------|
-| **Backend** | 70% | 70% | 70% | 70% |
-| **Frontend** | 62% | 55% | 54% | 62% |
+| Component | Lines | Branches | Functions | Statements | Config |
+|-----------|-------|----------|-----------|------------|--------|
+| **Backend** | `fail_under = 20` | — | — | — | `pyproject.toml` |
+| **Frontend** | 62% | 55% | 54% | 62% | `frontend/vitest.config.ts` |
+
+> The backend has a **single line-coverage gate**, re-baselined down to 20 in April 2026
+> so the gate reflects the tree instead of blocking every PR; 70% remains the
+> aspiration, not the enforced number. Check the live value with
+> `grep -n '^fail_under' pyproject.toml`.
 
 ---
 
@@ -651,16 +696,23 @@ bash scripts/ssh-tunnels/tunnels.sh
 ssh -N -L 8443:localhost:443 enunez@138.197.4.36
 ```
 
-| Service | Local URL |
-|---------|-----------|
-| Frontend | https://localhost:8443 |
-| API Docs | https://localhost:8443/api/docs |
-| MLflow | http://localhost:5000 |
-| Grafana | http://localhost:3200 |
-| Opik (stopped May 2026 — only if the legacy overlay is manually started) | http://localhost:5173 |
-| FalkorDB Browser | http://localhost:3030 |
-| Supabase Studio | http://localhost:3001 |
-| Alertmanager | http://localhost:9093 |
+| Service | Local URL | Started by |
+|---------|-----------|------------|
+| Frontend | https://localhost:8443 | default `up` |
+| API Docs | https://localhost:8443/api/docs | default `up` |
+| MLflow | http://localhost:5000 | default `up` (nginx `auth_basic` in front) |
+| Supabase Studio | http://localhost:3001 | the separate self-hosted Supabase stack |
+| Grafana | http://localhost:3200 | `monitoring` profile |
+| Prometheus | http://localhost:9091 | `monitoring` profile |
+| Alertmanager | http://localhost:9093 | `monitoring` profile |
+| FalkorDB Browser | http://localhost:3030 | `debug` profile |
+| Flower / Redis Commander | — | `dev-tools` profile (dev overlay only) |
+| Opik (stopped May 2026 — only if the legacy overlay is manually started) | http://localhost:5173 | not started |
+
+All management ports bind to `127.0.0.1` on the droplet, so they are reachable only
+through the tunnel. Profile-gated services are **not running unless you started their
+profile** — a refused connection on 3200/9091/9093/3030 usually means the profile is
+off, not that the service is broken.
 
 ---
 
@@ -669,8 +721,12 @@ ssh -N -L 8443:localhost:443 enunez@138.197.4.36
 ### Authentication
 
 - **JWT-based** via Supabase Auth
-- Tokens validated against `SUPABASE_JWT_SECRET`
-- Testing mode auto-bypasses auth (`E2I_TESTING_MODE=true`)
+- Tokens are verified by calling Supabase — `verify_supabase_token` →
+  `client.auth.get_user()`, which needs `SUPABASE_URL` + `SUPABASE_ANON_KEY`.
+  `SUPABASE_JWT_SECRET` is **not** used on this path; missing URL/anon-key is the real
+  "auth disabled" condition (`src/api/dependencies/auth.py`)
+- Testing mode auto-bypasses auth (`E2I_TESTING_MODE=true`), and only when
+  `ENVIRONMENT != production`
 
 ### Role-Based Access Control (4 Levels)
 
@@ -776,11 +832,20 @@ def create_graph():
 from fastapi import APIRouter, Depends
 from src.api.dependencies.auth import require_analyst
 
-router = APIRouter(prefix="/api/v1/<domain>", tags=["domain"])
+router = APIRouter(prefix="/<domain>", tags=["domain"])
 
 @router.get("/endpoint")
 async def get_data(user=Depends(require_analyst)):
     ...
+```
+
+The public base path is **`/api`**, not `/api/v1`: `src/api/main.py` mounts routers with
+`include_router(..., prefix="/api")`. Declare the domain segment on the router and let
+`main.py` supply `/api`. The one historical exception is `src/api/routes/rag.py`, which
+declares its own `/api/v1/rag`. Confirm with:
+
+```bash
+grep -rhoE 'prefix="/api[^"]*"' src/api/routes/ src/api/main.py | sort | uniq -c
 ```
 
 ### How Celery Tasks Work
@@ -804,7 +869,9 @@ def run_analysis(self, params: dict):
    ```bash
    ./scripts/health_check.sh
    ```
-   Understand what each of the 24 services does and verify they're running.
+   Understand what each reported service does and verify they're running. The probe
+   set is derived from `docker compose config --services`; profile-gated services show
+   as SKIPPED and Opik shows as UNHEALTHY by design.
 
 2. **Explore the API docs**
    Open http://localhost:8000/api/docs (Swagger UI) and browse the 220+ endpoints.
@@ -818,7 +885,7 @@ def run_analysis(self, params: dict):
 4. **Read the architecture docs**
    - `docs/ARCHITECTURE.md` - System architecture with C4 diagrams
    - `config/agent_config.yaml` - All 22 agent definitions
-   - `config/kpi_definitions.yaml` - 44 KPI definitions
+   - `config/kpi_definitions.yaml` - the KPI registry (45 KPIs today; `summary.total_kpis` is authoritative)
 
 5. **Trace a query through the system**
    Follow how a natural language query flows:
@@ -856,8 +923,10 @@ def run_analysis(self, params: dict):
 ### Ongoing
 
 11. **Review PRs** - Read other developers' code to learn patterns
-12. **Monitor Grafana dashboards** at http://localhost:3200
-13. **Explore the knowledge graph** via FalkorDB Browser at http://localhost:3030
+12. **Monitor Grafana dashboards** at http://localhost:3200 — start the stack first:
+    `COMPOSE_PROFILES=monitoring docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d`
+13. **Explore the knowledge graph** via FalkorDB Browser at http://localhost:3030 —
+    behind the `debug` profile (`COMPOSE_PROFILES=debug … up -d`)
 
 ---
 
@@ -996,20 +1065,20 @@ A: Create a route in `src/api/routes/`, register it in `src/api/main.py`, add au
 **Q: How do I add a new agent?**
 A: Create a directory in `src/agents/<agent_name>/` with `graph.py` (LangGraph state machine), node functions, and tools. Add the agent definition to `config/agent_config.yaml`. Write tests in `tests/unit/test_agents/`.
 
-**Q: Why is MyPy non-blocking?**
-A: The codebase has `ignore_missing_imports = true` because many ML libraries lack type stubs. MyPy runs in CI for visibility but doesn't block merges.
+**Q: Is MyPy blocking?**
+A: Yes, as a *ceiling*. The codebase has `ignore_missing_imports = true` because many ML libraries lack type stubs, so instead of demanding zero errors, `backend-tests.yml` pins a `MYPY_CEILING` and fails the required `Backend CI Success` gate if the error count exceeds it. Read the `mypy-report` artifact for the actual errors, and check the current ceiling with `grep -n 'MYPY_CEILING=' .github/workflows/backend-tests.yml`.
 
 **Q: How do I run just the causal engine tests?**
 A: `pytest tests/unit/test_causal_engine/ -v` for unit tests, or `pytest tests/synthetic/ -v` for validation benchmarks.
 
 **Q: What's the difference between worker_light, worker_medium, and worker_heavy?**
-A: Light workers (x2, concurrency=4) handle quick API tasks. Medium (x1, concurrency=1) handles analytics/reports. Heavy (x0, on-demand) handles causal training and heavy ML. Heavy workers start at 0 replicas and scale up when needed.
+A: Light workers (2 replicas, concurrency 2) handle the `default`/`quick`/`api` queues. Medium (1 replica, concurrency 2) handles `analytics`/`reports`/`aggregations`. Heavy (concurrency 1) handles `shap`/`causal`/`ml`/`twins` with a 3600s hard time limit; it starts at **0 replicas** and scales up on demand (see the `HEAVY_OFFLOAD_ENABLED` note in `docker/docker-compose.yml`).
 
 **Q: How do I view agent traces / LLM usage?**
 A: Per-call LLM usage (model, tokens, cost, latency, agent) is recorded in the `llm_usage_events` table and surfaced in the frontend at `/admin` → Observability. (Opik, the former tracing stack, was intentionally stopped in May 2026; its overlay remains in `docker/docker-compose.opik.yml` for reference only.)
 
 **Q: How do I regenerate TypeScript types from the API?**
-A: `cd frontend && npm run generate:types`. This reads the OpenAPI spec and generates `src/types/generated/api.ts`.
+A: `make generate-types`. It exports the OpenAPI spec statically (`python -m scripts.export_openapi --output openapi.json`) and regenerates `frontend/src/types/generated/api.ts` — no running API needed. This is what CI's verify-types gate runs, so **commit the regenerated `api.ts` in the same PR** as the response-model change that caused it.
 
 ---
 
@@ -1040,7 +1109,7 @@ gh workflow run deploy.yml
 # API docs
 open http://localhost:8000/api/docs
 
-# Monitoring
+# Monitoring (start it first: COMPOSE_PROFILES=monitoring docker compose ... up -d)
 open http://localhost:3200  # Grafana (via tunnel)
 open http://localhost:9091  # Prometheus (via tunnel)
 ```
