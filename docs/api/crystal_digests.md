@@ -1,11 +1,16 @@
 # Crystal Digests — CopilotKit API Reference
 
-**Version**: 1.0 | **Last Updated**: 2026-05-20 | **Status**: Living Document
+**Version**: 1.1 | **Last Updated**: 2026-09-07 | **Status**: Living Document
 
 Owner: Platform / Memory Subsystems
 
-Companion plan: `.claude/plans/e2i_memory_subsystems_implementation_plan.md`
-(Phase 4)
+Companion plan: `.claude/plans/archive/e2i_memory_subsystems_implementation_plan_archived_20260520.md`
+(Phase 4) — a local, untracked planning note, archived 2026-05-20 and kept for
+historical context only.
+
+Source citations in this file name **symbols**, not line numbers: line numbers
+drift silently and mislead the next reader. Where a number is unavoidable,
+regenerate it with `grep -n` at write time.
 
 ---
 
@@ -29,9 +34,27 @@ aggregates 2+ related episodic memories (from different agents, same
 brand, within a 7-day window, on the same `causal_path` or KPI) into a
 cross-agent narrative for executive consumption.
 
-The crystallizer (`src/memory/crystallization/crystallizer.py:102-117`)
-is **brand-strict**: it NEVER co-aggregates across brands. Aggregation
-keys are `(brand, region, kpi, time_window)`.
+The crystallizer (`Crystallizer` in
+`src/memory/crystallization/crystallizer.py`) is **brand-strict**: it NEVER
+co-aggregates across brands. Aggregation keys are
+`(brand, region, kpi, time_window)`.
+
+### Provenance filtering of the source memories
+
+The episodic page query is passed through `apply_provenance_filter()`
+(`src/repositories/provenance.py`) before paging, so **synthetic episodic
+memories are excluded from real crystals** — the filter appends
+`.eq('is_synthetic', False)` (#850/#977).
+
+The one exception is a synthetic-gold showcase instance: when
+`E2I_INCLUDE_SYNTHETIC` is set (`deployment_includes_synthetic()`) the
+predicate is skipped for every reader, so the synthetic corpus crystallizes and
+findings populate. This is reversible — unset the env and the strict gate
+returns verbatim.
+
+Note that `executive_insights` is itself **not** a provenance-tagged table
+(`PROVENANCE_TAGGED_TABLES` in the same module); the filter applies to the
+episodic memories a crystal is derived *from*, not to the crystal row.
 
 ### Schema shipped in two phases
 
@@ -53,8 +76,8 @@ The 15 fields added by migration 025 split into three groups:
 
 ### Analytical (8 fields)
 
-Source: `src/memory/crystallization/crystallizer.py:508-647`
-(`_derive_crystal_digest_fields`). All deterministically derived from
+Source: `_derive_crystal_digest_fields()` in
+`src/memory/crystallization/crystallizer.py`. All deterministically derived from
 the source episodic memories' `raw_content` JSONB.
 
 | Field                          | Type        | Source                                                                                |
@@ -70,7 +93,7 @@ the source episodic memories' `raw_content` JSONB.
 
 #### `effect_direction` derivation
 
-Logic at `src/memory/crystallization/crystallizer.py:537-553`:
+Logic in `_derive_crystal_digest_fields()`:
 
 - If `effect_size`, `ci_lower`, `ci_upper` are all set AND `ci_lower <= 0 <= ci_upper`: `"null"`
 - Else if `effect_size > 0`: `"positive"`
@@ -81,8 +104,7 @@ Logic at `src/memory/crystallization/crystallizer.py:537-553`:
 #### Why arrays are sorted
 
 `confounders_controlled` and the two `sensitivity_checks_*` arrays are
-sorted at function exit
-(`src/memory/crystallization/crystallizer.py:559-592`) so JSONB diffs
+sorted before the return in `_derive_crystal_digest_fields()` so JSONB diffs
 are minimal and the row hash is reproducible across re-crystallization
 passes. Source memories have no stable secondary ordering — without the
 sort, encounter-order would leak into the response.
@@ -98,11 +120,11 @@ Both fields are truncated to 500 chars at the audit boundary.
 
 The LLM path is gated by the feature flag
 `E2I_CRYSTAL_LLM_NARRATIVES_ENABLED`
-(`src/memory/crystallization/crystallizer.py:55`). When the flag is off,
-the deterministic heuristic (`_deterministic_narrative_prose` at
-`src/memory/crystallization/crystallizer.py:703-737`) emits short non-empty
-prose so dashboards don't show blank cells. Flag accepts any of `{"1",
-"true", "yes", "on"}` (case-insensitive).
+(`LLM_NARRATIVE_ENV_VAR`, read by `_llm_narratives_enabled()` in
+`src/memory/crystallization/crystallizer.py`). When the flag is off, the
+deterministic heuristic (`_deterministic_narrative_prose()` in the same module)
+emits short non-empty prose so dashboards don't show blank cells. Flag accepts
+any of `{"1", "true", "yes", "on"}` (case-insensitive).
 
 ### Lineage (5 fields)
 
@@ -117,8 +139,7 @@ prose so dashboards don't show blank cells. Flag accepts any of `{"1",
 #### Tier inheritance
 
 If any source memory carries a higher tier than `episodic`, the crystal
-inherits the highest. Tier rank at
-`src/memory/crystallization/crystallizer.py:614`:
+inherits the highest. Tier rank in `_derive_crystal_digest_fields()`:
 
 ```python
 tier_rank = {"working": 0, "episodic": 1, "semantic": 2, "procedural": 3}
@@ -130,7 +151,7 @@ tier_rank = {"working": 0, "episodic": 1, "semantic": 2, "procedural": 3}
 
 When the LLM narrator path is enabled, the crystallizer emits an audit
 sidecar to track the model call. Source:
-`src/data/kg/types.py:407-470` (`LLMCrystalNarrativeAudit`).
+`LLMCrystalNarrativeAudit` in `src/data/kg/types.py`.
 
 ### Schema
 
@@ -144,27 +165,47 @@ sidecar to track the model call. Source:
 | `input_tokens`              | `int?`      | Prompt tokens consumed, from Anthropic SDK `response.usage`. `None` if not captured.         |
 | `output_tokens`             | `int?`      | Completion tokens emitted. Same nullability as `input_tokens`.                               |
 | `cost_usd`                  | `float?`    | Computed via `compute_haiku_cost_usd`. `None` when token counts could not be extracted.      |
+| `input_prompt`              | `string`    | The **full prompt text sent to the LLM** (#391 security box 4), populated from `_build_narrator_prompt()`. Empty string on the flag-off / exception / legacy-caller paths. |
 
-### Audit visibility
+### Audit persistence
 
-The audit struct is **not** currently persisted as a separate row — its
-prose fields (`limitations`, `recommended_next_analysis`) flow into the
-`executive_insights` row directly. Telemetry fields (`latency_ms`,
-`*_tokens`, `cost_usd`) are emitted via the logger at WARNING level on
-exception (`src/memory/crystallization/crystallizer.py:839`) and via
-standard structured logging on success.
+The audit struct **is** persisted, as one row per crystal in the
+`crystal_narrative_audits` table (`database/memory/028_provenance_append_only.sql`).
+Its prose fields also flow into the `executive_insights` row directly, so the
+audit row is a sidecar rather than the only copy.
 
-A future migration may surface these as a dedicated audit table; for now,
-the audit's role is to enforce the **single-writer** contract:
-narrator emissions go through the audit struct, never directly to the
-row insert.
+| Audit column | Notes |
+|---|---|
+| `audit_id` | UUID primary key |
+| `insight_id` | FK → `executive_insights(insight_id)`, `ON DELETE CASCADE`, `UNIQUE` — so the write is idempotent across retries and orphans cannot accumulate |
+| `narrator_model` | Pinned model id |
+| `key_finding`, `limitations`, `recommended_next` | Audit copy of the prose columns (note the column is `recommended_next`, while the dataclass field is `recommended_next_analysis`) |
+| `input_prompt` | `NOT NULL DEFAULT ''`. The empty string is itself a meaningful signal — "we did NOT send anything" |
+| `latency_ms`, `input_tokens`, `output_tokens`, `cost_usd` | Telemetry mirror |
+| `created_at` | Insert timestamp |
+
+**Why the prompt is captured**: the offline PHI scanner
+(`scripts/audit_phi_in_crystal_narratives.py`) joins this table so it can audit
+the LLM's **inputs** as well as its outputs for PHI/PII leaks. Without the row,
+every real crystal lands with a NULL `audit_input_prompt` and only the outputs
+(`key_finding`, `narrative`) are auditable.
+
+**The write is best-effort, not crystallization-gating.** A failure is caught
+narrowly, logged at WARNING, and the crystallization continues — losing one
+audit sidecar is preferable to failing the whole pipeline. Persistent failures
+are detectable with a left-join count of `executive_insights` rows that have no
+`crystal_narrative_audits` row.
+
+The audit struct also enforces the **single-writer** contract: narrator
+emissions go through it, never directly to the row insert.
 
 ### Narrator dependency-injection
 
 The narrator function `_invoke_llm_narrator` accepts an optional
 `client_factory: Optional[Callable[[str], _AnthropicClientProtocol]]`
 parameter
-(`src/memory/crystallization/crystallizer.py:79, 740-747`). This is the
+(`_AnthropicClientFactory` / `_invoke_llm_narrator()` in
+`src/memory/crystallization/crystallizer.py`). This is the
 DI hook for tests — production passes nothing and the default factory
 constructs `anthropic.AsyncAnthropic(api_key=...)`.
 
@@ -176,8 +217,8 @@ worker pool.
 ### Narrow exception handling
 
 SDK-level transient errors fall back to an empty audit (the row insert
-still completes with empty prose). Narrow catch tuple at
-`src/memory/crystallization/crystallizer.py:788-797`:
+still completes with empty prose). Narrow catch tuple in
+`_invoke_llm_narrator()`:
 
 - `APIConnectionError`
 - `APITimeoutError`
@@ -189,9 +230,8 @@ propagate so they surface in CI / DLQ instead of being silently swallowed.
 
 ### Key-shape check
 
-`_invoke_llm_narrator` short-circuits if `ANTHROPIC_API_KEY` does NOT
-start with `"sk-ant-"`
-(`src/memory/crystallization/crystallizer.py:799-806`). Catches the CI
+`_invoke_llm_narrator()` short-circuits if `ANTHROPIC_API_KEY` does NOT
+start with `"sk-ant-"`. Catches the CI
 placeholder `test-key` so live-LM smoke tests don't 401 against the
 Anthropic API.
 
@@ -200,7 +240,7 @@ Anthropic API.
 ## 4. Endpoint Reference
 
 All endpoints live under the `/api/executive-insights` prefix
-(`src/api/routes/executive_insights.py:43`).
+(`router` in `src/api/routes/executive_insights.py`).
 
 ### `GET /api/executive-insights`
 
@@ -253,7 +293,8 @@ interface PortfolioBrandSummary {
 ```
 
 > **Important**: this endpoint is declared BEFORE `/{insight_id}` in
-> the route order (`src/api/routes/executive_insights.py:198-272`),
+> the route order (`get_portfolio_summary()` before `get_insight()` in
+> `src/api/routes/executive_insights.py`),
 > otherwise FastAPI matches `portfolio-summary` as an `insight_id`.
 
 ### `GET /api/executive-insights/{insight_id}`
@@ -315,9 +356,9 @@ The crystallization trigger requires the OPERATOR role
 (`Depends(require_operator)`).
 
 JWT format: Bearer token issued by Supabase Auth. The middleware stack
-validates against Supabase at
-`src/api/middleware/jwt_auth.py`. See `docs/ARCHITECTURE.md §6.2` for
-the full JWT flow.
+validates against Supabase in `JWTAuthMiddleware`
+(`src/api/middleware/auth_middleware.py` — there is no `jwt_auth.py`). See
+`docs/ARCHITECTURE.md §6.2` for the full JWT flow.
 
 RBAC roles (in increasing privilege):
 
@@ -450,11 +491,11 @@ curl -X POST 'https://eznomics.site/api/executive-insights/crystallize' \
 
 Crystallized insights can be invalidated by the staleness cascade
 (`src/memory/lifecycle/invalidator.py`). When that happens, the
-`sentinel_staleness_alert` (`config/sentinels.yaml:79-88`) fires and
+`sentinel_staleness_alert` (its `id:` entry in `config/sentinels.yaml`) fires and
 publishes a `staleness_alert` payload to `e2i:alerts` Redis pub/sub.
 
 CopilotKit dashboards subscribe via the SSE bridge at
-`src/api/routes/staleness_alerts.py:395-435`:
+`alerts_stream()` in `src/api/routes/staleness_alerts.py`:
 
 ### `GET /api/alerts/stream`
 
@@ -481,7 +522,7 @@ comment lines (per the SSE spec).
 ### Filter semantics
 
 The bridge filters by the connection's requested `brand` value
-(`src/api/routes/staleness_alerts.py:273-296`):
+(`AlertBridge._matches_brand()` in `src/api/routes/staleness_alerts.py`):
 
 - `payload['brands']` is a list — match if `self.brand` appears in it.
 - `"all"` in `brands` also matches every brand subscriber (mirrors
@@ -492,7 +533,8 @@ The bridge filters by the connection's requested `brand` value
 ### Backpressure
 
 Per-connection bounded queue caps at 100 events
-(`src/api/routes/staleness_alerts.py:99`). At capacity: drop-oldest with
+(`MAX_QUEUE_DEPTH`, applied by `AlertBridge._enqueue_with_backpressure()`).
+At capacity: drop-oldest with
 a WARNING log throttled to every 25th drop. The connection stays open.
 
 ### No replay
@@ -540,9 +582,9 @@ evtSource.onerror = (err) => {
 ### `invalidated_at` column
 
 Added by migration 021 to `executive_insights`, `triggers`, and
-`ml_predictions` (`database/memory/021_insight_lifecycle.sql:20-21`).
+`ml_predictions` (`database/memory/021_insight_lifecycle.sql`).
 The portfolio summary endpoint explicitly excludes invalidated rows
-(`src/api/routes/executive_insights.py:220`):
+(in `get_portfolio_summary()`):
 
 ```python
 .is_("invalidated_at", "null")
@@ -565,15 +607,15 @@ Flow:
 2. The next dispatcher tick runs `sentinel_staleness_alert` (cooldown
    permitting): the `invalidation_count` pattern enumerates rows where
    `invalidated_at IS NOT NULL`
-   (`src/memory/sentinels/registry.py:387-438`).
+   (`evaluate_sentinel()` in `src/memory/sentinels/registry.py`).
 3. `notify_and_queue_reanalysis`
-   (`src/tasks/sentinel_actions.py:150-302`) publishes a
+   (`src/tasks/sentinel_actions.py`) publishes a
    `staleness_alert` payload (full findings list) to `e2i:alerts`.
 4. The handler ALSO enqueues up to 5 `reanalyze_finding` Celery tasks
-   (`_REANALYSIS_CAP = 5`, `src/tasks/sentinel_actions.py:144`); each
+   (`_REANALYSIS_CAP = 5` in `src/tasks/sentinel_actions.py`); each
    task publishes a `reanalysis_requested` event on
    `reanalysis:e2i:{brand}` for downstream orchestrator consumers
-   (`src/tasks/insight_lifecycle_tasks.py:171-236`).
+   (`reanalyze_finding()` in `src/tasks/insight_lifecycle_tasks.py`).
 5. Any client subscribed to `GET /api/alerts/stream?brand=<brand>`
    receives the `staleness_alert` event via the SSE bridge and can
    invalidate its local cache for affected `insight_id`s. (Frontend
@@ -599,9 +641,12 @@ the full reversal checklist.
 - Crystallizer source: `src/memory/crystallization/crystallizer.py`
 - Route source: `src/api/routes/executive_insights.py`
 - SSE bridge: `src/api/routes/staleness_alerts.py`
-- Audit type: `src/data/kg/types.py:407-470` (`LLMCrystalNarrativeAudit`)
+- Audit type: `LLMCrystalNarrativeAudit` in `src/data/kg/types.py`
 - Migrations:
   - `database/memory/021_insight_lifecycle.sql` — base 13 fields + `invalidated_at`
   - `database/memory/025_crystaldigest_schema_completion.sql` — 15 new fields
-- Plan: `.claude/plans/e2i_memory_subsystems_implementation_plan.md` (Phase 4)
+  - `database/memory/028_provenance_append_only.sql` — `crystal_narrative_audits`
+    table (one row per crystal, incl. `input_prompt` for the PHI scanner)
+- Plan: `.claude/plans/archive/e2i_memory_subsystems_implementation_plan_archived_20260520.md`
+  (Phase 4; local untracked planning note, archived 2026-05-20)
 - Related ADRs: `docs/ARCHITECTURE.md §8 ADR-003 (Tri-Memory Architecture)`
