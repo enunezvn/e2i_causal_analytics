@@ -1,6 +1,6 @@
 # E2I Causal Analytics - Architecture Documentation
 
-**Version**: 4.2.1 | **Last Updated**: July 2026 | **Status**: Living Document
+**Version**: 4.3.0 | **Last Updated**: September 2026 | **Status**: Living Document
 
 ---
 
@@ -83,27 +83,28 @@ C4Container
 
     Person(user, "User", "Pharma analyst / Field rep / Admin")
 
-    System_Boundary(droplet, "DigitalOcean Droplet (8 vCPU, 32 GB RAM)") {
+    System_Boundary(droplet, "DigitalOcean Droplet (8 vCPU, 16 GB RAM)") {
 
         Container(nginx_host, "Host Nginx", "Nginx 1.x", "SSL termination, reverse proxy to all containers")
 
-        Container(frontend, "Frontend", "React 18 / TypeScript / Vite", "SPA with CopilotKit chat, 30+ pages, TanStack Query")
-        Container(api, "API Server", "FastAPI / Python 3.12", "220+ REST endpoints, 6 middleware layers, WebSocket support")
+        Container(frontend, "Frontend", "React 18 / TypeScript", "Vite-built SPA served by nginx; CopilotKit chat, TanStack Query")
+        Container(api, "API Server", "FastAPI / Python 3.12 / gunicorn", "REST + SSE; 8 middleware layers plus OpenTelemetry ASGI")
 
         Container(worker_light, "Worker Light (x2)", "Celery / Python 3.12", "Cache, notifications, API tasks")
-        Container(worker_medium, "Worker Medium", "Celery / Python 3.12", "Analytics, reports, drift monitoring")
-        Container(scheduler, "Scheduler", "Celery Beat", "15+ periodic tasks")
+        Container(worker_medium, "Worker Medium", "Celery / Python 3.12", "Analytics, reports, aggregations")
+        Container(worker_heavy, "Worker Heavy (x0)", "Celery / Python 3.12", "SHAP, causal, ML, digital twins — on demand")
+        Container(scheduler, "Scheduler", "Celery Beat", "Periodic tasks — see beat_schedule in src/workers/celery_app.py")
 
-        ContainerDb(redis, "Redis", "Redis 7.2", "Task broker, result backend, working memory, feature cache")
-        ContainerDb(falkordb, "FalkorDB", "FalkorDB v4.14.11", "Knowledge graph: 8 node types, 11 edge types")
+        ContainerDb(redis, "Redis", "redis:7-alpine", "Task broker, result backend, working memory, feature cache")
+        ContainerDb(falkordb, "FalkorDB", "FalkorDB v4.14.11", "Knowledge graph: 10 node types, 11 relationship types")
 
         Container(mlflow, "MLflow", "MLflow v3.15.1", "Experiment tracking, model registry")
         Container(bentoml, "BentoML", "Custom Python 3.12", "Model serving (churn, conversion, causal)")
-        Container(feast, "Feast", "Feast Feature Server", "Online/offline feature serving")
+        Container(feast, "Feast", "Local build FROM feastdev/feature-server:0.43.0", "Online/offline feature serving")
 
-        Container(prometheus, "Prometheus", "v3.2.1", "Metrics scraping (15s interval)")
-        Container(grafana, "Grafana", "v11.5.2", "Dashboards and alerting")
-        Container(loki, "Loki", "v3.4.2", "Log aggregation (30-day retention)")
+        Container(prometheus, "Prometheus", "v3.2.1 — monitoring profile", "Metrics scraping (15s interval)")
+        Container(grafana, "Grafana", "v11.5.2 — monitoring profile", "Dashboards and alerting")
+        Container(loki, "Loki", "v3.4.2 — monitoring profile", "Log aggregation (30-day retention)")
     }
 
     System_Ext(supabase, "Supabase Stack", "Self-hosted at /opt/supabase/docker/")
@@ -119,6 +120,7 @@ C4Container
     Rel(api, feast, "HTTP (6566)")
     Rel(worker_light, redis, "Broker/Backend")
     Rel(worker_medium, redis, "Broker/Backend")
+    Rel(worker_heavy, redis, "Broker/Backend")
     Rel(scheduler, redis, "Beat schedule")
     Rel(prometheus, api, "Scrape /metrics (15s)")
     Rel(grafana, prometheus, "Query metrics")
@@ -127,42 +129,82 @@ C4Container
 
 ### 2.2 Container Inventory
 
-#### Core Application (4 containers)
+**Deployment model.** Production runs the **base `docker/docker-compose.yml` alone — no
+overlay**. `deploy.yml`'s `pick_overlay()` selects `""` as soon as the frontend Dockerfile
+carries an `AS production` stage (it does), and only falls back to
+`docker-compose.frontend-dev.yml` (the #528-A rollback era) or `docker-compose.dev.yml` (the
+pre-flip #527 dev-in-prod era) on older trees. Deploys happen **only by merging to `main`**
+(`.github/workflows/deploy.yml`); to redeploy without a merge, re-run the workflow
+(`gh workflow run deploy.yml`). `scripts/deploy.sh` / `make deploy` / `make deploy-build` is the
+**legacy local-dev path** (dev overlay, no feast/bentoml gates, `git checkout <sha>` rollback) —
+never run it on the droplet.
 
-| Container | Image/Build | Port (host:container) | Purpose |
-|-----------|-------------|----------------------|---------|
-| `e2i_api_dev` | `docker/Dockerfile` (target: development) | 8000:8000 | FastAPI + uvicorn --reload |
-| `e2i_frontend_dev` | `docker/frontend/Dockerfile` (target: development) | 3002:5173 | Vite dev server + HMR |
-| `worker_light` (x2) | `docker/Dockerfile` | - | Celery light tasks (2 CPU, 2 GB) |
-| `worker_medium` | `docker/Dockerfile` | - | Celery medium tasks (4 CPU, 8 GB) |
-| `scheduler` | `docker/Dockerfile` | - | Celery Beat periodic tasks |
+**Local development** is base + `docker-compose.dev.yml`, which renames the app containers to
+`e2i_*_dev` and swaps the runtimes: `e2i_api_dev` runs `uvicorn --reload` (plus debugpy on
+127.0.0.1:5678) and `e2i_frontend_dev` runs the Vite dev server with HMR on `3002:5173`. The dev
+overlay also renames `redis`/`falkordb`/`mlflow`/`bentoml` to their `_dev` equivalents. **Names
+you see in `docker ps` on the droplet are the base names below, not the `_dev` names.**
+
+#### Core Application (6 services)
+
+| Service | Container | Image/Build | Port (host:container) | Purpose |
+|---------|-----------|-------------|----------------------|---------|
+| `api` | `e2i_api` | `ghcr.io/<owner>/e2i-api:<sha>` (built from `docker/Dockerfile`) | 8000:8000 | FastAPI under gunicorn, 2 × `uvicorn.workers.UvicornWorker`, `read_only: true` (2 CPU, 5 GB) |
+| `frontend` | `e2i_frontend` | `ghcr.io/<owner>/e2i-frontend:<sha>` (`docker/frontend/Dockerfile`, `AS production`) | 3002:80 | nginx:alpine serving the built Vite bundle, `read_only: true` (0.5 CPU, 512 MB) |
+| `worker_light` (×2) | — (replicated) | same API image | - | Celery `default,quick,api` (2 CPU, 1.5 GB per replica) |
+| `worker_medium` (×1) | — (replicated) | same API image | - | Celery `analytics,reports,aggregations` (4 CPU, 4 GB) |
+| `worker_heavy` (×0) | — (replicated) | same API image | - | Celery `shap,causal,ml,twins` — on-demand (2 CPU, 3 GB) |
+| `scheduler` | `e2i_scheduler` | same API image | - | Celery Beat, `PersistentScheduler` on the `e2i_celerybeat_state` volume (0.5 CPU, 1 GB) |
+
+Resource limits are the `deploy.resources.limits` blocks in `docker/docker-compose.yml`; re-derive
+with `python3 -c "import yaml;d=yaml.safe_load(open('docker/docker-compose.yml'))['services'];..."`
+rather than trusting a copied number.
 
 #### Data Stores (2 containers)
 
 | Container | Image | Port (host:container) | Auth |
 |-----------|-------|----------------------|------|
-| `redis` | redis:7.2-alpine | 6382:6379 | `REDIS_PASSWORD` (required) |
-| `falkordb` | falkordb/falkordb:v4.14.11 | 6381:6379 | `FALKORDB_PASSWORD` (required) |
+| `e2i_redis` | `redis:7-alpine` | 127.0.0.1:6382:6379 | `REDIS_PASSWORD` (required) |
+| `e2i_falkordb` | `falkordb/falkordb:v4.14.11` | 127.0.0.1:6381:6379 | `FALKORDB_PASSWORD` (required) |
 
-#### MLOps (3 containers)
+Both are bound to the loopback interface — nothing reaches them from outside the droplet.
+
+#### MLOps (4 containers)
 
 | Container | Image | Port (host:container) | Purpose |
 |-----------|-------|----------------------|---------|
-| `mlflow` | ghcr.io/mlflow/mlflow:v3.15.1 | 127.0.0.1:5000:5000 | Experiment tracking, model registry |
-| `bentoml` | Local build (`docker/bentoml/Dockerfile`) | 127.0.0.1:3000:3000 | Model serving |
-| `feast` | feastdev/feature-server:latest | 127.0.0.1:6567:6566 | Feature serving |
+| `e2i_mlflow` | `ghcr.io/mlflow/mlflow:v3.15.1` | 127.0.0.1:5000:5000 | Experiment tracking, model registry |
+| `e2i_bentoml` | Local build (`docker/bentoml/Dockerfile`) | 127.0.0.1:3000:3000 | Model serving |
+| `e2i_feast` | Local build (`docker/Dockerfile.feast`, `FROM feastdev/feature-server:0.43.0`) | 127.0.0.1:6567:6566 | Online feature serving |
+| `e2i_feast_materializer` | Same `Dockerfile.feast` build | - | Long-running materialization sidecar (`/materializer-entrypoint.sh`, heartbeat-guarded) |
 
-#### Observability (7 containers)
+#### Observability (7 containers) — `monitoring` profile, opt-in
+
+A plain `docker compose up -d` does **not** start these. Bring them up with
+`COMPOSE_PROFILES=monitoring docker compose -f docker/docker-compose.yml up -d`.
+`scripts/health_check.sh` derives its probe set from `docker compose config --services` and
+reports profile-gated services as SKIPPED rather than as failures. See the ADR-008 amendment.
 
 | Container | Image | Port (host:container) |
 |-----------|-------|----------------------|
-| `prometheus` | prom/prometheus:v3.2.1 | 127.0.0.1:9091:9090 |
-| `alertmanager` | prom/alertmanager:v0.28.1 | 127.0.0.1:9093:9093 |
-| `grafana` | grafana/grafana:11.5.2 | 127.0.0.1:3200:3000 |
-| `loki` | grafana/loki:3.4.2 | 127.0.0.1:3101:3100 |
-| `promtail` | grafana/promtail:3.4.2 | - |
-| `node-exporter` | prom/node-exporter:v1.9.0 | - |
-| `postgres-exporter` | prometheuscommunity/postgres-exporter:v0.16.0 | - |
+| `e2i_prometheus` | prom/prometheus:v3.2.1 | 127.0.0.1:9091:9090 |
+| `e2i_alertmanager` | prom/alertmanager:v0.28.1 | 127.0.0.1:9093:9093 |
+| `e2i_grafana` | grafana/grafana:11.5.2 | 127.0.0.1:3200:3000 |
+| `e2i_loki` | grafana/loki:3.4.2 | 127.0.0.1:3101:3100 |
+| `e2i_promtail` | grafana/promtail:3.4.2 | - |
+| `e2i_node_exporter` | prom/node-exporter:v1.9.0 | - |
+| `e2i_postgres_exporter` | prometheuscommunity/postgres-exporter:v0.16.0 | - |
+
+#### Other services defined in compose
+
+| Service | Container | Where | Notes |
+|---------|-----------|-------|-------|
+| `config-check` | `e2i_config_check` | base | One-shot alpine gate: fails the stack if `REDIS_PASSWORD` / `FALKORDB_PASSWORD` are unset or `changeme` while `ENVIRONMENT=production` |
+| `falkordb-browser` | `e2i_falkordb_browser` | base, `debug` profile | falkordb/falkordb-browser:v1.7.1 on 127.0.0.1:3030:3000 |
+| `flower` | `e2i_flower_dev` | dev overlay, `dev-tools` profile | Celery dashboard on 127.0.0.1:5555 |
+| `redis-commander` | `e2i_redis_commander_dev` | dev overlay, `dev-tools` profile | Redis browser on 127.0.0.1:8081 |
+| `falkordb-seeder` | `e2i_falkordb_seeder` | dev overlay | One-shot graph seed for a fresh dev stack |
+| `test` | `e2i_test_runner` | dev overlay, profile-gated | Containerised pytest runner |
 
 #### Opik Stack (10 services in `docker-compose.opik.yml`) — **STOPPED May 2026**
 
@@ -170,16 +212,16 @@ C4Container
 
 | Container | Image | Port |
 |-----------|-------|------|
-| `opik-frontend` | ghcr.io/comet-ml/opik/opik-frontend:latest | 127.0.0.1:5173:80 |
-| `opik-backend` | ghcr.io/comet-ml/opik/opik-backend:latest | 127.0.0.1:8084:8080 |
-| `opik-python-backend` | ghcr.io/comet-ml/opik/opik-python-backend:latest | 127.0.0.1:8001:8001 |
+| `opik-frontend` | ghcr.io/comet-ml/opik/opik-frontend:${OPIK_VERSION:-1.10.8} | 127.0.0.1:5173:80 |
+| `opik-backend` | ghcr.io/comet-ml/opik/opik-backend:${OPIK_VERSION:-1.10.8} | 127.0.0.1:8084:8080 |
+| `opik-python-backend` | ghcr.io/comet-ml/opik/opik-python-backend:${OPIK_VERSION:-1.10.8} | 127.0.0.1:8001:8001 |
 | `opik-mysql` | mysql:8.4.2 | - |
 | `opik-redis` | redis:7.2.4-alpine3.19 | - |
 | `opik-clickhouse` | clickhouse/clickhouse-server:25.3.6.56-alpine | - |
 | `opik-zookeeper` | zookeeper:3.9.4 | - |
-| `opik-minio` | minio/minio | 127.0.0.1:9090:9090 (console) |
-| `opik-clickhouse-init` | Custom init | - (one-shot) |
-| `opik-mc` | minio/mc | - (one-shot) |
+| `opik-minio` | minio/minio:RELEASE.2025-03-12T18-04-18Z | 127.0.0.1:9090:9090 (console) |
+| `opik-clickhouse-init` | alpine:3.19 | - (one-shot) |
+| `opik-mc` | minio/mc:RELEASE.2025-03-12T17-29-24Z | - (one-shot) |
 
 ### 2.3 Network Topology
 
@@ -192,12 +234,17 @@ Internet
 │  server_name eznomics.site  │
 └──────┬──────────┬───────────┘
        │          │
-  /api/* → :8000  / → :3002
+  /api/*        → :8000
+  /copilotkit/  → :8000   (AG-UI runtime; copilot_limit zone)
+  /ws           → :8000   (WebSocket upgrade)
+  /mlflow/      → :5000   (basic-auth, host-nginx only)
+  /auth/ /rest/ /realtime/ /functions/v1/ /storage/ → Supabase
+  /             → :3002
        │          │
-┌──────▼──┐  ┌───▼──────────┐
-│   API   │  │   Frontend   │
-│ FastAPI │  │  Vite (dev)  │
-└────┬────┘  └──────────────┘
+┌──────▼──┐  ┌───▼─────────────────┐
+│   API   │  │      Frontend       │
+│ FastAPI │  │ nginx + Vite bundle │
+└────┬────┘  └─────────────────────┘
      │
      ├──→ Redis (:6379)        — task broker, cache, working memory
      ├──→ FalkorDB (:6379)     — knowledge graph
@@ -207,7 +254,11 @@ Internet
      └──→ Feast (:6566)        — feature serving
 ```
 
-All management ports (MLflow, BentoML, Feast, Grafana, Prometheus, Loki) are bound to `127.0.0.1` and accessed via SSH tunnels from developer machines.
+All management ports (MLflow, BentoML, Feast, Grafana, Prometheus, Loki, FalkorDB browser) are
+bound to `127.0.0.1` and accessed via SSH tunnels from developer machines — except MLflow, which
+is additionally proxied at `/mlflow/` behind basic auth. The full location list is
+`docker/nginx/host-nginx.conf` (deployed as the host nginx server block); the `limit_req_zone`
+definitions it references live in `/etc/nginx/nginx.conf` (see §6.1).
 
 ---
 
