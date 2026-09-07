@@ -310,8 +310,10 @@ The roster is defined in `config/agent_config.yaml` — 22 agents, 9 of them in 
 (`ml_foundation`). Tier 0 runs as a sequential pipeline from `scope_definer` to
 `observability_connector`; `cohort_profiler` (#1790) is the exception — it sits in Tier 0 but is
 dispatched by the orchestrator from chat (`cohort_definition` intent), not from the SD→OC chain.
-The labels below are the dispatch timeouts in `RouterNode.INTENT_TO_AGENTS`
-(`src/agents/orchestrator/nodes/router.py`) — workload-measured SLAs, not latency targets.
+For the 13 chat-dispatchable agents the labels below are the dispatch timeouts in
+`RouterNode.INTENT_TO_AGENTS` (`src/agents/orchestrator/nodes/router.py`) — workload-measured
+SLAs, not latency targets; see the table in §3.2. The Tier-0 pipeline agents are not dispatched
+from chat and their labels are pipeline-stage budgets.
 
 ```mermaid
 graph TB
@@ -1377,7 +1379,7 @@ The Monday reseed is a known source of drift in the DQ Consistency panel and is 
 
 ## 7. Observability Architecture
 
-> **Status note (July 2026):** Opik — shown as the traces pillar below — was intentionally stopped in May 2026. LLM/agent call tracking now lives in the `llm_usage_events` table (migration 104, written by the LLM factory + DSPy hooks) and is surfaced at `/admin` → Observability. Prometheus, Grafana, Loki, and Alertmanager remain active.
+> **Status note (July 2026):** Opik — shown as the traces pillar below — was intentionally stopped in May 2026. LLM/agent call tracking now lives in the `llm_usage_events` table (migration 104, written by the LLM factory + DSPy hooks) and is surfaced at `/admin` → Observability. Prometheus, Grafana, Loki, and Alertmanager remain supported, but since #1806 they only start under the `monitoring` compose profile (see the ADR-008 August 2026 amendment).
 
 ### 7.1 Three Pillars
 
