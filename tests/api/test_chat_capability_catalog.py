@@ -397,6 +397,117 @@ async def test_axis_rules_window_composition_matches_calculators():
     assert triggers == {"WS2-TR-001", "WS2-TR-004", "WS2-TR-006", "WS2-TR-009"}
 
 
+async def test_axis_rules_patient_axes_match_calculators(monkeypatch):
+    """AXIS_RULES' patient-axis sentence and section D's family list are prose;
+    pin them to kpi_calculate_tool's allowlist (#1911) and the allowlist to the
+    calculators' query binding with the same DB-free sentinel pattern, so the
+    prompt can never promise a breakdown the tool refuses, or hide one it
+    serves. Before #1911 section D read as "any KPI by any axis" while only
+    the BusinessImpact / CATE calculators bind the patient axes."""
+    from src.api.routes.chatbot_tools import _PATIENT_AXIS_KPI_IDS
+    from src.kpi.calculators.business_impact import BusinessImpactCalculator
+    from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
+    from src.kpi.registry import get_registry
+    from src.kpi.synthetic_mode import _SYNTHETIC_SUFFIX
+
+    def short(kpi_id: str) -> str:
+        kpi = get_registry().get(kpi_id)
+        assert kpi is not None, kpi_id
+        m = _re.search(r"\(([^)]+)\)$", kpi.name)
+        return m.group(1) if m else kpi.name
+
+    def suffix(query_id: str) -> str:
+        return (
+            query_id[: -len(_SYNTHETIC_SUFFIX)]
+            if query_id.endswith(_SYNTHETIC_SUFFIX)
+            else query_id
+        )
+
+    four = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}
+    assert {short(i) for i in four} == {"TRx", "NRx", "NBRx", "TRx Share"}
+    assert short("WS3-BI-009") == "Conversion Rate" and short("CM-002") == "CATE"
+
+    # 1. Prose <-> tool allowlist: the sentence's three clauses ARE the sets.
+    sentence = next(s for s in cat.AXIS_RULES.split(". ") if "patient axes are served" in s)
+    assert "TRx, NRx, NBRx and TRx Share (all four axes)" in sentence
+    assert "Conversion Rate (segment/therapy_line only)" in sentence
+    assert "CATE by segment" in sentence
+    assert "NO other KPI" in sentence
+    assert _PATIENT_AXIS_KPI_IDS == {
+        "segment": four | {"WS3-BI-009", "CM-002"},
+        "therapy_line": four | {"WS3-BI-009"},
+        "biologic": four,
+        "ige_tier": four,
+    }
+    # Section D names the same family instead of implying any KPI.
+    c = await make_catalog()
+    d_line = _section(cat.render_catalog_block(c), "D")
+    assert "KPI breakdowns by ONE of the axes in A" in d_line
+    for kpi_id in four | {"WS3-BI-009", "CM-002"}:
+        assert short(kpi_id) in d_line, kpi_id
+
+    # 2. Tool allowlist <-> calculators. No query runs: the sentinel client
+    #    proves every routing decision is taken before _execute_query.
+    class _NoQueries:
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"routing test must not touch the DB client ({name})")
+
+    calc = BusinessImpactCalculator(db_client=_NoQueries())
+    probe = {
+        "segment": "high_severity",
+        "therapy_line": "1",
+        "biologic": "naive",
+        "ige_tier": "high",
+    }
+    tail = {
+        "segment": "_segment",
+        "therapy_line": "_line",
+        "biologic": "_biologic",
+        "ige_tier": "_ige_tier",
+    }
+    for base in (
+        "business_impact_trx",
+        "business_impact_nrx",
+        "business_impact_nbrx",
+        "business_impact_trx_share",
+    ):
+        for axis, value in probe.items():
+            qid, params = calc._resolve_windowed_call(
+                base, brand="Remibrutinib", region=None, window=None, context={}, **{axis: value}
+            )
+            assert suffix(qid).endswith(tail[axis]) and params == ["Remibrutinib", value], (
+                base,
+                axis,
+            )
+    # Conversion rate BINDS segment / therapy_line and REFUSES biologic / ige_tier
+    # before any query -- so it belongs to the first two sets only.
+    bound: List[Any] = []
+
+    def _record(query_id: str, params: List[Any]) -> None:
+        bound.append((suffix(query_id), list(params)))
+        raise RuntimeError("stop before the DB")
+
+    monkeypatch.setattr(calc, "_execute_query", _record)
+    for axis in ("segment", "therapy_line"):
+        with pytest.raises(RuntimeError, match="stop before the DB"):
+            calc._calc_conversion_rate({"brand": "Remibrutinib", axis: probe[axis]})
+        assert bound[-1] == (
+            f"business_impact_conversion_rate{tail[axis]}",
+            ["Remibrutinib", probe[axis]],
+        )
+    for axis in ("biologic", "ige_tier"):
+        with pytest.raises(RuntimeError, match="does not support"):
+            calc._calc_conversion_rate({"brand": "Remibrutinib", axis: probe[axis]})
+    assert len(bound) == 2  # the refusals never reached the query seam
+    # The motivating unserved case (#1911 evidence): trigger precision does not
+    # bind the tier -- it must be outside every set, and the prose says so.
+    _, params = TriggerPerformanceCalculator._scoped(
+        "trigger_precision", {"brand": "Kisqali", "segment": "high_severity"}
+    )
+    assert "high_severity" not in params
+    assert not any("WS2-TR-001" in ids for ids in _PATIENT_AXIS_KPI_IDS.values())
+
+
 # =============================================================================
 # ROUTE HINTS
 # =============================================================================
