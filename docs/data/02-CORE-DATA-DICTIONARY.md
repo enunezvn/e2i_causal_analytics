@@ -884,7 +884,7 @@ Master table for patient treatment journeys — demographics, source tracking fo
 | `geographic_region` | `region_type` | YES | | US census region |
 | `state` | `VARCHAR(2)` | YES | | Two-letter state abbreviation |
 | `zip_code` | `VARCHAR(10)` | YES | | ZIP or ZIP+4 code |
-| `insurance_type` | `VARCHAR(20)` | YES | | Insurance type: `commercial`, `medicare`, `medicaid`, `cash`, `other` |
+| `insurance_type` | `VARCHAR(20)` | YES | | Insurance type: `commercial`, `medicare`, `medicaid`, `uninsured`, `other`. **No CHECK constraint** — the vocabulary is a convention owned by [01-DATA-CONVERSION-GUIDE](01-DATA-CONVERSION-GUIDE.md#insurance_type). The synthetic generator emits only the first three (`InsuranceTypeEnum`) |
 | `data_quality_score` | `DECIMAL(3,2)` | YES | | Data quality score (0.00 - 9.99) |
 | `comorbidities` | `TEXT[]` | YES | | Array of comorbidity codes or descriptions |
 | `risk_score` | `DECIMAL(3,2)` | YES | | Patient risk score (0.00 - 9.99) |

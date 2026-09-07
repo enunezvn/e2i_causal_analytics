@@ -13,7 +13,7 @@
 
 ## Purpose
 
-This guide walks you through converting real pharmaceutical data (claims, EHR, CRM, lab) into the formats required by the E2I 21-agent, 6-tier causal analytics pipeline. It covers the minimum viable dataset, enum mappings, ID formats, validation, and data split assignment.
+This guide walks you through converting real pharmaceutical data (claims, EHR, CRM, lab) into the formats required by the E2I 6-tier causal analytics pipeline (22 agents; the roster is `config/agent_config.yaml`). It covers the minimum viable dataset, enum mappings, ID formats, validation, and data split assignment.
 
 ---
 
@@ -246,6 +246,20 @@ NBA trigger events with delivery and outcome tracking.
 | Self-pay / charity | `uninsured` |
 | Other / unknown | `other` |
 
+> **This table is the authoritative `insurance_type` vocabulary.** The column is
+> a plain `VARCHAR(20)` with **no CHECK constraint and no enum** — the database
+> accepts any string, so the vocabulary is a convention, and conventions drift
+> unless one document owns them. Two things to know:
+>
+> - The synthetic generator emits only **three** of these values.
+>   `InsuranceTypeEnum` in `src/ml/synthetic/config.py` is
+>   `commercial` / `medicare` / `medicaid`; `uninsured` and `other` never appear
+>   in synthetic rows. (The DGP's `_INIT_INS_ACCESS` access gradient does carry
+>   an `uninsured` coefficient, ready for real data.)
+> - Use `uninsured`, **not** `cash`, for self-pay. `cash` appeared in an earlier
+>   revision of doc 02 and is supported by nothing — no DDL, no enum, no
+>   generator.
+
 ### adoption_category (HCPs)
 
 | Prescribing Behavior | E2I Category |
@@ -392,10 +406,14 @@ These are the valid values enforced by Pandera (from `src/mlops/pandera_schemas.
 | `E2I_REGIONS` | `northeast`, `south`, `midwest`, `west` |
 | `E2I_PREDICTION_TYPES` | `trigger`, `propensity`, `risk`, `churn` |
 | `E2I_PRIORITY_TYPES` | `critical`, `high`, `medium`, `low` |
-| `E2I_JOURNEY_STAGES` | `diagnosis`, `initial_treatment`, `treatment_optimization`, `maintenance` |
+| `E2I_JOURNEY_STAGES` | All **12** `journey_stage_type` values: `diagnosis`, `initial_treatment`, `treatment_optimization`, `maintenance`, `treatment_switch`, `aware`, `considering`, `prescribed`, `first_fill`, `adherent`, `discontinued`, `maintained` |
 | `E2I_JOURNEY_STATUSES` | `active`, `stable`, `transitioning`, `completed` |
 
-> **Note**: The Pandera `E2I_JOURNEY_STAGES` list does not include `treatment_switch` (which exists in the DDL enum). Pandera schemas are set to `strict = False`, so extra values pass validation but won't match the `isin` check if the column is explicitly validated.
+> **Note**: `E2I_JOURNEY_STAGES` in `src/mlops/pandera_schemas.py` matches the
+> DDL `journey_stage_type` enum exactly — all 12 values, `treatment_switch`
+> among them (an earlier version of this guide said it was missing; it is not).
+> Pandera schemas are `strict = False`, so unexpected *columns* pass, but a
+> value outside this list fails the `isin` check when the column is validated.
 
 ---
 
@@ -551,8 +569,19 @@ After loading data, verify:
 ## Next Steps
 
 1. **Run Tier 0 test**: `.venv/bin/python scripts/run_tier0_test.py` — uses your loaded data
-2. **Run Tier 1–5 tests**: `.venv/bin/python scripts/run_tier1_5_test.py` — tests all 13 agents
+2. **Run Tier 1–5 tests**: `.venv/bin/python scripts/run_tier1_5_test.py` — exercises the 13 Tier 1–5 agents (the roster's other 9 are Tier 0, covered by `run_tier0_test.py`)
 3. **Seed knowledge graph**: `FALKORDB_HOST=localhost FALKORDB_PORT=6381 .venv/bin/python scripts/seed_falkordb.py`
 4. **Materialize features**: `cd feature_repo && feast materialize-incremental $(date -u +%Y-%m-%dT%H:%M:%S)`
+
+> **Columns added after v3.0.** The tables below carry the columns declared in
+> `database/core/e2i_ml_complete_v3_schema.sql`. `database/migrations/` has since
+> added many more — the payer axis and brand-gated clinical eligibility fields on
+> `patient_journeys` (036, 068, 107), the whole synthetic causal substrate
+> (064, 087, 088, 112), the shared `is_synthetic` provenance flag (063), the
+> claims arrival plane on `treatment_events` (115), and more.
+> **None of them are required for a conversion**: they are nullable, or defaulted,
+> or synthetic-only. Load the v3 columns documented here and the platform works;
+> see [02-CORE-DATA-DICTIONARY.md](02-CORE-DATA-DICTIONARY.md) for the full
+> current picture, where every such column names the migration that added it.
 
 See [02-CORE-DATA-DICTIONARY.md](02-CORE-DATA-DICTIONARY.md) for full column-level documentation of all 19 core tables.
