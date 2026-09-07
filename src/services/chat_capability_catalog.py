@@ -878,24 +878,99 @@ _INDIVIDUAL_ASK_RE = re.compile(
 )
 
 
+def _normalized_name(text: str) -> str:
+    """Lower case with every punctuation run collapsed to one space, so
+    ``"Remi - Intent-to-Prescribe Δ"`` and ``"intent to prescribe"`` compare."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
+
+
 def journey_outcomes(catalog: CapabilityCatalog) -> Tuple[str, ...]:
     """Outcomes with no KPI counterpart - the ones a pill can mistake for a metric.
 
-    Time-boxed journey flags (``persistent_180d``) are never KPIs; anything else
-    the KPI recognizer cannot resolve (``adopted``) is treated the same. Outcomes
-    the recognizer reads as a KPI mention (``roi``, ``trx_volume``, and also
-    ``treatment_initiated`` -> the causal-metric KPI) are left to the prompt.
+    An outcome is in the set when it is a time-boxed journey flag
+    (``persistent_180d``) or when neither strict test reads it as a KPI: its
+    spaced form matches no strict-vocabulary phrase (aliases, full registry
+    names, initialisms - ``conversion_flag`` -> "conversion", ``roi``,
+    ``trx_volume`` -> "trx", ``trx_market_share`` -> "market share" stay out)
+    and is not contained, punctuation normalized, in any registry KPI name
+    (``intent_to_prescribe`` sits inside "Remi - Intent-to-Prescribe" and stays
+    out). The recognizer's name-token fallback is deliberately NOT consulted
+    (#1901 item 4a): it reads ``treatment_initiated`` as CM-001 (ATE) and
+    ``action_taken`` as WS2-TR-003 (Action Rate Uplift) from one shared token,
+    and neither KPI has a series, a window or an axis, so a trend or rate of
+    those outcomes is unservable and they are in the set. A pill that names one
+    of them next to a real KPI phrase is handled by the stand-down in
+    :func:`match_unsupported_rule`, not here.
     """
-    from src.services.kpi_resolution import recognize_kpi
+    from src.services.kpi_resolution import recognize_distinct_metric
 
+    names = [_normalized_name(entry.name) for entry in catalog.kpis]
     out: List[str] = []
     for outcome in catalog.causal_outcomes:
-        if _DURATION_OUTCOME_RE.search(outcome) or recognize_kpi(outcome.replace("_", " ")) is None:
+        if _DURATION_OUTCOME_RE.search(outcome):
             out.append(outcome)
+            continue
+        spaced = outcome.replace("_", " ")
+        if recognize_distinct_metric(spaced, exclude_id="") is not None:
+            continue
+        needle = re.compile(rf"\b{re.escape(_normalized_name(spaced))}\b")
+        if any(needle.search(name) for name in names):
+            continue
+        out.append(outcome)
     return tuple(out)
 
 
-def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
+@dataclass(frozen=True)
+class CatalogRules:
+    """Catalog-derived inputs to the outcome / KPI checks of
+    :func:`match_unsupported_rule`, built once per :func:`filter_unsupported_pills`
+    call by :func:`catalog_rules`."""
+
+    journey: Tuple[str, ...]
+    # #1901 item 4a: journey outcomes the KPI recognizer reads as a KPI mention
+    # through its name-token fallback (treatment_initiated -> CM-001, action_taken
+    # -> WS2-TR-003). They yield when the same pill names a strict-vocabulary KPI
+    # phrase: "the treatment_initiated conversion rate ... in line-of-therapy 0"
+    # is a Conversion Rate read decorated with the outcome name (baseline
+    # segment-turn pill, graded PARTIAL), and dropping it costs an answerable
+    # ask. The duration flags and the unresolvable outcomes ("adopted") never
+    # yield: the recognizer does not read them as a KPI, so a KPI phrase next to
+    # them does not change what the outcome mention means.
+    kpi_backed_outcomes: FrozenSet[str]
+    strict_kpi_re: Optional["re.Pattern[str]"]  # any strict phrase; None when nothing yields
+
+
+def catalog_rules(catalog: CapabilityCatalog) -> CatalogRules:
+    """Precompute the catalog-derived checks for one batch of pills."""
+    from src.services.kpi_resolution import (
+        metric_phrase_regex,
+        recognize_kpi,
+        strict_metric_vocabulary,
+    )
+
+    journey = journey_outcomes(catalog)
+    kpi_backed = frozenset(
+        outcome
+        for outcome in journey
+        if not _DURATION_OUTCOME_RE.search(outcome)
+        and recognize_kpi(outcome.replace("_", " ")) is not None
+    )
+    vocabulary = strict_metric_vocabulary()
+    strict_re = (
+        re.compile(metric_phrase_regex(phrase for phrase, _ in vocabulary), re.I)
+        if kpi_backed
+        else None
+    )
+    return CatalogRules(
+        journey=journey,
+        kpi_backed_outcomes=kpi_backed,
+        strict_kpi_re=strict_re,
+    )
+
+
+def match_unsupported_rule(
+    text: str, journey: Sequence[str], *, rules: Optional[CatalogRules] = None
+) -> Optional[str]:
     """Name of the rule ``text`` violates, or None when the pill is supported.
 
     On-screen READ questions (Part C) bypass the artefact rules named in
@@ -903,6 +978,10 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
     artefact or name individual HCPs / patients. Aggregate HCP-segment
     likelihood asks (by specialty or region, section D) bypass
     individual_prediction unless an individual HCP or patient is named.
+
+    ``rules`` (:func:`catalog_rules`, passed by :func:`filter_unsupported_pills`)
+    carries the catalog-derived checks; without it the outcome loop runs on
+    ``journey`` alone and the fallback-resolved outcomes never stand down.
     """
     # #1901 item 4g: no page summary carries per-HCP or per-patient rows (each
     # publishes counts, a mean, top-N feature names or two territory ids), so a
@@ -927,7 +1006,16 @@ def match_unsupported_rule(text: str, journey: Sequence[str]) -> Optional[str]:
                 continue
             return name
     lowered = text.lower()
+    yielding: FrozenSet[str] = frozenset()
+    if (
+        rules is not None
+        and rules.strict_kpi_re is not None
+        and rules.strict_kpi_re.search(lowered)
+    ):
+        yielding = rules.kpi_backed_outcomes
     for outcome in journey:
+        if outcome in yielding:
+            continue
         needle = outcome.lower()
         spaced = needle.replace("_", " ")
         spans = [
@@ -947,11 +1035,11 @@ def filter_unsupported_pills(
     pills: Sequence[P], catalog: CapabilityCatalog
 ) -> Tuple[List[P], List[Tuple[P, str]]]:
     """Split ``pills`` into (kept, [(dropped, rule), ...]) preserving order."""
-    journey = journey_outcomes(catalog)
+    rules = catalog_rules(catalog)
     kept: List[P] = []
     dropped: List[Tuple[P, str]] = []
     for pill in pills:
-        rule = match_unsupported_rule(f"{pill.title} {pill.message}", journey)
+        rule = match_unsupported_rule(f"{pill.title} {pill.message}", rules.journey, rules=rules)
         if rule is None:
             kept.append(pill)
         else:

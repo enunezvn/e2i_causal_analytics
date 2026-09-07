@@ -966,6 +966,20 @@ DROP_FIXTURES = [
         "June NBRx drivers",
         "What drove the Fabhalta NBRx change in June 2025?",
     ),
+    # #1901 item 4a: a registry outcome that the KPI recognizer reads as a KPI
+    # only through its name-token fallback (treatment_initiated -> CM-001,
+    # action_taken -> WS2-TR-003) has no series, window or axis, so a trend or
+    # rate of it is NEVER; the live pill was kept on four consecutive runs.
+    (
+        "outcome_as_kpi:treatment_initiated",
+        "📈 Remibrutinib treatment_initiated trend",
+        "Show me the monthly trend of treatment_initiated rate for Remibrutinib over the last 12 months.",
+    ),
+    (
+        "outcome_as_kpi:action_taken",
+        "Action taken by region",
+        "What is the action_taken rate for Kisqali by census region?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -1294,6 +1308,41 @@ KEEP_FIXTURES = [
         "Fabhalta NRx by severity tier",
         "Show Fabhalta New Prescriptions broken down by patient severity tier to see which segments drive volume.",
     ),
+    # #1901 item 4a: treatment_initiated / action_taken join the journey set, so
+    # every causal ask that names them (live pills graded OK / PARTIAL) must
+    # keep surviving the outcome rule's causal-word exemption ...
+    (
+        "What drives treatment initiation?",
+        "What are the causal drivers of treatment_initiated for Remibrutinib, and how confident are those paths?",
+    ),
+    (
+        "Kisqali treatment initiation",
+        "What causal factors most strongly influence treatment_initiated for Kisqali?",
+    ),
+    (
+        "Treatment effect on adoption",
+        "What is the Average Treatment Effect (ATE) of action_taken on adopted outcomes across the three brands?",
+    ),
+    (
+        "Sample drop -> adherence chain",
+        "Does sample_drop drive adherent_180d for Remibrutinib, and what is the mediation effect through treatment_initiated?",
+    ),
+    (
+        "Compare sample_drop effect",
+        "How does the causal impact of sample_drop on treatment_initiated for Remibrutinib compare to its effect on other outcomes?",
+    ),
+    # ... and the two widened outcomes stand down when the pill also names a
+    # strict-vocabulary KPI ("conversion rate"): the ask is then a KPI read
+    # decorated with the outcome name (baseline segment-turn pill graded PARTIAL:
+    # Conversion Rate by line of therapy is answerable).
+    (
+        "Line-of-therapy depth",
+        "What is the treatment_initiated conversion rate for Fabhalta in line-of-therapy 0 versus lines 1+ when sample drops are deployed, and how does sample volume affect each?",
+    ),
+    (
+        "Action taken and acceptance",
+        "Chart the action_taken rate next to the Acceptance Rate for Kisqali.",
+    ),
 ]
 
 
@@ -1306,28 +1355,60 @@ async def test_journey_outcomes_exclude_kpi_named_outcomes():
         "adherent_180d",
         "low_gap_180d",
         "adopted",
+        # #1901 item 4a: resolvable only through the recognizer's name-token
+        # fallback (CM-001 / WS2-TR-003), which is not a KPI counterpart
+        "treatment_initiated",
+        "action_taken",
     } <= journey
     # KPI-named outcomes (a trend of ROI or TRx volume IS answerable) stay out
     for kpi_like in ("roi", "trx_volume", "nrx_volume", "nbrx_volume", "trx_market_share"):
         assert kpi_like not in journey, kpi_like
+    # "conversion" is a strict alias of Conversion Rate
+    assert "conversion_flag" not in journey
 
 
-async def test_treatment_initiated_is_left_to_the_prompt():
-    """The KPI recognizer reads 'treatment initiated' as a causal-metric KPI
-    mention (CM-001), so the outcome rule does not fire on it; the prompt's
-    section C carries that case. Pinned so a recognizer change is visible."""
+async def test_intent_to_prescribe_stays_out_by_normalized_containment():
+    """intent_to_prescribe has no strict-vocabulary hit; it is kept out of the
+    journey because its spaced form sits inside the registry name
+    "Remi - Intent-to-Prescribe" once punctuation is normalized to spaces.
+    Pinned with the raw name so the normalization stays load-bearing."""
     c = await make_catalog()
-    assert "treatment_initiated" not in cat.journey_outcomes(c)
+    assert "Intent-to-Prescribe" in c.kpi_name("BR-002")
+    assert "intent_to_prescribe" not in cat.journey_outcomes(c)
+
+
+async def test_treatment_initiated_joins_the_journey_but_yields_to_a_named_kpi():
+    """#1901 item 4a. treatment_initiated resolves to CM-001 (ATE) only through
+    the name-token fallback; CM-001 has no series, window or axis, so a trend
+    or rate of the outcome is unservable and drops. The widened outcomes stand
+    down when the pill also names a strict-vocabulary KPI: the ask is then a
+    KPI read (Conversion Rate by line of therapy, graded PARTIAL live)."""
+    c = await make_catalog()
+    assert "treatment_initiated" in cat.journey_outcomes(c)
     kept, dropped = cat.filter_unsupported_pills(
         [
             _Pill(
+                "Treatment initiation trend",
+                "Show me the monthly trend of treatment_initiated rate for Remibrutinib over the last 12 months.",
+            ),
+            _Pill(
                 "LoT depth",
                 "What is the treatment_initiated conversion rate for Fabhalta in line-of-therapy 0?",
-            )
+            ),
         ],
         c,
     )
-    assert len(kept) == 1 and dropped == []
+    assert [p.title for p in kept] == ["LoT depth"]
+    assert [(p.title, r) for p, r in dropped] == [
+        ("Treatment initiation trend", "outcome_as_kpi:treatment_initiated")
+    ]
+    # the stand-down is scoped to the fallback-resolved outcomes: a duration flag
+    # next to a strict KPI phrase still drops
+    kept, dropped = cat.filter_unsupported_pills(
+        [_Pill("Persistence and TRx", "Chart the persistent_180d rate by census region with TRx.")],
+        c,
+    )
+    assert kept == [] and [r for _, r in dropped] == ["outcome_as_kpi:persistent_180d"]
 
 
 @pytest.mark.parametrize("rule,title,message", DROP_FIXTURES)
