@@ -39,7 +39,7 @@ from src.agents.multi_faceted import (
     split_clauses,
 )
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
-from src.utils.llm_factory import get_fast_llm, get_llm_provider
+from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
 from src.utils.redaction import redact_query
 
@@ -762,7 +762,8 @@ class IntentClassifierNode:
 
     def __init__(self):
         """Initialize intent classifier with fast LLM for classification."""
-        # Use fast LLM (Haiku or gpt-4o-mini based on LLM_PROVIDER env var).
+        # Use fast LLM (claude-haiku-4-5-20251001 or gpt-5.6-luna based on
+        # LLM_PROVIDER env var — see src/utils/llm_factory.py MODEL_MAPPINGS).
         # In keyless contexts (Tier 1-5 harness, #606) fall back to an opt-in
         # MARKED mock (E2I_ALLOW_MOCK_LLM); prod stays fail-loud on a missing key.
         # _llm_classify already degrades to "general" on any parse error, so the
@@ -1153,10 +1154,14 @@ Respond with ONLY a JSON object:
             opik = _get_opik_connector()
 
             if opik and opik.is_enabled:
-                # Trace the LLM call with dynamic provider info
-                model_name = (
-                    "gpt-4o-mini" if self._provider == "openai" else "claude-haiku-4-5-20251001"
-                )
+                # Trace the LLM call with dynamic provider info. Read the
+                # fast-tier model name from llm_factory's own mapping rather
+                # than re-deriving it here, so the trace label can never fall
+                # out of sync with the model get_fast_llm() actually calls
+                # (issue #1940 — a stale hard-coded "gpt-4o-mini" would have
+                # mislabelled the trace under LLM_PROVIDER=openai even though
+                # gpt-5.6-luna is the model actually invoked).
+                model_name = MODEL_MAPPINGS[self._provider]["fast"]
                 async with opik.trace_llm_call(
                     model=model_name,
                     provider=self._provider,
