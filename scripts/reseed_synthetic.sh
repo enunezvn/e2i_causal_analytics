@@ -38,9 +38,17 @@
 # runs, silently no-oping the job):
 #   0 3 * * 1 /home/enunez/Projects/e2i_causal_analytics/scripts/reseed_synthetic.sh >> /home/enunez/logs/e2i-reseed.log 2>&1
 #
-# Extra args are forwarded to load_synthetic_data.py, EXCEPT --skip-retrain,
-# which this wrapper consumes to opt out of the gold-standard model retrain
-# stage (scripts/retrain_goldstd.sh).
+# ARGUMENT REACH (#1930) — extra args are forwarded to the two stages that
+# ARE load_synthetic_data.py invocations (stage 1 loader, stage 5 A/B refresh)
+# and to NOTHING else. Stages 2/3/4 are different entrypoints:
+#   - --skip-retrain is CONSUMED here (never forwarded) and opts out of the
+#     gold-standard retrain stage (scripts/retrain_goldstd.sh).
+#   - --dry-run is DETECTED here and still forwarded, because only stages 1
+#     and 5 implement it. Stages 2/3/4 are SKIPPED under --dry-run instead —
+#     handing them the flag would be worse than not having it (see the note
+#     above stage_kpi_backfill). Before #1930 they ran and wrote regardless,
+#     so `--dry-run` printed DRY RUN and then wrote kpi_history twice and the
+#     model registry once.
 # =============================================================================
 
 set -euo pipefail
@@ -61,13 +69,21 @@ if [[ ! -x .venv/bin/dotenv || ! -x .venv/bin/python ]]; then
 fi
 
 # Consume --skip-retrain (anywhere in the args) before mode detection so it is
-# never forwarded to load_synthetic_data.py.
+# never forwarded to load_synthetic_data.py. --dry-run is only DETECTED here
+# (anywhere in the args, and kept in ARGS): stages 1 and 5 genuinely implement
+# it, so it must still be forwarded; stages 2/3/4 are guarded on DRY_RUN below.
 RETRAIN=1
+DRY_RUN=0
 ARGS=()
 for arg in "$@"; do
     if [[ "$arg" == "--skip-retrain" ]]; then
         RETRAIN=0
     else
+        # NOT an elif and NOT consumed: --dry-run is only observed on its way
+        # through to load_synthetic_data.py, which is what actually parses it.
+        if [[ "$arg" == "--dry-run" ]]; then
+            DRY_RUN=1
+        fi
         ARGS+=("$arg")
     fi
 done
@@ -82,6 +98,10 @@ else
     echo "=== reseed_synthetic start $(date -Is) (frontier append) ==="
 fi
 
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "=== --dry-run: kpi_history backfill, weekly capture and goldstd retrain will be SKIPPED (they have no dry-run mode); --dry-run is forwarded to the loader and A/B stages ==="
+fi
+
 # "$@" is function-local in bash — capture the forwarded args so the stage
 # functions below can reach them.
 FORWARD_ARGS=("${@+"$@"}")
@@ -93,6 +113,19 @@ stage_loader() {
         "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"
 }
 
+# NO FORWARDED ARGS BELOW THIS LINE, DELIBERATELY (#1930). Stages 2/3/4 are
+# not load_synthetic_data.py, and handing them "$@" is strictly worse than the
+# bug it looks like it fixes:
+#   - src/kpi/history_backfill.py main(): kpi_ids = sys.argv[1:] or None — so
+#     --dry-run would be read as a KPI ID and the backfill would run against a
+#     nonexistent KPI;
+#   - src/kpi/history_capture.py main(): recognises only --purge and drops
+#     every other --prefixed arg ([a for a in sys.argv[1:] if not
+#     a.startswith("--")]) — so --dry-run would be SILENTLY SWALLOWED and the
+#     stage would write anyway, a false green;
+#   - scripts/retrain_goldstd.sh reads no arguments at all.
+# So the wrapper skips these stages under --dry-run (guards at the bottom).
+#
 # Rebuild kpi_history from the substrate. Replace semantics (delete per
 # (kpi_id, source), then upsert) stay correct in BOTH modes: after an append,
 # history months recompute to the same values (source rows are frozen) and the
@@ -146,7 +179,10 @@ stage_goldstd_retrain() {
 # pre-#1577 rationale — that ordering was the only thing protecting the other
 # stages from an A/B failure under `set -e` — is obsolete: the stage runner
 # now guarantees every stage runs regardless of earlier failures.) "$@" is
-# forwarded so --dry-run stays write-free (the purge is gated on it);
+# forwarded because this stage and the loader are the only two that PARSE it
+# (both are load_synthetic_data.py): --dry-run keeps THIS stage write-free
+# because its AB purge is gated on the parsed flag. The three stages between
+# them get no args and are skipped under --dry-run instead (#1930).
 # --refresh-ab itself ignores --small.
 stage_ab_refresh() {
     PYTHONPATH="$PROJECT_ROOT" LOKY_MAX_CPU_COUNT=1 \
@@ -156,13 +192,31 @@ stage_ab_refresh() {
 }
 
 reseed_run_stage "loader" stage_loader
-reseed_run_stage "kpi_history backfill" stage_kpi_backfill
-reseed_run_stage "kpi_history weekly capture" stage_weekly_capture
 
-if [[ "$RETRAIN" == "1" ]]; then
-    reseed_run_stage "goldstd retrain" stage_goldstd_retrain
+# --dry-run guards (#1930): these three stages write unconditionally — the
+# backfill and the capture to kpi_history (and under --full the capture's
+# --purge is IRRECOVERABLE: src/kpi/history_capture.py's own docstring says
+# those points "can never be recomputed later"), the retrain to the model
+# registry. None of them can be handed the flag, so the wrapper withholds the
+# stage instead.
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "=== kpi_history backfill SKIPPED (--dry-run) $(date -Is) ==="
 else
+    reseed_run_stage "kpi_history backfill" stage_kpi_backfill
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "=== kpi_history weekly capture SKIPPED (--dry-run) $(date -Is) ==="
+else
+    reseed_run_stage "kpi_history weekly capture" stage_weekly_capture
+fi
+
+if [[ "$RETRAIN" == "0" ]]; then
     echo "=== goldstd retrain SKIPPED (--skip-retrain) $(date -Is) ==="
+elif [[ "$DRY_RUN" == "1" ]]; then
+    echo "=== goldstd retrain SKIPPED (--dry-run) $(date -Is) ==="
+else
+    reseed_run_stage "goldstd retrain" stage_goldstd_retrain
 fi
 
 if [[ "$MODE" == "--append-frontier" ]]; then

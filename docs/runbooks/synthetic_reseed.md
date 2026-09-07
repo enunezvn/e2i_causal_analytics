@@ -48,9 +48,35 @@ watch it. Nothing does.
 | *(no args)* — what cron runs | `--append-frontier` | Grow the substrate with the trailing deterministic weekly cohorts + downstream events, refresh `user_sessions` (MAU/WAU), **without rewriting history** |
 | `--full` | `--anchor-to-now` | **Recovery only.** Legacy full-size destructive reseed; rewrites every synthetic timestamp and value |
 | `--skip-retrain` | *(consumed by the wrapper)* | Skip the gold-standard retrain stage; anywhere in the args, never forwarded to the loader |
+| `--dry-run` | *(detected **and** forwarded)* | Loader and A/B stages validate without writing (they parse the flag); stages 2, 3 and 4 are **skipped** — see below |
 
 Any other argument is **forwarded verbatim** to `scripts/load_synthetic_data.py`
-(§3).
+(§3) — i.e. to stages 1 and 5 only, the two that *are* that script.
+
+#### `--dry-run` reaches only the two loader stages — the other three are skipped
+
+`--dry-run` is an argparse flag of `load_synthetic_data.py`. Stages 2, 3 and 4
+are different entrypoints and **cannot be handed it** (#1930):
+
+- `src/kpi/history_backfill.py` reads `sys.argv[1:]` as KPI ids, so `--dry-run`
+  would become a KPI id;
+- `src/kpi/history_capture.py` recognises only `--purge` and drops every other
+  `--`-prefixed arg, so `--dry-run` would be **silently swallowed and the stage
+  would write anyway** — a false green, worse than no flag at all;
+- `scripts/retrain_goldstd.sh` reads no arguments.
+
+So the wrapper **withholds those three stages** under `--dry-run` and says so in
+the log:
+
+```
+=== kpi_history backfill SKIPPED (--dry-run) <ts> ===
+=== kpi_history weekly capture SKIPPED (--dry-run) <ts> ===
+=== goldstd retrain SKIPPED (--dry-run) <ts> ===
+```
+
+Before #1930 they ran regardless: `--dry-run` printed `DRY RUN` and then wrote
+`kpi_history` twice and the model registry once, and `--full --dry-run` ran the
+**irrecoverable** `history_capture --purge` first.
 
 Environment gotchas the wrapper encodes — do not "simplify" them away:
 
@@ -260,10 +286,15 @@ cd /home/enunez/Projects/e2i_causal_analytics
 # Append without the ~9-min retrain
 ./scripts/reseed_synthetic.sh --skip-retrain
 
-# Dry-run the LOADER only. `--dry-run` is forwarded to load_synthetic_data.py,
-# so stages 1 and 5 stay write-free -- but the kpi backfill, the weekly capture
-# and the ~9-min retrain still RUN AND WRITE. This is not a whole-chain dry run.
-./scripts/reseed_synthetic.sh --dry-run --skip-retrain
+# Whole-chain dry run (#1930). `--dry-run` is forwarded to the two
+# load_synthetic_data.py stages (1 loader, 5 A/B), which validate without
+# writing; the kpi backfill, the weekly capture and the retrain cannot take the
+# flag, so the wrapper SKIPS them and prints a SKIPPED marker for each. Nothing
+# in the chain writes.
+./scripts/reseed_synthetic.sh --dry-run
+
+# Note --full must come FIRST when combined (mode detection reads $1):
+./scripts/reseed_synthetic.sh --full --dry-run
 
 # DISASTER RECOVERY ONLY — invalidates the frozen substrate the gold-standard
 # models were trained on and re-fires a drift storm. Read section 0 first.
