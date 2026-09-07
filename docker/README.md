@@ -2,7 +2,15 @@
 
 How to run the full stack using the compose files with the dev overlay.
 
-> **Note**: Both local development and the production droplet use the same Docker Compose setup (base + dev overlay). The dev overlay provides volume mounts for hot-reloading and debug settings.
+> **Production runs the base file alone — no overlay.** `deploy.yml`'s
+> `pick_overlay()` returns the empty string because `docker/frontend/Dockerfile:106`
+> is `FROM nginx:alpine AS production`, so the droplet runs `e2i_api` (gunicorn
+> `--workers 2` / UvicornWorker, `read_only: true`, GHCR image tagged by commit sha,
+> `8000:8000`) and `e2i_frontend` (nginx serving the built bundle, `3002:80`).
+> **This file describes local development**: base + `docker-compose.dev.yml`, which
+> adds the bind mounts, `uvicorn --reload`, Vite HMR on `3002:5173`, and the `_dev`
+> container names used throughout below. Production is deployed *only* by merging to
+> `main`; see `DEPLOYMENT.md` § Production Deploy.
 
 ## Prerequisites
 
@@ -111,13 +119,7 @@ make docker-down
 # View logs
 make docker-logs
 
-# Deploy (git pull + restart workers)
-make deploy
-
-# Deploy with rebuild
-make deploy-build
-
-# Shell into API container
+# Shell into API container (dev overlay name; on the droplet it is e2i_api)
 docker exec -it e2i_api_dev bash
 
 # Start with debug tools (Redis Commander, FalkorDB Browser)
@@ -127,6 +129,13 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml --p
 # Off by default: no deploy step starts these, and they add ~1-1.5GB of RSS.
 COMPOSE_PROFILES=monitoring docker compose -f docker/docker-compose.yml up -d
 ```
+
+> **`make deploy` / `make deploy-build` are NOT the production deploy.** They run
+> `scripts/deploy.sh`, a legacy local-dev path that composes with the dev overlay,
+> skips the feast/health/bentoml gates, and does `git reset --hard origin/main` plus
+> a `git checkout <sha>` rollback inside the checkout. Never run either on the
+> droplet — production deploys only by merging to `main` (`.github/workflows/deploy.yml`),
+> and a manual redeploy is `gh workflow run deploy.yml`.
 
 > **Observability is opt-in.** The monitoring services are gated behind the
 > `monitoring` profile, so a plain `up -d` does not start them and no deployment

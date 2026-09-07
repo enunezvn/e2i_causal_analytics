@@ -1,7 +1,12 @@
 # E2I Causal Analytics - Deployment Guide
 
-How to run the full stack locally using Docker Compose with the dev overlay,
-plus how the real production deploy works (see [Production Deploy (CI/CD)](#production-deploy-cicd)).
+How to run the full stack locally using Docker Compose with the dev overlay, plus
+how the real production deploy works (see [Production Deploy (CI/CD)](#production-deploy-cicd)).
+
+Production runs the **base compose file alone** and is deployed **only** by merging
+to `main`. The `_dev` container names and dev-overlay commands below are the local
+ones — see [What production actually runs](#what-production-actually-runs) for the
+deployed shape.
 
 ---
 
@@ -127,8 +132,45 @@ These are defined in `docker-compose.yml` via the `x-common-env` anchor:
 
 ## Production Deploy (CI/CD)
 
-The production deploy is `.github/workflows/deploy.yml` — the workflow file is
-the source of truth; this is the operator-level summary (verified 2026-07-18).
+### What production actually runs
+
+Production is the **base `docker/docker-compose.yml` alone — no overlay**.
+`deploy.yml`'s `pick_overlay()` returns the empty string because
+`docker/frontend/Dockerfile:106` is `FROM nginx:alpine AS production`; the
+`docker-compose.frontend-dev.yml` branch below it belongs to the #528-A rollback
+era and the `docker-compose.dev.yml` branch to the pre-flip #527 dev-in-prod era.
+Neither is reachable today.
+
+The live app containers are `e2i_api` (gunicorn, `--workers 2` with
+`uvicorn.workers.UvicornWorker`, `read_only: true`, a GHCR image tagged by commit
+sha, `8000:8000`) and `e2i_frontend` (nginx serving the built bundle, `3002:80`).
+**Local dev** is base + `docker-compose.dev.yml`: `e2i_*_dev` container names,
+`uvicorn --reload`, Vite HMR on `3002:5173`. The names in the Service Map and
+Common Commands sections above are the dev-overlay ones; on the droplet drop the
+`_dev` suffix.
+
+```bash
+# what is actually running right now
+docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' | grep -E '^e2i_(api|frontend) '
+sed -n '419,427p' .github/workflows/deploy.yml    # pick_overlay()
+```
+
+### How it is deployed
+
+Only by merging to `main`, which runs `.github/workflows/deploy.yml` — the
+workflow file is the source of truth; what follows is the operator-level summary.
+
+`scripts/deploy.sh`, and therefore `make deploy` / `make deploy-build`, is the
+**legacy local-dev path**: it composes with the dev overlay
+(`scripts/deploy.sh:25`), skips the feast / health / bentoml gates, does its own
+`git reset --hard origin/main` (`:77`) and rolls back with `git checkout <sha>`
+(`:136`) inside the checkout. **Never run it on the droplet** — the droplet
+checkout is the deploy target, and both of those git operations move it. To
+redeploy the current `main`, re-run the workflow instead:
+
+```bash
+gh workflow run deploy.yml
+```
 
 **Trigger**: push to `main`, path-filtered to deploy inputs (`src/`, `config/`,
 compose files, `frontend/`, `requirements*`/`pyproject.toml`/`requirements.lock`,
@@ -192,8 +234,8 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml res
 
 `scripts/seed_falkordb_all.sh` seeds the FalkorDB knowledge graph from Supabase
 core tables. **The CI/CD deploy does NOT run it** — `deploy.yml` never invokes
-`scripts/deploy.sh` (that script is a separate, manual deploy path which does
-chain into the seeder). Reseed the graph manually when needed:
+`scripts/deploy.sh`, the legacy local-dev path that chains into the seeder (see
+[How it is deployed](#how-it-is-deployed)). Reseed the graph manually when needed:
 
 ```bash
 ./scripts/seed_falkordb_all.sh
