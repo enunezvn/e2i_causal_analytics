@@ -1,10 +1,10 @@
 # Database Migrations Runbook (PROD = AUTO on deploy, manual path available)
 
-**Status**: Operator runbook | **Last verified against code**: 2026-07-18
+**Status**: Operator runbook | **Last verified against code**: 2026-09-07
 
 This is a reader-facing companion. The **code and config are the source of
 truth** — every command, flag, and line reference below was transcribed from
-the files cited. If they have drifted since 2026-07-18, trust the files:
+the files cited. If they have drifted since 2026-09-07, trust the files:
 
 - `.github/workflows/deploy.yml` (the unconditional migration step)
 - `scripts/run_migrations.sh` (the auto-detecting, ledger-tracking runner)
@@ -27,8 +27,21 @@ workflow runs `scripts/run_migrations.sh` unconditionally. The runner
 auto-detects its connection:
 
 1. `SUPABASE_DB_URL` set → `psql` against that URL (CI / remote / workstation)
-2. else → `docker exec` into the `supabase-db` container (the droplet's
-   self-hosted Supabase stack exposes only REST creds, no DB URL)
+2. else → `docker exec` into the `supabase-db` container
+
+> **The droplet DOES define `SUPABASE_DB_URL`** — `grep -c '^SUPABASE_DB_URL=' .env`
+> → 1 (measured 2026-09-07), pointing at `127.0.0.1:5432`, the Supavisor pooler.
+> (`supabase-db` itself publishes **5433** on the host: `docker port supabase-db`
+> → `5432/tcp -> 0.0.0.0:5433`.) Deploys take docker mode anyway for a different
+> reason: **the SSH deploy step does not export `.env`**, so the variable is
+> simply not in the runner's environment there.
+>
+> **Consequence, and it is a real trap:** a shell that has sourced `.env` — which
+> an operator's shell on this box very often has — flips the runner into **url
+> mode**. Same database, different code path and different `psql` binary
+> requirement (url mode needs a host `psql`; the droplet's is inside the
+> container). If you want the deploy's exact behaviour by hand, unset it:
+> `env -u SUPABASE_DB_URL ./scripts/run_migrations.sh --dry-run`.
 
 It scans **all** `database/` schema dirs (`migrations`, `memory`, `core`, `ml`,
 `causal`, `chat`, `rag`, `audit`), applies pending files in order, and records
@@ -44,7 +57,11 @@ urgent/out-of-band applies — but note it bypasses the ledger (§5).
 
 ## 1. How migrations apply on deploy
 
-`deploy.yml` (SSH deploy script, after the `git reset --hard origin/main`):
+`deploy.yml` (SSH deploy script). Placement matters: the migration step runs
+**after** the tree has been reset to the deploy's *resolved target sha* (which is
+not always `origin/main` — see [`deploy-operations.md`](deploy-operations.md) §1)
+and **after** the published-image assertion, so a deploy that cannot find its GHCR
+images fails with *nothing migrated* (#1780/#1785):
 
 ```bash
 # Apply DB migrations. run_migrations.sh auto-detects the connection:
@@ -61,13 +78,22 @@ What the runner does (`scripts/run_migrations.sh`):
 
 - **Connection auto-detect**: `SUPABASE_DB_URL` mode needs a host `psql`;
   docker mode needs `docker exec supabase-db` to work. Neither → hard error.
+  The droplet has the variable in `.env` but not in the deploy's SSH environment,
+  so deploys land in docker mode — see the note in the TL;DR before running the
+  runner by hand from a shell that has sourced `.env`.
 - **Scope**: all 8 `database/` dirs, each namespaced in the ledger by a key
   prefix (e.g. `ml/011_...` vs plain `011_...`) so identically-numbered files
   never collide. Numbers are also not unique **within** a directory:
-  `database/migrations/` has shared-number pairs (two `099_*.sql`, two
-  `101_*.sql`). The ledger keys by full filename, so both members of a pair
-  are tracked and applied independently — a shared number is harmless, but
-  prefer the next unused number for new files.
+  `database/migrations/` has several shared-number pairs (**5 shared numbers as
+  of 2026-09-07** — re-measure rather than trusting this count, it grows):
+
+  ```bash
+  ls database/migrations/*.sql | sed 's|.*/||' | grep -oE '^[0-9]+' | sort | uniq -d
+  ```
+
+  The ledger keys by full filename, so every member of a pair is tracked and
+  applied independently — a shared number is harmless, but prefer the next
+  unused number for new files.
 - **Safety skips**: `*_validation_queries.sql`, `rollback_*.sql`, and
   `*_rollback.sql` are never auto-applied (rollback utils DROP live objects).
 - **Transaction wrapping**: each file normally applies under
@@ -198,17 +224,33 @@ docker exec -i supabase-db psql -U postgres -d postgres -c \
 so do not rely on `schema_migrations` to know what a manual apply landed.
 
 Either way, the decisive check is an explicit **cast/select disproof** against
-the object the migration created. For example, after adding
-`experiment_monitor` to an enum (mig 055), confirm the value now casts (a value
-that does not exist raises `22P02 invalid_text_representation`):
+the object the migration created — and it must be cast against the object *that
+migration* touched. **There are two agent-name enums in this database**, and
+picking the wrong one gives a check that cannot fail:
+
+| Enum | Owner | Labels (2026-09-07) |
+| --- | --- | --- |
+| `agent_name_enum` | observability schema — **what migration 055 altered** | 21 |
+| `e2i_agent_name` | memory schema (`database/memory/029_*`) | 23 |
+
+Both currently contain `experiment_monitor`, so
+`SELECT 'experiment_monitor'::e2i_agent_name;` succeeds **whether or not
+migration 055 ever applied**. It is a false positive, not a verification. Cast
+against `agent_name_enum`:
 
 ```bash
 docker exec -i supabase-db psql -U postgres -d postgres -c \
-  "SELECT 'experiment_monitor'::e2i_agent_name;"
-# Expected: returns the value. A 22P02 error means the migration did NOT apply.
+  "SELECT 'experiment_monitor'::agent_name_enum;"
+# Expected: returns the value. A 22P02 invalid_text_representation means
+# migration 055 did NOT apply.
 ```
 
-For an enum, you can also list the full label set:
+(`database/migrations/055_add_missing_agents_to_agent_name_enum.sql` runs
+`ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS …` for `cohort_constructor`
+and `experiment_monitor`.)
+
+For an enum, you can also list the full label set — substitute the type the
+migration actually names:
 
 ```bash
 docker exec -i supabase-db psql -U postgres -d postgres -c \
@@ -219,7 +261,9 @@ docker exec -i supabase-db psql -U postgres -d postgres -c \
 ```
 
 Pick a disproof that is specific to what the migration changed (a new column,
-table, type, or enum value) and that **errors** when the change is absent.
+table, type, or enum value), that **errors** when the change is absent, and that
+names the same object the migration file names. A check that passes on an
+unmigrated database is worse than no check.
 
 ---
 
@@ -245,11 +289,22 @@ docker exec -i supabase-db psql -U postgres -d postgres -c "<your query>"
    **idempotent** (`IF NOT EXISTS` / `IF EXISTS` guards).
 2. Confirm it has **no script-level `BEGIN`/`COMMIT`/`ROLLBACK`/`END`/`ABORT`**
    (CI lint `test_migrations_no_inner_txn.py` should already be green).
-3. Merge to `main`. If the same PR touches deploy-triggering paths (`src/`,
-   `config/`, `frontend/`, deps), the deploy fires and **applies the migration
-   automatically**. A docs-only or migration-only merge does NOT trigger a
-   deploy — for those, either wait for the next deploy or run the runner (or
-   the manual `docker exec` apply) on the droplet yourself.
+3. Merge to `main`. If the same PR touches deploy-triggering paths, the deploy
+   fires and **applies the migration automatically**. The trigger list is
+   `on.push.paths` in `.github/workflows/deploy.yml` — read it there rather than
+   trusting a copy; as of 2026-09-07 it is `src/**`, `config/**`,
+   `docker/Dockerfile`, the three compose files the deploy `-f`s,
+   `docker/frontend/**`, `frontend/**`, `requirements.txt`, `requirements.lock`,
+   `pyproject.toml`, `patches/**`, `scripts/bentoml/**`, `docker/bentoml/**`,
+   `scripts/deploy/**`, **`scripts/**`** (the whole tree is `COPY`ed into the
+   production image, #1783) and **`data/kg_cache/**`** (the KG Layer-2 caches are
+   baked into the image, #1607/#1783).
+
+   **`database/**` is deliberately NOT a trigger.** Migration files are not image
+   inputs — the runner reads them from the droplet checkout after the reset — so a
+   migration-only merge (like a docs-only one) does **not** fire a deploy. For
+   those, either wait for the next deploy to pick it up, or run the runner (or the
+   manual `docker exec` apply) on the droplet yourself.
 4. Verify with the ledger and/or a cast/select disproof against the migration's
    new object (§5).
 

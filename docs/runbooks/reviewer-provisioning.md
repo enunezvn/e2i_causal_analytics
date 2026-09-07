@@ -23,7 +23,15 @@ the missing-SMTP gap (GoTrue has no mailer configured) does not block onboarding
 
 ```bash
 ANON=$(docker exec e2i_api printenv SUPABASE_ANON_KEY)
-SVC=$(docker exec e2i_api printenv SUPABASE_SERVICE_ROLE_KEY)
+# The container variable is SUPABASE_SERVICE_KEY. There is NO
+# SUPABASE_SERVICE_ROLE_KEY on this box — using that name yields an empty
+# string and every curl below silently sends `Bearer ` (401/403, or a
+# confusing 200 from an anon-readable route). Verified 2026-09-07:
+#   docker exec e2i_api printenv SUPABASE_SERVICE_ROLE_KEY >/dev/null 2>&1; echo $?  -> 1
+#   docker exec e2i_api printenv SUPABASE_SERVICE_KEY      >/dev/null 2>&1; echo $?  -> 0
+SVC=$(docker exec e2i_api printenv SUPABASE_SERVICE_KEY)
+test -n "$SVC" || { echo "SVC is empty - wrong var name or e2i_api is down; STOP"; }
+test -n "$ANON" || { echo "ANON is empty - STOP"; }
 EMAIL="reviewer@example.com"
 PW=$(openssl rand -base64 15 | tr -d '/+=' | head -c 16)
 

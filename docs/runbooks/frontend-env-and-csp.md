@@ -20,7 +20,10 @@
 **Live remediation (batch phase):** on the droplet, edit `frontend/.env` to keep only the
 `VITE_*` contract (see `frontend/.env.example` for the authoritative list):
 `VITE_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_COPILOT_ENABLED`,
-`VITE_APP_VERSION`, `VITE_DEFAULT_MODEL_ID`, `VITE_DEBUG` (false), `VITE_MSW_ENABLED` (false).
+`VITE_APP_VERSION`, `VITE_DEBUG` (false), `VITE_MSW_ENABLED` (false).
+(`VITE_DEFAULT_MODEL_ID` was listed here until 2026-09-07 and has been dropped: it has no
+reader anywhere in the tree and is not in `frontend/.env.example`. Keep this list in step
+with that file, which is the authoritative contract.)
 Back up first. The running container reads its env from the compose/build, not this file, so
 this is defense-in-depth + dev-box hygiene.
 

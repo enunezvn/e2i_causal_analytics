@@ -1,10 +1,12 @@
 # Sentinels Operations Runbook
 
-**Version**: 1.0 | **Last Updated**: 2026-05-20 | **Status**: Living Document
+**Version**: 1.1 | **Last Updated**: 2026-09-07 | **Status**: Living Document
 
 Owner: Platform / Memory Subsystems
 
-Companion plan: `.claude/plans/e2i_memory_subsystems_implementation_plan.md` (Phase 3)
+Companion plan: `.claude/plans/archive/e2i_memory_subsystems_implementation_plan_archived_20260520.md`
+(Phase 3) — archived 2026-05-20; a **local, untracked planning note**, not in the
+repo. Historical context only.
 
 ---
 
@@ -34,22 +36,30 @@ Two paths produce sentinels in the runtime database:
 
 - **YAML config**: `config/sentinels.yaml` is read at API startup by
   `src.memory.sentinels.config_loader.load_sentinels_from_yaml`
-  (`src/memory/sentinels/config_loader.py:1-110`). Operator-facing — uses the
+  (`src/memory/sentinels/config_loader.py`). Operator-facing — uses the
   *plan vocabulary* (`data_drop`, `staleness_threshold`, `cohort_drift`,
   `schedule`).
 - **REST API**: `POST /api/sentinels` registers a sentinel programmatically.
   Uses the *shipped registry vocabulary* (`threshold_breach`, `freshness`,
   `drift_score`, `new_causal_path`, `invalidation_count`).
 
-A single Celery beat task — `sentinel_dispatcher` — runs every 5 minutes
-(`src/memory/sentinels/registry.py:457-509`) and evaluates each enabled
-sentinel. Errors in one sentinel never block others.
+A single Celery beat task evaluates each enabled sentinel; errors in one
+sentinel never block others. The names you need in order to find it (verified
+2026-09-07):
+
+| | |
+| --- | --- |
+| Celery task name | `src.tasks.sentinel_dispatcher` |
+| Python function | `sentinel_dispatcher` in `src/tasks/insight_lifecycle_tasks.py` |
+| Beat schedule key | `insight-lifecycle-sentinels` in `src/workers/celery_app.py` |
+| Schedule | `300.0` seconds (5 minutes), queue `quick` |
+| Registry entry point | `dispatch_sentinels` in `src/memory/sentinels/registry.py` |
 
 ### Plan vocabulary vs shipped vocabulary
 
 The YAML uses operator-friendly nouns; the registry uses internal/mechanistic
 names. Translation is single-source-of-truth at
-`src/memory/sentinels/config_loader.py:84-89`:
+`PLAN_TRIGGER_TO_INTERNAL_PATTERN` in `src/memory/sentinels/config_loader.py`:
 
 | Plan trigger (YAML)    | Shipped pattern (registry)  | Semantics                                       |
 |------------------------|-----------------------------|-------------------------------------------------|
@@ -102,13 +112,27 @@ Each `trigger_type` requires a different `condition` shape:
 
 ```yaml
 condition:
-  table: <invalidation-aware table>   # required
+  table: <threshold-watchable table>  # required
   ts_column: <timestamp column>       # required
   max_age_hours: <float>              # required
 ```
 
+**Constraints (`_validate_watch_target` in `src/memory/sentinels/registry.py`,
+enforced at BOTH registration and evaluation time — review finding M8):**
+
+- `table` must be in `THRESHOLD_WATCHABLE_TABLES` — **5 tables**, verified
+  2026-09-07: `causal_paths`, `triggers`, `ml_predictions`, `episodic_memories`,
+  `executive_insights`. This is a different (larger) allowlist from
+  `INVALIDATION_AWARE_TABLES`, which constrains `staleness_threshold` only.
+- `ts_column` must match `^[A-Za-z_][A-Za-z0-9_]*$` — a plain SQL identifier.
+  `table`/`column` are operator-supplied and interpolated into a PostgREST
+  projection, where `*`, `,`, `(`, `)` and `:` are meta-characters; the pattern
+  blocks projection-widening and foreign-table exfiltration.
+
+The same two constraints apply to `threshold_breach`.
+
 Fires when any row in `table` has `ts_column < (now - max_age_hours)`.
-Source: `_eval_freshness` at `src/memory/sentinels/registry.py:344-357`.
+Source: `_eval_freshness` in `src/memory/sentinels/registry.py`.
 
 #### `staleness_threshold` (invalidation_count)
 
@@ -123,14 +147,14 @@ Fires for every row where `invalidated_at IS NOT NULL`. Per
 match carries `staleness_score=1.0` — no graded staleness.
 
 **Allowed tables** are validated at registration time
-(`src/memory/sentinels/registry.py:114`):
+(`INVALIDATION_AWARE_TABLES` in `src/memory/sentinels/registry.py`):
 
 - `triggers`
 - `ml_predictions`
 - `executive_insights`
 
 Validation lives at `_validate_pattern_config`
-(`src/memory/sentinels/registry.py:258-270`) and fails loudly with a
+(`_validate_pattern_config` in `src/memory/sentinels/registry.py`) and fails loudly with a
 `ValueError` if you target a table without an `invalidated_at` column.
 
 #### `cohort_drift` (drift_score)
@@ -142,7 +166,7 @@ condition:
 ```
 
 Fires when the latest `drift_monitor` output exceeds `max_drift_score`.
-Source: `_eval_drift_score` at `src/memory/sentinels/registry.py:360-369`.
+Source: `_eval_drift_score` in `src/memory/sentinels/registry.py`.
 
 > Note: v1 returns `[]` unless a downstream integration provides drift
 > outputs — the action plumbing is exercised by other trigger types.
@@ -155,7 +179,7 @@ condition: {}     # empty — fires whenever new causal_paths exist
 
 Fires for `causal_paths` rows with `created_at > last_fired_at`. Auto-bumps
 `last_fired_at` after firing. Source: `_eval_new_causal_path` at
-`src/memory/sentinels/registry.py:372-384`.
+`_eval_new_causal_path` in `src/memory/sentinels/registry.py`.
 
 ---
 
@@ -163,7 +187,7 @@ Fires for `causal_paths` rows with `created_at > last_fired_at`. Auto-bumps
 
 Every sentinel YAML config MUST declare a top-level `lifecycle_state` key.
 Five values are valid, defined as a canonical enum at
-`src/lifecycle/gate_lifecycle.py:43-87`:
+`GateLifecycleState` in `src/lifecycle/gate_lifecycle.py`:
 
 | State          | Behavior                                                                            | Sentinel usage                                |
 |----------------|-------------------------------------------------------------------------------------|-----------------------------------------------|
@@ -185,7 +209,7 @@ signals, do not block. The YAML header comment at
 
 Transitions are enforced by `scripts/check_lifecycle_state.py` +
 `.github/workflows/lifecycle_state_guard.yml`. The allowed transitions live
-at `src/lifecycle/gate_lifecycle.py:107-128`:
+in the `_ALLOWED_TRANSITIONS` map read by `is_transition_allowed` (`src/lifecycle/gate_lifecycle.py`):
 
 - `development` → `advisory` or `deprecated`
 - `advisory` → `calibrating` or `deprecated`
@@ -196,7 +220,7 @@ at `src/lifecycle/gate_lifecycle.py:107-128`:
 Identity transitions (`X` → `X`) are explicitly NOT allowed.
 `development` → `enforced` is intentionally blocked — the gate must spend
 at least one `advisory` and one `calibrating` window before being enforced
-(see L3 note at `src/lifecycle/gate_lifecycle.py:98-106`).
+(see the L3 note above `is_transition_allowed` in `src/lifecycle/gate_lifecycle.py`).
 
 ### The lifecycle state guard CI check
 
@@ -212,7 +236,7 @@ guard runs on every push/PR via the lifecycle workflow.
 
 The single cross-process alert channel is `e2i:alerts`, defined as a
 module-level `Final[str]` constant at
-`src/tasks/sentinel_actions.py:70`:
+the module-level constant in `src/tasks/sentinel_actions.py`:
 
 ```python
 ALERTS_CHANNEL: Final[str] = "e2i:alerts"
@@ -222,7 +246,7 @@ ALERTS_CHANNEL: Final[str] = "e2i:alerts"
 
 Four sentinel-action handlers in `src/tasks/sentinel_actions.py` publish to
 this channel via the best-effort `publish_alert()` helper
-(`src/tasks/sentinel_actions.py:73-95`):
+(`publish_alert` in `src/tasks/sentinel_actions.py`):
 
 | Handler                          | Alert payload `type`         | Triggered by                              |
 |----------------------------------|------------------------------|-------------------------------------------|
@@ -232,7 +256,7 @@ this channel via the best-effort `publish_alert()` helper
 | `run_full_consolidation`         | `full_consolidation_run`     | `schedule` sentinels                      |
 
 `publish_alert` also fires from the `notify` action type in the dispatcher
-(`src/memory/sentinels/registry.py:687-715`), emitting `type=sentinel_notify`.
+(`_fire_action` in `src/memory/sentinels/registry.py`), emitting `type=sentinel_notify`.
 
 ### Subscribers
 
@@ -245,13 +269,13 @@ GET /api/alerts/stream?brand=<brand>   AUTH
 
 Returns `text/event-stream` with one SSE `event: alert` per matching
 publish on `e2i:alerts`. Authentication is `Depends(require_auth)` at
-`src/api/routes/staleness_alerts.py:407`.
+the `alerts_stream` handler in `src/api/routes/staleness_alerts.py`.
 
 ### Alert payload shapes
 
 All payloads are JSON dictionaries with brand-aware routing. The SSE
 bridge filters by the connection's requested brand
-(`src/api/routes/staleness_alerts.py:273-296`); `"all"` in `brands` matches
+(`AlertBridge._matches_brand` in `src/api/routes/staleness_alerts.py`); `"all"` in `brands` matches
 every subscriber.
 
 #### `data_refresh`
@@ -288,8 +312,8 @@ every subscriber.
 
 The `findings` array contains the FULL stale-findings list as received by
 the handler — see
-`src/tasks/sentinel_actions.py:197-202`. The top-5 cap (`_REANALYSIS_CAP =
-5`, `src/tasks/sentinel_actions.py:144`) only applies INTERNALLY for the
+`notify_and_queue_reanalysis` in `src/tasks/sentinel_actions.py`. The top-5
+cap (`_REANALYSIS_CAP = 5`, same module) only applies INTERNALLY for the
 per-finding `reanalyze_finding` Celery enqueue and log lines, not the
 alert payload itself.
 
@@ -305,7 +329,7 @@ alert payload itself.
 ```
 
 `drift_data` is whatever `trigger_data.get("drift_data", trigger_data)`
-resolves to at `src/tasks/sentinel_actions.py:320-326` — typically the
+resolves to (the tail of `notify_and_queue_reanalysis`) — typically the
 full dispatcher `trigger_data` dict (sentinel match + action input).
 
 #### `full_consolidation_run`
@@ -322,7 +346,7 @@ full dispatcher `trigger_data` dict (sentinel match + action input).
 ```
 
 Top-level fields are flattened from the consolidator result (see
-`src/tasks/sentinel_actions.py:380-388`).
+`run_full_consolidation` in `src/tasks/sentinel_actions.py`).
 
 #### `sentinel_notify` (action type `notify`)
 
@@ -340,7 +364,7 @@ Top-level fields are flattened from the consolidator result (see
 ### Backpressure
 
 Per-connection queue caps at 100 events
-(`src/api/routes/staleness_alerts.py:99`). At capacity, the oldest event
+(the per-connection queue cap constant in `src/api/routes/staleness_alerts.py`). At capacity, the oldest event
 is evicted (drop-oldest semantics) and a `WARNING` is logged. The
 connection stays open — disconnecting a slow client would defeat the
 alerting contract. Logs throttle to every 25th drop after the first.
@@ -356,7 +380,7 @@ to the `sentinels.cooldown_minutes` column (migration
 ### Semantics
 
 Enforced by `_is_in_cooldown` at
-`src/memory/sentinels/registry.py:512-552`:
+`_is_in_cooldown` in `src/memory/sentinels/registry.py`:
 
 | State                                                | Behavior                       |
 |------------------------------------------------------|--------------------------------|
@@ -432,7 +456,7 @@ Fires on `staleness_threshold` sentinels. Publishes a `staleness_alert`
 carrying the FULL stale-findings list (sorted by `staleness_score` —
 currently 1.0 binary) AND enqueues a `reanalyze_finding` Celery task
 for the top-5 most-stale findings (`_REANALYSIS_CAP = 5`,
-`src/tasks/sentinel_actions.py:144`). The top-5 cap applies ONLY to the
+`_REANALYSIS_CAP` in `src/tasks/sentinel_actions.py`). The top-5 cap applies ONLY to the
 per-finding Celery enqueue + log lines, not the SSE alert payload
 (see §4 for the on-the-wire shape). Broker outage on the per-finding
 enqueue is best-effort: the Redis alert publication still goes out
@@ -442,8 +466,7 @@ This is the **single-fire-with-list** path: the dispatcher calls this
 handler exactly once per dispatcher tick with the full matches list
 (rather than per-match). The bus event still fires per-match for
 back-compat with the PR #250 contract. See
-`src/memory/sentinels/registry.py:555-583` for the
-`_trigger_data_for_dispatch` helper.
+`_trigger_data_for_dispatch` in `src/memory/sentinels/registry.py`.
 
 ### `flag_for_review`
 
@@ -454,7 +477,7 @@ bridge.
 ### `run_full_consolidation`
 
 Fires on `schedule` sentinels. Runs a full `Consolidator.run()` pass
-(`src/memory/lifecycle/consolidator.py:195-233`) and publishes a
+(`src/memory/lifecycle/consolidator.py`) and publishes a
 `full_consolidation_run` heartbeat. The consolidator's `run()` performs:
 
 1. `deduplicate_episodic` — collapses near-duplicate episodic rows.
@@ -466,7 +489,7 @@ Fires on `schedule` sentinels. Runs a full `Consolidator.run()` pass
 When a sentinel's `dispatch_agent` action carries an `agent_name` matching
 one of the four plan-specified names, the dispatcher additionally calls
 `celery_app.send_task(...)` so a worker enqueues the handler. Mapping is
-single-source-of-truth at `src/memory/sentinels/registry.py:133-138`:
+single-source-of-truth at `PLAN_ACTION_TO_CELERY_TASK` in `src/memory/sentinels/registry.py`:
 
 ```python
 PLAN_ACTION_TO_CELERY_TASK: Dict[str, str] = {
@@ -494,13 +517,13 @@ with the PR #250 contract).
    guard CI check will catch this if you forget.
 3. If your trigger is `staleness_threshold`, confirm the `condition.table`
    is in `INVALIDATION_AWARE_TABLES`
-   (`src/memory/sentinels/registry.py:114`) — currently `triggers`,
+   (`INVALIDATION_AWARE_TABLES` in `src/memory/sentinels/registry.py`) — currently `triggers`,
    `ml_predictions`, `executive_insights`. If you need a new
    invalidation-aware table, write a migration that adds an
    `invalidated_at` column (model: `database/memory/021_insight_lifecycle.sql`)
    AND extend the allow-list in registry.py.
 4. Commit. The loader registers the new sentinel at API startup
-   (`src/memory/sentinels/config_loader.py:1-110`). Re-loading the same
+   (`src/memory/sentinels/config_loader.py`). Re-loading the same
    YAML is idempotent — sentinels are matched on `(name, brand)` and
    skipped if already present.
 
@@ -526,19 +549,36 @@ curl -X POST https://<host>/api/sentinels \
   }'
 ```
 
-`brand="all"` requires ADMIN role at the API layer.
+**Roles** (`src/api/routes/sentinels.py`, verified 2026-09-07): every write
+route requires **OPERATOR**; registering `brand="all"` additionally requires
+**ADMIN** (a cross-brand sentinel). Other brands must be in the caller's granted
+brand list. Reads (`GET`) require an authenticated user, scoped to their brands.
+
+The route set is larger than a POST — enable/disable and delete are REST too:
+
+| Route | Role | Purpose |
+| --- | --- | --- |
+| `POST /api/sentinels` | OPERATOR (ADMIN for `brand="all"`) | register |
+| `GET /api/sentinels` | authenticated | list, brand-scoped |
+| `GET /api/sentinels/{id}` | authenticated | fetch one |
+| `PATCH /api/sentinels/{id}` | OPERATOR | enable/disable |
+| `DELETE /api/sentinels/{id}` | OPERATOR | delete |
+
+`PATCH` is the least invasive way to silence one sentinel without touching the
+database directly — prefer it over the `UPDATE` statements in §9 when the API is
+reachable.
 
 ### Adding a new pattern type (engineering work)
 
 To add a new pattern type (e.g. `latency_spike`):
 
 1. Add to `VALID_PATTERN_TYPES`
-   (`src/memory/sentinels/registry.py:91-101`).
+   (`VALID_PATTERN_TYPES` in `src/memory/sentinels/registry.py`).
 2. Add validation in `_validate_pattern_config`
-   (`src/memory/sentinels/registry.py:241-270`).
+   (`_validate_pattern_config` in `src/memory/sentinels/registry.py`).
 3. Add an `_eval_<pattern_type>` helper.
 4. Add a dispatch arm in `evaluate_sentinel`
-   (`src/memory/sentinels/registry.py:288-311`).
+   (`evaluate_sentinel` in `src/memory/sentinels/registry.py`).
 5. Add a DB enum value: `ALTER TYPE sentinel_pattern_type ADD VALUE IF NOT
    EXISTS '<pattern_type>';` — model: migration 024 at
    `database/memory/024_sentinel_invalidation_count_pattern.sql`. Skipping
@@ -546,9 +586,10 @@ To add a new pattern type (e.g. `latency_spike`):
    passes (the test suite mocks Supabase).
 6. If the new pattern is plan-vocab-shaped, add it to
    `PLAN_TRIGGER_TO_INTERNAL_PATTERN`
-   (`src/memory/sentinels/config_loader.py:84-89`).
+   (`PLAN_TRIGGER_TO_INTERNAL_PATTERN` in `src/memory/sentinels/config_loader.py`).
 7. Write unit tests against the registry — model:
-   `tests/unit/test_memory/test_sentinels/`.
+   `tests/unit/test_memory/test_sentinel*.py` (8 modules) plus
+   `tests/unit/test_security/test_sentinel_external_unreachable.py`.
 
 ---
 
@@ -641,8 +682,19 @@ asyncio.run(publish_alert({
 
 ### Run the sentinel test suite
 
+There is **no** `tests/unit/test_memory/test_sentinels/` directory — that path
+exits 4 (usage error), not 0. The tests are individual modules:
+
 ```bash
-pytest tests/unit/test_memory/test_sentinels/ -v
+# 8 sentinel modules under test_memory/ (verified 2026-09-07)
+pytest tests/unit/test_memory/test_sentinel*.py -v
+
+# plus the external-unreachable guard, which lives under test_security/
+pytest tests/unit/test_security/test_sentinel_external_unreachable.py -v
+
+# both at once
+pytest tests/unit/test_memory/test_sentinel*.py \
+       tests/unit/test_security/test_sentinel_external_unreachable.py -v
 ```
 
 ---
@@ -655,14 +707,21 @@ order of preference (least → most invasive):
 
 ### Option 1 — Bump cooldown (preferred)
 
+> **On the droplet there is no local `psql` socket** — a bare `psql -c` fails.
+> Use the same `docker exec` shape the migrations runbook uses (the Postgres
+> container is named `supabase-db`; `docker port supabase-db` shows it published
+> on host **5433**, not 5432):
+
 ```bash
 # Set cooldown to 24 hours for one sentinel
-psql -c "UPDATE sentinels SET cooldown_minutes = 1440
-         WHERE name = 'High staleness alert';"
+docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \
+  "UPDATE sentinels SET cooldown_minutes = 1440
+   WHERE name = 'High staleness alert';"
 ```
 
 Effect: sentinel is SKIPPED at the dispatcher's pre-evaluation cooldown
-gate (`src/memory/sentinels/registry.py:487-498`) until the cooldown
+gate (`_is_in_cooldown`, called from `dispatch_sentinels` in
+`src/memory/sentinels/registry.py`) until the cooldown
 elapses. The dispatcher emits an INFO log line per skip
 (`sentinel <id> in cooldown (cooldown_minutes=..., last_fired_at=...);
 skipping`) — operators see the silencing in logs without action-handler
@@ -671,8 +730,9 @@ side effects.
 ### Option 2 — Disable a single sentinel
 
 ```bash
-psql -c "UPDATE sentinels SET enabled = false
-         WHERE name = 'High staleness alert';"
+docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \
+  "UPDATE sentinels SET enabled = false
+   WHERE name = 'High staleness alert';"
 ```
 
 Effect: dispatcher skips the sentinel entirely. The dispatcher loop is
@@ -691,7 +751,8 @@ In `config/sentinels.yaml`:
 
 ```bash
 # Also apply Option 2 to the existing DB row — REQUIRED.
-psql -c "UPDATE sentinels SET enabled = false WHERE name = 'High staleness alert';"
+docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \
+  "UPDATE sentinels SET enabled = false WHERE name = 'High staleness alert';"
 ```
 
 Effect: the YAML flag prevents future startup REGISTRATIONS from
@@ -707,7 +768,11 @@ silence after redeploy.
 # tasks (not just sentinel_dispatcher). Disabling `celery control
 # disable_events` is unrelated — that only stops event MONITORING, not
 # beat scheduling or task execution.
-docker compose stop scheduler
+# There is NO compose file at the repo root — always -f the docker/ one, or
+# address the container directly.
+docker compose -f docker/docker-compose.yml stop scheduler
+# equivalently:
+docker stop e2i_scheduler
 ```
 
 Effect: NO sentinels run, and the API restart will not re-enable them
@@ -747,11 +812,12 @@ with the silencing rationale, who acked, and the un-silence plan.
 
    If `elapsed < cooldown_minutes`, the sentinel is intentionally
    skipping. The dispatcher checks `_is_in_cooldown` BEFORE
-   `evaluate_sentinel` (`src/memory/sentinels/registry.py:487-498`),
+   `evaluate_sentinel` (both in `dispatch_sentinels`,
+   `src/memory/sentinels/registry.py`),
    so cooled-down rows do not even reach evaluation. Logs at INFO level
    confirm: `sentinel <id> in cooldown (cooldown_minutes=...,
    last_fired_at=...); skipping`
-   (`src/memory/sentinels/registry.py:491-495`).
+   (the cooldown-skip branch of `dispatch_sentinels`).
 
 3. Did `evaluate_sentinel` actually return matches?
 
@@ -759,10 +825,19 @@ with the silencing rationale, who acked, and the un-silence plan.
 
 4. Is the dispatcher beat task running?
 
+   `celery inspect scheduled` shows tasks a worker holds with an **ETA/countdown**
+   — it does **not** list beat's periodic schedule, so `sentinel_dispatcher` will
+   normally be absent from it even when beat is healthy. Look at what the
+   scheduler actually emitted instead:
+
    ```bash
-   celery -A src.workers.celery_app inspect scheduled
-   # Look for sentinel_dispatcher in the output
+   docker logs e2i_scheduler --since 10m | grep sentinel_dispatcher
    ```
+
+   > **UNVERIFIED (2026-09-07):** the `celery inspect scheduled` semantics above
+   > are reasoned from Celery's documented behaviour, and the replacement command
+   > was not executed — this doc pass was read-only. Treat the `docker logs` line
+   > as the intended check and confirm it on first use.
 
 ### "Alert isn't reaching the CopilotKit dashboard"
 
@@ -784,13 +859,13 @@ with the silencing rationale, who acked, and the un-silence plan.
 
    The bridge filters on `payload['brands']` — payloads without a
    matching brand are dropped by `_matches_brand`
-   (`src/api/routes/staleness_alerts.py:273-296`). A broadcast-without-brands
+   (`AlertBridge._matches_brand` in `src/api/routes/staleness_alerts.py`). A broadcast-without-brands
    is treated as out-of-scope.
 
 4. Is the connection at queue depth 100?
 
    Check logs for `backpressure dropping oldest`
-   (`src/api/routes/staleness_alerts.py:315-324`). The connection stays
+   (`AlertBridge._enqueue_with_backpressure` in `src/api/routes/staleness_alerts.py`). The connection stays
    open but drops oldest events.
 
 ### "Sentinel registration crashes at API startup"
@@ -812,7 +887,7 @@ Check the loader logs for `SentinelConfigLoadError`. Likely causes:
 
 Are you setting `cooldown_minutes = False` (or `True`)? Python's
 `isinstance(False, int)` is `True`. The registration guard catches this
-(`src/memory/sentinels/registry.py:196-208`), but a direct DB write or
+(`register_sentinel` in `src/memory/sentinels/registry.py`), but a direct DB write or
 PostgREST call can smuggle a bool in. `_is_in_cooldown` treats both
 booleans as "no cooldown" since the guarantee is no longer trustworthy.
 
@@ -822,7 +897,8 @@ Fix: `UPDATE sentinels SET cooldown_minutes = <int> WHERE ...`.
 
 ## References
 
-- Plan: `.claude/plans/e2i_memory_subsystems_implementation_plan.md` (Phase 3)
+- Plan: `.claude/plans/archive/e2i_memory_subsystems_implementation_plan_archived_20260520.md`
+  (Phase 3) — archived; local, untracked planning note, historical
 - Registry: `src/memory/sentinels/registry.py`
 - YAML loader: `src/memory/sentinels/config_loader.py`
 - Action handlers: `src/tasks/sentinel_actions.py`
