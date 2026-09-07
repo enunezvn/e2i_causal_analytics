@@ -46,10 +46,24 @@ First build pulls PyTorch + ML dependencies — expect 10-15 minutes. Subsequent
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_KEY` | Supabase anonymous key |
 | `SUPABASE_SERVICE_KEY` | Supabase service role key |
+| `SUPABASE_POSTGRES_PASSWORD` | Password of the self-hosted `supabase-db` container — mirrors `POSTGRES_PASSWORD` in `/opt/supabase/docker/.env`. Compose derives the container-internal `SUPABASE_DB_URL` from it and **refuses to start without it** |
 | `REDIS_PASSWORD` | Redis authentication password |
 | `FALKORDB_PASSWORD` | FalkorDB authentication password |
-| `GRAFANA_ADMIN_PASSWORD` | Grafana admin password |
-| `SUPABASE_DB_URL` | Supabase PostgreSQL connection string |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana admin password — still required with the `monitoring` profile **off** (compose interpolates every service before it filters by profile) |
+| `SUPABASE_DB_URL` | Host-side PostgreSQL connection string — **not** forwarded into containers (see below) |
+
+Four of these are `:?`-enforced in `docker/docker-compose.yml`, so compose exits
+before starting anything if they are unset: `REDIS_PASSWORD`, `FALKORDB_PASSWORD`,
+`SUPABASE_POSTGRES_PASSWORD` and `GRAFANA_ADMIN_PASSWORD`. Everything else fails at
+runtime instead. Validate a candidate `.env` without starting anything:
+
+```bash
+# rc 0 = every :?-enforced variable has a value
+docker compose --env-file .env -f docker/docker-compose.yml config -q
+
+# the enforced set itself, derived rather than remembered
+grep -o '\${[A-Z_]*:?' docker/docker-compose.yml | sort -u
+```
 
 ### Optional LLM configuration
 

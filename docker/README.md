@@ -62,10 +62,19 @@ First build pulls PyTorch + ML dependencies — subsequent starts use cached lay
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_KEY` | Supabase anonymous key |
 | `SUPABASE_SERVICE_KEY` | Supabase service role key |
+| `SUPABASE_POSTGRES_PASSWORD` | Password of the self-hosted `supabase-db` container — mirrors `POSTGRES_PASSWORD` in `/opt/supabase/docker/.env`. Compose derives the container-internal `SUPABASE_DB_URL` from it and **refuses to start without it** |
 | `REDIS_PASSWORD` | Redis authentication password |
 | `FALKORDB_PASSWORD` | FalkorDB authentication password |
-| `GRAFANA_ADMIN_PASSWORD` | Grafana admin password |
-| `SUPABASE_DB_URL` | Supabase PostgreSQL connection string |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana admin password — still required with the `monitoring` profile **off** (compose interpolates every service before it filters by profile) |
+| `SUPABASE_DB_URL` | Host-side PostgreSQL connection string — **not** forwarded into containers (see below) |
+
+`REDIS_PASSWORD`, `FALKORDB_PASSWORD`, `SUPABASE_POSTGRES_PASSWORD` and
+`GRAFANA_ADMIN_PASSWORD` are `:?`-enforced: compose exits before starting anything
+if they are unset. Validate an `.env` without starting anything:
+
+```bash
+docker compose --env-file .env -f docker/docker-compose.yml config -q   # rc 0 = ok
+```
 
 ### Auto-configured (set by compose, no action needed)
 
