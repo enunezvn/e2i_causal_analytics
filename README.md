@@ -10,7 +10,7 @@ Multi-Agent Causal Analytics for Pharmaceutical Drug Adoption Analysis
 [![Frontend Tests](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/frontend-tests.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/frontend-tests.yml)
 [![Security](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/security.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/security.yml)
 [![Deploy](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/deploy.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/deploy.yml)
-[![Type Check](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/verify-types.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/verify-types.yml)
+[![OpenAPI Types](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/verify-types.yml/badge.svg)](https://github.com/enunezvn/e2i_causal_analytics/actions/workflows/verify-types.yml)
 
 ## Overview
 
@@ -30,7 +30,8 @@ E2I Causal Analytics is a sophisticated 22-agent, 6-tier agentic system designed
 - **140+ Database Tables** across core, ML, memory, chat, audit, and RAG schemas
 - **Hybrid RAG System** with vector + full-text + graph search
 - **Full-Stack Dashboard** — React 18 + TypeScript + Vite with 31 pages
-- **Production Observability** — Prometheus, Grafana, Loki, Alertmanager + LLM usage/cost tracking in the `/admin` Observability tab
+- **Production Observability** — LLM usage/cost tracking in the `/admin` Observability tab, always on; the Prometheus/Grafana/Loki/Alertmanager stack is **opt-in** behind the `monitoring` compose profile
+- **In-app "How E2I Works"** — the platform explains itself at `/documentation` (predictive cohorts, intervention channels, agent tiers)
 
 ### Analyzed Brands
 
@@ -86,47 +87,74 @@ e2i_causal_analytics/
 ├── data/
 │   ├── rwd/                   # Real-world data (CSU, Optum) — git-ignored
 │   ├── training/              # fastText corpus
-│   └── kg_cache/              # Knowledge-graph cache (git-ignored)
-│                              # synthetic population data is generated on-demand (not stored)
+│   └── kg_cache/              # Committed Layer-2 KG cache, packaged into the API image
+│                              # (rebuild via docs/runbooks/kg_cache.md)
+│                              # Synthetic population data is generated on-demand (not stored)
 │
-├── src/                       # Main source code
-│   ├── nlp/                   # Query processing, entity extraction
+├── src/                       # Main source code — 27 top-level packages
+│   │                          # (orientation map: docs/ARCHITECTURE.md §3.0)
 │   ├── agents/                # 22 agent implementations (6 tiers)
 │   │   ├── orchestrator/      # Tier 1 coordination (4-stage classifier + router)
 │   │   ├── tool_composer/     # Multi-faceted query decomposition & orchestration
 │   │   ├── experiment_designer/ # Experiment design with Digital Twin pre-screening
 │   │   ├── ml_foundation/     # 7 Tier 0 agents (scope, data, features, models)
-│   │   └── ...                # 11 more agents (causal, monitoring, predictions, etc.)
+│   │   └── ...                # 12 more agents (causal, monitoring, predictions, etc.)
+│   ├── api/                   # FastAPI app, middleware stack, dependencies, route modules
+│   ├── causal/                # Small shared statistics helpers (z-scores) — NOT the engine
+│   ├── causal_engine/         # The causal engine: discovery, hierarchical CATE, IV, uplift,
+│   │                          # refutation, energy-score validation, expert-review gate
+│   ├── data/                  # Data access over the analytic tables (adaptive validity,
+│   │                          # audit sidecars, causal-role classification, leakage checks)
 │   ├── digital_twin/          # A/B test pre-screening with ML-based simulations
-│   ├── tool_registry/         # Tool discovery & management
-│   ├── feature_store/         # Lightweight feature store (Supabase + Redis + MLflow)
+│   ├── etl/                   # Scheduled rollups feeding the analytic marts
+│   ├── feature_store/         # Feast client + the lightweight Redis feature cache
+│   ├── insights/              # Insight generation: causal/clinical context, narratives, labels
+│   ├── kpi/                   # KPI registry calculators, cache, history backfill
+│   ├── lifecycle/             # Gate lifecycle state machine shared by the quality gates
 │   ├── memory/                # Tri-memory backends (working, episodic, procedural, semantic)
-│   ├── causal_engine/         # EconML CausalForestDML, CausalML, DoWhy integration
-│   ├── rag/                   # Hybrid RAG (vector + full-text + graph via FalkorDB)
-│   ├── ml/                    # ML ops + synthetic generators (synthetic/, synthetic_v2/, data_generator.py)
+│   ├── ml/                    # Synthetic generators (synthetic/, synthetic_v2/, data_generator.py)
 │   ├── mlops/                 # MLflow, Opik, Feast, BentoML, SHAP connectors
-│   ├── workers/               # Celery task definitions and event consumers
-│   ├── api/                   # FastAPI endpoints & middleware
-│   └── utils/                 # Shared utilities (circuit breaker, etc.)
+│   ├── nlp/                   # Query processing, entity extraction, typo handling
+│   ├── ontology/              # Ontology YAML compilation, validation & inference
+│   ├── optimization/          # DSPy prompt optimization, GEPA, lane A/B, shared DSPy LM config
+│   ├── rag/                   # Hybrid RAG (vector + full-text + graph via FalkorDB)
+│   ├── repositories/          # Supabase data-access layer, one repository per table family
+│   ├── security/              # PHI scanning
+│   ├── services/              # Cross-cutting app services (admin users, alert routing,
+│   │                          # chat capability catalog, clinical context, cohort resolution)
+│   ├── skills/                # Skill loading & matching for the agent skill packs
+│   ├── tasks/                 # Celery task bodies — every beat_schedule entry lands here
+│   ├── testing/               # In-tree quality gates and contract validators
+│   ├── tool_registry/         # Tool discovery & management
+│   ├── utils/                 # Shared primitives (audit chain, circuit breaker, env diagnostics)
+│   └── workers/               # Celery app, beat_schedule SSOT, worker monitoring, consumers
 │
-├── tests/                     # 1,400+ test files (unit, integration, tier0-5)
+├── tests/                     # unit, integration, e2e, api, rag, ml, performance, security,
+│                              # stress, synthetic, benchmarks, ci, configs, fixtures, insights
 ├── scripts/                   # Utility scripts (deploy, health check, backups, migrations)
 ├── frontend/                  # React 18 + TypeScript + Vite dashboard (31 pages)
 ├── docs/                      # Comprehensive documentation
 │   ├── ARCHITECTURE.md        # C4-model architecture documentation
 │   ├── ONBOARDING.md          # Developer onboarding guide
 │   ├── SYNTHETIC_DATA.md      # Synthetic data generation & validation reference
-│   ├── api/                   # OpenAPI spec (auto-generated, not tracked)
+│   ├── api/                   # Hand-written API notes (chat, crystal digests); the
+│   │                          # OpenAPI spec itself is generated on demand, not tracked
 │   └── data/                  # Data dictionary & conversion docs
 │       ├── 00-INDEX.md        # Master index & quick-start
-│       ├── 01-07 *.md         # Schema docs (core, ML, graph, Feast, KPIs)
+│       ├── 01-08 *.md         # Schema docs (core, ML, graph, Feast, KPIs, leakage)
 │       └── templates/         # CSV templates with example rows
 └── docker/                    # Container configurations
 ```
 
-## Recent Highlights (June–July 2026)
+## Recent Highlights (June–September 2026)
 
-> Ongoing change tracking lives in [`CHANGELOG.md`](CHANGELOG.md) (from July 2026) and the decision log in [`docs/decisions/`](docs/decisions/README.md).
+> Ongoing change tracking lives in [`CHANGELOG.md`](CHANGELOG.md), which is current through September 2026, and the decision log in [`docs/decisions/`](docs/decisions/README.md). The bullets below are a curated skim; the CHANGELOG is the record.
+
+- **Observability is opt-in** — the Prometheus/Grafana/Loki/Alertmanager stack sits behind the `monitoring` compose profile (#1806), so a plain `up -d` starts the platform without it.
+- **Maintenance-cron freshness alarm** — after the droplet's cron layer stopped silently for eight weeks, a freshness check keyed on completed-run stamps now runs unattended from GitHub Actions and files a tracking issue (#1799–#1807, #1810).
+- **Guided causal discovery hardened** — prior-asserted DAGs are no longer reported as discovered, the gate scores bootstrap edge stability, FCI latent diagnostics annotate without gating, and the discovery UI gained question multiselect plus a cooperative Cancel (#1879, #1883, #1886, #1898, #1899).
+- **Sampling-aware model-performance trend** — analytic standard errors and a skipped open walk-forward month, so a partial-month fold no longer reads as "degrading" (#1916).
+- **Copilot suggestion pills from a capability catalog** — pills are generated from declared capabilities and filtered by a validator, so the chat stops offering what the platform cannot serve (#1900–#1919).
 
 - **LLM model refresh + tier factory** — provider-switchable fast/standard/reasoning tiers (OpenAI `gpt-5.6-luna`/`gpt-5.6-terra` default, Anthropic `claude-haiku-4-5`/`claude-sonnet-5` alternative), `LLM_MODEL` deployment override, DSPy default `openai/gpt-5.6-terra`. See [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md).
 - **Admin LLM observability** — every factory LLM call meters tokens into `llm_usage_events`, priced at read time in the `/admin` Observability tab.
@@ -169,7 +197,7 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
 - **Routing Patterns**: `SINGLE_AGENT`, `PARALLEL_DELEGATION`, `TOOL_COMPOSER`, `CLARIFICATION_NEEDED`
 
 ### Configuration Updates
-- **Domain Vocabulary**: Enhanced with Tool Composer ENUMs and routing patterns
+- **Domain Vocabulary**: `config/domain_vocabulary.yaml` carries the Tool Composer vocabularies (`routing_patterns`, `dependency_types`, `tool_categories`) as documentation; the enum the classifier actually enforces is `RoutingPattern` in `src/agents/orchestrator/classifier/schemas.py`
 - **Enhanced Orchestrator**: 4-stage classifier for intelligent query routing
 - **Enhanced Experiment Designer**: Digital twin pre-screening tools integrated
 
@@ -181,7 +209,7 @@ Handle complex, multi-faceted queries with dynamic tool orchestration:
 - Supabase account (or self-hosted Supabase)
 - OpenAI API key (the default LLM provider; Anthropic is the optional alternative — see [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md))
 
-All services (API, frontend, workers, Redis, FalkorDB, MLflow, observability) run in Docker containers via Docker Compose.
+All services (API, frontend, workers, Redis, FalkorDB, MLflow) run in Docker containers via Docker Compose. The observability stack (Prometheus, Grafana, Loki, Promtail, Alertmanager, node/postgres exporters) is **opt-in** behind the `monitoring` compose profile; `falkordb-browser` is behind `debug`.
 
 ### Installation
 
@@ -196,6 +224,11 @@ All services (API, frontend, workers, Redis, FalkorDB, MLflow, observability) ru
 2. **Start all services**
    ```bash
    docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+   ```
+
+   To bring up the observability stack as well:
+   ```bash
+   COMPOSE_PROFILES=monitoring docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
    ```
 
    Optional overlays (Opik observability — currently not run in production — and debug tools) are described in `DEPLOYMENT.md`.
@@ -232,14 +265,16 @@ All workflows live in `.github/workflows/` and run on GitHub Actions. The main o
 |----------|------|---------|---------|
 | Backend Tests | `backend-tests.yml` | Push/PR | pytest with coverage gate + MyPy error-count ceiling |
 | Frontend Tests | `frontend-tests.yml` | Push/PR | Vitest + coverage thresholds |
-| Tier 1-5 Agent Harness | `tier1-5-test.yml` | PR (path-filtered) | Agent-tier integration harness (required check) |
+| Tier 1-5 Agent Harness | `tier1-5-test.yml` | Every PR + weekly Monday cron | Agent-tier integration harness (required check). Path gating lives **inside** a `changes` job so the required context always reports and never sits Pending (#1445) |
 | Deploy | `deploy.yml` | Push to main (path-filtered) | CI image build+push to GHCR, then gated droplet deploy with auto-rollback |
-| Security | `security.yml` | Push/PR + daily cron | Bandit, pip-audit, Semgrep, secrets scan |
+| Security | `security.yml` | Push/PR + daily cron | Bandit, pip-audit, Semgrep, gitleaks secrets scan, `npm audit` (frontend) |
 | Verify OpenAPI Types | `verify-types.yml` | Push/PR (path-filtered) | Regenerates the OpenAPI spec, Spectral lint, frontend type-drift check |
 | RAGAS Fixture Regression | `ragas-evaluation.yml` | **Manual only** | Judge-drift sentinel on FROZEN input — scores a static fixture, **not** production quality (#1485). gpt-4o judge; CI-key throughput-bound, see #504 |
 | Synthetic Benchmarks | `synthetic-benchmarks.yml` | Push/PR | Causal engine benchmark suite |
+| Slow Tests | `slow-tests.yml` | Nightly 05:00 UTC + manual | `pytest -m slow` and the heavy e2e suites excluded from the PR run; upstream-transient reds are routed to a rolling issue rather than the red alarm (#1816, #1823) |
+| Maintenance Freshness | `maintenance-freshness.yml` | Nightly 07:30 UTC + manual | Unattended audit of the droplet's `e2i-maintenance` cron layer from its success stamps; files/updates a tracking issue on failure (#1807) |
 
-Plus specialized guard workflows (feature contract, lifecycle state, RPC DDL, methodology sign-off, lockfile resolution, slow tests, retrieval benchmarks).
+That table is the operator-facing subset. `ls .github/workflows/*.yml` is the full list (23 today) and also covers the guard and benchmark workflows: feature contract, lifecycle state, RPC DDL, methodology sign-off (two workflows), G3 wiring, lockfile resolution, retrieval benchmarks, general benchmarks, Feast apply, RAGAS smoke, and the tier-1b B2 diagnostic/experiment pair.
 
 > **Measuring real RAG quality.** `ragas-evaluation.yml` never invokes the RAG
 > pipeline — it judges the golden set's hardcoded answers over contexts that are
@@ -264,7 +299,7 @@ Key scripts in `scripts/`:
 
 **Core Operations**
 - `deploy.sh` — Manual deploy path (git pull, restart workers, seed FalkorDB, health check); the normal production deploy is CI's `deploy.yml`, which does NOT invoke this script
-- `health_check.sh` — Check all 24 services (HTTP, Redis, FalkorDB, Supabase, observability)
+- `health_check.sh` — Probes every service a default `up` starts, deriving the set from `docker compose config --services`; profile-gated services (monitoring, debug, dev-tools) report SKIPPED and Opik reports UNHEALTHY by design. Also reports the maintenance-cron freshness verdict
 - `run_migrations.sh` — Ledger-tracked migration runner over all `database/` dirs; auto-detects `SUPABASE_DB_URL` vs docker-exec into `supabase-db`; run unconditionally by every deploy
 - `backup_data_stores.sh` — Backup Redis, FalkorDB, MLflow artifacts
 - `backup_cron.sh` — Scheduled backup wrapper
@@ -273,7 +308,24 @@ Key scripts in `scripts/`:
 - `run_tests_batched.sh` — Full test suite in 43 batches (~20 min)
 - `run_frontend_tests_batched.sh` — Frontend test suite in batches
 
+**Maintenance (`scripts/maintenance/`, driven by the droplet's `e2i-maintenance` crontab)**
+- `check_maintenance_freshness.sh` — Are the cron jobs actually running? Answers from their success stamps, with each interval derived from the crontab itself. Deliberately **not** in the crontab it audits — see [`docs/runbooks/maintenance-cron.md`](docs/runbooks/maintenance-cron.md)
+- `memory_monitor.sh` — Memory relief valve (`--auto-cleanup`) on a box that runs prod and dev together
+- `cleanup_orphans.sh`, `docker_cleanup.sh` — Orphaned-process and Docker-artifact reaping
+- `setup_cron.sh`, `resize_swap.sh`, `harden_ssh.sh` — One-shot box setup helpers
+
+**Data & models**
+- `reseed_synthetic.sh` — Staged synthetic reseed (stages in `scripts/lib/reseed_stages.sh`) — see [`docs/runbooks/synthetic_reseed.md`](docs/runbooks/synthetic_reseed.md)
+- `promote_hcp_adoption_champions.py` — Calibrate and promote the goldstd hcp_adoption models to champion
+- `rag/ingest_chunk_corpus.py` — Populate the chat-RAG chunk corpus in the embedding space the retriever queries
+- `gen_kpi_catalog.py` — Regenerate the KPI catalog consumed by chat charting
+- `build_kg_cache.py` — Rebuild the committed Layer-2 KG cache — see [`docs/runbooks/kg_cache.md`](docs/runbooks/kg_cache.md)
+
+**Evaluation**
+- `replay_golden_set.py` + `run_real_pipeline_ragas.py` — Replay the golden set through the live pipeline and judge the real output (the honest RAG-quality measurement; see the note above)
+
 **Infrastructure**
+- `deploy/check_image_drift.py` — Fail-loud drift check between the built image and what the droplet runs — see [`docs/runbooks/deploy-operations.md`](docs/runbooks/deploy-operations.md)
 - `opik-manager.sh` — Start/stop/status for the Opik overlay (intentionally stopped in production)
 - `setup_branch_protection.sh` — Configure GitHub branch protection via `gh api`
 - `ssh-tunnels/tunnels.sh` — SSH tunnel launcher for remote management ports
@@ -292,10 +344,19 @@ Key scripts in `scripts/`:
 ```bash
 make help           # Show all available commands
 make test           # Run test suite
-make lint           # Check code quality
-make format         # Format code with black
+make lint           # ruff check src/ tests/ + whole-tree mypy
+make format         # black src/ tests/ + ruff check --fix
+make generate-types # Export openapi.json, regenerate frontend/src/types/generated/api.ts
 make clean          # Clean build artifacts
 ```
+
+> `make lint` runs whole-tree mypy, which peaks around 1.6 GiB — do not run it on the
+> droplet, where production and development share one box. Scope local checks to the files
+> you changed (`mypy <file>`) and let CI's `Type Check (MyPy)` job be the arbiter. CI's
+> formatter gate is `ruff format --check`, which is separate from `make format`'s `black`.
+>
+> Run `make generate-types` whenever a response model changes — the frontend type-drift
+> check in `verify-types.yml` fails otherwise.
 
 ### Running Tests
 
@@ -308,7 +369,7 @@ pytest tests/ -v --cov=src
 ### Real-Time Model Interpretability (v4.1)
 
 **SHAP Explanations API**
-- 5 REST endpoints (/predict, /batch, /history, /models, /health)
+- 7 REST endpoints under `/api/explain`: `/predict`, `/predict/batch`, `/history/{patient_id}`, `/models`, `/sample-entities`, `/global`, `/health`
 - 50-500ms latency (TreeExplainer for tree models, KernelExplainer for others)
 - Natural language chat integration ("Why is patient X flagged?")
 - Compliance audit trail with row-level security
@@ -328,7 +389,8 @@ pytest tests/ -v --cov=src
 ```python
 # Import API routes
 from src.api.routes.explain import router as explain_router
-app.include_router(explain_router, prefix="/api/v1")
+# The public API base is /api, not /api/v1 (src/api/main.py)
+app.include_router(explain_router, prefix="/api")
 
 # Import chat tools
 from src.agents.orchestrator.tools.explain_tool import ExplainIntentHandler
@@ -424,6 +486,10 @@ See [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md) for the full refere
 4. Bootstrap estimation
 5. Sensitivity analysis (E-value)
 
+Each test carries a three-state verdict — **passed** | **warning** | **failed** (#1869) — and
+tests that could not run are reported in `skipped_tests` with a reason rather than silently
+counted as passes.
+
 Gate decisions: **proceed** | **review** | **block**
 
 ### Query Robustness
@@ -436,14 +502,14 @@ Gate decisions: **proceed** | **review** | **block**
 ## Database
 
 140+ tables across 8 categories:
-- **Core Data** (19): patient_journeys, hcp_profiles, treatment_events, triggers, business_metrics, etc.
+- **Core Data**: patient_journeys, hcp_profiles, treatment_events, triggers, business_metrics, agent_tier_mapping, etc.
 - **ML Pipeline** (60+): experiments, model registry, digital twins, causal validation, A/B testing, GEPA, cohort constructor, etc.
-- **Memory** (7): episodic_memories, procedural_memories, semantic_cache, cognitive_cycles, etc.
+- **Memory** (7): episodic_memories, procedural_memories, semantic_memory_cache, cognitive_cycles, etc.
 - **RAG** (2): rag_document_chunks (HNSW), rag_search_logs
 - **Chat** (10+): chat_threads, chat_messages, user_preferences (RLS), chatbot analytics, feedback, training signals
-- **Audit** (3): audit_chain_entries (SHA-256 hash chain), verification_log, security_audit_log (partitioned)
+- **Audit** (3): audit_chain_entries (SHA-256 hash chain), audit_chain_verification_log, security_audit_log (partitioned)
 - **FalkorDB Graph**: 10 entity types, 11 relationship types (`E2IEntityType` / `E2IRelationshipType` in `src/memory/graphiti_config.py`)
-- **Feast Feature Store**: 10 feature views, 48 features
+- **Feast Feature Store**: see [`docs/data/05-FEATURE-STORE-REFERENCE.md`](docs/data/05-FEATURE-STORE-REFERENCE.md) for the current feature views and fields (derive with `grep -c 'FeatureView(' feature_repo/features/*.py`)
 
 See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dictionary and schema documentation.
 
@@ -460,10 +526,19 @@ See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dicti
   - [Feature Store Reference](docs/data/05-FEATURE-STORE-REFERENCE.md) — Feast entities & features
   - [KPI Reference](docs/data/06-KPI-REFERENCE.md) — All KPIs with formulas & thresholds
   - [Supporting Schemas](docs/data/07-SUPPORTING-SCHEMAS.md) — Memory, RAG, Chat, Audit
+  - [Leakage Detection Contract](docs/data/08-LEAKAGE-DETECTION-CONTRACT.md) — What counts as leakage and how it is checked
   - [CSV Templates](docs/data/templates/) — Ready-to-use templates with example rows
 - **LLM Configuration**: [`docs/LLM_CONFIGURATION.md`](docs/LLM_CONFIGURATION.md) — Provider default, model tiers, overrides, usage metering & pricing
-- **API Reference**: OpenAPI 3.0 spec, auto-generated on demand (`make api-docs`) and per-PR in CI (`verify-types.yml`) — not tracked in git
-- **Migrations Runbook**: [`docs/runbooks/migrations.md`](docs/runbooks/migrations.md) — How migrations apply (auto on deploy + manual path)
+- **API Reference**: the OpenAPI 3.0 spec is generated on demand (`make api-docs` / `make generate-types`) and per-PR in CI (`verify-types.yml`) — the generated spec is not tracked in git, but `docs/api/` does track hand-written notes ([`chat.md`](docs/api/chat.md), [`crystal_digests.md`](docs/api/crystal_digests.md))
+- **Runbooks**: [`docs/runbooks/`](docs/runbooks/) — operator procedures:
+  - [`migrations.md`](docs/runbooks/migrations.md) — how migrations apply (auto on deploy + manual path)
+  - [`deploy-operations.md`](docs/runbooks/deploy-operations.md) — the CI deploy path, sha selection, image drift, rollback
+  - [`maintenance-cron.md`](docs/runbooks/maintenance-cron.md) — the droplet's `e2i-maintenance` crontab and its freshness alarm
+  - [`synthetic_reseed.md`](docs/runbooks/synthetic_reseed.md) — staged synthetic reseed
+  - [`kg_cache.md`](docs/runbooks/kg_cache.md) — rebuilding the committed Layer-2 knowledge-graph cache
+  - [`sentinels.md`](docs/runbooks/sentinels.md) — graph-emptiness and related self-healing sentinels
+  - [`frontend-env-and-csp.md`](docs/runbooks/frontend-env-and-csp.md) / [`frontend-serving-flip.md`](docs/runbooks/frontend-serving-flip.md) — frontend build env, CSP, and serving mode
+  - [`gotrue-smtp.md`](docs/runbooks/gotrue-smtp.md) / [`reviewer-provisioning.md`](docs/runbooks/reviewer-provisioning.md) — auth mail and reviewer accounts
 - **Developer Reference**: `CLAUDE.md` — Quick reference for AI-assisted development
 
 ## Tech Stack
@@ -491,6 +566,6 @@ For questions or issues, please contact the E2I development team.
 
 ---
 
-**Version**: 4.2.1
-**Last Updated**: July 2026
-**Recent**: LLM model refresh + tier factory, admin LLM observability, GHCR-based gated deploys, KPI/causal-engine deepening (see Recent Highlights above)
+**Version**: 4.2.1 (`pyproject.toml`; there is no tagged release — see [`CHANGELOG.md`](CHANGELOG.md))
+**Last Updated**: September 2026
+**Recent**: opt-in observability profile, maintenance-cron freshness alarm, guided causal-discovery hardening + discovery UX, sampling-aware model-performance trend, capability-catalog copilot pills (see Recent Highlights above)
