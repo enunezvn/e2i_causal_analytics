@@ -43,6 +43,13 @@ already reports that mismatch and has done so since long before this issue.
 Pinning it here would either fail on arrival or force a rewrite of a shipped
 migration — see #607, which layered it out for the same reason.
 
+#1932 adds a **different** DB enum, and the distinction matters: ``e2i_agent_name``
+(``database/memory/``) is the LIVE column type behind ``episodic_memories.agent_name``
+and ``learning_signals.rated_agent``, not a frozen artifact. It is asserted here
+because ``cohort_profiler`` reached the roster (#1779) and the Pydantic mirror
+(#1638) while no migration ever reached Postgres, so the enum rejected a name the
+API will hand it. See the ``e2i_agent_name`` section at the bottom of this file.
+
 **Known blind spot, stated rather than papered over.** ``backend-tests.yml``
 gates its whole matrix on a path list that covers ``src/`` and ``tests/`` but
 NOT ``config/``. So this guard runs on the change that matters — registering a
@@ -62,6 +69,7 @@ import pytest
 import yaml
 
 from src.agents.factory import AGENT_REGISTRY_CONFIG, AGENT_TIER_NAMES
+from src.memory.episodic_memory import E2IAgentName
 from src.mlops.opik_connector import OpikConnector
 from src.mlops.slo_monitor import AGENT_TIER_MAP, AgentTier, get_agent_tier
 
@@ -566,3 +574,141 @@ class TestOpikConnectorTierRoster:
         value-based assertion can see them.
         """
         assert connector._get_agent_tier(_NOT_AN_AGENT) not in REAL_TIER_NUMBERS
+
+
+# ============================================================================
+# #1932: the Postgres ``e2i_agent_name`` enum must accept every agent name the
+# code can hand it.
+# ============================================================================
+#
+# ``episodic_memories.agent_name`` and ``learning_signals.rated_agent`` are both
+# typed ``e2i_agent_name``. ``src/api/routes/memory.py`` passes the caller's
+# ``agent_name`` through to ``rated_agent`` on procedural feedback, so a name the
+# Pydantic mirror accepts but the enum does not reaches Postgres as a 22P02
+# ("invalid input value for enum") on insert. That is how ``cohort_profiler``
+# broke: #1779 / PR #1790 put it in the roster, #1638 put it in the Python
+# mirror, and no migration put it in Postgres.
+#
+# The DB side is read from the migration files rather than from a live
+# connection: CI's unit lane has no database, and the parse is faithful because
+# ``database/memory/`` is the ONLY place the type is created or extended (001
+# creates it, 018/029/041/048 extend it) and the parsed set was verified
+# set-equal to the droplet's live ``pg_enum`` at the time this guard landed.
+
+MEMORY_MIGRATIONS_DIR = REPO_ROOT / "database" / "memory"
+
+#: ``CREATE TYPE e2i_agent_name AS ENUM (...)`` -- the 12 originals in 001.
+_ENUM_CREATE = re.compile(
+    r"CREATE\s+TYPE\s+e2i_agent_name\s+AS\s+ENUM\s*\((.*?)\)\s*;", re.S | re.I
+)
+#: ``ALTER TYPE e2i_agent_name ADD VALUE [IF NOT EXISTS] 'x'`` -- every extension.
+_ENUM_ADD_VALUE = re.compile(
+    r"ALTER\s+TYPE\s+e2i_agent_name\s+ADD\s+VALUE\s+(?:IF\s+NOT\s+EXISTS\s+)?'([a-z0-9_]+)'",
+    re.I,
+)
+_SQL_LABEL = re.compile(r"'([a-z0-9_]+)'")
+_SQL_LINE_COMMENT = re.compile(r"--.*$", re.M)
+
+#: Enum labels that are deliberately NOT registry agents. Both were intent-checked
+#: in #1932 and both must stay:
+#:
+#: * ``corpus_ingestion`` -- a RAG pipeline, not a dispatched agent. It is written
+#:   by ``src/rag/corpus_ingestion.py`` (migration 041) and had 137 live rows when
+#:   this guard landed, so it is absent from the roster by design.
+#: * ``fairness_guardian`` -- DEPRECATED but kept on purpose. 48261d223 records
+#:   the reason verbatim: "Intentional: fairness_guardian KEPT (DEPRECATED) in
+#:   the enums for backwards-compat with existing memory rows." Postgres cannot
+#:   drop an enum value in place regardless, so removing it reclaims nothing.
+#:
+#: A THIRD name showing up here is a decision, not a typo: either the roster lost
+#: an agent, or a new non-agent writer needs its reason recorded above.
+_ENUM_ONLY_LABELS: Set[str] = {"corpus_ingestion", "fairness_guardian"}
+
+
+def _e2i_agent_name_labels() -> Set[str]:
+    """Every label the deployed ``e2i_agent_name`` enum has, read from the SQL."""
+    labels: Set[str] = set()
+    for path in sorted(MEMORY_MIGRATIONS_DIR.glob("*.sql")):
+        # Strip ``--`` comments first: 029 and 041 both quote their own
+        # ``ALTER TYPE ... ADD VALUE`` line inside the header prose, and 001's
+        # header names labels it does not define.
+        sql = _SQL_LINE_COMMENT.sub("", path.read_text())
+        for body in _ENUM_CREATE.findall(sql):
+            labels |= set(_SQL_LABEL.findall(body))
+        labels |= set(_ENUM_ADD_VALUE.findall(sql))
+    return labels
+
+
+class TestE2IAgentNameEnumParserIsNotVacuous:
+    """A parser that silently matches nothing would make every guard below pass.
+
+    ``labels >= X`` is only meaningful if ``labels`` really is the enum. These
+    tests pin one label from each arm of the parse, plus strings that must never
+    appear, so a regex that stops matching fails HERE with a readable reason
+    instead of turning the subset assertions into no-ops.
+    """
+
+    def test_reads_the_create_type_arm(self) -> None:
+        """``orchestrator`` exists only in 001's ``CREATE TYPE`` body."""
+        assert "orchestrator" in _e2i_agent_name_labels()
+
+    def test_reads_the_add_value_arm(self) -> None:
+        """``corpus_ingestion`` exists only in 041's ``ALTER TYPE ... ADD VALUE``."""
+        assert "corpus_ingestion" in _e2i_agent_name_labels()
+
+    def test_does_not_invent_labels(self) -> None:
+        """The label regex is greedy over quoted strings; keep it inside the enum."""
+        labels = _e2i_agent_name_labels()
+        assert _NOT_AN_AGENT not in labels
+        # 001 defines several other enums (``cognitive_phase``,
+        # ``learning_signal_type``, ...) in the same file. None of their values
+        # may leak into this set.
+        assert "thumbs_up" not in labels
+        assert "reflector" not in labels
+
+
+class TestE2IAgentNameEnumCoversTheRegistry:
+    """Roster and Pydantic mirror must both be SUBSETS of the Postgres enum.
+
+    Subset, not set equality: the enum legitimately carries names that are not
+    dispatched agents (see :data:`_ENUM_ONLY_LABELS`). What it may never do is
+    LACK a name the code can produce, because that failure mode is a 22P02 at
+    insert time, swallowed by a broad ``except`` into a ``logger.warning``.
+    """
+
+    def test_every_registry_agent_is_a_valid_enum_label(self) -> None:
+        labels = _e2i_agent_name_labels()
+        missing = sorted(REGISTRY_IDS - labels)
+        assert not missing, (
+            "factory.AGENT_REGISTRY_CONFIG names that the Postgres e2i_agent_name "
+            f"enum cannot store: {missing}.\n"
+            "Add them with an idempotent ALTER TYPE ... ADD VALUE IF NOT EXISTS "
+            "migration in database/memory/ (see 048 for the shape); registering an "
+            "agent in Python is only half the change."
+        )
+
+    def test_every_pydantic_mirror_value_is_a_valid_enum_label(self) -> None:
+        """``E2IAgentName`` is what the API validates against before the insert.
+
+        This is the guard #1638 needed and did not have: the mirror gained
+        ``COHORT_PROFILER`` while Postgres did not, which turns a Pydantic-valid
+        request into a database error rather than a 422.
+        """
+        labels = _e2i_agent_name_labels()
+        mirror = {member.value for member in E2IAgentName}
+        missing = sorted(mirror - labels)
+        assert not missing, (
+            "src.memory.episodic_memory.E2IAgentName accepts values the Postgres "
+            f"e2i_agent_name enum rejects (22P02 on insert): {missing}"
+        )
+
+    def test_enum_only_labels_are_the_two_documented_non_agent_writers(self) -> None:
+        """Pins WHY the enum is bigger than the roster, so neither side drifts silently."""
+        labels = _e2i_agent_name_labels()
+        assert labels - REGISTRY_IDS == _ENUM_ONLY_LABELS, (
+            "the set of e2i_agent_name labels that are not registry agents changed.\n"
+            f"  now: {sorted(labels - REGISTRY_IDS)}\n"
+            f"  documented: {sorted(_ENUM_ONLY_LABELS)}\n"
+            "Adding one means recording its reason on _ENUM_ONLY_LABELS; losing one "
+            "means an agent left the registry while its enum label stayed behind."
+        )
