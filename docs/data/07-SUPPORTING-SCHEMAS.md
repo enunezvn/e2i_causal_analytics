@@ -110,11 +110,20 @@ VALUE` statements under `database/memory/` and `database/migrations/`.
 >   config by #1790; no `ALTER TYPE ... ADD VALUE` was ever written for it).
 >   This is a **known gap**, recorded here rather than papered over. It is
 >   currently latent: `src/agents/cohort_profiler/` writes no memory rows, so
->   nothing inserts a value the enum would reject. **If that agent ever writes
->   an episodic/learning row, this becomes a hard insert failure and needs a
->   memory migration first.**
+>   nothing inserts a value the enum would reject. **But there is already one
+>   reachable path** — `src/api/routes/memory.py` passes `rated_agent` straight
+>   through on procedural feedback, so a client posting `"cohort_profiler"`
+>   raises a 22P02 today. Tracked as issue #1932; needs a memory migration.
 > - **`fairness_guardian`** and **`corpus_ingestion`** are enum values with no
->   agent in the config roster.
+>   agent in the config roster — **but for opposite reasons, and neither is a
+>   cleanup candidate.** `corpus_ingestion` has **live rows** (137 as of
+>   2026-09-07) written by `src/rag/corpus_ingestion.py` (migration 041); it is
+>   absent from the roster because it is a **RAG pipeline, not a dispatched
+>   agent**. `fairness_guardian` has no rows, but commit `48261d223` records the
+>   retention as deliberate — *"KEPT (DEPRECATED) in the enums for
+>   backwards-compat with existing memory rows"* — and Postgres cannot drop an
+>   enum value in place regardless. Verify before acting:
+>   `docker exec -i supabase-db psql -U postgres -d postgres -tAc "SELECT agent_name, count(*) FROM episodic_memories GROUP BY 1;"`
 >
 > Re-derive rather than trusting this note:
 > `grep -rn "'cohort_profiler'" database/memory/ database/migrations/ | grep -c 'ADD VALUE'`
