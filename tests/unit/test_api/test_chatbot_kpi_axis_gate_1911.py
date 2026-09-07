@@ -300,3 +300,30 @@ def test_allowlist_equals_the_kpis_whose_calculator_binds_the_axis():
     # nothing bound) -- documented here so the exclusion is visibly deliberate.
     assert "WS3-BI-009" in refused_by_calculator["biologic"]
     assert "WS3-BI-009" in refused_by_calculator["ige_tier"]
+
+
+# =============================================================================
+# THE TOOL'S OWN PROSE (reaches the LLM as the tool description)
+# =============================================================================
+
+
+@pytest.mark.unit
+def test_axis_field_descriptions_and_docstring_name_the_served_kpis():
+    from src.api.routes.chatbot_tools import KpiCalculateInput, kpi_calculate_tool
+
+    doc = kpi_calculate_tool.coroutine.__doc__ or ""
+    for axis in _AXIS_PROBE:
+        desc = KpiCalculateInput.model_fields[axis].description or ""
+        assert "TRx" in desc and "NBRx" in desc, axis
+        assert "never silently dropped" in desc, axis
+        assert f"{axis}:" in doc, axis
+    for axis in ("segment", "therapy_line"):
+        assert "conversion rate" in KpiCalculateInput.model_fields[axis].description.lower()
+    for axis in ("biologic", "ige_tier"):
+        desc = KpiCalculateInput.model_fields[axis].description.lower()
+        assert "conversion rate" not in desc, axis
+        assert "remibrutinib only" in desc, axis
+    assert "CATE" in KpiCalculateInput.model_fields["segment"].description
+    assert "CATE" not in KpiCalculateInput.model_fields["therapy_line"].description
+    # #1910 window wording is untouched (it was just certified).
+    assert "A window composes with any ONE" in doc

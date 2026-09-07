@@ -1934,21 +1934,27 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Optional severity tier filter: one of low_severity, "
-            "medium_severity, high_severity. Mutually exclusive with "
-            "region/therapy_line."
+            "medium_severity, high_severity. Served ONLY by TRx, NRx, NBRx, "
+            "TRx share, conversion rate and CATE (#1911) -- any other KPI "
+            "returns an error, the filter is never silently dropped. Mutually "
+            "exclusive with region/therapy_line."
         ),
     )
     therapy_line: Optional[str] = Field(
         default=None,
         description=(
             "Optional line-of-therapy filter: one of '0', '1', '2', '3'. "
-            "Mutually exclusive with region/segment."
+            "Served ONLY by TRx, NRx, NBRx, TRx share and conversion rate "
+            "(#1911) -- any other KPI returns an error, the filter is never "
+            "silently dropped. Mutually exclusive with region/segment."
         ),
     )
     biologic: Optional[str] = Field(
         default=None,
         description=(
             "Optional biologic-status filter: 'naive' or 'experienced'. "
+            "Served ONLY by TRx, NRx, NBRx and TRx share (#1911) -- any other "
+            "KPI returns an error, the filter is never silently dropped. "
             "AVAILABLE FOR REMIBRUTINIB ONLY -- for any other brand the tool "
             "returns an error (the data is 100% NULL by design); do NOT retry "
             "or fabricate a split. Mutually exclusive with "
@@ -1959,7 +1965,9 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Optional IgE-tertile filter: 'low', 'medium', or 'high' "
-            "(data-driven tertiles, not a clinical threshold). AVAILABLE FOR "
+            "(data-driven tertiles, not a clinical threshold). Served ONLY by "
+            "TRx, NRx, NBRx and TRx share (#1911) -- any other KPI returns an "
+            "error, the filter is never silently dropped. AVAILABLE FOR "
             "REMIBRUTINIB ONLY -- other brands return an error; do NOT fabricate. "
             "Mutually exclusive with region/segment/therapy_line/biologic."
         ),
@@ -2417,15 +2425,23 @@ async def kpi_calculate_tool(
             region-scoped ("applied") or global ("not_applicable" — never
             present those as region-specific).
         segment: optional severity tier filter (low_severity, medium_severity,
-            high_severity); mutually exclusive with region/therapy_line.
-        therapy_line: optional line-of-therapy filter ('0'-'3'); mutually
+            high_severity), served ONLY by TRx, NRx, NBRx, TRx share,
+            conversion rate and CATE (#1911) -- any other KPI returns an error
+            (never a silent drop); mutually exclusive with region/therapy_line.
+        therapy_line: optional line-of-therapy filter ('0'-'3'), served ONLY
+            by TRx, NRx, NBRx, TRx share and conversion rate (#1911) -- any
+            other KPI returns an error (never a silent drop); mutually
             exclusive with region/segment.
         biologic: optional biologic-status filter ('naive'/'experienced'),
-            REMIBRUTINIB ONLY -- returns an error for other brands (data is
-            NULL by design); mutually exclusive with the other axes.
+            served ONLY by TRx, NRx, NBRx and TRx share (#1911) and
+            REMIBRUTINIB ONLY -- returns an error for any other KPI or brand
+            (data is NULL by design; never a silent drop); mutually exclusive
+            with the other axes.
         ige_tier: optional IgE-tertile filter ('low'/'medium'/'high',
-            data-driven), REMIBRUTINIB ONLY -- returns an error for other
-            brands; mutually exclusive with the other axes.
+            data-driven), served ONLY by TRx, NRx, NBRx and TRx share (#1911)
+            and REMIBRUTINIB ONLY -- returns an error for any other KPI or
+            brand (never a silent drop); mutually exclusive with the other
+            axes.
         trigger_type: optional trigger-type filter, TRIGGER-EFFECTIVENESS KPIs
             ONLY (#1360) -- returns an error for any other KPI (never a
             silent drop).
