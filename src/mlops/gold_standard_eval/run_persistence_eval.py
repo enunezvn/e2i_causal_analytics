@@ -313,7 +313,7 @@ async def _run_one_cohort(
     slope_ci = calibration_slope_ci(y_holdout, y_score)
     await recorder.record_run(
         model_handle,
-        [(holdout_ts, holdout_metrics, n_holdout)],
+        [(holdout_ts, holdout_metrics, n_holdout, float(np.mean(y_holdout)))],
         source=_HOLDOUT_SOURCE,
         split_version=None,
         cis=(

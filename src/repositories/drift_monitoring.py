@@ -190,6 +190,31 @@ def _is_uuid(value: Optional[str]) -> bool:
     return bool(value and _UUID_RE.match(value))
 
 
+def _current_month_start(now: Optional[datetime] = None) -> datetime:
+    """First instant (UTC) of the calendar month containing ``now``."""
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _is_open_month_backtest_row(row: Dict[str, Any], month_start: datetime) -> bool:
+    """True for a ``backtest_wf`` row whose fold month has not closed yet."""
+    if (row.get("source") or "") != "backtest_wf":
+        return False
+    raw = row.get("measured_at")
+    if isinstance(raw, datetime):
+        measured = raw
+    elif isinstance(raw, str):
+        try:
+            measured = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    else:
+        return False
+    if measured.tzinfo is None:
+        measured = measured.replace(tzinfo=timezone.utc)
+    return measured >= month_start
+
+
 async def _resolve_model_id(client: Any, model_version: Optional[str]) -> Optional[str]:
     """Resolve an app-level model handle to a ``model_id`` uuid.
 
@@ -483,6 +508,13 @@ class PerformanceMetricRecord(BaseModel):
     # (pre-B2 behaviour unchanged for every existing caller).
     ci_lower: Optional[float] = None
     ci_upper: Optional[float] = None
+    # Share of positive labels in the evaluation window (existing nullable
+    # ml_performance_metrics.positive_rate column, migration 017 — NO
+    # migration). The gold-standard eval writes it on every walk-forward /
+    # holdout row so the trend classifier can derive the AUC's Hanley-McNeil
+    # standard error from the fold's class counts (2026-09-07). Omitted from
+    # to_db_row() when None so every other caller keeps NULL.
+    positive_rate: Optional[float] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def to_db_row(self) -> Dict[str, Any]:
@@ -508,6 +540,8 @@ class PerformanceMetricRecord(BaseModel):
             row["ci_lower"] = self.ci_lower
         if self.ci_upper is not None:
             row["ci_upper"] = self.ci_upper
+        if self.positive_rate is not None:
+            row["positive_rate"] = self.positive_rate
         return row
 
     @classmethod
@@ -1070,6 +1104,7 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
         measured_at: Optional[datetime] = None,
         source: Optional[str] = None,
         cis: Optional[Dict[str, Tuple[float, float]]] = None,
+        positive_rate: Optional[float] = None,
     ) -> List[PerformanceMetricRecord]:
         """Record performance metrics for a model.
 
@@ -1091,6 +1126,10 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
                 nullable ``ci_lower``/``ci_upper`` columns); metrics absent from
                 the mapping keep NULL columns. Used by the gold-standard holdout
                 eval for the bootstrap ``calibration_slope`` CI (B2).
+            positive_rate: Share of positive labels in the window, written to
+                every metric row of this point (the fold's class balance, which
+                the trend classifier needs for the AUC standard error). None
+                keeps the column NULL.
         """
         if not self.client or not metrics:
             return []
@@ -1115,6 +1154,8 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
             if ci is not None:
                 kwargs["ci_lower"] = float(ci[0])
                 kwargs["ci_upper"] = float(ci[1])
+            if positive_rate is not None:
+                kwargs["positive_rate"] = float(positive_rate)
             records.append(PerformanceMetricRecord(**kwargs))
 
         data = [r.to_db_row() for r in records]
@@ -1187,6 +1228,16 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
         # legacy null) are retained; the headline holdout metric is read
         # separately via get_latest_curve / the holdout path.
         rows = [r for r in (result.data or []) if (r.get("source") or "") != "holdout"]
+        # A walk-forward fold is one CALENDAR MONTH of rows; the month that is
+        # still open (the current one) is a partial fold whose metric moves
+        # every weekly re-run as rows arrive (measured 2026-09: n=54 in week 1
+        # vs ≈230 at month end) and whose sampling error dwarfs any trend
+        # threshold. WalkForwardRunner no longer emits it; this read-side guard
+        # keeps rows written by an older runner (or a manual mid-month run)
+        # from becoming "current" on the page / in the alerts. Daily-window
+        # rows (source 'mlflow' / legacy null) are NOT month folds and stay.
+        month_start = _current_month_start()
+        rows = [r for r in rows if not _is_open_month_backtest_row(r, month_start)]
         return [self._to_model(row) for row in rows]
 
     async def record_curve(

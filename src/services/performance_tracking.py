@@ -10,13 +10,29 @@ Tracks model performance metrics over time:
 """
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from src.services.performance_trend_stats import TrendPoint, assess_trend
+
 logger = logging.getLogger(__name__)
+
+
+def _as_int(v: Any) -> Optional[int]:
+    """int for a real number, else None (MagicMock / None / str → None)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return int(v) if v == v else None  # NaN guard
+
+
+def _as_float(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v) if v == v else None
 
 
 @dataclass
@@ -44,11 +60,26 @@ class PerformanceTrend:
     trend: str  # improving, stable, degrading
     is_significant: bool
     alert_threshold_breached: bool
-    # The metric level below which an alert fires — the higher of the relative
-    # floor (baseline * (1 - degradation_threshold)) and the absolute floor
-    # (absolute_min_accuracy). 0.0 when there is no data. Surfaced so the UI can
-    # plot it as the trend chart's alert-threshold line.
+    # The alert FLOOR: the higher of the relative floor
+    # (baseline * (1 - degradation_threshold)) and the absolute floor
+    # (absolute_min_accuracy). A fold must be at/below it for an alert to fire,
+    # but since 2026-09-07 the relative-drop alert ALSO requires ``trend ==
+    # "degrading"`` (outside sampling noise), so a fold below the floor is not
+    # necessarily an alert — only a fold below absolute_min_accuracy always is.
+    # 0.0 when there is no data. Surfaced so the UI can plot the floor.
     alert_threshold: float = 0.0
+    # Sampling-aware classification (2026-09-07; see performance_trend_stats):
+    # the newest fold's sample size, the noise scale the label was judged on,
+    # the level-test z-score, the OLS slope t-statistic over the window, the
+    # number of folds in the window, WHICH rule produced ``trend`` and a
+    # one-sentence human reason (surfaced on the page card and to the insight).
+    sample_size: Optional[int] = None
+    standard_error: Optional[float] = None
+    z_score: Optional[float] = None
+    slope_t_stat: Optional[float] = None
+    n_points: int = 0
+    basis: str = ""
+    reason: str = ""
 
 
 @dataclass
@@ -75,6 +106,37 @@ class PerformanceTrackingConfig:
     # Comparison settings
     baseline_window_days: int = 7
     current_window_days: int = 1
+
+    # Sampling-aware trend classification (2026-09-07). A fold is "degrading" /
+    # "improving" only when its change is BOTH beyond ``trend_z_threshold``
+    # standard errors of the baseline (or the window's OLS slope t-statistic is
+    # beyond ``trend_slope_t_threshold``) AND at least ``trend_min_change_percent``
+    # relative — the historical ±5% kept as a materiality floor, no longer the
+    # whole test. 2.5 SE ≈ one-sided p 0.006 per test: across the 60 trended
+    # series a weekly run expects ≈0.4 false "degrading" labels from the level
+    # test alone and at most ≈0.7 with the slope test OR'd in (union bound),
+    # before the ±5% floor removes the shallow ones — while a genuine 0.10 AUC
+    # drop on a full month (n≈230) still trips it (z ≈ −2.7).
+    trend_z_threshold: float = 2.5
+    trend_slope_t_threshold: float = 2.5
+    trend_min_change_percent: float = 5.0
+
+    def __post_init__(self) -> None:
+        # A zero/negative/NaN threshold would make every non-zero z "significant"
+        # (assess_trend rejects it too); fail at construction, not at trend time.
+        for name in ("trend_z_threshold", "trend_slope_t_threshold"):
+            val = getattr(self, name)
+            if not (isinstance(val, (int, float)) and math.isfinite(val) and val > 0):
+                raise ValueError(f"{name} must be a finite positive number, got {val!r}")
+        if not (
+            isinstance(self.trend_min_change_percent, (int, float))
+            and math.isfinite(self.trend_min_change_percent)
+            and self.trend_min_change_percent >= 0
+        ):
+            raise ValueError(
+                "trend_min_change_percent must be a finite non-negative number, "
+                f"got {self.trend_min_change_percent!r}"
+            )
 
 
 class PerformanceTracker:
@@ -257,37 +319,50 @@ class PerformanceTracker:
                 alert_threshold=0.0,
             )
 
-        # Get current and baseline values
-        values = [r.metric_value for r in records]
-        current_value = values[0] if values else 0.0
-
-        # Baseline is average of older records
-        baseline_values = values[self.config.current_window_days :]
-        baseline_value = float(np.mean(baseline_values)) if baseline_values else current_value
-
-        # Calculate change
-        if baseline_value > 0:
-            change_percent = float((current_value - baseline_value) / baseline_value * 100)
-        else:
-            change_percent = 0.0
-
-        # Determine trend
-        if change_percent > 5:
-            trend = "improving"
-        elif change_percent < -5:
-            trend = "degrading"
-        else:
-            trend = "stable"
-
-        # Check significance and thresholds
-        threshold = float(self.config.degradation_threshold) * 100
-        is_significant = abs(change_percent) > threshold
-        alert_threshold_breached = change_percent < -threshold or float(current_value) < float(
-            self.config.absolute_min_accuracy
+        # Sampling-aware classification (2026-09-07). Each record is one fold
+        # (a walk-forward month, or a daily window for record_performance);
+        # the newest is "current", the rest the baseline. The classifier needs
+        # the fold's sample size (+ positive rate for the AUC standard error);
+        # rows without one fall back to the legacy ±5% relative rule and say so
+        # in ``basis`` — never silently. Non-numeric attributes (test doubles,
+        # legacy rows) are treated as absent.
+        points = [
+            TrendPoint(
+                value=float(r.metric_value),
+                sample_size=_as_int(getattr(r, "sample_size", None)),
+                positive_rate=_as_float(getattr(r, "positive_rate", None)),
+            )
+            for r in records
+        ]
+        assessment = assess_trend(
+            points,
+            metric_name,
+            current_window=self.config.current_window_days,
+            min_change_percent=float(self.config.trend_min_change_percent),
+            z_threshold=float(self.config.trend_z_threshold),
+            slope_t_threshold=float(self.config.trend_slope_t_threshold),
+            legacy_significance_percent=float(self.config.degradation_threshold) * 100,
         )
-        # The accuracy level below which the breach above triggers: the stricter
-        # (higher) of the relative floor and the absolute floor. Mirrors the two
-        # OR'd conditions so a value at/below this line == breached.
+        current_value = assessment.current_value
+        baseline_value = assessment.baseline_value
+        change_percent = assessment.change_percent
+        trend = assessment.trend
+        is_significant = assessment.is_significant
+
+        # An alert needs a drop that is BOTH classified degrading (i.e. outside
+        # sampling noise) AND at least degradation_threshold deep — or a point
+        # estimate under the absolute floor (a coin-flip model is an alert
+        # regardless of how it got there).
+        threshold = float(self.config.degradation_threshold) * 100
+        alert_threshold_breached = (trend == "degrading" and change_percent < -threshold) or float(
+            current_value
+        ) < float(self.config.absolute_min_accuracy)
+        # The alert FLOOR the chart plots: the stricter (higher) of the relative
+        # floor and the absolute floor. Necessary, not sufficient — a fold under
+        # the relative floor still needs ``trend == "degrading"`` to breach (the
+        # 2026-09-07 hcp_adoption_remibrutinib fold sat at 0.709 under a 0.734
+        # floor and was correctly NOT an alert: within sampling noise at n=134).
+        # Only the absolute floor alerts unconditionally.
         alert_threshold = max(
             float(baseline_value) * (1.0 - float(self.config.degradation_threshold)),
             float(self.config.absolute_min_accuracy),
@@ -303,6 +378,13 @@ class PerformanceTracker:
             is_significant=is_significant,
             alert_threshold_breached=bool(alert_threshold_breached),
             alert_threshold=float(alert_threshold),
+            sample_size=assessment.sample_size,
+            standard_error=assessment.standard_error,
+            z_score=assessment.z_score,
+            slope_t_stat=assessment.slope_t_stat,
+            n_points=assessment.n_points,
+            basis=assessment.basis,
+            reason=assessment.reason,
         )
 
     async def check_performance_alerts(
@@ -337,6 +419,10 @@ class PerformanceTracker:
                             "trend": trend.trend,
                             "severity": "high" if trend.change_percent < -20 else "medium",
                             "message": f"{metric_name} degraded by {abs(trend.change_percent):.1f}%",
+                            "sample_size": trend.sample_size,
+                            "z_score": trend.z_score,
+                            "basis": trend.basis,
+                            "reason": trend.reason,
                         }
                     )
             except ServiceConnectionError:

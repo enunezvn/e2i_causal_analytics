@@ -8,9 +8,22 @@ chronological too, but a single train/holdout cut yields one number, while
 walk-forward yields the real performance TREND that the Time-Series page plots.
 The runner therefore IGNORES ``data_split`` entirely and re-windows by time.
 
-Output: a list of ``(month: datetime, metrics: dict, n_eval: int)`` tuples,
-which is exactly the ``points`` contract consumed by
-:meth:`MetricRecorder.record_run`.
+Output: a list of :class:`WalkForwardPoint` named tuples
+``(month: datetime, metrics: dict, n_eval: int, positive_rate: float)`` —
+the ``points`` contract consumed by :meth:`MetricRecorder.record_run` (which
+also accepts the older 3-tuple form). ``positive_rate`` is the eval month's
+share of positive labels; the recorder writes it to the row so the trend
+classifier can derive the AUC's Hanley-McNeil standard error.
+
+Open-month guard (2026-09-07)
+-----------------------------
+A month that has not closed yet (the one containing ``as_of``, default now)
+is a PARTIAL fold: its rows keep arriving with every weekly frontier append,
+so its metric moved 0.749 → 0.790 → 0.766 across three consecutive weekly
+runs and, at n≈50, its sampling error alone exceeded the page's trend
+threshold — the mechanism behind the false "degrading" flags on
+/model-performance. The runner now skips it (logged in :attr:`skipped`) and
+only emits months whose row set is final.
 
 Leakage discipline (the whole point)
 ------------------------------------
@@ -44,6 +57,7 @@ Guards
 ------
 * ``min_train_n``: skip a month whose training set has fewer rows than this.
 * ``n_min``: skip a month whose eval set has fewer rows than this.
+* open month: skip the month containing ``as_of`` (and anything later).
 
 Skipped months are LOGGED (and recorded in :attr:`skipped`), never emitted.
 """
@@ -53,8 +67,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -70,6 +84,16 @@ FitFn = Callable[[pd.DataFrame], tuple[Any, Any]]
 PredictFn = Callable[[Any, Any, pd.DataFrame], "np.ndarray"]
 
 _DATE_COL = "journey_start_date"
+
+
+class WalkForwardPoint(NamedTuple):
+    """One emitted month. A tuple, so ``month, metrics, n = point[:3]`` and the
+    positional 3-tuple consumers keep working."""
+
+    month: datetime
+    metrics: dict[str, float]
+    n_eval: int
+    positive_rate: float
 
 
 @dataclass(frozen=True)
@@ -109,6 +133,10 @@ class WalkForwardRunner:
         Optional callback invoked with the eval month (a ``pd.Timestamp``) right
         BEFORE that month's fit.  Lets tests key captured training data by the
         month under evaluation; unused in production.
+    as_of:
+        The "now" that decides which calendar month is still open (default:
+        wall-clock UTC). The month containing ``as_of`` and any later month
+        are skipped as partial folds. Injectable so tests can pin it.
     """
 
     def __init__(
@@ -122,6 +150,7 @@ class WalkForwardRunner:
         window_mode: str = "expanding",
         rolling_months: int = 3,
         on_month: Callable[[pd.Timestamp], None] | None = None,
+        as_of: datetime | None = None,
     ) -> None:
         if window_mode not in ("expanding", "rolling"):
             raise ValueError(f"window_mode must be 'expanding' or 'rolling', got {window_mode!r}")
@@ -136,6 +165,10 @@ class WalkForwardRunner:
         self.window_mode = window_mode
         self.rolling_months = rolling_months
         self._on_month = on_month
+        as_of = as_of or datetime.now(timezone.utc)
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+        self.as_of: datetime = as_of.astimezone(timezone.utc)
 
         # Populated by run().
         self.skipped: list[SkippedMonth] = []
@@ -174,7 +207,7 @@ class WalkForwardRunner:
     # ------------------------------------------------------------------ #
     # The walk-forward loop.                                              #
     # ------------------------------------------------------------------ #
-    def run(self, frame: pd.DataFrame) -> list[tuple[datetime, dict[str, float], int]]:
+    def run(self, frame: pd.DataFrame) -> list[WalkForwardPoint]:
         """Produce the per-month out-of-sample metric trend.
 
         Parameters
@@ -186,11 +219,13 @@ class WalkForwardRunner:
 
         Returns
         -------
-        list of (month, metrics, n_eval):
-            One tuple per QUALIFYING month, ascending by month.  ``month`` is the
+        list of WalkForwardPoint (month, metrics, n_eval, positive_rate):
+            One per QUALIFYING month, ascending by month.  ``month`` is the
             timezone-aware first instant of the calendar month;  ``metrics`` is
-            the :func:`scorer.score` dict;  ``n_eval`` is the eval row count.
-            Skipped months are recorded in :attr:`skipped`, not returned.
+            the :func:`scorer.score` dict;  ``n_eval`` is the eval row count;
+            ``positive_rate`` the month's share of positive labels.
+            Skipped months (guards, degenerate fits, the open month) are
+            recorded in :attr:`skipped`, not returned.
         """
         self.skipped = []
         if frame.empty or _DATE_COL not in frame.columns:
@@ -209,8 +244,9 @@ class WalkForwardRunner:
         df[_DATE_COL] = dates
         df["_period"] = dates.dt.tz_convert("UTC").dt.tz_localize(None).dt.to_period("M")
 
-        results: list[tuple[datetime, dict[str, float], int]] = []
+        results: list[WalkForwardPoint] = []
         ordered_periods = sorted(df["_period"].dropna().unique())
+        open_period = pd.Timestamp(self.as_of).tz_convert("UTC").tz_localize(None).to_period("M")
 
         for period in ordered_periods:
             # First instant of the month, tz-aware — the emitted "month" key and
@@ -219,6 +255,18 @@ class WalkForwardRunner:
             eval_mask = df["_period"] == period
             eval_df = df.loc[eval_mask].drop(columns=["_period"])
             n_eval = int(len(eval_df))
+
+            # --- Open-month guard: a month that has not closed is a partial
+            # fold (rows still arriving) — never score it. ------------------- #
+            if period >= open_period:
+                self._skip(
+                    month_start,
+                    f"open month: calendar month not complete as of {self.as_of.date()} "
+                    f"(n_eval so far={n_eval})",
+                    0,
+                    n_eval,
+                )
+                continue
 
             # Training window: strictly BEFORE the eval month's first instant.
             if self.window_mode == "rolling":
@@ -279,12 +327,16 @@ class WalkForwardRunner:
                 continue
 
             metrics = score(y_true, y_score)
-            results.append((month_start.to_pydatetime(), metrics, n_eval))
+            positive_rate = float(np.mean(y_true))
+            results.append(
+                WalkForwardPoint(month_start.to_pydatetime(), metrics, n_eval, positive_rate)
+            )
             logger.info(
-                "WalkForwardRunner: month=%s train_n=%d n_eval=%d auc_roc=%.4f",
+                "WalkForwardRunner: month=%s train_n=%d n_eval=%d pos_rate=%.3f auc_roc=%.4f",
                 month_start.date(),
                 train_n,
                 n_eval,
+                positive_rate,
                 metrics.get("auc_roc", float("nan")),
             )
 
@@ -319,7 +371,8 @@ def run_walk_forward(
     n_min: int = 20,
     window_mode: str = "expanding",
     rolling_months: int = 3,
-) -> tuple[list[tuple[datetime, dict[str, float], int]], list[SkippedMonth]]:
+    as_of: datetime | None = None,
+) -> tuple[list[WalkForwardPoint], list[SkippedMonth]]:
     """Convenience: build a runner with the production default fit/predict and run.
 
     Returns ``(points, skipped)`` so callers (and the experiment script) get both
@@ -331,9 +384,17 @@ def run_walk_forward(
         n_min=n_min,
         window_mode=window_mode,
         rolling_months=rolling_months,
+        as_of=as_of,
     )
     points = runner.run(frame)
     return points, runner.skipped
 
 
-__all__ = ["WalkForwardRunner", "SkippedMonth", "run_walk_forward", "FitFn", "PredictFn"]
+__all__ = [
+    "WalkForwardRunner",
+    "WalkForwardPoint",
+    "SkippedMonth",
+    "run_walk_forward",
+    "FitFn",
+    "PredictFn",
+]

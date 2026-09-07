@@ -24,10 +24,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { PerformanceTrendResponse } from '@/types/monitoring';
+import type { ComponentProps } from 'react';
 
 // =============================================================================
 // HOOK MOCKS — wired BEFORE page import so vi.mock can hoist
 // =============================================================================
+
+// Capture the props the page hands MetricTrend (the chart renders as usual):
+// the trend chart's threshold lines are only visible as SVG labels, which
+// jsdom's zero-size ResponsiveContainer never paints.
+const metricTrendSpy = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>> }));
+vi.mock('@/components/visualizations/charts/MetricTrend', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/components/visualizations/charts/MetricTrend')>();
+  const Spied = (props: ComponentProps<typeof actual.MetricTrend>) => {
+    metricTrendSpy.calls.push(props as unknown as Record<string, unknown>);
+    return <actual.MetricTrend {...props} />;
+  };
+  return { ...actual, MetricTrend: Spied };
+});
 
 vi.mock('@/hooks/api/use-monitoring', () => ({
   usePerformanceTrend: vi.fn(),
@@ -45,6 +61,14 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIList: vi.fn(),
 }));
 
+// The page reads the insight mutation from the barrel; mock ONLY that hook so
+// the "Generate strategic insight" click can be asserted (2026-09-07: it must
+// pass the SAME metric the trend cards show).
+vi.mock('@/hooks/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/api')>()),
+  useModelPerformanceInsight: vi.fn(),
+}));
+
 import ModelPerformance from './ModelPerformance';
 import {
   usePerformanceTrend,
@@ -55,6 +79,7 @@ import {
 } from '@/hooks/api/use-monitoring';
 import { useModelsStatus } from '@/hooks/api/use-predictions';
 import { useKPIList } from '@/hooks/api/use-kpi';
+import { useModelPerformanceInsight } from '@/hooks/api';
 
 // =============================================================================
 // FIXTURES
@@ -95,13 +120,13 @@ const mockModelsStatus = {
   timestamp: '2026-05-17T10:00:00Z',
 };
 
-const mockTrend = {
+const mockTrend: PerformanceTrendResponse = {
   model_id: 'propensity_v2.1.0',
   metric_name: 'accuracy',
   current_value: 0.918,
   baseline_value: 0.9,
   change_percent: 2.0,
-  trend: 'improving' as const,
+  trend: 'improving',
   is_significant: true,
   alert_threshold_breached: false,
   alert_threshold: 0.81,
@@ -240,10 +265,16 @@ function setHooksToSuccess() {
     error: null,
     refetch: vi.fn(),
   });
+  (useModelPerformanceInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+    data: undefined,
+    error: null,
+  });
 }
 
 /** Override the trend hook with a given metric/value/breach state. */
-function setTrend(overrides: Partial<typeof mockTrend>) {
+function setTrend(overrides: Partial<PerformanceTrendResponse>) {
   (usePerformanceTrend as ReturnType<typeof vi.fn>).mockReturnValue({
     data: { ...mockTrend, ...overrides },
     isLoading: false,
@@ -748,6 +779,26 @@ describe('ModelPerformance', () => {
       // mockTrend's latest history point is 2026-05-17 — the data boundary.
       expect(note).toHaveTextContent(/data coverage through May 17/i);
     });
+
+    it('plots the red line as the alert FLOOR, not an alert boundary', () => {
+      // 2026-09-07: the relative-drop alert also needs a degrading trend
+      // outside sampling noise, so a fold under the line is not necessarily
+      // an alert. The line's label and the card caption must say so.
+      metricTrendSpy.calls.length = 0;
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      type Threshold = { value: number; label: string; type: string };
+      const last = metricTrendSpy.calls[metricTrendSpy.calls.length - 1] as
+        | { thresholds?: Threshold[] }
+        | undefined;
+      expect(last?.thresholds).toBeDefined();
+      const lower = last?.thresholds?.find((t) => t.type === 'lower');
+      expect(lower).toMatchObject({ label: 'Alert floor', value: mockTrend.alert_threshold });
+      expect(last?.thresholds?.some((t) => /threshold/i.test(t.label))).toBe(false);
+      expect(
+        screen.getByText(/An alert needs a fold under the floor whose trend is degrading/i)
+      ).toBeInTheDocument();
+    });
   });
 
   // ===========================================================================
@@ -844,6 +895,68 @@ describe('ModelPerformance', () => {
         expect(card.className).toContain('border-l-gray-400');
         expect(card.className).not.toContain('border-l-emerald-500');
       }
+    });
+  });
+  // ===========================================================================
+  // 2026-09-07: sampling-aware trend. The classifier now judges the newest
+  // walk-forward fold on a standard-error scale; the page must say WHY a label
+  // was given, and the strategic insight must narrate the SAME metric the
+  // cards show (it used to read the accuracy trend while the cards showed
+  // auc_roc).
+  // ===========================================================================
+  describe('sampling-aware trend context', () => {
+    const reason =
+      '-13.0% vs the 8-fold baseline is within sampling noise at n=134 (z=-2.1; ±2.5 needed)';
+
+    it('renders the classifier reason under the KPI cards and keeps a stable trend green', () => {
+      setTrend({ trend: 'stable', change_percent: -12.97, reason, basis: 'within_noise' });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(screen.getByTestId('perf-trend-reason')).toHaveTextContent(
+        /within sampling noise at n=134/
+      );
+      expect(document.querySelector('.perf-trend-card')?.className).toContain(
+        'border-l-emerald-500'
+      );
+    });
+
+    it('renders no reason line for a legacy response without one', () => {
+      setTrend({ reason: undefined });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(screen.queryByTestId('perf-trend-reason')).toBeNull();
+    });
+
+    it('a level-test degradation still renders the Trend card critical, with its reason', () => {
+      setTrend({
+        trend: 'degrading',
+        reason: 'auc_roc 0.650 is 3.7 standard errors below the 8-fold baseline 0.800 (n=230, -18.8%)',
+        basis: 'level',
+      });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(document.querySelector('.perf-trend-card')?.className).toContain('border-l-rose-500');
+      expect(screen.getByTestId('perf-trend-reason')).toHaveTextContent(/standard errors below/);
+    });
+
+    it('Generate strategic insight passes the selected trend metric (auc_roc by default)', async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const mutate = vi.fn();
+      (useModelPerformanceInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+        mutate,
+        isPending: false,
+        data: undefined,
+        error: null,
+      });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      await user.click(
+        await screen.findByRole('button', { name: /generate strategic insight/i })
+      );
+
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(mutate.mock.calls[0][0]).toMatchObject({ metric_name: 'auc_roc' });
+      expect(typeof mutate.mock.calls[0][0].model_version).toBe('string');
     });
   });
 });

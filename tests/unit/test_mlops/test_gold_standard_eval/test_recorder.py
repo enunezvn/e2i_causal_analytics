@@ -279,3 +279,62 @@ async def test_record_curves_unresolved_model_raises(monkeypatch):
         )
     # Fail-closed BEFORE any delete/insert.
     assert repo.calls == []
+
+
+# ---------------------------------------------------------------------------
+# positive_rate (2026-09-07): a 4th tuple element (WalkForwardPoint) flows to
+# record_metrics as ``positive_rate=``; a legacy 3-tuple does NOT pass the
+# kwarg at all (so repositories / doubles with the older signature still work).
+# ---------------------------------------------------------------------------
+
+
+class _KwargCapturingRepo(FakeRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self.record_kwargs: list[dict] = []
+
+    async def record_metrics(
+        self, model_version, metrics, sample_size, window_start, window_end, **kw
+    ):
+        self.record_kwargs.append(dict(kw))
+        self.calls.append(
+            (
+                "record",
+                kw.get("measured_at"),
+                tuple(sorted(metrics.items())),
+                kw.get("source"),
+                kw.get("cis"),
+            )
+        )
+        return []
+
+
+@pytest.mark.asyncio
+async def test_record_run_passes_positive_rate_from_four_tuples(monkeypatch):
+    import src.mlops.gold_standard_eval.recorder as R
+
+    monkeypatch.setattr(R, "_resolve_model_id", _async_mid)
+    repo = _KwargCapturingRepo()
+    rec = MetricRecorder(repo)
+    m1 = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+    m2 = dt.datetime(2026, 2, 1, tzinfo=dt.timezone.utc)
+    await rec.record_run(
+        "mv",
+        [(m1, {"auc_roc": 0.8}, 100, 0.35), (m2, {"auc_roc": 0.82}, 120, 0.4)],
+        source="backtest_wf",
+    )
+    assert [k["positive_rate"] for k in repo.record_kwargs] == [0.35, 0.4]
+    assert repo.record_kwargs[0]["source"] == "backtest_wf"
+    assert repo.record_kwargs[0]["measured_at"] == m1
+
+
+@pytest.mark.asyncio
+async def test_record_run_three_tuples_omit_the_positive_rate_kwarg(monkeypatch):
+    import src.mlops.gold_standard_eval.recorder as R
+
+    monkeypatch.setattr(R, "_resolve_model_id", _async_mid)
+    repo = _KwargCapturingRepo()
+    rec = MetricRecorder(repo)
+    m1 = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+    await rec.record_run("mv", [(m1, {"auc_roc": 0.8}, 100)], source="backtest_wf")
+    assert "positive_rate" not in repo.record_kwargs[0]

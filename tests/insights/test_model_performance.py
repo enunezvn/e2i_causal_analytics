@@ -4,20 +4,33 @@ from src.insights.model_performance import build_grounding, generate_insight
 def test_build_grounding_derives_prf_and_chips():
     g = build_grounding(
         model_version="csu_adherence_v3",
-        current_accuracy=0.86,
-        baseline_accuracy=0.81,
+        current_value=0.86,
+        baseline_value=0.81,
         trend="improving",
         confusion={"tn": 80, "fp": 10, "fn": 12, "tp": 98},
         auc=0.88,
         alerts=[{"metric_name": "precision", "severity": "warning"}],
+        metric_name="accuracy",
     )
-    assert any(c["label"] == "Accuracy" and c["value"].startswith("0.86") for c in g["grounding"])
+    # The chips name the trended metric (2026-09-07: the grounding follows the
+    # page's metric selector instead of always narrating accuracy).
+    assert any(
+        c["label"] == "Current Accuracy" and c["value"].startswith("0.86") for c in g["grounding"]
+    )
+    assert g["metric_name"] == "accuracy"
     assert "precision" in g["confusion_summary"].lower()
 
 
 def test_generate_insight_fallback_grounded():
     g = build_grounding(
-        "m1", 0.86, 0.81, "improving", {"tn": 80, "fp": 10, "fn": 12, "tp": 98}, 0.88, []
+        "m1",
+        0.86,
+        0.81,
+        "improving",
+        {"tn": 80, "fp": 10, "fn": 12, "tp": 98},
+        0.88,
+        [],
+        metric_name="accuracy",
     )
     out = generate_insight(g)
     assert out["is_fallback"] is True
