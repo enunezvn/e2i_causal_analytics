@@ -1,6 +1,6 @@
 # 03 --- ML Pipeline Schema
 
-> **E2I Causal Analytics** | Schema Version 4.2.1 | Last Updated: 2026-07-18
+> **E2I Causal Analytics** | Schema Version 4.2.1 | Last Updated: 2026-09-07
 
 | Navigation | |
 |---|---|
@@ -13,9 +13,14 @@
 
 ## Overview
 
-The ML pipeline schema spans **60+ tables** across 14 functional groups in `database/ml/`. These tables track the full ML lifecycle: experiment definition, model training, deployment, monitoring, causal validation, digital twin simulation, A/B testing, self-improvement, and prompt optimization. All tables live in the Supabase (Postgres) database and are referenced by the 21-agent, 6-tier system.
+The ML pipeline schema spans **60+ tables** across 14 functional groups in `database/ml/`. These tables track the full ML lifecycle: experiment definition, model training, deployment, monitoring, causal validation, digital twin simulation, A/B testing, self-improvement, and prompt optimization. All tables live in the Supabase (Postgres) database and are referenced by the agent roster in `config/agent_config.yaml` (22 agents across 6 tiers; Tier 0 = 9).
 
-**Migration files**: `database/ml/mlops_tables.sql` through `database/ml/028_cohort_constructor_tables.sql`
+**Migration files**: `database/ml/mlops_tables.sql` through `database/ml/035_gepa_persistence_constraints.sql`. Some ML-relevant objects also arrive through the shared series in `database/migrations/` — notably the `causal_paths.validation_status` pin (119), `validation_outcomes` realignment (121) and `drift_qualifying_features()` (131). Current ceilings:
+
+```bash
+ls database/ml | sort | tail -1          # highest database/ml file
+ls database/migrations | sort | tail -1  # highest shared migration
+```
 
 ---
 
@@ -43,7 +48,7 @@ The ML pipeline schema spans **60+ tables** across 14 functional groups in `data
 
 **Source**: `database/ml/mlops_tables.sql` (Migration 007)
 
-The MLOps core tables provide the foundation for experiment tracking, model versioning, training run recording, feature metadata, data quality enforcement, SHAP explainability, deployment management, and distributed tracing across all 21 agents.
+The MLOps core tables provide the foundation for experiment tracking, model versioning, training run recording, feature metadata, data quality enforcement, SHAP explainability, deployment management, and distributed tracing across the whole agent roster (22 agents, Tier 0 = 9 — `config/agent_config.yaml`).
 
 ### Custom Enums
 
@@ -196,7 +201,7 @@ Deployment history with shadow mode testing, SLA tracking, and rollback chain su
 
 ### 1.8 `ml_observability_spans`
 
-Opik span data for distributed tracing across all 21 agents, including LLM token usage and fallback chain tracking.
+Opik span data for distributed tracing across the whole agent roster (22 agents — `config/agent_config.yaml`), including LLM token usage and fallback chain tracking.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -276,6 +281,56 @@ Tracks domain expert validation of causal DAGs and methodology. Supports time-li
 | `valid_until` | DATE | Expiration date for approval |
 | `supersedes_review_id` | UUID | Replaces a previous review |
 
+### 2.3 `validation_outcomes`
+
+Created by `database/migrations/007_validation_outcomes.sql`; realigned to the
+service's write shape by **migration 121**. Where `causal_validations` records
+one refutation *test*, this table records the *outcome of a whole validation
+suite* for an estimate.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `outcome_id` | UUID PK | Outcome identifier |
+| `estimate_id` | VARCHAR(100) | Estimate the suite ran against |
+| `outcome_type` | VARCHAR(30) CHECK | `passed`, `failed_refutation`, `failed_sensitivity`, `failed_placebo`, `partial_pass`, `inconclusive` |
+| `treatment_variable` / `outcome_variable` / `brand` | VARCHAR | What was analysed |
+| `sample_size` / `effect_size` / `confidence_interval` | INTEGER / DECIMAL(10,6) / JSONB | Estimate summary |
+| `gate_decision` | TEXT | *(migration 121)* Gate verdict recorded with the outcome |
+| `confidence_score` | DOUBLE PRECISION | *(migration 121)* |
+| `tests_passed` / `tests_failed` / `tests_total` | INTEGER DEFAULT 0 | *(migration 121)* Suite tallies |
+| `raw_suite` | JSONB DEFAULT `'{}'` | *(migration 121)* The full suite payload |
+| `agent_context` | JSONB DEFAULT `'{}'` | *(migration 121)* Dispatch context |
+| `dag_hash` | TEXT | *(migration 121)* DAG the suite ran against |
+
+### 2.4 `causal_paths.validation_status` — pinned semantics (migration 119)
+
+> **Two different things share the name `validation_status`.** The enum in the
+> table above is `causal_validations.status` (`passed`/`failed`/`warning`/
+> `skipped`), a per-test result. `causal_paths.validation_status` is a
+> different column in the **core** schema with a different value set, pinned by
+> `database/migrations/119_*.sql` (#1352/#1385).
+
+Migration 119 pins that column three ways:
+
+1. **Value domain** — `CHECK (validation_status IN ('pending', 'validated',
+   'needs_review', 'overturned', 'refuted'))`, constraint
+   `causal_paths_validation_status_domain_chk`. Deliberately a CHECK and *not*
+   an enum: `ALTER TYPE ... ADD VALUE` cannot run inside the single transaction
+   `scripts/run_migrations.sh` wraps migrations in.
+2. **Default + NOT NULL** — new paths enter `'pending'`. Only the
+   `causal_impact` RefutationNode promotes them.
+3. **Enforcement trigger** — `trg_causal_paths_validated_evidence`, backed by
+   `enforce_validated_requires_refutation_evidence()`. `'validated'` asserts
+   *"RefutationSuite evidence exists and passed"*, so on a **real** row
+   (`is_synthetic = false`) claiming `'validated'` without a passed
+   `causal_validations` row under `causal_path_estimate_id(path_id)` is
+   rejected outright. On a **synthetic** row the trigger instead auto-seeds the
+   same content-addressed evidence, so DGP reseeds keep working and the
+   invariant "validated implies passed evidence exists" holds either way.
+
+`'refuted'` / `'overturned'` mark demoted paths; `'needs_review'` awaits
+adjudication.
+
 ### Notable Functions
 
 | Function | Purpose |
@@ -332,6 +387,7 @@ Records simulation runs with predicted intervention effects and sample size reco
 | `simulated_ci_upper` | FLOAT | 95% CI upper bound |
 | `recommendation` | simulation_recommendation | deploy, skip, or refine |
 | `recommended_sample_size` | INTEGER | Suggested real experiment sample size |
+| `data_provenance` | TEXT | *(migration 030)* Origin of `simulated_ate`: `synthetic_uplift_v1` (synthetic-DGP-trained uplift, ~constant per brand/intervention in v1) or `rwd_uplift` (real-world). **NULL for legacy/error results** — the column exists so a synthetic-uplift number is never read as a real-world one |
 
 ### 3.3 `twin_fidelity_tracking`
 
@@ -346,6 +402,21 @@ Validates twin predictions against real experiment outcomes. A trigger auto-calc
 | `prediction_error` | FLOAT | (simulated - actual) / actual |
 | `ci_coverage` | BOOLEAN | Did actual fall within simulated CI? |
 | `fidelity_grade` | fidelity_grade | Auto-computed from prediction error |
+
+### 3.4 `twin_retraining_jobs` (migration 029)
+
+Tracks retraining of a digital-twin model. Mirrors the service's
+`TwinRetrainingJob`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Job identifier |
+| `model_id` | UUID FK -> `digital_twin_models(model_id)` | The twin being retrained. **No `ON DELETE` action** (NO ACTION, mirroring `ml_retraining_history`): a model with retraining history cannot be hard-deleted, so this stays non-NULL |
+| `new_model_id` | UUID FK -> `digital_twin_models(model_id)` `ON DELETE SET NULL` | The model produced on success; NULL until then, and nulled rather than orphaning the job if that model is deleted |
+| `trigger_reason` | VARCHAR(50) NOT NULL DEFAULT `'manual'` | `TwinTriggerReason` |
+| `status` | VARCHAR(50) NOT NULL DEFAULT `'pending'` | `TwinRetrainingStatus` |
+| `fidelity_before` | FLOAT NOT NULL DEFAULT 0 | Fidelity prior to retraining |
+| `fidelity_after` | FLOAT | The **real** held-out validation R2 of the retrained model. NULL until a certified completion and left NULL on failure (the #548 fail-closed invariant — never a fabricated `0.0` that reads as a poor score). Deliberately unconstrained: a finite R2 can be negative, so a `[0,1]` check would reject honest-but-poor metrics |
 
 ---
 
@@ -366,7 +437,7 @@ Supports multi-faceted query handling with dependency-aware tool composition. Th
 
 ### 4.1 `tool_registry`
 
-Central registry of composable tools exposed by Tier 2--4 agents. Seeded with 13 default tools.
+Central registry of composable tools exposed by Tier 2--4 agents. Seeded with **13** default tools. The count is the `INSERT INTO tool_registry (...) VALUES` block in `database/ml/013_tool_composer_tables.sql`: 3 for `causal_impact` and 2 each for `heterogeneous_optimizer`, `gap_analyzer`, `experiment_designer`, `prediction_synthesizer` and `drift_monitor`. Rows are seeded by migration, never registered at runtime, so that block is the authority for the count.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -686,6 +757,39 @@ Indexed by `checked_at DESC` (`idx_health_check_history_checked_at`).
 
 Daily aggregation over `health_check_history` (avg/min/max overall score, checks count), filtered to `check_scope = 'full'`; a day's provenance is `measured` only if **every** contributing check was measured (`bool_and`).
 
+### 7.8 `drift_qualifying_features()` (migration 131)
+
+```sql
+drift_qualifying_features(
+    p_window_days       integer,
+    p_min_samples       integer DEFAULT 30,
+    p_include_synthetic boolean DEFAULT false
+) RETURNS TABLE (feature_name text, baseline_n bigint, current_n bigint)
+```
+
+`STABLE`, `SECURITY DEFINER`. The **dispatcher's substrate probe** for
+`drift_monitor` chat dispatch (#1747): it answers "which registered features
+have at least `p_min_samples` `feature_values` rows in *both* drift windows?"
+so the orchestrator can ground `features_to_monitor` in the real feature store
+instead of failing input coercion.
+
+- Windows mirror `DataDriftNode._fetch_data` and the Supabase connector's
+  **closed** `.gte(start).lte(end)` intervals exactly: current =
+  `[now()-Nd, now()]`, baseline = `[now()-2Nd, now()-Nd]`. Two consequences of
+  that fidelity are intentional — a row at the exact `now()-Nd` instant counts
+  in **both** windows (the connector genuinely does that), and future-dated
+  rows (clock skew, scheduled loads) are **excluded**, because the connector
+  would never fetch them.
+- The 30-sample default is `DataDriftNode._min_samples`. Below it a bound
+  feature yields only an honest per-feature "insufficient data" — acceptable
+  for a user-*named* feature, pointless for a dispatcher-*selected* one.
+- Provenance mirrors `apply_provenance_filter`'s default-exclude
+  (`is_synthetic IS NOT TRUE`, so NULL counts as real) on both windows.
+- It exists as a SQL function because the two-window per-feature count is a
+  `GROUP BY ... HAVING` aggregate and PostgREST aggregates are disabled on this
+  deployment (PGRST123); paging ~26k rows/60d through REST at dispatch time is
+  not viable.
+
 ### Notable Views
 
 | View | Purpose |
@@ -840,6 +944,7 @@ Detailed RAGAS and rubric evaluation results per query-response pair.
 | `context_recall` | FLOAT | RAGAS context recall (0--1) |
 | `causal_validity` | FLOAT | Domain rubric: causal validity (1--5) |
 | `actionability` | FLOAT | Domain rubric: actionability (1--5) |
+| `answer_correctness` | FLOAT | *(migration 033)* RAGAS answer_correctness. **NULL = not measured, never a judged `0.0`** — like `context_recall` it requires a ground truth the replay path does not always have |
 | `ragas_aggregate` | FLOAT | Weighted RAGAS composite (0--1) |
 | `rubric_aggregate` | FLOAT | Weighted rubric composite (1--5) |
 
@@ -994,6 +1099,25 @@ Individual request-level observations for statistical analysis.
 | `score` | DECIMAL(5,4) | Response quality score |
 | `latency_ms` | INTEGER | Response latency |
 | `success` | BOOLEAN | Whether request succeeded |
+
+### 10.6 Uniqueness constraints and `v_active_instructions` (migration 035)
+
+Migration 023 shipped three defects that migration 035 corrects. They are worth
+stating because each one silently broke a stated purpose of the table:
+
+| Object | Before (023) | After (035) |
+|--------|--------------|-------------|
+| `optimized_instructions` one-active rule | `UNIQUE (agent_name, predictor_name, is_active)` — a boolean has three distinct states in a UNIQUE key, so this capped history at **one inactive row per predictor**, making versioned instruction history impossible | `uq_opt_instructions_one_active`: partial unique index on `(agent_name, predictor_name) WHERE is_active` — one *active* row per predictor, unlimited history |
+| Instruction dedup | `idx_opt_instructions_hash` globally unique on `instruction_hash`. Two agents routinely produce identical instruction text (dspy's default signature instruction is shared boilerplate), so the second agent's insert failed | `uq_opt_instructions_predictor_hash` on `(agent_name, predictor_name, instruction_hash)` — dedup scoped to the predictor |
+| `optimized_tool_descriptions` one-active rule | same boolean-in-UNIQUE defect | `uq_tool_desc_one_active` on `(agent_name, tool_name) WHERE is_active` |
+| `version` column | `VARCHAR(50)` — too short for real ids from `src/optimization/gepa/versioning.py` (e.g. `gepa_v1_feedback_learner_recommendation_20260810_133055`, 55 chars) | `VARCHAR(100)` on both tables |
+
+**`v_active_instructions`** (defined in 023 §7) joins `optimized_instructions`
+to `prompt_optimization_runs` and filters `is_active = TRUE`, exposing
+`agent_name`, `predictor_name`, `version`, `instruction_text`, `val_score`,
+`optimizer_type`, `run_name`, `improvement_percent`, `activated_at`. It depends
+on `version`, so migration 035 drops and recreates it around the `ALTER COLUMN`
+— the definition itself is unchanged.
 
 ---
 
@@ -1184,6 +1308,49 @@ Detailed per-feature ranking information with auto-computed rank difference.
 | `predictive_rank` | INTEGER | Rank by predictive importance |
 | `rank_difference` | INTEGER | `GENERATED ALWAYS AS (predictive_rank - causal_rank)` |
 | `is_direct_cause` | BOOLEAN | Whether feature is a direct cause |
+
+### 13.6 Where bootstrap stability and the latent diagnostic land
+
+Two discovery outputs have no dedicated columns — they reuse existing fields,
+which is exactly why they are easy to misread.
+
+**Bootstrap edge stability** (`_bootstrap_edge_stability` in
+`src/causal_engine/discovery/runner.py`). It applies only when
+`bootstrap_resamples > 0` **and exactly one algorithm converged** — a
+multi-algorithm run already has cross-algorithm agreement. It re-runs that one
+algorithm on B bootstrap resamples and sets each edge's `bootstrap_stability`
+to the directed-match resample frequency. It then **overwrites
+`confidence` with that frequency**, because on a single-algorithm run
+`confidence` is vacuously `1.0`. So in `ml.discovered_edges`:
+
+- `confidence` on a bootstrapped single-algorithm run is a **resample
+  frequency**, not an algorithm-vote share;
+- `algorithm_votes` is still 1, and the run-level agreement figure reports mean
+  bootstrap stability rather than agreement;
+- if fewer than `max(2, B // 2)` resamples succeed the function returns None
+  and writes **no** stability at all — the frequencies would be noise, so the
+  gate must treat the run as uncorroborated. It fails toward caution, not
+  toward ACCEPT.
+
+The run records `{"bootstrap": {"n_resamples": B, "n_succeeded": k}}` in the
+run metadata, so a reader can tell a real stability figure from a missing one.
+
+**FCI latent-confounding diagnostic** (`_run_latent_diagnostic`, off by
+default). PC and the guided production path assume causal sufficiency; FCI's
+PAG is the only signal in the toolbox that can even *represent* a latent
+confounder, as a bidirected edge. The diagnostic runs FCI **once, unguided** —
+`prior_knowledge=None`, `bootstrap_resamples=0` — because the point is the
+data's own testimony about latent structure, not the priors echoed back. Its
+payload distinguishes two failure modes and **neither fails discovery**:
+
+| Payload | Meaning |
+|---------|---------|
+| `{"ran": true, "converged": true, "bidirected_edges": [[src, tgt], …]}` | FCI ran and found (or did not find) latent-confounding signals |
+| `{"ran": true, "converged": false, …}` | FCI executed but did not converge — blame the **data** |
+| `{"ran": false, "error": "…"}` | FCI could not run at all — blame the **infrastructure** |
+
+`graph_builder` later annotates the payload with the estimand and the flag; the
+runner does not know treatment/outcome.
 
 ---
 

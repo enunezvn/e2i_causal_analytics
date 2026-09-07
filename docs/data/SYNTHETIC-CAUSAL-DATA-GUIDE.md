@@ -28,7 +28,7 @@ It exists in two consumption modes:
 
 > The runtime in `src/` **never reads the patient-cell cohort-frame parquets** — its
 > twin of those frames is the `patient_journeys` table, resolved through
-> `cohort_resolution._PJ_COHORTS` (`src/services/cohort_resolution.py:259`). The parquet
+> `cohort_resolution._PJ_COHORTS` (`_PJ_COHORTS` in `src/services/cohort_resolution.py`). The parquet
 > files are the offline/pollution-free equivalent of what the runtime reads from the DB.
 
 **Distinct track:** the claim-level CSU/Optum converter (`scripts/convert_optum_rwd.py`,
@@ -44,36 +44,52 @@ This guide covers the DB-substrate/causal-validation track.
 Per patient (`patient_generator.py`, `src/ml/synthetic/dgp/treatment_arm.py`):
 
 1. **Confounders** — `disease_severity ~ Normal(5,2)` clipped to [0,10];
-   `academic_hcp ~ Bernoulli(0.30)` (`patient_generator.py:262-287`).
+   `academic_hcp ~ Bernoulli(0.30)` (`PatientGenerator.generate` in `src/ml/synthetic/generators/patient_generator.py`).
 2. **Propensity & arm** — `e(X) = sigmoid(-2.0 + 0.30·(severity-5) + 0.80·academic)`,
    clipped to [0.01, 0.99] (overlap guaranteed); `treatment_arm ~ Bernoulli(e(X))`
-   (`treatment_arm.py:27-47`). Both confounders also enter the outcome, so the arm is
+   (the `SEGMENT_*` / `ArmSpec` block at the top of `src/ml/synthetic/dgp/treatment_arm.py`). Both confounders also enter the outcome, so the arm is
    genuinely confounded and the naive contrast is biased (measured: naive 0.269 vs
    truth 0.172 on the current Remibrutinib initiation cell). The realized propensity is
    **stored** per row as `propensity_score`.
 3. **Segments & heterogeneous tau** — severity >7 → `high_severity`, >4 → `medium`,
    else `low`. Latent CATE base map `{high: 0.50, medium: 0.30, low: 0.15}` × brand
    scale `_BRAND_CATE_SCALE = {Remibrutinib: 1.00, Kisqali: 1.40, Fabhalta: 0.70}`
-   (`treatment_arm.py:53-57`).
+   (`ArmSpec` and `_BRAND_CATE_SCALE` in `src/ml/synthetic/dgp/treatment_arm.py`).
 4. **Initiation outcome** — latent score
    `0.10·(severity-5) + 0.15·academic + arm·tau + N(0, 0.6)`; the threshold is set at
    the (1 − 0.35) quantile so marginal prevalence is **exactly 0.35**, clamped to the
-   [0.20, 0.50] design band (`treatment_arm.py:85-157`). This is what makes the label
+   [0.20, 0.50] design band (the `_*_CATE` maps in `src/ml/synthetic/dgp/treatment_arm.py`). This is what makes the label
    *recoverable* instead of degenerate.
 5. **Ground truth stamped per unit** — `treatment_effect_estimate` = the per-unit
-   risk-difference tau_i (`patient_generator.py:245`); `TRUE_ATE = mean(tau_i)`.
+   risk-difference tau_i (`PatientGenerator.generate`); `TRUE_ATE = mean(tau_i)`.
 
 > ⚠️ **Mixed-run caveat:** when the loader generates all brands in one frame (the
 > default), `config.brand` is unset and the CATE map falls back to the **Remibrutinib
-> scale for every row** (`patient_generator.py:110`). Per-brand TRUE_ATEs then differ
+> scale for every row** (`_BRAND_AXIS_DIFFERENTIALS` / the brand-scale fallback in `patient_generator.py`). Per-brand TRUE_ATEs then differ
 > only by sampling noise (current run: 0.1718 / 0.1737 / 0.1714). Designed cross-brand
 > CATE differences in the *patient* cohorts require per-brand generation runs. The
 > hcp_adoption artifacts (generated per brand) DO carry the designed brand differences.
 
-### 2.2 Discontinuation & persistence (initiators only)
+### 2.2 Discontinuation & persistence
 
-`generate_discontinuation_outcomes` (`src/ml/synthetic/generators/cohort_outcomes.py:51-88`,
-wired at `patient_generator.py:127-134`):
+`generate_discontinuation_outcomes` (`_DISC_TREATMENT_LOGIT` and `generate_discontinuation_outcomes` in
+`src/ml/synthetic/generators/cohort_outcomes.py`, wired from
+`PatientGenerator.generate`):
+
+> **Not initiators only** (migration 132, #1894). This heading said
+> "(initiators only)" and migration 064's column comments said the same. Neither
+> was true of the synthetic DGP: `generate_discontinuation_outcomes` takes **no**
+> `treatment_initiated` input and draws an outcome for **every** row as a
+> function of `treatment_arm`. Measured on prod 2026-09-04, where every row is
+> synthetic: all 17,186 `treatment_initiated = 0` rows carry both
+> `persistent_180d` and `discontinued_180d`, with 0 complement violations. The
+> loaders and the platform read paths (`_PJ_COHORTS`, the segment loader) apply
+> no initiator filter either. The initiators-only semantic belongs to the **RWD**
+> path alone: `scripts/convert_optum_rwd.py` writes `discontinued_180d` only for
+> initiators in its discontinuation cohort and never writes `persistent_180d` at
+> all (it emits `persistent_at_180d`). Migration 132 corrected the column
+> comments; the stale wording had already produced one wrong user-facing
+> definition (PR #1893, caught in review).
 
 - `logit(disc) = -0.85 + scale·seg_effect·arm + 0.18·severity − 0.40·academic + N(0,0.5)`
   with `seg_effect = {high: −1.20, medium: −0.70, low: −0.35}` — **treatment lowers
@@ -105,10 +121,22 @@ Kisqali 0.133 — exactly the designed 1.2 / 1.0 / 0.8 ordering.
 ### 2.4 Provenance and dates
 
 - Every row in every table is stamped `is_synthetic=True` centrally
-  (`load_synthetic_data.py:380-387`).
-- `--anchor-to-now` remaps all dates onto a rolling window ending at run time (current
-  run: 60.8% of treatment events within NOW()−30d, zero future-dated) so windowed KPIs
-  read non-zero; re-anchored per run, not a one-off backfill.
+  (`generate_datasets` in `scripts/load_synthetic_data.py`, which stamps every frame).
+- `--anchor-to-now` remaps all dates onto a rolling window ending at run time
+  (measured on one such run: 60.8% of treatment events within NOW()−30d, zero
+  future-dated) so windowed KPIs read non-zero; re-anchored per run, not a
+  one-off backfill.
+
+> **Which reseed mode is operative?** `--append-frontier`. `scripts/reseed_synthetic.sh`
+> sets `MODE="--append-frontier"` by default and only switches to
+> `--anchor-to-now` when invoked as `reseed_synthetic.sh --full`, which the
+> script itself labels **RECOVERY**. So the routine reseed appends new rows at
+> the frontier and leaves existing timestamps alone — which is why KPI windows
+> are **frontier-anchored** (migration 089: the window ends at
+> `MAX(metric_date)`, not `NOW()`) rather than now-anchored. The destructive
+> `--anchor-to-now` path rewrites the whole timeline, which is why `--full` also
+> purges and recaptures `kpi_history` (the old captures describe a substrate
+> that no longer exists) while the append path only appends.
 
 ---
 
@@ -142,13 +170,107 @@ Measured values are from the current `data/rwd/synthetic_CSU/` run (Remibrutinib
 | `ground_truth_<run>.json` | truth reference (all stages) | TRUE_ATE + `cate_by_segment` per (brand, dgp_type), tolerance 0.10 | Remi +0.1718; segments 0.294/0.191/0.074 | pass/fail verdicts | gate 3 + every lean check |
 | `manifest.json` + `README.md` | provenance check | inventory vs actual files; run config + invocations | 24 tables, 745,163 rows, `is_synthetic: true` | run audit trail | reproducibility / regeneration decisions |
 
+### 3.2 `business_metrics`: the brand x region execution matrix (#1833/#1849)
+
+The row above understates what `business_metrics.parquet` now carries. Since
+#1833 the generator plants **deterministic, RNG-free geography** on `value`
+only — never on `target`.
+
+**Why it had to be planted.** Before #1833 the only regional term was the
+market-size `REGION_FACTORS`, applied to *both* value and target. It therefore
+**cancels in every gap**, leaving i.i.d. noise — which is why all three brands'
+top gap came out "west", by coincidence. A gap analyzer ranking that noise is
+ranking nothing.
+
+`BRAND_REGION_PERFORMANCE` (`src/ml/synthetic/generators/business_metrics_generator.py`)
+gives each brand its **own** weakest region, with a clinical-commercial reason:
+
+| Brand | northeast | south | midwest | west | Planted weakest |
+|---|---|---|---|---|---|
+| Kisqali | 1.09 | 0.97 | **0.86** | 1.04 | **midwest** — community-oncology pathway adherence lag; NE academic centers over-index |
+| Fabhalta | 1.03 | **0.86** | 0.98 | 1.10 | **south** — thin hematology referral network; west/NE centres of excellence over-index |
+| Remibrutinib | 1.00 | 1.08 | 1.04 | **0.88** | **west** — late Kaiser/IDN formulary access; south allergy-practice density over-indexes |
+
+Each row is market-size-weighted to mean 1.0 under `REGION_FACTORS` (Kisqali
+0.997 / Fabhalta 0.996 / Remibrutinib 0.998, pinned by test), so **national
+scale is unchanged** — the geography is redistribution, not inflation.
+
+**Anchored step events** (`BRAND_REGION_EVENTS`) supply what a level factor
+cannot. A level factor cancels in the temporal gap (both 90-day windows carry
+it), and the production benchmark store aggregates **all** history un-windowed,
+so under the +2%/month trend the current window always sits above the
+historical target/P75/P90 bars. The anchored steps are what actually reach the
+gap analyzer's ranking. They apply to `trx`, `nrx` and `market_share`, on
+`value` only, **never revert, and compound**:
+
+| Brand / region | Steps | Note |
+|---|---|---|
+| Kisqali / midwest | ×0.88 from 2026-05-01, ×0.85 from 2026-10-01 | Compounded 0.748; with the 0.86 execution factor, 0.643 of the market-size line from 2026-10 |
+| Fabhalta / south | ×0.88 from 2026-06-01, ×0.85 from 2026-11-01 | |
+| Remibrutinib / west | ×0.88 from 2026-06-01, ×0.85 from 2026-11-01 | |
+
+**Two staggered steps per brand** are deliberate: a single step is straddled by
+the 90+90-day windows for only ~6 months, so two keep a temporal shortfall
+visible across ~7 consecutive monthly frontier positions. First steps are −12%
+(a step in a region that is <= 25% of national moves the brand's frontier-month
+national scale by <= 3.0%); the compounding later steps are −15%. Magnitudes
+were tuned by `scripts/gap_arbiter_1833.py`, not guessed.
+
+Measured national TRx effect (regenerated vs the pre-#1833 DB, 2026-08):
+Kisqali ×0.970, Fabhalta ×0.975, Remibrutinib ×0.980.
+
+> **The base rows do not regenerate.** The Mon-3AM cron
+> (`scripts/reseed_synthetic.sh --append-frontier`) regenerates only the cohort
+> months from `BM_EPOCH`; the frozen base (9,780 `metric_<12hex>` rows, seed 42,
+> n=10000, start 2013-01-01) never does. After a value-formula change the base
+> would sit on the old formula while cohorts moved to the new one, so
+> `scripts/reseed_business_metrics_aggregate.py` brings every aggregate row onto
+> the new formula in one in-place upsert on `metric_id`. It is safe to do that
+> because the #1833 terms are **value-only and consume no RNG**, so ids, dates
+> and targets reproduce byte-for-byte. The script **defaults to `--dry-run`** and
+> its `--execute` path **fails closed on id drift in either direction**.
+
+### 3.3 Brand-distinct causal axes & commercial-arm paths (#1321/#1325)
+
+Two mechanisms give the brands genuinely different causal structure rather than
+three relabelled copies of one DGP.
+
+**Brand-distinct axes** (`_BRAND_AXIS_DIFFERENTIALS` in
+`src/ml/synthetic/generators/patient_generator.py`). Each brand gets a
+persistence differential on a **clinically meaningful axis of its own** — for
+Remibrutinib, `urticaria_severity_uas7 >= 28.0` — carrying its own `main_pull`
+and `exp_mult` and its own `spawn_key`, so the axis is reproducible and
+independent per brand. These are the brand-gated clinical eligibility columns
+of migrations 068/107: NULL on off-brand rows **by design**, which is why a KPI
+axis built on them is brand-gated fail-closed rather than fabricated.
+
+**Commercial-arm paths** (migrations 088 and 112). Beyond the primary
+`treatment_arm`, each patient carries five commercial arms — `copay_support`,
+`psp_enrolled`, `rep_detailing_high`, `sample_dropped` (088) and
+`trigger_accepted` (112) — **each with its own stored propensity column**
+(`*_propensity`), all confounded on `disease_severity` + `engagement_score`,
+with `insurance_access_score` as a shared confounder behind the access arms.
+
+The declarative `ArmSpec` in `src/ml/synthetic/dgp/treatment_arm.py` is what
+keeps this honest: adding an arm means adding a spec, and the
+**confounder-contract guard then forces every declared confounder into the
+analysis covariate allowlist**. A new arm cannot ship with an un-adjustable
+backdoor, which would make the estimator silently report a confounded naive
+difference in means. CATE magnitudes (`_COPAY_CATE`, `_PSP_CATE`, …) are
+**measured from disproof sweeps, not guessed** — the copay design band is
++8–12pp, PSP's a shade weaker at +5–10pp.
+
+`triggers.acceptance_status` is generated consistently with the
+`trigger_accepted` arm (arm = 1 iff at least one accepted trigger), so the
+trigger table and the patient arm cannot disagree.
+
 ---
 
 ## 4. How the platform consumes it
 
 **Provenance enforcement (real analyses never see synthetic rows):**
 
-- SSOT helper `apply_provenance_filter` (`src/repositories/provenance.py:21`) appends
+- SSOT helper `apply_provenance_filter` (`PROVENANCE_DROP_COLS` / `apply_provenance_filter` in `src/repositories/provenance.py`) appends
   `.eq('is_synthetic', False)` on every tagged PostgREST read unless the caller passes
   `include_synthetic=True` (**default `False` everywhere**) — threaded through
   `BaseRepository`, `kpi_resolution`, `cohort_resolution`, the gap_analyzer connectors.
@@ -157,14 +279,14 @@ Measured values are from the current `data/rwd/synthetic_CSU/` run (Remibrutinib
   `(SELECT * FROM <t> WHERE is_synthetic = false)` — with a parallel
   `*_include_synthetic` statement family for validation runs.
 - Estimator-side, `PROVENANCE_DROP_COLS` keeps `is_synthetic` out of every design matrix
-  (`causal_impact/nodes/estimation.py:158-170`, `heterogeneous_optimizer/nodes/cate_estimator.py:212-220`).
+  (`EstimationNode` in `src/agents/causal_impact/nodes/estimation.py`, `CATEEstimatorNode` in `src/agents/heterogeneous_optimizer/nodes/cate_estimator.py`).
 
-**Who gets real frames at dispatch** (`src/agents/orchestrator/nodes/dispatcher.py:581-586`):
+**Who gets real frames at dispatch** (`_resolve_heterogeneous_optimizer_input` and its siblings in `src/agents/orchestrator/nodes/dispatcher.py`):
 `tool_composer` and `heterogeneous_optimizer` resolve real KPI/cohort frames
 (`triggers ⋈ treatment_events`, or `patient_journeys` via `cohort_resolution`);
 `resource_optimizer` and `prediction_synthesizer` fail closed without structured params;
 `causal_impact` receives `data` frames via the chatbot/API cohort resolution
-(`src/api/routes/chatbot_tools.py:1115-1135`).
+(the cohort-resolution path in `src/api/routes/chatbot_tools.py`).
 
 **Estimators** consume the frame as: `treatment_arm`→treatment, cohort outcome→outcome,
 `disease_severity`/`age_at_diagnosis`/segment-ordinal as confounders/modifiers, routed to
@@ -307,7 +429,7 @@ would be a leak signature.
 ### 5.3 Mode B — full pipeline validation (DB substrate + 11-gate ladder)
 
 From a clean docker-Supabase (the prod DB is the **local docker stack**, not the cloud
-mirror). Canonical runbook (`scripts/validate_synthetic_causal.py:1159-1220`):
+mirror). Canonical runbook (the gate functions `gate_1_*` .. `gate_11_chat_path` in `scripts/validate_synthetic_causal.py`):
 
 ```bash
 export LOKY_MAX_CPU_COUNT=1 E2I_DB_INTEGRATION=1   # + SUPABASE_URL / key in .env

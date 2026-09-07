@@ -1,5 +1,20 @@
 # Synthetic KPI Coverage Map (Shard 09)
 
+> ⚠️ **Dated snapshot — re-run before relying on it.** Every verdict below was
+> measured against the **pre-migration-095 registry**. Since then the live
+> registry queries for **WS1-DQ-003 / -004 / -007 / -009 no longer read their
+> `v_kpi_*` helper views** — migration 095 re-registered them as deterministic
+> trailing-30-day aggregates reading the source tables directly, each with an
+> `_include_synthetic` twin. Migrations 096–132 have moved further still
+> (region and brand×region variants, the WS2 truth-metric redefinition in 113,
+> the 6-param cap in 120). The mapping is still a useful guide to *which
+> substrate feeds which KPI*; the per-KPI verdicts are not current.
+>
+> Refresh with `E2I_DB_INTEGRATION=1 python scripts/check_kpi_coverage.py`
+> against the faithful docker Supabase, and see
+> [06-KPI-REFERENCE.md](06-KPI-REFERENCE.md) for the current definitions.
+
+
 **Goal:** map every one of the 45 calculable KPIs in `config/kpi_definitions.yaml` to the
 synthetic substrate that makes it return **non-NULL**, and prove it on the faithful
 docker Supabase. **Result: 45/45 MAPPED — ZERO N/A, ZERO EMPTY.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate. WS1-DQ-008 "Label Quality (IAA)" was decommissioned in T8 by product decision — a working metric, κ≈0.76, removed from the live set; `v_kpi_label_quality` + `ml_annotations` retained in the DB. WS2-TR-009 "Trigger Funnel Conversion" was ADDED by the #1360 ruling, 2026-07-30 — its registry statement lands with migration 118; its MAPPED verdict below was measured by executing the migration-118 statement body read-only on the live DB pre-application.)

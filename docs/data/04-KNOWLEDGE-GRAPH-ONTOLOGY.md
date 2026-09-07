@@ -15,7 +15,12 @@
 
 The E2I knowledge graph runs on **FalkorDB** (Redis-compatible graph database) using the Cypher query language. It models pharmaceutical commercial relationships — patients, HCPs, brands, triggers, causal paths, and KPIs — as a property graph with **8 node types** and **15 edge types** (13 direct + 2 inferred).
 
-**Purpose**: Enables graph-based RAG retrieval, causal path traversal, HCP influence network analysis, and patient journey state tracking for the 21-agent system.
+**Purpose**: Enables graph-based RAG retrieval, causal path traversal, HCP influence network analysis, and patient journey state tracking for the agent roster in `config/agent_config.yaml` (22 agents, Tier 0 = 9).
+
+> **Which graph do I query?** `e2i_causal`. See
+> [Runtime graph name](#runtime-graph-name-e2i_causal) before writing any
+> `GRAPH.QUERY` — `config/ontology/falkordb_config.yaml` names a *different*
+> graph and it is not the one the platform reads.
 
 ---
 
@@ -185,7 +190,18 @@ Causal relationship with evidence.
 
 **Enum values:**
 - `method_used`: `dowhy_backdoor`, `dowhy_frontdoor`, `econml_dml`, `econml_causal_forest`, `causalml_uplift`, `causalml_metalearner`, `propensity_score_matching`, `difference_in_differences`
-- `validation_status`: `validated`, `pending`, `failed`, `skipped`
+- `validation_status`: `pending`, `validated`, `needs_review`, `overturned`,
+  `refuted` — mirrors `causal_paths.validation_status`, whose value set is
+  pinned by `database/migrations/119_*.sql` (#1352/#1385) with the CHECK
+  constraint `causal_paths_validation_status_domain_chk`. **Semantics:**
+  `validated` asserts *"RefutationSuite evidence exists and passed"* and is
+  enforced in Postgres by `trg_causal_paths_validated_evidence` — a real
+  (`is_synthetic = false`) row cannot claim it without a passed
+  `causal_validations` row. New paths enter `pending`; only the `causal_impact`
+  RefutationNode promotes them. `refuted` / `overturned` mark demoted paths;
+  `needs_review` awaits adjudication. (Do not confuse this with
+  `causal_validations.status` — `passed`/`failed`/`warning`/`skipped` — a
+  per-test result that shares neither the name's scope nor its values.)
 - `gate_decision`: `proceed`, `review`, `block`
 
 ---
@@ -224,16 +240,16 @@ Agent entity for provenance tracking.
 | `created_at` | datetime | Yes | Auto | |
 | `updated_at` | datetime | Yes | Auto | |
 
-**Agent names (21 agents across 6 tiers):**
+**Agent names (22 agents across 6 tiers — the roster in `config/agent_config.yaml`):**
 
 | Tier | Agents |
 |------|--------|
-| 0 — ML Foundation | `scope_definer`, `cohort_constructor`, `data_preparer`, `feature_analyzer`, `model_selector`, `model_trainer`, `model_deployer`, `observability_connector` |
-| 1 — Coordination | `orchestrator`, `tool_composer` |
-| 2 — Causal Analytics | `causal_impact`, `heterogeneous_optimizer`, `gap_analyzer` |
-| 3 — Monitoring | `drift_monitor`, `experiment_designer`, `experiment_monitor`, `health_score` |
-| 4 — Prediction | `prediction_synthesizer`, `resource_optimizer` |
-| 5 — Self-Improvement | `explainer`, `feedback_learner` |
+| 0 — ML Foundation (9) | `scope_definer`, `cohort_constructor`, `cohort_profiler`, `data_preparer`, `feature_analyzer`, `model_selector`, `model_trainer`, `model_deployer`, `observability_connector` |
+| 1 — Coordination (2) | `orchestrator`, `tool_composer` |
+| 2 — Causal Analytics (3) | `causal_impact`, `heterogeneous_optimizer`, `gap_analyzer` |
+| 3 — Monitoring (4) | `drift_monitor`, `experiment_designer`, `experiment_monitor`, `health_score` |
+| 4 — Prediction (2) | `prediction_synthesizer`, `resource_optimizer` |
+| 5 — Self-Improvement (2) | `explainer`, `feedback_learner` |
 
 ---
 
@@ -496,7 +512,12 @@ The seed script (`scripts/seed_falkordb.py`) populates:
 
 - **3 Brand** nodes (Remibrutinib, Fabhalta, Kisqali)
 - **4 Region** nodes (northeast, south, midwest, west)
-- **11 Agent** nodes (one per Tier 1–5 agent)
+- **6 Agent** nodes — `orchestrator`, `causal_impact`, `gap_analyzer`,
+  `experiment_designer`, `prediction_synthesizer`, `explainer`. This is a
+  **sample, not the roster**: the `AGENTS` list in `scripts/seed_falkordb.py`
+  carries one representative agent per tier 1–5 (two for tier 2), not all 13
+  Tier 1–5 agents and none of the 9 Tier-0 agents. Node counts from a seeded
+  graph are therefore a floor, not the ontology's cardinality.
 - **Sample KPI** nodes (from `config/kpi_definitions.yaml`)
 - **Sample HCP** and **Patient** nodes with relationships
 
@@ -516,9 +537,58 @@ FALKORDB_URL=redis://:${FALKORDB_PASSWORD}@falkordb:6379/0 python scripts/seed_f
 
 ## FalkorDB Configuration
 
-**Source**: `config/ontology/falkordb_config.yaml`
+### Runtime graph name: `e2i_causal`
+
+**The graph the platform reads and writes is `e2i_causal`.** Every
+`GRAPH.QUERY` — from `redis-cli`, from a runbook, from a script — must select
+that graph, or it will run against an empty one and return zero rows with no
+error.
+
+| Where | Value | Role |
+|-------|-------|------|
+| `FALKORDB_GRAPH_NAME` env var | `e2i_causal` | The runtime switch |
+| `src/api/dependencies/falkordb_client.py` | `os.environ.get("FALKORDB_GRAPH_NAME", "e2i_causal")` | API client default |
+| `src/rag/config.py`, `src/memory/graphiti_config.py` | `e2i_causal` | RAG + Graphiti defaults |
+| `config/005_memory_config.yaml` (`semantic.graph_name`) | `e2i_causal` | The YAML that overrides the default in every real env |
+| `config/ontology/falkordb_config.yaml` (`graph_name`) | `e2i_semantic` | **Legacy, seed-only** |
+
+> `config/ontology/falkordb_config.yaml` still says `graph_name: "e2i_semantic"`.
+> That name is a **legacy seed-time artefact** (#749) and no runtime read path
+> uses it. The ontology definitions in that file — node types, edge types,
+> constraints, the settings below — are current; only its `graph_name` is not.
+> Treat `FALKORDB_GRAPH_NAME` / `config/005_memory_config.yaml` as authoritative.
+
+```bash
+# Confirm before querying
+grep -rn 'FALKORDB_GRAPH_NAME' src/api/dependencies/falkordb_client.py
+grep -n 'graph_name' config/005_memory_config.yaml
+```
+
+### Graphiti temporal layer
+
+`src/memory/graphiti_service.py` writes a **temporal episode layer into the same
+`e2i_causal` graph**, alongside the pharma ontology above. It is why a graph
+dump contains labels the ontology never declares.
+
+| Object | Kind | Notes |
+|--------|------|-------|
+| `Episode` | node | Written by `add_episode` with `episode_id`, `content` (truncated to 10,000 chars), `source`, `session_id`, `valid_at`, `created_at`, `metadata`. `valid_at` is the **bi-temporal** axis: when the fact was true, distinct from `created_at`, when it was recorded |
+| Entity nodes | node | Extracted from episode content and labelled with the `E2IEntityType` labels |
+| `MENTIONS` | edge | Episode -> entity it mentions |
+| `MEMBER_OF` | edge | Entity -> community it belongs to |
+| `RELATES_TO` | edge | Generic extracted relationship, and the **fallback label** for any relationship type the extractor does not recognise |
+
+`group_id` is pinned to `config.graph_name` (`e2i_causal`) on both the write
+(`add_episode`) and the read (`group_ids=[...]`), so episodes stay partitioned
+to the graph they were written into. The domain relationship types
+(`TREATED_BY`, `PRESCRIBED`, `PRESCRIBES`, `CAUSES`, `IMPACTS`, `INFLUENCES`,
+`DISCOVERED`, `GENERATED`) and these three Graphiti ones share one enum,
+`E2IRelationshipType` in `src/memory/graphiti_config.py`.
 
 ### Unique Constraints
+
+**Source**: `config/ontology/falkordb_config.yaml` (ontology only — see the
+graph-name caveat above)
 
 ```
 Patient.patient_id, HCP.hcp_id, HCP.npi, Brand.brand_name,

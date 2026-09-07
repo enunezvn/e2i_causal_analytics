@@ -62,7 +62,50 @@ can flag any column; Layers 3+ require a numeric AUC. The steps
 | 3 | HBLP severity classification | `hblp_classify`: 3a z-band -> `severity_pre_joint_check`; 3b the issue-#194 joint `|delta_AUC|` clamp may force `info`. |
 | 4 | Layer 3 ablation (opt-in) | `compute_feature_ablation` combined by MAX-rule; can ESCALATE info->moderate/high, never downgrade. Off by default. |
 | 5 | Layer 4 (LLM causal-role) | Fires on `severity_pre_joint_check`; auditor only, off by default. |
+| — | **Layer 2 (knowledge-graph causal role)** | `classify_kg_signal` over the UMLS/Open-Targets drug–disease cache, gated by `kg_mode`. Not a numbered ladder step: it contributes a **signal the voter consumes**, and it is the source of the "KG-contradictory abstain" branch below. |
 | 6 | EnsembleVoter | Renders the final verdict from the precedence ladder. |
+
+### Layer 2 — the knowledge-graph causal-role signal
+
+The voter's precedence names a "KG-contradictory abstain" branch, and this is
+where that signal comes from.
+
+`classify_kg_signal` (`src/data/kg/ensemble_voter.py`) takes the edges
+`KnowledgeGraphQuerier` produced for a feature/target pair, plus the UMLS CUI
+sets (or external IDs) representing each — several IDs per side, because a
+feature may be a code that cross-walks to multiple CUIs. It returns
+`(signal, considered_edges)`:
+
+| Condition | Signal |
+|---|---|
+| An Open Targets `treats`-style edge between feature and target entities | `leak_drug_treats_disease` |
+| A taxonomic `is_a`-style edge between them | `taxonomic_descendant` |
+| **Both** kinds present | `contradictory` — the voter **abstains** |
+| Neither, or no edges at all | `no_signal` |
+
+Edges that do not connect *this* feature/target pair (sibling concept
+relations, for instance) are ignored: the voter's contract is "what does the KG
+say about **this** feature's relation to the target".
+
+#### `kg_mode` — three values, and `shadow` is not `off`
+
+`_resolve_kg_mode` (in `adaptive_validity_check.py`) coerces
+`scope_spec["kg_mode"]` to one of `_VALID_KG_MODES`:
+
+| Mode | Effect |
+|---|---|
+| `off` | **Default.** No KG cache is loaded; the KG contributes nothing |
+| `shadow` | The KG runs and its verdict is recorded, but **capped**: when `decided_by == "kg"` the severity is forced to `info` and remediation to `keep`, so the KG cannot yet drop a feature. The audit fields (`decided_by="kg"`, `kg_signal=...`) stay intact so `compute_promotion_eligibility` can measure KG-vs-adversarial divergence *before* promotion. The `evidence` text is annotated `[shadow-mode: verdict capped to info/keep; KG not yet promoted]`, because otherwise the evidence would read "drop" while severity read "info" |
+| `promoted` | The KG verdict carries drop authority |
+
+> **The third value is `promoted`, not `active`.** `None`, an empty string, or
+> any unrecognised value resolves to `off` — a typo like `"shadowmode"` logs a
+> warning and falls back to `off` rather than silently bypassing promotion
+> control. Empty string is silent (most likely an unset YAML field).
+
+Cache staleness interacts with the mode: under `shadow` a manifest/target
+fingerprint mismatch logs a warning and skips the cache for that run; under
+`promoted` the same mismatch raises `KGCacheStaleError`.
 
 The voter's precedence (module docstring Step 6):
 
@@ -314,5 +357,6 @@ So a run that lacks a `feature_store.yaml` (e.g. an isolated worktree) can set
 | `adaptive_fdr_max_permutations` | `2000` | Cap on the feasibility-aware budget; over it -> sigma-band fallback. |
 | `adaptive_layer3_ablation_enabled` | `False` | Opt-in joint-model ablation pass (MAX-rule escalation). |
 | `adaptive_layer4_enabled` | `False` | Opt-in LLM causal-role auditor. |
+| `kg_mode` (`scope_spec`) | `off` | `off` \| `shadow` \| `promoted`. `shadow` records KG verdicts but caps them to `info`/`keep`; `promoted` gives them drop authority. Unrecognised values fall back to `off` with a warning. |
 | `adaptive_declared_safe_full_immunity` | `False` | #604 carve-out; set only for synthetic fixtures by the runner. |
 | `ALLOW_STALE_FEAST` (env) | unset | `=1` bypasses the Feast staleness hard block. |

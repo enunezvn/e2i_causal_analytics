@@ -81,20 +81,44 @@ graph TD
 
 ## Memory Schema
 
-**Source**: `database/memory/001_agentic_memory_schema_v1.3.sql` (807 lines)
+**Source**: `database/memory/001_agentic_memory_schema_v1.3.sql`, extended by the
+numbered migrations in the same directory (`ls database/memory | sort | tail -1`
+for the ceiling). The base file is not the whole memory schema — everything
+under [Later memory tables](#later-memory-tables) arrived in a migration.
 
 The tri-memory architecture provides agents with episodic recall (what happened), procedural knowledge (how to do things), and semantic caching (graph facts). No FK dependencies to the core data layer — entity references use VARCHAR IDs.
 
 ### Enum Types
 
+All values below were re-derived from the `CREATE TYPE` and `ALTER TYPE ... ADD
+VALUE` statements under `database/memory/` and `database/migrations/`.
+
 | Enum | Values |
 |------|--------|
-| `memory_event_type` | `query`, `analysis`, `recommendation`, `alert`, `learning`, `feedback` |
-| `memory_outcome_type` | `success`, `partial_success`, `failure`, `timeout`, `skipped` |
-| `procedure_type` | `tool_sequence`, `analysis_recipe`, `response_template`, `escalation_path` |
+| `memory_event_type` | **8 base** — `user_query`, `agent_action`, `system_event`, `feedback`, `error`, `causal_discovery`, `trigger_generated`, `experiment_completed` — plus **21 added** by migrations 020/039/040/041: `composition_completed`, `optimization_completed`, `explanation_generated`, `scope_definition_completed`, `qc_report_completed`, `model_selection_completed`, `model_training_completed`, `feature_analysis_completed`, `model_deployment_completed`, `observability_metrics_collected`, `cohort_construction_completed`, `causal_analysis_completed`, `causal_analysis`, `cate_analysis_completed`, `prediction_completed`, `prediction_delivered`, `health_check_completed`, `experiment_alert_generated`, `experiment_monitoring_completed`, `gap_analysis_completed`, `orchestration_completed` (**29** in all) |
+| `memory_outcome_type` | `success`, `partial_success`, `failure`, `pending`, `escalated` |
+| `procedure_type` | `tool_sequence`, `query_pattern`, `causal_chain_traversal`, `error_recovery`, `optimization`, plus `hpo_pattern` and `tool_composition` added by migration |
 | `cognitive_phase` | `summarizer`, `investigator`, `agent`, `reflector` |
-| `e2i_agent_name` | All 21 agent names (scope_definer through feedback_learner) |
-| `learning_signal_type` | `thumbs_up`, `thumbs_down`, `correction`, `rating`, `implicit` |
+| `e2i_agent_name` | **23 values**: 12 base (`orchestrator`, `causal_impact`, `gap_analyzer`, `drift_monitor`, `heterogeneous_optimizer`, `fairness_guardian`, `health_score`, `experiment_designer`, `prediction_synthesizer`, `feedback_learner`, `explainer`, `resource_optimizer`) + 11 added by migrations 018/029/041 (`scope_definer`, `data_preparer`, `feature_analyzer`, `model_selector`, `model_trainer`, `model_deployer`, `observability_connector`, `tool_composer`, `cohort_constructor`, `experiment_monitor`, `corpus_ingestion`). **See the roster mismatch note below.** |
+| `learning_signal_type` | `thumbs_up`, `thumbs_down`, `correction`, `rating`, `implicit_positive`, `implicit_negative` |
+
+> **This enum is NOT the agent roster, and the two do not match.**
+> `config/agent_config.yaml` declares 22 agents; `e2i_agent_name` has 23 values.
+> They differ in three places:
+>
+> - **`cohort_profiler` is in the roster but has NO enum value** (added to the
+>   config by #1790; no `ALTER TYPE ... ADD VALUE` was ever written for it).
+>   This is a **known gap**, recorded here rather than papered over. It is
+>   currently latent: `src/agents/cohort_profiler/` writes no memory rows, so
+>   nothing inserts a value the enum would reject. **If that agent ever writes
+>   an episodic/learning row, this becomes a hard insert failure and needs a
+>   memory migration first.**
+> - **`fairness_guardian`** and **`corpus_ingestion`** are enum values with no
+>   agent in the config roster.
+>
+> Re-derive rather than trusting this note:
+> `grep -rn "'cohort_profiler'" database/memory/ database/migrations/ | grep -c 'ADD VALUE'`
+> -> 0 today.
 
 ### episodic_memories
 
@@ -242,7 +266,7 @@ Feedback data used for DSPy optimization and self-improvement.
 | Column | Type | Description |
 |--------|------|-------------|
 | `signal_id` | UUID (PK) | |
-| `cycle_id` | UUID — parent `cognitive_cycles` restored mig 042 (soft reference; enforced FK not re-added — the async reflector may write a child before the parent row, so the link is intentionally soft) | Related cycle |
+| `cycle_id` | UUID **FK -> `cognitive_cycles(cycle_id)` ON DELETE CASCADE** | Related cycle. The parent table was restored by migration 042, and **migration 072 (#884) added the real FK** — it is no longer a soft reference. 072 first NULLs any orphan `cycle_id` (measured 0 at the time: all 300 rows had `cycle_id` NULL), so the `ADD CONSTRAINT` cannot fail on an environment that does hold orphans, and it specifically asserts CASCADE delete behaviour rather than accepting any FK |
 | `signal_type` | learning_signal_type | Type of feedback |
 | `signal_value` | FLOAT | Numeric signal (-1 to 1 or 1–5 rating) |
 | `correction_text` | TEXT | User's correction (if any) |
@@ -271,11 +295,157 @@ Aggregated hourly/daily metrics for monitoring memory system health.
 
 ---
 
+## Later memory tables
+
+Everything above is in the `001` base schema. These arrived in numbered
+migrations under `database/memory/` (or `database/migrations/`) and were
+previously undocumented. `grep -l 'CREATE TABLE' database/memory/*.sql` is the
+current inventory.
+
+### agent_knowledge_store (migration 065)
+
+Durable backend for the feedback-learner's knowledge updates (#837). Before it,
+`KnowledgeUpdaterNode` proposed updates with no store behind them.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `knowledge_type` | TEXT NOT NULL | One of the four the node proposes: `baseline`, `agent_config`, `prompt`, `threshold` |
+| `key` | TEXT NOT NULL | Knowledge key within the type |
+| `value` | JSONB NOT NULL | The stored value |
+| `justification` | TEXT | Why the update was proposed |
+| `version` | INTEGER NOT NULL DEFAULT 1 | Bumped on update — history is versioned, not overwritten |
+| `created_at` / `updated_at` | TIMESTAMPTZ NOT NULL DEFAULT now() | |
+
+### dspy_agent_training_signals (migration 014)
+
+Per-invocation DSPy training signals, richer than `learning_signals`: phase
+decomposition, token/latency accounting and downstream impact.
+
+Notable columns: `signal_id` (PK), `source_agent`, `batch_id`, `input_context`
+/ `output` / `quality_metrics` (JSONB), `reward` (`CHECK BETWEEN 0 AND 1`),
+`latency_breakdown`, `total_latency_ms`, `model_used`, `llm_calls`,
+`total_tokens` / `prompt_tokens` / `completion_tokens`,
+`cognitive_context_id`, `has_cognitive_context`, `user_satisfaction_delta`,
+`downstream_impact` (JSONB), `human_validated`, `validation_timestamp`.
+
+### ml_hpo_patterns (migration 017)
+
+Hyperparameter-optimization outcomes reused as **warm starts** for later
+studies. `procedure_id` FK -> `procedural_memories(procedure_id)` ON DELETE
+CASCADE, so an HPO pattern is a specialisation of a procedural memory.
+
+Notable columns: `pattern_id` (PK), `algorithm_name`, `problem_type`,
+`search_space` / `best_hyperparameters` (JSONB), `best_value`,
+`optimization_metric`, the problem-shape fields used for matching
+(`n_samples`, `n_features`, `n_classes`, `class_balance`, `feature_types`),
+the study fields (`n_trials`, `n_completed`, `n_pruned`, `duration_seconds`,
+`study_name`) and the payoff fields `times_used_as_warmstart` /
+`warmstart_improvement_avg`. Migration 017 also adds `hpo_pattern` to
+`procedure_type`.
+
+### procedural_templates (migration 027)
+
+Brand-scoped templates distilled from episodic memories.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | |
+| `brand` | TEXT NOT NULL | Brand scope |
+| `template_signature` | TEXT NOT NULL | Signature the template answers to |
+| `template_body` | JSONB NOT NULL | The template |
+| `derived_from_episodic_ids` | UUID[] NOT NULL | **Provenance**: exactly which episodic rows produced this template |
+| `extraction_confidence` | FLOAT NOT NULL | Confidence of the distillation |
+| `extraction_method` | TEXT NOT NULL | How it was extracted |
+| `created_at` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | |
+
+### Insight lifecycle: executive_insights, insight_edges, sentinels (migration 021)
+
+**`executive_insights`** — crystallized narratives. `insight_id` (PK), `title`,
+`narrative`, `brand` (**never cross-brand**), `region`, `kpi`,
+`time_window_start` / `_end`, `key_metrics` (JSONB), the recall fields
+(`recall`, `recall_reason`, `recall_at`), the crystallization provenance
+(`crystallized_at`, `crystallized_by_cycle_id`, `crystallized_by_user_id`),
+the invalidation fields (`invalidated_at`, `invalidation_reason` — mirroring
+triggers/predictions for cascade uniformity) and `source_count` (count of
+`insight_edges` rows targeting this insight).
+
+**`insight_edges`** — the provenance graph between source rows and insights;
+`verify_insight_chain()` walks it, and migration 030 pins the permitted
+ancestor types.
+
+**`sentinels`** — standing watches over the data. `sentinel_id` (PK), `name`,
+`description`, `pattern_type` (`sentinel_pattern_type`), `pattern_config`
+(JSONB, e.g. `{"table":"causal_paths","column":"causal_effect_size","op":"<","value":0.05}`),
+`action_type` (`sentinel_action_type`), `action_config`, `brand` (`'all'` is
+admin-only, enforced at the API layer), `region`, `created_by_user_id`,
+`enabled`, `last_fired_at`, `fire_count`, timestamps. Migrations 023 and 024
+add cooldown and the invalidation-count pattern.
+
+**Append-only enforcement (migration 028)**: a
+`prevent_change_invalidated_executive_insight` trigger blocks changes to an
+invalidated insight, so the record is corrected by a new row, never rewritten.
+
+### crystal_narrative_audits (migration 028)
+
+One audit row per crystallized narrative — what the model produced and what it
+cost. `audit_id` (PK), `insight_id` (**UNIQUE**, one audit per insight),
+`narrator_model`, `key_finding`, `limitations`, `recommended_next`,
+`input_prompt`, `latency_ms`, `input_tokens`, `output_tokens`, `cost_usd`,
+`created_at`.
+
+### Gap analysis & feedback-loop tables
+
+| Table | Source | Purpose |
+|-------|--------|---------|
+| `gap_analyses` | migration 059 | Persisted gap-analyzer results |
+| `feedback_learning_batches` | migration 059 | A learner run over a batch of signals |
+| `feedback_patterns` | migration 059 | Patterns the learner extracted |
+| `feedback_knowledge_updates` | migration 059 | Proposed updates (the `agent_knowledge_store` writes above) |
+| `feedback_items` | migration 059 | Individual feedback records |
+| `ml_feedback_loop_config` | migration 006 | Feedback-loop configuration |
+| `ml_feedback_loop_runs` | migration 006 | Feedback-loop run history |
+
+### Memory RPCs
+
+Functions defined under `database/memory/`. Re-derive with
+`grep -rhoE 'CREATE OR REPLACE FUNCTION [a-z_.]+\(' database/memory/*.sql | sort -u`.
+
+| Function | Purpose |
+|----------|---------|
+| `search_episodic_memory` | Episodic recall; migration 035 added filters |
+| `hybrid_vector_search` / `hybrid_fulltext_search` | The two halves of hybrid retrieval (011). Migrations 043–045 add operational-corpus scoping and synthetic exclusion/coalescing |
+| `find_relevant_procedures` | Procedural-memory lookup |
+| `increment_procedure_outcome` | Atomic outcome counter (036) — atomic so concurrent updates cannot lose a count |
+| `find_similar_hpo_patterns` / `record_hpo_warmstart_usage` | HPO warm-start matching and usage recording (017) |
+| `get_memory_entity_context` / `get_agent_activity_context` | Context assembly for agents |
+| `get_dspy_training_examples` / `get_dspy_agent_metrics` | DSPy training-signal reads (014) |
+| `get_conversations_with_feedback` / `search_similar_conversations` | Conversation-level reads (016; migration 031 retired some of the similarity RPCs) |
+| `get_active_prompt` | Active prompt lookup |
+| `get_search_stats` / `test_vector_search` / `test_fulltext_search` | Diagnostics |
+| `sync_hcp_patient_relationships_to_cache` | Semantic-cache sync (038 makes the count accumulate) |
+| `verify_insight_chain` | Walks `insight_edges`; migration 030 verifies permitted ancestor types |
+| `prevent_change_invalidated_executive_insight` | Trigger function — append-only insights (028) |
+| `prevent_update_delete_audit_chain` | Trigger function — the audit chain is insert-only |
+
+---
+
 ## RAG Schema
 
-**Source**: `database/rag/001_rag_schema.sql` (501 lines)
+**Source**: `database/rag/001_rag_schema.sql`, extended by `002`-`006` in the same directory
 
 Hybrid search combining vector, full-text, and graph retrieval.
+
+**Provenance filtering (migrations 004/005).** `rag_document_chunks` carries
+`is_synthetic`, and the vector-search path filters on it, so a synthetic-gold
+chunk is not retrieved as though it were real-world evidence.
+
+**Full-text uses OR semantics, not AND (migration 006).** `rag_fulltext_search`
+still parses the query with `websearch_to_tsquery` (so phrase and negation
+syntax keep working), but a long natural-language question under strict AND
+matched nothing — every term had to appear in one chunk. The function converts
+the parsed tsquery to its **OR** form for both matching and ranking, letting
+`ts_rank_cd` order partial matches instead of returning an empty set.
+**Negated queries keep strict AND**: `-term` -> `!term` must still exclude.
 
 ### rag_document_chunks
 
@@ -459,8 +629,18 @@ Unique constraint: `(user_id, key)`
 | `chatbot_message_feedback` | 031 | Structured feedback per message |
 | `chatbot_analytics` | 033 | Usage analytics aggregations |
 | `chatbot_training_signals` | 034 | Phase-decomposed training signals written by the chatbot finalize node — intended consumer is the dormant `ChatbotOptimizer` (chatbot_dspy.py), **not** the feedback-learner (see the two-collector note under `learning_signals` above; intent decision: issue #1282) |
-| `chatbot_optimization_requests` | 035 | Optimization request tracking |
+| `chatbot_optimization_requests` | 035 | Optimization request tracking. No longer purely dormant: `src/tasks/chatbot_optimization_tasks.py` drains it on the 05:30 schedule **when `CHATBOT_OPT_DRAIN_ENABLED` is set** (#1521, following the #1513 precedent) — a logged no-op otherwise, so the default deployment behaves as before |
 | `user_roles` | 036 | Role-based access definitions |
+
+#### `computed_user_id` is trigger-maintained, not generated (migration 123)
+
+`chatbot_messages.computed_user_id` and its sibling on the feedback table were
+`GENERATED ALWAYS AS` expressions. Migration 123 (#1433) **drops the generated
+expression on both** and replaces it with a shared
+`chatbot_inherit_conversation_owner()` trigger that sets `computed_user_id`
+from the parent conversation's `user_id` on insert. The RLS policies and
+indexes keyed on the column are preserved unchanged — the column keeps its
+meaning; only the mechanism that fills it changed.
 
 ### Row-Level Security
 
@@ -655,7 +835,7 @@ service-role writers bypass RLS.
 
 ## Audit Schema
 
-**Source**: `database/audit/011_audit_chain_tables.sql` (352 lines)
+**Source**: `database/audit/011_audit_chain_tables.sql`
 
 Tamper-evident audit chain with SHA-256 hash linking for regulatory compliance. Every agent action in a workflow is recorded as a chain entry, with each entry's hash incorporating the previous entry's hash (blockchain-style).
 
@@ -670,16 +850,39 @@ Hash-linked audit trail — one entry per agent action.
 | `sequence_number` | INTEGER | Order within workflow (1, 2, 3...) |
 | `agent_name` | VARCHAR(50) | Agent that performed action |
 | `agent_tier` | INTEGER (0–5) | Agent's tier |
-| `action_type` | VARCHAR(50) | `analysis`, `validation`, `prediction`, `recommendation` |
+| `action_type` | VARCHAR(50) | The audited node's name (`<node>`), or **`<node>_error`** when that node raised or returned a `{node}_error` key. The tool composer's total-tool-failure gate writes `execute_error`. See the callout below |
 | `input_hash` | VARCHAR(64) | SHA-256 of input data |
 | `output_hash` | VARCHAR(64) | SHA-256 of output data |
-| `validation_passed` | BOOLEAN | Did validation gate pass? |
+| `validation_passed` | BOOLEAN | A **scientific verdict about the data**, not a run outcome. See the callout below |
 | `confidence_score` | FLOAT (0–1) | Agent's confidence |
 | `refutation_results` | JSONB | DoWhy refutation outcomes |
 | `entry_hash` | VARCHAR(64) | SHA-256 of this entry |
 | `previous_hash` | VARCHAR(64) | Hash of previous entry in chain |
 | `previous_entry_id` | UUID (FK → self) | Link to previous entry |
 | `created_at` | TIMESTAMPTZ | |
+
+> **`validation_passed` is a verdict; `<node>_error` is the execution outcome
+> (#1902).** The audited-node wrapper (`src.agents.base.audit_chain_mixin`)
+> records under `validation_passed` whatever the node returned as
+> `validation_passed` / `overall_robust` — the heterogeneous optimizer's
+> EconML/CausalML cross-library agreement, or causal_impact's refutation
+> verdict. Those are results *about the data*, and a downstream node returning
+> `{**state}` re-records the same verdict once per node. Counting them as
+> failed invocations made /system-health warn "heterogeneous_optimizer has low
+> success rate (89.7%)" across a 30-day window in which no node of any agent
+> raised.
+>
+> **Execution failure has exactly one marker: an `action_type` ending in
+> `_error`**, and every fail-closed path writes one. The single shared
+> definition is `is_execution_failure()` in `src/api/utils/audit_outcomes.py`,
+> used by the agent-health reader (`/health-score` -> /system-health) and the
+> analytics readers.
+>
+> **The unit of an invocation is the workflow run (`workflow_id`), not the
+> row.** A run writes one genesis row plus one row per node; a run counts as
+> failed if *any* of its rows is an error row, once, however many rows it
+> wrote. Legacy rows with no `workflow_id` have no other unit, so each counts
+> as one run.
 
 **Refutation results JSONB structure**:
 ```json
@@ -696,6 +899,36 @@ Hash-linked audit trail — one entry per agent action.
 SHA-256(entry_id || workflow_id || sequence_number || agent_name ||
         action_type || created_at || input_hash || output_hash || previous_hash)
 ```
+
+### security_audit_log
+
+**Source**: `database/audit/012_security_audit_log.sql`. Separate from the hash
+chain: `audit_chain_entries` records *agent actions* for scientific
+reproducibility; this table records *security events* for compliance and threat
+detection — authentication, authorization, rate limiting, API-security and
+sensitive-data-access events.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `event_id` | UUID PK DEFAULT `gen_random_uuid()` | |
+| `event_type` | VARCHAR(100) NOT NULL | Event class |
+| `severity` | VARCHAR(20) NOT NULL CHECK | `debug`, `info`, `warning`, `error`, `critical` |
+| `timestamp` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | Event time (indexed DESC) |
+| `message` | TEXT NOT NULL | Human-readable summary |
+| `user_id` / `user_email` / `user_roles` | VARCHAR / VARCHAR / JSONB | Actor |
+| `request_id` / `correlation_id` | VARCHAR(100) | Request correlation |
+| `client_ip` | INET | Client address |
+| `user_agent` / `endpoint` / `http_method` | TEXT / VARCHAR(500) / VARCHAR(10) | Request context |
+| `resource_type` / `resource_id` / `action_attempted` / `action_result` | VARCHAR | What was attempted, on what, and how it ended |
+| `error_code` / `error_details` | VARCHAR(50) / TEXT | Failure detail |
+| `metadata` | JSONB DEFAULT `'{}'` | Flexible payload (GIN-indexed) |
+| `created_at` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | |
+
+Indexed on `timestamp`, `event_type`, `severity`, `user_id`, `client_ip`,
+`request_id`, the composite `(event_type, severity, timestamp)`, and `metadata`.
+The file also carries a **commented-out** partitioned variant
+(`security_audit_log_partitioned`) — it is guidance for a future volume
+migration, not live DDL.
 
 ### audit_chain_verification_log
 
@@ -747,10 +980,25 @@ Each entry's `entry_hash` incorporates the `previous_hash`, creating a tamper-ev
 
 ## Permissions Summary
 
-| Schema | authenticated | service_role |
-|--------|-------------|-------------|
-| Memory | SELECT/INSERT on all tables | Full access |
-| RAG | SELECT/INSERT, EXECUTE functions | Full access |
-| Chat | RLS-filtered SELECT/INSERT | Full access |
-| Admin & LLM Observability | SELECT for admins only (RLS) | Full access; sole EXECUTE on admin functions |
-| Audit | SELECT only (e2i_readonly) | SELECT/INSERT (e2i_service) |
+> **Migration 058 (#703) REVOKEd the `anon` / `authenticated` over-grant.** The
+> Supabase default `GRANT ALL ON ... TO anon, authenticated` had left roughly
+> 101 no-RLS public tables (and ~105 anon-granted views) readable and writable
+> by those roles. Migration 058 revokes ALL privileges from `anon` and
+> `authenticated` on **every** public table and view (including materialized
+> views), and neutralises the Supabase DEFAULT PRIVILEGES that would re-grant
+> them. **All application access is via the service-role backend**, which
+> bypasses RLS and retains its grants. It was safe to revoke because the
+> frontend never calls PostgREST directly — it goes through the API.
+>
+> Scope, per the owner decision at the time: **tables and views, REVOKE only**
+> (RLS itself deferred). Other anon-granted public *functions* — the guarded
+> `kpi_query` allowlist among them — were left in place deliberately. The
+> migration is idempotent and safe to re-apply.
+
+| Schema | anon / authenticated | service_role |
+|--------|----------------------|-------------|
+| Memory | **none** (revoked by migration 058) | Full access |
+| RAG | **none** on tables/views; the hybrid-search functions remain EXECUTE-able | Full access |
+| Chat | **none** on tables; RLS policies still define the per-user shape for the service-role paths that honour them | Full access |
+| Admin & LLM Observability | **none** | Full access; sole EXECUTE on admin functions |
+| Audit | **none** | SELECT/INSERT (e2i_service) |

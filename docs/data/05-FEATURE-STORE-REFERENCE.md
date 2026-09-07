@@ -1,6 +1,6 @@
 # 05 — Feature Store Reference (Feast)
 
-> **E2I Causal Analytics** | Feast 0.58.0 | Last Updated: 2026-02
+> **E2I Causal Analytics** | Feast **0.43.0** | Last Updated: 2026-09-07
 
 | Navigation | |
 |---|---|
@@ -15,7 +15,21 @@
 
 The E2I feature store uses **Feast** (Feature Store for ML) to manage feature definitions, serving, and materialization. Features are organized around pharmaceutical commercial use cases: HCP conversion prediction, patient churn prediction, trigger effectiveness analysis, and ROI prediction.
 
-**Source**: `feature_repo/` directory
+**Source**: `feature_repo/` directory. This is the canonical Feast doc — README,
+ONBOARDING, ARCHITECTURE and [00-INDEX](00-INDEX.md) point here rather than
+carrying their own counts.
+
+**The Feast version is `0.43.0`**, pinned by the sidecar image in
+`docker/Dockerfile.feast` (`FROM feastdev/feature-server:0.43.0`). The SDK is
+deliberately **not** installed in the API venv (#307), so anything that imports
+`feast` runs inside the `e2i_feast` sidecar, not in the app or worker.
+
+```bash
+grep -n '^FROM' docker/Dockerfile.feast                                  # the version
+grep -hE '^[a-z_]+ = FeatureView\(' feature_repo/features/*.py | wc -l   # feature views
+grep -ho 'Field(' feature_repo/features/*.py | wc -l                     # fields
+grep -rho 'PostgreSQLSource(' feature_repo/ | wc -l                      # sources
+```
 
 ---
 
@@ -52,6 +66,8 @@ graph TD
         FV_TR2[trigger_response_features]
         FV_MD[market_dynamics_features]
         FV_TP[territory_performance_features]
+        FV_GC[goldstd_cohort_features]
+        FV_GH[goldstd_hcp_cohort_features]
     end
 
     BM --> FV_HC
@@ -78,6 +94,11 @@ graph TD
     E_TER --> FV_MD
     E_TER --> FV_TP
     E_BRD --> FV_MD
+
+    PJ --> FV_GC
+    HP --> FV_GH
+    E_PAT --> FV_GC
+    E_HCP --> FV_GH
 ```
 
 ---
@@ -96,7 +117,7 @@ graph TD
 
 ### Composite Entities (3)
 
-Feast 0.58.0 only supports single join keys, so composite entities use concatenated key strings.
+Feast only supports single join keys, so composite entities use concatenated key strings.
 
 | Entity | Join Key | Format | Description |
 |--------|----------|--------|-------------|
@@ -110,9 +131,16 @@ Feast 0.58.0 only supports single join keys, so composite entities use concatena
 
 ## Data Sources
 
-### PostgreSQL Sources (5)
+### PostgreSQL Sources
 
-All sources read from Supabase PostgreSQL with a 365-day lookback window.
+`grep -rho 'PostgreSQLSource(' feature_repo/ | wc -l` -> **7**: the five below,
+defined in `feature_repo/data_sources.py`, plus `goldstd_cohort_source` and
+`goldstd_hcp_source`, which live beside their feature views in
+`feature_repo/features/` (see [Gold-standard serving
+views](#gold-standard-serving-views)).
+
+The five domain sources read from Supabase PostgreSQL with a 365-day lookback
+window.
 
 #### business_metrics_source
 
@@ -363,6 +391,97 @@ For on-demand feature computation at serving time.
 
 **Source**: `territory_metrics_source`
 
+### Gold-standard serving views
+
+Two feature views added in June 2026 serve the **gold-standard evaluation
+cohorts** — the RAW covariates the goldstd models consume, so SHAP explanations
+are computed on the same values the model saw. They live in
+`feature_repo/features/goldstd_cohort_features.py` and
+`goldstd_hcp_features.py`, each with its own `PostgreSQLSource` beside it rather
+than in `data_sources.py`.
+
+> **Leakage-safe by construction.** Each source query selects **only** the
+> covariate columns; no post-index (cohort) or post-decision (HCP) column enters
+> the serving contract. That restriction is the point of these views — adding a
+> column here is a leakage decision, not a convenience.
+
+#### goldstd_cohort_features
+
+**Use case**: SHAP serving for the gold-standard patient cohort models
+**Entities**: `patient` | **TTL**: 7 days | **Source**: `goldstd_cohort_source`
+(`patient_journeys`, `WHERE event_date >= NOW() - INTERVAL '2000 days'`)
+
+| Feature | Type | Description |
+|---------|------|-------------|
+| `disease_severity` | Float64 | Confounder: disease severity |
+| `academic_hcp` | Int64 | Confounder: treating HCP is academic |
+| `geographic_region` | String | US census region |
+| `insurance_type` | String | Insurance type |
+| `age_at_diagnosis` | Int64 | Age at diagnosis |
+| `comorbidity_burden` | Int64 | Persistence driver (migration 087) |
+| `prior_therapy_lines` | Int64 | Persistence driver (migration 087) |
+| `copay_support` | Int64 | Commercial arm (migration 088) |
+| `psp_enrolled` | Int64 | Commercial arm (migration 088) |
+| `rep_detailing_high` | Int64 | Commercial arm (migration 088) |
+| `sample_dropped` | Int64 | Commercial arm (migration 088) |
+| `trigger_accepted` | Int64 | Commercial arm (migration 112) |
+
+`event_timestamp` is `event_date::TIMESTAMPTZ` — a DATE cast to midnight, so it
+is **day-granular**. That is what makes the same-day dedup hazard below real.
+
+#### goldstd_hcp_cohort_features
+
+**Use case**: SHAP serving for the HCP-adoption models
+**Entities**: `hcp` | **TTL**: 30 days | **Source**: `goldstd_hcp_source`
+(`hcp_profiles`, no lookback filter)
+
+| Feature | Type | Description |
+|---------|------|-------------|
+| `peer_influence_score` | Float64 | Peer influence |
+| `influence_network_size` | Int64 | Influence network size |
+| `years_experience` | Int64 | Years in practice |
+| `specialty` | String | Medical specialty |
+| `geographic_region` | String | US census region |
+
+`event_timestamp` is `hcp_profiles.updated_at`, a real `timestamptz`.
+
+#### Same-day dedup markers — `clear_goldstd_ts_markers.py`
+
+Feast's Redis online store keeps a `_ts:<view>` field per entity hash holding
+the last-written `event_timestamp`, and **skips** a column when the incoming
+event time is not *strictly* newer
+(`feast/infra/online_stores/redis.py`: `if prev_ts.seconds and
+event_time_seconds <= prev_ts.seconds: continue`). `created_timestamp` is
+discarded, so a fresher write with an equal event time is silently dropped.
+
+Because `goldstd_cohort_features` is day-granular, **two reseeds on the same
+calendar day produce byte-identical event times**: the `<=` branch fires, the
+changed columns are never written to the online store, and `feast materialize`
+still exits 0. The serving layer silently no-ops (degenerate SHAP surface, and
+the #576 null-trap 503). `goldstd_hcp_cohort_features` ties only when a reseed
+rewrites rows without bumping `updated_at`, but the mechanism is identical.
+
+`feature_repo/clear_goldstd_ts_markers.py` (#1298) fixes it by `HDEL`-ing
+**only** the `_ts:<view>` marker on each entity hash, so the next write is laid
+down unconditionally. It touches nothing else in the shared Redis — not feature
+values, not other views' markers (`_ts:hcp_profile_features` and
+`_ts:hcp_features` on the same HCP hash are untouched), not any non-Feast key.
+Non-destructive and idempotent, so it is safe before **every** full materialize.
+
+It runs **inside the `e2i_feast` sidecar only** — the app/worker image cannot
+import feast (#307). Compose bind-mounts `feature_repo/` read-only at
+`/feast-src`; the entrypoint copies it into the writable `/feast` layer where
+the rendered `feature_store.yaml` lives. So the script is at `/feast-src/...`
+while the config is read from `repo_path=/feast`:
+
+```bash
+# dry-run first (counts markers, deletes nothing)
+docker exec e2i_feast python /feast-src/clear_goldstd_ts_markers.py --dry-run
+
+# then the real clear, then re-materialize
+docker exec e2i_feast python /feast-src/clear_goldstd_ts_markers.py
+```
+
 ---
 
 ## Feature View Summary
@@ -378,8 +497,11 @@ For on-demand feature computation at serving time.
 | `trigger_response_features` | trigger | 3 | 1d | Response tracking | triggers |
 | `market_dynamics_features` | territory, brand | 6 | 7d | ROI prediction | business_metrics |
 | `territory_performance_features` | territory | 6 | 1d | Resource optimization | territory_metrics |
+| `goldstd_cohort_features` | patient | 12 | 7d | Gold-standard cohort SHAP serving | patient_journeys |
+| `goldstd_hcp_cohort_features` | hcp | 5 | 30d | Gold-standard HCP-adoption SHAP serving | hcp_profiles |
 
-**Total**: 9 feature views, 48 features
+**Total**: **11 feature views, 65 fields** (measured — see the commands in
+[Overview](#overview); re-run them rather than trusting this line).
 
 ---
 
@@ -437,18 +559,78 @@ feast materialize-incremental $(date -u +%Y-%m-%dT%H:%M:%S)
 
 The Feast feature server runs in Docker at `127.0.0.1:6567` (internal port 6566, remapped because Chrome blocks 6566). The compose overlay binds the `feature_repo/` directory into the container.
 
+> **`feature_repo/feature_store.yaml` is not in the repo.** It embeds the
+> Postgres and Redis passwords, so it is gitignored and **rendered from a
+> template at startup**. The committed file is
+> `feature_repo/feature_store.yaml.tmpl`:
+
 ```yaml
-# feature_store.yaml
+# feature_repo/feature_store.yaml.tmpl  (committed)
 project: e2i_causal_analytics
 provider: local
-online_store:
-  type: redis
-  connection_string: redis://redis:6379/2
+registry: data/registry.db
+
 offline_store:
   type: postgres
-  host: db
+  host: supabase-db
   port: 5432
+  database: postgres
+  user: postgres
+  password: "${SUPABASE_POSTGRES_PASSWORD}"
+  sslmode: prefer
+  db_schema: public
+
+online_store:
+  type: redis
+  connection_string: "redis:6379,password=${REDIS_PASSWORD}"
+
+entity_key_serialization_version: 3
 ```
+
+**Who renders it**, by environment — the substitution is only
+`${SUPABASE_POSTGRES_PASSWORD}` and `${REDIS_PASSWORD}`:
+
+| Environment | Renderer |
+|-------------|----------|
+| Production / container | `docker/feast/entrypoint.sh`, at container start, into the writable `/feast` layer |
+| CI | an inline step in `.github/workflows/feast-apply.yml`, with placeholder values (`--skip-source-validation` means nothing connects) |
+| Local dev only | `scripts/feast_render_config.sh` — sources `.env`, writes the file `chmod 600`. **Never run this in production or CI** |
+
+### Registry lifecycle & the `feast-apply` CI gate
+
+The registry is `data/registry.db` (relative to the repo), regenerated by
+`feast apply`. Two facts about its lifecycle are easy to get wrong:
+
+- **The Feast container does not re-apply on startup.** It runs `feast serve`.
+  Applying against the live registry store is a separate deployment step.
+- **The registry file hash drifts on every apply** — it embeds
+  `last_updated_timestamp` — so file-hash comparison is not a validity check.
+
+`.github/workflows/feast-apply.yml` ("Feast Apply & Idempotency") gates changes
+under `feature_repo/**`, `database/**`, `docker/Dockerfile.feast` and the
+workflow itself. It deliberately does **not** run on `src/`-only changes, and
+`backend-tests.yml` deliberately does not run on `feature_repo/**`. Its steps:
+
+1. **Source-column guard** — hermetic, no Feast and no DB: AST-parses
+   `feature_repo/data_sources.py`, text-parses the committed DDL under
+   `database/`, and asserts every column a source query selects actually
+   exists. This is why a `database/**` change triggers this workflow.
+2. **Version-pin assertion** — greps the version out of
+   `docker/Dockerfile.feast` and **fails loudly** if it is not `0.43.0`, before
+   installing anything. Keeps CI from green-lighting a definition that breaks
+   the production server, or failing on a deprecation 0.43 still accepts.
+3. **Install** `feast[postgres,redis]==0.43.0` — the Redis extra is required at
+   *config-load* time (Feast imports `RedisOnlineStoreConfig` even under
+   `--skip-source-validation`), so omitting it crashes apply.
+4. **Render** `feature_store.yaml` from the template with placeholders.
+5. **`feast apply --skip-source-validation`** — a "do the Python definitions
+   parse and produce a valid registry" gate, with no Postgres or Redis.
+6. **Structural idempotency probe** — applies a *second* time and diffs the
+   entity and feature-view **name** inventories. **Scope limitation, stated in
+   the workflow:** names only. It does **not** catch dtype flips, TTL drift, a
+   source rename, or a schema field being added or removed inside an existing
+   feature view. Treat it as the minimum-viable gate against non-deterministic
+   apply behaviour, not as a schema diff.
 
 ---
 

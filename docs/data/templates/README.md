@@ -63,12 +63,12 @@ if result['errors']:
 |--------|-------------|
 | `brand` | `Remibrutinib`, `Fabhalta`, `Kisqali`, `competitor`, `other` |
 | `geographic_region` | `northeast`, `south`, `midwest`, `west` |
-| `journey_stage` | `diagnosis`, `initial_treatment`, `treatment_optimization`, `maintenance`, `treatment_switch` |
+| `journey_stage` | All 12 `journey_stage_type` values: `diagnosis`, `initial_treatment`, `treatment_optimization`, `maintenance`, `treatment_switch`, plus the 7 engagement-funnel values added by migration 035 — `aware`, `considering`, `prescribed`, `first_fill`, `adherent`, `discontinued`, `maintained` |
 | `journey_status` | `active`, `stable`, `transitioning`, `completed` |
 | `event_type` | `diagnosis`, `prescription`, `lab_test`, `procedure`, `consultation`, `hospitalization` |
 | `priority` | `critical`, `high`, `medium`, `low` |
 | `data_split` | `train`, `validation`, `test`, `holdout`, `unassigned` |
-| `insurance_type` | `commercial`, `medicare`, `medicaid`, `uninsured`, `other` |
+| `insurance_type` | `commercial`, `medicare`, `medicaid`, `uninsured`, `other` — a **convention, not a constraint**: the column is `VARCHAR(20)` with no CHECK. [01-DATA-CONVERSION-GUIDE](../01-DATA-CONVERSION-GUIDE.md#insurance_type) is authoritative for this vocabulary |
 | `adoption_category` | `innovator`, `early_adopter`, `early_majority`, `late_majority`, `laggard` |
 
 ### Nullable vs Required

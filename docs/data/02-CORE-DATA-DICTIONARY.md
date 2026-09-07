@@ -1,8 +1,8 @@
 # Core Data Dictionary
 
-**E2I Causal Analytics Platform** | Schema Version 3.1.0 | Last updated: 2026-07-18
+**E2I Causal Analytics Platform** | Schema Version 3.1.0 | Last updated: 2026-09-07
 
-This document provides a comprehensive reference for the 19 core database tables in the E2I Causal Analytics schema. It covers every column, constraint, index, foreign key, and function defined in `database/core/e2i_ml_complete_v3_schema.sql`.
+This document provides a comprehensive reference for the 19 core database tables in the E2I Causal Analytics schema. It covers every column, constraint, index, foreign key, and function defined in `database/core/e2i_ml_complete_v3_schema.sql`, **plus the columns, tables, views and RPCs added since by `database/migrations/`** — where a column arrived in a migration the row says which one. The base file is not the whole schema: run `ls database/migrations | sort | tail -1` to see how far the migration series has moved past it.
 
 ---
 
@@ -37,9 +37,17 @@ This document provides a comprehensive reference for the 19 core database tables
   - [hcp_intent_surveys](#hcp_intent_surveys)
 - [Agent Registry](#agent-registry)
   - [agent_registry](#agent_registry)
+- [KPI Registry & History Tables](#kpi-registry--history-tables)
+  - [kpi_query_registry](#kpi_query_registry)
+  - [kpi_query (RPC)](#kpi_query-rpc)
+  - [kpi_history](#kpi_history)
+  - [hcp_brand_adoption](#hcp_brand_adoption)
+  - [territory_metrics](#territory_metrics)
+  - [npi_taxonomy](#npi_taxonomy)
 - [Views](#views)
   - [Split-Based Views](#split-based-views)
   - [KPI Helper Views](#kpi-helper-views)
+  - [KPI History Coverage View](#kpi-history-coverage-view)
   - [Agent Routing View](#agent-routing-view)
 - [Functions](#functions)
 
@@ -61,10 +69,19 @@ All custom PostgreSQL ENUM types defined in the schema. These types enforce doma
 | `event_type` | `diagnosis`, `prescription`, `lab_test`, `procedure`, `consultation`, `hospitalization` | treatment_events |
 | `prediction_type` | `trigger`, `propensity`, `risk`, `churn`, `next_best_action` | ml_predictions |
 | `agent_tier_type` | `coordination`, `causal_analytics`, `monitoring`, `ml_predictions`, `self_improvement` | agent_activities, agent_registry |
-| `agent_name_type_v2` | `orchestrator`, `causal_impact`, `gap_analyzer`, `heterogeneous_optimizer`, `drift_monitor`, `experiment_designer`, `health_score`, `prediction_synthesizer`, `resource_optimizer`, `explainer`, `feedback_learner` | Reference only (agent_registry uses VARCHAR) |
 | `workstream_type` | `WS1`, `WS2`, `WS3` | agent_activities |
 
-> **Note on enum evolution**: Migration 029 introduced `agent_tier_type_v2` (with `tier_0_ml_foundation` through `tier_5_self_improvement`) and `agent_name_type_v3` (with 20 agents including Tier 0). The core schema tables still reference the original enum types shown above. See `database/core/029_update_agent_enums_v4.sql` for the migration path.
+> **Note on enum evolution**: migration 029 introduced `agent_tier_type_v2` and
+> `agent_name_type_v3` as a planned rename path that never executed, and the v3 schema
+> file's own `agent_name_type_v2` was never adopted by any column. **Migration 056
+> (#607) dropped all three** along with the dead `agent_registry.name_v3` / `tier_v2`
+> shadow columns and the `map_agent_v2_to_v3` / `map_tier_v1_to_v2` functions, so the
+> table above is the complete set of enum types the schema file still declares.
+> There is **no enum for the agent roster**: `agent_registry.agent_name` and
+> `agent_activities.agent_name` are plain `VARCHAR(50)`, and the roster is
+> code-defined in `config/agent_config.yaml` (22 agents, Tier 0 = 9). The memory
+> schema keeps a separate `e2i_agent_name` enum — see
+> [07 Supporting Schemas](07-SUPPORTING-SCHEMAS.md).
 
 ---
 
@@ -727,6 +744,16 @@ LIMIT 20;
 
 These nine tables hold the primary business data: HCP profiles, patient journeys, treatment events, ML predictions, NBA triggers, agent execution logs, business KPI snapshots, and discovered causal relationships.
 
+> **Shared `is_synthetic` provenance flag (migration 063).** Every table below —
+> plus `ml_predictions`, `agent_activities`, `user_sessions`,
+> `hcp_intent_surveys`, `episodic_memories` and `ab_experiment_assignments` —
+> carries `is_synthetic BOOLEAN NOT NULL DEFAULT false`. It is the platform's
+> single provenance switch: KPI views, RAG retrieval and the memory search RPCs
+> filter on it so a synthetic-gold row is never presented as a real-world
+> reading. Individual table sections do not repeat the column; assume it is
+> present on all twelve. `grep -n 'ALTER TABLE' database/migrations/063_is_synthetic_provenance.sql`
+> is the authoritative list.
+
 ---
 
 ### reference_universe
@@ -769,7 +796,7 @@ WHERE universe_type = 'patient'
 
 ### hcp_profiles
 
-Master table for Healthcare Professional (HCP) profiles with 30 columns covering demographics, practice details, engagement metrics, and influence scores.
+Master table for Healthcare Professional (HCP) profiles covering demographics, practice details, engagement metrics, and influence scores.
 
 | Column | Type | Nullable | Constraints | Description |
 |--------|------|----------|-------------|-------------|
@@ -806,6 +833,16 @@ Master table for Healthcare Professional (HCP) profiles with 30 columns covering
 | `created_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Record creation timestamp |
 | `updated_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Last update timestamp (auto-updated by trigger) |
 
+**Columns added by migrations** (not in the v3 schema file):
+
+| Column | Type | Migration | Description |
+|--------|------|-----------|-------------|
+| `patient_volume_tier` | `TEXT` | 033 | Feast-canonical tier label (`High`/`Medium`/`Low`) served by `hcp_profile_features` |
+| `digital_engagement_tier` | `TEXT` | 033 | Feast-canonical digital-engagement tier |
+| `prescribing_tier` | `TEXT` | 033 | Feast-canonical prescribing-volume tier |
+| `years_of_practice` | `INTEGER` | 033 | Feast-canonical alias of `years_experience` (the feature view reads this name) |
+| `is_synthetic` | `BOOLEAN NOT NULL DEFAULT false` | 063 | Provenance flag — see the shared callout below |
+
 **Triggers:**
 
 - `update_hcp_profiles_timestamp`: Fires `BEFORE UPDATE` to set `updated_at = NOW()`.
@@ -826,7 +863,7 @@ LIMIT 20;
 
 ### patient_journeys
 
-Master table for patient treatment journeys with 45+ columns including demographics, source tracking for cross-source match/stacking KPIs, causal variables for ML agents, and ML split assignment.
+Master table for patient treatment journeys — demographics, source tracking for cross-source match/stacking KPIs, causal variables for ML agents, and ML split assignment. The v3 schema file's columns are listed first; the migration-added columns (the bulk of the synthetic causal substrate) follow in their own table.
 
 | Column | Type | Nullable | Constraints | Description |
 |--------|------|----------|-------------|-------------|
@@ -847,7 +884,7 @@ Master table for patient treatment journeys with 45+ columns including demograph
 | `geographic_region` | `region_type` | YES | | US census region |
 | `state` | `VARCHAR(2)` | YES | | Two-letter state abbreviation |
 | `zip_code` | `VARCHAR(10)` | YES | | ZIP or ZIP+4 code |
-| `insurance_type` | `VARCHAR(20)` | YES | | Insurance type: `commercial`, `medicare`, `medicaid`, `cash`, `other` |
+| `insurance_type` | `VARCHAR(20)` | YES | | Insurance type: `commercial`, `medicare`, `medicaid`, `uninsured`, `other`. **No CHECK constraint** — the vocabulary is a convention owned by [01-DATA-CONVERSION-GUIDE](01-DATA-CONVERSION-GUIDE.md#insurance_type). The synthetic generator emits only the first three (`InsuranceTypeEnum`) |
 | `data_quality_score` | `DECIMAL(3,2)` | YES | | Data quality score (0.00 - 9.99) |
 | `comorbidities` | `TEXT[]` | YES | | Array of comorbidity codes or descriptions |
 | `risk_score` | `DECIMAL(3,2)` | YES | | Patient risk score (0.00 - 9.99) |
@@ -881,6 +918,68 @@ Master table for patient treatment journeys with 45+ columns including demograph
 > have no `ldh_ratio`/`complement_inhibitor_status`/`proteinuria_g_day`/
 > `egfr`. KPI axes and causal covariates built on these columns are
 > brand-gated fail-closed — a 100%-NULL axis is refused, not fabricated.
+
+**Columns added by migrations** (not in the v3 schema file). These carry the synthetic
+causal substrate, the payer axis and the brand-gated clinical eligibility fields:
+
+| Column | Type | Migration | Description |
+|--------|------|-----------|-------------|
+| `adherence_rate` | `NUMERIC` | 033 (re-asserted 088) | Adherence over the observation window (0-1). Served by `patient_adherence_features` |
+| `refill_count` | `INTEGER` | 033 | Number of refills to date |
+| `gap_days` | `INTEGER` | 033 (re-asserted 088) | Cumulative therapy gap days |
+| `payer_category` | `VARCHAR(30)` | 036 | Normalized payer bucket derived from the raw Optum payer fields |
+| `payer_bus_raw` | `VARCHAR(10)` | 036 | Raw Optum payer business code (source-fidelity passthrough) |
+| `payer_product_raw` | `VARCHAR(20)` | 036 | Raw Optum payer product code |
+| `payer_health_exch_raw` | `BOOLEAN` | 036 | Raw health-exchange flag |
+| `payer_lis_dual_raw` | `BOOLEAN` | 036 | Raw low-income-subsidy / dual-eligible flag |
+| `is_synthetic` | `BOOLEAN NOT NULL DEFAULT false` | 063 | Provenance flag - see the shared callout below |
+| `treatment_arm` | `SMALLINT` | 064 | Assigned arm of the synthetic DGP (the treatment variable the outcome model is a function of) |
+| `propensity_score` | `DOUBLE PRECISION` | 064 | True propensity used to assign `treatment_arm` - ground truth for positivity/overlap checks |
+| `segment_assignment` | `TEXT` | 064 | Latent segment label used by the heterogeneity DGP |
+| `persistent_180d` | `SMALLINT` | 064 (comment corrected by 132) | 1 = still on therapy at day 180 of the window. Exactly `1 - discontinued_180d` |
+| `discontinued_180d` | `SMALLINT` | 064 (comment corrected by 132) | 1 = stopped therapy within the 180-day window |
+| `urticaria_severity_uas7` | `INTEGER` | 068 | CSU severity (UAS7) - Remibrutinib rows only |
+| `prior_antihistamine_therapy` | `BOOLEAN` | 068 | Prior antihistamine line - Remibrutinib rows only |
+| `hr_status` | `VARCHAR(10)` | 068 | Hormone-receptor status - Kisqali rows only |
+| `her2_status` | `VARCHAR(10)` | 068 | HER2 status - Kisqali rows only |
+| `disease_stage` | `VARCHAR(20)` | 068 | Disease stage - Kisqali rows only |
+| `ecog_performance_status` | `INTEGER` | 068 | ECOG performance status - Kisqali rows only |
+| `ldh_ratio` | `NUMERIC(5,2)` | 068 | LDH ratio - Fabhalta rows only |
+| `complement_inhibitor_status` | `VARCHAR(10)` | 068 | Prior complement-inhibitor exposure - Fabhalta rows only |
+| `proteinuria_g_day` | `NUMERIC(5,2)` | 068 | Proteinuria (g/day) - Fabhalta rows only |
+| `egfr` | `NUMERIC(6,2)` | 068 | eGFR - Fabhalta rows only |
+| `comorbidity_burden` | `SMALLINT` | 087 | Persistence driver: count of relevant comorbidities |
+| `prior_therapy_lines` | `SMALLINT` | 087 | Persistence driver: prior therapy lines |
+| `adherent_180d` | `SMALLINT` | 088 | Commercial-arm outcome: adherent at day 180 |
+| `low_gap_180d` | `SMALLINT` | 088 | Commercial-arm outcome: low cumulative gap at day 180 |
+| `copay_support` | `SMALLINT` | 088 | Commercial arm: copay support received (0/1) |
+| `psp_enrolled` | `SMALLINT` | 088 | Commercial arm: patient-support-program enrolment (0/1) |
+| `rep_detailing_high` | `SMALLINT` | 088 | Commercial arm: high rep detailing (0/1) |
+| `sample_dropped` | `SMALLINT` | 088 | Commercial arm: sample dropped (0/1) |
+| `copay_support_propensity` | `DOUBLE PRECISION` | 088 | True propensity behind `copay_support` |
+| `psp_enrolled_propensity` | `DOUBLE PRECISION` | 088 | True propensity behind `psp_enrolled` |
+| `rep_detailing_high_propensity` | `DOUBLE PRECISION` | 088 | True propensity behind `rep_detailing_high` |
+| `sample_dropped_propensity` | `DOUBLE PRECISION` | 088 | True propensity behind `sample_dropped` |
+| `insurance_access_score` | `DOUBLE PRECISION` | 088 | Shared confounder behind the commercial arms |
+| `biologic_experienced` | `SMALLINT` | 107 | Prior anti-IgE biologic exposure - Remibrutinib rows only (also in the table above) |
+| `ige_level` | `NUMERIC` | 107 | Baseline total serum IgE (IU/mL) - Remibrutinib rows only (also in the table above) |
+| `trigger_accepted` | `SMALLINT` | 112 | Commercial arm: NBA trigger accepted (0/1) |
+| `trigger_accepted_propensity` | `DOUBLE PRECISION` | 112 | True propensity behind `trigger_accepted` |
+
+> **`persistent_180d` / `discontinued_180d` are NOT restricted to initiators**
+> (migration 132). Migration 064's original comments said "filtered
+> `treatment_initiated=1`"; that is the RWD semantic only, and only for
+> `discontinued_180d`. The synthetic DGP
+> (`generate_discontinuation_outcomes` in
+> `src/ml/synthetic/generators/cohort_outcomes.py`) takes no
+> `treatment_initiated` input and draws an outcome for **every** row as a
+> function of `treatment_arm`; the loaders and the platform read paths
+> (`_PJ_COHORTS` in `src/services/cohort_resolution.py`, the segment loader)
+> apply no initiator filter either. `scripts/convert_optum_rwd.py` writes
+> `discontinued_180d` only for initiators in its discontinuation cohort
+> (NULL otherwise) and never writes `persistent_180d` at all - it emits
+> `persistent_at_180d` - so non-synthetic rows carry NULL there. Migration
+> 132 is comment-only; the live `COMMENT ON COLUMN` text is the authority.
 
 **Check Constraints:**
 
@@ -930,6 +1029,19 @@ ORDER BY disease_severity DESC;
 ### treatment_events
 
 Stores individual clinical events (diagnoses, prescriptions, lab tests, procedures, consultations, hospitalizations) tied to patient journeys and HCPs. Includes ICD-10, CPT, and LOINC coding.
+
+**Columns added by migrations** (not in the v3 schema file):
+
+| Column | Type | Migration | Description |
+|--------|------|-----------|-------------|
+| `is_synthetic` | `BOOLEAN NOT NULL DEFAULT false` | 063 | Provenance flag - see the shared callout below |
+| `claim_available_date` | `DATE` | 115 | When the claim for this event became visible to the platform. The **arrival plane**: the service date is when care happened, this is when it could be counted |
+| `adjudication_lag_days` | `INTEGER` | 115 | Days between service and claim availability. Substrate for the claims-lag nowcast triangles (migration 116) - see [06 KPI Reference](06-KPI-REFERENCE.md) |
+
+> A KPI that counts events **as of** a date must read the arrival plane
+> (`claim_available_date`), not the service plane: a recent window read on the
+> service plane is systematically undercounted by the adjudication lag. That
+> undercount is exactly what the nowcast completion factors correct for.
 
 | Column | Type | Nullable | Constraints | Description |
 |--------|------|----------|-------------|-------------|
@@ -1079,7 +1191,16 @@ LIMIT 50;
 
 ### triggers
 
-Stores Next-Best-Action (NBA) triggers with 30+ columns covering delivery lifecycle, acceptance tracking, causal chain evidence, and change tracking fields for computing the Change-Fail Rate (CFR) KPI.
+Stores Next-Best-Action (NBA) triggers covering delivery lifecycle, acceptance tracking, causal chain evidence, and change tracking fields for computing the Change-Fail Rate (CFR) KPI.
+
+**Columns added by migrations** (not in the v3 schema file):
+
+| Column | Type | Migration | Description |
+|--------|------|-----------|-------------|
+| `brand_id` | `TEXT NOT NULL DEFAULT 'UNKNOWN'` | 033 | Brand axis for trigger-effectiveness KPIs. `triggers` carries **no region column** — the regioned trigger variants reach region by joining `hcp_profiles` (the 078/118/120 idiom) |
+| `roi_estimate` | `NUMERIC` | 033 | Estimated ROI of the trigger, served by `trigger_effectiveness_features` |
+| `control_group_flag` | `BOOLEAN` | 051 | Holdout marker for the action-rate-uplift KPI: uplift is treated minus control, so a NULL flag means the row joins neither arm |
+| `is_synthetic` | `BOOLEAN NOT NULL DEFAULT false` | 063 | See the shared provenance callout above |
 
 | Column | Type | Nullable | Constraints | Description |
 |--------|------|----------|-------------|-------------|
@@ -1224,6 +1345,31 @@ ORDER BY agent_tier, avg_duration_ms DESC;
 
 Stores periodic KPI snapshots by brand and region including actuals, targets, achievement rates, and statistical significance.
 
+**Columns added by migrations** (not in the v3 schema file):
+
+| Column | Type | Migration | Description |
+|--------|------|-----------|-------------|
+| `trx_count` | `INTEGER` | 033 | Total prescriptions in the period |
+| `nrx_count` | `INTEGER` | 033 | New prescriptions in the period |
+| `total_rx_count` | `INTEGER` | 033 | Total Rx across brands |
+| `market_share` | `NUMERIC` | 033 | Market share for the brand/territory |
+| `conversion_rate` | `NUMERIC` | 033 | Conversion rate for the period |
+| `engagement_score` | `NUMERIC` | 033 | Average engagement score |
+| `call_frequency` | `NUMERIC` | 033 | Rep call frequency (calls/month) |
+| `is_synthetic` | `BOOLEAN NOT NULL DEFAULT false` | 063 | See the shared provenance callout above |
+| `email_campaign_count` | `NUMERIC` | 099 | Intervention treatment: email campaigns run |
+| `speaker_program_count` | `NUMERIC` | 099 | Intervention treatment: speaker programs run |
+| `sample_volume` | `NUMERIC` | 099 | Intervention treatment: sample volume delivered |
+| `peer_influence_score` | `NUMERIC` | 099 | Intervention treatment: peer-influence exposure |
+| `patient_support_enrollment` | `NUMERIC` | 099 | Intervention treatment: patient-support enrolment |
+| `rep_training_score` | `NUMERIC` | 099 | Intervention treatment: rep-training level |
+
+> The migration-099 columns are the **intervention (treatment) variables** the
+> causal agents estimate effects for; the 033 columns are the outcomes/covariates.
+> Rows are laid out on a deterministic brand x region execution matrix with
+> anchored step events — see
+> [SYNTHETIC-CAUSAL-DATA-GUIDE](SYNTHETIC-CAUSAL-DATA-GUIDE.md).
+
 | Column | Type | Nullable | Constraints | Description |
 |--------|------|----------|-------------|-------------|
 | `metric_id` | `VARCHAR(50)` | NOT NULL | **PK** | Unique metric snapshot identifier |
@@ -1285,6 +1431,14 @@ LIMIT 12;
 ### causal_paths
 
 Stores discovered causal relationships including DAG structure, effect sizes, confounders controlled, mediators identified, and business impact estimates.
+
+**Columns added by migrations** (not in the v3 schema file):
+
+| Column | Type | Migration | Description |
+|--------|------|-----------|-------------|
+| `direct_effect` | `NUMERIC(6,4)` | 049 | Mediation decomposition: the direct (unmediated) effect |
+| `indirect_effect` | `NUMERIC(6,4)` | 049 | Mediation decomposition: the effect transmitted through the mediator |
+| `is_synthetic` | `BOOLEAN NOT NULL DEFAULT false` | 063 | See the shared provenance callout above |
 
 | Column | Type | Nullable | Constraints | Description |
 |--------|------|----------|-------------|-------------|
@@ -1595,11 +1749,20 @@ ORDER BY avg_delta DESC;
 
 ### agent_registry
 
-Runtime configuration table for the 11-agent tiered architecture. Used by the orchestrator for intent-based routing and capability discovery. Pre-populated with all agents via an `INSERT ... ON CONFLICT` upsert.
+Routing/capability-discovery table for the **Tier 1-5** agents. Used by the
+orchestrator for intent-based routing. Seeded by the v3 schema file with 11 rows
+and extended to **13** by migration 057.
+
+> **This table is not the agent roster.** The roster is code-defined in
+> `config/agent_config.yaml` (22 agents; `python3 -c "import yaml;print(len(yaml.safe_load(open('config/agent_config.yaml'))['agents']))"`).
+> The nine **Tier 0 / ML-foundation** agents — including `cohort_profiler`,
+> added by #1790 — are dispatched by the ML pipeline, not by intent routing,
+> and are deliberately **not** registered here. `agent_tier_mapping` (also
+> extended by migration 057) is the table that does carry Tier 0.
 
 | Column | Type | Nullable | Constraints | Description |
 |--------|------|----------|-------------|-------------|
-| `agent_name` | `VARCHAR(50)` | NOT NULL | **PK** | Agent identifier (matches `agent_name_type_v2` values) |
+| `agent_name` | `VARCHAR(50)` | NOT NULL | **PK** | Agent identifier. Plain VARCHAR — `agent_name_type_v2` was dropped by migration 056 and no enum constrains this column |
 | `agent_tier` | `agent_tier_type` | NOT NULL | | Tier classification |
 | `display_name` | `VARCHAR(100)` | NOT NULL | | Human-readable agent name |
 | `description` | `TEXT` | YES | | Agent description and capabilities summary |
@@ -1621,21 +1784,23 @@ Runtime configuration table for the 11-agent tiered architecture. Used by the or
 
 - `update_agent_registry_timestamp`: Fires `BEFORE UPDATE` to set `updated_at = NOW()`.
 
-**Pre-populated Data (11 agents):**
+**Pre-populated Data (13 rows: 11 from the schema file + 2 from migration 057):**
 
-| agent_name | agent_tier | priority_order |
-|------------|-----------|----------------|
-| `orchestrator` | `coordination` | 1 |
-| `causal_impact` | `causal_analytics` | 10 |
-| `gap_analyzer` | `causal_analytics` | 11 |
-| `heterogeneous_optimizer` | `causal_analytics` | 12 |
-| `drift_monitor` | `monitoring` | 20 |
-| `experiment_designer` | `monitoring` | 21 |
-| `health_score` | `monitoring` | 22 |
-| `prediction_synthesizer` | `ml_predictions` | 30 |
-| `resource_optimizer` | `ml_predictions` | 31 |
-| `explainer` | `self_improvement` | 40 |
-| `feedback_learner` | `self_improvement` | 41 |
+| agent_name | agent_tier | priority_order | Added by |
+|------------|-----------|----------------|----------|
+| `orchestrator` | `coordination` | 1 | v3 schema |
+| `causal_impact` | `causal_analytics` | 10 | v3 schema |
+| `gap_analyzer` | `causal_analytics` | 11 | v3 schema |
+| `heterogeneous_optimizer` | `causal_analytics` | 12 | v3 schema |
+| `drift_monitor` | `monitoring` | 20 | v3 schema |
+| `experiment_designer` | `monitoring` | 21 | v3 schema |
+| `health_score` | `monitoring` | 22 | v3 schema |
+| `prediction_synthesizer` | `ml_predictions` | 30 | v3 schema |
+| `resource_optimizer` | `ml_predictions` | 31 | v3 schema |
+| `explainer` | `self_improvement` | 40 | v3 schema |
+| `feedback_learner` | `self_improvement` | 41 | v3 schema |
+| `tool_composer` | `coordination` | 2 | migration 057 |
+| `experiment_monitor` | `monitoring` | 32 | migration 057 |
 
 **Example Query:**
 
@@ -1647,6 +1812,164 @@ WHERE is_active = TRUE
   AND routes_from_intents ? 'CAUSAL'
 ORDER BY priority_order;
 ```
+
+---
+
+## KPI Registry & History Tables
+
+Tables that back the KPI layer. None of them are in
+`database/core/e2i_ml_complete_v3_schema.sql` — each arrived in a migration —
+which is why they were absent from this dictionary until now. Formulas,
+thresholds and per-KPI semantics live in [06 KPI Reference](06-KPI-REFERENCE.md);
+this section is the schema.
+
+---
+
+### kpi_query_registry
+
+Allowlist of vetted read-only SQL statements (migration 044). Clients never send
+SQL: they send a `query_id` plus positional params and `kpi_query()` looks the
+statement up here.
+
+| Column | Type | Nullable | Constraints | Description |
+|--------|------|----------|-------------|-------------|
+| `query_id` | `text` | NOT NULL | **PK** | Registry key, e.g. `trigger_effectiveness_brand_region_windowed` |
+| `sql` | `text` | NOT NULL | CHECK `sql ~* '^\s*(with\|select)\s'` | The vetted statement. The CHECK is what makes the registry read-only — nothing that is not a `WITH`/`SELECT` can be registered |
+| `max_params` | `int` | NOT NULL | DEFAULT `0` | Exact positional-param arity the statement expects |
+| `note` | `text` | YES | | Provenance / intent note |
+
+Registry rows are added by migration, not at runtime. Migrations that seed or
+amend rows include **044** (initial), **050**, **051**, **077**, **078**, **085**,
+**113** (WS2 truth-metric redefinition), **116**, **118**, **120**, **124/125**,
+**127**, **128**, **129** and **130** — `grep -ln kpi_query_registry database/migrations/*.sql`
+is the current list.
+
+---
+
+### kpi_query (RPC)
+
+`public.kpi_query(query_id text, params jsonb DEFAULT '[]'::jsonb)` —
+`SECURITY DEFINER` over the allowlist above.
+
+- Looks up `sql` and `max_params` by `query_id`; a statement that is not
+  registered cannot run.
+- `params` must be a **JSON array** (an object or scalar is rejected, so it
+  cannot bind in the wrong order).
+- Arity is checked against `max_params` before execution.
+- **The positional cap is 6**, raised from 4 by **migration 120** (#1388). The
+  function unrolls `USING param_arr[1..n]` for n = 1..6 and raises
+  `kpi_query: at most 6 positional parameters supported` above that. Docs that
+  say "caps at 4 parameters", or that region and window are therefore mutually
+  exclusive, are pre-120: the `_windowed_region` variants exist precisely
+  because the 5th and 6th slots opened up.
+
+---
+
+### kpi_history
+
+Durable KPI time series (migration 079). One row per
+(`kpi_id`, `brand`, `region`, `metric_date`) point.
+
+| Column | Type | Nullable | Constraints | Description |
+|--------|------|----------|-------------|-------------|
+| `id` | `UUID` | NOT NULL | **PK**, DEFAULT `gen_random_uuid()` | Surrogate key |
+| `kpi_id` | `TEXT` | NOT NULL | | KPI identifier, e.g. `WS3-BI-010` |
+| `brand` | `TEXT` | NOT NULL | DEFAULT `''` | Brand scope. **`''` (empty string), never NULL**, means global/all-brands |
+| `region` | `TEXT` | NOT NULL | DEFAULT `''` | Region scope. `''` means global/all-regions |
+| `metric_date` | `DATE` | NOT NULL | | The point's date |
+| `value` | `DOUBLE PRECISION` | NOT NULL | | The measured value |
+| `status` | `TEXT` | YES | | `on_target` / `warning` / `critical` / `unknown` |
+| `source` | `TEXT` | NOT NULL | | Provenance of the point, e.g. `business_metrics`, `asof:treatment_events` — no silent mocks |
+| `is_synthetic` | `BOOLEAN` | NOT NULL | DEFAULT `TRUE` | Backfill runs on synthetic-gold data |
+| `computed_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `now()` | When the point was computed |
+| | | | **UQ** `(kpi_id, brand, region, metric_date)` | `uq_kpi_history_point` |
+
+> The empty-string convention is load-bearing: NULLs compare as distinct in a
+> UNIQUE constraint, so a NULL brand would let duplicate points through.
+
+**Writers.** Two, both under `src/kpi/`:
+
+- `src.kpi.history_backfill` — reconstructs history from the source tables
+  (`python -m src.kpi.history_backfill [KPI_ID]`).
+- `src.kpi.history_capture` — the going-forward companion, wired into
+  `scripts/reseed_synthetic.sh`, that appends the current period.
+
+**Brand axis.** `history_capture` also captures a per-brand line for the KPIs in
+`BRAND_CAPTURE_KPI_IDS`, over the brands in `CAPTURE_BRANDS`, by calling the same
+calculator with `context={"brand": <brand>}`. **Only KPIs whose calculator
+returns a genuinely distinct brand-scoped reading are on that list** — a KPI that
+ignores a brand parameter is captured globally only, because three identical
+lines would be a fabricated brand axis.
+
+**Partial months are dropped.** `_complete_months()` in
+`src/kpi/history_backfill.py` keeps only calendar months fully covered by the
+data span: a leading month counts only if the data starts on its 1st, a trailing
+month only if the data reaches its last day. A mid-month frontier would
+otherwise render a truncated point that reads as a real collapse or spike. The
+same hazard, in the model-performance walk-forward folds, is handled separately
+by the open-month guard in `src/mlops/gold_standard_eval/walk_forward.py` — see
+[06 KPI Reference](06-KPI-REFERENCE.md) §WS1.
+
+---
+
+### hcp_brand_adoption
+
+Per-HCP brand adoption labels (migration 076) — the supervised target behind the
+adoption/conversion KPIs and models.
+
+| Column | Type | Nullable | Constraints | Description |
+|--------|------|----------|-------------|-------------|
+| `id` | `UUID` | NOT NULL | **PK**, DEFAULT `gen_random_uuid()` | Surrogate key |
+| `hcp_id` | `VARCHAR(20)` | NOT NULL | **FK** `hcp_profiles(hcp_id)` | HCP |
+| `brand` | `brand_type` | NOT NULL | | Brand considered |
+| `consideration_date` | `DATE` | NOT NULL | | Date the consideration window opens |
+| `adopted` | `INTEGER` | NOT NULL | CHECK `IN (0, 1)` | Outcome label |
+| `adoption_category` | `VARCHAR(20)` | YES | | Innovation-adoption category at consideration time |
+| `data_split` | `data_split_type` | NOT NULL | DEFAULT `'unassigned'` | ML split assignment |
+| `is_synthetic` | `BOOLEAN` | NOT NULL | DEFAULT `false` | Provenance flag |
+| `created_at` / `updated_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Timestamps |
+| | | | **UQ** `(hcp_id, brand)` | `uq_hcp_brand_adoption` |
+
+---
+
+### territory_metrics
+
+Territory-grain aggregates (migration 031) feeding the Feast
+`territory_performance_features` view.
+
+| Column | Type | Nullable | Constraints | Description |
+|--------|------|----------|-------------|-------------|
+| `territory_id` | `VARCHAR(20)` | NOT NULL | **PK** (with `metric_date`) | Territory |
+| `metric_date` | `DATE` | NOT NULL | **PK** (with `territory_id`) | Snapshot date |
+| `total_trx` | `BIGINT` | NOT NULL | DEFAULT `0` | Total TRx in the territory |
+| `total_nrx` | `BIGINT` | NOT NULL | DEFAULT `0` | Total NRx in the territory |
+| `active_hcp_count` | `BIGINT` | NOT NULL | DEFAULT `0` | Active HCPs |
+| `covered_lives` | `BIGINT` | NOT NULL | DEFAULT `0` | Covered lives |
+| `market_potential` | `DOUBLE PRECISION` | NOT NULL | DEFAULT `0` | Market-potential score |
+| `resource_allocation_score` | `DOUBLE PRECISION` | NOT NULL | DEFAULT `0` | Resource-allocation score |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Row creation |
+
+---
+
+### npi_taxonomy
+
+NPPES provider-taxonomy cache (migration 034), keyed by NPI. Lets specialty and
+practice-address lookups run without hitting the NPPES API per request.
+
+| Column | Type | Nullable | Constraints | Description |
+|--------|------|----------|-------------|-------------|
+| `npi` | `VARCHAR(10)` | NOT NULL | **PK** | National Provider Identifier |
+| `entity_type` | `VARCHAR(1)` | YES | | NPPES entity type (1 = individual, 2 = organization) |
+| `enumeration_date` | `DATE` | YES | | NPPES enumeration date |
+| `last_updated_nppes` | `DATE` | YES | | Last NPPES update |
+| `taxonomies` | `JSONB` | NOT NULL | DEFAULT `'[]'` | Taxonomy array as returned by NPPES |
+| `practice_address` | `JSONB` | YES | | Practice address |
+| `parent_organization_legal_name` | `TEXT` | YES | | Parent organization |
+| `organization_legal_name` | `TEXT` | YES | | Organization legal name |
+| `sole_proprietor` | `BOOLEAN` | YES | | Sole-proprietor flag |
+| `first_name` / `last_name` | `TEXT` | YES | | Individual provider name |
+| `cached_at` | `TIMESTAMPTZ` | NOT NULL | DEFAULT `NOW()` | Cache timestamp |
+| `source` | `TEXT` | NOT NULL | DEFAULT `'bulk_dump'`, CHECK `IN ('bulk_dump','api_fallback','fixture')` | How the row was obtained — a fixture row is never mistaken for a real NPPES read |
 
 ---
 
@@ -1711,6 +2034,27 @@ FROM v_kpi_active_users
 ORDER BY month DESC
 LIMIT 6;
 ```
+
+### KPI History Coverage View
+
+`v_kpi_history_coverage` — coverage summary over `kpi_history`, backing
+`GET /api/kpis/history/coverage`.
+
+| Column | Description |
+|--------|-------------|
+| `kpi_id` | KPI identifier |
+| `brand` | Brand scope (`''` = global) |
+| `points` | `COUNT(*)` of history points in the scope |
+| `first_date` | `MIN(metric_date)` |
+| `last_date` | `MAX(metric_date)` |
+| `region` | Region scope (`''` = global) |
+
+Created by migration **098** grouped by `(kpi_id, brand)`; **migration 126**
+re-grained it to the full `(kpi_id, brand, region)` scope lattice. Without that
+change, region-scoped rows silently inflated a brand scope's point count and
+duplicated brand entries in the endpoint's aggregation. `region` is deliberately
+the **last** column — `CREATE OR REPLACE VIEW` can only append columns — and
+consumers read rows as dicts, so column order does not matter to them.
 
 ### Agent Routing View
 
@@ -1909,10 +2253,19 @@ The schema requires these PostgreSQL extensions:
 
 ### DDL Source File
 
-All definitions above are sourced from:
+The base DDL is:
 
 ```
 database/core/e2i_ml_complete_v3_schema.sql
+```
+
+but it is **not the whole schema**. Every "Columns added by migrations" table
+above, and the entire [KPI Registry & History Tables](#kpi-registry--history-tables)
+section, come from `database/migrations/`. To see how far the series has moved
+past the base file:
+
+```bash
+ls database/migrations | sort | tail -1     # highest migration applied to the tree
 ```
 
 ### Related Migrations
@@ -1930,3 +2283,21 @@ The following migration files extend or modify the core schema:
 | 106 | `database/migrations/106_trigger_action_prognostic_baselines.sql` | Data-only reseed: `triggers.action_taken` made arm-conditioned + baseline-prognostic (#1188) |
 | 107 | `database/migrations/107_patient_biologic_ige_axis.sql` | Adds `patient_journeys.biologic_experienced` + `ige_level` (CSU-only) and NULLs off-brand clinical eligibility columns |
 | 109 | `database/migrations/109_sample_entity_ids_rpc.sql` | Adds `sample_entity_ids()` whitelisted random-sampling RPC |
+| 033 | `database/migrations/033_feast_canonical_schema.sql` | Feast-canonical columns on `hcp_profiles`, `patient_journeys`, `triggers`, `business_metrics` |
+| 036 | `database/migrations/036_add_payer_category.sql` | `patient_journeys` payer axis (`payer_category` + four raw passthrough columns) |
+| 044 | `database/migrations/044_kpi_query_allowlist.sql` | Creates `kpi_query_registry` + the `kpi_query()` SECURITY DEFINER RPC |
+| 049 | `database/migrations/049_kpi_577_mediation.sql` | `causal_paths.direct_effect` / `indirect_effect` |
+| 051 | `database/migrations/051_kpi_577_action_rate_uplift.sql` | `triggers.control_group_flag` |
+| 056 | `database/migrations/056_retire_orphan_agent_enum_v2_v3.sql` | **Drops** `agent_name_type_v2`, `agent_name_type_v3`, `agent_tier_type_v2` and the dead shadow columns/functions (#607) |
+| 057 | `database/migrations/057_realign_agent_registry_data_to_code.sql` | Adds `tool_composer` + `experiment_monitor` to `agent_registry` (11 -> 13); realigns `agent_tier_mapping` |
+| 063 | `database/migrations/063_is_synthetic_provenance.sql` | Shared `is_synthetic` flag across 12 tables |
+| 064 | `database/migrations/064_synthetic_causal_substrate_columns.sql` | `treatment_arm`, `propensity_score`, `segment_assignment`, `persistent_180d`, `discontinued_180d` |
+| 068 | `database/migrations/068_synthetic_eligibility_columns.sql` | Brand-gated clinical eligibility columns on `patient_journeys` |
+| 076 | `database/migrations/076_hcp_brand_adoption.sql` | Creates `hcp_brand_adoption` |
+| 079 | `database/migrations/079_kpi_history.sql` | Creates `kpi_history` |
+| 087 / 088 / 112 | `database/migrations/087_persistence_drivers.sql`, `088_synthetic_commercial_arms.sql`, `112_synthetic_trigger_accepted_arm.sql` | Persistence drivers and the commercial-arm treatment/propensity columns |
+| 098 / 126 | `database/migrations/098_kpi_history_coverage_view.sql`, `126_kpi_history_coverage_region.sql` | `v_kpi_history_coverage`, then re-grained by region |
+| 099 | `database/migrations/099_business_metrics_intervention_treatments.sql` | `business_metrics` intervention-treatment columns; `hcp_profiles` tier/coverage backfills |
+| 115 | `database/migrations/115_treatment_events_claims_arrival_plane.sql` | `claim_available_date`, `adjudication_lag_days` |
+| 120 | `database/migrations/120_kpi_query_6_params.sql` | Raises the `kpi_query` positional cap 4 -> 6 (#1388) |
+| 132 | `database/migrations/132_persistence_outcome_column_comments.sql` | Corrects the `persistent_180d` / `discontinued_180d` column comments (comment-only) |
