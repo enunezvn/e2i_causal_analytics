@@ -47,6 +47,7 @@ import {
   type MetricDataPoint,
 } from '@/components/visualizations';
 import { KPICard } from '@/components/visualizations/dashboard';
+import type { ModelPerfInsightRequest } from '@/types/insights';
 import { StrategicInsightCard } from '@/components/insights';
 import {
   LineChart,
@@ -693,7 +694,13 @@ function ModelPerformance() {
       <div className="mb-6">
         <StrategicInsightCard
           onGenerate={() => {
-            if (effectiveModelId) perfInsight.mutate({ model_version: effectiveModelId });
+            // Same metric as the trend cards (2026-09-07): the insight used to
+            // read the accuracy trend while the cards showed auc_roc.
+            if (effectiveModelId)
+              perfInsight.mutate({
+                model_version: effectiveModelId,
+                metric_name: trendMetric as ModelPerfInsightRequest['metric_name'],
+              });
           }}
           isLoading={perfInsight.isPending}
           error={perfInsight.error?.message ?? null}
@@ -731,6 +738,7 @@ function ModelPerformance() {
           ? 'critical'
           : targetStatus ?? 'healthy';
         return (
+        <>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <KPICard
             className="perf-current-card"
@@ -758,11 +766,29 @@ function ModelPerformance() {
             status={trendQuery.data.trend === 'degrading' ? 'critical' : 'healthy'}
           />
           <KPICard
+            className="perf-trend-card"
             title="Trend"
             value={trendQuery.data.trend}
             status={trendQuery.data.trend === 'degrading' ? 'critical' : 'healthy'}
+            // WHY the label (2026-09-07): the classifier is sampling-aware, so a
+            // −13% single-fold wobble reads "stable — within sampling noise at
+            // n=134" instead of a bare red "degrading".
+            description={trendQuery.data.reason || undefined}
           />
         </div>
+        {/* WHY the label, visibly (the card tooltip needs a hover). The
+            classifier is sampling-aware: a −13% single-fold wobble reads
+            "stable — within sampling noise at n=134", a genuine drop says
+            how many standard errors below baseline it is. */}
+        {trendQuery.data.reason && (
+          <p
+            data-testid="perf-trend-reason"
+            className="-mt-4 mb-6 max-w-prose text-xs text-muted-foreground"
+          >
+            Trend basis: {trendQuery.data.reason}
+          </p>
+        )}
+        </>
         );
       })()}
 

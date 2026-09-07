@@ -19,7 +19,12 @@ import numpy as np
 import pandas as pd
 
 from src.mlops.gold_standard_eval.cohort_spec import INITIATION
-from src.mlops.gold_standard_eval.walk_forward import WalkForwardRunner
+from src.mlops.gold_standard_eval.walk_forward import WalkForwardPoint, WalkForwardRunner
+
+# The fixture frame lives in 2026-01..2026-05; pin "now" AFTER it so every month
+# is closed and the open-month guard (tested separately below) stays out of the
+# guard-behaviour assertions.
+_AS_OF = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
 
 
 def _monotone_frame() -> pd.DataFrame:
@@ -108,6 +113,7 @@ def test_walk_forward_one_result_per_qualifying_month_and_strict_oos():
         n_min=2,
         # Hook so the capturing fit can key training data by the eval month.
         on_month=lambda em: setattr(cap, "_pending_eval_month", em),
+        as_of=_AS_OF,
     )
     results = runner.run(frame)
 
@@ -120,19 +126,24 @@ def test_walk_forward_one_result_per_qualifying_month_and_strict_oos():
     # The runner emits the CANONICAL first-instant-of-month key (not the raw
     # day-of-month a row happened to carry) so the metric timestamp is the clean
     # month boundary MetricRecorder.record_run stores as window_start/window_end.
-    emitted_months = [pd.Timestamp(m) for (m, _metrics, _n) in results]
+    emitted_months = [pd.Timestamp(p.month) for p in results]
     assert emitted_months == [
         pd.Timestamp("2026-03-01", tz="UTC"),
         pd.Timestamp("2026-04-01", tz="UTC"),
     ], f"unexpected emitted months: {emitted_months}"
 
-    # Each emitted point is (datetime, metrics_dict, n_eval) consumable by
-    # MetricRecorder.record_run.
-    for month, metrics, n_eval in results:
+    # Each emitted point is a WalkForwardPoint (datetime, metrics_dict, n_eval,
+    # positive_rate) consumable by MetricRecorder.record_run — and still a
+    # tuple, so 3-field consumers can slice ``point[:3]``.
+    for point in results:
+        assert isinstance(point, WalkForwardPoint)
+        month, metrics, n_eval = point[:3]
         assert isinstance(month, dt.datetime)
         assert isinstance(metrics, dict)
         assert "auc_roc" in metrics
         assert isinstance(n_eval, int) and n_eval > 0
+        # The fixture alternates labels → exactly half positive in every month.
+        assert point.positive_rate == 0.5
 
     # n_eval matches the month's row count (4 in both qualifying months).
     assert results[0][2] == 4
@@ -141,7 +152,7 @@ def test_walk_forward_one_result_per_qualifying_month_and_strict_oos():
     # (b) STRICT out-of-sample: for every emitted eval month, that month is
     # NEVER among the training months, and none of the month's own patient_ids
     # appear in its training set.
-    for month, _metrics, _n in results:
+    for month, _metrics, _n, _p in results:
         eval_period = pd.Timestamp(month).tz_localize(None).to_period("M")
         train_months = cap.train_months_by_eval[pd.Timestamp(month)]
         assert eval_period not in train_months, (
@@ -178,10 +189,11 @@ def test_walk_forward_skips_are_logged_not_emitted():
         min_train_n=2,
         n_min=2,
         on_month=lambda em: setattr(cap, "_pending_eval_month", em),
+        as_of=_AS_OF,
     )
     results = runner.run(frame)
 
-    emitted = {pd.Timestamp(m) for (m, _x, _y) in results}
+    emitted = {pd.Timestamp(p.month) for p in results}
     skipped_months = {pd.Timestamp(s.month) for s in runner.skipped}
 
     # The three non-qualifying months are recorded as skips, not emitted.
@@ -216,3 +228,49 @@ def test_walk_forward_default_window_mode_is_expanding():
         "The experiment selected 'expanding' as the default window mode; "
         "a different default would change production behaviour without a new experiment."
     )
+
+
+def test_walk_forward_skips_the_open_month_and_anything_later():
+    """2026-09-07: the month containing ``as_of`` is a PARTIAL fold (its rows
+    keep arriving with every weekly frontier append; at n≈50 its sampling
+    error alone exceeded the page's trend threshold). It must be skipped —
+    logged with an "open month" reason — never emitted, and so must any later
+    month (future-dated rows)."""
+    frame = _monotone_frame()
+    cap = _CapturingFit()
+    # "Now" is mid-April 2026: Mar closed (emit), Apr open (skip), May later (skip).
+    runner = WalkForwardRunner(
+        INITIATION,
+        fit_fn=cap,
+        predict_fn=_predict,
+        min_train_n=2,
+        n_min=2,
+        on_month=lambda em: setattr(cap, "_pending_eval_month", em),
+        as_of=dt.datetime(2026, 4, 15, 9, 30, tzinfo=dt.timezone.utc),
+    )
+    results = runner.run(frame)
+
+    assert [pd.Timestamp(p.month) for p in results] == [pd.Timestamp("2026-03-01", tz="UTC")]
+
+    reason_by_month = {pd.Timestamp(s.month): s.reason for s in runner.skipped}
+    apr = pd.Timestamp("2026-04-01", tz="UTC")
+    may = pd.Timestamp("2026-05-01", tz="UTC")
+    assert "open month" in reason_by_month[apr]
+    assert "open month" in reason_by_month[may]
+    # The open month was never fitted (no leakage-adjacent work on a partial fold).
+    assert apr not in cap.train_months_by_eval
+
+
+def test_walk_forward_as_of_defaults_to_now_and_normalizes_naive_datetimes():
+    runner = WalkForwardRunner(INITIATION, fit_fn=_CapturingFit(), predict_fn=_predict)
+    now = dt.datetime.now(dt.timezone.utc)
+    assert abs((runner.as_of - now).total_seconds()) < 60
+
+    naive = WalkForwardRunner(
+        INITIATION,
+        fit_fn=_CapturingFit(),
+        predict_fn=_predict,
+        as_of=dt.datetime(2026, 4, 15),
+    )
+    assert naive.as_of.tzinfo is not None
+    assert naive.as_of == dt.datetime(2026, 4, 15, tzinfo=dt.timezone.utc)

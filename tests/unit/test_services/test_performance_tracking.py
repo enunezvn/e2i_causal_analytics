@@ -10,6 +10,7 @@ Tests cover:
 """
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -614,3 +615,129 @@ class TestPerformanceTrackingWorkflow:
 
             assert comparison["better_model"] == "new_model_v2.0"
             assert comparison["difference"] > 0
+
+
+# =============================================================================
+# 2026-09-07 — sampling-aware trend classification
+#
+# The old ±5% single-fold rule flagged four gold-standard models "degrading" on
+# folds 0.8–2.2 standard errors below baseline. The tracker now feeds each
+# record's sample_size / positive_rate to performance_trend_stats.assess_trend
+# and only calls a change degrading when it is outside sampling noise AND
+# material. Records without a sample size (legacy rows, MagicMock doubles)
+# fall back to the legacy rule and SAY so via ``basis``.
+# =============================================================================
+
+
+class TestSamplingAwareTrend:
+    @staticmethod
+    def _rec(value, n=None, p=None):
+        return SimpleNamespace(metric_value=value, sample_size=n, positive_rate=p)
+
+    @staticmethod
+    def _patched_repo(records):
+        mock_repo = MagicMock()
+        mock_repo.get_metric_trend = AsyncMock(return_value=records)
+        return patch(
+            "src.repositories.drift_monitoring.PerformanceMetricRepository",
+            return_value=mock_repo,
+        )
+
+    @pytest.mark.asyncio
+    async def test_single_noisy_fold_is_stable_with_reason(self):
+        """The real hcp_adoption_remibrutinib auc_roc window on 2026-09-07:
+        −13% on ONE 134-row fold (z ≈ −2.1) → stable, not degrading."""
+        tracker = PerformanceTracker()
+        window = [0.7094, 0.8233, 0.8426, 0.8277, 0.7974, 0.7887, 0.8222, 0.7803, 0.8390]
+        records = [self._rec(v, n=134, p=0.381) for v in window]
+        with self._patched_repo(records):
+            trend = await tracker.get_performance_trend("hcp_adoption_remibrutinib", "auc_roc")
+        assert trend.change_percent == pytest.approx(-12.97, abs=0.05)
+        assert trend.trend == "stable"
+        assert trend.basis == "within_noise"
+        assert trend.alert_threshold_breached is False
+        assert trend.is_significant is False
+        assert trend.sample_size == 134
+        assert trend.n_points == 9
+        assert trend.z_score is not None and -2.5 < trend.z_score < -1.5
+        assert "sampling noise" in trend.reason
+        # The chart's alert line is unchanged: max(baseline*0.9, 0.5).
+        assert trend.alert_threshold == pytest.approx(trend.baseline_value * 0.9)
+
+    @pytest.mark.asyncio
+    async def test_genuine_drop_is_degrading_and_breaches(self):
+        tracker = PerformanceTracker()
+        records = [self._rec(0.65, n=230, p=0.35)] + [self._rec(0.80, n=230, p=0.35)] * 8
+        with self._patched_repo(records):
+            trend = await tracker.get_performance_trend("m", "auc_roc")
+        assert trend.trend == "degrading"
+        assert trend.basis == "level"
+        assert trend.is_significant is True
+        assert trend.alert_threshold_breached is True  # −18.75% and outside noise
+        assert trend.z_score is not None and trend.z_score < -2.5
+
+    @pytest.mark.asyncio
+    async def test_degrading_below_ten_percent_does_not_breach(self):
+        """Degrading (outside noise) but shallower than degradation_threshold
+        → label yes, alert no — the old alert semantics, now noise-gated."""
+        tracker = PerformanceTracker()
+        records = [self._rec(0.74, n=5000, p=0.4)] + [self._rec(0.80, n=5000, p=0.4)] * 8
+        with self._patched_repo(records):
+            trend = await tracker.get_performance_trend("m", "auc_roc")
+        assert trend.trend == "degrading"
+        assert trend.change_percent == pytest.approx(-7.5)
+        assert trend.alert_threshold_breached is False
+
+    @pytest.mark.asyncio
+    async def test_absolute_floor_still_alerts_regardless_of_noise(self):
+        tracker = PerformanceTracker()
+        records = [self._rec(0.48, n=40, p=0.5)] + [self._rec(0.52, n=40, p=0.5)] * 3
+        with self._patched_repo(records):
+            trend = await tracker.get_performance_trend("m", "auc_roc")
+        assert trend.trend == "stable"  # within noise at n=40
+        assert trend.alert_threshold_breached is True  # but under absolute_min_accuracy
+
+    @pytest.mark.asyncio
+    async def test_legacy_fallback_when_records_lack_sample_size(self):
+        """MagicMock records (as in the older tests above) expose a MagicMock
+        for sample_size — treated as ABSENT, so the legacy rule applies and
+        the basis says so."""
+        tracker = PerformanceTracker()
+        records = [MagicMock(metric_value=v) for v in (0.85, 0.82, 0.80, 0.78)]
+        with self._patched_repo(records):
+            trend = await tracker.get_performance_trend("m", "accuracy")
+        assert trend.trend == "improving"
+        assert trend.basis == "legacy_relative"
+        assert trend.sample_size is None and trend.z_score is None
+
+    @pytest.mark.asyncio
+    async def test_config_thresholds_are_honoured(self):
+        tracker = PerformanceTracker(PerformanceTrackingConfig(trend_z_threshold=1.0))
+        window = [0.7094, 0.8233, 0.8426, 0.8277, 0.7974, 0.7887, 0.8222, 0.7803, 0.8390]
+        records = [self._rec(v, n=134, p=0.381) for v in window]
+        with self._patched_repo(records):
+            trend = await tracker.get_performance_trend("m", "auc_roc")
+        assert trend.trend == "degrading"  # z ≈ −2.1 is beyond a 1.0 threshold
+
+    @pytest.mark.asyncio
+    async def test_alerts_carry_sampling_context(self):
+        tracker = PerformanceTracker()
+        records = [self._rec(0.60, n=230, p=0.35)] + [self._rec(0.85, n=230, p=0.35)] * 8
+        with self._patched_repo(records):
+            alerts = await tracker.check_performance_alerts("m")
+        assert alerts, "a 29% drop on full months must alert"
+        for a in alerts:
+            assert a["sample_size"] == 230
+            assert a["basis"] == "level"
+            assert a["z_score"] < -2.5
+            assert "standard errors below" in a["reason"]
+            assert a["severity"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_noisy_partial_fold_raises_no_alerts(self):
+        """persistence_fabhalta 2026-09-07: −7.5% on n=54 → no alert on any metric."""
+        tracker = PerformanceTracker()
+        records = [self._rec(0.7125, n=54, p=0.35)] + [self._rec(0.771, n=110, p=0.35)] * 8
+        with self._patched_repo(records):
+            alerts = await tracker.check_performance_alerts("m")
+        assert alerts == []

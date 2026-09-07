@@ -13707,6 +13707,12 @@ export interface components {
         ModelPerfInsightRequest: {
             /** Model Version */
             model_version: string;
+            /**
+             * Metric Name
+             * @default auc_roc
+             * @enum {string}
+             */
+            metric_name: "accuracy" | "precision" | "recall" | "f1" | "auc_roc";
         };
         /**
          * ModelStatus
@@ -14662,6 +14668,20 @@ export interface components {
             trend: string;
             /** Severity */
             severity: string;
+            /** Sample Size */
+            sample_size?: number | null;
+            /** Z Score */
+            z_score?: number | null;
+            /**
+             * Basis
+             * @default
+             */
+            basis: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
             /** Message */
             message: string;
         };
@@ -14793,6 +14813,29 @@ export interface components {
              * @default 0
              */
             alert_threshold: number;
+            /** Sample Size */
+            sample_size?: number | null;
+            /** Standard Error */
+            standard_error?: number | null;
+            /** Z Score */
+            z_score?: number | null;
+            /** Slope T Stat */
+            slope_t_stat?: number | null;
+            /**
+             * N Points
+             * @default 0
+             */
+            n_points: number;
+            /**
+             * Basis
+             * @default
+             */
+            basis: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
             /**
              * History
              * @default []

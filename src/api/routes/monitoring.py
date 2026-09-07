@@ -1004,6 +1004,23 @@ class RecordPerformanceRequest(BaseModel):
     )
 
 
+def _opt_int(v: Any) -> Optional[int]:
+    """int for a real number, else None — tolerant of partial tracker doubles."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return int(v)
+
+
+def _opt_float(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
+
+
+def _opt_str(v: Any) -> str:
+    return v if isinstance(v, str) else ""
+
+
 class PerformanceMetricItem(BaseModel):
     """Single performance metric."""
 
@@ -1026,6 +1043,18 @@ class PerformanceTrendResponse(BaseModel):
     # Metric level below which an alert fires (lower-bound line for the chart).
     # 0.0 when there is no history to derive a baseline from.
     alert_threshold: float = 0.0
+    # Sampling-aware classification (2026-09-07): the newest fold's sample
+    # size, the noise scale the label was judged on, the level-test z-score,
+    # the window's OLS slope t-statistic, the fold count, WHICH rule produced
+    # ``trend`` (level / slope / within_noise / immaterial / legacy_relative /
+    # insufficient_history / no_data) and a one-sentence reason for the card.
+    sample_size: Optional[int] = None
+    standard_error: Optional[float] = None
+    z_score: Optional[float] = None
+    slope_t_stat: Optional[float] = None
+    n_points: int = 0
+    basis: str = ""
+    reason: str = ""
     history: List[PerformanceMetricItem] = []
 
 
@@ -1048,6 +1077,11 @@ class PerformanceAlertItem(BaseModel):
     change_percent: float
     trend: str
     severity: str
+    # Sampling context of the alert (2026-09-07); None/"" for legacy producers.
+    sample_size: Optional[int] = None
+    z_score: Optional[float] = None
+    basis: str = ""
+    reason: str = ""
     message: str
 
 
@@ -1206,6 +1240,13 @@ async def get_performance_trend(
             is_significant=trend.is_significant,
             alert_threshold_breached=trend.alert_threshold_breached,
             alert_threshold=trend.alert_threshold,
+            sample_size=_opt_int(getattr(trend, "sample_size", None)),
+            standard_error=_opt_float(getattr(trend, "standard_error", None)),
+            z_score=_opt_float(getattr(trend, "z_score", None)),
+            slope_t_stat=_opt_float(getattr(trend, "slope_t_stat", None)),
+            n_points=_opt_int(getattr(trend, "n_points", None)) or 0,
+            basis=_opt_str(getattr(trend, "basis", None)),
+            reason=_opt_str(getattr(trend, "reason", None)),
             history=history,
         )
 
@@ -1246,6 +1287,10 @@ async def get_performance_alerts(model_id: str) -> PerformanceAlertsResponse:
                 trend=a["trend"],
                 severity=a["severity"],
                 message=a["message"],
+                sample_size=_opt_int(a.get("sample_size")),
+                z_score=_opt_float(a.get("z_score")),
+                basis=_opt_str(a.get("basis")),
+                reason=_opt_str(a.get("reason")),
             )
             for a in alerts
         ]

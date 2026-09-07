@@ -49,6 +49,11 @@ export interface KGInsightRequest {
 
 export interface ModelPerfInsightRequest {
   model_version: string;
+  /**
+   * The metric the page's trend cards are showing (2026-09-07) so the insight
+   * narrates the SAME series as the card. Server default: auc_roc.
+   */
+  metric_name?: 'accuracy' | 'precision' | 'recall' | 'f1' | 'auc_roc';
 }
 
 export interface CausalInsightRequest {

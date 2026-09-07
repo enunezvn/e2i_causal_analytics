@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -134,6 +134,11 @@ class KGInsightRequest(BaseModel):
 
 class ModelPerfInsightRequest(BaseModel):
     model_version: str
+    # The metric the page's trend cards are showing (2026-09-07): the insight
+    # used to read the ACCURACY trend while the card defaulted to auc_roc, so
+    # the two could disagree about the same model. The page passes its
+    # selector; the default matches the page's DEFAULT_TREND_METRIC.
+    metric_name: Literal["accuracy", "precision", "recall", "f1", "auc_roc"] = "auc_roc"
 
 
 class HomeKpiInsightRequest(BaseModel):
@@ -527,18 +532,21 @@ async def model_performance_insight(
 
     tracker = get_performance_tracker()
     try:
-        trend = await tracker.get_performance_trend(req.model_version, "accuracy")
+        trend = await tracker.get_performance_trend(req.model_version, req.metric_name)
         confusion = await tracker.get_confusion_matrix(req.model_version)
         roc = await tracker.get_roc_curve(req.model_version)
         alerts = await tracker.check_performance_alerts(req.model_version)
+        trend_reason = getattr(trend, "reason", "")
         g = model_performance.build_grounding(
             model_version=req.model_version,
-            current_accuracy=float(getattr(trend, "current_value", 0.0) or 0.0),
-            baseline_accuracy=float(getattr(trend, "baseline_value", 0.0) or 0.0),
+            metric_name=req.metric_name,
+            current_value=float(getattr(trend, "current_value", 0.0) or 0.0),
+            baseline_value=float(getattr(trend, "baseline_value", 0.0) or 0.0),
             trend=str(getattr(trend, "trend", "stable")),
             confusion=confusion,
             auc=(float(roc["auc"]) if roc and roc.get("auc") is not None else None),
             alerts=alerts,
+            trend_reason=trend_reason if isinstance(trend_reason, str) else "",
         )
     except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
         logger.warning("model-performance insight metrics unavailable: %s", e)
@@ -554,8 +562,8 @@ async def model_performance_insight(
         )
     key = cache_key(
         "model-performance",
-        req.model_version,
-        {"a": g["accuracy_summary"], "c": g["confusion_summary"]},
+        f"{req.model_version}:{req.metric_name}",
+        {"t": g["trend_summary"], "c": g["confusion_summary"]},
     )
     cached = await cache_get(key)
     if cached is not None:

@@ -16,8 +16,9 @@ Design notes
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # Import the async resolver at module level so it can be monkeypatched in tests.
 from src.repositories.drift_monitoring import _resolve_model_id
@@ -61,7 +62,7 @@ class MetricRecorder:
     async def record_run(
         self,
         model_version: str,
-        points: list[tuple[datetime, dict[str, float], int]],
+        points: Sequence[tuple[Any, ...]],
         *,
         source: str,
         split_version: str | None = None,
@@ -72,8 +73,12 @@ class MetricRecorder:
         Args:
             model_version: Model handle or uuid string passed to the repository.
             points: Sequence of ``(measured_at_month, metrics_dict, sample_size)``
-                tuples.  Each maps to one ``record_metrics`` call with
-                ``measured_at=measured_at_month``.
+                or ``(measured_at_month, metrics_dict, sample_size, positive_rate)``
+                tuples (``WalkForwardPoint`` is the latter).  Each maps to one
+                ``record_metrics`` call with ``measured_at=measured_at_month``;
+                a 4th element is written to the rows' ``positive_rate`` column
+                (the fold's class balance, needed for the AUC standard error
+                in the trend classifier), a 3-tuple leaves it NULL.
             source: Tag for the metric origin (``'backtest_wf'`` or ``'holdout'``).
             split_version: Optional cohort/split label.  Used to scope the
                 delete filter so only rows from this split are cleared.  NOT
@@ -117,16 +122,25 @@ class MetricRecorder:
         )
 
         # Step 3 — insert one record_metrics call per point
-        for measured_at_month, metrics, sample_size in points:
+        for point in points:
+            measured_at_month, metrics, sample_size = point[0], point[1], point[2]
+            positive_rate = float(point[3]) if len(point) > 3 and point[3] is not None else None
+            kwargs: dict[str, Any] = {
+                "measured_at": measured_at_month,
+                "source": source,
+                "cis": cis,
+            }
+            if positive_rate is not None:
+                # Only pass the kwarg when set so repositories/test doubles
+                # with the older signature keep working for 3-tuple callers.
+                kwargs["positive_rate"] = positive_rate
             await self.repo.record_metrics(
                 model_version,
                 metrics,
                 sample_size,
                 measured_at_month,  # window_start = month boundary
                 measured_at_month,  # window_end   = same (month-grain; caller refines if needed)
-                measured_at=measured_at_month,
-                source=source,
-                cis=cis,
+                **kwargs,
             )
 
     async def record_curves(

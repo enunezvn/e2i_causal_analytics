@@ -9,6 +9,7 @@ that omit them.
 
 import asyncio
 import datetime as dt
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from src.repositories.drift_monitoring import (
@@ -409,3 +410,142 @@ def test_get_metric_trend_keeps_non_holdout_sources(monkeypatch):
     repo = _make_trend_repo(rows)
     recs = asyncio.run(repo.get_metric_trend("mv", "accuracy"))
     assert len(recs) == 3, "only the holdout snapshot is excluded; other sources stay"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-07 — open-month walk-forward folds + positive_rate.
+#
+# A backtest_wf row is one CALENDAR MONTH; the month that is still open is a
+# partial fold (n=54 in week 1 vs ≈230 at month end) whose metric moves every
+# weekly re-run. get_metric_trend() must not surface it as "current". Daily
+# windows (source 'mlflow' / legacy null) are not month folds and must stay.
+# ---------------------------------------------------------------------------
+
+
+def test_get_metric_trend_drops_open_month_backtest_fold(monkeypatch):
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+    # Pin "now" to 2026-09-07 so the 2026-09-01 fold is the open month.
+    monkeypatch.setattr(
+        D, "_current_month_start", lambda now=None: datetime(2026, 9, 1, tzinfo=timezone.utc)
+    )
+
+    rows = [
+        _acc_row(0.7125, "2026-09-01T00:00:00+00:00", "backtest_wf"),  # open month (n=54)
+        _acc_row(0.7840, "2026-08-01T00:00:00+00:00", "backtest_wf"),
+        _acc_row(0.7700, "2026-07-01T00:00:00+00:00", "backtest_wf"),
+        _acc_row(0.7300, "2026-09-05T00:00:00+00:00", "mlflow"),  # daily window: keep
+        _acc_row(0.7200, "2026-09-04T00:00:00Z", None),  # legacy null source: keep
+    ]
+    repo = _make_trend_repo(rows)
+    recs = asyncio.run(repo.get_metric_trend("mv", "accuracy", days=365))
+
+    assert all(abs(r.metric_value - 0.7125) > 1e-9 for r in recs), "open-month fold must be dropped"
+    assert len(recs) == 4
+    # The newest walk-forward point is now the last CLOSED month.
+    wf = [r for r in recs if r.source == "backtest_wf"]
+    assert wf[0].metric_value == 0.7840
+
+
+def test_get_metric_trend_keeps_closed_months_when_now_advances(monkeypatch):
+    """Once the calendar rolls over, the same fold is a closed month and stays."""
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+    monkeypatch.setattr(
+        D, "_current_month_start", lambda now=None: datetime(2026, 10, 1, tzinfo=timezone.utc)
+    )
+    rows = [
+        _acc_row(0.7125, "2026-09-01T00:00:00+00:00", "backtest_wf"),
+        _acc_row(0.7840, "2026-08-01T00:00:00+00:00", "backtest_wf"),
+    ]
+    recs = asyncio.run(_make_trend_repo(rows).get_metric_trend("mv", "accuracy", days=365))
+    assert len(recs) == 2
+
+
+def test_is_open_month_backtest_row_edge_cases():
+    from src.repositories.drift_monitoring import _current_month_start, _is_open_month_backtest_row
+
+    ms = _current_month_start(datetime(2026, 9, 7, 15, 0, tzinfo=timezone.utc))
+    assert ms == datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert _is_open_month_backtest_row(
+        {"source": "backtest_wf", "measured_at": "2026-09-01T00:00:00+00:00"}, ms
+    )
+    assert _is_open_month_backtest_row(
+        {"source": "backtest_wf", "measured_at": datetime(2026, 9, 1)}, ms
+    )
+    assert _is_open_month_backtest_row(
+        {"source": "backtest_wf", "measured_at": "2026-12-01T00:00:00Z"}, ms
+    )
+    assert not _is_open_month_backtest_row(
+        {"source": "backtest_wf", "measured_at": "2026-08-01T00:00:00+00:00"}, ms
+    )
+    assert not _is_open_month_backtest_row(
+        {"source": "mlflow", "measured_at": "2026-09-05T00:00:00+00:00"}, ms
+    )
+    assert not _is_open_month_backtest_row({"source": "backtest_wf", "measured_at": "garbage"}, ms)
+    assert not _is_open_month_backtest_row({"source": "backtest_wf"}, ms)
+
+
+def test_positive_rate_round_trips_through_to_db_row_and_record_metrics():
+    """The existing nullable ml_performance_metrics.positive_rate column is
+    written only when set (every other caller keeps NULL)."""
+    rec = PerformanceMetricRecord(
+        model_id="mid",
+        metric_name="auc_roc",
+        metric_value=0.81,
+        sample_size=134,
+        source="backtest_wf",
+        positive_rate=0.381,
+    )
+    assert rec.to_db_row()["positive_rate"] == 0.381
+    assert (
+        "positive_rate"
+        not in PerformanceMetricRecord(metric_name="auc_roc", metric_value=0.8).to_db_row()
+    )
+    back = PerformanceMetricRecord.from_db_row({**rec.to_db_row(), "positive_rate": 0.381})
+    assert back.positive_rate == 0.381
+
+
+def test_record_metrics_writes_positive_rate_on_every_metric_row(monkeypatch):
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+    inserted: list = []
+    client = MagicMock()
+    chain = MagicMock()
+    chain.insert = MagicMock(side_effect=lambda data: inserted.append(data) or chain)
+    chain.execute = AsyncMock(return_value=MagicMock(data=[]))
+    client.table = MagicMock(return_value=chain)
+    repo = PerformanceMetricRepository(client)
+    ts = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    recs = asyncio.run(
+        repo.record_metrics(
+            "mv",
+            {"auc_roc": 0.8, "accuracy": 0.7},
+            230,
+            ts,
+            ts,
+            measured_at=ts,
+            source="backtest_wf",
+            positive_rate=0.35,
+        )
+    )
+    assert [r.positive_rate for r in recs] == [0.35, 0.35]
+    assert all(row["positive_rate"] == 0.35 for row in inserted[0])
+    # Omitted → NULL stays NULL (no key in the row).
+    recs = asyncio.run(
+        repo.record_metrics("mv", {"auc_roc": 0.8}, 230, ts, ts, source="backtest_wf")
+    )
+    assert recs[0].positive_rate is None
+    assert "positive_rate" not in inserted[1][0]

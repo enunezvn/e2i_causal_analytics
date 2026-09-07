@@ -342,6 +342,19 @@ export interface PerformanceTrendResponse {
   alert_threshold_breached: boolean;
   /** Metric level below which an alert fires (lower-bound line for the chart). */
   alert_threshold: number;
+  /**
+   * Sampling-aware classification context (2026-09-07). The newest fold's
+   * sample size, the noise scale the label was judged on, the level-test
+   * z-score, the window's OLS slope t-statistic, the fold count, WHICH rule
+   * produced `trend` and a one-sentence reason rendered on the Trend card.
+   */
+  sample_size?: number | null;
+  standard_error?: number | null;
+  z_score?: number | null;
+  slope_t_stat?: number | null;
+  n_points?: number;
+  basis?: string;
+  reason?: string;
   history: PerformanceMetricItem[];
 }
 
@@ -367,6 +380,11 @@ export interface PerformanceAlertItem {
   trend: string;
   severity: string;
   message: string;
+  /** Sampling context of the alert (2026-09-07); absent for legacy producers. */
+  sample_size?: number | null;
+  z_score?: number | null;
+  basis?: string;
+  reason?: string;
 }
 
 /**
