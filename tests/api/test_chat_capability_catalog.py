@@ -504,6 +504,117 @@ DROP_FIXTURES = [
         "Email the summary",
         "Email this TRx summary for Kisqali to the brand team.",
     ),
+    # #1907: live experiment status - no chat tool reads running experiments
+    (
+        "live_experiment_status",
+        "Active experiments overview",
+        "What experiments are currently running and what KPIs is each one targeting?",
+    ),
+    (
+        "live_experiment_status",
+        "Experiment design status",
+        "What experiments are currently designed or running through the orchestrator?",
+    ),
+    (
+        "live_experiment_status",
+        "Active experiments",
+        "What experiments are currently running, and what KPIs is each one designed to measure?",
+    ),
+    (
+        "live_experiment_status",
+        "Kisqali experiments",
+        "Which experiments are active for Kisqali?",
+    ),
+    ("live_experiment_status", "Running experiments", "Show me the running experiments."),
+    # live-status wording that also mentions lift; lift / results-only phrasings
+    # ("what experiments have lift results?") are deliberately NOT covered
+    (
+        "live_experiment_status",
+        "Live experiment lift",
+        "List live experiments and their lift.",
+    ),
+    (
+        "live_experiment_status",
+        "Kisqali A/B tests",
+        "Which A/B tests are running for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Experiments in progress",
+        "What experiments are in progress for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Orchestrator experiments",
+        "What experiments are currently in flight through the orchestrator?",
+    ),
+    ("live_experiment_status", "Running A/B tests", "Show me running A/B tests for Kisqali."),
+    (
+        "live_experiment_status",
+        "Ongoing A/B tests",
+        "List ongoing A/B tests and their target KPIs.",
+    ),
+    (
+        "live_experiment_status",
+        "Experiments in flight",
+        "Show experiments in flight through the orchestrator.",
+    ),
+    (
+        "live_experiment_status",
+        "Orchestrator status",
+        "Which experiments are designed or running through the orchestrator?",
+    ),
+    # #1907: a status read that merely MENTIONS power, sample size or a duration is
+    # still a status read; only calculation or design intent exempts
+    ("live_experiment_status", "Powered experiments", "What active experiments have 80% power?"),
+    (
+        "live_experiment_status",
+        "Six-week experiments",
+        "Which experiments are running for 6 weeks?",
+    ),
+    (
+        "live_experiment_status",
+        "Powered A/B tests",
+        "What A/B tests are running for 6 weeks with 80% power?",
+    ),
+    (
+        "live_experiment_status",
+        "Kisqali running list",
+        "List the experiments that are running for Kisqali.",
+    ),
+    # #1907 codex: status synonyms, yes/no and count reads, hyphenated in-flight
+    (
+        "live_experiment_status",
+        "Actively running",
+        "Which experiments are actively running for Kisqali?",
+    ),
+    (
+        "live_experiment_status",
+        "Being run",
+        "What experiments are currently being run through the orchestrator?",
+    ),
+    ("live_experiment_status", "Any running?", "Are any experiments running for Kisqali?"),
+    ("live_experiment_status", "Running count", "How many experiments are running for Kisqali?"),
+    ("live_experiment_status", "In-flight", "Which experiments are in-flight for Kisqali?"),
+    # #1907 codex: a detection PURPOSE on a status read is still a status read
+    (
+        "live_experiment_status",
+        "Lift detection",
+        "Which active experiments are designed to detect a 5% NBRx lift?",
+    ),
+    (
+        "live_experiment_status",
+        "Running to detect",
+        "Which experiments are running to detect a 5% NBRx lift?",
+    ),
+    (
+        "live_experiment_status",
+        "Detecting lift",
+        "Show active experiments detecting Fabhalta conversion lift.",
+    ),
+    # #1907 codex: live ENROLLMENT is a status read (the /experiments hint names it)
+    ("live_experiment_status", "Enrolling", "What experiments are currently enrolling patients?"),
+    ("live_experiment_status", "Kisqali enrolling", "Which experiments are enrolling for Kisqali?"),
     (
         "competitor_data",
         "Competitor share",
@@ -524,6 +635,95 @@ DROP_FIXTURES = [
         "outcome_as_kpi:discontinued_180d",
         "Discontinuation level",
         "What is the discontinued_180d percentage for Fabhalta?",
+    ),
+    # #1906: a TREND of a journey outcome drops even when the pill also names a
+    # causal word (section C has no time dimension; the causal exemption is
+    # for "what drives the <outcome> rate?", not for a trend with a causal tail)
+    (
+        "outcome_as_kpi:persistent_180d",
+        "📈 Persistence drivers over time",
+        "Chart the monthly trend of Remibrutinib's persistent_180d rate to see if the causal drivers' strength has shifted.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "What drives persistent_180d?",
+        "Chart the monthly trend of Remibrutinib's persistent_180d rate.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Driver drift",
+        "Have the causal drivers of persistent_180d shifted over time?",
+    ),
+    # #1906 codex: a chart / plot / graph verb whose OBJECT is the outcome drops
+    # whatever causal tail follows
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence chart",
+        "Chart the persistent_180d rate for Remibrutinib to see if causal drivers shifted.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence plot",
+        "Plot persistent_180d values for Kisqali and explain causal factors.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by segment",
+        "Graph persistent_180d by segment and show which causal paths matter.",
+    ),
+    # #1906 codex: a time series OF the causal quantity (driver strength, path
+    # confidence, effect estimates) is a trend of effects, not a driver read
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Monthly driver strength",
+        "Show monthly causal driver strength for persistent_180d for Remibrutinib.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Effect estimate trend",
+        "Show the trend in causal effect estimates for persistent_180d over the last year.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Driver shift",
+        "Over time, have causal drivers shifted for persistent_180d in Remibrutinib?",
+    ),
+    # #1906 codex: display / frequency words right AFTER the outcome
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence with notes",
+        "For Remibrutinib, persistent_180d monthly rate with driver notes.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence picture",
+        "For Remibrutinib, persistent_180d chart with driver notes.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by month",
+        "Show persistent_180d by month with driver notes.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence as a chart",
+        "Show persistent_180d rate as a chart and explain causal drivers for Remibrutinib.",
+    ),
+    # #1906 codex: "time series" and the spelled-out period-change forms
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence series",
+        "Show a time series of persistent_180d for Remibrutinib and explain causal drivers.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence changes",
+        "Show month over month persistent_180d changes and explain drivers.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Quarterly persistence changes",
+        "Show quarter-over-quarter persistent_180d changes and explain drivers.",
     ),
     (
         "uplift_by_segment",
@@ -774,6 +974,96 @@ KEEP_FIXTURES = [
         "Persistence drivers",
         "What drives persistent_180d for Remibrutinib, and how confident are those paths?",
     ),
+    # #1906: causal asks whose OBJECT is the outcome (or its rate) stay kept; the
+    # trend split must not widen into "chart/plot/graph" - "the causal graph" is
+    # section C's own vocabulary
+    (
+        "Causal drivers",
+        "What are the causal drivers of persistent_180d for Remibrutinib, and how confident are those paths?",
+    ),
+    (
+        "Cross-brand paths",
+        "Which causal paths most reliably predict persistent_180d across all three brands?",
+    ),
+    ("Rate drivers", "What drives the persistent_180d rate for Kisqali?"),
+    (
+        "Causal graph paths",
+        "In the causal graph, which paths lead to persistent_180d for Kisqali?",
+    ),
+    # #1906 codex: a frequency adjective on a DRIVER is not a trend of the outcome
+    ("Monthly copay support", "Does monthly copay support drive persistent_180d for Remibrutinib?"),
+    ("Weekly PSP touchpoints", "Do weekly PSP touchpoints influence adherent_180d for Fabhalta?"),
+    ("Weekly rep visits", "Do weekly rep visits drive persistent_180d for Remibrutinib?"),
+    (
+        "Chart causal drivers",
+        "Chart the causal drivers of persistent_180d for Remibrutinib.",
+    ),
+    # #1906 codex: a causal VERB between the time word and the outcome means the
+    # time word modifies a driver; a KPI trend in the same pill does not spoil it
+    (
+        "TRx trend and persistence drivers",
+        "Show the monthly TRx trend for Kisqali and what drives persistent_180d.",
+    ),
+    (
+        "Monthly impact",
+        "What is the monthly impact of copay support on persistent_180d for Kisqali?",
+    ),
+    # #1906 codex: the driver's verb is free text - no verb whitelist decides this
+    ("Weekly visit lift", "Do weekly rep visits boost persistent_180d for Remibrutinib?"),
+    (
+        "Monthly reminders",
+        "Do monthly copay support reminders reduce persistent_180d for Remibrutinib?",
+    ),
+    ("Monthly access calls", "Do monthly access calls matter for persistent_180d for Kisqali?"),
+    (
+        "Weekly hub calls",
+        "Are weekly hub calls associated with persistent_180d for Remibrutinib?",
+    ),
+    # #1906 codex: a time word in the TITLE over a plain driver message stays
+    (
+        "Persistence over time",
+        "What are the causal drivers of persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Monthly persistence drivers",
+        "What factors matter for persistent_180d for Remibrutinib?",
+    ),
+    # #1906 codex: a series noun or change verb INSIDE the driver phrase does not
+    # make the time word a series of the outcome
+    (
+        "Copay changes",
+        "Do monthly changes in copay support influence persistent_180d for Remibrutinib?",
+    ),
+    ("Nurse call rate", "Does monthly rate of nurse calls influence persistent_180d for Fabhalta?"),
+    (
+        "Touchpoint volume",
+        "Does weekly volume of PSP touchpoints matter for adherent_180d for Fabhalta?",
+    ),
+    (
+        "Support strength",
+        "Is monthly strength of copay support associated with persistent_180d for Kisqali?",
+    ),
+    (
+        "Lab value changes",
+        "For patients with monthly lab value changes, what drives persistent_180d for Remibrutinib?",
+    ),
+    # #1906 codex: a close compound pill - KPI trend, then a driver ask - stays
+    ("TRx and persistence", "Show monthly TRx trend and what drives persistent_180d for Kisqali."),
+    ("TRx plus drivers", "Show monthly TRx trend plus the drivers of persistent_180d."),
+    ("TRx chart and drivers", "Show a monthly TRx chart alongside drivers of persistent_180d."),
+    # #1906 codex: the newer time words on the DRIVER side stay too
+    (
+        "Visit series",
+        "Is a time series of rep visits associated with persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Copay changes by month",
+        "Are month over month changes in copay support associated with persistent_180d for Remibrutinib?",
+    ),
+    (
+        "Hub changes by quarter",
+        "Are quarter-over-quarter changes in hub touchpoints associated with persistent_180d for Remibrutinib?",
+    ),
     ("Kisqali TRx trend", "Show me the month-over-month trend for Kisqali total TRx."),
     ("TRx by severity", "Chart Fabhalta's TRx trend by severity tier."),
     (
@@ -788,6 +1078,85 @@ KEEP_FIXTURES = [
     ("Action rate uplift", "What is the action rate uplift for Kisqali?"),
     ("TRx volume drivers", "What are the causal drivers of trx_volume for Kisqali?"),
     ("Active agents", "Which agents are active right now and what are they working on?"),
+    # #1907: experiment DESIGN and power asks are served (experiment_designer tools);
+    # past-tense "designed" is ambiguous and stays kept
+    (
+        "Experiment design best practices",
+        "How should I design an experiment to test trigger precision improvements across the three brands?",
+    ),
+    (
+        "Experiment sample size",
+        "How many HCPs do I need for an experiment on Kisqali NBRx with 80% power?",
+    ),
+    (
+        "Sample-lift experiment",
+        "Design an experiment to test whether more samples lift Fabhalta conversion.",
+    ),
+    ("Designed experiments", "What experiments have been designed for Fabhalta?"),
+    (
+        "Experiment duration",
+        "How long should an experiment run to detect a 5% NBRx lift for Kisqali?",
+    ),
+    # #1907: "the experiment is running for N weeks" is a planned DURATION inside a
+    # power ask, not a live-status read - the same words must not drop it
+    (
+        "Sample size for a 6-week experiment",
+        "How many HCPs do I need if the experiment is running for 6 weeks?",
+    ),
+    (
+        "Power for a 6-week experiment",
+        "For an experiment that is running for 6 weeks, how many HCPs do I need for 80% power?",
+    ),
+    (
+        "Active-window power",
+        "If the experiment is active for 6 weeks, how many HCPs do I need for 80% power?",
+    ),
+    # #1907: a DESIGN ask keeps its status adjective and its which/what lead
+    ("Live experiment design", "Design a live experiment for Kisqali NBRx."),
+    (
+        "Powered 6-week experiments",
+        "Which experiments are running for 6 weeks and need 80% power?",
+    ),
+    (
+        "Power calculation window",
+        "Which experiment is active for 6 weeks in the power calculation?",
+    ),
+    # #1907: a modal design ask ("what ... should I run / set up") is design intent
+    ("Next live experiment", "What live experiment should I run for Kisqali NBRx?"),
+    ("Live experiment setup", "Which live experiment should I set up for Kisqali NBRx?"),
+    ("Live A/B sample size", "What sample size does a live A/B test on Remibrutinib need?"),
+    # #1907 codex: a design noun after the status adjective, a purpose infinitive,
+    # or a modal with any actor is design intent even when it collides with the
+    # adjective form
+    ("Running design", "Which running experiment design would detect a 5% NBRx lift?"),
+    ("Running options", "Show running experiment options for detecting a 5% NBRx lift."),
+    (
+        "Orchestrator launch",
+        "What active experiment should the orchestrator launch to improve Kisqali NBRx?",
+    ),
+    ("Active candidates", "What experiments are active candidates to test Kisqali NBRx lift?"),
+    ("Live ideas", "Which live experiment ideas could lift Fabhalta NBRx?"),
+    ("Active plans", "Show active experiment plans to test Kisqali NBRx lift."),
+    ("Running setup", "Which running experiment setup would detect a 5% NBRx lift?"),
+    (
+        "Ongoing test plan",
+        "What ongoing A/B test plan should we use to measure trigger precision?",
+    ),
+    # #1907 codex: the modal actor is a short noun phrase, and "use a live
+    # experiment to measure" is an imperative design ask
+    (
+        "Brand team experiment",
+        "Should the brand team use a live experiment to measure trigger precision?",
+    ),
+    (
+        "Brand team A/B test",
+        "What live experiment should the brand team use to measure trigger precision?",
+    ),
+    ("Use a live test", "Use a live A/B test to measure trigger precision for Kisqali."),
+    (
+        "Brand analytics team",
+        "What active experiment should the US Kisqali brand team use to measure trigger precision?",
+    ),
     (
         "Competitive landscape",
         "Give me the competitive landscape context for Fabhalta's PNH indication.",
