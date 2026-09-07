@@ -1610,33 +1610,41 @@ brings up a working stack.
 
 ### 9.3 Deployment Workflow
 
+Deploys are triggered **only** by a merge to `main` (or a manual
+`gh workflow run deploy.yml`). Nothing is built or pulled on the droplet by hand.
+
 ```
 Developer Machine                       Droplet
       │                                    │
-      │  git push main                     │
+      │  merge PR → main                   │
       │─────────────────────►              │
       │                    GitHub Actions  │
       │                    ┌──────────┐   │
-      │                    │ Lint     │   │
-      │                    │ Type     │   │
-      │                    │ Test     │   │
-      │                    │ Security │   │
+      │                    │ test     │   │  lint / mypy / pytest / security
       │                    └────┬─────┘   │
-      │                         │ (success)│
-      │                    ┌────▼─────┐   │
-      │                    │ Build    │   │
-      │                    │ Push GHCR│   │
-      │                    └────┬─────┘   │
+      │                         │          │
+      │            ┌────────────┴───────┐ │
+      │            ▼                    ▼ │
+      │   build-and-push        build-and-push-frontend
+      │   (GHCR e2i-api:<sha>)  (GHCR e2i-frontend:<sha>)
+      │            └────────────┬───────┘ │
+      │                         ▼          │
+      │                  ensure-main-image │
       │                         │ SSH      │
       │                         ▼          │
-      │                    git pull        │
-      │                    restart workers │
-      │                    health check    │
+      │                    deploy job:     │
+      │                      pick_overlay() → "" (base compose alone)
+      │                      docker compose pull + up -d --no-deps
+      │                      health check; rollback to PREV_SHA on failure
       │                                    │
-      │  API: auto-reload via bind mount   │
-      │  Frontend: HMR via bind mount      │
-      │  Workers: explicit restart         │
+      │  API: gunicorn, read_only rootfs — no reload, image swap only
+      │  Frontend: nginx serving the built bundle — no HMR
+      │  Workers: recreated with the new image
 ```
+
+`scripts/deploy.sh` / `make deploy` / `make deploy-build` are the **legacy local-dev** path
+(dev overlay, no feast/bentoml gates, `git checkout <sha>` rollback). Do not run them on the
+droplet. To redeploy the same sha, re-run the workflow rather than touching the box.
 
 ### 9.4 Configuration Management
 
@@ -1644,9 +1652,9 @@ Developer Machine                       Droplet
 |-------------|----------|--------|
 | Agent definitions | `config/agent_config.yaml` | YAML |
 | Domain vocabulary | `config/domain_vocabulary.yaml` | YAML |
-| KPI definitions | `config/kpi_definitions.yaml` | YAML (44 KPIs) |
-| Ontology | `config/ontology/*.yaml` | YAML (14 files) |
-| Docker services | `docker/docker-compose*.yml` | YAML (4 files) |
+| KPI definitions | `config/kpi_definitions.yaml` | YAML (`summary.total_kpis` is the count) |
+| Ontology | `config/ontology/*.yaml` | YAML (17 files) |
+| Docker services | `docker/docker-compose*.yml` | YAML (7 files — see ADR-006 for which one deploys) |
 | Environment | `.env` (gitignored) | Key=Value |
 | Python tools | `pyproject.toml` | TOML (ruff, mypy, pytest, coverage) |
 | Pre-commit | `.pre-commit-config.yaml` | YAML |
@@ -1660,15 +1668,28 @@ Developer Machine                       Droplet
 | Feature cache hit (Redis) | <1ms | <1ms |
 | Feature cache miss | <50ms | ~30ms |
 | RAG hybrid search | <500ms | ~300ms (3 backends) |
-| Causal impact (full) | <120s | 30s estimate + 15s refutation |
-| Health check | <5s | ~1s |
+| Causal impact (full) | <300s SLA | 30s estimate + 15s refutation typical |
+| Health check | <20s SLA | ~1s |
+
+Agent-facing numbers here are the dispatch SLAs in `RouterNode.INTENT_TO_AGENTS` (§3.2), not
+observed latency. Two mechanisms keep the causal path inside them: the energy-score estimator
+tournament runs its 4-way selection on a **deterministic stratified subsample** above a row cap
+and refits only the winner on the full frame (`_stratified_subsample_indices` in
+`src/causal_engine/energy_score/estimator_selector.py`, #1392/#1413 — the response discloses
+when the subsampled tournament was used); and categorical covariates reach the estimators
+one-hot encoded by the FeatureBuilder, so a confounder appears as `X_<value>` columns rather
+than as a raw string column (`src/api/routes/explain.py`).
 
 ### 9.6 Known Architectural Debt
 
 1. **Single droplet**: No HA, no failover. Acceptable for current scale.
 2. **Celery doesn't auto-reload**: Workers require manual restart on code changes.
 3. **No API versioning**: All endpoints at `/api/` without version prefix (except RAG at `/api/v1/`).
-4. **FalkorDB graph sync**: Manual seeding via `scripts/seed_falkordb.py`, no CDC pipeline.
+4. **FalkorDB graph sync**: no CDC pipeline. An *empty* curated graph self-heals — the
+   `graph-emptiness-sentinel` beat task runs every 30 minutes, and `GET /api/graph/health`
+   reports `degraded` while `curated_node_count == 0` (emptiness deliberately trips on the
+   curated count, not the total, because agent runtime writes repopulate the total within hours
+   of a wipe). A full manual reseed is still `scripts/seed_falkordb_all.sh`.
 5. **Heavy worker at 0 replicas**: On-demand startup adds ~120s latency for first ML/causal job.
 
 ---
