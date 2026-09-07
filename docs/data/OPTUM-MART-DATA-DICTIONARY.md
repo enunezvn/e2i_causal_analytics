@@ -3,7 +3,7 @@
 **Generated:** 2026-06-08 (from the parquet's embedded schema + lineage columns; read-only).
 **Why this exists:** no dictionary file ships with the mart. This reconstructs one from the file's own metadata so the column set, grains, and — critically — the **comorbidity lookback window certification status** are documented in one place. Exhaustive machine-readable column+type list: **`docs/data/optum_mart_column_schema.csv`** (252 rows).
 
-> This is the **INPUT mart** dictionary (252 cols, the vendor/upstream artifact). It is distinct from the per-cohort `data_dictionary.csv` our converters **emit** (the 64-feature tier-0 contract). See `docs/OPTUM_MART_CONVERSION.md` and `docs/reports/optum-mart-data-treatment-findings-20260608.md`.
+> This is the **INPUT mart** dictionary (252 cols, the vendor/upstream artifact). It is distinct from the per-cohort `data_dictionary.csv` our converters **emit** (the 64-feature tier-0 contract). See `docs/OPTUM_MART_CONVERSION.md`.
 
 ---
 
@@ -104,7 +104,6 @@ Full enumerated list with Spark types is in `optum_mart_column_schema.csv`. Fami
 
 ## Pointers
 - `docs/data/optum_mart_column_schema.csv` — exhaustive 252-column name+type list.
-- `docs/reports/optum-mart-data-treatment-findings-20260608.md` — the temporal data-treatment audit (this dictionary closes its open "vendor data dictionary" item as far as the file allows).
 - `docs/OPTUM_MART_CONVERSION.md` — the mart adapter + comorbidity-opacity caveat.
 - `scripts/convert_optum_rwd.py` — reference comorbidity/window implementation (`LOOKBACK_DAYS=180`, strict pre-index).
 - `src/data/manifests/optum_mart_feature_manifest.py` — the 64-col tier-0 safe allow-list + `knowable_at` contracts.
