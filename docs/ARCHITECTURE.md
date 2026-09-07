@@ -457,7 +457,11 @@ All agents share common patterns:
 
 ### 3.4 API Layer
 
-**220+ endpoints** across 33 route files (July 2026). The table below lists the major route groups; the full set lives in `src/api/routes/`:
+The route modules live in `src/api/routes/` and are mounted in `src/api/main.py`
+(`app.include_router(...)` — that call list is the authoritative registration order and
+prefix set). Public API paths are under `/api`, **not** `/api/v1` — RAG is the one exception.
+The table below lists the route groups; re-derive the set with
+`grep -n 'include_router' src/api/main.py`.
 
 | Route Group | Prefix | Key Endpoints | Auth Level |
 |------------|--------|---------------|------------|
@@ -466,7 +470,9 @@ All agents share common patterns:
 | audit | `/api/audit/` | Workflow audit chain, verification | AUTH |
 | causal | `/api/causal/` | Hierarchical CATE, pipeline, validation | ANALYST |
 | cognitive | `/api/cognitive/` | 4-phase cognitive workflow, RAG | - |
-| copilotkit | `/api/copilotkit/` | CopilotKit AI chat runtime — AG-UI agent, `/chat/stream` SSE (`dispatch_info`), feedback/analytics; reference: `docs/api/chat.md` | Rate-limited |
+| chat (orchestrator brain) | `/api/copilotkit/` | `POST /chat/stream` (SSE, `dispatch_info`) and `POST /chat` — classify → orchestrator → synthesize. On a **complete** orchestrator failure the #1336 conversational bridge (`src/api/routes/chat_bridge.py`) re-runs the turn through the AG-UI brain behind an honest preamble, failing open to the original summary | Rate-limited |
+| chat (AG-UI runtime) | `/api/copilotkit/{path}` | The CopilotKit AG-UI agent runtime (`chat_node` + bound tools), registered by `add_api_route` at both `/api/copilotkit` and `/api/copilotkit/{path:path}`; this is the brain the frontend chat panel talks to | Rate-limited |
+| chat (suggestions) | `/api/chat/` | `POST /suggestions` — one fast-tier LLM call returning up to four conversation- and page-adaptive pills; 502 makes the frontend fall back to static pills | AUTH |
 | digital-twin | `/api/digital-twin/` | Simulate, validate, list models | OPERATOR |
 | experiments | `/api/experiments/` | Randomize, enroll, interim analysis | OPERATOR |
 | explain | `/api/explain/` | Real-time SHAP explanations | AUTH |
@@ -474,7 +480,7 @@ All agents share common patterns:
 | gaps | `/api/gaps/` | Gap analysis, ROI opportunities | ANALYST |
 | graph | `/api/graph/` | FalkorDB knowledge graph queries | - |
 | health-score | `/api/health-score/` | Composite health metrics | - |
-| kpi | `/api/kpis/` | 44 KPI definitions and values | AUTH |
+| kpi | `/api/kpis/` | KPI definitions and values (the registry in `config/kpi_definitions.yaml`) | AUTH |
 | memory | `/api/memory/` | Tri-memory read/write | AUTH |
 | metrics | `/metrics` | Prometheus metrics export | Public |
 | monitoring | `/api/monitoring/` | Drift detection, alerts | AUTH |
@@ -482,16 +488,65 @@ All agents share common patterns:
 | rag | `/api/v1/rag/` | Hybrid RAG search | AUTH |
 | resources | `/api/resources/` | Resource allocation optimization | AUTH |
 | segments | `/api/segments/` | Treatment effect segmentation | AUTH |
+| admin | `/api/admin/` | User administration, activity log, observability panel | ADMIN |
+| alerts | `/api/alerts/` | Staleness alert stream (SSE, drop-oldest backpressure) | AUTH |
+| executive-insights | `/api/executive-insights/` | Executive insight rows (JIT provenance-verified) | ANALYST |
+| insights | `/api/insights/` | Strategic insights row, incl. `POST /insights/clinical-narrative` | ANALYST |
+| expert-reviews | `/api/expert-reviews/` | Expert review gate queue and decisions | OPERATOR |
+| sentinels | `/api/sentinels/` | Data-driven memory sentinels (register, list, fire) | AUTH |
 
-**Middleware Stack** (applied in LIFO order):
+**Middleware Stack.** `src/api/main.py` makes eight `app.add_middleware(...)` calls plus the
+OpenTelemetry ASGI layer added by `instrument_fastapi()`. Starlette applies middleware LIFO, so
+the **last** registered is outermost — the list below runs outermost first:
 
-1. **OpenTelemetry ASGI** - Distributed tracing (outermost)
-2. **TracingMiddleware** - Request ID, correlation ID, W3C trace context
-3. **TimingMiddleware** - Prometheus latency metrics, Server-Timing header
-4. **RateLimitMiddleware** - Per-endpoint limits (Redis or in-memory backend)
-5. **SecurityHeadersMiddleware** - CSP, XSS, clickjacking, HSTS
-6. **JWTAuthMiddleware** - Supabase JWT validation, RBAC
-7. **CORS** - Origin validation (innermost)
+1. **OpenTelemetry ASGI** — distributed tracing, added last so its span covers everything
+   (`instrument_fastapi`, `src/api/dependencies/opentelemetry_config.py`; skipped when
+   `OTEL_ENABLED=false`)
+2. **TracingMiddleware** — `X-Request-ID`, `X-Correlation-ID`, W3C `traceparent`
+3. **TimingMiddleware** — Prometheus latency metrics + `Server-Timing`
+   (`TIMING_SLOW_THRESHOLD_MS`, default 1000)
+4. **RateLimitMiddleware** — per-endpoint limits, Redis-backed; skipped when
+   `DISABLE_RATE_LIMITING` is set, which is itself ignored under `ENVIRONMENT=production`
+5. **SecurityHeadersMiddleware** — CSP, XSS, clickjacking, HSTS
+6. **JWTAuthMiddleware** — Supabase JWT validation, RBAC
+7. **ActivityTrackingMiddleware** — bounded per-minute aggregation of authenticated `/api`
+   requests into `user_activity_log`; deliberately registered before the JWT layer so it is
+   *inner* to it and can read `request.state.user`
+8. **InsightVerifierMiddleware** — JIT provenance check on `/api/causal`, `/api/explain`,
+   `/api/executive-insights`; replaces a stale response with `410 Gone` on the outbound side
+9. **CORS** — origin validation (innermost)
+
+**Error envelope.** Every handled failure is serialised by `E2IError.to_dict()`
+(`src/api/errors.py`) through the app-wide exception handlers in `src/api/main.py`. The body is
+**flat**, not nested:
+
+```json
+{
+  "error": "ValidationError",
+  "error_id": "…",
+  "category": "validation",
+  "message": "…",
+  "timestamp": "…",
+  "suggested_action": "…",
+  "details": {}
+}
+```
+
+`suggested_action` and `details` appear only when set; `severity`, `original_error` and
+`traceback` are added only when `DEBUG_MODE` is on. `ErrorCategory` values: `validation`,
+`authentication`, `authorization`, `not_found`, `rate_limited`, `conflict`, `internal`,
+`agent_error`, `dependency_error`, `timeout`, `configuration`. `ErrorSeverity`: `low`, `medium`,
+`high`, `critical` (CRITICAL/HIGH also go to Sentry).
+
+Two helpers do the status → category mapping for raw `HTTPException`s:
+
+- `_generic_http_error` (#1831) — 400/422 → `ValidationError`, 409 → `ConflictError`, any other
+  4xx → generic class but `VALIDATION` category and `LOW` severity; 5xx keeps the `INTERNAL`
+  / `MEDIUM` default. Before #1831 every in-app `HTTPException(400|409|422)` was labelled a
+  server error.
+- `_e2i_404_error` (#1814) — an unmatched route (empty or `"Not Found"` detail) becomes
+  `EndpointNotFoundError`; an in-app `HTTPException(404)` keeps its deliberate client-facing
+  detail as the message.
 
 ### 3.5 Celery Worker Architecture
 
@@ -499,44 +554,71 @@ All agents share common patterns:
 ┌─────────────────────────────────────────────────────────────┐
 │                     Redis Broker (DB 1)                      │
 ├──────────┬──────────┬──────────┬──────────┬────────────────┤
-│ default  │  quick   │   api    │analytics │  reports       │
-│          │          │          │aggregate │                │
+│ default  │  quick   │   api    │analytics │ reports        │
+│          │          │          │          │ aggregations   │
 ├──────────┴──────────┴──────────┼──────────┴────────────────┤
 │       Light Workers (x2)       │     Medium Worker (x1)     │
-│    2 CPU, 2 GB per replica     │    4 CPU, 8 GB             │
-│    Scales: 2-4 replicas        │    Scales: 1-3 replicas    │
+│   2 CPU, 1.5 GB per replica    │       4 CPU, 4 GB          │
+│   --concurrency=2              │       --concurrency=2      │
 ├────────────────────────────────┼────────────────────────────┤
 │     shap    │  causal  │  ml   │  twins                     │
-├─────────────┴──────────┴──────┴────────────────────────────┤
+├─────────────┴──────────┴───────┴────────────────────────────┤
 │              Heavy Worker (x0, on-demand)                    │
-│              16 CPU, 32 GB per replica                       │
-│              Scales: 0-4 replicas                            │
+│              2 CPU, 3 GB, --concurrency=1                    │
 ├────────────────────────────────────────────────────────────┤
 │                    dead_letter (DLQ)                         │
 │              Failed tasks after max retries                  │
-│              Monitored every 30 minutes                      │
+│              Depth polled every 30 minutes                   │
 └────────────────────────────────────────────────────────────┘
 ```
 
-**Celery Beat Schedule** (15+ periodic tasks):
+Queue-to-worker assignment is the `--queues=` argument of each service in
+`docker/docker-compose.yml`; the queue set itself is `celery_app.conf.task_queues`. CPU/memory
+figures are the compose `deploy.resources.limits`. `config/autoscale.yml` and the
+`e2i.autoscale=true` label describe `scripts/autoscaler.py`, which is **not running** on the
+droplet — replica counts are whatever compose declares.
 
-| Task | Interval | Queue |
-|------|----------|-------|
-| Drift monitoring | 6 hours | analytics |
-| Health check | 1 hour | quick |
-| Cache cleanup | 24 hours | quick |
-| Queue metrics | 5 minutes | quick |
-| Feast materialize (incremental) | 6 hours | analytics |
-| Feast freshness check | 4 hours | analytics |
-| Feast materialize (full) | 7 days | ml |
-| A/B interim analysis | 24 hours (2 AM) | quick |
-| A/B enrollment health | 12 hours | quick |
-| A/B SRM detection sweep | 6 hours | quick |
-| Feedback loop (short window) | 4 hours | analytics |
-| Feedback loop (medium window) | 24 hours (2 AM) | analytics |
-| Feedback loop (long window) | 7 days (Sunday) | analytics |
-| Concept drift analysis | 24 hours (3 AM) | analytics |
-| DLQ monitoring | 30 minutes | quick |
+**Celery Beat Schedule.** The SSOT is `beat_schedule` in `src/workers/celery_app.py`, guarded by
+`tests/unit/test_workers/test_beat_schedule_registration.py`. Note the dict literal is not the
+whole story: `monitor-dead-letter-queue` is assigned onto `celery_app.conf.beat_schedule` after
+the literal, so the effective schedule is one entry larger than a grep of the literal suggests
+(28 + 1 = 29 at the time of writing). Beat state persists on the `e2i_celerybeat_state` volume.
+Daily jobs moved from 86400-second intervals to wall-clock `crontab()` entries in #1653, so
+"2 AM" style prose no longer describes them.
+
+| Task | Schedule (as written) | Queue |
+|------|----------------------|-------|
+| `monitor-drift` | 21600.0 (6 h) | analytics |
+| `drift-history-cleanup` | `crontab(hour=0, minute=45)` | quick |
+| `queue-metrics` | 300.0 (5 min) | quick |
+| `feast-materialize-incremental` | 21600.0 (6 h) | analytics |
+| `feast-check-freshness` | 14400.0 (4 h) | analytics |
+| `feast-materialize-full-weekly` | 604800.0 (7 d) | ml |
+| `business-metrics-per-hcp-rollup` | `crontab(hour=3, minute=15)` | analytics |
+| `patient-adherence-rollup` | `crontab(hour=3, minute=30)` | analytics |
+| `territory-metrics-rollup` | `crontab(hour=3, minute=45)` | analytics |
+| `sync-operational-corpus` | `crontab(hour=4, minute=0)` | analytics |
+| `sync-chunk-corpus` | `crontab(hour=4, minute=15)` | analytics |
+| `ab-interim-analysis-check` | `crontab(hour=1, minute=15)` | quick |
+| `ab-enrollment-health-check` | 43200.0 (12 h) | quick |
+| `ab-srm-detection-sweep` | 21600.0 (6 h) | quick |
+| `ab-results-cleanup` | 604800.0 (7 d) | quick |
+| `feedback-loop-short-window` | 14400.0 (4 h) | analytics |
+| `feedback-loop-medium-window` | `crontab(hour=2, minute=10)` | analytics |
+| `feedback-loop-long-window` | 604800.0 (7 d) | analytics |
+| `feedback-loop-drift-analysis` | `crontab(hour=2, minute=40)` | analytics |
+| `feedback-learning-cycle` | 21600.0 (6 h) | analytics |
+| `dspy-prompt-optimization-daily` | `crontab(hour=6, minute=0)` | analytics |
+| `routing-label-nightly` | `crontab(hour=4, minute=30)` | analytics |
+| `chatbot-optimization-drain` | `crontab(hour=5, minute=30)` | analytics |
+| `nppes-refresh-monthly` | 2592000.0 (~30 d) | analytics |
+| `graph-emptiness-sentinel` | 1800.0 (30 min) | quick |
+| `insight-lifecycle-consolidate` | `crontab(hour=6, minute=30)` | analytics |
+| `insight-lifecycle-sentinels` | 300.0 (5 min) | quick |
+| `crystallization-portfolio` | 21600.0 (6 h) | analytics |
+| `monitor-dead-letter-queue` (post-literal) | 1800.0 (30 min) | quick |
+
+The scaffolded `health-check` and `cache-cleanup` entries were removed in #897.
 
 ---
 
