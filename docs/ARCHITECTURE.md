@@ -264,7 +264,54 @@ definitions it references live in `/etc/nginx/nginx.conf` (see §6.1).
 
 ## 3. Component Architecture
 
+### 3.0 Source Package Map
+
+`src/` holds 27 top-level packages. This table is the orientation map; each row's entry point is
+the module to read first.
+
+| Package | Responsibility | Entry points |
+|---------|----------------|--------------|
+| `src/agents` | The 22-agent roster — one sub-package per agent, each a LangGraph state machine with `nodes/`, state TypedDicts and a `CONTRACT_VALIDATION.md` | `src/agents/orchestrator/graph.py`, `src/agents/<agent>/graph.py` |
+| `src/api` | FastAPI app, middleware stack, dependencies, route modules | `src/api/main.py`, `src/api/routes/` |
+| `src/causal` | Small shared statistics helpers (z-scores for a confidence level / alpha). **Not** the causal engine — 2 modules, 3 consumers | `src/causal/stats.py` |
+| `src/causal_engine` | The canonical causal-inference engine: discovery, hierarchical CATE, IV, uplift, refutation, energy-score validation, the expert-review gate | `src/causal_engine/pipeline/`, `src/causal_engine/hierarchical/segment_cate.py` |
+| `src/data` | Data-access helpers around the analytic tables: adaptive validity, audit sidecars, causal-role classification, leakage checks | `src/data/adaptive_validity_repository.py` |
+| `src/digital_twin` | Patient/HCP twin simulation, fidelity tracking, retraining | `src/digital_twin/simulation_cache.py`, `src/digital_twin/retraining_service.py` |
+| `src/etl` | Scheduled rollups feeding the analytic marts (per-HCP business metrics, patient adherence, territory) | `src/etl/business_metrics_per_hcp_etl.py` |
+| `src/feature_store` | Feast client + the lightweight Redis feature cache, model feature refs | `src/feature_store/feast_client.py`, `src/feature_store/client.py` |
+| `src/insights` | Insight generation and enrichment: causal context, causal discovery, clinical context/narrative, column labels | `src/insights/clinical_narrative.py` |
+| `src/kpi` | The KPI registry calculators, cache and history backfill | `src/kpi/calculator.py`, `config/kpi_definitions.yaml` |
+| `src/lifecycle` | Gate lifecycle state machine shared by the quality gates | `src/lifecycle/gate_lifecycle.py` |
+| `src/memory` | Tri-memory (working / episodic / procedural + semantic), crystallization, sentinels, triple-stream retrieval | `src/memory/graphiti_config.py`, `src/memory/crystallization/` |
+| `src/ml` | Synthetic data generation (v1/v2/v3), DGPs, loaders — the ML foundation's data layer | `src/ml/data_generator.py`, `src/ml/synthetic_v2/` |
+| `src/mlops` | MLflow/BentoML integration, packaging, prediction audit, agent cost tracking | `src/mlops/bentoml_service.py`, `src/mlops/agent_cost_tracker.py` |
+| `src/nlp` | Query typo handling and the fastText intent trainer | `src/nlp/typo_handler.py` |
+| `src/ontology` | Ontology YAML compilation, validation and inference over `config/ontology/` | `src/ontology/schema_compiler.py` |
+| `src/optimization` | DSPy prompt optimization, GEPA, lane A/B, the shared DSPy LM config | `src/optimization/dspy_lm.py`, `src/optimization/gepa/` |
+| `src/rag` | Hybrid RAG: the three backends, chunk corpus ingestion, causal RAG, cognitive backends | `src/rag/causal_rag.py`, `src/rag/backends/` |
+| `src/repositories` | Supabase data-access layer, one repository per table family, all on `BaseRepository` | `src/repositories/base.py` |
+| `src/security` | PHI scanning | `src/security/phi_scanner.py` |
+| `src/services` | Cross-cutting application services used by routes and agents (admin users, alert routing, chat capability catalog, clinical context, cohort resolution) | `src/services/clinical_context/`, `src/services/chat_capability_catalog.py` |
+| `src/skills` | Skill loading and matching for the agent skill packs | `src/skills/loader.py` |
+| `src/tasks` | Celery task bodies — every `beat_schedule` entry resolves into here | `src/tasks/__init__.py` |
+| `src/testing` | In-tree quality gates and contract validators used by CI and by agents at runtime | `src/testing/contract_validator.py` |
+| `src/tool_registry` | The tool registry the orchestrator and tool_composer dispatch through | `src/tool_registry/registry.py` |
+| `src/utils` | Shared primitives: audit chain, circuit breaker, frame registry, env diagnostics | `src/utils/circuit_breaker.py`, `src/utils/audit_chain.py` |
+| `src/workers` | Celery app, the `beat_schedule` SSOT, worker monitoring, event consumer | `src/workers/celery_app.py` |
+
+**`causal` vs `causal_engine`:** these are not duplicates. `src/causal_engine` is the causal
+inference engine (53 modules, ~47 import sites outside itself). `src/causal` is a two-module
+statistics helper (`stats.py`) imported by three call sites, including `causal_engine` itself.
+Re-derive with `grep -rn 'src\.causal\.' src/ --include=*.py | grep -v '^src/causal/'`.
+
 ### 3.1 6-Tier Agent System
+
+The roster is defined in `config/agent_config.yaml` — 22 agents, 9 of them in Tier 0
+(`ml_foundation`). Tier 0 runs as a sequential pipeline from `scope_definer` to
+`observability_connector`; `cohort_profiler` (#1790) is the exception — it sits in Tier 0 but is
+dispatched by the orchestrator from chat (`cohort_definition` intent), not from the SD→OC chain.
+The labels below are the dispatch timeouts in `RouterNode.INTENT_TO_AGENTS`
+(`src/agents/orchestrator/nodes/router.py`) — workload-measured SLAs, not latency targets.
 
 ```mermaid
 graph TB
@@ -276,6 +323,7 @@ graph TB
         MS --> MT[model_trainer<br/>Variable]
         MT --> MD[model_deployer<br/><30s]
         MD --> OC[observability_connector<br/><15s]
+        CP[cohort_profiler<br/><30s<br/>chat-dispatched]
     end
 
     subgraph "TIER 1: Coordination"
@@ -284,16 +332,16 @@ graph TB
     end
 
     subgraph "TIER 2: Causal Analytics"
-        CI[causal_impact<br/><120s<br/>DoWhy + EconML]
+        CI[causal_impact<br/><300s<br/>DoWhy + EconML]
         GA[gap_analyzer<br/><20s<br/>ROI]
-        HO[heterogeneous_optimizer<br/><180s<br/>CATE]
+        HO[heterogeneous_optimizer<br/><420s<br/>CATE]
     end
 
     subgraph "TIER 3: Monitoring"
         DM[drift_monitor<br/><10s]
-        ED[experiment_designer<br/>Variable]
+        ED[experiment_designer<br/><240s]
         EM[experiment_monitor<br/><15s]
-        HS[health_score<br/><5s]
+        HS[health_score<br/><20s]
     end
 
     subgraph "TIER 4: Predictions"
@@ -317,12 +365,17 @@ graph TB
     OR -->|classify + route| RO
     OR -->|classify + route| EX
     OR -->|classify + route| FL
+    OR -->|classify + route| CP
     OR -->|multi-faceted| TC
 ```
 
 ### 3.2 Orchestrator Routing
 
-The orchestrator uses a linear workflow: `audit_init` -> `classify_intent` -> `retrieve_rag_context` -> `route_to_agents` -> `dispatch_to_agents` -> `synthesize_response`.
+The orchestrator uses a linear workflow (node ids as registered in
+`create_orchestrator_graph`, `src/agents/orchestrator/graph.py`): `audit_init` → `classify` →
+[`rag_context`] → `route` → `dispatch` → `synthesize` → END. The `rag_context` hop is
+conditional on the graph's `enable_rag` flag (default `True`); with RAG off, `classify` edges
+straight to `route`. There are no other conditional edges — the flow is linear by design.
 
 **Two routing layers coexist** (2026-07, PR #1330 onward; sources:
 `src/agents/orchestrator/nodes/intent_classifier.py`, `nodes/router.py`,
@@ -373,15 +426,15 @@ are workload-measured SLAs, not latency targets — see inline comments in
 
 | Intent | Primary Agent | Timeout | Fallback | Tier |
 |--------|--------------|---------|----------|------|
-| `causal_effect` | causal_impact | 120s | explainer | 2 |
+| `causal_effect` | causal_impact | 300s | explainer | 2 |
 | `performance_gap` | gap_analyzer | 20s | — | 2 |
 | `segment_analysis` | heterogeneous_optimizer | 420s | gap_analyzer | 2 |
-| `experiment_design` | experiment_designer | 150s | — | 3 |
+| `experiment_design` | experiment_designer | 240s | — | 3 |
 | `experiment_monitor` | experiment_monitor | 15s | — | 3 |
 | `prediction` | prediction_synthesizer | 15s | — | 4 |
 | `resource_allocation` | resource_optimizer | 20s | — | 4 |
 | `explanation` | explainer | 45s | — | 5 |
-| `system_health` | health_score | 5s | — | 3 |
+| `system_health` | health_score | 20s | — | 3 |
 | `drift_check` | drift_monitor | 10s | — | 3 |
 | `feedback` | feedback_learner | 30s | — | 5 |
 | `multi_faceted` | tool_composer | 180s | explainer | 1 |
