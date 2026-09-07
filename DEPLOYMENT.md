@@ -110,23 +110,36 @@ These are defined in `docker-compose.yml` via the `x-common-env` anchor:
 
 | Service | Port | URL | Notes |
 |---------|------|-----|-------|
-| API (FastAPI) | 8000 | http://localhost:8000 | Auto-reloads |
+| API (FastAPI) | 8000 | http://localhost:8000 | Auto-reloads under the dev overlay only |
 | API Docs | 8000 | http://localhost:8000/docs | Swagger UI |
-| Frontend (Vite) | 3002 | http://localhost:3002 | HMR |
+| Frontend | 3002 | http://localhost:3002 | Vite HMR under the dev overlay; nginx on the built bundle in production |
 | MLflow | 5000 | http://localhost:5000 | 127.0.0.1 only |
-| Redis | 6382 | redis://localhost:6382 | |
-| FalkorDB | 6381 | redis://localhost:6381 | |
+| Redis | 6382 | redis://localhost:6382 | 127.0.0.1 only |
+| FalkorDB | 6381 | redis://localhost:6381 | 127.0.0.1 only |
 | BentoML | 3000 | http://localhost:3000 | 127.0.0.1 only |
 | Feast | 6567 | http://localhost:6567 | 127.0.0.1 only |
-| Grafana | 3200 | http://localhost:3200 | 127.0.0.1 only |
-| Prometheus | 9091 | http://localhost:9091 | 127.0.0.1 only |
-| Loki | 3101 | http://localhost:3101 | 127.0.0.1 only |
-| Alertmanager | 9093 | http://localhost:9093 | 127.0.0.1 only |
-| Flower* | 5555 | http://localhost:5555 | debug profile |
-| FalkorDB Browser* | 3030 | http://localhost:3030 | debug profile |
-| Redis Commander* | 8081 | http://localhost:8081 | dev-tools profile |
+| Grafana* | 3200 | http://localhost:3200 | `monitoring` profile; 127.0.0.1 only |
+| Prometheus* | 9091 | http://localhost:9091 | `monitoring` profile; 127.0.0.1 only |
+| Loki* | 3101 | http://localhost:3101 | `monitoring` profile; 127.0.0.1 only |
+| Alertmanager* | 9093 | http://localhost:9093 | `monitoring` profile; 127.0.0.1 only |
+| Flower* | 5555 | http://localhost:5555 | `dev-tools` profile (dev overlay); 127.0.0.1 only |
+| FalkorDB Browser* | 3030 | http://localhost:3030 | `debug` profile; 127.0.0.1 only |
+| Redis Commander* | 8081 | http://localhost:8081 | `dev-tools` profile (dev overlay); 127.0.0.1 only |
 
 \* Requires `--profile`. Management ports (127.0.0.1 only) need SSH tunnels for remote access — see `scripts/ssh-tunnels/`.
+
+**The observability stack is opt-in.** Since #1806 prometheus, alertmanager,
+node-exporter, postgres-exporter, loki, promtail and grafana sit behind the
+`monitoring` profile, so a plain `up -d` does not start them and **no deploy step
+does either**. Start them deliberately:
+
+```bash
+COMPOSE_PROFILES=monitoring docker compose -f docker/docker-compose.yml up -d
+```
+
+`scripts/health_check.sh` derives its probe set from `docker compose config
+--services`, so it reports profile-gated services as SKIPPED while the profile is
+off and re-arms automatically when it is on — nothing to toggle in two places.
 
 ---
 

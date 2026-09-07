@@ -42,21 +42,21 @@ First build pulls PyTorch + ML dependencies — subsequent starts use cached lay
 
 | Service | Port | URL | Notes |
 |---------|------|-----|-------|
-| API (FastAPI) | 8000 | http://localhost:8000 | Auto-reloads |
+| API (FastAPI) | 8000 | http://localhost:8000 | Auto-reloads (dev overlay) |
 | API Docs | 8000 | http://localhost:8000/docs | Swagger UI |
-| Frontend (Vite) | 3002 | http://localhost:3002 | HMR |
+| Frontend (Vite) | 3002 | http://localhost:3002 | HMR (dev overlay); nginx on the built bundle in production |
 | MLflow | 5000 | http://localhost:5000 | 127.0.0.1 only |
-| Redis | 6382 | redis://localhost:6382 | |
-| FalkorDB | 6381 | redis://localhost:6381 | |
+| Redis | 6382 | redis://localhost:6382 | 127.0.0.1 only |
+| FalkorDB | 6381 | redis://localhost:6381 | 127.0.0.1 only |
 | BentoML | 3000 | http://localhost:3000 | 127.0.0.1 only |
 | Feast | 6567 | http://localhost:6567 | 127.0.0.1 only |
-| Grafana* | 3200 | http://localhost:3200 | monitoring profile; 127.0.0.1 only |
-| Prometheus* | 9091 | http://localhost:9091 | monitoring profile; 127.0.0.1 only |
-| Loki* | 3101 | http://localhost:3101 | monitoring profile; 127.0.0.1 only |
-| Alertmanager* | 9093 | http://localhost:9093 | monitoring profile; 127.0.0.1 only |
-| Flower* | 5555 | http://localhost:5555 | debug profile |
-| FalkorDB Browser* | 3030 | http://localhost:3030 | debug profile |
-| Redis Commander* | 8081 | http://localhost:8081 | dev-tools profile |
+| Grafana* | 3200 | http://localhost:3200 | `monitoring` profile; 127.0.0.1 only |
+| Prometheus* | 9091 | http://localhost:9091 | `monitoring` profile; 127.0.0.1 only |
+| Loki* | 3101 | http://localhost:3101 | `monitoring` profile; 127.0.0.1 only |
+| Alertmanager* | 9093 | http://localhost:9093 | `monitoring` profile; 127.0.0.1 only |
+| Flower* | 5555 | http://localhost:5555 | `dev-tools` profile (dev overlay); 127.0.0.1 only |
+| FalkorDB Browser* | 3030 | http://localhost:3030 | `debug` profile; 127.0.0.1 only |
+| Redis Commander* | 8081 | http://localhost:8081 | `dev-tools` profile (dev overlay); 127.0.0.1 only |
 
 \* Requires `--profile`. Management ports (127.0.0.1 only) need SSH tunnels for remote access — see `scripts/ssh-tunnels/`.
 
