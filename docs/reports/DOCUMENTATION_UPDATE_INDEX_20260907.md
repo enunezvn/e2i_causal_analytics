@@ -1217,7 +1217,7 @@ write time.
 | **F · Data dictionary catch-up** | X7 (U19–U25), X9 (U23 + pointers), X8 in docs/data, U26, U27, U28 | **DONE** — #1926 |
 | **G · Architecture & API docs** | U6 remainder (X10, X11, middleware, routes, KG types, package map, new service sections), U17 chat.md, C9 decision outcome, C10, C11 | **DONE** — #1923, #1927, #1929 |
 | **H · Method docs & frontend** | U29–U33, U34 archive, U7 | **DONE** — #1928 (frontend/README.md deferred — deploy trigger) |
-| **I · Code items** | N1–N10 as small separate PRs (each needs an intent check; N1/N7 first) | **NOT STARTED** — deliberately held: each needs an intent check and several fire a production deploy |
+| **I · Code items** | N1–N10 as small separate PRs (each needs an intent check; N1/N7 first) | **INTENT-CHECKED AND FILED** — 12 issues #1930–#1937, #1939–#1942; N8 disproved and deliberately not filed. See *Bundle I disposition*. |
 
 *Last updated: 2026-09-07 (phase 1 complete; **phase 2 doc bundles A–H executed** — see Phase-2 execution record).*
 
@@ -1290,3 +1290,59 @@ These are recorded so a future audit does not re-derive them from this file.
 - `scripts/run_tier0_test.py:4240` still hard-codes a Kisqali deployment name and problem description (see U32 above).
 - `src/agents/orchestrator/nodes/intent_classifier.py` comment names `gpt-4o-mini` as the fast tier; `llm_factory.py` says `gpt-5.6-luna`.
 - `docs/api/index.html` is a `make api-docs` output but is not git-ignored (N9 confirmed).
+
+---
+
+## Bundle I disposition (2026-09-07) — intent-checked, then filed as issues
+
+Every N-item was investigated under REASON-BEFORE-RULES before anything was
+filed: what is the code trying to do, why is it in this shape, is it causing
+harm **now**. Three ledger premises did not survive that check (below). Nothing
+was code-changed in this pass — each issue carries a concrete fix and says
+whether it touches a deploy-trigger path.
+
+| Issue | Item | Pri | What |
+|---|---|---|---|
+| [#1930](../../issues/1930) | new | **P1** | `reseed_synthetic.sh --dry-run` silently writes — reaches 2 of 5 stages |
+| [#1931](../../issues/1931) | N1 | **P1** | the documented `ADAPTIVE_CRITERIA` rollback switch is inert in containers (+7 vars) |
+| [#1932](../../issues/1932) | N7 | **P1** | `e2i_agent_name` missing `cohort_profiler`; Pydantic mirror has it, Postgres does not |
+| [#1939](../../issues/1939) | new | P2 | tier0 `deployment_name` hard-codes `kisqali_discontinuation` into MLflow/BentoML/DB |
+| [#1933](../../issues/1933) | N4 | P2 | chatbot span reports an unforwarded env var's fallback model, + a precedence bug |
+| [#1934](../../issues/1934) | N2 | P2 | alertmanager routes every alert to a 404 |
+| [#1935](../../issues/1935) | N3 | P2 | delete the superseded `docker-compose.monitoring.yml` |
+| [#1936](../../issues/1936) | N5 + new | P3 | the "droplet exposes no `SUPABASE_DB_URL`" claim, in two files |
+| [#1937](../../issues/1937) | N9 | P3 | `docs/api/index.html` is not git-ignored |
+| [#1940](../../issues/1940) | N6 + 2 new | P3 | three stale code comments |
+| [#1941](../../issues/1941) | N10 | P3 | `AgentOrchestration` inline `useQuery` |
+| [#1942](../../issues/1942) | new | P3 | `useE2ICopilot()` inside try/catch — lint-level, **not** a latent crash |
+
+### Ledger premises the intent check overturned
+- **N8 is not a defect and was NOT filed.** The ledger said `run_tier0_test.py`'s
+  `--regime` help lags `_VALID_REGIMES`. The help documents all 7 regimes by name
+  with their DGP/n/AUC band, and `choices=_VALID_REGIMES` binds the accepted set to
+  the tuple — drift is structurally impossible on the choices side.
+- **N7's "two dead enum values" premise splits, and treating them alike would have
+  been a data-integrity bug.** `corpus_ingestion` has **137 live rows** (it is a RAG
+  pipeline, not a dispatched agent); `fairness_guardian` is deliberately retained
+  for backwards-compat per commit `48261d223`. Neither is a cleanup candidate.
+  `docs/data/07` was corrected accordingly.
+- **The "cosmetic follow-up" in `OPTUM_MART_CONVERSION.md` is not cosmetic.** The
+  hard-coded `deployment_name` reaches the MLflow registry, BentoML and an
+  `ml_deployments` row — three persistent stores. Re-labelled in this PR.
+  Conversely the ledger's claim that `problem_description` hard-codes the brand is
+  **false** — it interpolates `CONFIG.brand`; only the "discontinuation" framing is fixed.
+
+### Two items grew under investigation
+- **N1** was 3 vars; it is **8** (the five compute/segment ones were undocumented
+  entirely). The smoking gun for "oversight, not policy": the compose file names
+  `ADAPTIVE_VALIDITY_EVALUATOR_ENABLED` as the operator's switch in the same block
+  that forwards its sibling and not it.
+- **N4** is **two** defects: the unforwarded-env-var model label, plus an operator
+  precedence bug (`a or b if c else d`) that records `"unknown"` on the plain LLM path.
+
+### The trap in the obvious fix for #1930
+Forwarding `"$@"` to the three unguarded stages is **worse** than the bug:
+`history_backfill.py` reads `sys.argv[1:]` as KPI ids, so `--dry-run` becomes a KPI
+id; `history_capture.py` strips `--`-prefixed args and recognises only `--purge`, so
+`--dry-run` is **silently swallowed and the stage still writes**. The fix must guard
+the stages, not forward the flag to them.
