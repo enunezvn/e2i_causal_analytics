@@ -9,7 +9,6 @@
  */
 
 import * as React from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -19,13 +18,12 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 import { TierOverview, type AgentTier } from '@/components/visualizations/agents/AgentTierBadge';
 import { AgentStatusPanel } from '@/components/chat/AgentStatusPanel';
-import { getValidated } from '@/lib/api-client';
-import {
-  AgentStatusResponseSchema,
-  TierMetricsResponseSchema,
-  AgentActivityResponseSchema,
-} from '@/lib/api-schemas';
 import { useMetricsSummary } from '@/hooks/api/use-analytics';
+import {
+  useAgentStatus,
+  useAgentActivity,
+  useAgentTierMetrics,
+} from '@/hooks/api/use-agents';
 import {
   Activity,
   Bot,
@@ -263,17 +261,10 @@ export default function AgentOrchestration() {
   const { agents } = useE2ICopilot();
   const [selectedTier, setSelectedTier] = React.useState<AgentTier | null>(null);
 
-  // Fetch agent status from API (with fallback to context data)
-  // Uses apiClient for auth headers, correlation IDs, and response validation
-  const { data: agentStatus, isLoading: _isLoading, refetch: refetchAgents } = useQuery({
-    queryKey: ['agent-status'],
-    queryFn: () => getValidated(
-      AgentStatusResponseSchema,
-      '/agents/status'
-    ),
-    refetchInterval: 30000, // Refresh every 30 seconds
-    retry: false,
-  });
+  // Fetch agent status from API (with fallback to context data).
+  // Layered through @/hooks/api/use-agents -> @/api/agents, which uses
+  // getValidated for auth headers, correlation IDs, and response validation.
+  const { data: agentStatus, isLoading: _isLoading, refetch: refetchAgents } = useAgentStatus();
 
   // Real 24h telemetry from /analytics/summary (query counts, latency,
   // success rate). When unavailable the stat cards render an em dash.
@@ -282,23 +273,12 @@ export default function AgentOrchestration() {
   // Real per-tier performance from GET /analytics/tier-metrics (audit_chain_entries,
   // automated health poller excluded). Avg Response / Tasks are real; per-tier
   // success rate is honestly null ("—") — validation is too sparse to compute.
-  const { data: tierData, refetch: refetchTiers } = useQuery({
-    queryKey: ['tier-metrics'],
-    queryFn: () => getValidated(TierMetricsResponseSchema, '/analytics/tier-metrics?hours=24'),
-    refetchInterval: 30000,
-    retry: false,
-  });
+  const { data: tierData, refetch: refetchTiers } = useAgentTierMetrics();
 
   // Real agent activity from GET /agents/activity (audit_chain_entries, newest
   // first; the automated health poller is excluded server-side). An empty list
   // is an honest "no recent activity", never fabricated.
-  const { data: activityData, refetch: refetchActivity } = useQuery({
-    queryKey: ['agent-activity'],
-    queryFn: () =>
-      getValidated(AgentActivityResponseSchema, '/agents/activity?hours=24&limit=50'),
-    refetchInterval: 30000,
-    retry: false,
-  });
+  const { data: activityData, refetch: refetchActivity } = useAgentActivity();
 
   // Map tier -> served perf (avg response, tasks). Absent => null ("—").
   const tierPerfByTier = React.useMemo(() => {
