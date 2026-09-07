@@ -61,7 +61,7 @@ C4Context
 | Anthropic API | Claude LLM for the factory chat/synthesis lanes (claude-sonnet-5 standard/reasoning, claude-haiku-4-5 fast) | HTTPS | API Key |
 | OpenAI API | GPT LLM for the DSPy reasoning path (gpt-5.6-terra) + embeddings | HTTPS | API Key |
 
-> **LLM provider split (July 2026):** both providers are load-bearing. The LangChain factory lanes run on Anthropic (`LLM_PROVIDER=anthropic`); the GEPA-tuned DSPy reasoning path is pinned to OpenAI `gpt-5.6-terra` (`DSPY_LM_MODEL`); embeddings are OpenAI. See [`docs/LLM_CONFIGURATION.md`](LLM_CONFIGURATION.md) and ADR-009/ADR-010 in [`docs/decisions/`](decisions/README.md).
+> **LLM provider split (July 2026):** both providers are load-bearing. The LangChain factory lanes run on Anthropic (`LLM_PROVIDER=anthropic`); the GEPA-tuned DSPy reasoning path is pinned to OpenAI `gpt-5.6-terra` (`DSPY_LM_MODEL`); embeddings are OpenAI. See [`docs/LLM_CONFIGURATION.md`](LLM_CONFIGURATION.md) and ADR-009/ADR-010 in [`docs/decisions/`](decisions/README.md); ADR-011 (feature-importance covariate-group estimand) and ADR-012 (RCT ANCOVA efficiency adjustment) live in the same directory.
 >
 > **Opik (removed from this diagram):** the Opik observability stack was intentionally stopped in May 2026 and is no longer an active external system. LLM usage tracking now lives in the `llm_usage_events` table (migration 104), surfaced at `/admin` → Observability. The compose overlay (`docker/docker-compose.opik.yml`) remains in the repo but is not part of the running stack.
 
@@ -1403,14 +1403,14 @@ Alertmanager routes to `http://api:8000/api/v1/webhooks/alertmanager` with:
 
 **Context**: Budget and operational simplicity favor a single machine. The system serves a small team of pharma analysts (< 50 concurrent users).
 
-**Decision**: Deploy all services on a single DigitalOcean droplet (8 vCPU, 32 GB RAM) using Docker Compose. Dev and production are the same environment. API and frontend auto-reload via bind mounts.
+**Decision**: Deploy all services on a single DigitalOcean droplet (8 vCPU, 16 GB RAM) using Docker Compose. The droplet is both the dev box and production, but they are **not the same runtime**: production runs the base compose file alone (gunicorn, nginx-served bundle, `read_only: true` containers), while the bind-mount / auto-reload setup is the `docker-compose.dev.yml` overlay. See §2.2.
 
 **Consequences**:
-- (+) Zero infrastructure overhead, simple deployment (`git pull` + restart workers)
+- (+) Zero infrastructure overhead; deploys are a merge to `main` driving `.github/workflows/deploy.yml` (GHCR image pull + compose up), not a `git pull` on the box
 - (+) All services share localhost networking (no service mesh needed)
 - (-) No horizontal scaling (single point of failure)
 - (-) Heavy ML jobs compete with API for resources
-- Mitigation: Worker autoscaling config, heavy worker starts on-demand only
+- Mitigation: heavy worker starts on-demand only (`replicas: 0`). Note `config/autoscale.yml` / `scripts/autoscaler.py` describe an autoscaler that is **not running** on the droplet, and its per-replica sizing (16 CPU / 32 GB for the heavy tier) exceeds the box.
 
 ---
 
@@ -1451,7 +1451,7 @@ Alertmanager routes to `http://api:8000/api/v1/webhooks/alertmanager` with:
 - Per-executor wrappers live in `src/causal_engine/pipeline/executors/{networkx,dowhy,econml,causalml}.py` — each fail-closed on missing data, no synthetic-data fabrication, no hardcoded placeholders
 - Cross-library consensus at `pipeline/sequential.py::_aggregate_results` + `pipeline/parallel.py::_aggregate_parallel_results`: DoWhy/EconML produce ATE → effect-consensus; CausalML produces uplift → separate uplift channel (semantically distinct from ATE); NetworkX structural quality modulates `consensus_confidence`. No silent `0.8` confidence default — missing confidence excludes the executor from consensus
 - Canonical DataFrame contract via `pipeline/data_resolver.py::resolve_estimation_dataframe(state)` (preserves Wave-1 executors' back-compat data keys)
-- Production entry points: tool composer `causal_effect_estimator` (Surface B) + `/causal/pipeline/{sequential,parallel}` API endpoints (Surface C)
+- Production entry points: tool composer `causal_effect_estimator` (Surface B) + the API endpoints `POST /api/causal/pipeline/sequential`, `POST /api/causal/pipeline/parallel` and `GET /api/causal/pipeline/{pipeline_id}` (status) — Surface C
 - `demo_mode=true` on Surface C preserves pinned-zero UI-demo contract; production path is fail-closed (503 on data unavailability is honest, not a hardcoded short-circuit)
 
 **Consequences**:
@@ -1495,17 +1495,32 @@ RRF with k=60 and 1.3x boost for graph-connected results.
 
 **Context**: Single-droplet deployment doesn't justify Kubernetes overhead. Team size is small (1-2 developers).
 
-**Decision**: Use Docker Compose with three overlay files:
-- `docker-compose.yml` (base definitions)
-- `docker-compose.dev.yml` (bind mounts, dev resources, debug ports)
-- `docker-compose.opik.yml` (Opik observability stack)
+**Decision**: Use Docker Compose. `docker/` holds seven compose files:
+
+| File | Role |
+|------|------|
+| `docker-compose.yml` | **Base — this is what production runs, alone.** All app services, data stores, MLOps, and the `monitoring`/`debug` profile services |
+| `docker-compose.dev.yml` | Local dev overlay: bind mounts, `uvicorn --reload`, Vite HMR, `e2i_*_dev` names, debugpy, `dev-tools` profile (flower, redis-commander) |
+| `docker-compose.frontend-dev.yml` | Frontend-only dev overlay; the #528-A rollback target, not used by current deploys |
+| `docker-compose.monitoring.yml` | Older standalone exporter overlay (node/postgres exporters); superseded in practice by the base file's `monitoring` profile |
+| `docker-compose.opik.yml` | Opik stack — stopped May 2026, retained for reference |
+| `docker-compose.rxnav.yml` | Pointer/notes file for the offline RxNav-in-a-Box setup — NLM ships its own compose file, see §4.7 |
+| `docker-compose.secure.yml` | Network-isolation/segmentation variant; must be kept in sync with the base file by hand |
+
+**Which one deploys:** `.github/workflows/deploy.yml`'s `pick_overlay()` returns `""` — no
+overlay — whenever `docker/frontend/Dockerfile` contains an `AS production` stage, which it has
+since #528. The two overlay branches below it exist only so a rollback to a pre-#528 tree still
+brings up a working stack.
 
 **Consequences**:
 - (+) Dramatically simpler operations (no etcd, no kubelet, no CRDs)
 - (+) YAML anchors for DRY config (`x-common-env`, `x-common-worker`)
-- (+) Overlay pattern supports future production/staging split
+- (+) Compose profiles give opt-in service groups (`monitoring`, `debug`, `dev-tools`) without a
+  separate file
 - (-) No auto-healing (manual restart on container crash)
 - (-) No rolling deployments (brief downtime on restart)
+- (-) Seven files is enough that "which one is production" needs stating explicitly — hence the
+  table above
 
 ---
 
@@ -1541,12 +1556,26 @@ RRF with k=60 and 1.3x boost for graph-connected results.
 
 **Amended (July 2026)**: Opik was intentionally stopped in May 2026. LLM-specific usage tracking (model, tokens, cost, latency per call) moved to the in-database `llm_usage_events` table (migration 104) surfaced at `/admin` → Observability. The metrics/logs/alerting pillars are unchanged.
 
+**Amended (August 2026)** — the stack became **opt-in**:
+
+- PR #1806 put prometheus, alertmanager, node-exporter, postgres-exporter, loki, promtail and
+  grafana behind `profiles: [monitoring]` in the base compose file. A plain `up -d` starts none
+  of them; `COMPOSE_PROFILES=monitoring docker compose -f docker/docker-compose.yml up -d` does.
+- The operating principle behind that change: **an unmanaged service is not an outage.**
+  `scripts/health_check.sh` derives its probe set from `docker compose config --services` and
+  reports profile-gated services as SKIPPED, so a box running without monitoring reports healthy
+  instead of permanently red.
+- PR #1807 added the maintenance-freshness alarm, so the absence of monitoring does not silently
+  become the absence of maintenance signal.
+
 **Consequences**:
 - (+) Full observability at zero recurring cost
 - (+) Prometheus metrics integrate with Celery event consumer
 - (+) Loki provides centralized log search across all containers
+- (+) Opt-in profile keeps ~7 containers of memory off a 16 GB box that does not need them
 - (-) Self-hosted means self-managed (upgrades, disk, retention)
-- (-) 7 additional containers for observability
+- (-) 7 additional containers when the profile is enabled
+- (-) Dashboards are only as live as the last time someone enabled the profile
 
 ---
 
