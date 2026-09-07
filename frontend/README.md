@@ -96,15 +96,17 @@ frontend/src/
      - the sidebar, via `getNavigationSections(includeAdmin)` (L636), which
        filters on a truthy `showInNav`, drops `adminOnly` entries unless
        admin, and groups the rest by `section`. `showInNav` is optional
-       (`showInNav?: boolean`), so a page is kept out of the nav by **omitting**
-       it — no entry in the file sets it to `false`;
+       (`showInNav?: boolean`), so a page is kept out of the nav by omitting it
+       or setting it `false` — today every entry sets it `true`;
      - the header page title, via `getRouteConfig(path)` (L608), consumed by
        `components/layout/Header.tsx:107`.
 
      So a page whose `routeConfigs` entry is missing does not fail loudly: the
-     header falls back to `'Dashboard'` (`Header.tsx:109`,
-     `currentRoute?.title ?? 'Dashboard'`), and the page silently renders under
-     the wrong title. An entry here with no element below renders a link to
+     header falls back to the generic title `Dashboard` (`Header.tsx:108`,
+     `currentRoute?.title ?? 'Dashboard'`) and the page silently renders under
+     a plausible-looking wrong title. `RouteConfig.description` is carried but
+     reaches no UI — `Header.tsx` is `getRouteConfig`'s only consumer, and it
+     reads `.title` only. An entry here with no element below renders a link to
      nothing.
   3. **A `RouteObject` element** in `export const routes: RouteObject[]` (L285)
      — the actual react-router table. Protected pages wrap the component in
