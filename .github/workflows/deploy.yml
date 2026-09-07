@@ -935,9 +935,12 @@ jobs:
 
             # Apply DB migrations. run_migrations.sh auto-detects the connection:
             # SUPABASE_DB_URL when set (CI/remote), else `docker exec` into the
-            # supabase-db container. The droplet's self-hosted Supabase exposes
-            # no SUPABASE_DB_URL (REST creds only), so this step USED to skip
-            # every deploy — leaving database/memory/ (lifecycle/sentinels/
+            # supabase-db container. The droplet's .env DOES define
+            # SUPABASE_DB_URL, but the deploy's SSH shell does not source
+            # `.env`, so the var is unset here and the runner takes its
+            # docker-exec path — deliberate; exporting `.env` would switch it
+            # to psql mode. This step USED to skip every deploy on that same
+            # unset var — leaving database/memory/ (lifecycle/sentinels/
             # crystallization) and database/migrations/ backlogs unapplied. The
             # runner now covers both dirs and tracks via public.schema_migrations.
             bash scripts/run_migrations.sh
