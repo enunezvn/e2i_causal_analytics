@@ -1,7 +1,7 @@
 /**
  * Display label for a gold-standard column (treatment / outcome).
  *
- * The backend owns the label SSOT (`causal._COLUMN_LABELS`) and serves it as a
+ * The backend owns the label SSOT (`src.insights.column_labels`) and serves it as a
  * `labels` map on `GET /causal/variables` and `GET /segments/datasets`. Every
  * page that prints a column name goes through this helper so the same column
  * reads the same everywhere — 2026-09-05: /segment-analysis rendered

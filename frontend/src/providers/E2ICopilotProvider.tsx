@@ -1149,7 +1149,7 @@ const CopilotHooksInner: React.FC = () => {
   // 8. Render a chart for ANY registry KPI (generative UI, Flint-compiled)
   //
   // Complements renderKpiTrend, which is the hand-tuned line chart for the
-  // Rx-volume KPIs. This action covers the other 38 registry KPIs and the
+  // Rx-volume KPIs. This action covers every other registry KPI and the
   // chart types beyond a line, by routing each KPI to whichever endpoint can
   // serve it (materialized history, patient-axis history, current value, or a
   // batch comparison) and compiling the result with flint-chart.
