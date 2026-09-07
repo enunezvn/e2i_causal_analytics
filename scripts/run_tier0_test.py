@@ -4260,7 +4260,8 @@ def _slugify_name_part(value: Any) -> str:
 def _build_deployment_name(brand: str, target_outcome: str, experiment_id: str) -> str:
     """Build the Step-7 deployment name from the brand and outcome actually run.
 
-    Keeps the historical ``experiment_id[:8]`` suffix semantics unchanged and
+    Keeps the historical ``experiment_id[:8]`` suffix bytes unchanged (see the
+    note below on why that suffix is constant, not per-run) and
     guarantees a legal MLflow registered-model name and BentoML tag for any
     free-form ``--brand`` / ``--target`` value.
     """
@@ -4270,7 +4271,14 @@ def _build_deployment_name(brand: str, target_outcome: str, experiment_id: str) 
     )
 
     # Reserve room for the experiment suffix so trimming a long brand never
-    # eats the part that distinguishes one run's artifacts from another's.
+    # eats it. NOTE: that suffix does NOT currently distinguish runs. The caller
+    # builds experiment_id as f"tier0_e2e_{uuid4().hex[:8]}" (:5334), so [:8]
+    # stops before the UUID begins and the slug is always the constant
+    # "tier0_e2" -- every run has registered the same MLflow model name
+    # (kisqali_discontinuation_tier0_e2:v69 in the run reports). #1939 is only
+    # about the brand/outcome half; do not read this suffix as unique. Making it
+    # unique would create a new registered model per run and fragment that
+    # version lineage, so it is a deliberate follow-up, not a typo fix.
     reserved = len(experiment_slug) + 1 if experiment_slug else 0
     budget = max(1, _DEPLOYMENT_NAME_MAX_LENGTH - reserved)
     if len(head) > budget:
