@@ -1980,11 +1980,12 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Time window, e.g. 'last 3 months', 'last year', 'Q1 2025', or "
-            "'2025-01-01 to 2025-03-31'. Supported for TRx/NRx/NBRx, TRx "
-            "share, conversion rate (alone or combined with segment/"
-            "therapy_line), and the trigger-effectiveness KPIs (alone or "
-            "combined with brand/trigger_type; NOT combinable with region -- "
-            "the tool errors honestly). ALWAYS pass this when the user names "
+            "'2025-01-01 to 2025-03-31'. Supported for TRx/NRx/NBRx (alone or "
+            "combined with any ONE axis), TRx share and conversion rate (alone "
+            "or combined with segment/therapy_line; NOT with region/biologic/"
+            "ige_tier -- the tool errors honestly), and the trigger-"
+            "effectiveness KPIs (alone or combined with brand/trigger_type/"
+            "region -- migration 120). ALWAYS pass this when the user names "
             "a period. Omit for the engine's default window (the most recent "
             "30 days of available data)."
         ),
@@ -2305,19 +2306,21 @@ async def kpi_calculate_tool(
     TRIGGER-EFFECTIVENESS KPIs (#1360): trigger precision, acceptance rate,
     override rate, and trigger funnel conversion are chat-KPI-path KPIs served
     here. They accept ``brand``, ``region``, ``trigger_type`` and ``window``
-    filters — with ONE constraint: ``region`` does NOT compose with an explicit
-    ``window`` (the tool errors honestly rather than silently dropping the
-    region). WS2-TR-009 responses carry ``funnel_stages`` (delivered ->
-    viewed -> accepted -> actioned -> outcome counts) alongside the headline.
+    filters, and ``region`` COMPOSES with an explicit ``window`` (migration
+    120, #1388: the ``_windowed_region`` variants bind the region through the
+    patient_journeys join, so it is never silently dropped). WS2-TR-009
+    responses carry ``funnel_stages`` (delivered -> viewed -> accepted ->
+    actioned -> outcome counts) alongside the headline.
 
     TIME WINDOW: pass ``window`` (e.g. "last 3 months", "last year", "Q1 2025",
     "2025-01-01 to 2025-03-31") to compute the volume KPIs (TRx/NRx/NBRx), TRx
     share, conversion rate, or the trigger-effectiveness KPIs over that period
-    — ALWAYS pass it when the user names one. A window composes with the
-    ``segment`` / ``therapy_line`` axes (e.g. per-tier conversion rate over the
-    last year); it does NOT compose with region/biologic/ige_tier for share or
-    conversion, nor with region for the trigger-effectiveness KPIs (the tool
-    errors honestly). The engine reports back ``window_status`` ("applied" when the
+    — ALWAYS pass it when the user names one. A window composes with any ONE
+    axis for the volume KPIs, with the ``segment`` / ``therapy_line`` axes for
+    share and conversion (e.g. per-tier conversion rate over the last year) and
+    with ``region`` for the trigger-effectiveness KPIs; it does NOT compose with
+    region/biologic/ige_tier for share or conversion (the tool errors honestly).
+    The engine reports back ``window_status`` ("applied" when the
     requested window was honored, "not_applicable" when the KPI has no time
     dimension, "default" when no window was requested), plus ``window_requested``
     and ``window_applied``. BASELINE COMPARISONS: to compare a recent period
