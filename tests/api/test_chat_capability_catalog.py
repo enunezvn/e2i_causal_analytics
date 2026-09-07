@@ -867,6 +867,30 @@ DROP_FIXTURES = [
         "Quarterly persistence changes",
         "Show quarter-over-quarter persistent_180d changes and explain drivers.",
     ),
+    # #1918: a trailing PURPOSE clause does not make the outcome's breakdown a
+    # causal ask - the only causal word sits after "to identify / to see / so
+    # that / in order to" and the OBJECT is still the outcome by an axis. The
+    # first is the live pill kept on the registry-worded causal turn (5/5 reps).
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by severity tier",
+        "Break down Remibrutinib's persistent_180d by patient severity tier (low/medium/high) to identify which segments benefit most from the identified drivers.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by tier",
+        "Show persistent_180d by severity tier for Remibrutinib to see the causal effect of copay support in each tier.",
+    ),
+    (
+        "outcome_as_kpi:persistent_180d",
+        "Persistence by tier",
+        "What is Remibrutinib's persistent_180d rate by patient severity tier, so that we can understand why high-severity patients persist?",
+    ),
+    (
+        "outcome_as_kpi:adherent_180d",
+        "Adherence by region",
+        "Show adherent_180d by census region for Kisqali in order to find the drivers behind the regional gap.",
+    ),
     (
         "uplift_by_segment",
         "CATE by tier",
@@ -1573,6 +1597,22 @@ KEEP_FIXTURES = [
     (
         "Fabhalta NRx by severity tier",
         "Show Fabhalta New Prescriptions broken down by patient severity tier to see which segments drive volume.",
+    ),
+    # #1918: the causal exemption still holds when the causal word sits BEFORE a
+    # purpose clause (a causal object), when the pill is no value ask at all, and
+    # when a coordinated causal clause follows the breakdown with no purpose marker
+    # (the title must not lead with the causal word, or 4c takes the pill)
+    (
+        "Persistence driver rates",
+        "What are the causal drivers of Remibrutinib's persistent_180d rate, to see where to focus?",
+    ),
+    (
+        "Persistence drivers",
+        "Look at Remibrutinib's persistent_180d to see what drives it.",
+    ),
+    (
+        "Persistence by tier, then the registry",
+        "What is the persistent_180d rate by severity tier for Remibrutinib, and what are the registry's causal drivers of persistence?",
     ),
     # #1901 item 4a: treatment_initiated / action_taken join the journey set, so
     # every causal ask that names them (live pills graded OK / PARTIAL) must

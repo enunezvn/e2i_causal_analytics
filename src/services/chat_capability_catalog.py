@@ -514,11 +514,40 @@ _VALUE_ASK_RE = re.compile(
 # ... unless the pill is a causal question, which section C serves: "what drives
 # the persistent_180d rate?" has the outcome's rate as the OBJECT of the ask, and
 # "the causal graph" is section C's own vocabulary, so a causal word anywhere in
-# title + message exempts the value shape above.
+# title + message exempts the value shape above - anywhere before a trailing
+# purpose clause, that is (_PURPOSE_MARKER_RE, #1918).
 _CAUSAL_ASK_RE = re.compile(
     r"\b(?:driv\w*|caus\w*|paths?|effects?|why|influenc\w*|factors?|impacts?|refut\w*|confiden\w*|matters?)\b",
     re.I,
 )
+# The causal word must belong to the ASK, not to a trailing PURPOSE clause
+# (#1918): "break down persistent_180d by patient severity tier to identify which
+# segments benefit most from the identified drivers" still has the outcome's
+# breakdown as its object - the purpose after "to identify" does not change what
+# the pill asks for, and neither the breakdown (a journey flag has no series or
+# axis) nor a driver read scoped to a tier is served. The exemption is therefore
+# tested on the HEAD of the text: everything before the first purpose marker
+# that FOLLOWS an outcome mention ("to see / identify / understand / find (out)
+# / ...", "so that / so we", "in order to"). A causal word before the marker
+# ("what are the causal drivers of the persistent_180d rate, to see where to
+# focus?") still exempts, a coordinated causal clause carries no marker ("...,
+# and what are the registry's causal drivers?"), and a marker BEFORE the
+# outcome ("I want to see ...") is not a purpose of the outcome's breakdown.
+_PURPOSE_MARKER_RE = re.compile(
+    r"\b(?:to\s+(?:see|identify|understand|find(?:\s+out)?|determine|spot|learn|check|assess|"
+    r"pinpoint|reveal|know|compare|highlight|tell|figure\s+out|gauge|evaluate|explore|uncover|"
+    r"surface|show)|so\s+(?:that|we|i|you)|in\s+order\s+to)\b",
+    re.I,
+)
+
+
+def _head_before_purpose(lowered: str, spans: Sequence[Tuple[int, int]]) -> str:
+    """``lowered`` up to the first purpose marker after the first outcome mention."""
+    first_end = min(end for _start, end in spans)
+    hit = _PURPOSE_MARKER_RE.search(lowered, first_end)
+    return lowered[: hit.start()] if hit else lowered
+
+
 # A TIME-SERIES or DISPLAY word that ATTACHES to the outcome is not exempted by a
 # causal word (#1906): section C is a static registry and the NEVER list names
 # trends of effects, so "chart the monthly trend of persistent_180d to see if its
@@ -1224,7 +1253,8 @@ def match_unsupported_rule(
             if not spans:
                 continue
         if _series_attaches_to_outcome(lowered, spans) or (
-            _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered)
+            _VALUE_ASK_RE.search(lowered)
+            and not _CAUSAL_ASK_RE.search(_head_before_purpose(lowered, spans))
         ):
             return f"outcome_as_kpi:{outcome}"
     if rules is not None and rules.kpi_as_causal_outcome:
