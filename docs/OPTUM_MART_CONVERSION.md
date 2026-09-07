@@ -638,14 +638,22 @@ calibration, and overfit all pass on their merits. Full detail:
 [`deployable_cohort_decision_20260607.md`](results/deployable_cohort_decision_20260607.md)
 and the same-day deployable-cohort decision record [`results/deployable_cohort_decision_20260607.md`](results/deployable_cohort_decision_20260607.md) — the originally cited `disc_feature_bound_verdict_20260607.md` is no longer in the repo.
 
-> **Cosmetic follow-up — still open (re-verified 2026-09-07).** Step 7 builds
+> **Label carryover — still open, and NOT cosmetic (re-verified 2026-09-07; issue #1939).** Step 7 builds
 > `deployment_name = f"kisqali_discontinuation_{experiment_id[:8]}"`
 > (`scripts/run_tier0_test.py`, the MODEL DEPLOYER step) and the scope's
 > `problem_description` is `f"Predict patient discontinuation risk for {CONFIG.brand}"`.
 > Both are hardcoded for the patient test harness and are **not** cohort-accurate
 > for the HCP / XOLAIR cohort — the run log's `kisqali_discontinuation_tier0_e2:v62`
 > is that f-string with a `tier0_e2` experiment id, not a separate literal. The
-> model and metrics are correct; only the label strings are a carryover.
+> model and metrics are correct — but the label is **not** confined to the run
+> log: `deployment_name` reaches the **MLflow model registry**
+> (`register_model(model_uri, deployment_name)`), the **BentoML** service and
+> bento name, and an **`ml_deployments` row** via
+> `endpoint_name = f"{deployment_name}-{target_environment}"`. A non-Kisqali run
+> therefore registers an MLflow model literally named `kisqali_discontinuation_*`.
+> (The scope's `problem_description` does interpolate `CONFIG.brand`; what is
+> hard-coded there is the "patient discontinuation risk" framing, which is not
+> persisted as a name.)
 
 ## Related files
 
