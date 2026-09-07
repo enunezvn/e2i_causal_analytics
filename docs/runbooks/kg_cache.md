@@ -97,9 +97,35 @@ silently skipped agent execution in CI. The failure presented as *quiet output*,
 not as a missing file. The same shape here would look exactly like "the KG has
 nothing to say about these features".
 
-The artifact is ~72 KB and rebuilt rarely (only when the manifest's entity codes
-or the cohort's target change), so committing it is cheaper and far more robust
-than a provisioning step someone has to remember.
+The artifact is small — **~79 KB for the JSON, ~86 KB for the whole
+`data/kg_cache/` directory** (`du -sb data/kg_cache` → 86237 bytes, 2026-09-07;
+re-measure rather than trusting the figure) — and rebuilt rarely (only when the
+manifest's entity codes or the cohort's target change), so committing it is
+cheaper and far more robust than a provisioning step someone has to remember.
+
+### A rebuilt cache reaches prod only through a new image
+
+This is the part that is easy to get wrong. The cache is **baked into the API
+image**, not read from the droplet checkout at runtime:
+
+- `docker/Dockerfile` has `COPY data/kg_cache/ ./data/kg_cache/` in **both** the
+  builder and the production stage (lines 109 and 202).
+- `.dockerignore` blanket-ignores `data/` and then explicitly un-ignores it:
+  `!data/kg_cache/` + `!data/kg_cache/**` (lines 121-122). `.dockerignore` is
+  last-match-wins, so the order matters.
+- `data/kg_cache/**` is a **deploy trigger** in `.github/workflows/deploy.yml`
+  (`on.push.paths`, #1607/#1783), scoped to that subtree precisely because the
+  rest of `data/` never reaches any image.
+
+So: committing a rebuilt cache is not enough on its own, and neither is copying
+it onto the droplet — **the image must be rebuilt and deployed**. Because
+`data/kg_cache/**` is a trigger, merging the rebuilt artifact to `main` does that
+by itself. Verify it landed by looking inside the running container, not at the
+checkout:
+
+```bash
+docker exec e2i_api ls -la /app/data/kg_cache/
+```
 
 To commit a rebuild under a new fingerprint, add the new filename to the
 un-ignore list in `.gitignore` and update `KG_ACTIVATIONS` in
