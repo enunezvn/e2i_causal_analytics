@@ -2,15 +2,20 @@
 # =============================================================================
 # E2I Causal Analytics - Database Migration Runner
 # =============================================================================
-# Applies SQL migrations from database/migrations/ AND database/memory/ in
-# alphabetical order, tracking applied migrations in public.schema_migrations.
+# Applies SQL migrations from every database/ schema dir listed in
+# MIGRATION_DIRS below, in alphabetical order per dir, tracking applied
+# migrations in public.schema_migrations. MIGRATION_DIRS is the only source
+# of that scope -- do not restate the dir count here, it has gone stale twice.
 #
 # Connection (auto-detected, in priority order):
 #   1. SUPABASE_DB_URL  - psql connection string (CI / remote), OR
 #   2. docker exec into $SUPABASE_DB_CONTAINER (default: supabase-db) when the
-#      runner executes on the droplet itself (the self-hosted Supabase stack
-#      exposes no SUPABASE_DB_URL — REST creds only — so the deploy historically
-#      SKIPPED migrations; docker-exec mode closes that gap).
+#      runner executes on the droplet itself. The droplet's .env DOES define
+#      SUPABASE_DB_URL, but the deploy's SSH shell does not source .env, so
+#      the var is unset there and the runner takes this path — deliberate;
+#      exporting .env would switch it to psql mode. The deploy historically
+#      SKIPPED migrations on that same unset var; docker-exec mode closes
+#      that gap.
 #
 # Usage:
 #   ./scripts/run_migrations.sh              # Apply pending migrations
