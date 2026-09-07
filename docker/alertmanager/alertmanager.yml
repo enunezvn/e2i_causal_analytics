@@ -1,19 +1,38 @@
 global:
   resolve_timeout: 5m
 
+# There is no in-app receiver, so this route deliberately discards (#1934).
+# The previous 'webhook' receiver posted to http://api:8000/api/v1/webhooks/alertmanager,
+# an endpoint written here aspirationally that no handler ever followed:
+# `grep -rn "webhooks" src/api/ --include="*.py"` returns 0 hits, and no src/ commit
+# ever added or removed one. Every notification would have 404'd, so alerting LOOKED
+# configured while delivering nothing but Alertmanager-side log noise. Discarding is
+# honest about that; a 404 loop is not.
+#
+# Alerts are read from the Alertmanager UI instead — docker/docker-compose.yml
+# publishes it on 127.0.0.1:9093 (loopback only; reach it via scripts/ssh-tunnels/setup.sh).
+# Note docker-compose.secure.yml publishes no host port at all, so there the UI is
+# reachable only from inside monitoring-network.
+#
+# Wiring a real receiver (an in-app route, Slack, email, PagerDuty) is a separate
+# feature and belongs in its own issue — do not re-point this at an endpoint before
+# the handler exists.
 route:
-  receiver: 'webhook'
+  receiver: 'null'
   group_by: ['alertname', 'severity']
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 12h
 
 receivers:
-  - name: 'webhook'
-    webhook_configs:
-      - url: 'http://api:8000/api/v1/webhooks/alertmanager'
-        send_resolved: true
-        max_alerts: 10
+  # A receiver with a name and no *_configs is the standard Alertmanager
+  # discard receiver: notifications route here and stop.
+  #
+  # The quotes are load-bearing. Alertmanager parses YAML 1.1, where a bare
+  # `null` is the null scalar rather than the string "null" — unquoted, this
+  # receiver would have no name and the config would be rejected at load with
+  # `undefined receiver "null" used in route`. Keep both occurrences quoted.
+  - name: 'null'
 
 inhibit_rules:
   - source_match:
