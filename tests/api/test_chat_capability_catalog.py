@@ -980,6 +980,23 @@ DROP_FIXTURES = [
         "Action taken by region",
         "What is the action_taken rate for Kisqali by census region?",
     ),
+    # codex iter-1: a KPI merely CO-MENTIONED (side-by-side chart, "and" / "next
+    # to") does not make the outcome's rate servable - the stand-down is local
+    (
+        "outcome_as_kpi:treatment_initiated",
+        "Initiation and TRx",
+        "Chart treatment_initiated rate and TRx for Kisqali.",
+    ),
+    (
+        "outcome_as_kpi:treatment_initiated",
+        "Initiation by region",
+        "Chart treatment_initiated rate by census region and show Acceptance Rate for Kisqali.",
+    ),
+    (
+        "outcome_as_kpi:action_taken",
+        "Action taken and acceptance",
+        "Chart the action_taken rate next to the Acceptance Rate for Kisqali.",
+    ),
     # #1901 item 4q: a registry KPI asked as a causal OUTCOME. Section C serves
     # drivers / paths / effects only for the causal-path registry's end nodes,
     # and the tool composer's KPI path only for KPIs with a substrate builder
@@ -1027,6 +1044,28 @@ DROP_FIXTURES = [
         "kpi_as_causal_outcome:WS2-TR-001",
         "Hyphenated precision",
         "What drives Trigger-Precision for Kisqali?",
+    ),
+    # codex iter-1: an auxiliary between the causal noun and its verb, and
+    # past-tense leads, are the same ask
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Factors driving precision",
+        "Which factors are driving Trigger Precision for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Drivers behind precision",
+        "Which causal drivers are behind Trigger Precision for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-006",
+        "Override drop cause",
+        "What caused Override Rate to drop for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Precision drove lower",
+        "What drove Trigger Precision lower for Kisqali?",
     ),
 ]
 
@@ -1387,9 +1426,12 @@ KEEP_FIXTURES = [
         "Line-of-therapy depth",
         "What is the treatment_initiated conversion rate for Fabhalta in line-of-therapy 0 versus lines 1+ when sample drops are deployed, and how does sample volume affect each?",
     ),
+    # codex iter-1: the stand-down is LOCAL - the KPI phrase must be the
+    # outcome's own noun phrase (within two words, no coordinator between), so
+    # "conversion rate of treatment_initiated patients" also stands down ...
     (
-        "Action taken and acceptance",
-        "Chart the action_taken rate next to the Acceptance Rate for Kisqali.",
+        "Conversion of initiators",
+        "What is the conversion rate of treatment_initiated patients for Fabhalta by therapy line?",
     ),
     # #1901 item 4q: a KPI in TREATMENT position (the object is a causal
     # outcome) is a section-C ask ...

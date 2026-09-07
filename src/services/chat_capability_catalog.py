@@ -896,7 +896,7 @@ _INDIVIDUAL_ASK_RE = re.compile(
 #     miss there costs nothing while a false drop costs an answerable ask.
 #     "What drives TRx volume / NBRx / conversion rate / ROI / market share"
 #     all stay kept.
-# The phrase must be the OBJECT of a causal ask - one of four bounded shapes on
+# The phrase must be the OBJECT of a causal ask - one of five bounded shapes on
 # title + message, with a gap of at most three words that admits no outcome id
 # (no underscore) and no conjunction, so a treatment-position mention ("effect
 # of HCP Coverage on persistent_180d", "does trigger precision drive NBRx?",
@@ -904,12 +904,17 @@ _INDIVIDUAL_ASK_RE = re.compile(
 # object is an outcome ("what drives persistent_180d and Trigger Precision")
 # never fire it, and neither do "paths", "confident" or "refutation" on their
 # own, nor a definition or value ask ("why does Trigger Precision matter",
-# "explain Override Rate", "what is the Override Rate"). Shapes:
+# "explain Override Rate", "what is the Override Rate"). Shapes (an auxiliary
+# "is / are / was / were" may sit between the causal noun and its preposition
+# or verb, and the verbs carry their past tense - "factors are driving", "what
+# caused", "what drove"; codex iter-1):
 #   1. "<causal> drivers | factors | paths | causes | determinants of | behind |
-#      for | that drive | influencing ... <KPI>", and "paths (leading) to <KPI>"
-#   2. "what drives | causes | influences | affects | explains | is driving <KPI>"
-#   3. "effect | impact | influence of <treatment> on <KPI>"
-#   4. "why is <KPI> (so) low | high | falling ...", "why did <KPI> drop"
+#      for | that drive | are driving | influencing ... <KPI>"
+#   2. "paths (leading) to | into <KPI>"
+#   3. "what drives | drove | causes | caused | influences | affects | explains |
+#      is driving | has been driving <KPI>"
+#   4. "effect | impact | influence of <treatment> on <KPI>"
+#   5. "why is <KPI> (so) low | high | falling ...", "why did <KPI> drop"
 # Hyphens and dashes are normalized to spaces before the shapes run (the
 # vocabulary phrases are space-normalized: "cross source match rate"), so a
 # KPI written as the registry spells it ("Cross-source Match Rate",
@@ -923,10 +928,12 @@ _INDIVIDUAL_ASK_RE = re.compile(
 _KPI_GAP = r"(?:(?!(?:and|or|nor|vs|versus|than)\b)[a-z0-9'’.-]+\s+){0,3}?"
 _CAUSAL_LEAD_NOUN = r"(?:causal\s+)?(?:drivers?|factors?|paths?|causes?|determinants?)"
 _CAUSAL_ADVERB = r"(?:(?:most|strongly|primarily|mainly|significantly|really|actually)\s+){0,2}"
+_CAUSAL_AUX = r"(?:(?:is|are|was|were|has\s+been|have\s+been)\s+)?"
 _CAUSAL_VERB = (
-    r"(?:drives?|driving|causes?|causing|influences?|influencing|affects?|affecting|explains?|"
-    r"explaining|determines?|determining|impacts?|impacting|shapes?|shaping|leads?\s+to|"
-    r"leading\s+to|contributes?\s+to|contributing\s+to)"
+    r"(?:drives?|drove|driving|causes?|caused|causing|influences?|influenced|influencing|affects?|"
+    r"affected|affecting|explains?|explained|explaining|determines?|determined|determining|"
+    r"impacts?|impacted|impacting|shapes?|shaped|shaping|leads?\s+to|led\s+to|leading\s+to|"
+    r"contributes?\s+to|contributed\s+to|contributing\s+to)"
 )
 _KPI_STATE = (
     r"(?:so\s+|still\s+|now\s+)?(?:low\w*|high\w*|fall\w*|fell|dropp?\w*|declin\w*|ris\w*|rose|"
@@ -939,13 +946,42 @@ _KPI_STATE = (
 _KPI_DEFINITION_TAIL = r"(?!\s+(?:calculation|definition|formula|computation|methodolog)\w*)"
 _DASH_RE = re.compile(r"[-\u2013\u2014]")
 _KPI_AS_CAUSAL_OUTCOME_SHAPES: Tuple[str, ...] = (
-    rf"\b{_CAUSAL_LEAD_NOUN}\s+(?:of|behind|for|(?:(?:that|which)\s+)?{_CAUSAL_ADVERB}{_CAUSAL_VERB})"
-    rf"\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
+    rf"\b{_CAUSAL_LEAD_NOUN}\s+(?:(?:that|which)\s+)?{_CAUSAL_AUX}"
+    rf"(?:of|behind|for|{_CAUSAL_ADVERB}{_CAUSAL_VERB})\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
     rf"\b(?:causal\s+)?paths?\s+(?:to|into|towards?)\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
-    rf"\bwhat\s+(?:is\s+|are\s+)?{_CAUSAL_ADVERB}{_CAUSAL_VERB}\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
+    rf"\bwhat\s+{_CAUSAL_AUX}{_CAUSAL_ADVERB}{_CAUSAL_VERB}\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
     rf"\b(?:effects?|impacts?|influence)\s+of\s+[^.?!,]{{1,60}}?\s+on\s+{_KPI_GAP}<KPI>",
     rf"\bwhy\s+{_KPI_GAP}<KPI>\s+(?:[a-z'’-]+\s+){{0,3}}?{_KPI_STATE}\b",
 )
+
+
+# The stand-down window. A strict KPI phrase owns the outcome mention when it
+# FOLLOWS it within this many words with no coordinator or punctuation between
+# ("treatment_initiated conversion rate", "treatment_initiated patients'
+# conversion rate"), or PRECEDES it through a preposition ("conversion rate of
+# treatment_initiated patients"). A phrase merely before the mention does not
+# ("TRx chart treatment_initiated rate": the title's KPI is another chart).
+_STAND_DOWN_SPAN_WORDS = 2
+_COORDINATOR_RE = re.compile(
+    r"\b(?:and|or|nor|vs\.?|versus|with|plus|alongside|against|beside|next to|compared)\b|[,;:]",
+    re.I,
+)
+_STAND_DOWN_BEFORE_GAP_RE = re.compile(r"^\s*(?:of|for|among|across|in|on)\s+(?:the\s+|\w+'s\s+)?$")
+
+
+def _kpi_phrase_owns_outcome(
+    lowered: str, spans: Sequence[Tuple[int, int]], strict_kpi_re: "re.Pattern[str]"
+) -> bool:
+    """True when a strict KPI phrase and an outcome mention form one noun phrase."""
+    for hit in strict_kpi_re.finditer(lowered):
+        for start, end in spans:
+            if hit.start() >= end:
+                gap = lowered[end : hit.start()]
+                if len(gap.split()) <= _STAND_DOWN_SPAN_WORDS and not _COORDINATOR_RE.search(gap):
+                    return True
+            elif hit.end() <= start and _STAND_DOWN_BEFORE_GAP_RE.match(lowered[hit.end() : start]):
+                return True
+    return False
 
 
 def _normalized_name(text: str) -> str:
@@ -968,9 +1004,9 @@ def journey_outcomes(catalog: CapabilityCatalog) -> Tuple[str, ...]:
     (#1901 item 4a): it reads ``treatment_initiated`` as CM-001 (ATE) and
     ``action_taken`` as WS2-TR-003 (Action Rate Uplift) from one shared token,
     and neither KPI has a series, a window or an axis, so a trend or rate of
-    those outcomes is unservable and they are in the set. A pill that names one
-    of them next to a real KPI phrase is handled by the stand-down in
-    :func:`match_unsupported_rule`, not here.
+    those outcomes is unservable and they are in the set. A pill in which one
+    of them is part of a real KPI's noun phrase is handled by the stand-down
+    in :func:`match_unsupported_rule`, not here.
     """
     from src.services.kpi_resolution import recognize_distinct_metric
 
@@ -999,13 +1035,20 @@ class CatalogRules:
     journey: Tuple[str, ...]
     # #1901 item 4a: journey outcomes the KPI recognizer reads as a KPI mention
     # through its name-token fallback (treatment_initiated -> CM-001, action_taken
-    # -> WS2-TR-003). They yield when the same pill names a strict-vocabulary KPI
-    # phrase: "the treatment_initiated conversion rate ... in line-of-therapy 0"
-    # is a Conversion Rate read decorated with the outcome name (baseline
-    # segment-turn pill, graded PARTIAL), and dropping it costs an answerable
-    # ask. The duration flags and the unresolvable outcomes ("adopted") never
-    # yield: the recognizer does not read them as a KPI, so a KPI phrase next to
-    # them does not change what the outcome mention means.
+    # -> WS2-TR-003). They yield when a strict-vocabulary KPI phrase is the
+    # outcome's OWN noun phrase - within _STAND_DOWN_SPAN_WORDS after the
+    # mention with no coordinator between, or before it through a preposition
+    # ("the treatment_initiated conversion rate ... in line-of-therapy 0",
+    # "conversion rate of treatment_initiated patients"): the ask is then a
+    # Conversion Rate read
+    # decorated with the outcome name (baseline segment-turn pill, graded
+    # PARTIAL), and dropping it costs an answerable ask. A KPI merely
+    # co-mentioned ("chart treatment_initiated rate and TRx", "... next to the
+    # Acceptance Rate") does not make the outcome's rate servable, so the
+    # mention still drops (codex iter-1). The duration flags and the
+    # unresolvable outcomes ("adopted") never yield: the recognizer does not
+    # read them as a KPI, so a KPI phrase next to them does not change what the
+    # outcome mention means.
     kpi_backed_outcomes: FrozenSet[str]
     strict_kpi_re: Optional["re.Pattern[str]"]  # any strict phrase; None when nothing yields
     # #1901 item 4q: the object shapes above, each with the strict phrases of the
@@ -1073,8 +1116,9 @@ def match_unsupported_rule(
 
     ``rules`` (:func:`catalog_rules`, passed by :func:`filter_unsupported_pills`)
     carries the catalog-derived checks; without it the outcome loop runs on
-    ``journey`` alone, the fallback-resolved outcomes never stand down and the
-    KPI-as-causal-outcome check (``kpi_as_causal_outcome:<kpi_id>``) is inert.
+    ``journey`` alone, the fallback-resolved outcomes never stand down to an
+    adjacent KPI phrase and the KPI-as-causal-outcome check
+    (``kpi_as_causal_outcome:<kpi_id>``) is inert.
     """
     # #1901 item 4g: no page summary carries per-HCP or per-patient rows (each
     # publishes counts, a mean, top-N feature names or two territory ids), so a
@@ -1099,16 +1143,7 @@ def match_unsupported_rule(
                 continue
             return name
     lowered = text.lower()
-    yielding: FrozenSet[str] = frozenset()
-    if (
-        rules is not None
-        and rules.strict_kpi_re is not None
-        and rules.strict_kpi_re.search(lowered)
-    ):
-        yielding = rules.kpi_backed_outcomes
     for outcome in journey:
-        if outcome in yielding:
-            continue
         needle = outcome.lower()
         spaced = needle.replace("_", " ")
         spans = [
@@ -1116,6 +1151,13 @@ def match_unsupported_rule(
             for m in re.finditer(rf"\b(?:{re.escape(needle)}|{re.escape(spaced)})\b", lowered)
         ]
         if not spans:
+            continue
+        if (
+            rules is not None
+            and rules.strict_kpi_re is not None
+            and outcome in rules.kpi_backed_outcomes
+            and _kpi_phrase_owns_outcome(lowered, spans, rules.strict_kpi_re)
+        ):
             continue
         if _series_attaches_to_outcome(lowered, spans) or (
             _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered)
