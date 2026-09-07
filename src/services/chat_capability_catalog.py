@@ -920,9 +920,10 @@ _INDIVIDUAL_ASK_RE = re.compile(
 # KPI written as the registry spells it ("Cross-source Match Rate",
 # "Trigger-Precision") still matches. Accepted misses: any other phrasing
 # ("root cause analysis for <KPI>", "<KPI> drivers" as a noun compound,
-# "which factors to watch for <KPI>") and the near-synonym Trigger Funnel
-# Conversion (WS2-TR-009), which drops even though conversion_flag is a
-# section-C outcome.
+# "which factors to watch for <KPI>"). Accepted over-drop: the near-synonym
+# Trigger Funnel Conversion (WS2-TR-009) drops even though conversion_flag is
+# a section-C outcome - it is a different registry KPI, and no live pill has
+# asked for its drivers.
 # With an empty outcome list (degraded catalog) the check is inert: the prompt
 # then invites "what drives <the outcome or KPI named on screen>".
 _KPI_GAP = r"(?:(?!(?:and|or|nor|vs|versus|than)\b)[a-z0-9'’.-]+\s+){0,3}?"
@@ -969,19 +970,28 @@ _COORDINATOR_RE = re.compile(
 _STAND_DOWN_BEFORE_GAP_RE = re.compile(r"^\s*(?:of|for|among|across|in|on)\s+(?:the\s+|\w+'s\s+)?$")
 
 
-def _kpi_phrase_owns_outcome(
+def _spans_not_owned_by_kpi_phrase(
     lowered: str, spans: Sequence[Tuple[int, int]], strict_kpi_re: "re.Pattern[str]"
-) -> bool:
-    """True when a strict KPI phrase and an outcome mention form one noun phrase."""
-    for hit in strict_kpi_re.finditer(lowered):
-        for start, end in spans:
-            if hit.start() >= end:
-                gap = lowered[end : hit.start()]
+) -> List[Tuple[int, int]]:
+    """The outcome mentions that do NOT form one noun phrase with a strict KPI
+    phrase. Per mention (codex iter-2): "treatment_initiated conversion rate
+    and treatment_initiated monthly trend" keeps its second mention."""
+    hits = [(hit.start(), hit.end()) for hit in strict_kpi_re.finditer(lowered)]
+    remaining: List[Tuple[int, int]] = []
+    for start, end in spans:
+        owned = False
+        for hit_start, hit_end in hits:
+            if hit_start >= end:
+                gap = lowered[end:hit_start]
                 if len(gap.split()) <= _STAND_DOWN_SPAN_WORDS and not _COORDINATOR_RE.search(gap):
-                    return True
-            elif hit.end() <= start and _STAND_DOWN_BEFORE_GAP_RE.match(lowered[hit.end() : start]):
-                return True
-    return False
+                    owned = True
+                    break
+            elif hit_end <= start and _STAND_DOWN_BEFORE_GAP_RE.match(lowered[hit_end:start]):
+                owned = True
+                break
+        if not owned:
+            remaining.append((start, end))
+    return remaining
 
 
 def _normalized_name(text: str) -> str:
@@ -1035,8 +1045,8 @@ class CatalogRules:
     journey: Tuple[str, ...]
     # #1901 item 4a: journey outcomes the KPI recognizer reads as a KPI mention
     # through its name-token fallback (treatment_initiated -> CM-001, action_taken
-    # -> WS2-TR-003). They yield when a strict-vocabulary KPI phrase is the
-    # outcome's OWN noun phrase - within _STAND_DOWN_SPAN_WORDS after the
+    # -> WS2-TR-003). A MENTION of one yields when a strict-vocabulary KPI
+    # phrase is its own noun phrase - within _STAND_DOWN_SPAN_WORDS after the
     # mention with no coordinator between, or before it through a preposition
     # ("the treatment_initiated conversion rate ... in line-of-therapy 0",
     # "conversion rate of treatment_initiated patients"): the ask is then a
@@ -1045,7 +1055,8 @@ class CatalogRules:
     # PARTIAL), and dropping it costs an answerable ask. A KPI merely
     # co-mentioned ("chart treatment_initiated rate and TRx", "... next to the
     # Acceptance Rate") does not make the outcome's rate servable, so the
-    # mention still drops (codex iter-1). The duration flags and the
+    # mention still drops (codex iter-1), and a second, bare mention of the
+    # same outcome is checked on its own (codex iter-2). The duration flags and the
     # unresolvable outcomes ("adopted") never yield: the recognizer does not
     # read them as a KPI, so a KPI phrase next to them does not change what the
     # outcome mention means.
@@ -1156,9 +1167,10 @@ def match_unsupported_rule(
             rules is not None
             and rules.strict_kpi_re is not None
             and outcome in rules.kpi_backed_outcomes
-            and _kpi_phrase_owns_outcome(lowered, spans, rules.strict_kpi_re)
         ):
-            continue
+            spans = _spans_not_owned_by_kpi_phrase(lowered, spans, rules.strict_kpi_re)
+            if not spans:
+                continue
         if _series_attaches_to_outcome(lowered, spans) or (
             _VALUE_ASK_RE.search(lowered) and not _CAUSAL_ASK_RE.search(lowered)
         ):

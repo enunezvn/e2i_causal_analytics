@@ -997,6 +997,13 @@ DROP_FIXTURES = [
         "Action taken and acceptance",
         "Chart the action_taken rate next to the Acceptance Rate for Kisqali.",
     ),
+    # codex iter-2: the stand-down is per MENTION - a second, bare mention of
+    # the outcome is still checked
+    (
+        "outcome_as_kpi:treatment_initiated",
+        "Conversion and trend",
+        "Compare treatment_initiated conversion rate and treatment_initiated monthly trend for Fabhalta.",
+    ),
     # #1901 item 4q: a registry KPI asked as a causal OUTCOME. Section C serves
     # drivers / paths / effects only for the causal-path registry's end nodes,
     # and the tool composer's KPI path only for KPIs with a substrate builder
