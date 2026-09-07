@@ -10,7 +10,8 @@ historical context only.
 
 Source citations in this file name **symbols**, not line numbers: line numbers
 drift silently and mislead the next reader. Where a number is unavoidable,
-regenerate it with `grep -n` at write time.
+regenerate it with `grep -n` at write time. A bare `#N` is a **GitHub issue**;
+`PR #N` is a **merged pull request**.
 
 ---
 
@@ -44,7 +45,7 @@ co-aggregates across brands. Aggregation keys are
 The episodic page query is passed through `apply_provenance_filter()`
 (`src/repositories/provenance.py`) before paging, so **synthetic episodic
 memories are excluded from real crystals** — the filter appends
-`.eq('is_synthetic', False)` (#850/#977).
+`.eq('is_synthetic', False)` (PR #850, PR #977).
 
 The one exception is a synthetic-gold showcase instance: when
 `E2I_INCLUDE_SYNTHETIC` is set (`deployment_includes_synthetic()`) the
