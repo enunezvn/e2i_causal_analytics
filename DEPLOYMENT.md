@@ -627,14 +627,13 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml res
 
 ## File Reference
 
-### Compose files (7)
+### Compose files (6)
 
 | File | Purpose |
 |------|---------|
 | `docker/docker-compose.yml` | Base service definitions. **This alone is production** |
 | `docker/docker-compose.dev.yml` | Dev overlay: bind mounts, hot reload, `_dev` names, the `dev-tools` profile |
 | `docker/docker-compose.frontend-dev.yml` | Legacy — the #528-A rollback era; `pick_overlay()` can no longer select it |
-| `docker/docker-compose.monitoring.yml` | Superseded by the `monitoring` profile in the base file |
 | `docker/docker-compose.opik.yml` | Opik LLM observability overlay (10 services) |
 | `docker/docker-compose.rxnav.yml` | RxNav stub |
 | `docker/docker-compose.secure.yml` | Hardened variant, not used by the deploy |

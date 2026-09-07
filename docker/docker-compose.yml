@@ -1324,8 +1324,8 @@ services:
   # Connects directly to supabase-db via the external supabase-network
   # (bypasses the pooler, which is important for system catalog queries).
   # Block 6B-infra-4 moved this off the legacy `supabase_default` network
-  # (used by docker/docker-compose.monitoring.yml's standalone deploy) onto
-  # `supabase-network`, the canonical Supabase Docker network.
+  # (used by the now-removed docker/docker-compose.monitoring.yml's standalone
+  # deploy, #1935) onto `supabase-network`, the canonical Supabase Docker network.
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:v0.16.0
     container_name: e2i_postgres_exporter

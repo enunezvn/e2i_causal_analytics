@@ -1577,14 +1577,13 @@ RRF with k=60 and 1.3x boost for graph-connected results.
 
 **Context**: Single-droplet deployment doesn't justify Kubernetes overhead. Team size is small (1-2 developers).
 
-**Decision**: Use Docker Compose. `docker/` holds seven compose files:
+**Decision**: Use Docker Compose. `docker/` holds six compose files:
 
 | File | Role |
 |------|------|
 | `docker-compose.yml` | **Base — this is what production runs, alone.** All app services, data stores, MLOps, and the `monitoring`/`debug` profile services |
 | `docker-compose.dev.yml` | Local dev overlay: bind mounts, `uvicorn --reload`, Vite HMR, `e2i_*_dev` names, debugpy, `dev-tools` profile (flower, redis-commander) |
 | `docker-compose.frontend-dev.yml` | Frontend-only dev overlay; the #528-A rollback target, not used by current deploys |
-| `docker-compose.monitoring.yml` | Older standalone exporter overlay (node/postgres exporters); superseded in practice by the base file's `monitoring` profile |
 | `docker-compose.opik.yml` | Opik stack — stopped May 2026, retained for reference |
 | `docker-compose.rxnav.yml` | Pointer/notes file for the offline RxNav-in-a-Box setup — NLM ships its own compose file, see §4.7 |
 | `docker-compose.secure.yml` | Network-isolation/segmentation variant; must be kept in sync with the base file by hand |
