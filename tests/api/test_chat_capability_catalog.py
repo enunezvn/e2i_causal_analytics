@@ -1599,9 +1599,11 @@ KEEP_FIXTURES = [
         "Show Fabhalta New Prescriptions broken down by patient severity tier to see which segments drive volume.",
     ),
     # #1918: the causal exemption still holds when the causal word sits BEFORE a
-    # purpose clause (a causal object), when the pill is no value ask at all, and
-    # when a coordinated causal clause follows the breakdown with no purpose marker
-    # (the title must not lead with the causal word, or 4c takes the pill)
+    # purpose clause (a causal object) and when a coordinated causal clause
+    # follows the breakdown with no purpose marker (the title must not lead with
+    # the causal word, or 4c takes the pill). The middle fixture carries no value
+    # word, so the value branch never runs: it pins that a purpose clause on its
+    # own drops nothing, not the exemption itself (codex iter-1 LOW).
     (
         "Persistence driver rates",
         "What are the causal drivers of Remibrutinib's persistent_180d rate, to see where to focus?",
