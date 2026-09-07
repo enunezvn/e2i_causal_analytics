@@ -2244,6 +2244,73 @@ async def _window_coverage_probe(
 # silently dropping on any other KPI.
 _TRIGGER_EFFECTIVENESS_KPI_IDS = frozenset({"WS2-TR-001", "WS2-TR-004", "WS2-TR-006", "WS2-TR-009"})
 
+#: Human names for the patient axes, used in the #1911 refusal text.
+_PATIENT_AXIS_LABELS: Dict[str, str] = {
+    "segment": "severity tier",
+    "therapy_line": "line of therapy",
+    "biologic": "biologic status",
+    "ige_tier": "IgE tier",
+}
+
+# #1911: the KPIs whose calculator BINDS each patient axis into its query --
+# the ONLY KPIs for which the axis can be honoured. Every other calculator
+# ignores the key, and unlike region there is no provenance marker for these
+# axes (src/kpi/calculator.py stamps region only), so on any other KPI the
+# filter silently dropped while the answer read as segment-scoped (the
+# migration-111 conversion-rate incident shape, one tier up). Derived from the
+# calculators -- tests/unit/test_api/test_chatbot_kpi_axis_gate_1911.py
+# re-derives every set by running the real calculators against a recording
+# client, so the sets cannot drift from the code:
+#   * BusinessImpactCalculator._resolve_windowed_call binds all four axes for
+#     WS3-BI-005 TRx / -006 NRx / -007 NBRx / -008 TRx share (migrations
+#     105/108/111).
+#   * BusinessImpactCalculator._calc_conversion_rate (WS3-BI-009) binds
+#     segment and therapy_line (migration 111) and REFUSES biologic/ige_tier
+#     itself (triggers carry no biologic/IgE dimension). It is left OUT of
+#     those two sets on purpose so the allowlist keeps one meaning -- "binds
+#     the axis" -- and the refusal names only KPIs that do; the calculator's
+#     own guard stays as defence in depth for /api/kpis.
+#   * CausalMetricsCalculator._calc_cate (CM-002) binds ``segment`` as
+#     ``ml_predictions.segment_assignment = $1`` (migration 044). Same label
+#     space as this tool's ``segment`` Field: the DGP writes
+#     low/medium/high_severity (src/ml/synthetic/dgp/treatment_arm.py
+#     SEGMENT_*, copied per prediction by prediction_generator.py; verified on
+#     the prod substrate 2026-09-07), and 'CATE' / 'conditional ATE' resolve to
+#     CM-002 here, so refusing it would drop a combination the calculator
+#     serves. It reads none of the other three axes.
+_PATIENT_AXIS_KPI_IDS: Dict[str, frozenset[str]] = {
+    "segment": frozenset(
+        {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008", "WS3-BI-009", "CM-002"}
+    ),
+    "therapy_line": frozenset(
+        {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008", "WS3-BI-009"}
+    ),
+    "biologic": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}),
+    "ige_tier": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}),
+}
+
+
+def _patient_axis_refusal(kpi: Any, axis: str) -> Dict[str, Any]:
+    """The #1911 refusal for a patient axis on a KPI whose calculator does not
+    bind it. The served KPIs are named in registry order (volume KPIs first)
+    and the hint offers both ways out (#1565: a next step, not a dead end)."""
+    from src.kpi.registry import get_registry
+
+    label = _PATIENT_AXIS_LABELS[axis]
+    served_ids = _PATIENT_AXIS_KPI_IDS[axis]
+    served = ", ".join(k.name for k in get_registry().get_all() if k.id in served_ids)
+    return {
+        "success": False,
+        "query_type": "kpi_calculate",
+        "kpi_id": kpi.id,
+        "kpi_name": kpi.name,
+        "error": f"{axis} ({label}) applies only to {served}, not {kpi.name}.",
+        "hint": (
+            f"Ask for {kpi.name} without the {label} filter, or ask for one of {served} by {label}."
+        ),
+    }
+
+
 #: Coordinators that turn two KPI mentions into two SEPARATE asks (#1637). Two
 #: mentions alone do not: "TRx market share" is a modifier chain naming exactly
 #: one KPI (WS3-BI-008). Only an explicit coordinator between the mentions means
@@ -2511,6 +2578,21 @@ async def kpi_calculate_tool(
                 f"funnel conversion), not {kpi.name}."
             ),
         }
+
+    # #1911: the same failure class for the PATIENT axes -- only the calculators
+    # in _PATIENT_AXIS_KPI_IDS bind them, and unlike region there is no
+    # provenance marker to say "not applied", so on any other KPI the value
+    # would come back brand-global and read as segment-scoped. Same truthiness
+    # test as the context assembly below, so the gate and the context can never
+    # disagree about what counts as a requested axis.
+    for _axis, _axis_value in (
+        ("segment", segment),
+        ("therapy_line", therapy_line),
+        ("biologic", biologic),
+        ("ige_tier", ige_tier),
+    ):
+        if _axis_value and kpi.id not in _PATIENT_AXIS_KPI_IDS[_axis]:
+            return _patient_axis_refusal(kpi, _axis)
 
     # Parse the requested window BEFORE touching the calculator: an unparseable
     # window is a user-input error, not a calculation error, so fail fast with a
