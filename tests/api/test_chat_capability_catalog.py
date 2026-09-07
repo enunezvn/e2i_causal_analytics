@@ -1074,6 +1074,19 @@ DROP_FIXTURES = [
         "Precision drove lower",
         "What drove Trigger Precision lower for Kisqali?",
     ),
+    # codex iter-3: a coordinated object list with NO served member (no causal
+    # outcome, no allow-set KPI) still drops - the yield is for a served
+    # co-object, not for coordination itself
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Precision and acceptance drivers",
+        "What drives Trigger Precision and Acceptance Rate for Kisqali?",
+    ),
+    (
+        "kpi_as_causal_outcome:WS2-TR-001",
+        "Precision drivers and confidence",
+        "What drives Trigger Precision for Kisqali, and how confident are those paths?",
+    ),
 ]
 
 # Pills the assistant CAN answer; every one must survive.
@@ -1471,6 +1484,16 @@ KEEP_FIXTURES = [
     # partly served (precision-first: the gap between the lead and the KPI
     # phrase admits no outcome id and no conjunction).
     ("Persistence and precision", "What drives persistent_180d and Trigger Precision for Kisqali?"),
+    # ... and so is one whose SERVED object follows the KPI phrase - a catalog
+    # causal outcome or an allow-set KPI later in the same coordinated object
+    # list yields the rule, whatever the order (codex iter-3: dropping by
+    # object order alone is not precision-first).
+    ("Precision and persistence", "What drives Trigger Precision and persistent_180d for Kisqali?"),
+    (
+        "Precision and action factors",
+        "What causal factors influence Trigger Precision and action_taken for Kisqali?",
+    ),
+    ("Precision and TRx drivers", "What drives Trigger Precision and TRx for Kisqali?"),
 ]
 
 

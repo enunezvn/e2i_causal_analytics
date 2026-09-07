@@ -898,11 +898,17 @@ _INDIVIDUAL_ASK_RE = re.compile(
 #     all stay kept.
 # The phrase must be the OBJECT of a causal ask - one of five bounded shapes on
 # title + message, with a gap of at most three words that admits no outcome id
-# (no underscore) and no conjunction, so a treatment-position mention ("effect
-# of HCP Coverage on persistent_180d", "does trigger precision drive NBRx?",
-# "how does Trigger Precision affect adoption") and a mixed ask whose first
-# object is an outcome ("what drives persistent_180d and Trigger Precision")
-# never fire it, and neither do "paths", "confident" or "refutation" on their
+# (no underscore) and none of "and / or / nor / vs / versus / than", so a
+# treatment-position mention ("effect of HCP Coverage on persistent_180d",
+# "does trigger precision drive NBRx?", "how does Trigger Precision affect
+# adoption") and a mixed ask whose first object is an outcome ("what drives
+# persistent_180d and Trigger Precision") never fire it. A mixed ask in the
+# other order ("what drives Trigger Precision and persistent_180d") is the same
+# partly-served ask, so a hit YIELDS when the coordinated object list that
+# follows the KPI phrase - up to the end of the clause - names a catalog causal
+# outcome or an allow-set KPI (codex iter-3: dropping by object order alone is
+# not precision-first); "Trigger Precision and Acceptance Rate" still drops.
+# Neither do "paths", "confident" or "refutation" fire it on their
 # own, nor a definition or value ask ("why does Trigger Precision matter",
 # "explain Override Rate", "what is the Override Rate"). Shapes (an auxiliary
 # "is / are / was / were" may sit between the causal noun and its preposition
@@ -946,6 +952,13 @@ _KPI_STATE = (
 # a KPI followed by a definition noun is a section-A ask, not a causal one
 _KPI_DEFINITION_TAIL = r"(?!\s+(?:calculation|definition|formula|computation|methodolog)\w*)"
 _DASH_RE = re.compile(r"[-\u2013\u2014]")
+# The coordinated object list after a 4q hit ends at sentence punctuation or at
+# a wh-word / auxiliary that opens a new clause ("..., and how confident are
+# those paths"): only a served object INSIDE that list yields the rule.
+_OBJECT_LIST_END_RE = re.compile(
+    r"[.?!;:]|\b(?:how|what|which|why|when|where|who|is|are|was|were|does|do|did|"
+    r"can|could|should|would|will)\b"
+)
 _KPI_AS_CAUSAL_OUTCOME_SHAPES: Tuple[str, ...] = (
     rf"\b{_CAUSAL_LEAD_NOUN}\s+(?:(?:that|which)\s+)?{_CAUSAL_AUX}"
     rf"(?:of|behind|for|{_CAUSAL_ADVERB}{_CAUSAL_VERB})\s+{_KPI_GAP}<KPI>{_KPI_DEFINITION_TAIL}",
@@ -1067,6 +1080,9 @@ class CatalogRules:
     # has no outcomes (degraded) or every strict phrase is allowed.
     kpi_as_causal_outcome: Tuple["re.Pattern[str]", ...] = ()
     kpi_ids: Dict[str, str] = dataclasses.field(default_factory=dict)  # phrase -> KPI id
+    # a catalog causal outcome id or an allow-set strict phrase - a served
+    # causal object; found in the object list after a hit, it yields the rule
+    served_object_re: Optional["re.Pattern[str]"] = None
 
 
 def catalog_rules(catalog: CapabilityCatalog) -> CatalogRules:
@@ -1099,6 +1115,14 @@ def catalog_rules(catalog: CapabilityCatalog) -> CatalogRules:
     causal_phrases = tuple(
         (phrase, kpi_id) for phrase, kpi_id in vocabulary if kpi_id not in allowed
     )
+    served_parts: List[str] = []
+    if catalog.causal_outcomes:
+        outcome_alt = "|".join(re.escape(o.lower()) for o in catalog.causal_outcomes)
+        served_parts.append(rf"(?<![\w-])(?:{outcome_alt})(?![\w-])")
+    served_phrases = [phrase for phrase, kpi_id in vocabulary if kpi_id in allowed]
+    if served_phrases:
+        served_parts.append(metric_phrase_regex(served_phrases))
+    served_re = re.compile("|".join(served_parts), re.I) if served_parts else None
     patterns: Tuple["re.Pattern[str]", ...] = ()
     if catalog.causal_outcomes and causal_phrases:
         kpi = metric_phrase_regex((phrase for phrase, _ in causal_phrases), group="kpi")
@@ -1111,6 +1135,7 @@ def catalog_rules(catalog: CapabilityCatalog) -> CatalogRules:
         strict_kpi_re=strict_re,
         kpi_as_causal_outcome=patterns,
         kpi_ids=dict(causal_phrases),
+        served_object_re=served_re,
     )
 
 
@@ -1178,10 +1203,23 @@ def match_unsupported_rule(
     if rules is not None and rules.kpi_as_causal_outcome:
         dashless = _DASH_RE.sub(" ", lowered)
         for pattern in rules.kpi_as_causal_outcome:
-            hit = pattern.search(dashless)
-            if hit is not None:
-                return f"kpi_as_causal_outcome:{rules.kpi_ids[hit.group('kpi')]}"
+            for hit in pattern.finditer(dashless):
+                if not _object_list_has_served_member(dashless, hit.end("kpi"), rules):
+                    return f"kpi_as_causal_outcome:{rules.kpi_ids[hit.group('kpi')]}"
     return None
+
+
+def _object_list_has_served_member(dashless: str, start: int, rules: CatalogRules) -> bool:
+    """True when the coordinated object list that follows a 4q hit (from
+    ``start`` to the end of the clause) names a catalog causal outcome or an
+    allow-set KPI: the ask is then at least partly served and the hit yields
+    ("what drives Trigger Precision and persistent_180d"; codex iter-3)."""
+    if rules.served_object_re is None:
+        return False
+    tail = dashless[start:]
+    end = _OBJECT_LIST_END_RE.search(tail)
+    objects = tail[: end.start()] if end else tail
+    return rules.served_object_re.search(objects) is not None
 
 
 def filter_unsupported_pills(
