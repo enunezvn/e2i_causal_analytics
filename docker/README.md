@@ -58,7 +58,7 @@ First build pulls PyTorch + ML dependencies — subsequent starts use cached lay
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Claude API key for agents |
+| `OPENAI_API_KEY` | OpenAI API key — the **default** LLM provider (`gpt-5.6-terra` standard/reasoning, `gpt-5.6-luna` fast), and RAG embeddings (`text-embedding-3-small`) are OpenAI *regardless* of `LLM_PROVIDER`, so this key is always required |
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_KEY` | Supabase anonymous key |
 | `SUPABASE_SERVICE_KEY` | Supabase service role key |
@@ -75,6 +75,17 @@ if they are unset. Validate an `.env` without starting anything:
 ```bash
 docker compose --env-file .env -f docker/docker-compose.yml config -q   # rc 0 = ok
 ```
+
+### Optional LLM configuration
+
+| Variable | Description |
+|----------|-------------|
+| `LLM_PROVIDER` | `openai` (code default, `src/utils/llm_factory.py`) or `anthropic` |
+| `ANTHROPIC_API_KEY` | Required only with `LLM_PROVIDER=anthropic`. It also gates two paths that are Anthropic-only whatever the provider, both fail-open: the nightly routing-label judge (`src/tasks/routing_label_tasks.py`) and the Layer-4 adaptive-validity evaluator (`src/data/causal_role_evaluator.py`) |
+| `LLM_MODEL` | Pin the OpenAI standard/reasoning model without a code change |
+| `DSPY_LM_MODEL` | Verbatim litellm model string for the DSPy/GEPA lane; takes precedence over `LLM_PROVIDER` there |
+
+See `docs/LLM_CONFIGURATION.md` for tiers, model mappings and overrides.
 
 ### Auto-configured (set by compose, no action needed)
 
