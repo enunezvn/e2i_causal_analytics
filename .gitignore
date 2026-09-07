@@ -274,3 +274,7 @@ data/model_artifacts/
 # `.codex` rule does not match these filenames, so 14 of them reached main during
 # the #1775 audit rounds via `git add -A`.
 .codex_brief_*.md
+
+# Local `skills` CLI installs (npx skills add) — third-party agent skills
+# copied/symlinked per-project; not meant to be shared via the repo.
+.agents/
