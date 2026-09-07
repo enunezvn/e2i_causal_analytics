@@ -594,3 +594,236 @@ class TestWorkerPidSpanField:
         dispatch = [e for e in events if e["type"] == "dispatch_info"]
         assert len(dispatch) == 1
         assert dispatch[0]["data"]["worker_pid"] == 4242
+
+
+# =============================================================================
+# 6. #1933: the generate span must report the model that was actually called
+# =============================================================================
+
+
+class _StubLLM:
+    """A chat client shaped like what ``get_chat_llm`` returns.
+
+    Deliberately NOT an ``AsyncMock``: ``getattr(mock, "model")`` auto-creates a
+    truthy child mock, so a mock would let a broken model lookup pass while
+    asserting nothing. The attribute has to be a real string for these tests to
+    mean anything.
+    """
+
+    def __init__(self, model: str, response: AIMessage):
+        self.model = model
+        self._response = response
+
+    def bind_tools(self, _tools):
+        return self
+
+    async def ainvoke(self, _messages):
+        return self._response
+
+
+def _capture_node_spans(ctx: ChatbotTraceContext) -> dict:
+    """Record the NodeSpanContext each ``trace_node`` yields, by node name.
+
+    ``log_generate`` writes into that object's ``metadata``, which is what
+    reaches Opik via ``span.set_output`` — so the metadata dict is the thing
+    under test, not a log line.
+    """
+    from contextlib import asynccontextmanager
+
+    captured: dict = {}
+    real = ctx.trace_node
+
+    @asynccontextmanager
+    async def spy(node_name, metadata=None):
+        async with real(node_name, metadata) as node_span:
+            captured[node_name] = node_span
+            yield node_span
+
+    ctx.trace_node = spy  # instance attribute shadows the bound method
+    return captured
+
+
+def _llm_state():
+    from src.api.routes.chatbot_state import create_initial_state
+
+    state = create_initial_state(
+        user_id="u-1933",
+        query="What is the TRx for Kisqali?",
+        request_id="req-1933",
+        session_id="u-1933~s-1933",
+    )
+    state["messages"] = [g.HumanMessage(content="What is the TRx for Kisqali?")]
+    return state
+
+
+async def _run_generate_with_span(state, monkeypatch, *, llm=None, synthesis=None):
+    """Drive ``generate_node`` under a live trace context; return generate's metadata."""
+    ctx = _ctx()
+    captured = _capture_node_spans(ctx)
+
+    if synthesis is None:
+        monkeypatch.setattr(g, "CHATBOT_DSPY_SYNTHESIS_ENABLED", False)
+        monkeypatch.setattr(g, "get_chat_llm", lambda **kwargs: llm)
+        monkeypatch.setattr(g, "get_llm_provider", lambda: "anthropic")
+    else:
+        monkeypatch.setattr(g, "CHATBOT_DSPY_SYNTHESIS_ENABLED", True)
+        monkeypatch.setattr(g, "synthesize_response_dspy", synthesis)
+
+    token = g._active_trace_context.set(ctx)
+    try:
+        await g.generate_node(state)
+    finally:
+        g._active_trace_context.reset(token)
+
+    assert "generate" in captured, "generate node never opened its trace span"
+    return captured["generate"].metadata
+
+
+class TestGenerateSpanReportsTheRealModel:
+    """#1933: the span attributed cost/latency to a model that is never invoked.
+
+    ``ANTHROPIC_MODEL`` is deliberately NOT forwarded into the containers
+    (docker/docker-compose.yml states the policy), so inside `e2i_api` the read
+    could only ever return its own hardcoded fallback — a plausible-looking id
+    that nothing had called. Meanwhile the factory resolves the tier through
+    ``MODEL_MAPPINGS`` and calls something else entirely. Measured 2026-09-07::
+
+        MODEL_MAPPINGS["anthropic"]["standard"]           -> claude-sonnet-5
+        os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6") -> claude-sonnet-4-6
+
+    Latent while Opik is stopped, live the moment it is switched back on.
+    """
+
+    @pytest.mark.asyncio
+    async def test_span_records_the_model_of_the_client_that_was_called(self, monkeypatch):
+        llm = _StubLLM("claude-sonnet-5", AIMessage(content="answer"))
+
+        metadata = await _run_generate_with_span(_llm_state(), monkeypatch, llm=llm)
+
+        assert metadata["model"] == "claude-sonnet-5", (
+            "the generate span must report the model of the client actually "
+            "invoked, read off the constructed object"
+        )
+        assert metadata["provider"] == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_span_ignores_the_unforwarded_anthropic_model_env(self, monkeypatch):
+        """Even when the host sets it, it must not reach the span.
+
+        The variable is host-side-only by policy. Honouring it here would
+        reintroduce exactly the divergence #1933 is about: the span naming a
+        model the factory never selected.
+        """
+        monkeypatch.setenv("ANTHROPIC_MODEL", "claude-opus-4-1-interactive")
+        llm = _StubLLM("claude-sonnet-5", AIMessage(content="answer"))
+
+        metadata = await _run_generate_with_span(_llm_state(), monkeypatch, llm=llm)
+
+        assert metadata["model"] == "claude-sonnet-5"
+        assert metadata["model"] != "claude-opus-4-1-interactive"
+
+    @pytest.mark.asyncio
+    async def test_span_never_reports_the_old_hardcoded_fallback(self, monkeypatch):
+        """Regression pin on the literal that was being recorded in production."""
+        monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+        llm = _StubLLM("claude-sonnet-5", AIMessage(content="answer"))
+
+        metadata = await _run_generate_with_span(_llm_state(), monkeypatch, llm=llm)
+
+        assert metadata["model"] != "claude-sonnet-4-6", (
+            "claude-sonnet-4-6 was the unreachable fallback the span recorded "
+            "for every containerised request"
+        )
+
+    def test_anthropic_model_is_never_read_from_the_environment_here(self):
+        """The read itself is the defect, not just the value it returned.
+
+        Compose forwards nothing under this name, so any reader inside a
+        container observes only its own default. Asserted against the source so
+        a future edit cannot quietly reintroduce it — and scoped to the *read*
+        rather than the identifier, because naming the variable in a comment to
+        explain why it must not be read is the correct thing to do.
+        """
+        import inspect
+
+        source = inspect.getsource(g)
+        reads = re.findall(
+            r"os\.(?:environ\.get|getenv|environ)\s*[(\[]\s*[\"']ANTHROPIC_MODEL[\"']", source
+        )
+        assert not reads, (
+            "src/api/routes/chatbot_graph.py must not read ANTHROPIC_MODEL from the "
+            "environment: it is deliberately not forwarded into the containers, so "
+            "the read can only return the caller's own fallback (#1933). Read the "
+            "model off the client returned by get_chat_llm instead."
+        )
+
+
+class TestGenerateSpanOperatorPrecedence:
+    """#1933 defect B: ``a or b if c else d`` binds as ``(a or b) if c else d``.
+
+    So the plain-LLM path — every request that does not synthesize — recorded
+    ``"unknown"`` for both model and provider, discarding values it already had.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_synthesis_path_does_not_record_unknown(self, monkeypatch):
+        llm = _StubLLM("claude-sonnet-5", AIMessage(content="answer"))
+
+        metadata = await _run_generate_with_span(_llm_state(), monkeypatch, llm=llm)
+
+        assert metadata["model"] != "unknown"
+        assert metadata["provider"] != "unknown"
+
+    @pytest.mark.asyncio
+    async def test_synthesis_path_still_reports_dspy(self, monkeypatch):
+        """The parenthesisation must not disturb the branch that was correct.
+
+        On the synthesis path ``model_name`` is never assigned, so the old
+        expression happened to yield "dspy_synthesis" via the ``or``. The fixed
+        one must reach the same answer deliberately rather than by accident.
+        """
+
+        class _Synth:
+            response = "synthesized answer"
+            synthesis_method = "evidence_synthesis"
+            confidence_statement = "high confidence"
+            confidence_level = "high"
+            evidence_citations = ["c1"]
+            follow_up_suggestions = ["f1"]
+
+        async def fake_synthesize(**kwargs):
+            return _Synth()
+
+        state = _llm_state()
+        state["rag_context"] = [{"content": "evidence", "source": "s", "relevance_score": 0.9}]
+
+        metadata = await _run_generate_with_span(state, monkeypatch, synthesis=fake_synthesize)
+
+        assert metadata["model"] == "dspy_synthesis"
+        assert metadata["provider"] == "dspy"
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_records_unknown_because_no_client_exists(self, monkeypatch):
+        """The fallback path keeps "unknown" — there honestly is no model to name."""
+
+        def _boom(**kwargs):
+            raise RuntimeError("LLM failed")
+
+        monkeypatch.setattr(g, "CHATBOT_DSPY_SYNTHESIS_ENABLED", False)
+        monkeypatch.setattr(g, "get_chat_llm", _boom)
+        monkeypatch.setattr(g, "get_llm_provider", lambda: "anthropic")
+
+        ctx = _ctx()
+        captured = _capture_node_spans(ctx)
+        token = g._active_trace_context.set(ctx)
+        try:
+            await g.generate_node(_llm_state())
+        finally:
+            g._active_trace_context.reset(token)
+
+        metadata = captured["generate"].metadata
+        assert metadata["is_fallback"] is True
+        assert metadata["model"] == "unknown", (
+            "no client was constructed, so there is no model to name — 'unknown' "
+            "is the honest value here, unlike on the working LLM path"
+        )

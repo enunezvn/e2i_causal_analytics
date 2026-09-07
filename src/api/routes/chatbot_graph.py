@@ -1967,7 +1967,16 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
                 temperature=0.3,
             )
             provider = get_llm_provider()
-            model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+            # Read the model off the client we just built, never from the
+            # environment. ANTHROPIC_MODEL is deliberately NOT forwarded into the
+            # containers (docker/docker-compose.yml states that policy), so an
+            # os.getenv here could only ever return its own hardcoded fallback —
+            # a plausible-looking id that the factory had not selected, recorded
+            # onto the span as if it were the model billed (#1933). get_chat_llm
+            # resolves the tier through MODEL_MAPPINGS (+ LLM_MODEL on the OpenAI
+            # lane), and both ChatAnthropic and ChatOpenAI expose the resolved id;
+            # they disagree on the attribute name, hence the two lookups.
+            model_name = getattr(llm, "model", None) or getattr(llm, "model_name", None)
             logger.info(f"Using {provider} LLM for chatbot")
 
             # Bind tools to the model
@@ -2020,8 +2029,12 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
             node_span.log_generate(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                model=model_name or "dspy_synthesis" if synthesis_used else "unknown",
-                provider=provider or "dspy" if synthesis_used else "unknown",
+                # Parenthesised on purpose: `a or b if c else d` binds as
+                # `(a or b) if c else d`, so the plain-LLM path — every request
+                # that does not synthesize — reported "unknown" and threw away
+                # the model and provider it had just resolved (#1933).
+                model=("dspy_synthesis" if synthesis_used else (model_name or "unknown")),
+                provider=("dspy" if synthesis_used else (provider or "unknown")),
                 tool_calls_count=tool_calls_count,
                 temperature=0.3,
                 is_fallback=is_fallback,
