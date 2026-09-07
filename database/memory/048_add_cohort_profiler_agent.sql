@@ -1,0 +1,64 @@
+-- ============================================================================
+-- MIGRATION 048 (memory): Add cohort_profiler to e2i_agent_name
+-- ============================================================================
+-- Date: 2026-09-07
+-- Issue: #1932 (DOC-AUDIT-202609 ledger item N7)
+--
+-- Problem (a half-landed two-sided change):
+--   cohort_profiler is a real, enabled, dispatched Tier-0 agent. #1779 / PR #1790
+--   added it to config/agent_config.yaml and #1638 added COHORT_PROFILER to the
+--   Python mirror src/memory/episodic_memory.py, but NO migration ever added it
+--   to the Postgres e2i_agent_name enum. Measured on the droplet before this
+--   migration: the enum held 23 labels and cohort_profiler was not one of them,
+--   while factory.AGENT_REGISTRY_CONFIG held 22 names including cohort_profiler.
+--
+--   So the Pydantic layer accepts 'cohort_profiler' and Postgres rejects it.
+--   episodic_memories.agent_name and learning_signals.rated_agent are both typed
+--   e2i_agent_name, and src/api/routes/memory.py passes the caller's agent_name
+--   straight through to rated_agent on procedural feedback -- so a client
+--   POSTing agent_name='cohort_profiler' raises 22P02 ('invalid input value for
+--   enum') on insert. That is the same failure family migrations 029 and 041
+--   were written for, and the one feedback_learner/nodes/rubric_node.py already
+--   documents dodging.
+--
+-- Fix: forward-only, idempotent enum extension (same pattern as 018/029/041).
+--   Placed BEFORE 'orchestrator' like every other Tier-0 agent, and immediately
+--   after its sibling cohort_constructor in enum sort order.
+--
+-- Applying:
+--   The deploy now runs scripts/run_migrations.sh unconditionally; the runner
+--   auto-detects the connection, tracks applies in public.schema_migrations, and
+--   deliberately does NOT wrap a file containing ALTER TYPE ... ADD VALUE in a
+--   single transaction. The live caveat is a different one: database/** is not a
+--   deploy-trigger path, so a migration-only merge does not itself fire a deploy.
+--   This file was therefore applied out of band on 2026-09-07 (see #1932), which
+--   bypasses the schema_migrations ledger -- harmless precisely because
+--   ADD VALUE IF NOT EXISTS makes the next deploy's re-run a no-op.
+--
+--   Manual form (autocommit; do NOT pass -1):
+--     docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+--       < database/memory/048_add_cohort_profiler_agent.sql
+--
+-- Scope: this migration adds ONE label and touches nothing else. In particular
+--   it does NOT try to remove the two enum labels that are not roster agents:
+--     * corpus_ingestion -- a RAG pipeline, not a dispatched agent (migration
+--       041), with live rows in episodic_memories. Removing it would lose data.
+--     * fairness_guardian -- DEPRECATED but intentionally retained for
+--       backwards-compat with existing memory rows (48261d223).
+--   Postgres cannot drop an enum value in place regardless.
+-- ============================================================================
+
+-- Tier 0: Cohort Profiler (ML Foundation; sits with the other Tier-0 agents,
+-- directly after cohort_constructor and before orchestrator).
+DO $$ BEGIN
+    ALTER TYPE e2i_agent_name ADD VALUE IF NOT EXISTS 'cohort_profiler' AFTER 'cohort_constructor';
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- ============================================================================
+-- VERIFICATION (run separately, NOT inside the ADD VALUE transaction):
+--   SELECT string_agg(enumlabel, ', ' ORDER BY enumsortorder)
+--     FROM pg_enum WHERE enumtypid = 'e2i_agent_name'::regtype;
+--   -- Expect 24 labels, with 'cohort_profiler' between 'cohort_constructor'
+--   -- and 'corpus_ingestion'.
+-- ============================================================================
