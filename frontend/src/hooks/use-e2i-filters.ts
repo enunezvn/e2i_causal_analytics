@@ -79,6 +79,35 @@ export function useE2IFilters(): UseE2IFiltersReturn {
   const [localFilters, setLocalFilters] = React.useState<E2IFilters>(DEFAULT_FILTERS);
 
   // Try to get context, but don't throw if not available
+  //
+  // #1942: this try/catch is a rules-of-hooks *smell* (React explicitly warns
+  // against calling hooks inside try/catch), but it is NOT a latent crash —
+  // useE2ICopilot() calls exactly one hook (useContext) before its throw
+  // point, so the hook count/order is identical on both paths, and whether it
+  // throws is stable for a given render tree.
+  //
+  // The obvious-looking replacement — gate this call behind useCopilotEnabled()
+  // instead — is NOT behavior-preserving and was rejected after measuring it:
+  // RootLayout (frontend/src/router/index.tsx) mounts <E2ICopilotProvider>
+  // unconditionally *inside* <CopilotKitWrapper enabled={env.copilotEnabled}>,
+  // so the provider (and this real context) is present even when
+  // useCopilotEnabled() reports false — e.g. dev mode (VITE_COPILOT_ENABLED
+  // defaults to false outside prod) and the CI e2e build (explicitly
+  // VITE_COPILOT_ENABLED=false). Gating on `enabled` there would silently
+  // switch this hook to an isolated per-component local state instead of the
+  // shared filters context that AIAgentInsights/E2IChatPopup/E2IChatSidebar
+  // read directly via useE2ICopilot() — breaking cross-page brand/region
+  // filter sync in exactly those environments. Confirmed with a render test
+  // asserting a sibling reading useE2ICopilot() directly observes a setBrand()
+  // made through this hook while wrapped only in
+  // `<CopilotKitWrapper enabled={false}><E2ICopilotProvider>` (provider
+  // mounted, copilot disabled) — it does today; it stops the moment this call
+  // is gated on `enabled`. See use-e2i-filters.test.ts for the pinned
+  // regression test. There is no way to distinguish "no provider mounted" from
+  // "provider mounted, copilot disabled" using useCopilotEnabled() alone —
+  // both report `false` — so a correct non-try/catch fix needs a safe,
+  // non-throwing accessor exported from E2ICopilotProvider.tsx itself (out of
+  // scope here).
   let contextFilters: E2IFilters | null = null;
   let setContextFilters: React.Dispatch<React.SetStateAction<E2IFilters>> | null = null;
 
