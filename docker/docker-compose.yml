@@ -25,6 +25,34 @@ x-logging: &default-logging
     max-file: "3"
 
 x-common-env: &common-env
+  # ---------------------------------------------------------------------------
+  # ENV-FORWARDING POLICY (#1931 / #1933). This anchor is a WHITELIST: a host
+  # .env value reaches api/workers/scheduler ONLY if it is named here. Two
+  # halves of one rule, each of which has already cost an incident:
+  #
+  #   1. FORWARD every var an operator is documented to be able to change.
+  #      A knob advertised in .env.example / DEPLOYMENT.md but missing here is a
+  #      SILENT no-op inside the containers while it keeps working host-side —
+  #      worst exactly when it matters. #1931: ADAPTIVE_CRITERIA, documented in
+  #      two places as THE rollback switch, was never forwarded, so an operator
+  #      rolling back during an incident would have changed nothing and been
+  #      told nothing.
+  #   2. A var deliberately left OUT is HOST-SIDE ONLY, and src/ must not read
+  #      it as though it were forwarded. ANTHROPIC_MODEL (below) is the standing
+  #      example: its exclusion is a decision, so container code reading it only
+  #      ever observes its own hardcoded fallback — which is how the chatbot
+  #      Opik span came to report a model that is never called (#1933).
+  #
+  # Adding a var here is therefore a claim that an operator may set it. Leaving
+  # one out is a claim that nobody may — including code.
+  #
+  # Defaults: `${VAR:-}` is NOT "leave it unset". Docker sets the variable to the
+  # EMPTY STRING. Measured 2026-09-07 on a var already forwarded that way:
+  #   `docker exec e2i_api printenv CHATBOT_RAG_REWRITE_COT` -> exit 0, no output
+  # (versus exit 1 for a genuinely absent var). So the empty default is only
+  # equivalent to "unset" when the READER treats "" and unset alike. Where it
+  # does not, mirror the in-code default explicitly — see ADAPTIVE_CRITERIA.
+  # ---------------------------------------------------------------------------
   SUPABASE_URL: ${SUPABASE_URL}
   SUPABASE_KEY: ${SUPABASE_KEY}
   SUPABASE_ANON_KEY: ${SUPABASE_KEY}
@@ -199,7 +227,14 @@ x-common-env: &common-env
   # above: the host .env values silently never reached the containers, so the
   # in-code defaults governed. ANTHROPIC_MODEL is deliberately NOT forwarded —
   # its in-code defaults resolve to current models, while the host .env pins an
-  # opus-tier id meant for interactive use, not the platform lanes.
+  # opus-tier id meant for interactive use, not the platform lanes. That is
+  # policy half 2 at the top of this anchor, and it binds src/ as well as the
+  # operator: container code must never read ANTHROPIC_MODEL, because there it
+  # can only ever return the caller's own fallback. #1933 was exactly that —
+  # the chatbot generate span reported `claude-sonnet-4-6` from an
+  # os.getenv("ANTHROPIC_MODEL", ...) default while the factory was really
+  # calling MODEL_MAPPINGS["anthropic"]["standard"] (claude-sonnet-5). Read the
+  # model off the constructed client instead, never from this variable.
   LLM_PROVIDER: ${LLM_PROVIDER:-openai}
   LLM_MODEL: ${LLM_MODEL:-}
   DSPY_LM_MODEL: ${DSPY_LM_MODEL:-}
@@ -212,6 +247,34 @@ x-common-env: &common-env
   # every service that merges *common-env. Operator opt-in for the Haiku
   # evaluator itself is still ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1.
   ADAPTIVE_VALIDITY_ARTIFACTS_DIR: /app/data/audit_artifacts
+  # ...and that opt-in, plus its model pin, now actually arrive (#1931). The
+  # sentence above named ADAPTIVE_VALIDITY_EVALUATOR_ENABLED as the operator's
+  # switch in the very block that forwards its neighbour, and then never
+  # forwarded it — so setting it in the host .env did nothing in the containers
+  # and the evaluator could not be turned on from the outside at all.
+  # Both default EMPTY, which is safe here because src/data/causal_role_evaluator.py
+  # reads them as `os.environ.get(VAR, "").strip()` — "" and unset are the same
+  # value at that reader, so the in-code SSOT (off / DEFAULT_EVALUATOR_MODEL)
+  # still governs when the operator sets nothing. Enabling it spends real Haiku
+  # budget, so it stays an operator decision rather than a deploy side effect.
+  ADAPTIVE_VALIDITY_EVALUATOR_ENABLED: ${ADAPTIVE_VALIDITY_EVALUATOR_ENABLED:-}
+  ADAPTIVE_VALIDITY_EVALUATOR_MODEL: ${ADAPTIVE_VALIDITY_EVALUATOR_MODEL:-}
+  # v3 adaptive success criteria — the ROLLBACK switch (#1931). .env.example and
+  # criteria_validator.py:18 both advertise ADAPTIVE_CRITERIA=false as the way to
+  # revert every binary-classification quality gate to the fixed Apr-26 baseline;
+  # it had never been forwarded, so in Docker the lever was connected to nothing.
+  #
+  # Default `true` — NOT the empty default its neighbours use, and the exception
+  # to "let the in-code default govern". This is deliberate. The reader is
+  #     os.getenv("ADAPTIVE_CRITERIA", "true").strip().lower() in _TRUTHY
+  # so an empty string is FALSY there, and `${ADAPTIVE_CRITERIA:-}` would put ""
+  # in every container and turn the v3 engine OFF platform-wide — the compose
+  # file would silently PERFORM the rollback this line exists to make possible.
+  # Mirroring the in-code default keeps host-unset behaviour byte-identical to
+  # today's while letting a host .env value win. If the in-code default ever
+  # flips, this must flip with it (pinned by
+  # tests/integration/test_compose_env_operator_switch_forwarding.py).
+  ADAPTIVE_CRITERIA: ${ADAPTIVE_CRITERIA:-true}
   # KPI synthetic-visibility (demo/review). Default OFF -> production's
   # migration-066 synthetic-exclusion gate stands. A synthetic-gold-only
   # instance opts in by setting E2I_KPI_INCLUDE_SYNTHETIC=true in its host .env:
@@ -225,6 +288,27 @@ x-common-env: &common-env
   # the platform runs at full potential — synthetic is a badge, not a gate.
   # Generalizes the KPI-only flag above; reversible (unset -> strict gate returns).
   E2I_INCLUDE_SYNTHETIC: ${E2I_INCLUDE_SYNTHETIC:-0}
+  # API compute-pool sizing and the segment run budget (#1931). These are pure
+  # box-headroom knobs on a memory-constrained droplet — exactly the things an
+  # operator needs to retune without shipping a code change — and none of them
+  # was forwarded, so every value in the host .env was inert in the containers.
+  #
+  # All four default EMPTY, which is precisely equivalent to unset here: each
+  # reader guards with `if raw is None or raw.strip() == "": return <default>`
+  # (src/api/dependencies/compute.py, src/api/routes/segments.py), so the in-code
+  # defaults stay the SSOT and no spurious "Invalid ..." warning is logged at
+  # boot. A compose-side numeric default would be a second, silently-diverging
+  # source of truth for a value tuned against the container's cgroup.
+  AGENT_COMPUTE_EXECUTOR_WORKERS: ${AGENT_COMPUTE_EXECUTOR_WORKERS:-}
+  HEAVY_COMPUTE_MAX_CONCURRENCY: ${HEAVY_COMPUTE_MAX_CONCURRENCY:-}
+  HEAVY_COMPUTE_EXECUTOR_WORKERS: ${HEAVY_COMPUTE_EXECUTOR_WORKERS:-}
+  SEGMENT_ANALYSIS_BUDGET_SECONDS: ${SEGMENT_ANALYSIS_BUDGET_SECONDS:-}
+  # P2 heavy-offload feature flag. Forwarding it makes it REACHABLE; it does not
+  # arm it. compute.py reads `os.environ.get("HEAVY_OFFLOAD_ENABLED", "false")`,
+  # so the empty default is falsy exactly like unset and the flag stays DARK.
+  # Turning it on also requires scaling worker_heavy, which ships at replicas: 0
+  # (see its comment below) — the two are a pair, not a single switch.
+  HEAVY_OFFLOAD_ENABLED: ${HEAVY_OFFLOAD_ENABLED:-}
 
 x-common-worker: &common-worker
   build:

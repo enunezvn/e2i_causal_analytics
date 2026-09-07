@@ -196,25 +196,39 @@ buys a quieter, smaller degradation instead.
 | `UMLS_UTS_API_KEY` | `src/data/kg/umls_uts.py` raises `UMLSAuthError`; `CitationResolver` catches it and degrades to `umls=None`, disabling synonym expansion — genuine supporting citations can score as unverified | Synonym expansion on |
 | `OPENFDA_API_KEY` | Unauthenticated client, which returns no rate-limit headers at all | openFDA reports `x-ratelimit-limit: 240` |
 
-#### Read by code but NOT forwarded — setting these in `.env` is inert in containers
+#### Host-side only — deliberately NOT forwarded into the containers
 
-Same whitelist rule, other direction. Each of these is read via `os.environ` in
-application code but does not appear in `x-common-env`, so a host `.env` value
-never reaches the containers and the in-code default governs. Verify with
-`grep -c '<VAR>' docker/docker-compose.yml` (comment-only hits do not count).
+Same whitelist rule, other direction. These are read via `os.environ` somewhere
+but are kept out of `x-common-env` **on purpose**, so a host `.env` value affects
+host-run scripts only and the in-code default governs in Docker. Verify with
+`grep -c '<VAR>:' docker/docker-compose.yml` (comment-only hits do not count).
 
-| Variable | In-code default | Where it is read |
-|----------|-----------------|------------------|
-| `SEGMENT_ANALYSIS_BUDGET_SECONDS` | `900.0` | `src/api/routes/segments.py` |
-| `AGENT_COMPUTE_EXECUTOR_WORKERS` | `1` | `src/api/dependencies/compute.py` |
-| `HEAVY_COMPUTE_EXECUTOR_WORKERS`, `HEAVY_COMPUTE_MAX_CONCURRENCY`, `HEAVY_OFFLOAD_ENABLED` | see module | `src/api/dependencies/compute.py` |
-| `ADAPTIVE_CRITERIA` | `true` | ML training path — so the documented rollback switch is inert in containers |
-| `ADAPTIVE_VALIDITY_EVALUATOR_ENABLED`, `ADAPTIVE_VALIDITY_EVALUATOR_MODEL` | off / Haiku 4.5 | Layer-4 evaluator |
-| `ANTHROPIC_MODEL` | in-code default | Deliberately not forwarded — the host `.env` pins an id meant for interactive use, not the platform lanes |
-| `CORS_ORIGINS` | — | No reader in `src/` at all |
-| `SUPABASE_JWT_SECRET` | — | `src/api/dependencies/auth.py` logs about it, but verification goes through `client.auth.get_user()`; currently optional and unused |
+| Variable | Why it is not forwarded |
+|----------|-------------------------|
+| `ANTHROPIC_MODEL` | The host `.env` pins an id meant for interactive use, not the platform lanes; the in-code defaults resolve to current models. The exclusion binds application code too — reading it inside a container can only ever return the caller's own fallback, which is how the chatbot span came to report a model that was never called (#1933) |
+| `CORS_ORIGINS` | No reader in `src/` at all |
+| `SUPABASE_JWT_SECRET` | `src/api/dependencies/auth.py` logs about it, but verification goes through `client.auth.get_user()`; currently optional and unused |
 
 Changing any of those on the droplet needs a compose change, not an `.env` change.
+
+This table used to be much longer. Eight operator switches sat in it —
+`ADAPTIVE_CRITERIA`, `ADAPTIVE_VALIDITY_EVALUATOR_ENABLED` / `_MODEL`,
+`SEGMENT_ANALYSIS_BUDGET_SECONDS`, `AGENT_COMPUTE_EXECUTOR_WORKERS`,
+`HEAVY_COMPUTE_MAX_CONCURRENCY`, `HEAVY_COMPUTE_EXECUTOR_WORKERS` and
+`HEAVY_OFFLOAD_ENABLED` — described as inert because they genuinely were. That
+was an oversight rather than a policy (#1931): `ADAPTIVE_CRITERIA` is documented
+in two places as *the* rollback switch for the adaptive success-criteria engine,
+so an operator reaching for it mid-incident would have changed nothing and been
+told nothing. All eight are now forwarded, and
+`tests/integration/test_compose_env_operator_switch_forwarding.py` keeps them
+forwarded *and* keeps this table honest.
+
+One subtlety worth carrying: `${VAR:-}` does not leave a variable unset — docker
+sets it to the **empty string**. That is harmless for the seven readers that
+guard on `raw.strip() == ""`, and a behaviour flip for `ADAPTIVE_CRITERIA`, whose
+reader is `os.getenv("ADAPTIVE_CRITERIA", "true")`. It is therefore forwarded as
+`${ADAPTIVE_CRITERIA:-true}`; the obvious empty default would have silently
+performed the very rollback the forwarding exists to enable.
 
 ---
 
