@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_operator
+from src.api.errors import user_safe_503_detail
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.expert_review import (
     AgentAssessmentResponse,
@@ -44,6 +45,28 @@ if TYPE_CHECKING:
     from src.repositories.expert_review import ExpertReviewRepository
 
 logger = logging.getLogger(__name__)
+
+# R3: the repository re-raises store errors instead of returning [] / zeros
+# (a "0 pending" page with HTTP 200 during an outage is a plausible-wrong
+# value). The app's catch-all classifies exceptions by message keyword
+# ("connection"/"unavailable" -> 503, otherwise a generic 500), which is not a
+# contract, so these routes map a store failure themselves with the existing
+# HTTPException(503) pattern (routes/causal.py, routes/digital_twin.py). The
+# app's StarletteHTTPException handler MASKS a 503 detail unless it is marked
+# with errors.user_safe_503_detail(); this one names no internals, so it is
+# marked and reaches the client as the response ``message``. (The handler
+# builds its own JSONResponse, so an HTTPException ``Retry-After`` header
+# would be dropped -- its body already says "try again in 30 seconds".)
+_STORE_UNAVAILABLE_DETAIL = "Expert-review store unavailable. Retry shortly."
+
+
+def _store_unavailable(operation: str, exc: Exception) -> HTTPException:
+    logger.error(f"Expert-review {operation} failed: {exc}", exc_info=True)
+    return HTTPException(
+        status_code=503,
+        detail=user_safe_503_detail(_STORE_UNAVAILABLE_DETAIL),
+    )
+
 
 router = APIRouter(
     prefix="/expert-reviews",
@@ -92,7 +115,10 @@ async def list_pending_reviews(
     metadata + approve/reject, no DAG graph render (OD-2).
     """
     repo = await _get_expert_review_repo()
-    rows = await repo.get_pending_reviews(brand=brand, reviewer_id=reviewer_id, limit=limit)
+    try:
+        rows = await repo.get_pending_reviews(brand=brand, reviewer_id=reviewer_id, limit=limit)
+    except Exception as e:  # store failure (R3): honest 503, never an empty queue
+        raise _store_unavailable("pending-queue read", e) from e
     reviews = [PendingReviewItem.model_validate(row) for row in rows]
     return PendingReviewsResponse(reviews=reviews, total=len(reviews))
 
@@ -231,9 +257,15 @@ async def get_summary(
     brand: Optional[str] = Query(None, description="Filter by brand"),
     user: Dict[str, Any] = Depends(require_operator),
 ) -> ReviewSummaryResponse:
-    """Return status counts (pending/approved/rejected/expired/expiring_soon)."""
+    """Return status counts (pending/approved/rejected/expired/expiring_soon).
+
+    A store failure is 503 (R3) -- never all-zero counts with a 200.
+    """
     repo = await _get_expert_review_repo()
-    summary = await repo.get_review_summary(brand=brand)
+    try:
+        summary = await repo.get_review_summary(brand=brand)
+    except Exception as e:  # store failure (R3): honest 503, never zero counts
+        raise _store_unavailable("summary read", e) from e
     return ReviewSummaryResponse(
         pending=summary.get("pending", 0),
         approved=summary.get("approved", 0),

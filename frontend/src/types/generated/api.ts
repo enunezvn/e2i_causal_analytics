@@ -4345,6 +4345,8 @@ export interface paths {
         /**
          * Expert-review status counts
          * @description Return status counts (pending/approved/rejected/expired/expiring_soon).
+         *
+         *     A store failure is 503 (R3) -- never all-zero counts with a 200.
          */
         get: operations["get_expert_review_summary"];
         put?: never;
@@ -16310,14 +16312,17 @@ export interface components {
          * ReviewSummaryResponse
          * @description Response for ``GET /expert-reviews/summary``.
          *
-         *     Mirrors ``get_review_summary`` (repo :507-513).
+         *     Mirrors ``ExpertReviewRepository.get_review_summary``.
          *
          *     These counts are NOT all disjoint (#1972). ``pending`` / ``approved`` /
          *     ``rejected`` / ``expired`` partition the rows, but **``expiring_soon`` is a
          *     subset of ``approved``** -- a row approved and within 14 days of
          *     ``valid_until`` is counted in both. Summing all five double-counts those
          *     rows. ``expired`` is derived from ``valid_until`` at read time and is never
-         *     a stored ``approval_status``.
+         *     a stored ``approval_status``. A NULL ``valid_until`` is a PERMANENT
+         *     approval (the schema's ``v_active_expert_approvals`` labels it
+         *     ``'permanent'``): counted in ``approved``, never in ``expired`` or
+         *     ``expiring_soon``.
          */
         ReviewSummaryResponse: {
             /** Pending */

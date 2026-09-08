@@ -40,6 +40,9 @@ class _FakeExpertReviewRepo:
         self.rows_by_id: Dict[str, Dict[str, Any]] = {}
         self.assessment_writes: List[Dict[str, Any]] = []
         self.assessment_write_return: bool = True
+        # R3: when set, every READ raises it (a store outage). The real repo
+        # re-raises client errors instead of returning []/zeros.
+        self.read_error: Optional[BaseException] = None
 
     async def get_pending_reviews(
         self,
@@ -47,6 +50,8 @@ class _FakeExpertReviewRepo:
         reviewer_id: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
+        if self.read_error is not None:
+            raise self.read_error
         return list(self.pending_rows)
 
     async def submit_review(
@@ -73,6 +78,8 @@ class _FakeExpertReviewRepo:
         return self.submit_return
 
     async def get_review_summary(self, brand: Optional[str] = None) -> Dict[str, int]:
+        if self.read_error is not None:
+            raise self.read_error
         return dict(self.summary)
 
     async def get_by_id(self, id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
@@ -200,6 +207,44 @@ class TestResolveReview:
             json={"approval_status": "approved", "checklist": {}},
         )
         assert resp.status_code == 404, resp.text
+
+
+class TestStoreOutageIsHonest:
+    """R3: a store failure must be a 503 with a plain detail, never a 200 with
+    an empty queue or zero counts, and never a raw 500. The app's catch-all
+    classifies by message keyword ("connection"/"unavailable" -> 503, else
+    500), which is not a contract -- so the route maps it itself, mirroring
+    routes/causal.py ("Causal data store unavailable", 503) and
+    routes/digital_twin.py (503 + Retry-After)."""
+
+    @pytest.fixture
+    def outage_client(self, fake_repo):
+        from fastapi.testclient import TestClient
+
+        # A generic message: on the OLD code this reached the catch-all as a
+        # plain 500 (positive control), because it carries no keyword.
+        fake_repo.read_error = RuntimeError("store down")
+        return TestClient(app, raise_server_exceptions=False)
+
+    # The app's StarletteHTTPException handler reshapes a 503 into the
+    # DependencyError envelope ({"error", "category", "message", ...}) and masks
+    # the detail unless the route marked it user-safe -- so the plain message
+    # landing in ``message`` proves both the status and the marking.
+    def test_pending_queue_is_503_not_empty_200(self, outage_client):
+        resp = outage_client.get("/api/expert-reviews/pending")
+        assert resp.status_code == 503, resp.text
+        body = resp.json()
+        assert body["category"] == "dependency_error"
+        assert body["message"] == "Expert-review store unavailable. Retry shortly."
+        assert "reviews" not in body, "no empty queue may ride an error response"
+
+    def test_summary_is_503_not_zeros_200(self, outage_client):
+        resp = outage_client.get("/api/expert-reviews/summary")
+        assert resp.status_code == 503, resp.text
+        body = resp.json()
+        assert body["category"] == "dependency_error"
+        assert body["message"] == "Expert-review store unavailable. Retry shortly."
+        assert "pending" not in body, "no zero counts may ride an error response"
 
 
 class TestReviewSummary:
