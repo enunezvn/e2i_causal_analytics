@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, cast
 from uuid import UUID
 
 import numpy as np
@@ -97,9 +97,7 @@ def _enum_value(value: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def resolve_frame_provenance(
-    frame: Optional[pd.DataFrame], state: Mapping[str, Any]
-) -> bool:
+def resolve_frame_provenance(frame: Optional[pd.DataFrame], state: Mapping[str, Any]) -> bool:
     """Decide ``is_synthetic`` for a DAG discovered from ``frame``.
 
     Evidence, strongest first — the answer is never a silent default:
@@ -144,7 +142,7 @@ def _matrix_or_none(matrix: Any) -> Optional[List[List[int]]]:
     array = np.asarray(matrix)
     if array.size == 0:
         return None
-    return array.tolist()
+    return cast(List[List[int]], array.tolist())
 
 
 def build_discovered_dag_payload(
@@ -291,7 +289,7 @@ def build_discovered_dag_payload(
         "algorithm_runs": algorithm_runs,
         "edges": edge_rows,
     }
-    return _to_plain_json(payload)
+    return cast(Dict[str, Any], _to_plain_json(payload))
 
 
 # ---------------------------------------------------------------------------
@@ -360,9 +358,7 @@ class DiscoveredDagRepository(BaseRepository[Dict[str, Any]]):
         if not self.client:
             return []
         query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("dag_version_hash", dag_version_hash)
+            self.client.table(self.table_name).select("*").eq("dag_version_hash", dag_version_hash)
         )
         query = apply_provenance_filter(query, include_synthetic=include_synthetic)
         result = await query.order("created_at", desc=True).limit(limit).execute()

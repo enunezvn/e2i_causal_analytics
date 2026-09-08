@@ -351,6 +351,15 @@ class CausalImpactState(TypedDict):
     discovery_gate_evaluation: NotRequired[Dict[str, Any]]  # Full GateEvaluation from gate
     discovery_latency_ms: NotRequired[float]  # Discovery computation time
     discovery_skip_reason: NotRequired[str]  # M-gb1: surfaced reason auto-discovery was skipped
+    # #1974: durable record of the discovery run in public.discovered_dags
+    # (DiscoveredDagRepository, written by graph_builder whenever discovery
+    # actually ran). Exactly one of the two is set per discovery run:
+    # discovered_dag_id on success; discovered_dag_persist_error (also
+    # appended to warnings) when persistence failed — never silent, never a
+    # crash. Declared so LangGraph persists them (undeclared channels are
+    # dropped) and the agent-analyze response can surface both.
+    discovered_dag_id: NotRequired[str]
+    discovered_dag_persist_error: NotRequired[str]
 
     # Estimation outputs
     estimation_result: NotRequired[EstimationResult]

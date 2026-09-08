@@ -237,3 +237,28 @@ def _neutralize_drift_monitoring_client(request, monkeypatch):
     monkeypatch.setattr(
         _dm, "get_drift_monitoring_client", AsyncMock(return_value=None), raising=False
     )
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_discovered_dag_persistence(request, monkeypatch):
+    """Autouse (#1974): graph_builder persists EVERY discovery run to
+    public.discovered_dags through the service-role client. Under the
+    dead-Supabase pin above the client is created but the RPC raises
+    ``httpx.ConnectError`` (measured), which the node correctly turns into a
+    ``discovered_dag_persist_error`` + a ``warnings`` entry — on every
+    discovery unit test in the tree, flipping warnings-absence assertions and
+    adding an ERROR log per run for an environmental, not functional, reason.
+
+    Stub the persistence STEP to an empty state delta (the #788
+    ``_contribute_to_memory`` precedent: neutralise the side effect, keep the
+    analysis). The wiring tests
+    (``test_graph_builder_persistence_1974``) opt out by nodeid and exercise the
+    real step against a fake repository; ``raising=True`` so a rename of the
+    step breaks loudly instead of silently un-stubbing the tree."""
+    if "test_graph_builder_persistence_1974" in request.node.nodeid:
+        return
+    try:
+        import src.agents.causal_impact.nodes.graph_builder as _gb
+    except Exception:  # pragma: no cover - module always importable in unit env
+        return
+    monkeypatch.setattr(_gb, "_persist_discovered_dag", AsyncMock(return_value={}), raising=True)

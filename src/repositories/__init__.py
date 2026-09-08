@@ -20,6 +20,7 @@ V3 Repositories:
 V4.3 Repositories:
 - CausalValidationRepository: Refutation test results and gate decisions
 - ExpertReviewRepository: Domain expert DAG validation and approval workflow
+- DiscoveredDagRepository: Durable record of causal-discovery runs (#1974)
 
 ML Data Loading (Phase 1):
 - MLDataLoader: Load data from Supabase for ML pipelines
@@ -92,6 +93,7 @@ from src.repositories.deployment import (
     MLDeployment,
     MLDeploymentRepository,
 )
+from src.repositories.discovered_dag import DiscoveredDagRepository
 
 # Drift Monitoring (Phase 14)
 from src.repositories.drift_monitoring import (
@@ -192,6 +194,7 @@ __all__ = [
     "UserSessionRepository",
     "CausalValidationRepository",
     "ExpertReviewRepository",
+    "DiscoveredDagRepository",
     "ObservabilitySpanRepository",
     # ML Data Loading
     "MLDataLoader",

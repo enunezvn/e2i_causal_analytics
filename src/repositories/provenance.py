@@ -25,6 +25,7 @@ PROVENANCE_DROP_COLS: tuple[str, ...] = (PROVENANCE_COLUMN,)
 #   database/migrations/063_is_synthetic_provenance.sql        (M1, 12 tables)
 #   database/migrations/067_kpi_view_synthetic_exclusion.sql   (3 view-backed)
 #   database/migrations/069_synthetic_provenance_shard09_tables.sql (Shard 09, 11)
+#   database/ml/036_move_discovery_tables_to_public.sql         (#1974, 1)
 PROVENANCE_TAGGED_TABLES: frozenset[str] = frozenset(
     {
         # 063
@@ -56,6 +57,8 @@ PROVENANCE_TAGGED_TABLES: frozenset[str] = frozenset(
         "feature_groups",
         "features",
         "feature_values",
+        # ml/036 (#1974)
+        "discovered_dags",
     }
 )
 
