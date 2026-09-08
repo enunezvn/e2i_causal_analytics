@@ -420,13 +420,20 @@ def _parse_or(filters: str) -> _Pred:
 
 
 class FakeQuery:
-    def __init__(self, rows: List[Dict[str, Any]], log: List[Tuple[str, Any]]):
+    def __init__(
+        self,
+        rows: List[Dict[str, Any]],
+        log: List[Tuple[str, Any]],
+        fail_with: Optional[BaseException] = None,
+    ):
         self._rows = rows
         self._log = log
+        self._fail_with = fail_with
         self._preds: List[_Pred] = []
         self._order: Optional[Tuple[str, bool]] = None
         self._limit: Optional[int] = None
         self._insert: Optional[Dict[str, Any]] = None
+        self._update: Optional[Dict[str, Any]] = None
 
     def select(self, cols: str = "*") -> "FakeQuery":
         self._log.append(("select", cols))
@@ -473,11 +480,24 @@ class FakeQuery:
         self._insert = dict(row)
         return self
 
+    def update(self, data: Dict[str, Any]) -> "FakeQuery":
+        self._log.append(("update", dict(data)))
+        self._update = dict(data)
+        return self
+
     async def execute(self) -> SimpleNamespace:
+        if self._fail_with is not None:
+            raise self._fail_with
         if self._insert is not None:
             new = {"review_id": f"rev-{len(self._rows) + 1}", **self._insert}
             self._rows.append(new)
             return SimpleNamespace(data=[new])
+        if self._update is not None:
+            # PostgREST UPDATE ... WHERE <all filters>; returns the touched rows.
+            touched = [r for r in self._rows if all(p(r) for p in self._preds)]
+            for r in touched:
+                r.update(self._update)
+            return SimpleNamespace(data=[dict(r) for r in touched])
         out = [r for r in self._rows if all(p(r) for p in self._preds)]
         if self._order:
             col, desc = self._order
@@ -488,13 +508,14 @@ class FakeQuery:
 
 
 class FakeClient:
-    def __init__(self, rows: List[Dict[str, Any]]):
+    def __init__(self, rows: List[Dict[str, Any]], fail_with: Optional[BaseException] = None):
         self.rows = [dict(r) for r in rows]
         self.log: List[Tuple[str, Any]] = []
+        self.fail_with = fail_with
 
     def table(self, name: str) -> FakeQuery:
         assert name == "expert_reviews", name
-        return FakeQuery(self.rows, self.log)
+        return FakeQuery(self.rows, self.log, self.fail_with)
 
 
 def _row(status: str, valid_until: Optional[str], **extra: Any) -> Dict[str, Any]:
@@ -740,4 +761,83 @@ class TestRenewalRow:
         assert "still active" in doc.lower(), (
             "the original is reported again after the renewal expires ONLY while it is "
             "itself still active -- the docstring must say so (codex iter-2)"
+        )
+
+
+# --------------------------------------------------------------------------
+# R1 (lane-1971 audit): a store error must not read as "nothing on file"
+# --------------------------------------------------------------------------
+
+
+class StoreDown(RuntimeError):
+    """Stands in for any transient client/transport failure."""
+
+
+class TestReadErrorsAreNotSwallowed:
+    """The gate's rejection probe reads an empty result as "structure clear".
+    Before this change both readers turned a query error into []/None, so an
+    outage looked like a clean slate. They must raise (after logging) so the
+    gate can report ``unavailable`` and the node ``unknown``."""
+
+    async def test_get_dag_approval_raises_on_store_error(self, caplog):
+        repo = ExpertReviewRepository(supabase_client=FakeClient([PERMANENT], StoreDown("down")))
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(StoreDown):
+                await repo.get_dag_approval("dag-1")
+        assert any("Failed to get DAG approval" in r.getMessage() for r in caplog.records)
+
+    async def test_get_reviews_for_dag_raises_on_store_error(self, caplog):
+        repo = ExpertReviewRepository(supabase_client=FakeClient([PENDING], StoreDown("down")))
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(StoreDown):
+                await repo.get_reviews_for_dag("dag-1")
+        assert any("Failed to get reviews for DAG" in r.getMessage() for r in caplog.records)
+
+    async def test_no_client_early_returns_are_unchanged(self):
+        repo = ExpertReviewRepository(supabase_client=None)
+        assert await repo.get_dag_approval("dag-1") is None
+        assert await repo.get_reviews_for_dag("dag-1") == []
+
+    def test_docstrings_say_they_raise(self):
+        for fn in (
+            ExpertReviewRepository.get_dag_approval,
+            ExpertReviewRepository.get_reviews_for_dag,
+        ):
+            assert "Raises" in (fn.__doc__ or ""), fn.__name__
+
+
+# --------------------------------------------------------------------------
+# R2 (lane-1971 audit): only a PENDING row can be resolved
+# --------------------------------------------------------------------------
+
+
+class TestSubmitReviewResolvesOnlyPending:
+    async def test_pending_row_is_resolved(self):
+        repo, client = _repo([PENDING])
+        ok = await repo.submit_review(PENDING["review_id"], "approved", {"c": True})
+        assert ok is True
+        assert client.rows[0]["approval_status"] == "approved"
+        assert ("eq", "approval_status", "pending") in client.log, client.log
+
+    async def test_already_approved_older_row_cannot_be_re_resolved(self):
+        """An older approval re-resolved to 'rejected' while a NEWER approval
+        exists would silently flip history. The UPDATE must carry the pending
+        filter so it matches zero rows -> False (route -> 404)."""
+        older = dict(FAR_FUTURE, review_id="rev-older")
+        newer = dict(FAR_FUTURE, review_id="rev-newer")
+        repo, client = _repo([older, newer])
+        ok = await repo.submit_review("rev-older", "rejected", {"c": False})
+        assert ok is False
+        assert client.rows[0]["approval_status"] == "approved", "the row must be untouched"
+        assert ("eq", "approval_status", "pending") in client.log, client.log
+
+    async def test_rejected_row_cannot_be_flipped_to_approved(self):
+        repo, client = _repo([REJECTED])
+        assert await repo.submit_review(REJECTED["review_id"], "approved", {"c": True}) is False
+        assert client.rows[0]["approval_status"] == "rejected"
+
+    def test_docstring_states_pending_only_is_enforced(self):
+        doc = ExpertReviewRepository.submit_review.__doc__ or ""
+        assert "pending" in doc.lower() and "approval_status" in doc, (
+            "the docstring must say the UPDATE itself carries approval_status = 'pending'"
         )

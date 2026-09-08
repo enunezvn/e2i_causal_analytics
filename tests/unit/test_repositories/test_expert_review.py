@@ -229,9 +229,13 @@ class TestExpertReviewRepository:
 
     @pytest.mark.asyncio
     async def test_submit_review_approved(self, repo, mock_client):
-        """Test submitting an approved review."""
+        """Test submitting an approved review.
+
+        Chain pins R2: the UPDATE is filtered by review_id AND
+        approval_status='pending' (two .eq calls), so only a pending row resolves.
+        """
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
             review_id="rev-123",
@@ -246,7 +250,7 @@ class TestExpertReviewRepository:
     async def test_submit_review_rejected(self, repo, mock_client):
         """Test submitting a rejected review."""
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
             review_id="rev-123",
@@ -267,7 +271,7 @@ class TestExpertReviewRepository:
         fabricated success (the route would 200 a record it never changed).
         """
         mock_execute = AsyncMock(return_value=MagicMock(data=[]))
-        mock_client.table.return_value.update.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
             review_id="does-not-exist",

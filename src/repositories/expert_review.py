@@ -300,6 +300,13 @@ class ExpertReviewRepository(BaseRepository):
         """
         Submit a completed expert review.
 
+        Only a PENDING row can be resolved (R2, lane-1971 audit): the UPDATE
+        itself carries ``approval_status = 'pending'``, so an already-resolved
+        row -- including an OLDER approval while a NEWER one exists -- matches
+        zero rows and returns False (the route surfaces that as 404). Before
+        this the filter was ``review_id`` alone and the pending-only claim was
+        documentation, not enforcement.
+
         Args:
             review_id: UUID of the review to complete
             approval_status: 'approved' or 'rejected'
@@ -310,7 +317,8 @@ class ExpertReviewRepository(BaseRepository):
             validity_days: Days until review expires (default 90)
 
         Returns:
-            True if successful, False otherwise
+            True if exactly this pending row was resolved, False otherwise
+            (nonexistent, already resolved, or persistence error)
         """
         if not self.client:
             return False
@@ -341,6 +349,7 @@ class ExpertReviewRepository(BaseRepository):
                 self.client.table(self.table_name)
                 .update(update_data)
                 .eq("review_id", review_id)
+                .eq("approval_status", "pending")
                 .execute()
             )
             # FIX B (codex HIGH): a zero-row update (nonexistent or already-resolved
@@ -490,6 +499,13 @@ class ExpertReviewRepository(BaseRepository):
         Returns:
             The newest active approval record (permanent or unexpired --
             same predicate as ``is_dag_approved``), or None if not approved
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R1, lane-1971 audit). A store outage must not read as "no
+            approval on file": the gate maps the raise to ``unavailable``
+            and the refutation node to ``unknown`` instead of proceeding.
+            The no-client early return (None) is unchanged.
         """
         if not self.client:
             return None
@@ -509,8 +525,9 @@ class ExpertReviewRepository(BaseRepository):
             result = await query.execute()
             return result.data[0] if result.data else None
         except Exception as e:
+            # R1: log, then re-raise -- never turn an outage into "not approved".
             logger.error(f"Failed to get DAG approval: {e}")
-            return None
+            raise
 
     async def get_pending_reviews(
         self,
@@ -611,6 +628,12 @@ class ExpertReviewRepository(BaseRepository):
 
         Returns:
             List of review records for the DAG
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R1, lane-1971 audit). The gate's rejection probe reads an empty
+            list as "structure clear"; an outage must not look like that.
+            The no-client early return ([]) is unchanged.
         """
         if not self.client:
             return []
@@ -632,8 +655,9 @@ class ExpertReviewRepository(BaseRepository):
             result = await query.execute()
             return result.data or []
         except Exception as e:
+            # R1: log, then re-raise -- never turn an outage into "no reviews".
             logger.error(f"Failed to get reviews for DAG: {e}")
-            return []
+            raise
 
     async def renew_review(
         self,
