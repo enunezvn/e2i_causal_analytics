@@ -23,14 +23,12 @@
  */
 
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { Activity, Brain, Target, CheckCircle2, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useGraphStats } from '@/hooks/api/use-graph';
 import { useFullHealthCheck } from '@/hooks/api/use-health-score';
-import { getValidated } from '@/lib/api-client';
-import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import { useAgentStatus } from '@/hooks/api/use-agents';
 import { isTrustedProvenance } from '@/lib/provenance';
 
 // =============================================================================
@@ -85,12 +83,7 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
   const trustedHealth = health && isTrustedProvenance(health.data_provenance) ? health : null;
 
   // Real agent roster (same source as the Home Agent Status card).
-  const { data: agentStatus, error: agentsError } = useQuery({
-    queryKey: ['agent-status'],
-    queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
-    refetchInterval: 30000,
-    retry: false,
-  });
+  const { data: agentStatus, error: agentsError } = useAgentStatus();
 
   // Failed sources get a LABELED degraded notice — a query error must be
   // distinguishable from honest "no data yet" ('—').

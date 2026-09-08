@@ -17,7 +17,7 @@
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 
 // API Hooks
 import { useKPIList, useKPIHealth, useBatchCalculateKPIs } from '@/hooks/api/use-kpi';
@@ -29,8 +29,7 @@ import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-st
 import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
 import { useHomeKpiInsight } from '@/hooks/api/use-insights';
 import { useOpportunities } from '@/hooks/api/use-gaps';
-import { getValidated } from '@/lib/api-client';
-import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import { useAgentStatus } from '@/hooks/api/use-agents';
 import { isTrustedProvenance } from '@/lib/provenance';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -520,12 +519,7 @@ function Home() {
   const trustedHealth = health && isTrustedProvenance(health.data_provenance) ? health : null;
 
   // Agent Status card: real agent roster.
-  const { data: agentStatus, isLoading: agentsLoading } = useQuery({
-    queryKey: ['agent-status'],
-    queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
-    refetchInterval: 30000,
-    retry: false,
-  });
+  const { data: agentStatus, isLoading: agentsLoading } = useAgentStatus();
 
   // AI Insights tile — dual source: executive insights + gap opportunities.
   const {

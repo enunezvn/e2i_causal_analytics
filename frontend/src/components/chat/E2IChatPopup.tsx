@@ -16,12 +16,10 @@
 
 import * as React from 'react';
 import { CopilotPopup } from '@copilotkit/react-ui';
-import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MessageSquare, X, Bot, Keyboard } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getValidated } from '@/lib/api-client';
-import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import { useAgentStatus } from '@/hooks/api/use-agents';
 import { Button } from '@/components/ui/button';
 import { useE2ICopilot, useCopilotEnabled } from '@/providers/E2ICopilotProvider';
 
@@ -62,13 +60,7 @@ export function E2IChatPopup({
   // the Agent Orchestration page use (ACTIVE = action in the last ~15 min). The
   // provider's static registry is the fallback. Replaces the previously-dead
   // count derived from the never-populated `activeAgents` map.
-  const { data: agentStatus } = useQuery({
-    queryKey: ['agent-status'],
-    queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
-    refetchInterval: 30000,
-    retry: false,
-    enabled: copilotEnabled,
-  });
+  const { data: agentStatus } = useAgentStatus({ enabled: copilotEnabled });
 
   // Keyboard shortcut: Cmd/Ctrl + /
   React.useEffect(() => {
