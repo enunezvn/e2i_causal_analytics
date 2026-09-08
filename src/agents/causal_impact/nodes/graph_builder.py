@@ -517,31 +517,6 @@ class GraphBuilderNode:
         # documented fallback to no adjustment.
         return [[]]
 
-    def _find_backdoor_paths(
-        self, dag: nx.DiGraph, treatment: str, outcome: str
-    ) -> List[List[str]]:
-        """Find all backdoor paths from treatment to outcome.
-
-        A backdoor path is a path that enters treatment via an arrow
-        pointing into treatment.
-        """
-        backdoor_paths = []
-
-        # Get all simple paths
-        try:
-            all_paths = nx.all_simple_paths(dag.to_undirected(), treatment, outcome, cutoff=5)
-
-            for path in all_paths:
-                # Check if path enters treatment (backdoor)
-                if len(path) >= 2:
-                    # First edge in undirected path
-                    if dag.has_edge(path[1], path[0]):  # Arrow into treatment
-                        backdoor_paths.append(path)
-        except nx.NetworkXNoPath:
-            pass
-
-        return backdoor_paths
-
     def _satisfies_backdoor_criterion(
         self, dag: nx.DiGraph, adjustment_set: Set[str], treatment: str, outcome: str
     ) -> bool:

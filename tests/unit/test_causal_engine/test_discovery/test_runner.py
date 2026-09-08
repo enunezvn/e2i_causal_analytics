@@ -4,6 +4,7 @@ Version: 1.0.0
 Tests the causal discovery runner with ensemble algorithms.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -404,3 +405,66 @@ class TestRegisterAlgorithm:
 
         # Clean up
         del DiscoveryRunner.ALGORITHM_REGISTRY[DiscoveryAlgorithmType.LINGAM]
+
+
+class TestPerAlgorithmTimeout:
+    """#1978: ``timeout_seconds`` bounds each algorithm on the sequential path."""
+
+    @pytest.mark.asyncio
+    async def test_slow_algorithm_times_out_as_a_failed_run(self):
+        import time as _time
+
+        import pandas as pd
+
+        class SlowAlgorithm:
+            def discover(self, data, config):
+                _time.sleep(0.5)
+                return AlgorithmResult(
+                    algorithm=DiscoveryAlgorithmType.LINGAM,
+                    adjacency_matrix=np.zeros((2, 2), dtype=int),
+                    edge_list=[],
+                    runtime_seconds=0.5,
+                )
+
+        DiscoveryRunner.register_algorithm(DiscoveryAlgorithmType.LINGAM, SlowAlgorithm)
+        try:
+            runner = DiscoveryRunner(timeout_seconds=0.05, enable_tracing=False)
+            data = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [2.0, 1.0, 4.0, 3.0]})
+            config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.LINGAM])
+            result = await runner.discover_dag(data, config)
+        finally:
+            del DiscoveryRunner.ALGORITHM_REGISTRY[DiscoveryAlgorithmType.LINGAM]
+
+        assert len(result.algorithm_results) == 1
+        failed = result.algorithm_results[0]
+        assert failed.converged is False
+        assert "timeout" in failed.metadata["error"]
+        # No converged run -> no edges, never a silently empty converged DAG.
+        assert result.n_edges == 0
+        # Allow the abandoned worker thread to finish before the loop closes.
+        await asyncio.sleep(0.6)
+
+    @pytest.mark.asyncio
+    async def test_fast_algorithm_is_unaffected_by_the_bound(self):
+        import pandas as pd
+
+        class FastAlgorithm:
+            def discover(self, data, config):
+                return AlgorithmResult(
+                    algorithm=DiscoveryAlgorithmType.LINGAM,
+                    adjacency_matrix=np.array([[0, 1], [0, 0]], dtype=int),
+                    edge_list=[],
+                    runtime_seconds=0.001,
+                    metadata={"node_names": list(data.columns)},
+                )
+
+        DiscoveryRunner.register_algorithm(DiscoveryAlgorithmType.LINGAM, FastAlgorithm)
+        try:
+            runner = DiscoveryRunner(timeout_seconds=5.0, enable_tracing=False)
+            data = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [2.0, 1.0, 4.0, 3.0]})
+            config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.LINGAM])
+            result = await runner.discover_dag(data, config)
+        finally:
+            del DiscoveryRunner.ALGORITHM_REGISTRY[DiscoveryAlgorithmType.LINGAM]
+
+        assert result.algorithm_results[0].converged is True

@@ -599,6 +599,16 @@ class RefutationSummary(BaseModel):
             "the gate is REVIEW or BLOCK; None when the result auto-proceeded."
         ),
     )
+    expert_review_decision: Optional[str] = Field(
+        default=None,
+        description=(
+            "ExpertReviewGate decision recorded on a REVIEW/BLOCK gate: proceed "
+            "(active structural approval) / renewal_required / pending_review / "
+            "blocked. None when the gate was not consulted. Advisory: the run is "
+            "not halted on it (#1971); consumers that need approved structure "
+            "filter on this field."
+        ),
+    )
     tests_passed: Optional[int] = Field(default=None)
     tests_total: Optional[int] = Field(default=None)
     sensitivity_e_value: Optional[float] = Field(default=None)

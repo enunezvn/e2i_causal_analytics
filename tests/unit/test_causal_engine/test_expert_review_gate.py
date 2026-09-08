@@ -718,3 +718,76 @@ def test_auto_create_review_defaults_false_failclosed():
     )
     # Opt-in still honored:
     assert ExpertReviewGate(auto_create_review=True).auto_create_review is True
+
+
+class TestRejectedVerdictIsDurable:
+    """#1970: a rejected review must not be re-queued as a fresh pending row."""
+
+    @pytest.fixture
+    def mock_repo(self):
+        return MagicMock()
+
+    @pytest.mark.asyncio
+    async def test_rejected_latest_row_blocks_without_auto_create(self, mock_repo):
+        gate = ExpertReviewGate(repository=mock_repo, auto_create_review=True)
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {
+                    "review_id": "rev-rejected",
+                    "approval_status": "rejected",
+                    "reviewer_name": "Dr. No",
+                },
+                {"review_id": "rev-old-pending-resolved", "approval_status": "approved"},
+            ]
+        )
+        mock_repo.create_review = AsyncMock(return_value="rev-should-not-exist")
+
+        result = await gate.check_approval("abc123", requester_id="user-1")
+
+        assert result.decision == ReviewGateDecision.BLOCKED
+        assert result.is_approved is False
+        assert result.review_id == "rev-rejected"
+        assert result.reviewer_name == "Dr. No"
+        assert "rejected" in result.message.lower()
+        mock_repo.create_review.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_newer_pending_row_still_wins_over_older_rejection(self, mock_repo):
+        """Ordering: rows come back created_at DESC; a pending row newer than a
+        rejection means a reviewer re-opened the structure."""
+        gate = ExpertReviewGate(repository=mock_repo, auto_create_review=True)
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {"review_id": "rev-reopened", "approval_status": "pending"},
+                {"review_id": "rev-rejected", "approval_status": "rejected"},
+            ]
+        )
+        mock_repo.create_review = AsyncMock(return_value="rev-new")
+
+        result = await gate.check_approval("abc123", requester_id="user-1")
+
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert result.review_id == "rev-reopened"
+        mock_repo.create_review.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_older_rejection_below_a_newer_non_pending_row_does_not_block(self, mock_repo):
+        """Only the MOST RECENT verdict is durable; an old rejection under a
+        newer expired approval falls through to auto-create as before."""
+        gate = ExpertReviewGate(repository=mock_repo, auto_create_review=True)
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {"review_id": "rev-expired", "approval_status": "approved"},
+                {"review_id": "rev-rejected", "approval_status": "rejected"},
+            ]
+        )
+        mock_repo.create_review = AsyncMock(return_value="rev-new")
+
+        result = await gate.check_approval("abc123", requester_id="user-1")
+
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert result.review_id == "rev-new"
+        mock_repo.create_review.assert_called_once()

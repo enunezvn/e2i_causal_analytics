@@ -23,6 +23,21 @@ Usage:
     result = await runner.discover_dag(data, config)
     await cache.set(data, config, result)
 
+Status note (#1973): NO production caller today. ``graph_builder``, the
+feature analyzer's causal ranker and the tool-registry ``discover_dag`` all
+call ``DiscoveryRunner.discover_dag`` directly, so every run re-learns from
+scratch (including the 20 guided bootstrap resamples). This module is an
+intentional placeholder, not dead code. Two prerequisites before wiring it
+onto the agent path:
+
+1. ``_deserialize_result`` does not round-trip ``ensemble_dag`` or
+   ``algorithm_results``; a cache hit fed to ``graph_builder`` would fall
+   through the ACCEPT branch to the manual DAG. The serializer must carry the
+   graph (edge list + node list is enough to rebuild the DiGraph).
+2. ``hasher._hash_values`` rounds floats only for float dtypes; an
+   object-dtype frame bypasses the rounding contract (open finding FU-hasher,
+   docs/reports/causal-validation-remediation-status-20260605.md).
+
 Author: E2I Causal Analytics Team
 """
 

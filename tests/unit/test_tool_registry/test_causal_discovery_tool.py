@@ -703,3 +703,89 @@ class TestToolRegistration:
 
         assert mock_discover.called
         assert mock_rank.called
+
+
+class TestGuidedDiscovery:
+    """#1977: treatment/outcome make the tool run the agent's guided config."""
+
+    def _tool_with_capture(self):
+        from src.causal_engine.discovery import DiscoveryResult
+
+        tool = CausalDiscoveryTool(opik_enabled=False)
+        mock_runner = MagicMock()
+        mock_gate = MagicMock()
+        mock_result = MagicMock(spec=DiscoveryResult)
+        mock_result.n_edges = 1
+        mock_result.n_nodes = 3
+        mock_result.edges = []
+        mock_result.algorithm_results = []
+        mock_result.config = MagicMock()
+        mock_result.config.ensemble_threshold = 0.5
+        mock_evaluation = MagicMock()
+        mock_evaluation.decision.value = "accept"
+        mock_evaluation.confidence = 0.9
+        mock_evaluation.reasons = []
+        mock_runner.discover_dag = AsyncMock(return_value=mock_result)
+        mock_gate.evaluate.return_value = mock_evaluation
+        tool._runner = mock_runner
+        tool._gate = mock_gate
+        return tool, mock_runner
+
+    @pytest.mark.asyncio
+    async def test_guided_input_builds_tiers_required_edge_pc_and_bootstrap(self):
+        from src.causal_engine.discovery import DiscoveryAlgorithmType
+
+        tool, runner = self._tool_with_capture()
+        data = {
+            "sev": [1, 2, 3, 4],
+            "t": [0, 1, 0, 1],
+            "y": [0, 1, 1, 1],
+            "is_synthetic": [0, 0, 0, 0],
+        }
+        result = await tool.invoke(
+            {"data": data, "treatment_var": "t", "outcome_var": "y", "algorithms": ["ges", "pc"]}
+        )
+        assert result.success is True
+        config = runner.discover_dag.call_args.args[1]
+        assert config.algorithms == [DiscoveryAlgorithmType.PC]
+        assert config.prior_knowledge is not None
+        assert config.prior_knowledge.tiers == [["sev"], ["t"], ["y"]]
+        assert config.prior_knowledge.required_edges == [("t", "y")]
+        assert config.bootstrap_resamples == 20
+        assert config.latent_diagnostic is False
+
+    @pytest.mark.asyncio
+    async def test_unguided_input_keeps_legacy_behaviour(self):
+        from src.causal_engine.discovery import DiscoveryAlgorithmType
+
+        tool, runner = self._tool_with_capture()
+        await tool.invoke({"data": {"a": [1, 2, 3], "b": [3, 2, 1]}})
+        config = runner.discover_dag.call_args.args[1]
+        assert config.algorithms == [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
+        assert config.prior_knowledge is None
+        assert config.bootstrap_resamples == 0
+
+    @pytest.mark.asyncio
+    async def test_missing_column_falls_back_to_unguided_with_a_note(self):
+        tool, runner = self._tool_with_capture()
+        result = await tool.invoke(
+            {"data": {"a": [1, 2, 3], "b": [3, 2, 1]}, "treatment_var": "a", "outcome_var": "zzz"}
+        )
+        config = runner.discover_dag.call_args.args[1]
+        assert config.prior_knowledge is None
+        assert any("running unguided" in e for e in result.errors)
+
+    @pytest.mark.asyncio
+    async def test_explicit_bootstrap_override_is_honoured(self):
+        tool, runner = self._tool_with_capture()
+        await tool.invoke(
+            {
+                "data": {"t": [0, 1, 0, 1], "y": [0, 1, 1, 1]},
+                "treatment_var": "t",
+                "outcome_var": "y",
+                "bootstrap_resamples": 5,
+            }
+        )
+        config = runner.discover_dag.call_args.args[1]
+        assert config.prior_knowledge.tiers == [["t"], ["y"]]
+        assert config.bootstrap_resamples == 5

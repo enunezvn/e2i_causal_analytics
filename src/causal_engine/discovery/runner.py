@@ -421,12 +421,44 @@ class DiscoveryRunner:
                     algorithm = self._get_algorithm(algo_type)
                     logger.debug(f"Running {algo_type.value} algorithm...")
 
-                    # Run in executor to not block event loop
+                    # Run in executor to not block event loop. Bound each
+                    # algorithm by ``timeout_seconds`` (#1978): the attribute
+                    # was documented as a per-algorithm timeout but never
+                    # enforced, so a runaway causal-learn call was bounded only
+                    # by the caller's wall-clock cap. A timeout is a FAILED run
+                    # (converged=False) so the gate scores no evidence; never a
+                    # silently empty converged DAG. The worker thread itself
+                    # cannot be cancelled; its result is abandoned.
                     loop = asyncio.get_event_loop()
-                    result = await loop.run_in_executor(
-                        None,
-                        lambda a=algorithm: a.discover(data, config),  # type: ignore[misc]
-                    )
+                    try:
+                        result = await asyncio.wait_for(
+                            loop.run_in_executor(
+                                None,
+                                lambda a=algorithm: a.discover(data, config),  # type: ignore[misc]
+                            ),
+                            timeout=self.timeout_seconds,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(
+                            f"Algorithm {algo_type.value} timed out after "
+                            f"{self.timeout_seconds:.0f}s"
+                        )
+                        results.append(
+                            AlgorithmResult(
+                                algorithm=algo_type,
+                                adjacency_matrix=np.zeros(
+                                    (len(data.columns), len(data.columns)), dtype=int
+                                ),
+                                edge_list=[],
+                                runtime_seconds=float(self.timeout_seconds),
+                                converged=False,
+                                metadata={
+                                    "error": f"timeout after {self.timeout_seconds:.0f}s",
+                                    "timeout_seconds": self.timeout_seconds,
+                                },
+                            )
+                        )
+                        continue
 
                     results.append(result)
                     logger.debug(
@@ -476,7 +508,9 @@ class DiscoveryRunner:
         config_dict = config.to_dict()
 
         # Create process pool
-        with ProcessPoolExecutor(max_workers=config.max_workers) as executor:
+        # #1978: the runner's own max_workers is the fallback when the config
+        # does not pin one (it used to be stored and never read).
+        with ProcessPoolExecutor(max_workers=config.max_workers or self.max_workers) as executor:
             # Submit all algorithms
             futures = []
             for algo_type in config.algorithms:

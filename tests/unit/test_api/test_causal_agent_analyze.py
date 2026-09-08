@@ -1233,3 +1233,41 @@ async def test_agent_analysis_task_survives_tracker_failure():
     # The analysis result survived the tracker failure untouched.
     assert stored and stored[-1].status == "completed"
     assert stored[-1].ate == 0.12
+
+
+@pytest.mark.unit
+def test_expert_review_decision_travels_with_its_row_id():
+    """#1971: the gate's verdict is surfaced next to the review id so consumers
+    can tell pending_review from an active structural approval."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state(
+        refutation_results={"gate_decision": "review", "tests_passed": 1, "total_tests": 3},
+        expert_review_id="rev-42",
+        expert_review_decision="pending_review",
+    )
+    resp = _agent_state_to_response(
+        analysis_id="a3",
+        request=_req(),
+        data_source="database",
+        n_rows=80,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.refutation.expert_review_id == "rev-42"
+    assert resp.refutation.expert_review_decision == "pending_review"
+
+
+@pytest.mark.unit
+def test_expert_review_decision_is_none_when_gate_not_consulted():
+    from src.api.routes.causal import _agent_state_to_response
+
+    resp = _agent_state_to_response(
+        analysis_id="a4",
+        request=_req(),
+        data_source="database",
+        n_rows=80,
+        final_state=_base_state(),
+        latency_ms=10,
+    )
+    assert resp.refutation.expert_review_decision is None

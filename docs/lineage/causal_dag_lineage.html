@@ -698,16 +698,16 @@
 source == "llm" and evaluator_satisfied  → act
 otherwise                                → do not act</code></pre>
     <p>The same predicate is implemented in Python and in SQL, so a query over <code>adaptive_validity_verdicts</code> returns only actionable rows. LLM rows with no evaluator audit are skipped entirely. <span class="anchor">src/data/role_attribution.py:181</span> <span class="anchor">src/data/adaptive_validity_repository.py:68</span></p>
-    <div class="callout finding"><div class="label">Finding</div><p>Nothing populates <code>state["role_attributions"]</code> for the <code>causal_impact</code> agent. The dispatcher only passes it through for the heterogeneous optimizer. Combined with the policy's default of <code>OFF</code>, the feature-role system currently has no effect on the estimation DAG.</p></div>
+    <div class="callout finding"><div class="label">Finding</div><p>No producer populates <code>state["role_attributions"]</code> for the <code>causal_impact</code> agent on the API path. The dispatcher now passes the key through on the explicit-spec branch, as it already did for the heterogeneous optimizer, so a caller that supplies attributions reaches the policy node (issue #1976). Combined with the policy's default of <code>OFF</code>, the feature-role system still has no effect on the estimation DAG unless both are set.</p></div>
   </div></details>
 
   <h3 id="s1-7">1.7 What is not an input</h3>
   <ul>
     <li><strong>The ontology.</strong> <code>src/ontology</code> and <code>config/ontology/*.yaml</code> define a FalkorDB schema with a <code>CAUSES</code> edge type and confidence thresholds (proceed ≥ 0.75, review ≥ 0.50), but no module under <code>src/causal_engine</code> or the graph builder imports it. It represents already-discovered paths; it does not seed them.</li>
-    <li><strong>An LLM edge proposer.</strong> <code>CausalGraphSignature</code> is defined in <code>dspy_integration.py:225</code> and has zero call sites. The DSPy module that is wired consumes estimation and refutation text for narrative, not structure.</li>
-    <li><strong><code>forbidden_edges</code>.</strong> Declared, translated, hashed, never set.</li>
-    <li><strong>The discovery cache.</strong> <code>DiscoveryCache</code> (Redis, 1 h TTL) has no production caller. Every run re-learns from scratch, including the 20 bootstrap resamples.</li>
-    <li><strong><code>config/agent_config.yaml</code>.</strong> Its <code>require_dag_approval: true</code> and gate thresholds (0.8 / 0.6) are not read by any Python module. The live thresholds are the class constants cited in sections 2.5 and 4.2.</li>
+    <li><strong>An LLM edge proposer.</strong> <code>CausalGraphSignature</code> is defined in <code>dspy_integration.py:225</code> and has zero call sites; its docstring now records it as a deliberate roadmap placeholder (issue #1973). The DSPy module that is wired consumes estimation and refutation text for narrative, not structure.</li>
+    <li><strong><code>forbidden_edges</code>.</strong> Declared, translated, hashed, never set by the agent path. Kept as API surface for callers that must veto an edge; documented as such (issue #1973).</li>
+    <li><strong>The discovery cache.</strong> <code>DiscoveryCache</code> (Redis, 1 h TTL) has no production caller. Every run re-learns from scratch, including the 20 bootstrap resamples. Its module docstring now lists the two prerequisites before it could be wired: the serializer drops <code>ensemble_dag</code>, and object-dtype frames bypass the hash rounding contract (issue #1973).</li>
+    <li><strong><code>config/agent_config.yaml</code>.</strong> Its <code>require_dag_approval: true</code> and gate thresholds are not read by any Python module. The block is now annotated as documentation-only and its numbers mirror the live class constants cited in sections 2.5 and 4.2 (issue #1975).</li>
   </ul>
 </section>
 
@@ -753,6 +753,7 @@ otherwise                                → do not act</code></pre>
 node_names=…, background_knowledge=build_background_knowledge(prior, node_names)   # guided only</code></pre>
     <p>Independence test: <code>fisherz</code> if all columns are float or int dtypes or <code>assume_gaussian</code>; <code>chisq</code> if every column has ≤ 10 distinct values; otherwise <code>fisherz</code>. CPDAG undirected edges become both adjacency cells. A parse failure must reach the outer handler so the result is <code>converged=False</code>, never a silently empty converged graph. <span class="anchor">src/causal_engine/discovery/algorithms/pc_wrapper.py:96</span> <span class="anchor">:154</span></p>
     <p>Input validation for every algorithm: non-empty, no missing values ("impute first"), at least two columns. <span class="anchor">base.py:422</span></p>
+    <p>Each algorithm is bounded by the runner's <code>timeout_seconds</code> (default 300). A timeout is recorded as a non-converged run with an error, so the gate scores no evidence rather than an empty converged graph; the worker thread itself cannot be cancelled and its result is abandoned (issue #1978). <span class="anchor">runner.py:427</span></p>
   </div></details>
   <details class="proc" data-stage="disc"><summary>Ensemble voting and cycle removal <span class="sub">_build_ensemble, _remove_cycles</span></summary><div class="body">
     <pre><code>n_converged = converged algorithms only
@@ -906,7 +907,7 @@ discovered_confounders = adjustment_sets[0] − everything declared through any 
     <thead><tr><th>Destination</th><th>What is written</th><th>Key</th><th>Lifetime</th><th>Source</th></tr></thead>
     <tbody>
       <tr><td>LangGraph state → estimation, refutation, interpretation</td><td>Full <code>CausalGraph</code>; estimation reads <code>adjustment_sets[0]</code> and refuses degenerate graphs</td><td>—</td><td>run</td><td>estimation.py:705</td></tr>
-      <tr><td>API response (<code>DurableJobStore</code>, Redis with bounded in-memory fallback)</td><td><code>CausalDAGModel</code> (nodes, edges, T, Y, adjustment_sets, dag_dot, edge_provenance), <code>dag_source</code>, <code>discovered_confounders</code></td><td><code>analysis_id</code></td><td>8 h TTL</td><td>causal.py:262</td></tr>
+      <tr><td>API response (<code>DurableJobStore</code>, Redis with bounded in-memory fallback)</td><td><code>CausalDAGModel</code> (nodes, edges, T, Y, adjustment_sets, dag_dot, edge_provenance), <code>dag_source</code>, <code>discovered_confounders</code>, and on REVIEW/BLOCK bands the expert-review row id and gate decision</td><td><code>analysis_id</code></td><td>8 h TTL</td><td>causal.py:262</td></tr>
       <tr><td><code>expert_reviews.dag_structure_json</code></td><td>Sanitised snapshot: nodes, edges, augmented_edges, T, Y, adjustment_sets, confidence, gate decision, hash. No DOT. Only when a review row is created or backfilled</td><td><code>dag_version_hash</code></td><td>durable</td><td>expert_review_gate.py:34</td></tr>
       <tr><td>MLflow run artifacts</td><td><code>causal_dag.dot</code> and <code>causal_dag.json</code></td><td>run id</td><td>MLflow retention</td><td>graph.py:649, mlflow_tracker.py:488</td></tr>
       <tr><td>FalkorDB semantic memory</td><td><code>(var:T)-[:CAUSES {ate, confidence, refutation_passed, confounders}]→(var:Y)</code>. The estimand pair only, not the graph</td><td>entity ids</td><td>durable</td><td>memory_hooks.py:524</td></tr>
@@ -981,14 +982,15 @@ decision:  any critical test FAILED → BLOCK
   <h3 id="s4-3">4.3 Expert review</h3>
   <p>The human governance surface is a table of reviews keyed by <code>dag_version_hash</code>, a gate object that consults it, an operator-only API, and a React page. Here is how each behaves and when it is reached.</p>
   <details class="proc" data-stage="gov" open><summary>When the gate is consulted <span class="sub">only on REVIEW or BLOCK bands, and never to stop the run</span></summary><div class="body">
-    <p>The refutation node calls <code>ExpertReviewGate.check_approval</code> only when its own gate returned REVIEW or BLOCK. The call passes the hash, brand, T, Y, the sanitised DAG snapshot, and the ids of the <code>causal_validations</code> rows it just wrote so the review can show its statistical evidence. The result is recorded on state as <code>expert_review_decision</code>, <code>expert_review_id</code>, and a caveat string. Nothing reads those fields to halt execution. <span class="anchor">nodes/refutation.py:892</span> <span class="anchor">:1379</span></p>
-    <div class="callout finding"><div class="label">Finding</div><p>On the live agent path a DAG can be estimated against before any human has approved it. The gate queues and annotates; it does not block. The only true precondition is the SQL function <code>can_use_estimate()</code> in migration 010, which no Python code calls.</p></div>
+    <p>The refutation node calls <code>ExpertReviewGate.check_approval</code> only when its own gate returned REVIEW or BLOCK. The call passes the hash, brand, T, Y, the sanitised DAG snapshot, and the ids of the <code>causal_validations</code> rows it just wrote so the review can show its statistical evidence. The result is recorded on state as <code>expert_review_decision</code>, <code>expert_review_id</code>, and a caveat string, and both the id and the decision are surfaced in the API's refutation summary (issue #1971). Nothing reads those fields to halt execution. The caveat names an expert approval only when a real approval row exists; the no-repository bypass used to claim one (fixed, issue #1969). <span class="anchor">nodes/refutation.py:892</span> <span class="anchor">:1379</span></p>
+    <div class="callout finding"><div class="label">Finding</div><p>On the live agent path a DAG can be estimated against before any human has approved it. The gate queues and annotates; it does not block. The only true precondition is the SQL function <code>can_use_estimate()</code> in migration 010, which no Python code calls. Whether new structures should hard-block is an open product decision, tracked in issue #1971.</p></div>
   </div></details>
   <details class="proc" data-stage="gov"><summary>Gate state machine <span class="sub">ExpertReviewGate.check_approval</span></summary><div class="body">
     <ol>
       <li>No repository → <span class="pill ok">PROCEED</span>, <code>is_approved=True</code>, "bypassed (no repository)". This is the dev/test path and fires whenever Supabase is absent.</li>
       <li>Active approval (<code>approved</code> and <code>valid_until ≥ today</code>): expiring within 14 days → <span class="pill warn">RENEWAL_REQUIRED</span> (still approved); else <span class="pill ok">PROCEED</span>.</li>
       <li>A <code>pending</code> row exists → <span class="pill warn">PENDING_REVIEW</span>. If that row predates snapshot capture, the DAG structure is backfilled best-effort.</li>
+      <li>The most recent row is <code>rejected</code> → <span class="pill crit">BLOCKED</span> with the rejecting review id, and no new row is created. A rejection is durable; before this branch existed the next REVIEW-band run re-queued the same structure as a fresh pending review (issue #1970).</li>
       <li>Nothing exists and <code>auto_create_review</code> with a requester → create a <code>dag_approval</code> row → PENDING_REVIEW. The refutation node builds its gate with <code>auto_create_review=True</code> explicitly; the class default is False so no orphan rows are created by callers without a human queue consumer.</li>
       <li>Otherwise <span class="pill crit">BLOCKED</span>.</li>
     </ol>
@@ -999,7 +1001,7 @@ decision:  any critical test FAILED → BLOCK
       <dt>columns</dt><dd><code>review_id</code>, <code>review_type</code> (enum: dag_approval, methodology_review, quarterly_audit, ad_hoc_validation), <code>dag_version_hash</code>, reviewer id/name/role/email, <code>approval_status</code> (free text: pending, approved, rejected, expired), <code>checklist_json</code>, <code>comments_json</code>, <code>concerns_raised</code>, <code>conditions</code>, brand, context, T, Y, <code>valid_from</code>, <code>valid_until</code>, <code>approved_at</code>, <code>related_validation_ids</code>, <code>supersedes_review_id</code>, plus <code>dag_structure_json</code> and <code>agent_assessment_json</code> from migration 097.</dd>
       <dt>uniqueness</dt><dd>At most one pending row per <code>(dag_version_hash, COALESCE(brand, ''))</code>. Concurrent creators recover the winner's id; any non-unique error is not masked. <span class="anchor">database/migrations/062</span></dd>
       <dt>approval</dt><dd><code>submit_review(approved)</code> sets <code>valid_from = today</code>, <code>valid_until = today + 90</code>, <code>approved_at = now()</code>. Zero rows updated returns False rather than a fabricated success.</dd>
-      <dt>rejection</dt><dd>Writes the status and nothing else. No DAG invalidation, no re-discovery trigger.</dd>
+      <dt>rejection</dt><dd>Writes the status. The gate now treats the most recent rejected row as a durable verdict and stops re-queueing (issue #1970). No DAG invalidation of an earlier approval on the same hash, and no re-discovery trigger.</dd>
       <dt>renewal</dt><dd>Inserts a new <code>quarterly_audit</code> pending row with <code>supersedes_review_id</code>.</dd>
       <dt>reviewer identity</dt><dd>Auto-created rows carry <code>reviewer_id = query_id or "causal_impact_agent"</code>; the human's identity arrives only in checklist and comments at resolve time.</dd>
       <dt>access</dt><dd>Service-role only since migration 058; every API route requires the operator role.</dd>
@@ -1065,17 +1067,19 @@ decision:  any critical test FAILED → BLOCK
   <h3 id="s4-8">4.8 Gaps register</h3>
   <p>Things a reader of this lineage should not assume. Each is verified against the tree, not inferred.</p>
   <ol class="gap-list">
-    <li><b>No hard block on the live path.</b> Expert-review BLOCKED and PENDING_REVIEW are recorded, not enforced. Three bypasses resolve to "approved": gate with no repository, repository with no client, and a gate build that fails on a service connection error.</li>
-    <li><b>Rejection is inert.</b> A rejected review changes no DAG, triggers no re-discovery, and invalidates no prior approval.</li>
+    <li><b>No hard block on the live path.</b> Expert-review BLOCKED and PENDING_REVIEW are recorded and now surfaced in the API, not enforced. Whether a new structure should block is an owner decision (issue #1971). Three infrastructure-absent paths still resolve to PROCEED; since issue #1969 none of them can claim an approval to the user.</li>
+    <li><b>Rejection stops re-queueing but does not cascade.</b> A rejected review is durable at the gate (issue #1970). It does not demote a <code>causal_paths</code> row or invalidate an earlier approval on the same hash.</li>
     <li><b>Approval covers structure, not statistics.</b> The user-facing caveat says so explicitly when an approved DAG meets a REVIEW-band estimate.</li>
-    <li><b>Expiry is never swept.</b> <code>expired</code> is computed at read time from <code>valid_until</code>; nothing writes that status.</li>
+    <li><b>Expiry is never swept.</b> <code>expired</code> is computed at read time from <code>valid_until</code>; nothing writes that status (issue #1972, owner decision).</li>
     <li><b>Two gates share a word.</b> The discovery gate (accept / augment / review / reject) chooses structure; the refutation gate (proceed / review / block) chooses whether the estimate ships and drives routing. Only the second reaches the human queue.</li>
     <li><b><code>discovery_gate_decision == "accept"</code> can accompany a manual DAG.</b> Read <code>discovery_dag_overridden</code> or <code>dag_source</code>, never the gate field alone.</li>
     <li><b>The hash is narrow by design.</b> Two runs with identical structure but different adjustment sets or confidence share one review key; the separate <code>adjustment_set_hash</code> is the audit channel for that.</li>
-    <li><b>Dead configuration.</b> <code>forbidden_edges</code>, <code>DiscoveryCache</code>, <code>CausalGraphSignature</code>, the <code>ml.discovered_dags</code> tables, and the <code>agent_config.yaml</code> review keys are all defined and unused on this path.</li>
-    <li><b>The feature-role system is shadow-mode end to end for this agent.</b> Promotion rules R1–R3, the KG layer, the LLM decision flag, and the adjustment-set policy each default off, and <code>role_attributions</code> is never produced here.</li>
-    <li><b>The tool-registry <code>discover_dag</code> is unguided.</b> It builds its own runner and gate with no priors, no bootstrap, and no latent diagnostic, so it will not reproduce the agent's DAG on the same data.</li>
-    <li><b>A referenced protocol document does not exist.</b> Three module docstrings cite <code>docs/E2I_Causal_Validation_Protocol.html</code>; it is not in the repository.</li>
+    <li><b>Intentional placeholders, now labelled.</b> <code>forbidden_edges</code>, <code>DiscoveryCache</code>, and <code>CausalGraphSignature</code> carry inline status notes explaining why they exist and what wiring them requires (issue #1973). The vestigial <code>_find_backdoor_paths</code> helper was removed.</li>
+    <li><b>The discovery tables are not applied on the live database.</b> Migration 026 defines <code>ml.discovered_dags</code> and friends; the live <code>ml</code> schema has zero tables, so no writer can be wired until the migration is applied (issue #1974).</li>
+    <li><b>The feature-role system is shadow-mode end to end for this agent.</b> Promotion rules R1–R3, the KG layer, and the LLM decision flag default off; the adjustment-set policy defaults OFF. A caller can now supply <code>role_attributions</code> through the dispatcher (issue #1976), but the API path has no producer.</li>
+    <li><b>The tool-registry <code>discover_dag</code> is guided only on request.</b> Passing <code>treatment_var</code> and <code>outcome_var</code> now reproduces the agent's tiers, required edge, PC-only run, and 20-resample corroboration (issue #1977). Without them it remains the unguided GES + PC ensemble.</li>
+    <li><b>Per-algorithm timeouts are now enforced</b> on the sequential runner path (issue #1978).</li>
+    <li><b>Docstring references now point at real documents</b> (issue #1979).</li>
   </ol>
 </section>
 

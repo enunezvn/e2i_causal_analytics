@@ -109,6 +109,12 @@ class CausalPriorKnowledge:
     - ``required_edges``: ``(from, to)`` directed edges that must be present
       (e.g. the treatment->outcome hypothesis under test).
     - ``forbidden_edges``: ``(from, to)`` directed edges that must be absent.
+
+    Status note (#1973): ``forbidden_edges`` is part of the prior API and is
+    translated by ``build_background_knowledge`` and hashed by ``hasher``, but
+    the agent path (``graph_builder._run_discovery``) never sets it — edge
+    orientation there is controlled entirely by ``tiers``. It is kept for
+    callers that need to veto a specific edge; it is not dead code.
     """
 
     tiers: Optional[List[List[str]]] = None
