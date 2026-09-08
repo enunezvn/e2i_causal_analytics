@@ -648,13 +648,16 @@ class ExpertReviewRepository(BaseRepository):
         The original row is not modified and nothing filters on
         ``supersedes_review_id``, so approving a renewal NEVER revokes the
         original: ``is_dag_approved`` stays True while EITHER row is active,
-        and ``get_dag_approval`` (newest ``approved_at`` first) reports the
-        renewal while it is active and the original again once the renewal
-        expires. Renewing a PERMANENT approval (NULL ``valid_until``) therefore
-        does not make the DAG time-limited -- it only changes which record the
-        gate reports, and the gate's renewal warning follows that record's
-        ``valid_until``. The original is not checked for being approved or
-        active -- any existing row may be renewed.
+        and ``get_dag_approval`` (newest active ``approved_at`` first) reports
+        the renewal while it is active, then the original again -- but only
+        while the original is itself still active (always, for a permanent
+        one; a time-limited original that has also lapsed leaves nothing, and
+        the DAG is unapproved). Renewing a PERMANENT approval (NULL
+        ``valid_until``) therefore does not make the DAG time-limited -- it
+        only changes which record the gate reports, and the gate's renewal
+        warning follows that record's ``valid_until``. The original is not
+        checked for being approved or active -- any existing row may be
+        renewed.
 
         Args:
             original_review_id: UUID of the review to renew

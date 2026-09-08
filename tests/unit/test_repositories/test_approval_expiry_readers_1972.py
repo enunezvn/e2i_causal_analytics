@@ -116,7 +116,13 @@ def _declares_expired_included(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
     if any(a.arg == "include_expired" for a in fn.args.args + fn.args.kwonlyargs):
         return True
     doc = (ast.get_docstring(fn) or "").lower()
-    return "expired" in doc and any(w in doc for w in ("included", "including", "includes"))
+    # codex iter-2 MED: "expired rows are NOT included" must not count as a
+    # declaration. Accept only an affirmative phrase with no negation.
+    affirmative = re.search(
+        r"\b(including|includes)\s+expired\b|\bexpired\b(\s+\w+){0,2}\s+included\b", doc
+    )
+    negated = re.search(r"\bnot\s+includ|\bexclud|\bwithout\s+expired\b", doc)
+    return bool(affirmative) and not negated
 
 
 def _called_names(fn: ast.AST) -> set[str]:
@@ -257,6 +263,23 @@ HISTORICAL_READER_DECLARED = (
 '''
 )
 
+# codex iter-2 MED: a docstring that mentions both words while EXCLUDING
+# expired rows is a documented active reader that lost its validity filter.
+HISTORICAL_READER_NEGATED = [
+    COMPLIANT_MODULE
+    + f'''
+    async def active_only(self):
+        """{doc}"""
+        q = self.client.table("t").select("*").eq("approval_status", "approved")
+        return (await q.execute()).data
+'''
+    for doc in (
+        "Active approvals. Expired rows are not included.",
+        "Approvals, excluding expired ones.",
+        "Approvals without expired rows; nothing else is included.",
+    )
+]
+
 
 class TestStructuralGuard:
     """No reader may re-derive validity on its own."""
@@ -289,6 +312,13 @@ class TestStructuralGuard:
 
     def test_positive_control_declared_historical_reader_is_allowed(self):
         assert find_validity_violations(HISTORICAL_READER_DECLARED) == []
+
+    @pytest.mark.parametrize(
+        "module", HISTORICAL_READER_NEGATED, ids=["not-included", "excluding", "without"]
+    )
+    def test_positive_control_negated_declaration_is_still_caught(self, module):
+        found = find_validity_violations(module)
+        assert any(v.startswith("R2 active_only") for v in found), found
 
     def test_positive_control_missing_helper_is_caught(self):
         stripped = COMPLIANT_MODULE.replace("def _apply_expiring_window", "def _renamed")
@@ -648,10 +678,35 @@ class TestRenewalRow:
         assert (await repo.get_dag_approval("dag-1"))["review_id"] == "rev-orig"
         assert await repo.is_dag_approved("dag-1") is True
 
+    async def test_a_time_limited_original_is_reported_again_only_while_still_active(self):
+        """codex iter-2 HIGH: "the original again once the renewal expires"
+        holds only while the original itself is active. Both expired -> None."""
+        still_valid = _row(
+            "approved", _iso(20), review_id="rev-orig", approved_at=f"{_iso(-70)}T00:00:00+00:00"
+        )
+        lapsed = dict(still_valid, valid_until=_iso(-2))
+        expired_renewal = _row(
+            "approved",
+            _iso(-1),
+            review_id="rev-renew",
+            supersedes_review_id="rev-orig",
+            approved_at=f"{_iso(-60)}T00:00:00+00:00",
+        )
+        repo, _ = _repo([still_valid, expired_renewal])
+        assert (await repo.get_dag_approval("dag-1"))["review_id"] == "rev-orig"
+
+        repo, _ = _repo([lapsed, expired_renewal])
+        assert await repo.get_dag_approval("dag-1") is None
+        assert await repo.is_dag_approved("dag-1") is False
+
     def test_docstring_states_what_renewing_a_permanent_approval_does(self):
         doc = ExpertReviewRepository.renew_review.__doc__ or ""
         assert "permanent" in doc.lower()
         assert "supersedes_review_id" in doc
         assert "never revoke" in doc.lower(), (
             "the docstring must not claim a renewal makes a permanent approval time-limited"
+        )
+        assert "still active" in doc.lower(), (
+            "the original is reported again after the renewal expires ONLY while it is "
+            "itself still active -- the docstring must say so (codex iter-2)"
         )
