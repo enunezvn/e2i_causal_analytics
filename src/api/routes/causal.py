@@ -3683,8 +3683,15 @@ def _agent_state_to_response(
 
     Fail-closed status mirrors the agent's own gate (CausalImpactAgent
     ._build_output): a run is ``completed`` only with a real ATE, a non-blocked
-    refutation gate, and no sensitivity failure; ``review`` band is surfaced as
-    ``needs_review``; anything else is ``failed`` with the reason in warnings.
+    refutation gate, no sensitivity failure and no expert-review halt; ``review``
+    band is surfaced as ``needs_review``; anything else is ``failed`` with the
+    reason in warnings. An expert-review halt (#1971: a human rejected the DAG
+    structure, or CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL is on and a REVIEW-band
+    structure holds no approval) is ``failed`` with the halt message -- review
+    id and how to resolve it -- in warnings, and the gate verdict in
+    ``refutation.expert_review_decision`` / ``expert_review_id``. ``failed`` is
+    reused rather than a fourth status because the frontend poll loop treats
+    only completed / needs_review / failed as terminal.
     """
     causal_graph = final_state.get("causal_graph") or {}
     estimation = final_state.get("estimation_result") or {}
@@ -3813,8 +3820,16 @@ def _agent_state_to_response(
     refutation_ran = bool(refutation) and not refutation_error
     gate_blocked = gate_decision == "block"
     needs_review = gate_decision == "review"
+    # #1971: withheld on the expert-review gate -- may sit on a PROCEED gate.
+    expert_review_halt = bool(final_state.get("expert_review_halt"))
 
-    if ate is not None and refutation_ran and not gate_blocked and not sensitivity_failed:
+    if (
+        ate is not None
+        and refutation_ran
+        and not gate_blocked
+        and not sensitivity_failed
+        and not expert_review_halt
+    ):
         status = "needs_review" if needs_review else "completed"
     else:
         status = "failed"
@@ -3849,6 +3864,11 @@ def _agent_state_to_response(
         warnings.append("Refutation gate BLOCKED — the estimate did not survive robustness checks.")
     if sensitivity_failed:
         warnings.append("Sensitivity analysis failed — robustness is unvalidated.")
+    if expert_review_halt:
+        warnings.append(
+            str(final_state.get("error_message") or "")
+            or "Estimate withheld on the expert-review gate (no reason recorded)."
+        )
 
     return AgentCausalAnalysisResponse(
         analysis_id=analysis_id,

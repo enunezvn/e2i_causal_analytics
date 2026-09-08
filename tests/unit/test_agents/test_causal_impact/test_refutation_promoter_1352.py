@@ -283,3 +283,66 @@ class TestQueryEstimateDerivation:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-q"])
+
+
+class TestRejectedStructureNeverBlessesAPath:
+    """#1971: a run whose DAG structure a human REJECTED persists only UNLINKED
+    evidence and never moves the path's status -- on every band.
+
+    Why unlinked, not just "skip the transition": path-linked *passed* rows
+    would satisfy migration 119's evidence gate for a later ``validated`` claim.
+    A suite that passed on a structure a reviewer rejected is conditional on a
+    premise the reviewer threw out; it must not be able to bless the path even
+    in principle. Same mechanism as the synthetic-fixture rule above.
+    """
+
+    @pytest.mark.asyncio
+    async def test_proceed_on_rejected_structure_is_unlinked_and_not_promoted(self) -> None:
+        validation_repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=validation_repo, causal_path_repo=path_repo)
+
+        ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_rejected=True,
+        )
+
+        assert ids == ["v-1", "v-2"]
+        assert promotion == {}
+        assert path_repo.status_calls == []
+        kwargs = validation_repo.save_suite.await_args.kwargs
+        assert kwargs["estimate_id"] == derive_query_estimate_id("q-abc123def456")
+        assert kwargs["estimate_source"] == "causal_impact_query"
+
+    @pytest.mark.asyncio
+    async def test_block_on_rejected_structure_does_not_demote_either(self) -> None:
+        """A failed suite on a rejected structure says nothing about the path."""
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=_validation_repo(), causal_path_repo=path_repo)
+
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.BLOCK),
+            structure_rejected=True,
+        )
+
+        assert promotion == {}
+        assert path_repo.status_calls == []
+
+    @pytest.mark.asyncio
+    async def test_positive_control_same_call_without_the_flag_promotes(self) -> None:
+        validation_repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=validation_repo, causal_path_repo=path_repo)
+
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_rejected=False,
+        )
+
+        assert promotion["new_status"] == "validated"
+        assert validation_repo.save_suite.await_args.kwargs[
+            "estimate_id"
+        ] == derive_causal_path_estimate_id("cp_real_000000001")

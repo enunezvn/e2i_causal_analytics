@@ -19,6 +19,7 @@ Anti-Mocking (F-014 fix, #416):
 
 import logging
 import math
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 
@@ -39,6 +40,7 @@ from src.causal_engine import (
     RefutationError,
     RefutationRunner,
     RefutationSuite,
+    ReviewGateDecision,
     ValidationOutcome,
     # Phase 4: ValidationOutcome for Feedback Learner integration
     create_validation_outcome,
@@ -52,6 +54,55 @@ from src.repositories.causal_validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+# #1971: the owner's REAL expert-review enforcement switch. Read fresh per
+# RefutationNode construction (one node per run) so an operator flip needs no
+# code change and tests can patch the environment. Forwarded into the
+# containers by docker/docker-compose.yml x-common-env as `${VAR:-}` -- the
+# empty string a host-unset var becomes there is treated exactly like unset
+# (OFF), so the forwarding can never flip behaviour (#1931 lesson).
+# config/agent_config.yaml's `require_dag_approval` keys are documentation only
+# (#1975); this is the one reader.
+#
+# Semantics (mirrors the contract the retired SQL `can_use_estimate` promised,
+# now on the live path -- migration 133):
+#   OFF (default): post-hoc / advisory. A REVIEW band queues the DAG for review
+#       and carries the gate decision + caveat; the run continues.
+#   ON: a REVIEW-band run whose DAG structure holds no active expert approval
+#       (gate decision pending_review / blocked / unavailable) HALTS honestly --
+#       status='failed', current_phase='awaiting_expert_review', error_message
+#       naming the review id and how to resolve it. PROCEED never needs
+#       approval; BLOCK is already terminal for a statistical reason.
+# Independent of the switch, a human REJECTION of the structure halts on every
+# band (decision 2 of #1971: the harm-now fix).
+_ENV_REQUIRE_DAG_APPROVAL = "CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSY = frozenset({"", "0", "false", "no", "off"})
+
+
+def _resolve_require_dag_approval(explicit: Optional[bool] = None) -> bool:
+    """Resolve the enforcement switch: explicit argument > env var > OFF.
+
+    An unknown non-empty value is loud (WARN) and OFF -- silent demotion would
+    hide a typo in the one setting that changes what users see.
+    """
+    if explicit is not None:
+        return bool(explicit)
+    raw = os.environ.get(_ENV_REQUIRE_DAG_APPROVAL)
+    if raw is None:
+        return False
+    value = raw.strip().lower()
+    if value in _TRUTHY:
+        return True
+    if value in _FALSY:
+        return False
+    logger.warning(
+        "Unknown %s=%r; expert-review enforcement stays OFF (valid: true/false).",
+        _ENV_REQUIRE_DAG_APPROVAL,
+        raw,
+    )
+    return False
+
 
 # Gate → validation_status transition map (#1352 item 3; demotion mechanics are
 # this lane's documented call — see _persist_suite_and_promote):
@@ -679,6 +730,7 @@ class RefutationNode:
         validation_repo: Optional[CausalValidationRepository] = None,
         expert_review_gate: Optional[Any] = None,
         causal_path_repo: Optional[Any] = None,
+        require_dag_approval: Optional[bool] = None,
     ):
         """Initialize refutation node.
 
@@ -686,10 +738,15 @@ class RefutationNode:
             config: Custom test configuration (merged with defaults)
             thresholds: Custom pass/fail thresholds
             validation_repo: Repository for database persistence (optional)
-            expert_review_gate: ExpertReviewGate consulted on a REVIEW-band gate
-                (H2). When None, a no-repository gate is constructed lazily and
-                bypasses gracefully (development mode); a real repository-backed
-                gate creates/looks up the DAG approval in production.
+            expert_review_gate: ExpertReviewGate consulted on REVIEW/BLOCK bands
+                (queue-or-lookup) and probed read-only on EVERY band for a human
+                rejection (#1971). When None, a no-repository gate is
+                constructed lazily and answers ``unavailable`` (never
+                ``proceed``); a real repository-backed gate creates/looks up the
+                DAG approval in production.
+            require_dag_approval: the #1971 enforcement switch. ``None`` reads
+                ``CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL`` (default OFF); an explicit
+                bool wins. See ``_resolve_require_dag_approval``.
             causal_path_repo: ``CausalPathRepository`` (or protocol-compatible)
                 used by the #1352 sole-promoter wiring — resolving the run's
                 linked ``causal_paths`` row and conditionally moving its
@@ -702,7 +759,12 @@ class RefutationNode:
         self.validation_repo = validation_repo
         self.expert_review_gate = expert_review_gate
         self.causal_path_repo = causal_path_repo
-        logger.info(f"RefutationNode initialized (DoWhy available: {DOWHY_AVAILABLE})")
+        self.require_dag_approval = _resolve_require_dag_approval(require_dag_approval)
+        logger.info(
+            "RefutationNode initialized (DoWhy available: %s, require_dag_approval: %s)",
+            DOWHY_AVAILABLE,
+            self.require_dag_approval,
+        )
 
     # ------------------------------------------------------------------ #1352
     async def _resolve_linked_path(self, state: CausalImpactState) -> Optional[Dict[str, Any]]:
@@ -767,7 +829,11 @@ class RefutationNode:
         return cast(Dict[str, Any], rows[0])
 
     async def _persist_suite_and_promote(
-        self, state: CausalImpactState, suite: "RefutationSuite"
+        self,
+        state: CausalImpactState,
+        suite: "RefutationSuite",
+        *,
+        structure_rejected: bool = False,
     ) -> Tuple[List[str], Dict[str, Any]]:
         """Persist the suite's evidence and — as SOLE promoter — move the linked
         real path's ``validation_status`` (#1352 item 3).
@@ -787,6 +853,15 @@ class RefutationNode:
         * a synthetic-FIXTURE run (``data_source='synthetic'``, the dev/test
           path) persists only unlinked evidence and NEVER promotes: promoting a
           real path off fixture data would be fabricated validation.
+        * a run whose DAG structure a human REJECTED (``structure_rejected``,
+          #1971) persists only unlinked evidence and NEVER promotes -- on any
+          band. A suite that passed on a rejected structure is conditional on
+          a premise the reviewer threw out; linked *passed* rows would satisfy
+          migration 119's evidence gate for a later ``validated`` claim, so the
+          evidence must not be able to bless the path even in principle. And
+          a failed suite on a rejected structure says nothing about the path
+          either, so it does not demote. Operator adjudication of the path row
+          itself is untouched.
 
         Returns ``(validation_ids, promotion_info)``; ``promotion_info`` is
         ``{}`` unless a status transition actually happened. Best-effort
@@ -801,7 +876,7 @@ class RefutationNode:
         synthetic_fixture_run = state.get("data_source") == "synthetic"
 
         linked_row: Optional[Dict[str, Any]] = None
-        if not synthetic_fixture_run:
+        if not synthetic_fixture_run and not structure_rejected:
             try:
                 linked_row = await self._resolve_linked_path(state)
             except Exception as link_err:  # noqa: BLE001 - linkage is best-effort
@@ -889,25 +964,186 @@ class RefutationNode:
             "estimate_id": estimate_id,
         }
 
+    async def _check_structure_rejection(self, state: CausalImpactState) -> Optional[Any]:
+        """#1971: READ-ONLY probe -- did a human REJECT this DAG structure?
+
+        Runs on EVERY band, BEFORE evidence is persisted, so a run on a rejected
+        structure can never link its evidence to (or move the status of) a
+        real ``causal_paths`` row. Uses ``ExpertReviewGate.check_rejection``
+        (never creates a review row). A gate without that method (a duck-typed
+        stand-in) or without a repository cannot tell, and says ``None``.
+
+        A lookup error degrades to ``None`` with a WARNING: this probe is a
+        safety net over the previous behaviour (no check at all), and turning
+        a transient review-store error into a failed run on every PROCEED band
+        would be a new failure mode, not a fix. The degradation is logged so it
+        is observable; the run itself carries no false claim (no decision is
+        written on a PROCEED band unless a rejection was actually found).
+        """
+        gate = self.expert_review_gate
+        probe = getattr(gate, "check_rejection", None)
+        dag_hash = str(state.get("dag_version_hash") or "")
+        if gate is None or probe is None or not dag_hash:
+            return None
+        try:
+            return await probe(dag_hash, brand=state.get("brand"))
+        except Exception as probe_err:  # noqa: BLE001 - probe must never break the node
+            logger.warning(
+                "Expert-review rejection check failed (%s); proceeding as before the "
+                "check existed -- a rejection, if any, is not visible to this run.",
+                probe_err,
+            )
+            return None
+
+    @staticmethod
+    def _band_caveat(suite: "RefutationSuite") -> str:
+        """The band sentence of the caveat -- the statistical truth, per band.
+
+        The REVIEW sentence used to promise that expert review would let the
+        estimate be "used as a validated result". It cannot (#1969): approval
+        is STRUCTURAL, a DAG sign-off changes no p-value, and the sole promoter
+        moves ``needs_review`` to ``validated`` only on a PROCEED re-run. Say
+        that instead.
+        """
+        conf = suite.confidence_score
+        if suite.gate_decision == GateDecision.BLOCK:
+            return (
+                f"Refutation gate is BLOCK (failed robustness, confidence={conf:.2f}). "
+                "This estimate did not pass and has been routed to expert review for "
+                "adjudication."
+            )
+        if suite.gate_decision == GateDecision.REVIEW:
+            return (
+                f"Refutation gate is REVIEW (borderline robust, confidence={conf:.2f}). "
+                "Only a PROCEED re-run promotes this estimate to a validated result; "
+                "expert approval covers the DAG structure, not this estimate's "
+                "statistical robustness."
+            )
+        return f"Refutation gate is PROCEED (robust, confidence={conf:.2f})."
+
+    @staticmethod
+    def _review_note(decision: Optional[str], result: Any) -> str:
+        """The expert-review sentence appended to the band caveat.
+
+        One sentence per ``ReviewGateDecision`` value, each stating exactly what
+        was checked and what a human can do about it. ``getattr`` throughout:
+        callers inject duck-typed gates in tests, and a missing attribute must
+        read as "not recorded", never as a crash swallowed into a wrong note.
+        """
+        review_id = getattr(result, "review_id", None)
+        reviewer = getattr(result, "reviewer_name", None)
+        if decision == "rejected":
+            reason = getattr(result, "rejection_reason", None)
+            return (
+                " The DAG structure was REJECTED by expert review"
+                + (f" by {reviewer}" if reviewer else "")
+                + (f" (review {review_id})" if review_id else "")
+                + (f": {reason}" if reason else "")
+                + ". A rejected structure is not re-queued; revise the DAG (a changed "
+                "structure gets its own review) or ask an operator to queue a new "
+                "review for this hash."
+            )
+        if decision == "pending_review":
+            if review_id:
+                return (
+                    f" The DAG structure is queued for expert review (review {review_id}; "
+                    f"resolve via POST /expert-reviews/{review_id}/resolve)."
+                )
+            return " The DAG structure is queued for expert review."
+        if decision == "blocked":
+            return (
+                " The DAG structure holds no expert approval and no review request could be queued."
+            )
+        if decision == "unavailable":
+            return (
+                " The expert-review gate could not be consulted (no review store "
+                "configured or reachable); the DAG structure was not checked or queued."
+            )
+        # HITL visibility: when this DAG already holds an ACTIVE approval, say
+        # so -- reviewer + validity -- while making explicit that the approval
+        # vouches the DAG STRUCTURE, not this estimate's statistical robustness.
+        # #1969: only a REAL approval row (review_id present) may claim approval.
+        if getattr(result, "is_approved", False) and review_id:
+            valid_until = getattr(result, "valid_until", None)
+            return (
+                " The DAG structure was expert-approved"
+                + (f" by {reviewer}" if reviewer else "")
+                + (f" (valid until {valid_until})" if valid_until else "")
+                + "; that approval covers the DAG structure, not this"
+                " estimate's statistical robustness."
+            )
+        return ""
+
+    def _review_fields(
+        self, suite: "RefutationSuite", decision: Optional[str], result: Any
+    ) -> Dict[str, Any]:
+        """The state fields carrying a gate consult (see ``_consult_review_gate``)."""
+        return {
+            "expert_review_decision": decision,
+            "review_caveat": self._band_caveat(suite) + self._review_note(decision, result),
+            "expert_review_id": getattr(result, "review_id", None),
+        }
+
+    def _expert_review_halt_reason(
+        self, suite: "RefutationSuite", review_fields: Dict[str, Any]
+    ) -> Optional[str]:
+        """Why the estimate is withheld on the expert-review gate, or ``None``.
+
+        * REJECTED (any band, regardless of the switch): an estimate built on a
+          structure a domain expert rejected is not a valid causal estimate
+          whatever its refutation verdict.
+        * REVIEW band with ``require_dag_approval`` ON and no active approval
+          (pending_review / blocked / unavailable): the switch's contract.
+        The caveat (which already names the review id, reviewer, reason and the
+        resolve endpoint) is carried verbatim so the message is complete.
+        """
+        decision = review_fields.get("expert_review_decision")
+        caveat = str(review_fields.get("review_caveat") or "")
+        if decision == "rejected":
+            return (
+                "Estimate withheld: a domain expert REJECTED this DAG structure, and an "
+                "estimate built on a rejected structure is not a valid causal estimate "
+                "whatever its refutation verdict. " + caveat
+            )
+        if (
+            self.require_dag_approval
+            and suite.gate_decision == GateDecision.REVIEW
+            and decision in ("pending_review", "blocked", "unavailable")
+        ):
+            return (
+                f"Estimate withheld: {_ENV_REQUIRE_DAG_APPROVAL}=true requires an active "
+                "expert approval of the DAG structure for a REVIEW-band estimate, and this "
+                f"structure holds none (gate decision: {decision}). "
+                + caveat
+                + " Re-run once the review is resolved."
+            )
+        return None
+
     async def _consult_review_gate(
         self,
         state: CausalImpactState,
         suite: "RefutationSuite",
         validation_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """On a REVIEW- or BLOCK-band gate, consult the ExpertReviewGate.
+        """Consult the ExpertReviewGate and build the review fields for state.
 
-        Routes both borderline-robust (REVIEW) and failed-robustness (BLOCK)
-        estimates to the expert-review queue so a human can adjudicate. Emits a
-        band-specific caveat and returns the created/looked-up ``review_id``. The
-        consult is best-effort (a missing repository bypasses with a logged
-        warning; a gate error degrades without breaking the node). ``needs_review``
-        is set by the caller from ``suite.needs_review`` (REVIEW only), so a BLOCK
-        row is queued without being mislabelled valid-but-needs-review.
+        Called on REVIEW and BLOCK bands (queue-or-lookup: a new structure gets
+        a ``pending`` row a human can resolve; #1970 keeps a rejection durable).
+        A PROCEED band never calls this -- it uses the read-only
+        ``_check_structure_rejection`` probe and, only on a rejection, builds
+        the same fields from that result.
+
+        Emits ``expert_review_decision`` (a ``ReviewGateDecision`` value;
+        ``unavailable`` when the gate has no repository OR the consult raised --
+        never ``proceed`` for something that was not checked, #1971), the
+        band-specific ``review_caveat`` and the ``expert_review_id``.
+        ``needs_review`` is set by the caller from ``suite.needs_review`` (REVIEW
+        only), so a BLOCK row is queued without being mislabelled
+        valid-but-needs-review.
 
         Args:
             validation_ids: causal_validations row ids persisted for THIS
-                refutation run — forwarded so the queued review row links to
+                refutation run -- forwarded so the queued review row links to
                 its statistical evidence (mig 097).
         """
         from src.causal_engine.expert_review_gate import ExpertReviewGate
@@ -918,15 +1154,13 @@ class RefutationNode:
         brand = state.get("brand")
         # FIX: read the DAG hash from the key the graph builder actually writes
         # (`dag_version_hash`, graph_builder.py). The old `dag_hash` key was never
-        # populated, so every auto-created review row was keyed on "" — which broke
+        # populated, so every auto-created review row was keyed on "" -- which broke
         # the approval round-trip and left the queue effectively empty.
         dag_hash = str(state.get("dag_version_hash") or "")
         requester_id = state.get("query_id") or "causal_impact_agent"
-        is_block = suite.gate_decision == GateDecision.BLOCK
 
-        expert_review_decision: Optional[str] = None
-        review_id: Optional[str] = None
-        active_approval_note = ""
+        review_result: Any = None
+        decision: Optional[str]
         try:
             review_result = await gate.check_approval(
                 dag_hash=dag_hash,
@@ -935,7 +1169,7 @@ class RefutationNode:
                 outcome=outcome,
                 requester_id=requester_id,
                 # check_approval expects a STRING description (Optional[str]),
-                # not a dict — summarise the refutation verdict for the audit row.
+                # not a dict -- summarise the refutation verdict for the audit row.
                 analysis_context=(
                     f"confidence={suite.confidence_score:.2f}, gate={suite.gate_decision.value}"
                 ),
@@ -944,57 +1178,18 @@ class RefutationNode:
                 dag_structure=state.get("causal_graph"),
                 related_validation_ids=validation_ids,
             )
-            expert_review_decision = review_result.decision.value
-            review_id = review_result.review_id
-            # HITL visibility: when this DAG already holds an ACTIVE approval,
-            # say so — reviewer + validity — while making explicit that the
-            # approval vouches the DAG STRUCTURE, not this estimate's
-            # statistical robustness (structure sign-off never upgrades a
-            # borderline/failed estimate to validated).
-            # #1969: only a REAL approval row may claim approval. The
-            # no-repository bypass returns PROCEED/is_approved=True with no
-            # review_id (dev/test convenience), and that bypass is exactly
-            # what a prod ServiceConnectionError degrades to — so gating on
-            # is_approved alone told users an unreachable Supabase had
-            # "expert-approved" their DAG.
-            if getattr(review_result, "is_approved", False) and getattr(
-                review_result, "review_id", None
-            ):
-                reviewer = getattr(review_result, "reviewer_name", None)
-                valid_until = getattr(review_result, "valid_until", None)
-                active_approval_note = (
-                    " The DAG structure was expert-approved"
-                    + (f" by {reviewer}" if reviewer else "")
-                    + (f" (valid until {valid_until})" if valid_until else "")
-                    + "; that approval covers the DAG structure, not this"
-                    " estimate's statistical robustness."
-                )
+            decision = review_result.decision.value
         except Exception as gate_err:  # noqa: BLE001 - gate must never break the node
-            logger.warning(
-                f"ExpertReviewGate consult failed (degrading to needs_review): {gate_err}"
-            )
+            # #1971: a consult that raised checked nothing. Record that, not
+            # None (which downstream read as "not consulted, carry on").
+            logger.warning(f"ExpertReviewGate consult failed (decision: unavailable): {gate_err}")
+            review_result = None
+            decision = ReviewGateDecision.UNAVAILABLE.value
 
-        if is_block:
-            caveat = (
-                f"Refutation gate is BLOCK (failed robustness, "
-                f"confidence={suite.confidence_score:.2f}). This estimate did not pass "
-                f"and has been routed to expert review for adjudication."
-            )
-        else:
-            caveat = (
-                f"Refutation gate is REVIEW (borderline robust, "
-                f"confidence={suite.confidence_score:.2f}). This estimate needs expert "
-                f"review before it is used as a validated result."
-            )
-        caveat += active_approval_note
         # `needs_review` is intentionally NOT returned here: the caller's result
         # dict sets it from ``suite.needs_review`` (True only for REVIEW), so a
         # BLOCK row is queued without being surfaced as valid-but-needs-review.
-        return {
-            "expert_review_decision": expert_review_decision,
-            "review_caveat": caveat,
-            "expert_review_id": review_id,
-        }
+        return self._review_fields(suite, decision, review_result)
 
     async def _log_validation_outcome_signal(
         self, validation_outcome: "ValidationOutcome"
@@ -1343,15 +1538,24 @@ class RefutationNode:
             # Convert to legacy format for backward compatibility
             refutation_results = cast(RefutationResults, suite.to_legacy_format())
 
+            # #1971: READ-ONLY rejection probe on EVERY band, BEFORE evidence
+            # is persisted. Before this, the gate was consulted only on
+            # REVIEW/BLOCK, so a DAG a reviewer had explicitly rejected still
+            # yielded a PROCEED-band estimate promoted to 'validated' and
+            # surfaced as completed. None = no rejection found (or none could
+            # be looked up -- see _check_structure_rejection).
+            rejection = await self._check_structure_rejection(state)
+
             # Persist validation results + SOLE-promoter path transition
             # (#1352 item 3, extracted to _persist_suite_and_promote): linked
             # runs write path-linked evidence (derive_causal_path_estimate_id)
             # then move the real row's validation_status per the gate; unlinked
             # runs write per-run history under the query-derived uuid (the old
             # ``estimate_id=query_id`` write ALWAYS failed the uuid cast — half
-            # of #1352's "causal_validations never populated").
+            # of #1352's "causal_validations never populated"). A rejected
+            # structure is persisted UNLINKED and never moves the path.
             validation_ids, causal_path_promotion = await self._persist_suite_and_promote(
-                state, suite
+                state, suite, structure_rejected=rejection is not None
             )
 
             # Phase 4: Log ValidationOutcome for Feedback Learner integration
@@ -1372,6 +1576,7 @@ class RefutationNode:
 
             # Determine next phase based on gate decision
             review_fields: Dict[str, Any] = {}
+            halt_reason: Optional[str] = None
             if suite.gate_decision == GateDecision.BLOCK:
                 logger.warning(
                     f"Refutation BLOCKED estimate: confidence={suite.confidence_score:.2f}, "
@@ -1400,6 +1605,9 @@ class RefutationNode:
                 review_fields = await self._consult_review_gate(
                     state, suite, validation_ids=validation_ids
                 )
+                # #1971: a human rejection halts; a missing approval halts only
+                # when the owner's switch is ON (post-hoc / advisory by default).
+                halt_reason = self._expert_review_halt_reason(suite, review_fields)
             else:
                 logger.info(
                     f"Refutation PASSED: confidence={suite.confidence_score:.2f}, "
@@ -1408,6 +1616,29 @@ class RefutationNode:
                 next_phase = "analyzing_sensitivity"
                 status = state.get("status", "in_progress")
                 error_message = None
+                if rejection is not None:
+                    # #1971 harm-now fix: a robust estimate on a structure a
+                    # human REJECTED is withheld. No queue row is created (the
+                    # verdict is durable, #1970); the fields come from the
+                    # read-only probe result. With no rejection the PROCEED
+                    # band is byte-for-byte what it was before this check.
+                    review_fields = self._review_fields(
+                        suite, ReviewGateDecision.REJECTED.value, rejection
+                    )
+                    halt_reason = self._expert_review_halt_reason(suite, review_fields)
+
+            if halt_reason is not None:
+                logger.warning(
+                    "Refutation node withheld the estimate on the expert-review gate "
+                    "(decision=%s, review_id=%s, band=%s)",
+                    review_fields.get("expert_review_decision"),
+                    review_fields.get("expert_review_id"),
+                    suite.gate_decision.value,
+                )
+                next_phase = "awaiting_expert_review"
+                status = "failed"
+                error_message = halt_reason
+                review_fields["expert_review_halt"] = True
 
             result = {
                 **spread_safe(state),
@@ -1505,9 +1736,11 @@ async def _build_expert_review_gate() -> Optional[Any]:
     dev/test (or any environment without a Supabase service-role key)
     ``get_async_supabase_client`` raises ``ServiceConnectionError`` — we catch
     THAT specific class and return None so ``_consult_review_gate`` falls back to
-    a bare ``ExpertReviewGate()`` (bypass to PROCEED-with-warning) and still flags
-    ``needs_review`` via the H2 caveat. A missing Supabase must NEVER crash the
-    node.
+    a bare ``ExpertReviewGate()``, which answers ``unavailable`` (#1971 — never
+    the old PROCEED-with-warning bypass) and still flags ``needs_review`` via the
+    H2 caveat. With ``CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true`` that
+    ``unavailable`` halts a REVIEW-band run. A missing Supabase must NEVER crash
+    the node.
 
     FIX A (codex HIGH): any OTHER exception (a transient/unexpected prod Supabase
     failure, a bug) PROPAGATES (fail-loud / fail-closed). Collapsing every error
@@ -1559,8 +1792,10 @@ async def refute_causal_estimate(
     refutation_config = (state.get("parameters") or {}).get("refutation_config")
     # R6-F2 C2: wire a repo-backed ExpertReviewGate so a REVIEW band creates a
     # `pending` expert_reviews row a human can resolve. Best-effort: None in
-    # dev/test (no Supabase) -> the node bypasses to PROCEED-with-warning and
-    # still flags needs_review. REVIEW never hard-blocks the agent run.
+    # dev/test (no Supabase) -> the node's bare gate answers `unavailable` and
+    # still flags needs_review. #1971: whether a REVIEW band without approval
+    # halts is the node's CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL switch (default
+    # OFF); a human REJECTION of the structure always halts.
     expert_review_gate = await _build_expert_review_gate()
     # #1352 item 3: the production graph adds this function as a bare node, so
     # ``validation_repo`` was ALWAYS None here and evidence persistence never
