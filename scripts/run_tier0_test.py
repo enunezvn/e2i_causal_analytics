@@ -4245,6 +4245,23 @@ async def step_6_feature_analyzer(
 # "Xolair (omalizumab)" raw would raise inside `bentoml build`. MLflow is laxer
 # (it rejects only "/" and ":"), so a name legal for BentoML is legal for
 # MLflow too, and slugging to BentoML's alphabet satisfies both.
+#
+# The old literal also appended experiment_id[:8]. That suffix looked per-run
+# and was not: run_pipeline (the Step-7 caller, below) builds experiment_id as
+# f"tier0_e2e_{uuid4().hex[:8]}", so the slice stopped before the UUID began and
+# the suffix was always the constant "tier0_e2" — it discriminated no run, ever.
+# #1957 dropped it rather than making it unique: a stable registered-model name
+# is how the MLflow registry is meant to be used (one model accumulating
+# versions), whereas a genuinely per-run suffix would register a NEW model per
+# run and split that version history.
+#
+# Dropping it breaks no consumer (checked before the change): nothing looks a
+# deployment up by name — MLDeploymentRepository's name-keyed and enumerating
+# reads have no production callers at all, its only production read is by row
+# UUID — the ml_deployments row has no uniqueness constraint on deployment_name,
+# and the monitoring / BentoML tables join on that row UUID. Renaming does start
+# a fresh MLflow version series under the new name; any pre-existing series
+# stays under whatever name produced it.
 
 _DEPLOYMENT_NAME_MAX_LENGTH = 63  # mirrors bentoml._internal.tag.tag_max_length
 _DEPLOYMENT_NAME_ILLEGAL_RUN = re.compile(r"[^a-z0-9._-]+")
@@ -4257,35 +4274,23 @@ def _slugify_name_part(value: Any) -> str:
     return slug.strip("._-")
 
 
-def _build_deployment_name(brand: str, target_outcome: str, experiment_id: str) -> str:
+def _build_deployment_name(brand: str, target_outcome: str) -> str:
     """Build the Step-7 deployment name from the brand and outcome actually run.
 
-    Keeps the historical ``experiment_id[:8]`` suffix bytes unchanged (see the
-    note below on why that suffix is constant, not per-run) and
-    guarantees a legal MLflow registered-model name and BentoML tag for any
-    free-form ``--brand`` / ``--target`` value.
+    Returns ``<brand>_<outcome>``, slugged to BentoML's tag alphabet and capped
+    at its 63-character limit, so the result is a legal name in every store it
+    reaches. Takes no run-scoped argument: the name is deliberately stable
+    across runs (see the note above on #1957).
     """
-    experiment_slug = _slugify_name_part(str(experiment_id)[:8])
-    head = "_".join(
+    name = "_".join(
         part for part in (_slugify_name_part(brand), _slugify_name_part(target_outcome)) if part
     )
+    if len(name) > _DEPLOYMENT_NAME_MAX_LENGTH:
+        # Re-slug after trimming: the cut can land on a "._-" character, and a
+        # tag must end on an alphanumeric one.
+        name = _slugify_name_part(name[:_DEPLOYMENT_NAME_MAX_LENGTH])
 
-    # Reserve room for the experiment suffix so trimming a long brand never
-    # eats it. NOTE: that suffix does NOT currently distinguish runs. The caller
-    # builds experiment_id as f"tier0_e2e_{uuid4().hex[:8]}" (:5334), so [:8]
-    # stops before the UUID begins and the slug is always the constant
-    # "tier0_e2" -- every run has registered the same MLflow model name
-    # (kisqali_discontinuation_tier0_e2:v69 in the run reports). #1939 is only
-    # about the brand/outcome half; do not read this suffix as unique. Making it
-    # unique would create a new registered model per run and fragment that
-    # version lineage, so it is a deliberate follow-up, not a typo fix.
-    reserved = len(experiment_slug) + 1 if experiment_slug else 0
-    budget = max(1, _DEPLOYMENT_NAME_MAX_LENGTH - reserved)
-    if len(head) > budget:
-        head = _slugify_name_part(head[:budget])
-
-    name = "_".join(part for part in (head, experiment_slug) if part)
-    # Only reachable if brand, target and experiment id all slug away to "".
+    # Only reachable if brand and target both slug away to "".
     return name or "e2i_model"
 
 
@@ -4309,7 +4314,7 @@ async def step_7_model_deployer(
 
     from src.agents.ml_foundation.model_deployer import ModelDeployerAgent
 
-    deployment_name = _build_deployment_name(CONFIG.brand, CONFIG.target_outcome, experiment_id)
+    deployment_name = _build_deployment_name(CONFIG.brand, CONFIG.target_outcome)
 
     print_input_section(
         {
