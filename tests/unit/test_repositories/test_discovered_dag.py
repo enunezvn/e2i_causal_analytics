@@ -421,6 +421,26 @@ def test_payload_is_plain_json_even_with_numpy_inputs():
     assert payload["metadata"]["discovery"]["latent_diagnostic"]["bidirected_edges"] == [["t", "y"]]
 
 
+def test_payload_maps_non_finite_floats_to_null():
+    """codex iter-2 MED: httpx encodes JSON with allow_nan=False, so a NaN or
+    Infinity anywhere in the payload would fail the whole write at the
+    transport. JSON has no NaN; the honest representation of "no finite
+    value" is null. Positive control: finite values survive unchanged."""
+    result = _result()
+    result.algorithm_results[0].score = float("nan")
+    result.algorithm_results[0].metadata["objective"] = float("inf")
+    result.metadata["bootstrap"]["mean_stability"] = float("-inf")
+    result.metadata["bootstrap"]["finite_control"] = 0.25
+    payload = _payload(discovery_result=result)
+
+    run = payload["algorithm_runs"][0]
+    assert run["score"] is None
+    assert run["metadata"]["objective"] is None
+    assert payload["metadata"]["discovery"]["bootstrap"]["mean_stability"] is None
+    assert payload["metadata"]["discovery"]["bootstrap"]["finite_control"] == 0.25
+    json.dumps(payload, allow_nan=False)  # the transport's exact requirement
+
+
 def test_payload_falls_back_to_the_frame_when_result_metadata_is_missing():
     """A DiscoveryResult without runner metadata (a failed run, a stub runner)
     still yields honest n_samples / feature_names from the frame it ran on —

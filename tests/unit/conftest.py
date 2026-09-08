@@ -253,7 +253,9 @@ class _UnitStubDiscoveredDagRepository:
     async def record(self, payload: dict) -> str:
         import json
 
-        json.dumps(payload)
+        # allow_nan=False mirrors httpx's encoder (codex iter-2 MED): a NaN
+        # that production would reject must fail here too, not pass.
+        json.dumps(payload, allow_nan=False)
         self.payloads.append(payload)
         return "unit-stub-discovered-dag-id"
 

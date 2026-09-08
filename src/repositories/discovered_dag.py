@@ -84,8 +84,15 @@ def _json_default(value: Any) -> Any:
 
 
 def _to_plain_json(value: Any) -> Any:
-    """Round-trip through JSON so every leaf is a plain JSON type."""
-    return json.loads(json.dumps(value, default=_json_default))
+    """Round-trip through JSON so every leaf is a plain JSON type.
+
+    Non-finite floats (NaN / Infinity / -Infinity, including numpy ones)
+    become ``None``: JSON has no such values and the transport encodes with
+    ``allow_nan=False`` (httpx ``_content.py``), so one stray NaN in a score
+    or a wrapper's metadata would otherwise fail the WHOLE write. ``null`` is
+    the honest JSON reading of "no finite value" (codex iter-2 MED).
+    """
+    return json.loads(json.dumps(value, default=_json_default), parse_constant=lambda _: None)
 
 
 def _enum_value(value: Any) -> Any:

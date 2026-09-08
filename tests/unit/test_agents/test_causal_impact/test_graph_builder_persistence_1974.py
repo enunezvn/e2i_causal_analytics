@@ -386,6 +386,23 @@ def test_persistence_keys_survive_langgraph_channel_filter():
 
 
 @pytest.mark.asyncio
+async def test_unit_tree_stub_repository_is_as_strict_as_the_transport():
+    """codex iter-2 MED: the conftest stand-in must reject what httpx rejects
+    (allow_nan=False), or a NaN-bearing payload passes the unit tree while
+    production reports a persist failure."""
+    from tests.unit.conftest import _UnitStubDiscoveredDagRepository
+
+    stub = _UnitStubDiscoveredDagRepository()
+    with pytest.raises(ValueError):
+        await stub.record({"score": float("nan")})
+    with pytest.raises(ValueError):
+        await stub.record({"score": float("inf")})
+    # Positive control: a finite payload is accepted and recorded.
+    assert await stub.record({"score": 0.5}) == "unit-stub-discovered-dag-id"
+    assert stub.payloads == [{"score": 0.5}]
+
+
+@pytest.mark.asyncio
 async def test_this_module_exercises_the_real_persist_step(monkeypatch):
     """Guard against the conftest stub silently covering these tests: the
     real step must be the one running (the fake factory gets called)."""
