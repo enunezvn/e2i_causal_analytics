@@ -20,7 +20,6 @@ import * as React from 'react';
 import { useLocation } from 'react-router-dom';
 import { CopilotContext, useCopilotChatInternal } from '@copilotkit/react-core';
 import { CopilotChat } from '@copilotkit/react-ui';
-import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   MessageSquare,
@@ -32,8 +31,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { logger } from '@/lib/logger';
-import { getValidated, post } from '@/lib/api-client';
-import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import { post } from '@/lib/api-client';
+import { useAgentStatus } from '@/hooks/api/use-agents';
 import { Button } from '@/components/ui/button';
 import {
   useE2ICopilot,
@@ -414,13 +413,7 @@ export function E2IChatSidebar({
   // replaces the provider's static registry, whose `activeAgents` map was never
   // populated — so the panel/badge previously read a permanent "0 active". The
   // registry is the graceful fallback while the query is loading/unavailable.
-  const { data: agentStatus } = useQuery({
-    queryKey: ['agent-status'],
-    queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
-    refetchInterval: 30000,
-    retry: false,
-    enabled: copilotEnabled,
-  });
+  const { data: agentStatus } = useAgentStatus({ enabled: copilotEnabled });
 
   const liveAgents: AgentInfo[] = React.useMemo(
     () =>

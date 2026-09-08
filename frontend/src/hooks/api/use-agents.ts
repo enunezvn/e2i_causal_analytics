@@ -32,14 +32,15 @@ import type {
 /**
  * Cache keys for the agent-orchestration queries.
  *
- * `status()` DELIBERATELY keeps the bare `['agent-status']` value it replaces:
- * Home, ExecutiveSummary and both chat sidebars each read `/agents/status`
- * under that same literal key today, so all five share one cache entry.
- * Namespacing it here would silently split that entry and make every one of
- * those consumers refetch — a behaviour change, not a consistency fix.
- * Centralising the *definition* is the point of #1941; changing the *value* is
- * a separate migration (point the other four call sites at `agentKeys.status()`
- * first, then rename in one step).
+ * `status()` still returns the bare `['agent-status']` value it replaced, and
+ * is now the only DEFINITION of that key in the app: Home, ExecutiveSummary
+ * and both chat surfaces read `/agents/status` through `useAgentStatus()` as
+ * of #1958 (step 1), so no component hardcodes the key any more and all five
+ * consumers still share one cache entry.
+ * Namespacing the value (e.g. `['agents', 'status']`) is #1958 step 2, kept
+ * out of that migration so it stayed behaviour-preserving. With every consumer
+ * on the hook it is now a single safe edit here — there is no second literal
+ * left for it to split the cache entry against.
  *
  * `activity()` / `tierMetrics()` fold their result-affecting params into the
  * key so a different window cannot collide with the cached 24h read. Their
