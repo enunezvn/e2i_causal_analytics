@@ -273,8 +273,9 @@ All workflows live in `.github/workflows/` and run on GitHub Actions. The main o
 | Synthetic Benchmarks | `synthetic-benchmarks.yml` | Push/PR | Causal engine benchmark suite |
 | Slow Tests | `slow-tests.yml` | Nightly 05:00 UTC + manual | `pytest -m slow` and the heavy e2e suites excluded from the PR run; upstream-transient reds are routed to a rolling issue rather than the red alarm (#1816, #1823) |
 | Maintenance Freshness | `maintenance-freshness.yml` | Nightly 07:30 UTC + manual | Unattended audit of the droplet's `e2i-maintenance` cron layer from its success stamps; files/updates a tracking issue on failure (#1807) |
+| Deploy Currency | `deploy-currency.yml` | Every 3h + manual | Is production actually running `main`? Reads the running container (not job conclusions) and alarms when a deploy-triggering push is past its grace window and still not live — the case a skipped deploy chain makes invisible (#1962) |
 
-That table is the operator-facing subset. `ls .github/workflows/*.yml` is the full list (23 today) and also covers the guard and benchmark workflows: feature contract, lifecycle state, RPC DDL, methodology sign-off (two workflows), G3 wiring, lockfile resolution, retrieval benchmarks, general benchmarks, Feast apply, RAGAS smoke, and the tier-1b B2 diagnostic/experiment pair.
+That table is the operator-facing subset. `ls .github/workflows/*.yml` is the full list (24 today) and also covers the guard and benchmark workflows: feature contract, lifecycle state, RPC DDL, methodology sign-off (two workflows), G3 wiring, lockfile resolution, retrieval benchmarks, general benchmarks, Feast apply, RAGAS smoke, and the tier-1b B2 diagnostic/experiment pair.
 
 > **Measuring real RAG quality.** `ragas-evaluation.yml` never invokes the RAG
 > pipeline — it judges the golden set's hardcoded answers over contexts that are

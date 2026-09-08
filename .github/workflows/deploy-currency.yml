@@ -1,0 +1,198 @@
+name: Deploy Currency
+
+# Is production actually running what main says it should be? (#1962, #1963)
+#
+# On 2026-09-08 deploy run 34175425118 reported `cancelled` with ELEVEN GREEN
+# JOBS. A flaked Agents shard ran to its 30:00 ceiling, `Backend CI Success`
+# failed, and Build/Deploy were therefore SKIPPED -- not failed. origin/main was
+# 1022ab202 while the api container still ran 1cce45132. Production silently sat
+# a commit behind and nothing anywhere said so; it took a human noticing.
+#
+# The existing guard cannot catch this by construction: check_image_drift.py is
+# invoked from deploy.yml itself, so it is skipped by exactly the failure it
+# would report. This workflow is the outside observer -- the same reason
+# maintenance-freshness.yml audits the cron layer from GitHub rather than from
+# inside the crontab it audits.
+#
+# It reads GROUND TRUTH, not job conclusions: run 34175425118 said `cancelled`
+# while deploying nothing, and 34164682392 said `success` having deployed a sha
+# that was not its trigger (deploy.yml hard-resets the droplet to origin/main and
+# walks for the newest ancestor with published images). Only the running
+# container establishes what is live.
+#
+# A scheduled run always files; a dispatch files only when asked, so forcing a
+# red for certification does not spam the tracker.
+
+on:
+  schedule:
+    # Every 3 hours at :25 -- off the top-of-hour herd. Bounds "production is
+    # silently behind" to ~3h. Cheap: one SSH plus one API page.
+    - cron: '25 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      grace_minutes:
+        description: 'Minutes a missed deploy may be in flight before it is an alarm (default 45). Use 0 to force an alarm for certification.'
+        required: false
+        default: ''
+        type: string
+      file_issue:
+        description: 'On alarm, file/update the tracking issue as a scheduled run would'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read   # reading Deploy to Production run conclusions
+  issues: write   # report filing/updating the tracking issue
+
+concurrency:
+  group: deploy-currency
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Is production current?
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      # fresh | hold | alarm | unknown | unreachable
+      verdict: ${{ steps.classify.outputs.verdict }}
+      summary: ${{ steps.classify.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check walks first-parent history between the running sha and
+          # origin/main. A shallow clone cannot see the running commit and would
+          # report `unknown` on every run.
+          fetch-depth: 0
+
+      # Deliberately a plain `ssh` step rather than the appleboy/ssh-action this
+      # repo uses elsewhere: appleboy does not surface the remote command's
+      # stdout to the runner, and the running image tag IS the value we need.
+      # Reachability failures are caught here and classified `unreachable`, never
+      # as drift -- an SSH outage must not be filed as "production is behind"
+      # (maintenance-freshness.yml learned this as a codex HIGH).
+      - name: Read the running image from the droplet
+        id: box
+        continue-on-error: true
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy_key"
+          chmod 600 "$RUNNER_TEMP/deploy_key"
+          IMAGE=$(ssh -i "$RUNNER_TEMP/deploy_key" \
+                      -o StrictHostKeyChecking=accept-new \
+                      -o ConnectTimeout=20 -o BatchMode=yes \
+                      "$DEPLOY_USER@$DEPLOY_HOST" \
+                      "docker inspect e2i_api --format '{{.Config.Image}}'")
+          echo "==> e2i_api image: $IMAGE"
+          # ghcr.io/<owner>/e2i-api:<40-char sha>
+          SHA="${IMAGE##*:}"
+          case "$SHA" in
+            [0-9a-f][0-9a-f]*) ;;
+            *) echo "::error::image tag '$SHA' is not a sha -- cannot compare"; exit 1 ;;
+          esac
+          echo "running_sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether production is current
+        id: check
+        if: steps.box.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUNNING_SHA: ${{ steps.box.outputs.running_sha }}
+          # Passed through env, never inlined into the script (expression injection).
+          GRACE: ${{ inputs.grace_minutes }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          python3 .github/scripts/check_deploy_currency.py \
+            --running-sha "$RUNNING_SHA" \
+            ${GRACE:+--grace-minutes "$GRACE"} \
+            | tee "$RUNNER_TEMP/verdict.txt"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Classify the outcome
+        id: classify
+        if: always()
+        env:
+          BOX: ${{ steps.box.outcome }}
+          CHECK: ${{ steps.check.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$BOX" != "success" ]; then
+            # The box could not be read at all: the check never ran. This is an
+            # observability failure, and it is reported as one.
+            VERDICT=unreachable
+            SUMMARY="could not read the running image from the droplet (SSH/auth/box down) -- currency is UNKNOWN, not clean"
+          else
+            VERDICT=$(sed -n 's/^==> verdict: //p' "$RUNNER_TEMP/verdict.txt" | head -1 | tr 'A-Z' 'a-z')
+            SUMMARY=$(sed -n 's/^==> //p' "$RUNNER_TEMP/verdict.txt" | sed -n 2p)
+            [ -n "$VERDICT" ] || { VERDICT=unknown; SUMMARY="the check produced no verdict line"; }
+          fi
+          echo "==> verdict: $VERDICT"
+          echo "==> $SUMMARY"
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Deploy currency: \`$VERDICT\`"
+            echo ""
+            echo "$SUMMARY"
+            echo ""
+            if [ -f "$RUNNER_TEMP/verdict.txt" ]; then
+              echo '```'; cat "$RUNNER_TEMP/verdict.txt"; echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # alarm/unreachable/unknown all fail the job; fresh and hold pass.
+          case "$VERDICT" in
+            fresh|hold) exit 0 ;;
+            *) exit 1 ;;
+          esac
+
+  report:
+    name: File/update the tracking issue
+    needs: check
+    if: >-
+      always() && needs.check.result == 'failure' &&
+      (github.event_name == 'schedule' || inputs.file_issue)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the rolling issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERDICT: ${{ needs.check.outputs.verdict }}
+          SUMMARY: ${{ needs.check.outputs.summary }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TITLE="Deploy currency: production is not running main"
+          BODY=$(printf '%s\n' \
+            "**Verdict:** \`$VERDICT\`" \
+            "" \
+            "$SUMMARY" \
+            "" \
+            "Detected by [Deploy Currency]($RUN_URL) at $(date -u +%FT%TZ)." \
+            "" \
+            "\`fresh\`/\`hold\` are clean; \`alarm\` means at least one deploy-triggering push is past the grace window and still not live; \`unreachable\`/\`unknown\` mean the question could not be answered and currency is undetermined." \
+            "" \
+            "Recovery for a skipped deploy chain is \`gh run rerun --failed <run-id>\` on the deploy run named above; only the container image tag confirms it worked.")
+          EXISTING=$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" \
+                      --json number,title --jq "[.[] | select(.title == \"$TITLE\")][0].number" || echo "")
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            echo "==> updating #$EXISTING"
+            gh issue comment "$EXISTING" --repo "$REPO" --body "$BODY"
+          else
+            echo "==> filing a new tracking issue"
+            gh issue create --repo "$REPO" --title "$TITLE" --label bug --body "$BODY"
+          fi
