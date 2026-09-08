@@ -217,16 +217,17 @@ class TestReviewGateWiring:
 
     @pytest.mark.asyncio
     async def test_no_repo_gate_degrades_gracefully(self):
-        # With no injected gate (no repository), the default bare gate bypasses —
-        # the helper degrades gracefully (returns a decision, no crash). needs_review
-        # is owned by execute() from suite.needs_review (True for REVIEW), so the
-        # band is still surfaced as needs-review downstream.
+        # With no injected gate (no repository), the default bare gate cannot
+        # check anything: the helper degrades gracefully (no crash) and reports
+        # the decision honestly as "unavailable" (#1971) -- never "proceed".
+        # needs_review is owned by execute() from suite.needs_review (True for
+        # REVIEW), so the band is still surfaced as needs-review downstream.
         node = RefutationNode()
         fields = await node._consult_review_gate(
             {"treatment_var": "t", "outcome_var": "y"}, _review_suite()
         )
         assert "needs_review" not in fields
-        assert "expert_review_decision" in fields
+        assert fields["expert_review_decision"] == "unavailable"
         assert _review_suite().needs_review is True
 
 
