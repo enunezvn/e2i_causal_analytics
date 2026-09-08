@@ -1,0 +1,3877 @@
+# Expert-Review Loop Closure Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make the expert-review loop visible and usable end to end: real evidence from the two non-critical refutation tests, a guarded promote that can never land over a rejection, a review lookup route, review state and the discovered-DAG id on the drill-down, a workable queue page, a refreshed lineage document, and a live verification of approve, reject and the enforcement switch.
+
+**Architecture:** Spec `docs/superpowers/specs/2026-09-08-expert-review-loop-closure-design.md` (read §2 and §4 first). Backend: the refutation runner replaces two discard-after-compute DoWhy calls with its own resample loops; a new SQL RPC (migration 134) evaluates the review chronology rule inside the promote statement; one new read route returns a review in any status plus its same-structure history. Frontend: hand-written types learn the fields the API already returns; a small review-status panel on the drill-down deep-links to the queue page, which gains a linked-review card, a brand filter, a summary error state and assessment prefetch. Docs: the lineage page is rewritten to the shipped state and its anchors re-resolved.
+
+**Tech Stack:** Python 3.12, FastAPI, Pydantic v2, supabase-py (async), DoWhy 0.14 / EconML 0.16, PostgreSQL (plpgsql), pytest + pytest-asyncio; React 18 + TypeScript, TanStack Query, react-router-dom 7, vitest + Testing Library.
+
+**Conventions for every task**
+
+- Work in the lane worktree `/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane1-review-loop` on branch `claude/lane1-expert-review-loop`. Run `git branch --show-current` before every commit.
+- Python: `PY=/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python`. Tests: `$PY -m pytest <paths> -q -p no:cacheprovider`. Lint: `$PY -m ruff check <files>` and `$PY -m ruff format --check <files>` (ruff is pinned 0.14.10). Type-check only the changed files: `$PY -m mypy --config-file pyproject.toml <files>` (never the whole tree on this box).
+- Frontend: run from `frontend/`: `npx vitest run <paths>`, `npm run typecheck`, `npx eslint <files>`.
+- Commit message footer on every commit:
+
+```
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv
+```
+
+- Never `git stash` (shared stash). Never merge with squash. Nothing is pushed until Task 14.
+
+---
+
+## File structure
+
+| Path | Responsibility | Task |
+|---|---|---|
+| `src/causal_engine/refutation_runner.py` | thresholds; `_refit_effect_on`, `_refutation_frame`, `_resample_effects`, `_significance_p_value`, `_budget_skip_result`, `_resample_seed_for`; rewritten `_run_data_subset_test` / `_run_bootstrap_test`; `run_all_tests` passes deadline + seed | 1, 2 |
+| `tests/unit/test_causal_engine/test_refutation_runner.py` | shared stubs gain `_data`, `_stub_estimate`, `_sequence_estimate`; two tests rewritten | 1 |
+| `tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py` | new: evidence, thresholds, deadline, seeding, band arithmetic, wiring | 1, 2 |
+| `tests/unit/test_causal_engine/test_refutation_runner_1419.py`, `..._randomized.py` | `estimate=object()` → `_stub_estimate()` | 1 |
+| `database/migrations/134_guarded_causal_path_promote.sql` | `dag_structure_rejected`, `promote_causal_path_guarded`, grants, assertion | 3 |
+| `tests/unit/test_database/test_migration_134_guarded_promote.py` | pins the migration's contract | 3 |
+| `src/repositories/causal_path.py` | `set_validation_status` routes through the RPC when a hash is given | 4 |
+| `tests/unit/test_repositories/test_causal_path_promoter_1352.py` | new class `TestGuardedPromoteRpc` | 4 |
+| `src/agents/causal_impact/nodes/refutation.py` | promote call passes hash + brand | 5 |
+| `tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py` | fake accepts kwargs; new test | 5 |
+| `src/api/schemas/expert_review.py` | `ReviewRecord`, `ExpertReviewDetailResponse` | 6 |
+| `src/api/routes/expert_review.py` | `GET /expert-reviews/{review_id}` | 6 |
+| `tests/unit/test_api/test_expert_review_detail_route.py` | new route tests | 6 |
+| `frontend/src/types/generated/api.ts` | regenerated | 7 |
+| `frontend/src/types/expert-review.ts`, `api/expert-review.ts`, `lib/query-client.ts`, `hooks/api/use-expert-review.ts` (+ test) | detail type, client, key, hook | 8 |
+| `frontend/src/types/causal.ts` | review fields + `discovered_dag_id` | 9 |
+| `frontend/src/components/causal/ReviewStatusPanel.tsx` (+ test), `CausalAnalysisDetail.tsx` (+ test) | drill-down review state | 9 |
+| `frontend/src/components/expert-review/{checklist.ts,DagPanel.tsx,ResolveForm.tsx,LinkedReviewCard.tsx,PrepareAssessmentsButton.tsx}` | extracted + new queue components | 10 |
+| `frontend/src/pages/ExpertReviews.tsx` (+ test) | linked card, brand filter, summary error, prefetch | 10 |
+| `docs/lineage/causal_dag_lineage.html` | sections + anchors | 11 |
+| `docs/demos/results/<date>_expert_review_loop/` | live evidence | 13, 15 |
+
+---
+
+### Task 1: Runner — real evidence for data_subset and bootstrap, intended bootstrap thresholds
+
+**Files:**
+- Modify: `src/causal_engine/refutation_runner.py` (PASS_THRESHOLDS ~line 470; new helpers after `_require_p_value` ~line 75; `_run_data_subset_test` ~line 1196; `_run_bootstrap_test` ~line 1320)
+- Modify: `tests/unit/test_causal_engine/test_refutation_runner.py` (helpers lines 42–61; tests at lines 751–780 and 798–832)
+- Modify: `tests/unit/test_causal_engine/test_refutation_runner_1419.py`, `tests/unit/test_causal_engine/test_refutation_runner_randomized.py`
+- Create: `tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py`
+
+- [ ] **Step 1: Extend the shared test stubs**
+
+In `tests/unit/test_causal_engine/test_refutation_runner.py`, add to the imports at the top (keep existing ones):
+
+```python
+from typing import Callable, List, Optional
+
+import numpy as np
+import pandas as pd
+```
+
+Replace the existing `_make_stub_causal_model` (lines 49–61) with:
+
+```python
+class _StubRefitEstimator:
+    """What ``estimate.estimator.get_new_estimator_object`` returns (spec §4.1).
+
+    ``fit`` records the resample and ``estimate_effect`` reports an effect
+    computed FROM it, so subset and bootstrap draws vary the way a real re-fit
+    would (a constant series would make DoWhy's normal test divide by zero).
+    """
+
+    def __init__(self, effect_fn: Callable[[pd.DataFrame], float]) -> None:
+        self._effect_fn = effect_fn
+        self.fitted_on: Optional[pd.DataFrame] = None
+
+    def fit(self, data: pd.DataFrame, effect_modifier_names=None, **_fit_params) -> None:  # noqa: ANN001
+        self.fitted_on = data
+
+    def estimate_effect(  # noqa: ANN001
+        self, data: pd.DataFrame, control_value=0, treatment_value=1, target_units="ate"
+    ) -> SimpleNamespace:
+        return SimpleNamespace(value=float(self._effect_fn(data)))
+
+
+def _stub_frame(n: int = 60, seed: int = 0) -> pd.DataFrame:
+    """The frame a stub CausalModel was 'built on' (DoWhy keeps it as ``_data``)."""
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame({"t": rng.integers(0, 2, n), "y": rng.random(n), "c": rng.random(n)})
+
+
+def _stub_estimate(
+    value: float = 0.15,
+    effect_fn: Optional[Callable[[pd.DataFrame], float]] = None,
+) -> SimpleNamespace:
+    """A DoWhy-shaped CausalEstimate: ``.value`` plus the four estimator
+    attributes ``refutation_runner._refit_effect_on`` reads."""
+    fn = effect_fn or (lambda df: value + 0.01 * (float(df["y"].mean()) - 0.5))
+    estimator = SimpleNamespace(
+        get_new_estimator_object=lambda _estimand: _StubRefitEstimator(fn),
+        _effect_modifier_names=[],
+        _target_units="ate",
+    )
+    return SimpleNamespace(value=value, estimator=estimator, control_value=0, treatment_value=1)
+
+
+def _sequence_estimate(values: List[float], value: float = 0.15) -> SimpleNamespace:
+    """An estimate whose successive re-fits report ``values`` in order."""
+    it = iter(values)
+    return _stub_estimate(value=value, effect_fn=lambda _df: next(it))
+
+
+def _make_stub_causal_model(
+    refutation_results_by_method: dict, data: Optional[pd.DataFrame] = None
+) -> SimpleNamespace:
+    """Construct a stub object shaped like DoWhy's CausalModel.
+
+    ``refute_estimate(estimand, estimate, method_name=..., **kwargs)`` returns
+    the canned result for ``method_name`` (placebo / random_common_cause still
+    go through it); ``_data`` is the frame the two resample loops draw from.
+    """
+
+    def refute_estimate(*_args, method_name: str, **_kwargs):  # noqa: ANN001
+        if method_name not in refutation_results_by_method:
+            raise KeyError(f"stub did not register method_name={method_name!r}")
+        return refutation_results_by_method[method_name]
+
+    return SimpleNamespace(
+        refute_estimate=refute_estimate,
+        _data=data if data is not None else _stub_frame(),
+    )
+```
+
+- [ ] **Step 2: Point every stub-driven `estimate=object()` at the new estimate stub**
+
+```bash
+cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane1-review-loop
+sed -i 's/estimate=object()/estimate=_stub_estimate()/g' tests/unit/test_causal_engine/test_refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_randomized.py
+sed -i 's/"estimate": object(),/"estimate": _stub_estimate(),/' tests/unit/test_causal_engine/test_refutation_runner_1419.py
+grep -c '_stub_estimate()' tests/unit/test_causal_engine/test_refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_randomized.py tests/unit/test_causal_engine/test_refutation_runner_1419.py
+```
+
+Expected counts: 15, 2, 1. Then add `_stub_estimate` to the existing import lines in the two importing files:
+
+```python
+# test_refutation_runner_randomized.py line 27 and test_refutation_runner_1419.py line 48
+from tests.unit.test_causal_engine.test_refutation_runner import _full_stub_causal_model, _stub_estimate
+```
+
+- [ ] **Step 3: Rewrite the two "passed" tests in `test_refutation_runner.py`**
+
+Replace `test_run_data_subset_test_passed` (lines 751–778) with:
+
+```python
+    def test_run_data_subset_test_passed(self, runner):
+        """Real evidence (spec §4.1): the test re-fits on subsets of the model's
+        frame and scores how many subset effects fall inside original_ci."""
+        result = runner._run_data_subset_test(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            use_dowhy=True,
+        )
+
+        assert result.status == RefutationStatus.PASSED
+        assert len(result.details["subset_effects"]) == 5
+        assert result.details["ci_coverage"] == 1.0
+```
+
+Replace `test_run_bootstrap_test_passed` (lines 798–832) with:
+
+```python
+    def test_run_bootstrap_test_passed(self, runner):
+        """Real evidence (spec §4.1): bootstrap re-fits on row resamples; the
+        2.5–97.5 percentile width is compared with original_ci under the
+        INTENDED thresholds (pass ≤ 1.5× the original width)."""
+        result = runner._run_bootstrap_test(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            use_dowhy=True,
+        )
+
+        assert result.status == RefutationStatus.PASSED
+        assert len(result.details["bootstrap_effects"]) == runner.config["bootstrap"]["num_bootstraps"]
+        assert result.details["ci_ratio"] <= 1.5
+```
+
+- [ ] **Step 4: Write the new failing test file**
+
+Create `tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py`:
+
+```python
+"""Lane 1 (spec §4.1): data_subset and bootstrap produce REAL distributional evidence.
+
+Before this change both tests called ``causal_model.refute_estimate`` and then
+discarded the result because DoWhy 0.14 does not expose per-sample effects on
+the refutation object: 96 of 96 live runs recorded them SKIPPED (measured
+2026-09-08) at the same compute cost these loops have. The methods now run
+their own resample loops with the public estimator calls DoWhy's refuters use,
+keep DoWhy's significance test for the p-value, stop at the cooperative
+deadline, and reproduce their draws from a seed.
+"""
+
+from __future__ import annotations
+
+import time as _t
+from types import SimpleNamespace
+from typing import List
+
+import numpy as np
+import pytest
+
+from src.causal_engine.errors import RefutationError
+from src.causal_engine.refutation_runner import (
+    GateDecision,
+    RefutationResult,
+    RefutationRunner,
+    RefutationStatus,
+    RefutationTestType,
+)
+from tests.unit.test_causal_engine.test_refutation_runner import (
+    _make_stub_causal_model,
+    _sequence_estimate,
+    _stub_estimate,
+)
+
+CI = (0.10, 0.20)
+
+
+def _subset(runner: RefutationRunner, estimate, **kw):
+    return runner._run_data_subset_test(
+        original_effect=0.15,
+        original_ci=CI,
+        causal_model=_make_stub_causal_model({}),
+        identified_estimand=object(),
+        estimate=estimate,
+        use_dowhy=True,
+        **kw,
+    )
+
+
+def _bootstrap(runner: RefutationRunner, estimate, **kw):
+    return runner._run_bootstrap_test(
+        original_effect=0.15,
+        original_ci=CI,
+        causal_model=_make_stub_causal_model({}),
+        identified_estimand=object(),
+        estimate=estimate,
+        use_dowhy=True,
+        **kw,
+    )
+
+
+def _bootstrap_values(width: float, center: float = 0.15, n: int = 40) -> List[float]:
+    """40 evenly spaced values whose 2.5th–97.5th percentile span is ``width``
+    (np.percentile's linear interpolation gives span = 0.95 × range)."""
+    span = width / 0.95
+    return [float(v) for v in np.linspace(center - span / 2, center + span / 2, n)]
+
+
+class TestDataSubsetRealEvidence:
+    def test_records_per_subset_effects_and_scores_coverage(self):
+        runner = RefutationRunner()
+        result = _subset(runner, _stub_estimate())
+        assert result.status == RefutationStatus.PASSED
+        assert len(result.details["subset_effects"]) == runner.config["data_subset"]["num_subsets"]
+        assert result.details["ci_coverage"] == 1.0
+        assert result.details["resamples_completed"] == 5
+        assert result.details["resamples_requested"] == 5
+        assert result.details["stopped_for_budget"] is False
+        assert result.p_value is not None and 0.0 <= result.p_value <= 1.0
+
+    @pytest.mark.parametrize(
+        "inside,expected",
+        [(8, RefutationStatus.PASSED), (7, RefutationStatus.WARNING), (6, RefutationStatus.FAILED)],
+    )
+    def test_coverage_thresholds_at_the_boundaries(self, inside, expected):
+        runner = RefutationRunner(config={"data_subset": {"num_subsets": 10}})
+        values = [0.15 + 0.001 * i for i in range(inside)] + [
+            0.50 + 0.01 * i for i in range(10 - inside)
+        ]
+        result = _subset(runner, _sequence_estimate(values))
+        assert result.details["ci_coverage"] == pytest.approx(inside / 10)
+        assert result.status == expected
+
+    def test_p_value_is_dowhys_significance_test(self):
+        from dowhy.causal_refuter import test_significance
+
+        runner = RefutationRunner()
+        est = _stub_estimate()
+        result = _subset(runner, est)
+        expected = test_significance(est, np.asarray(result.details["subset_effects"]))["p_value"]
+        assert result.p_value == pytest.approx(float(expected))
+
+    def test_seeded_runs_reproduce_their_evidence(self):
+        runner = RefutationRunner()
+        a = _subset(runner, _stub_estimate(), resample_seed=7)
+        b = _subset(runner, _stub_estimate(), resample_seed=7)
+        c = _subset(runner, _stub_estimate(), resample_seed=8)
+        assert a.details["subset_effects"] == b.details["subset_effects"]
+        assert a.details["subset_effects"] != c.details["subset_effects"]
+
+    def test_model_without_frame_fails_closed(self):
+        runner = RefutationRunner()
+        with pytest.raises(RefutationError) as ei:
+            runner._run_data_subset_test(
+                original_effect=0.15,
+                original_ci=CI,
+                causal_model=SimpleNamespace(),
+                identified_estimand=object(),
+                estimate=_stub_estimate(),
+                use_dowhy=True,
+            )
+        assert ei.value.details["reason"] == "refutation_frame_missing"
+
+    def test_refit_failure_fails_closed(self):
+        runner = RefutationRunner()
+
+        def boom(_df):
+            raise ValueError("estimator exploded")
+
+        with pytest.raises(RefutationError) as ei:
+            _subset(runner, _stub_estimate(effect_fn=boom))
+        assert ei.value.details["test_name"] == "data_subset"
+
+
+class TestBootstrapRealEvidence:
+    def test_thresholds_are_the_intended_values(self):
+        assert RefutationRunner.PASS_THRESHOLDS["bootstrap_ci_ratio"] == {"pass": 1.50, "warning": 1.75}
+
+    @pytest.mark.parametrize(
+        "width,expected",
+        [(0.149, RefutationStatus.PASSED), (0.160, RefutationStatus.WARNING), (0.180, RefutationStatus.FAILED)],
+    )
+    def test_width_ratio_thresholds_mean_what_the_comment_says(self, width, expected):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 40}})
+        result = _bootstrap(runner, _sequence_estimate(_bootstrap_values(width)))
+        assert result.details["ci_ratio"] == pytest.approx(width / 0.10, rel=1e-6)
+        assert result.status == expected
+
+    def test_records_per_bootstrap_effects(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 12}})
+        result = _bootstrap(runner, _stub_estimate())
+        assert len(result.details["bootstrap_effects"]) == 12
+        assert result.details["bootstrap_ci_available"] is True
+        assert result.details["resamples_requested"] == 12
+        assert result.details["resamples_completed"] == 12
+        assert len(result.details["bootstrap_ci"]) == 2
+
+
+class TestDeadlineInsideTheLoop:
+    def _clocked(self, monkeypatch, cost_s: float):
+        clock = {"now": 0.0}
+        monkeypatch.setattr(_t, "monotonic", lambda: clock["now"])
+
+        def effect(_df):
+            clock["now"] += cost_s
+            return 0.15 + 0.001 * clock["now"]
+
+        return effect
+
+    def test_stops_early_and_scores_on_the_completed_resamples(self, monkeypatch):
+        effect = self._clocked(monkeypatch, 10.0)
+        result = _subset(RefutationRunner(), _stub_estimate(effect_fn=effect), deadline=25.0)
+        assert result.status == RefutationStatus.PASSED
+        assert result.details["resamples_completed"] == 3
+        assert result.details["resamples_requested"] == 5
+        assert result.details["stopped_for_budget"] is True
+
+    def test_below_the_minimum_is_an_honest_budget_skip(self, monkeypatch):
+        effect = self._clocked(monkeypatch, 10.0)
+        result = _subset(RefutationRunner(), _stub_estimate(effect_fn=effect), deadline=15.0)
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["resamples_completed"] == 2
+        assert "time_budget" in result.details["reason"]
+        assert "message" in result.details
+
+    @pytest.mark.parametrize("deadline,skipped", [(9.5, False), (8.5, True)])
+    def test_bootstrap_minimum_is_ten(self, monkeypatch, deadline, skipped):
+        effect = self._clocked(monkeypatch, 1.0)
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 20}})
+        result = _bootstrap(runner, _stub_estimate(effect_fn=effect), deadline=deadline)
+        assert (result.status == RefutationStatus.SKIPPED) is skipped
+        assert result.details["resamples_completed"] == (9 if skipped else 10)
+
+
+class TestReviewBandArithmetic:
+    """Why REVIEW was unreachable, pinned as arithmetic (spec §2)."""
+
+    @staticmethod
+    def _r(name: RefutationTestType, status: RefutationStatus) -> RefutationResult:
+        return RefutationResult(test_name=name, status=status, original_effect=0.15, refuted_effect=0.15)
+
+    def test_sensitivity_warning_with_both_noncritical_failed_is_review(self):
+        runner = RefutationRunner()
+        tests = [
+            self._r(RefutationTestType.PLACEBO_TREATMENT, RefutationStatus.PASSED),
+            self._r(RefutationTestType.RANDOM_COMMON_CAUSE, RefutationStatus.PASSED),
+            self._r(RefutationTestType.SENSITIVITY_E_VALUE, RefutationStatus.WARNING),
+            self._r(RefutationTestType.DATA_SUBSET, RefutationStatus.FAILED),
+            self._r(RefutationTestType.BOOTSTRAP, RefutationStatus.FAILED),
+        ]
+        conf = runner._calculate_confidence_score(tests)
+        assert conf == pytest.approx(0.65)
+        assert runner._determine_gate_decision(tests, conf) == GateDecision.REVIEW
+
+    def test_sensitivity_warning_with_both_passed_is_proceed(self):
+        runner = RefutationRunner()
+        tests = [
+            self._r(RefutationTestType.PLACEBO_TREATMENT, RefutationStatus.PASSED),
+            self._r(RefutationTestType.RANDOM_COMMON_CAUSE, RefutationStatus.PASSED),
+            self._r(RefutationTestType.SENSITIVITY_E_VALUE, RefutationStatus.WARNING),
+            self._r(RefutationTestType.DATA_SUBSET, RefutationStatus.PASSED),
+            self._r(RefutationTestType.BOOTSTRAP, RefutationStatus.PASSED),
+        ]
+        conf = runner._calculate_confidence_score(tests)
+        assert conf == pytest.approx(0.90)
+        assert runner._determine_gate_decision(tests, conf) == GateDecision.PROCEED
+
+    def test_only_criticals_scoring_could_never_reach_review(self):
+        """What production did until this lane: both non-critical tests SKIPPED."""
+        runner = RefutationRunner()
+        tests = [
+            self._r(RefutationTestType.PLACEBO_TREATMENT, RefutationStatus.PASSED),
+            self._r(RefutationTestType.RANDOM_COMMON_CAUSE, RefutationStatus.PASSED),
+            self._r(RefutationTestType.SENSITIVITY_E_VALUE, RefutationStatus.WARNING),
+            self._r(RefutationTestType.DATA_SUBSET, RefutationStatus.SKIPPED),
+            self._r(RefutationTestType.BOOTSTRAP, RefutationStatus.SKIPPED),
+        ]
+        conf = runner._calculate_confidence_score(tests)
+        assert conf == pytest.approx(0.8667, abs=1e-3)
+        assert runner._determine_gate_decision(tests, conf) == GateDecision.PROCEED
+```
+
+- [ ] **Step 5: Run the new file and confirm it fails for the right reason**
+
+```bash
+PY=/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python
+$PY -m pytest tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py -q -p no:cacheprovider -x 2>&1 | tail -15
+```
+
+Expected: FAIL. The first failure is `test_records_per_subset_effects_and_scores_coverage` with `RefutationError` (the old code looks for `refute_estimate` on the stub and finds no `data_subset_refuter` result) or `KeyError: 'subset_effects'`. `TestReviewBandArithmetic` passes already (the arithmetic is unchanged); `test_thresholds_are_the_intended_values` fails with `{'pass': 0.5, 'warning': 0.75}`.
+
+- [ ] **Step 6: Change the bootstrap thresholds**
+
+In `src/causal_engine/refutation_runner.py`, inside `PASS_THRESHOLDS`, replace
+
+```python
+        "bootstrap_ci_ratio": {
+            "pass": 0.50,  # Bootstrap CI must not be > 50% wider than original
+            "warning": 0.75,
+        },
+```
+
+with
+
+```python
+        "bootstrap_ci_ratio": {
+            # ratio = bootstrap_width / original_width. A stable estimate's
+            # bootstrap interval is about as wide as its analytic one (ratio
+            # ≈ 1; measured 1.01 and 0.81 on two live pairs, 2026-09-08). The
+            # pre-lane-1 values 0.50 / 0.75 contradicted the comment beside them
+            # ("must not be > 50% wider") and would have failed nearly every
+            # real run; they never scored because the test was always SKIPPED.
+            "pass": 1.50,  # bootstrap CI at most 50% wider than the original
+            "warning": 1.75,
+        },
+```
+
+- [ ] **Step 7: Add the resample helpers after `_require_p_value`**
+
+Insert after the `_require_p_value` function (before the `ENUMS` banner):
+
+```python
+# ============================================================================
+# REAL NON-CRITICAL EVIDENCE (lane 1, spec §4.1)
+# ============================================================================
+# DoWhy 0.14's data_subset / bootstrap refuters compute per-sample effects and
+# keep only their mean and a p-value on the CausalRefutation object, so the two
+# distributional tests below could never score and were recorded SKIPPED on
+# every live run (96/96 measured 2026-09-08). The loops below re-fit the SAME
+# reported estimator with the SAME public calls DoWhy's ``_refute_once`` uses
+# and keep every effect. Reference interval: ``original_ci`` from the
+# estimation node (the reported interval) -- never the reconstruction's own.
+
+_MIN_SUBSET_RESAMPLES = 3
+_MIN_BOOTSTRAP_RESAMPLES = 10
+
+
+def _refit_effect_on(new_data: Any, identified_estimand: Any, estimate: Any) -> float:
+    """Re-fit the reported estimator on ``new_data`` and return its effect.
+
+    The four calls are the public estimator API DoWhy 0.14's own
+    ``data_subset_refuter._refute_once`` / ``bootstrap_refuter._refute_once``
+    use; nothing here substitutes a different model.
+    """
+    new_estimator = estimate.estimator.get_new_estimator_object(identified_estimand)
+    fit_params = getattr(new_estimator, "_fit_params", None) or {}
+    new_estimator.fit(
+        new_data,
+        effect_modifier_names=estimate.estimator._effect_modifier_names,
+        **fit_params,
+    )
+    new_effect = new_estimator.estimate_effect(
+        new_data,
+        control_value=estimate.control_value,
+        treatment_value=estimate.treatment_value,
+        target_units=estimate.estimator._target_units,
+    )
+    return float(new_effect.value)
+
+
+def _refutation_frame(causal_model: Any, test_name: str, original_effect: float) -> Any:
+    """The frame the CausalModel was built on (DoWhy stores it as ``_data``)."""
+    frame = getattr(causal_model, "_data", None)
+    if frame is None or not hasattr(frame, "sample") or not hasattr(frame, "columns"):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"{test_name} needs the CausalModel's DataFrame (``_data``) to resample; "
+            "the model exposes none.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "refutation_frame_missing",
+            },
+        )
+    return frame
+
+
+def _resample_effects(
+    *,
+    kind: str,
+    frame: Any,
+    identified_estimand: Any,
+    estimate: Any,
+    requested: int,
+    rng: np.random.Generator,
+    deadline: Optional[float],
+    subset_fraction: float = 0.8,
+) -> Tuple[List[float], bool]:
+    """Run up to ``requested`` re-fits, stopping at the cooperative deadline.
+
+    ``kind`` is ``"subset"`` (``frame.sample(frac=subset_fraction)``) or
+    ``"bootstrap"`` (row resample WITH replacement, same size; no confounder
+    noise -- DoWhy's default bootstrap refuter also perturbs the chosen
+    covariates, which answers a measurement-error question, not the variance
+    question this test scores). Each draw is seeded from ``rng`` so a seeded
+    caller reproduces its evidence. Returns ``(effects, stopped_for_budget)``.
+    """
+    effects: List[float] = []
+    for _ in range(max(1, int(requested))):
+        if deadline is not None and time.monotonic() >= deadline:
+            return effects, True
+        seed = int(rng.integers(0, 2**31 - 1))
+        if kind == "subset":
+            new_data = frame.sample(frac=subset_fraction, random_state=seed)
+        else:
+            new_data = frame.sample(n=len(frame), replace=True, random_state=seed)
+        effects.append(_refit_effect_on(new_data, identified_estimand, estimate))
+    return effects, False
+
+
+def _significance_p_value(
+    estimate: Any, effects: List[float], test_name: str, original_effect: float
+) -> float:
+    """p-value of the reported estimate under the resample distribution --
+    DoWhy's own ``test_significance`` (the refuters' p-value), kept real."""
+    try:
+        from dowhy.causal_refuter import test_significance
+    except ImportError as ie:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "DoWhy import failed while scoring resample evidence.",
+            details={"test_name": test_name, "reason": "dowhy_import_failed"},
+            original_error=ie,
+        ) from ie
+    result = test_significance(estimate, np.asarray(effects, dtype=float))
+    pv = result.get("p_value") if isinstance(result, dict) else None
+    if pv is None or not np.isfinite(float(pv)):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"{test_name} significance test returned no finite p_value; refusing to "
+            "substitute a placeholder.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "missing_p_value",
+            },
+        )
+    return float(pv)
+
+
+def _budget_skip_result(
+    test_name: RefutationTestType,
+    original_effect: float,
+    completed: int,
+    requested: int,
+    minimum: int,
+    config_details: Dict[str, Any],
+) -> RefutationResult:
+    """Honest SKIPPED result when the deadline stopped a loop below its minimum
+    (same ``reason`` / ``message`` contract as the #1419 pre-start skip)."""
+    name = test_name.value
+    return RefutationResult(
+        test_name=test_name,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=original_effect,
+        details={
+            "reason": (
+                "time_budget — non-critical test stopped before its minimum resample "
+                "count; the critical gates decide the suite"
+            ),
+            "message": (
+                f"{name} skipped: {completed}/{requested} resamples completed before the "
+                f"compute deadline (minimum {minimum}); non-critical, degraded honestly"
+            ),
+            "resamples_completed": completed,
+            "resamples_requested": requested,
+            "stopped_for_budget": True,
+            **config_details,
+        },
+    )
+
+
+def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
+    """Stable 31-bit seed from the estimate id (``None`` → unseeded, as before)."""
+    if not estimate_id:
+        return None
+    import hashlib
+
+    return int(hashlib.sha256(str(estimate_id).encode("utf-8")).hexdigest()[:8], 16)
+```
+
+- [ ] **Step 8: Replace `_run_data_subset_test`**
+
+Replace the whole method (from `def _run_data_subset_test(` through its `return RefutationResult(...)`) with:
+
+```python
+    def _run_data_subset_test(
+        self,
+        original_effect: float,
+        original_ci: Tuple[float, float],
+        causal_model: Optional[Any],
+        identified_estimand: Optional[Any],
+        estimate: Optional[Any],
+        use_dowhy: bool,
+        *,
+        deadline: Optional[float] = None,
+        resample_seed: Optional[int] = None,
+    ) -> RefutationResult:
+        """Data-subset consistency test on REAL per-subset evidence (spec §4.1).
+
+        Re-fits the reported estimator on ``num_subsets`` random subsets of
+        ``subset_fraction`` of the model's frame and scores the SHARE of subset
+        effects that fall inside ``original_ci`` (the estimation node's reported
+        interval). Stops at ``deadline`` between re-fits; below
+        ``_MIN_SUBSET_RESAMPLES`` completed it returns an honest SKIPPED.
+        """
+        import time
+
+        start_time = time.time()
+        test_name = RefutationTestType.DATA_SUBSET
+
+        if not (use_dowhy and causal_model is not None):
+            # F-014 fail-closed: defense-in-depth for legacy non-agent callers.
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                "data_subset test requires a real DoWhy CausalModel; "
+                "caller passed causal_model=None.",
+                details={
+                    "test_name": "data_subset",
+                    "dowhy_available": DOWHY_AVAILABLE,
+                    "original_effect": original_effect,
+                },
+            )
+
+        cfg = self.config["data_subset"]
+        requested = int(cfg["num_subsets"])
+        subset_fraction = float(cfg["subset_fraction"])
+        frame = _refutation_frame(causal_model, "data_subset", original_effect)
+        rng = np.random.default_rng(resample_seed)
+        try:
+            subset_effects, stopped = _resample_effects(
+                kind="subset",
+                frame=frame,
+                identified_estimand=identified_estimand,
+                estimate=estimate,
+                requested=requested,
+                rng=rng,
+                deadline=deadline,
+                subset_fraction=subset_fraction,
+            )
+        except RefutationError:
+            raise
+        except Exception as e:
+            # F-014 fail-closed: no silent mock fallback.
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                f"data_subset re-fit failed: {e}",
+                details={"test_name": "data_subset", "original_effect": original_effect},
+                original_error=e,
+            ) from e
+
+        config_details = {"subset_fraction": subset_fraction, "num_subsets": requested}
+        if len(subset_effects) < _MIN_SUBSET_RESAMPLES:
+            return _budget_skip_result(
+                test_name, original_effect, len(subset_effects), requested,
+                _MIN_SUBSET_RESAMPLES, config_details,
+            )
+
+        refuted_effect = float(np.mean(subset_effects))
+        p_value = _significance_p_value(estimate, subset_effects, "data_subset", original_effect)
+        ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
+        delta_percent = (
+            abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        )
+
+        if ci_coverage >= self.thresholds["subset_ci_coverage"]["pass"]:
+            status = RefutationStatus.PASSED
+            message = f"Effect consistent across {int(ci_coverage * 100)}% of data subsets"
+        elif ci_coverage >= self.thresholds["subset_ci_coverage"]["warning"]:
+            status = RefutationStatus.WARNING
+            message = f"Effect varies in {int((1 - ci_coverage) * 100)}% of subsets"
+        else:
+            status = RefutationStatus.FAILED
+            message = f"WARNING: Effect inconsistent across data subsets ({int(ci_coverage * 100)}% coverage)"
+
+        execution_time = (time.time() - start_time) * 1000
+        return RefutationResult(
+            test_name=test_name,
+            status=status,
+            original_effect=original_effect,
+            refuted_effect=refuted_effect,
+            p_value=p_value,
+            delta_percent=delta_percent,
+            details={
+                "message": message,
+                "ci_coverage": ci_coverage,
+                "subset_effects": [float(e) for e in subset_effects],
+                "resamples_completed": len(subset_effects),
+                "resamples_requested": requested,
+                "stopped_for_budget": stopped,
+                **config_details,
+            },
+            execution_time_ms=execution_time,
+        )
+```
+
+- [ ] **Step 9: Replace `_run_bootstrap_test`**
+
+Replace the whole method with:
+
+```python
+    def _run_bootstrap_test(
+        self,
+        original_effect: float,
+        original_ci: Tuple[float, float],
+        causal_model: Optional[Any],
+        identified_estimand: Optional[Any],
+        estimate: Optional[Any],
+        use_dowhy: bool,
+        *,
+        deadline: Optional[float] = None,
+        resample_seed: Optional[int] = None,
+    ) -> RefutationResult:
+        """Bootstrap stability test on REAL per-resample evidence (spec §4.1).
+
+        Re-fits the reported estimator on ``num_bootstraps`` row resamples (with
+        replacement, same size) of the model's frame; the 2.5th–97.5th
+        percentile width of the resample effects is compared with the width of
+        ``original_ci``. Thresholds: pass ≤ 1.5×, warning ≤ 1.75×, else failed
+        (``PASS_THRESHOLDS["bootstrap_ci_ratio"]``). Stops at ``deadline``
+        between re-fits; below ``_MIN_BOOTSTRAP_RESAMPLES`` it returns SKIPPED.
+        """
+        import time
+
+        start_time = time.time()
+        test_name = RefutationTestType.BOOTSTRAP
+
+        if not (use_dowhy and causal_model is not None):
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                "bootstrap test requires a real DoWhy CausalModel; "
+                "caller passed causal_model=None.",
+                details={
+                    "test_name": "bootstrap",
+                    "dowhy_available": DOWHY_AVAILABLE,
+                    "original_effect": original_effect,
+                },
+            )
+
+        requested = int(self.config["bootstrap"]["num_bootstraps"])
+        frame = _refutation_frame(causal_model, "bootstrap", original_effect)
+        rng = np.random.default_rng(resample_seed)
+        try:
+            bootstrap_effects, stopped = _resample_effects(
+                kind="bootstrap",
+                frame=frame,
+                identified_estimand=identified_estimand,
+                estimate=estimate,
+                requested=requested,
+                rng=rng,
+                deadline=deadline,
+            )
+        except RefutationError:
+            raise
+        except Exception as e:
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                f"bootstrap re-fit failed: {e}",
+                details={"test_name": "bootstrap", "original_effect": original_effect},
+                original_error=e,
+            ) from e
+
+        config_details = {"num_bootstraps": requested}
+        if len(bootstrap_effects) < _MIN_BOOTSTRAP_RESAMPLES:
+            return _budget_skip_result(
+                test_name, original_effect, len(bootstrap_effects), requested,
+                _MIN_BOOTSTRAP_RESAMPLES, config_details,
+            )
+
+        refuted_effect = float(np.mean(bootstrap_effects))
+        p_value = _significance_p_value(estimate, bootstrap_effects, "bootstrap", original_effect)
+        bootstrap_ci = (
+            float(np.percentile(bootstrap_effects, 2.5)),
+            float(np.percentile(bootstrap_effects, 97.5)),
+        )
+        delta_percent = (
+            abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
+        )
+        original_ci_width = original_ci[1] - original_ci[0]
+        bootstrap_ci_width = bootstrap_ci[1] - bootstrap_ci[0]
+        ci_ratio = bootstrap_ci_width / max(original_ci_width, 1e-10)
+
+        if ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["pass"]:
+            status = RefutationStatus.PASSED
+            message = f"Effect stable across {len(bootstrap_effects)} bootstrap samples"
+        elif ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["warning"]:
+            status = RefutationStatus.WARNING
+            message = "Bootstrap CI moderately wider than original"
+        else:
+            status = RefutationStatus.FAILED
+            message = "WARNING: High variance in bootstrap estimates"
+
+        execution_time = (time.time() - start_time) * 1000
+        return RefutationResult(
+            test_name=test_name,
+            status=status,
+            original_effect=original_effect,
+            refuted_effect=refuted_effect,
+            p_value=p_value,
+            delta_percent=delta_percent,
+            details={
+                "message": message,
+                "bootstrap_ci": bootstrap_ci,
+                "ci_ratio": ci_ratio,
+                "bootstrap_ci_available": True,
+                "bootstrap_effects": [float(e) for e in bootstrap_effects],
+                "resamples_completed": len(bootstrap_effects),
+                "resamples_requested": requested,
+                "stopped_for_budget": stopped,
+                **config_details,
+            },
+            execution_time_ms=execution_time,
+        )
+```
+
+- [ ] **Step 10: Run the runner test files**
+
+```bash
+$PY -m pytest tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_causal_engine/test_refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_1419.py tests/unit/test_causal_engine/test_refutation_runner_randomized.py -q -p no:cacheprovider 2>&1 | tail -8
+```
+
+Expected: all PASS except the two `TestRunAllTestsWiring` cases, which do not exist yet (Task 2). If `test_bootstrap_default_bootstraps_bounded` or `test_data_subset_default_subsets_bounded` fail, read them: they pin DEFAULT_CONFIG counts, which this task did not change.
+
+- [ ] **Step 11: Lint and type-check the changed file, then commit**
+
+```bash
+$PY -m ruff check src/causal_engine/refutation_runner.py tests/unit/test_causal_engine/ && $PY -m ruff format --check src/causal_engine/refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py
+$PY -m mypy --config-file pyproject.toml src/causal_engine/refutation_runner.py
+git add src/causal_engine/refutation_runner.py tests/unit/test_causal_engine/
+git commit -m "feat(refutation): real data_subset/bootstrap evidence; intended bootstrap thresholds (spec §4.1)
+
+Both tests ran DoWhy's refuter and discarded the result (per-sample effects
+are not on the refutation object): 96/96 live runs recorded them SKIPPED.
+They now re-fit the reported estimator in their own resample loops (same
+public calls as DoWhy's _refute_once), keep every effect, score coverage /
+width ratio against the reported interval, use DoWhy's test_significance
+for the p-value, stop at the cooperative deadline, and seed their draws.
+bootstrap_ci_ratio thresholds 0.50/0.75 -> 1.50/1.75 (the code contradicted
+its own comment; measured ratios 1.01 and 0.81 on live pairs).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+---
+
+### Task 2: Runner — `run_all_tests` passes the deadline and a stable seed
+
+**Files:**
+- Modify: `src/causal_engine/refutation_runner.py` (`run_all_tests`, the two `_run_test_with_tracing` calls for data_subset and bootstrap ~lines 748–790)
+- Modify: `tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py`
+
+- [ ] **Step 1: Add the failing wiring tests**
+
+Append to `test_refutation_runner_real_evidence.py`:
+
+```python
+_ONLY_NONCRITICAL = {
+    "placebo_treatment": {"enabled": False},
+    "random_common_cause": {"enabled": False},
+    "sensitivity_e_value": {"enabled": False},
+}
+
+
+class TestRunAllTestsWiring:
+    def _kw(self):
+        return dict(
+            original_effect=0.15,
+            original_ci=CI,
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+        )
+
+    def test_estimate_id_seeds_the_resamples(self):
+        runner = RefutationRunner(config=_ONLY_NONCRITICAL)
+        a = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-1", **self._kw())
+        b = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-1", **self._kw())
+        c = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-2", **self._kw())
+
+        def effects(suite):
+            return {t.test_name.value: t.details.get("subset_effects") for t in suite.tests}
+
+        assert effects(a)["data_subset"] == effects(b)["data_subset"]
+        assert effects(a)["data_subset"] != effects(c)["data_subset"]
+
+    def test_deadline_and_seed_reach_the_loops(self, monkeypatch):
+        runner = RefutationRunner(config=_ONLY_NONCRITICAL)
+        seen: dict = {}
+        real = runner._run_data_subset_test
+
+        def spy(*args, **kwargs):
+            seen.update(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(runner, "_run_data_subset_test", spy)
+        far = _t.monotonic() + 3600.0
+        runner.run_all_tests(estimate=_stub_estimate(), deadline=far, **self._kw())
+        assert seen["deadline"] == far
+        assert seen["resample_seed"] is None
+```
+
+- [ ] **Step 2: Run them to see the failure**
+
+```bash
+$PY -m pytest tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py::TestRunAllTestsWiring -q -p no:cacheprovider 2>&1 | tail -6
+```
+
+Expected: FAIL — `KeyError: 'deadline'` in the spy test; the seed test fails because two unseeded runs differ.
+
+- [ ] **Step 3: Wire the two calls**
+
+In `run_all_tests`, directly after the `_record` inner function definition, add:
+
+```python
+        # Spec §4.1: the two resample loops check the deadline between re-fits
+        # and seed their draws from the estimate id so a re-run reproduces its
+        # evidence (None → unseeded, the pre-lane-1 behaviour).
+        resample_seed = _resample_seed_for(estimate_id)
+```
+
+In the `data_subset` block, change the `_run_test_with_tracing(` call to add two kwargs after `use_dowhy=use_dowhy,`:
+
+```python
+                    use_dowhy=use_dowhy,
+                    deadline=deadline,
+                    resample_seed=resample_seed,
+                )
+```
+
+Do the same in the `bootstrap` block.
+
+- [ ] **Step 4: Run all runner tests, lint, commit**
+
+```bash
+$PY -m pytest tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_causal_engine/test_refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_1419.py tests/unit/test_causal_engine/test_refutation_runner_randomized.py -q -p no:cacheprovider 2>&1 | tail -4
+$PY -m ruff check src/causal_engine/refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py
+git add -A src/causal_engine/refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py
+git commit -m "feat(refutation): thread the cooperative deadline and an estimate-id seed into the resample loops
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+Expected: all green.
+
+---
+
+### Task 3: Migration 134 — guarded promote in SQL
+
+**Files:**
+- Create: `database/migrations/134_guarded_causal_path_promote.sql`
+- Create: `tests/unit/test_database/test_migration_134_guarded_promote.py`
+
+- [ ] **Step 1: Write the failing contract test**
+
+```python
+"""Migration 134 ships the guarded causal_paths promote (lane 1, spec §4.3)."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[3]
+MIGRATION = REPO / "database" / "migrations" / "134_guarded_causal_path_promote.sql"
+
+FUNCTIONS = (
+    "public.dag_structure_rejected(text, text)",
+    "public.promote_causal_path_guarded(text, text, text[], text, text)",
+)
+
+
+@pytest.mark.unit
+def test_migration_defines_both_functions():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE FUNCTION public.dag_structure_rejected(" in sql
+    assert "CREATE OR REPLACE FUNCTION public.promote_causal_path_guarded(" in sql
+
+
+@pytest.mark.unit
+def test_rejection_is_evaluated_inside_the_update_statement():
+    """The whole point: no window between reading the verdict and writing the status."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    update = re.search(r"UPDATE public\.causal_paths.*?;", sql, re.S)
+    assert update is not None
+    assert "NOT public.dag_structure_rejected(" in update.group(0)
+    assert "validation_status = ANY (p_allowed_current)" in update.group(0)
+
+
+@pytest.mark.unit
+def test_service_role_only():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    for fn in FUNCTIONS:
+        assert f"REVOKE ALL ON FUNCTION {fn} FROM PUBLIC, anon, authenticated;" in sql
+        assert f"GRANT EXECUTE ON FUNCTION {fn} TO service_role;" in sql
+    assert "has_function_privilege" in sql  # the migration asserts its own grants
+```
+
+Run: `$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: FAIL with `FileNotFoundError`.
+
+- [ ] **Step 2: Write the migration**
+
+Create `database/migrations/134_guarded_causal_path_promote.sql`:
+
+```sql
+-- ============================================================================
+-- Migration 134: guarded causal_paths promotion (lane 1, spec §4.3)
+-- ============================================================================
+-- WHAT: two functions.
+--   public.dag_structure_rejected(p_dag_version_hash text, p_brand text)
+--     → boolean. The expert-review chronology rule
+--     (src/causal_engine/expert_review_gate.py, ExpertReviewGate
+--     ._latest_adjudication / check_rejection) in SQL: a structure is rejected
+--     when the NEWEST non-pending review row for the hash (and brand, when a
+--     brand is given) is 'rejected' and no pending row is newer than it. A
+--     NULL hash means "no structure to check" and reads false.
+--   public.promote_causal_path_guarded(p_path_id, p_new_status,
+--     p_allowed_current text[], p_dag_version_hash, p_brand) → jsonb
+--     One UPDATE that moves causal_paths.validation_status only when the
+--     current status is allowed AND the structure is not rejected -- the
+--     rejection predicate is evaluated INSIDE the UPDATE statement, so there
+--     is no window between reading the verdict and writing the status.
+--     Returns {"moved": 0|1, "rejected": bool}.
+-- WHY: CausalPathRepository.set_validation_status conditioned the promote on
+--   the current status only; a rejection committed between the RefutationNode's
+--   read-only probe and its status write was not seen (#1985 residue).
+-- SAFETY: SECURITY INVOKER; service_role EXECUTE only (precedent
+--   database/ml/036 record_discovered_dag); idempotent (CREATE OR REPLACE);
+--   the asserting DO block below RAISEs on a grant regression. Migration 119's
+--   trigger on 'validated' stays the second line of defence.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.dag_structure_rejected(
+    p_dag_version_hash text,
+    p_brand text DEFAULT NULL
+) RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = public
+AS $$
+    WITH latest_np AS (
+        SELECT r.approval_status, r.created_at
+        FROM public.expert_reviews r
+        WHERE r.dag_version_hash = p_dag_version_hash
+          AND (p_brand IS NULL OR r.brand = p_brand)
+          AND r.approval_status <> 'pending'
+        ORDER BY r.created_at DESC
+        LIMIT 1
+    )
+    SELECT COALESCE(
+        (SELECT l.approval_status = 'rejected'
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM public.expert_reviews p
+                    WHERE p.dag_version_hash = p_dag_version_hash
+                      AND (p_brand IS NULL OR p.brand = p_brand)
+                      AND p.approval_status = 'pending'
+                      AND p.created_at > l.created_at
+                )
+         FROM latest_np l),
+        false
+    );
+$$;
+
+COMMENT ON FUNCTION public.dag_structure_rejected(text, text) IS
+    'Lane 1 (migration 134): the expert-review chronology rule in SQL -- true when '
+    'the newest non-pending review of this DAG hash (and brand, when given) is '
+    'rejected and no pending review is newer. Python mirror: ExpertReviewGate'
+    '._latest_adjudication. NULL hash reads false ("unchecked").';
+
+CREATE OR REPLACE FUNCTION public.promote_causal_path_guarded(
+    p_path_id text,
+    p_new_status text,
+    p_allowed_current text[],
+    p_dag_version_hash text DEFAULT NULL,
+    p_brand text DEFAULT NULL
+) RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+    v_moved integer := 0;
+    v_rejected boolean := false;
+BEGIN
+    IF p_path_id IS NULL OR p_new_status IS NULL OR p_allowed_current IS NULL THEN
+        RAISE EXCEPTION 'promote_causal_path_guarded: p_path_id, p_new_status and p_allowed_current are required';
+    END IF;
+
+    UPDATE public.causal_paths
+       SET validation_status = p_new_status
+     WHERE path_id = p_path_id
+       AND validation_status = ANY (p_allowed_current)
+       AND NOT public.dag_structure_rejected(p_dag_version_hash, p_brand);
+    GET DIAGNOSTICS v_moved = ROW_COUNT;
+
+    IF v_moved = 0 THEN
+        v_rejected := public.dag_structure_rejected(p_dag_version_hash, p_brand);
+    END IF;
+
+    RETURN jsonb_build_object('moved', v_moved, 'rejected', v_rejected);
+END;
+$$;
+
+COMMENT ON FUNCTION public.promote_causal_path_guarded(text, text, text[], text, text) IS
+    'Lane 1 (migration 134): the RefutationNode''s SOLE promoter write. Moves '
+    'causal_paths.validation_status only when the current status is in '
+    'p_allowed_current AND dag_structure_rejected(hash, brand) is false, in one '
+    'statement. Returns {"moved": 0|1, "rejected": bool}.';
+
+REVOKE ALL ON FUNCTION public.dag_structure_rejected(text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.dag_structure_rejected(text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.promote_causal_path_guarded(text, text, text[], text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.promote_causal_path_guarded(text, text, text[], text, text) TO service_role;
+
+DO $$
+DECLARE
+    v_fn text;
+BEGIN
+    FOREACH v_fn IN ARRAY ARRAY[
+        'public.dag_structure_rejected(text, text)',
+        'public.promote_causal_path_guarded(text, text, text[], text, text)'
+    ] LOOP
+        IF NOT has_function_privilege('service_role', v_fn, 'EXECUTE') THEN
+            RAISE EXCEPTION 'migration 134: service_role cannot EXECUTE %', v_fn;
+        END IF;
+        IF has_function_privilege('anon', v_fn, 'EXECUTE') THEN
+            RAISE EXCEPTION 'migration 134: anon can still EXECUTE %', v_fn;
+        END IF;
+        IF has_function_privilege('authenticated', v_fn, 'EXECUTE') THEN
+            RAISE EXCEPTION 'migration 134: authenticated can still EXECUTE %', v_fn;
+        END IF;
+    END LOOP;
+    -- Behavioural smoke: an unknown hash is never "rejected"; an absent path never moves.
+    IF public.dag_structure_rejected('migration-134-no-such-hash', NULL) THEN
+        RAISE EXCEPTION 'migration 134: unknown hash reads as rejected';
+    END IF;
+    IF (public.promote_causal_path_guarded('migration-134-no-such-path', 'validated',
+            ARRAY['pending'], NULL, NULL) ->> 'moved')::int <> 0 THEN
+        RAISE EXCEPTION 'migration 134: a non-existent path moved';
+    END IF;
+END $$;
+```
+
+- [ ] **Step 3: Run the contract test**
+
+`$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: 3 passed.
+
+- [ ] **Step 4: Rehearse on the live database (BEGIN … ROLLBACK, applied twice, with a positive control)**
+
+The live table holds exactly one rejected review (2026-07-13, brand NULL); it must read as rejected. Run from the worktree:
+
+```bash
+{
+  echo 'BEGIN;'
+  cat database/migrations/134_guarded_causal_path_promote.sql
+  cat database/migrations/134_guarded_causal_path_promote.sql
+  cat <<'SQL'
+DO $$
+DECLARE v_hash text;
+BEGIN
+  SELECT dag_version_hash INTO v_hash FROM public.expert_reviews
+   WHERE approval_status = 'rejected' ORDER BY created_at DESC LIMIT 1;
+  IF v_hash IS NULL THEN RAISE EXCEPTION 'rehearsal: expected one live rejected row'; END IF;
+  IF NOT public.dag_structure_rejected(v_hash, NULL) THEN
+    RAISE EXCEPTION 'rehearsal: the live rejected structure must read as rejected';
+  END IF;
+  -- A pending row newer than the rejection reopens it: simulate inside the txn.
+  INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id, created_at)
+  VALUES ('dag_approval', v_hash, 'pending', 'rehearsal', now());
+  IF public.dag_structure_rejected(v_hash, NULL) THEN
+    RAISE EXCEPTION 'rehearsal: a newer pending row must reopen the structure';
+  END IF;
+  RAISE NOTICE 'rehearsal OK for hash %', left(v_hash, 12);
+END $$;
+SQL
+  echo 'ROLLBACK;'
+} | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 2>&1 | tail -6
+```
+
+Expected: `NOTICE: rehearsal OK for hash …` then `ROLLBACK`, no ERROR. If the INSERT fails on a NOT NULL column, add the column to the INSERT (read `\d public.expert_reviews`); the rehearsal must end in ROLLBACK either way. Confirm nothing persisted:
+
+```bash
+docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_proc where proname in ('dag_structure_rejected','promote_causal_path_guarded')"
+```
+
+Expected: `0`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add database/migrations/134_guarded_causal_path_promote.sql tests/unit/test_database/test_migration_134_guarded_promote.py
+git commit -m "feat(db): migration 134 -- guarded causal_paths promote evaluates the review chronology inside the UPDATE
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+---
+
+### Task 4: Repository — `set_validation_status` routes through the guarded RPC
+
+**Files:**
+- Modify: `src/repositories/causal_path.py` (`set_validation_status`, ~line 377)
+- Modify: `tests/unit/test_repositories/test_causal_path_promoter_1352.py` (append a class)
+
+- [ ] **Step 1: Add the failing tests**
+
+Append to `tests/unit/test_repositories/test_causal_path_promoter_1352.py`:
+
+```python
+@pytest.mark.unit
+class TestGuardedPromoteRpc:
+    """Lane 1 (spec §4.3): with a DAG hash the transition runs through
+    ``promote_causal_path_guarded`` (migration 134); without one the plain
+    conditional update is kept."""
+
+    def _install_rpc(self, mock_client, payload):
+        call = MagicMock()
+        call.execute = AsyncMock(return_value=MagicMock(data=payload))
+        mock_client.rpc.return_value = call
+        return call
+
+    @pytest.mark.asyncio
+    async def test_hash_routes_through_the_guarded_rpc(self, repo, mock_client):
+        self._install_rpc(mock_client, {"moved": 1, "rejected": False})
+        moved = await repo.set_validation_status(
+            "cp_1", "validated", ("pending", "needs_review"),
+            dag_version_hash="h" * 64, brand="Kisqali",
+        )
+        assert moved is True
+        name, params = mock_client.rpc.call_args.args
+        assert name == "promote_causal_path_guarded"
+        assert params == {
+            "p_path_id": "cp_1",
+            "p_new_status": "validated",
+            "p_allowed_current": ["pending", "needs_review"],
+            "p_dag_version_hash": "h" * 64,
+            "p_brand": "Kisqali",
+        }
+        mock_client.table.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejected_structure_moves_nothing(self, repo, mock_client):
+        self._install_rpc(mock_client, {"moved": 0, "rejected": True})
+        moved = await repo.set_validation_status(
+            "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
+        )
+        assert moved is False
+
+    @pytest.mark.asyncio
+    async def test_list_wrapped_payload_is_read(self, repo, mock_client):
+        self._install_rpc(mock_client, [{"moved": 1, "rejected": False}])
+        assert (
+            await repo.set_validation_status("cp_1", "validated", ("pending",), dag_version_hash="h" * 64)
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_hash_keeps_the_plain_conditional_update(self, repo, mock_client):
+        query = MagicMock()
+        query.eq.return_value = query
+        query.in_.return_value = query
+        query.execute = AsyncMock(return_value=MagicMock(data=[{"path_id": "cp_1"}]))
+        mock_client.table.return_value.update.return_value = query
+        assert await repo.set_validation_status("cp_1", "validated", ("pending",)) is True
+        mock_client.rpc.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rpc_error_propagates(self, repo, mock_client):
+        call = MagicMock()
+        call.execute = AsyncMock(side_effect=RuntimeError("connection refused"))
+        mock_client.rpc.return_value = call
+        with pytest.raises(RuntimeError):
+            await repo.set_validation_status("cp_1", "validated", ("pending",), dag_version_hash="h" * 64)
+```
+
+Run: `$PY -m pytest tests/unit/test_repositories/test_causal_path_promoter_1352.py -q -p no:cacheprovider -k Guarded` → Expected: FAIL with `TypeError: ... unexpected keyword argument 'dag_version_hash'`.
+
+- [ ] **Step 2: Implement**
+
+Replace `set_validation_status` in `src/repositories/causal_path.py` with:
+
+```python
+    async def set_validation_status(
+        self,
+        path_id: str,
+        new_status: str,
+        allowed_current: tuple,
+        *,
+        dag_version_hash: Optional[str] = None,
+        brand: Optional[str] = None,
+    ) -> bool:
+        """Conditionally move a path's ``validation_status`` (SOLE-promoter write).
+
+        The transition is guarded server-side: the UPDATE matches only when the
+        row's CURRENT status is in ``allowed_current``, so a concurrent writer
+        (or an operator adjudication) is never silently overwritten. Returns
+        True iff a row was actually updated. Raises on query errors — the
+        caller (RefutationNode) degrades with a logged warning; a silent False
+        on infra failure would be indistinguishable from a legitimate
+        no-transition.
+
+        Lane 1 (spec §4.3): when ``dag_version_hash`` is given the transition
+        runs through the ``promote_causal_path_guarded`` RPC (migration 134),
+        which evaluates the expert-review chronology rule INSIDE the same
+        UPDATE statement, so a rejection committed after the node's read-only
+        probe can never be promoted over. Without a hash there is no structure
+        to check and the plain conditional update is kept.
+        """
+        if not self.client:
+            return False
+        if dag_version_hash:
+            result = await self.client.rpc(
+                "promote_causal_path_guarded",
+                {
+                    "p_path_id": path_id,
+                    "p_new_status": new_status,
+                    "p_allowed_current": list(allowed_current),
+                    "p_dag_version_hash": dag_version_hash,
+                    "p_brand": brand,
+                },
+            ).execute()
+            payload: Any = result.data
+            if isinstance(payload, list):
+                payload = payload[0] if payload else {}
+            if not isinstance(payload, dict):
+                payload = {}
+            if payload.get("rejected"):
+                logger.info(
+                    "guarded promote: structure %s… is rejected by expert review; "
+                    "causal_paths.%s not moved to %s",
+                    dag_version_hash[:12],
+                    path_id,
+                    new_status,
+                )
+            return int(payload.get("moved") or 0) > 0
+        result = await (
+            self.client.table(self.table_name)
+            .update({"validation_status": new_status})
+            .eq(self.id_column, path_id)
+            .in_("validation_status", list(allowed_current))
+            .execute()
+        )
+        return bool(result.data)
+```
+
+`Any` and `Optional` are already imported in that module (check the top; add `Any` to the `typing` import if missing).
+
+- [ ] **Step 3: Run, lint, commit**
+
+```bash
+$PY -m pytest tests/unit/test_repositories/test_causal_path_promoter_1352.py -q -p no:cacheprovider
+$PY -m ruff check src/repositories/causal_path.py tests/unit/test_repositories/test_causal_path_promoter_1352.py
+$PY -m mypy --config-file pyproject.toml src/repositories/causal_path.py
+git add src/repositories/causal_path.py tests/unit/test_repositories/test_causal_path_promoter_1352.py
+git commit -m "feat(repo): set_validation_status goes through promote_causal_path_guarded when a DAG hash is known
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+Expected: all green (existing `TestSetValidationStatus` cases unchanged).
+
+---
+
+### Task 5: Node — the promote carries the run's hash and brand
+
+**Files:**
+- Modify: `src/agents/causal_impact/nodes/refutation.py` (`_persist_suite_and_promote`, the `set_validation_status` call ~line 981)
+- Modify: `tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py` (`_FakePathRepo.set_validation_status` ~line 90; new test in `TestLinkedPromotion`)
+
+- [ ] **Step 1: Let the fake record keyword arguments and add the failing test**
+
+Replace `_FakePathRepo.set_validation_status` with:
+
+```python
+    async def set_validation_status(
+        self, path_id: str, new_status: str, allowed_current: tuple, **kwargs: Any
+    ) -> bool:
+        if self.fail_update:
+            raise RuntimeError("db write failed")
+        self.status_calls.append(
+            {
+                "path_id": path_id,
+                "new_status": new_status,
+                "allowed_current": allowed_current,
+                "dag_version_hash": kwargs.get("dag_version_hash"),
+                "brand": kwargs.get("brand"),
+            }
+        )
+        return True
+```
+
+Append to `class TestLinkedPromotion`:
+
+```python
+    @pytest.mark.asyncio
+    async def test_promote_carries_the_structure_hash_and_brand(self) -> None:
+        """Lane 1 (spec §4.3): the guarded RPC needs the run's DAG hash and brand
+        to evaluate the rejection rule inside the UPDATE."""
+        repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
+        await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001", dag_version_hash="h" * 64, brand="Kisqali"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
+        )
+        call = path_repo.status_calls[0]
+        assert call["dag_version_hash"] == "h" * 64
+        assert call["brand"] == "Kisqali"
+
+    @pytest.mark.asyncio
+    async def test_promote_without_a_hash_passes_none(self) -> None:
+        repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
+        state = _state(causal_path_id="cp_real_000000001")
+        state.pop("dag_version_hash", None)
+        await node._persist_suite_and_promote(
+            state, _suite(GateDecision.PROCEED), structure_verdict="clear"
+        )
+        assert path_repo.status_calls[0]["dag_version_hash"] is None
+```
+
+(`_state(**overrides)` in that file merges overrides into the base state dict; if it does not accept `dag_version_hash`/`brand`, set them on the returned dict instead: `s = _state(...); s["dag_version_hash"] = "h" * 64; s["brand"] = "Kisqali"`.)
+
+Run: `$PY -m pytest tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py -q -p no:cacheprovider -k hash_and_brand` → Expected: FAIL, `call["dag_version_hash"] is None`.
+
+- [ ] **Step 2: Pass the hash and brand at the call site**
+
+In `_persist_suite_and_promote`, change
+
+```python
+            moved = await self.causal_path_repo.set_validation_status(
+                path_id, new_status, allowed_current
+            )
+```
+
+to
+
+```python
+            # Lane 1 (spec §4.3): the guarded RPC re-evaluates the rejection rule
+            # inside the UPDATE, so the probe→write window can no longer be won
+            # by a rejection committed in between.
+            moved = await self.causal_path_repo.set_validation_status(
+                path_id,
+                new_status,
+                allowed_current,
+                dag_version_hash=(str(state.get("dag_version_hash") or "") or None),
+                brand=cast(Optional[str], state.get("brand")),
+            )
+```
+
+- [ ] **Step 3: Run the node's refutation tests, lint, commit**
+
+```bash
+$PY -m pytest tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py tests/unit/test_agents/test_causal_impact/test_refutation_expert_review_enforcement_1971.py tests/unit/test_agents/test_causal_impact/test_refutation.py -q -p no:cacheprovider -m "not slow" 2>&1 | tail -4
+$PY -m ruff check src/agents/causal_impact/nodes/refutation.py tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py
+git add src/agents/causal_impact/nodes/refutation.py tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py
+git commit -m "feat(causal-impact): the promoter passes the run's DAG hash and brand to the guarded transition
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+---
+
+### Task 6: Backend — `GET /expert-reviews/{review_id}` with same-structure history
+
+**Files:**
+- Modify: `src/api/schemas/expert_review.py` (add two models after `PendingReviewItem`)
+- Modify: `src/api/routes/expert_review.py` (import the models; add the route at the END of the file)
+- Create: `tests/unit/test_api/test_expert_review_detail_route.py`
+
+- [ ] **Step 1: Write the failing route tests**
+
+```python
+"""Lane 1 (spec §4.2): GET /expert-reviews/{review_id} returns a review in ANY
+status plus the same-structure history, so the drill-down's deep link resolves
+for pending, approved and rejected structures alike."""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, List, Optional
+
+import pytest
+from fastapi import HTTPException
+
+import src.api.routes.expert_review as route_mod
+
+ROW: Dict[str, Any] = {
+    "review_id": "rev-1",
+    "review_type": "dag_approval",
+    "dag_version_hash": "h" * 64,
+    "brand": "Kisqali",
+    "treatment_variable": "treatment_arm",
+    "outcome_variable": "persistent_180d",
+    "approval_status": "rejected",
+    "reviewer_name": "Dr. No",
+    "concerns_raised": ["collider"],
+    "created_at": "2026-07-13T10:00:00+00:00",
+    "dag_structure_json": json.dumps({"nodes": ["t", "y"], "edges": [["t", "y"]]}),
+    "comments_json": json.dumps({"note": "engagement is post-treatment"}),
+}
+
+
+class _Repo:
+    def __init__(self, row: Optional[Dict[str, Any]], history: Optional[List[Dict[str, Any]]] = None, fail: Optional[str] = None):
+        self.row, self.history, self.fail = row, history or [], fail
+        self.history_calls: List[tuple] = []
+
+    async def get_by_id(self, review_id: str):
+        if self.fail == "row":
+            raise RuntimeError("connection refused")
+        return self.row if self.row and self.row["review_id"] == review_id else None
+
+    async def get_reviews_for_dag(self, dag_hash: str, include_expired: bool = False, brand: Optional[str] = None):
+        self.history_calls.append((dag_hash, include_expired, brand))
+        if self.fail == "history":
+            raise RuntimeError("connection refused")
+        return self.history
+
+
+def _install(monkeypatch, repo: _Repo) -> None:
+    async def _factory():
+        return repo
+
+    monkeypatch.setattr(route_mod, "_get_expert_review_repo", _factory)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_returns_the_row_and_its_same_structure_history(monkeypatch):
+    repo = _Repo(ROW, history=[ROW, {**ROW, "review_id": "rev-0", "approval_status": "pending"}])
+    _install(monkeypatch, repo)
+    resp = await route_mod.get_expert_review("rev-1", user={})
+    assert resp.review.review_id == "rev-1"
+    assert resp.review.approval_status == "rejected"
+    assert resp.review.reviewer_name == "Dr. No"
+    assert resp.review.dag_structure_json == {"nodes": ["t", "y"], "edges": [["t", "y"]]}
+    assert resp.review.comments_json == {"note": "engagement is post-treatment"}
+    assert [r.review_id for r in resp.history] == ["rev-1", "rev-0"]
+    # the same read the gate's rejection probe performs: expired included, brand-scoped
+    assert repo.history_calls == [("h" * 64, True, "Kisqali")]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unknown_review_is_404(monkeypatch):
+    _install(monkeypatch, _Repo(None))
+    with pytest.raises(HTTPException) as ei:
+        await route_mod.get_expert_review("nope", user={})
+    assert ei.value.status_code == 404
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", ["row", "history"])
+async def test_store_failure_is_503_never_an_empty_200(monkeypatch, fail):
+    _install(monkeypatch, _Repo(ROW, history=[ROW], fail=fail))
+    with pytest.raises(HTTPException) as ei:
+        await route_mod.get_expert_review("rev-1", user={})
+    assert ei.value.status_code == 503
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_row_without_a_hash_has_empty_history(monkeypatch):
+    repo = _Repo({**ROW, "dag_version_hash": None})
+    _install(monkeypatch, repo)
+    resp = await route_mod.get_expert_review("rev-1", user={})
+    assert resp.history == []
+    assert repo.history_calls == []
+
+
+@pytest.mark.unit
+def test_lookup_route_is_declared_after_pending_and_summary():
+    """FastAPI matches in declaration order: /{review_id} must not shadow the
+    two literal GET routes."""
+    paths = [r.path for r in route_mod.router.routes]
+    assert paths.index("/expert-reviews/pending") < paths.index("/expert-reviews/{review_id}")
+    assert paths.index("/expert-reviews/summary") < paths.index("/expert-reviews/{review_id}")
+```
+
+Run: `$PY -m pytest tests/unit/test_api/test_expert_review_detail_route.py -q -p no:cacheprovider` → Expected: FAIL, `AttributeError: module ... has no attribute 'get_expert_review'`.
+
+- [ ] **Step 2: Add the schemas**
+
+In `src/api/schemas/expert_review.py`, change the datetime import to `from datetime import date, datetime` and add after `PendingReviewItem`:
+
+```python
+class ReviewRecord(PendingReviewItem):
+    """One ``expert_reviews`` row in ANY status (lane 1, spec §4.2).
+
+    Extends ``PendingReviewItem`` with the resolution columns so the queue
+    page's linked-review card can show who decided what, and until when.
+    """
+
+    approval_status: Optional[str] = None
+    reviewer_id: Optional[str] = None
+    reviewer_name: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    valid_from: Optional[date] = None
+    valid_until: Optional[date] = None
+    concerns_raised: Optional[List[str]] = None
+    conditions: Optional[str] = None
+    checklist_json: Optional[Dict[str, Any]] = None
+    comments_json: Optional[Dict[str, Any]] = None
+    supersedes_review_id: Optional[str] = None
+
+    @field_validator("checklist_json", "comments_json", mode="before")
+    @classmethod
+    def _parse_resolution_json(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except (ValueError, TypeError):
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return value
+
+
+class ExpertReviewDetailResponse(BaseModel):
+    """``GET /expert-reviews/{review_id}``: the row plus its same-structure history.
+
+    ``history`` is every review sharing the DAG hash (and brand), newest first,
+    expired rows included -- the same read the gate's rejection probe performs.
+    """
+
+    review: ReviewRecord
+    history: List[ReviewRecord]
+```
+
+- [ ] **Step 3: Add the route (at the end of `src/api/routes/expert_review.py`)**
+
+Extend the schema import:
+
+```python
+from src.api.schemas.expert_review import (
+    AgentAssessmentResponse,
+    ExpertReviewDetailResponse,
+    PendingReviewItem,
+    PendingReviewsResponse,
+    ResolveReviewRequest,
+    ResolveReviewResponse,
+    ReviewRecord,
+    ReviewSummaryResponse,
+)
+```
+
+Append after `get_summary`:
+
+```python
+@router.get(
+    "/{review_id}",
+    response_model=ExpertReviewDetailResponse,
+    summary="One expert review (any status) with its same-structure history",
+    operation_id="get_expert_review",
+    responses={
+        404: {"model": ErrorResponse, "description": "Review not found"},
+        503: {"model": ErrorResponse, "description": "Expert-review store unavailable"},
+    },
+)
+async def get_expert_review(
+    review_id: str,
+    user: Dict[str, Any] = Depends(require_operator),
+) -> ExpertReviewDetailResponse:
+    """Return one review row in any status plus every review of the same DAG structure.
+
+    Powers the linked-review card the causal drill-down deep-links to
+    (``/expert-reviews?review=<id>``), so a run whose structure is pending,
+    approved or rejected always resolves to its record. ``history`` is the full
+    same-hash (and same-brand) list, newest first, expired included -- the read
+    ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
+    so it cannot shadow ``/pending`` and ``/summary``.
+    """
+    repo = await _get_expert_review_repo()
+    try:
+        row = await repo.get_by_id(review_id)
+    except Exception as e:  # store failure (R3): honest 503
+        raise _store_unavailable("review read", e) from e
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Review {review_id} was not found.")
+    dag_hash = row.get("dag_version_hash")
+    history_rows: List[Dict[str, Any]] = []
+    if dag_hash:
+        try:
+            history_rows = await repo.get_reviews_for_dag(
+                dag_hash, include_expired=True, brand=row.get("brand")
+            )
+        except Exception as e:
+            raise _store_unavailable("review history read", e) from e
+    return ExpertReviewDetailResponse(
+        review=ReviewRecord.model_validate(row),
+        history=[ReviewRecord.model_validate(r) for r in history_rows],
+    )
+```
+
+- [ ] **Step 4: Run, lint, type-check, commit**
+
+```bash
+$PY -m pytest tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_api/test_causal_agent_analyze_expert_review_1971.py -q -p no:cacheprovider
+$PY -m ruff check src/api/routes/expert_review.py src/api/schemas/expert_review.py tests/unit/test_api/test_expert_review_detail_route.py
+$PY -m mypy --config-file pyproject.toml src/api/routes/expert_review.py src/api/schemas/expert_review.py
+git add src/api/routes/expert_review.py src/api/schemas/expert_review.py tests/unit/test_api/test_expert_review_detail_route.py
+git commit -m "feat(api): GET /expert-reviews/{review_id} -- a review in any status with its same-structure history
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+---
+
+### Task 7: Regenerate the OpenAPI TypeScript types
+
+**Files:**
+- Modify: `frontend/src/types/generated/api.ts` (generated)
+
+- [ ] **Step 1: Regenerate from the lane's app**
+
+```bash
+cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane1-review-loop
+$PY -m scripts.export_openapi --output openapi.json
+cd frontend && npx openapi-typescript ../openapi.json -o src/types/generated/api.ts && cd ..
+rm -f openapi.json
+git diff --stat frontend/src/types/generated/api.ts
+grep -c 'get_expert_review\b' frontend/src/types/generated/api.ts
+grep -c 'ExpertReviewDetailResponse' frontend/src/types/generated/api.ts
+```
+
+Expected: the diff adds the operation and the two schemas; both greps ≥ 1. If the export fails to import the app on this box for memory reasons, run it inside the container instead: `docker exec -w /app e2i_api python -m scripts.export_openapi --output /tmp/openapi.json && docker cp e2i_api:/tmp/openapi.json openapi.json` — but that exports the DEPLOYED app, not the lane; only use it to compare shapes, never to commit.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add frontend/src/types/generated/api.ts
+git commit -m "chore(types): regenerate api.ts for the expert-review lookup route
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+(Re-run this task at the end of Task 11 if any later task touches a route or schema docstring; CI's `verify-types` gate compares the committed file with a fresh export.)
+
+---
+
+### Task 8: Frontend data layer — detail type, client, query key, hook
+
+**Files:**
+- Modify: `frontend/src/types/expert-review.ts` (append)
+- Modify: `frontend/src/api/expert-review.ts` (append)
+- Modify: `frontend/src/lib/query-client.ts` (`expertReviews` block ~line 401)
+- Modify: `frontend/src/hooks/api/use-expert-review.ts`
+- Modify: `frontend/src/hooks/api/use-expert-review.test.ts`
+
+- [ ] **Step 1: Update the hook test file's mocks and add failing tests**
+
+In `frontend/src/hooks/api/use-expert-review.test.ts`:
+
+1. Add `getExpertReview: vi.fn(),` to the `vi.mock('@/api/expert-review', ...)` factory.
+2. Add to the mocked `queryKeys.expertReviews`:
+
+```ts
+      detail: (reviewId: string) => ['e2i', 'expert-reviews', 'detail', reviewId] as const,
+```
+
+3. Add `useExpertReview` to the import from `'./use-expert-review'` and `ExpertReviewDetailResponse` to the type import.
+4. In `useResolveReview` › `'posts a resolution and invalidates pending + summary queries'`, change the last assertion to `expect(invalidateSpy).toHaveBeenCalledTimes(3);` and its comment to `// invalidate the pending queue, the summary AND any open linked-review detail`.
+5. Append:
+
+```ts
+const mockDetailResponse: ExpertReviewDetailResponse = {
+  review: {
+    review_id: 'rev-1',
+    review_type: 'dag_approval',
+    dag_version_hash: 'deadbeefcafebabe0123',
+    brand: 'Kisqali',
+    treatment_variable: 'treatment_arm',
+    outcome_variable: 'persistent_180d',
+    approval_status: 'rejected',
+    reviewer_name: 'Dr. No',
+    created_at: '2026-07-13T10:00:00Z',
+  },
+  history: [],
+};
+
+describe('useExpertReview', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fetches one review (any status) by id', async () => {
+    vi.mocked(expertReviewApi.getExpertReview).mockResolvedValueOnce(mockDetailResponse);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useExpertReview('rev-1'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(mockDetailResponse);
+    expect(expertReviewApi.getExpertReview).toHaveBeenCalledWith('rev-1');
+  });
+
+  it('stays idle without an id', () => {
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useExpertReview(null), { wrapper });
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(expertReviewApi.getExpertReview).not.toHaveBeenCalled();
+  });
+});
+```
+
+Run: `cd frontend && npx vitest run src/hooks/api/use-expert-review.test.ts` → Expected: FAIL (`useExpertReview` is not exported; the resolve test expects 3 invalidations).
+
+- [ ] **Step 2: Types**
+
+Append to `frontend/src/types/expert-review.ts`:
+
+```ts
+/**
+ * One expert_reviews row in ANY status (GET /expert-reviews/{review_id}).
+ * Extends the pending shape with the resolution columns.
+ */
+export interface ReviewRecord extends PendingReviewItem {
+  /** pending / approved / rejected (expired is derived at read time from valid_until) */
+  approval_status?: string | null;
+  reviewer_id?: string | null;
+  reviewer_name?: string | null;
+  approved_at?: string | null;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  concerns_raised?: string[] | null;
+  conditions?: string | null;
+  checklist_json?: Record<string, unknown> | null;
+  comments_json?: Record<string, unknown> | null;
+  supersedes_review_id?: string | null;
+}
+
+/**
+ * Response for GET /expert-reviews/{review_id}: the row plus every review of
+ * the same DAG structure (newest first, expired included).
+ */
+export interface ExpertReviewDetailResponse {
+  review: ReviewRecord;
+  history: ReviewRecord[];
+}
+```
+
+- [ ] **Step 3: API client**
+
+Append to `frontend/src/api/expert-review.ts` (and add `ExpertReviewDetailResponse` to its type import):
+
+```ts
+/**
+ * One review in any status plus its same-structure history.
+ *
+ * @param reviewId - The review identifier
+ */
+export async function getExpertReview(reviewId: string): Promise<ExpertReviewDetailResponse> {
+  return get<ExpertReviewDetailResponse>(`${EXPERT_REVIEW_BASE}/${encodeURIComponent(reviewId)}`);
+}
+```
+
+Also add `- GET  /expert-reviews/{review_id}          : One review (any status) + same-DAG history` to the endpoint list in the file's header comment.
+
+- [ ] **Step 4: Query key**
+
+In `frontend/src/lib/query-client.ts`, inside `expertReviews`, add after `summary`:
+
+```ts
+    detail: (reviewId: string) =>
+      [...queryKeys.expertReviews.all(), 'detail', reviewId] as const,
+```
+
+- [ ] **Step 5: Hook**
+
+In `frontend/src/hooks/api/use-expert-review.ts`:
+
+1. Add `getExpertReview` to the API import and `ExpertReviewDetailResponse` to the type import.
+2. Append after `useReviewSummary`:
+
+```ts
+/**
+ * Hook to fetch one review (any status) with its same-structure history —
+ * the linked-review card behind the drill-down's deep link. Idle until an id
+ * is present.
+ */
+export function useExpertReview(
+  reviewId: string | null | undefined,
+  options?: Omit<
+    UseQueryOptions<ExpertReviewDetailResponse, ApiError>,
+    'queryKey' | 'queryFn' | 'enabled'
+  >
+) {
+  return useQuery<ExpertReviewDetailResponse, ApiError>({
+    queryKey: queryKeys.expertReviews.detail(reviewId ?? ''),
+    queryFn: () => getExpertReview(reviewId as string),
+    enabled: !!reviewId,
+    ...options,
+  });
+}
+```
+
+3. In `useResolveReview`'s `onSuccess`, add after the summary invalidation:
+
+```ts
+      // A resolution also changes any open linked-review card.
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.expertReviews.all(), 'detail'],
+      });
+```
+
+4. In `useReviewAssessment`'s `onSuccess`, add the same `detail` invalidation after the pending one.
+5. Add `- useExpertReview:   read one review (any status) + same-DAG history` to the module header list.
+
+- [ ] **Step 6: Run, typecheck, commit**
+
+```bash
+cd frontend && npx vitest run src/hooks/api/use-expert-review.test.ts && npm run typecheck && npx eslint src/hooks/api/use-expert-review.ts src/api/expert-review.ts src/types/expert-review.ts src/lib/query-client.ts && cd ..
+git add frontend/src/types/expert-review.ts frontend/src/api/expert-review.ts frontend/src/lib/query-client.ts frontend/src/hooks/api/use-expert-review.ts frontend/src/hooks/api/use-expert-review.test.ts
+git commit -m "feat(frontend): expert-review detail type, client, query key and useExpertReview hook
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+---
+
+### Task 9: Drill-down — review state and discovered-DAG id
+
+**Files:**
+- Modify: `frontend/src/types/causal.ts` (`RefutationSummary` ~line 239; `AgentCausalAnalysisResponse` ~line 281)
+- Create: `frontend/src/components/causal/ReviewStatusPanel.tsx`
+- Create: `frontend/src/components/causal/ReviewStatusPanel.test.tsx`
+- Modify: `frontend/src/components/causal/CausalAnalysisDetail.tsx` (after the discovered-confounders paragraph, ~line 409)
+- Modify: `frontend/src/components/causal/CausalAnalysisDetail.test.tsx` (append one test)
+
+- [ ] **Step 1: Types**
+
+In `RefutationSummary` add after `needs_review: boolean;`:
+
+```ts
+  /**
+   * The expert-review row this run touched: the queue row on a REVIEW/BLOCK
+   * gate, the approval row when one is active, or the rejection row when a
+   * reviewer rejected the structure (any gate). Absent when none was involved.
+   */
+  expert_review_id?: string | null;
+  /**
+   * proceed / renewal_required / pending_review / rejected / blocked /
+   * unavailable — the structural verdict (#1971). Approval never promotes a
+   * borderline estimate; a rejection halts the run on every band.
+   */
+  expert_review_decision?: string | null;
+```
+
+In `AgentCausalAnalysisResponse` add after `dag_source?: string;`:
+
+```ts
+  /**
+   * Row id of this run's durable discovery record in public.discovered_dags
+   * (#1974). Absent when discovery did not run or persistence failed (then
+   * `warnings` carries the reason).
+   */
+  discovered_dag_id?: string | null;
+```
+
+- [ ] **Step 2: Failing component tests**
+
+Create `frontend/src/components/causal/ReviewStatusPanel.test.tsx`:
+
+```tsx
+import { describe, it, expect } from 'vitest';
+import { renderWithProviders, screen } from '@/test/utils';
+import { ReviewStatusPanel } from './ReviewStatusPanel';
+
+describe('ReviewStatusPanel', () => {
+  it('renders nothing when the run carried no review state and no DAG record', () => {
+    const { container } = renderWithProviders(<ReviewStatusPanel />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('shows a pending structure with a deep link into the queue', () => {
+    renderWithProviders(
+      <ReviewStatusPanel decision="pending_review" reviewId="rev-9" discoveredDagId={null} />
+    );
+    expect(screen.getByText('Pending expert review')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /open review/i });
+    expect(link).toHaveAttribute('href', '/expert-reviews?review=rev-9');
+  });
+
+  it('shows the rejection and the halt message from the run warnings', () => {
+    renderWithProviders(
+      <ReviewStatusPanel
+        decision="rejected"
+        reviewId="rev-rejected"
+        warnings={[
+          'Estimate withheld: a domain expert REJECTED this DAG structure by Dr. No (review rev-rejected): collider.',
+          'Refutation gate BLOCKED — the estimate did not survive robustness checks.',
+        ]}
+      />
+    );
+    expect(screen.getByText('Structure rejected')).toBeInTheDocument();
+    expect(screen.getByText(/by Dr\. No/)).toBeInTheDocument();
+    expect(screen.queryByText(/Refutation gate BLOCKED/)).not.toBeInTheDocument();
+  });
+
+  it('shows the durable discovery record id', () => {
+    renderWithProviders(<ReviewStatusPanel discoveredDagId="8a61b3db-6aad-4b01-96e4-bbea0af861b4" />);
+    expect(screen.getByText(/Durable discovery record/)).toBeInTheDocument();
+    expect(screen.getByText('8a61b3db-6aad-4b01-96e4-bbea0af861b4')).toBeInTheDocument();
+  });
+
+  it('never invents a label for an unknown decision', () => {
+    renderWithProviders(<ReviewStatusPanel decision="something_new" />);
+    expect(screen.getByText('something_new')).toBeInTheDocument();
+  });
+});
+```
+
+Run: `cd frontend && npx vitest run src/components/causal/ReviewStatusPanel.test.tsx` → Expected: FAIL (module not found).
+
+- [ ] **Step 3: Component**
+
+Create `frontend/src/components/causal/ReviewStatusPanel.tsx`:
+
+```tsx
+/**
+ * ReviewStatusPanel — the expert-review state of one agent run's DAG structure.
+ * =============================================================================
+ *
+ * Renders ONLY what the API returned (spec §4.4): the structural verdict from
+ * `refutation.expert_review_decision`, a link to the review row when the run
+ * touched one, the rejection halt message from `warnings`, and the durable
+ * discovered-DAG record id. Absent fields render nothing; an unknown decision
+ * renders verbatim rather than a guessed label.
+ *
+ * @module components/causal/ReviewStatusPanel
+ */
+
+import { Link } from 'react-router-dom';
+import { Badge } from '@/components/ui/badge';
+
+type Variant = 'default' | 'secondary' | 'destructive' | 'outline';
+
+const DECISION_COPY: Record<string, { label: string; meaning: string; variant: Variant }> = {
+  proceed: {
+    label: 'Structure approved',
+    meaning:
+      'A reviewer approved this DAG structure. Approval covers the structure only; the estimate still stands or falls on its own robustness checks.',
+    variant: 'default',
+  },
+  renewal_required: {
+    label: 'Approval expiring',
+    meaning:
+      'The structural approval is inside its renewal window. A reviewer should renew it before it lapses.',
+    variant: 'secondary',
+  },
+  pending_review: {
+    label: 'Pending expert review',
+    meaning:
+      'This DAG structure is queued for a reviewer. Re-running the analysis does not change that; resolving the review does.',
+    variant: 'secondary',
+  },
+  rejected: {
+    label: 'Structure rejected',
+    meaning:
+      'A reviewer rejected this DAG structure. The estimate is withheld on every band until a reviewer reopens the structure.',
+    variant: 'destructive',
+  },
+  blocked: {
+    label: 'No review possible',
+    meaning: 'The structure holds no approval and no review could be queued for it.',
+    variant: 'outline',
+  },
+  unavailable: {
+    label: 'Review gate unavailable',
+    meaning:
+      'The review store could not be consulted for this run; nothing was checked or queued.',
+    variant: 'outline',
+  },
+};
+
+export interface ReviewStatusPanelProps {
+  decision?: string | null;
+  reviewId?: string | null;
+  discoveredDagId?: string | null;
+  /** The run's warnings; the rejection halt message (reviewer + reason) lives there. */
+  warnings?: string[];
+}
+
+export function ReviewStatusPanel({
+  decision,
+  reviewId,
+  discoveredDagId,
+  warnings,
+}: ReviewStatusPanelProps) {
+  if (!decision && !discoveredDagId) return null;
+  const copy = decision ? DECISION_COPY[decision] : undefined;
+  const halt =
+    decision === 'rejected'
+      ? (warnings ?? []).find((w) => w.startsWith('Estimate withheld'))
+      : undefined;
+
+  return (
+    <div
+      className="space-y-1 rounded-md border border-[var(--color-border)] p-3 text-sm"
+      data-testid="review-status"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">Review status</span>
+        {copy ? (
+          <Badge variant={copy.variant}>{copy.label}</Badge>
+        ) : decision ? (
+          <Badge variant="outline">{decision}</Badge>
+        ) : null}
+        {reviewId && (
+          <Link
+            to={`/expert-reviews?review=${encodeURIComponent(reviewId)}`}
+            className="text-xs underline"
+          >
+            Open review
+          </Link>
+        )}
+      </div>
+      {copy && <p className="text-xs text-muted-foreground">{copy.meaning}</p>}
+      {halt && <p className="text-xs text-muted-foreground">{halt}</p>}
+      {discoveredDagId && (
+        <p className="text-xs text-muted-foreground">
+          Durable discovery record:{' '}
+          <code className="font-mono text-[11px]">{discoveredDagId}</code>
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Wire into the detail view and add its test**
+
+In `CausalAnalysisDetail.tsx`, add the import `import { ReviewStatusPanel } from './ReviewStatusPanel';` next to the `ClinicalContextPanel` import, and insert directly before `<ConfoundingAdjustmentPanel result={result} />`:
+
+```tsx
+      <ReviewStatusPanel
+        decision={result.refutation.expert_review_decision}
+        reviewId={result.refutation.expert_review_id}
+        discoveredDagId={result.discovered_dag_id}
+        warnings={result.warnings}
+      />
+```
+
+Append to `CausalAnalysisDetail.test.tsx` (inside `describe('CausalAnalysisDetail', …)`):
+
+```tsx
+  it('surfaces the review state and the discovered-DAG record when the run carries them', () => {
+    renderWithProviders(
+      <CausalAnalysisDetail
+        result={{
+          ...RESULT,
+          discovered_dag_id: 'dag-123',
+          refutation: {
+            ...RESULT.refutation,
+            expert_review_decision: 'pending_review',
+            expert_review_id: 'rev-9',
+          },
+        }}
+      />
+    );
+    expect(screen.getByText('Pending expert review')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /open review/i })).toHaveAttribute(
+      'href',
+      '/expert-reviews?review=rev-9'
+    );
+    expect(screen.getByText('dag-123')).toBeInTheDocument();
+  });
+
+  it('renders no review block for a run that touched no review and persisted no DAG', () => {
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
+    expect(screen.queryByTestId('review-status')).not.toBeInTheDocument();
+  });
+```
+
+- [ ] **Step 5: Run, typecheck, lint, commit**
+
+```bash
+cd frontend && npx vitest run src/components/causal && npm run typecheck && npx eslint src/components/causal/ReviewStatusPanel.tsx src/components/causal/CausalAnalysisDetail.tsx src/types/causal.ts && cd ..
+git add frontend/src/types/causal.ts frontend/src/components/causal/ReviewStatusPanel.tsx frontend/src/components/causal/ReviewStatusPanel.test.tsx frontend/src/components/causal/CausalAnalysisDetail.tsx frontend/src/components/causal/CausalAnalysisDetail.test.tsx
+git commit -m "feat(frontend): review status and discovered-DAG id on the causal drill-down
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+---
+
+### Task 10: Queue page — linked-review card, brand filter, summary error, assessment prefetch
+
+The page currently holds `CHECKLIST_ITEMS`, `shortHash`, `VERDICT_VARIANT`, `DagPanel` and `ResolveForm` inline. This task moves them into `frontend/src/components/expert-review/` (one responsibility per file), adds two new components, and rewrites the page around them. Behaviour of the moved code is unchanged except the auto-assessment in `ResolveForm`.
+
+**Files:**
+- Create: `frontend/src/components/expert-review/checklist.ts`
+- Create: `frontend/src/components/expert-review/DagPanel.tsx`
+- Create: `frontend/src/components/expert-review/ResolveForm.tsx`
+- Create: `frontend/src/components/expert-review/LinkedReviewCard.tsx`
+- Create: `frontend/src/components/expert-review/PrepareAssessmentsButton.tsx`
+- Modify: `frontend/src/pages/ExpertReviews.tsx` (full rewrite)
+- Modify: `frontend/src/pages/ExpertReviews.test.tsx` (full rewrite)
+
+- [ ] **Step 1: Shared checklist constants**
+
+Create `frontend/src/components/expert-review/checklist.ts`:
+
+```ts
+/**
+ * The minimal reviewer checklist (the migration-010 SYSTEM_TEMPLATE required
+ * items) and the advisory-verdict chip styling shared by the queue page and
+ * the linked-review card. Ids MUST stay in sync with
+ * src/insights/expert_review_assessment.py CHECKLIST_QUESTIONS.
+ */
+import type { AssessmentVerdict } from '@/types/expert-review';
+
+export const CHECKLIST_ITEMS: { id: string; question: string }[] = [
+  { id: 'conf_complete', question: 'Are all known confounders included?' },
+  { id: 'edge_plausible', question: 'Do causal arrows reflect domain knowledge?' },
+  { id: 'no_forbidden', question: 'Are there no forbidden edges (future→past)?' },
+  { id: 'mediators_correct', question: 'Are intermediate variables correctly positioned?' },
+  { id: 'sutva_plausible', question: 'Is the no-interference assumption reasonable?' },
+  { id: 'positivity', question: 'Is there sufficient overlap in treatment groups?' },
+];
+
+/** Concern is the only destructive signal; the other verdicts stay visually calm. */
+export const VERDICT_VARIANT: Record<AssessmentVerdict, 'secondary' | 'destructive' | 'outline'> = {
+  supports: 'secondary',
+  concern: 'destructive',
+  unclear: 'outline',
+  no_evidence: 'outline',
+};
+
+export function shortHash(hash?: string | null): string {
+  if (!hash) return '—';
+  return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash;
+}
+
+/** approved / rejected / pending / anything else → badge variant. */
+export function statusVariant(status?: string | null): 'default' | 'secondary' | 'destructive' | 'outline' {
+  if (status === 'approved') return 'default';
+  if (status === 'rejected') return 'destructive';
+  if (status === 'pending') return 'secondary';
+  return 'outline';
+}
+```
+
+- [ ] **Step 2: `DagPanel` (moved verbatim)**
+
+Create `frontend/src/components/expert-review/DagPanel.tsx`:
+
+```tsx
+/** Render a review's stored DAG snapshot, or an honest fallback for pre-097 rows. */
+import { CausalDAG } from '@/components/visualizations/causal/CausalDAG';
+import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
+import type { DagStructure } from '@/types/expert-review';
+
+export function DagPanel({ structure }: { structure?: DagStructure | null }) {
+  if (!structure?.nodes?.length) {
+    return (
+      <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-sm text-[var(--color-muted-foreground)]">
+        DAG structure not captured for this review (created before snapshot capture was
+        added). The DAG hash identifies the structure but cannot be rendered from it.
+      </div>
+    );
+  }
+
+  const treatments = new Set(structure.treatment_nodes ?? []);
+  const outcomes = new Set(structure.outcome_nodes ?? []);
+  const augmented = new Set((structure.augmented_edges ?? []).map(([s, t]) => `${s}->${t}`));
+
+  const nodes: CausalNode[] = structure.nodes.map((id) => ({
+    id,
+    label: id,
+    type: treatments.has(id) ? 'treatment' : outcomes.has(id) ? 'outcome' : 'variable',
+  }));
+  const edges: CausalEdge[] = (structure.edges ?? []).map(([source, target]) => ({
+    id: `${source}->${target}`,
+    source,
+    target,
+    // Discovery-augmented edges are visually distinct: the discovery gate added them.
+    type: augmented.has(`${source}->${target}`) ? 'association' : 'causal',
+  }));
+
+  return (
+    <div className="space-y-2">
+      <h4 className="text-sm font-medium">DAG under review</h4>
+      <CausalDAG nodes={nodes} edges={edges} minHeight={320} ariaLabel="Causal DAG under review" />
+      {structure.augmented_edges && structure.augmented_edges.length > 0 && (
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          Dashed/association edges were discovery-augmented (gate=
+          {structure.discovery_gate_decision ?? 'unknown'}).
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 3: `ResolveForm` (moved, plus auto-assessment on mount)**
+
+Create `frontend/src/components/expert-review/ResolveForm.tsx`:
+
+```tsx
+/**
+ * Approve / reject one pending review with the 010 checklist and an advisory
+ * agent assessment. The assessment is generated automatically the first time
+ * the form mounts for a row without a cached one (spec §4.5) — once per
+ * review id, StrictMode-safe — and can be regenerated on demand. It never
+ * pre-fills the human checklist.
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { CheckCircle2, RefreshCw, Sparkles, XCircle } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
+import { WarningBanner } from '@/components/ui/WarningBanner';
+import { useResolveReview, useReviewAssessment } from '@/hooks/api/use-expert-review';
+import type { AgentAssessment, PendingReviewItem, ReviewApprovalStatus } from '@/types/expert-review';
+import { CHECKLIST_ITEMS, VERDICT_VARIANT } from './checklist';
+
+export interface ResolveFormProps {
+  review: PendingReviewItem;
+  onClose: () => void;
+}
+
+export function ResolveForm({ review, onClose }: ResolveFormProps) {
+  const [checklist, setChecklist] = useState<Record<string, boolean>>({});
+  const [comments, setComments] = useState('');
+  const resolve = useResolveReview();
+  const assessmentMutation = useReviewAssessment();
+  const { mutate: generateAssessment } = assessmentMutation;
+
+  // Prefer the freshly generated assessment; fall back to the row's cache.
+  const assessment: AgentAssessment | null =
+    assessmentMutation.data?.assessment ?? review.agent_assessment_json ?? null;
+  const assessmentById = new Map((assessment?.items ?? []).map((item) => [item.id, item]));
+
+  // Auto-generate once per review id when nothing is cached (spec §4.5).
+  const autoFiredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (assessment) return;
+    if (autoFiredFor.current === review.review_id) return;
+    autoFiredFor.current = review.review_id;
+    generateAssessment({ reviewId: review.review_id });
+  }, [assessment, generateAssessment, review.review_id]);
+
+  const submit = useCallback(
+    (approval_status: ReviewApprovalStatus) => {
+      resolve.mutate(
+        {
+          reviewId: review.review_id,
+          body: {
+            approval_status,
+            checklist,
+            comments: comments ? { note: comments } : undefined,
+          },
+        },
+        { onSuccess: onClose }
+      );
+    },
+    [resolve, review.review_id, checklist, comments, onClose]
+  );
+
+  return (
+    <div className="space-y-4 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/20 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
+          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+          Agent assessment (advisory — the checklist answers are yours)
+          {assessment?.is_fallback && ' · deterministic, no LLM'}
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => generateAssessment({ reviewId: review.review_id, force: !!assessment })}
+          disabled={assessmentMutation.isPending}
+        >
+          <RefreshCw
+            className={`mr-1 h-3.5 w-3.5 ${assessmentMutation.isPending ? 'animate-spin' : ''}`}
+          />
+          {assessment ? 'Regenerate agent assessment' : 'Generate agent assessment'}
+        </Button>
+      </div>
+
+      {assessmentMutation.isError && (
+        <WarningBanner
+          title="Failed to generate agent assessment"
+          messages={[assessmentMutation.error?.message ?? 'An unexpected error occurred.']}
+        />
+      )}
+
+      <div className="space-y-2">
+        {CHECKLIST_ITEMS.map((item) => {
+          const graded = assessmentById.get(item.id);
+          return (
+            <div key={item.id} className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={`${review.review_id}-${item.id}`}
+                  checked={!!checklist[item.id]}
+                  onCheckedChange={(v) =>
+                    setChecklist((prev) => ({ ...prev, [item.id]: v === true }))
+                  }
+                />
+                <Label htmlFor={`${review.review_id}-${item.id}`} className="text-sm">
+                  {item.question}
+                </Label>
+                {graded && (
+                  <Badge variant={VERDICT_VARIANT[graded.verdict] ?? 'outline'}>{graded.verdict}</Badge>
+                )}
+              </div>
+              {graded && (
+                <p className="pl-6 text-xs text-[var(--color-muted-foreground)]">{graded.rationale}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor={`${review.review_id}-comments`} className="text-sm">
+          Comments
+        </Label>
+        <textarea
+          id={`${review.review_id}-comments`}
+          value={comments}
+          onChange={(e) => setComments(e.target.value)}
+          rows={3}
+          className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background)] p-2 text-sm"
+          placeholder="Reviewer notes (optional)"
+        />
+      </div>
+
+      {resolve.isError && (
+        <WarningBanner
+          title="Failed to submit review"
+          messages={[resolve.error?.message ?? 'An unexpected error occurred.']}
+        />
+      )}
+
+      <div className="flex items-center gap-2">
+        <Button size="sm" onClick={() => submit('approved')} disabled={resolve.isPending}>
+          <CheckCircle2 className="mr-1 h-4 w-4" />
+          Approve
+        </Button>
+        <Button size="sm" variant="destructive" onClick={() => submit('rejected')} disabled={resolve.isPending}>
+          <XCircle className="mr-1 h-4 w-4" />
+          Reject
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={resolve.isPending}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: `LinkedReviewCard`**
+
+Create `frontend/src/components/expert-review/LinkedReviewCard.tsx`:
+
+```tsx
+/**
+ * The review the causal drill-down linked to (`/expert-reviews?review=<id>`):
+ * one row in ANY status plus every review of the same DAG structure. A pending
+ * linked review resolves in place; a resolved one shows who decided what.
+ */
+import { RefreshCw } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { WarningBanner } from '@/components/ui/WarningBanner';
+import { useExpertReview } from '@/hooks/api/use-expert-review';
+import { DagPanel } from './DagPanel';
+import { ResolveForm } from './ResolveForm';
+import { shortHash, statusVariant } from './checklist';
+
+function fmtDate(value?: string | null): string {
+  if (!value) return '—';
+  return value.slice(0, 10);
+}
+
+export function LinkedReviewCard({ reviewId }: { reviewId: string }) {
+  const q = useExpertReview(reviewId);
+
+  return (
+    <Card data-testid="linked-review">
+      <CardHeader>
+        <CardTitle>Linked review</CardTitle>
+        <CardDescription>
+          Opened from a causal analysis. Review <span className="font-mono">{shortHash(reviewId)}</span>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {q.isLoading && (
+          <div className="flex items-center justify-center py-6">
+            <RefreshCw className="h-5 w-5 animate-spin text-[var(--color-muted-foreground)]" />
+          </div>
+        )}
+        {q.isError && (
+          <WarningBanner
+            title={/not found/i.test(q.error?.message ?? '') ? 'This review no longer exists' : 'Failed to load the linked review'}
+            messages={[q.error?.message ?? 'An unexpected error occurred.']}
+          />
+        )}
+        {q.data && (
+          <>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge variant={statusVariant(q.data.review.approval_status)}>
+                {q.data.review.approval_status ?? 'unknown'}
+              </Badge>
+              <span>{q.data.review.brand ?? 'no brand'}</span>
+              <span>·</span>
+              <span>
+                {q.data.review.treatment_variable ?? '—'} → {q.data.review.outcome_variable ?? '—'}
+              </span>
+              <span>·</span>
+              <span>created {fmtDate(q.data.review.created_at)}</span>
+            </div>
+            {q.data.review.approval_status !== 'pending' && (
+              <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+                <dt className="text-[var(--color-muted-foreground)]">Reviewer</dt>
+                <dd>{q.data.review.reviewer_name ?? q.data.review.reviewer_id ?? '—'}</dd>
+                <dt className="text-[var(--color-muted-foreground)]">Decided</dt>
+                <dd>{fmtDate(q.data.review.approved_at ?? q.data.review.created_at)}</dd>
+                <dt className="text-[var(--color-muted-foreground)]">Valid until</dt>
+                <dd>{q.data.review.valid_until ? fmtDate(q.data.review.valid_until) : 'no expiry recorded'}</dd>
+                <dt className="text-[var(--color-muted-foreground)]">Concerns</dt>
+                <dd>{q.data.review.concerns_raised?.length ? q.data.review.concerns_raised.join('; ') : '—'}</dd>
+                <dt className="text-[var(--color-muted-foreground)]">Conditions</dt>
+                <dd>{q.data.review.conditions ?? '—'}</dd>
+              </dl>
+            )}
+            <div className="grid gap-4 xl:grid-cols-2">
+              <DagPanel structure={q.data.review.dag_structure_json} />
+              {q.data.review.approval_status === 'pending' ? (
+                <ResolveForm review={q.data.review} onClose={() => undefined} />
+              ) : (
+                <div className="text-sm text-[var(--color-muted-foreground)]">
+                  This review is resolved. A newer pending review for the same structure would
+                  reopen it.
+                </div>
+              )}
+            </div>
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium">Same structure, all reviews</h4>
+              {q.data.history.length === 0 ? (
+                <p className="text-xs text-[var(--color-muted-foreground)]">No other reviews share this DAG hash.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Review</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead>Reviewer</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {q.data.history.map((h) => (
+                      <TableRow key={h.review_id}>
+                        <TableCell className="font-mono text-xs">{shortHash(h.review_id)}</TableCell>
+                        <TableCell>
+                          <Badge variant={statusVariant(h.approval_status)}>{h.approval_status ?? '—'}</Badge>
+                        </TableCell>
+                        <TableCell>{fmtDate(h.created_at)}</TableCell>
+                        <TableCell>{h.reviewer_name ?? '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+```
+
+- [ ] **Step 5: `PrepareAssessmentsButton`**
+
+Create `frontend/src/components/expert-review/PrepareAssessmentsButton.tsx`:
+
+```tsx
+/**
+ * Walk the visible pending rows that have no cached assessment and generate
+ * one each, ONE AT A TIME (each call is cached server-side). Shows k / n,
+ * is cancellable, stops on the first error and shows it. No new endpoint.
+ */
+import { useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Sparkles, Square } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { WarningBanner } from '@/components/ui/WarningBanner';
+import { generateReviewAssessment } from '@/api/expert-review';
+import { queryKeys } from '@/lib/query-client';
+import type { PendingReviewItem } from '@/types/expert-review';
+
+interface RunState {
+  running: boolean;
+  done: number;
+  total: number;
+  error: string | null;
+}
+
+export function PrepareAssessmentsButton({ reviews }: { reviews: PendingReviewItem[] }) {
+  const queryClient = useQueryClient();
+  const cancelRef = useRef(false);
+  const [state, setState] = useState<RunState>({ running: false, done: 0, total: 0, error: null });
+  const missing = reviews.filter((r) => !r.agent_assessment_json);
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: [...queryKeys.expertReviews.all(), 'pending'] });
+
+  const run = async () => {
+    cancelRef.current = false;
+    setState({ running: true, done: 0, total: missing.length, error: null });
+    for (const review of missing) {
+      if (cancelRef.current) break;
+      try {
+        await generateReviewAssessment(review.review_id);
+        setState((s) => ({ ...s, done: s.done + 1 }));
+      } catch (e) {
+        setState((s) => ({
+          ...s,
+          running: false,
+          error: e instanceof Error ? e.message : 'Assessment generation failed.',
+        }));
+        await invalidate();
+        return;
+      }
+    }
+    setState((s) => ({ ...s, running: false }));
+    await invalidate();
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={run}
+        disabled={state.running || missing.length === 0}
+        aria-label="Prepare assessments"
+      >
+        <Sparkles className="mr-1 h-4 w-4" />
+        {state.running
+          ? `Preparing ${state.done} / ${state.total}…`
+          : `Prepare assessments (${missing.length} missing)`}
+      </Button>
+      {state.running && (
+        <Button size="sm" variant="ghost" onClick={() => (cancelRef.current = true)}>
+          <Square className="mr-1 h-3.5 w-3.5" />
+          Stop
+        </Button>
+      )}
+      {state.error && (
+        <WarningBanner
+          title={`Stopped after ${state.done} of ${state.total}`}
+          messages={[state.error]}
+          className="basis-full"
+        />
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 6: Rewrite the page**
+
+Replace the full contents of `frontend/src/pages/ExpertReviews.tsx` with:
+
+```tsx
+/**
+ * Expert Reviews Page (R6-F2 Phase B4; DAG snapshot + advisory assessment 097;
+ * lane 1: linked review, brand filter, honest summary, assessment prefetch)
+ * ============================================================================
+ *
+ * Admin review-queue UI for the causal-DAG human-in-the-loop loop.
+ *
+ * A REVIEW- or BLOCK-band causal estimate creates a `pending` expert_reviews
+ * row; an operator sees it here and resolves it (approve/reject) with the 010
+ * checklist items + comments. The expanded row renders the DAG under review
+ * from its stored snapshot and an ADVISORY agent assessment that never
+ * pre-fills the human checklist.
+ *
+ * Lane 1 (spec §4.5):
+ * - `?review=<id>` opens a linked-review card (any status + same-DAG history),
+ *   the destination of the causal drill-down's "Open review" link.
+ * - The queue and the counts follow the GLOBAL brand filter (the same SSOT the
+ *   Causal Analysis page reads, #1752). "All" is the only way to see the rows
+ *   that carry no brand.
+ * - A summary read failure renders a banner instead of silently dropping the
+ *   counts.
+ * - "Prepare assessments" generates the missing advisory assessments one row
+ *   at a time; expanding a row generates its own if none is cached.
+ *
+ * Honest states: loading spinner, error banner, and an EmptyState (no hardcoded
+ * SAMPLE_ data) when the live queue is empty.
+ *
+ * @module pages/ExpertReviews
+ */
+
+import { Fragment, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { ClipboardCheck, Inbox, RefreshCw } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { WarningBanner } from '@/components/ui/WarningBanner';
+import { DagPanel } from '@/components/expert-review/DagPanel';
+import { LinkedReviewCard } from '@/components/expert-review/LinkedReviewCard';
+import { PrepareAssessmentsButton } from '@/components/expert-review/PrepareAssessmentsButton';
+import { ResolveForm } from '@/components/expert-review/ResolveForm';
+import { shortHash } from '@/components/expert-review/checklist';
+import { usePendingReviews, useReviewSummary } from '@/hooks/api/use-expert-review';
+import { useE2IFilters } from '@/hooks/use-e2i-filters';
+
+export default function ExpertReviews() {
+  const [searchParams] = useSearchParams();
+  const linkedReviewId = searchParams.get('review')?.trim() || null;
+
+  const { filters } = useE2IFilters();
+  const brand = filters.brand === 'All' ? undefined : (filters.brand as string);
+  const params = brand ? { brand } : undefined;
+
+  const { data, isLoading, isError, error, refetch, isFetching } = usePendingReviews(params);
+  const summary = useReviewSummary(params);
+  const [openRow, setOpenRow] = useState<string | null>(null);
+
+  const reviews = data?.reviews ?? [];
+
+  return (
+    <div className="space-y-6 p-6">
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-semibold">
+            <ClipboardCheck className="h-6 w-6" />
+            Expert Reviews
+          </h1>
+          <p className="text-sm text-[var(--color-muted-foreground)]">
+            Human-in-the-loop validation queue for causal DAGs awaiting expert sign-off.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+          <RefreshCw className={`mr-1 h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+      </div>
+
+      {summary.isError && (
+        <WarningBanner
+          title="Review counts unavailable"
+          messages={[summary.error?.message ?? 'An unexpected error occurred.']}
+        />
+      )}
+      {summary.data && (
+        <div className="flex flex-wrap gap-2">
+          {/* pending/approved/rejected/expired partition the rows; expiring_soon
+              is a SUBSET of approved (#1972), so it is labelled and styled as a
+              qualifier rather than a fourth peer count that could be added in. */}
+          <Badge variant="secondary">Pending: {summary.data.pending}</Badge>
+          <Badge variant="secondary">Approved: {summary.data.approved}</Badge>
+          <Badge variant="secondary">Rejected: {summary.data.rejected}</Badge>
+          <Badge variant="secondary">Expired: {summary.data.expired}</Badge>
+          <Badge variant="outline">of which expiring soon: {summary.data.expiring_soon}</Badge>
+        </div>
+      )}
+
+      {linkedReviewId && <LinkedReviewCard reviewId={linkedReviewId} />}
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <CardTitle>Pending Queue</CardTitle>
+              <CardDescription>
+                {brand
+                  ? `Oldest reviews first · brand: ${brand}. Reviews with no brand are listed under All.`
+                  : 'Oldest reviews first · all brands, including reviews with no brand.'}
+              </CardDescription>
+            </div>
+            {reviews.length > 0 && <PrepareAssessmentsButton reviews={reviews} />}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <RefreshCw className="h-6 w-6 animate-spin text-[var(--color-muted-foreground)]" />
+            </div>
+          ) : isError ? (
+            <WarningBanner
+              title="Failed to load pending reviews"
+              messages={[error?.message ?? 'An unexpected error occurred.']}
+            />
+          ) : reviews.length === 0 ? (
+            <EmptyState
+              icon={<Inbox className="h-8 w-8" aria-hidden="true" />}
+              title="No pending reviews"
+              description="REVIEW-band causal estimates will appear here for expert sign-off."
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Brand</TableHead>
+                  <TableHead>Treatment</TableHead>
+                  <TableHead>Outcome</TableHead>
+                  <TableHead>DAG hash</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Age (days)</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {reviews.map((review) => (
+                  <Fragment key={review.review_id}>
+                    <TableRow>
+                      <TableCell>{review.brand ?? '—'}</TableCell>
+                      <TableCell>{review.treatment_variable ?? '—'}</TableCell>
+                      <TableCell>{review.outcome_variable ?? '—'}</TableCell>
+                      <TableCell className="font-mono text-xs">{shortHash(review.dag_version_hash)}</TableCell>
+                      <TableCell>{review.review_type ?? '—'}</TableCell>
+                      <TableCell>
+                        {review.days_pending != null ? Math.round(review.days_pending) : '—'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            setOpenRow((prev) => (prev === review.review_id ? null : review.review_id))
+                          }
+                        >
+                          {openRow === review.review_id ? 'Close' : 'Review'}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                    {openRow === review.review_id && (
+                      <TableRow>
+                        <TableCell colSpan={7}>
+                          <div className="grid gap-4 xl:grid-cols-2">
+                            <DagPanel structure={review.dag_structure_json} />
+                            <ResolveForm review={review} onClose={() => setOpenRow(null)} />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 7: Rewrite the page tests**
+
+Replace the full contents of `frontend/src/pages/ExpertReviews.test.tsx` with:
+
+```tsx
+/**
+ * ExpertReviews Page Tests (R6-F2 Phase B4 + lane 1)
+ * ===================================================
+ *
+ * The page renders ONLY the live pending queue (no hardcoded SAMPLE_ rows) with
+ * honest loading / error / empty states, resolves a review, follows the global
+ * brand filter, shows a summary error instead of dropping the counts, opens a
+ * linked review from `?review=`, auto-generates a missing assessment when a row
+ * is expanded, and prefetches assessments one row at a time.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
+import ExpertReviews from './ExpertReviews';
+import type { ExpertReviewDetailResponse, PendingReviewsResponse } from '@/types/expert-review';
+
+vi.mock('@/hooks/api/use-expert-review', () => ({
+  usePendingReviews: vi.fn(),
+  useReviewSummary: vi.fn(),
+  useResolveReview: vi.fn(),
+  useReviewAssessment: vi.fn(),
+  useExpertReview: vi.fn(),
+}));
+
+const mockSetBrand = vi.fn();
+const filtersState = { brand: 'All' as string };
+vi.mock('@/hooks/use-e2i-filters', () => ({
+  useE2IFilters: () => ({ filters: { brand: filtersState.brand }, setBrand: mockSetBrand }),
+}));
+
+vi.mock('@/api/expert-review', () => ({
+  generateReviewAssessment: vi.fn(),
+}));
+
+// The DAG renderer is D3-heavy; the page test only asserts it is MOUNTED with
+// the right graph (its own rendering is covered by causal.test.tsx).
+vi.mock('@/components/visualizations/causal/CausalDAG', () => {
+  const FakeDag = ({ nodes, edges }: { nodes: unknown[]; edges: unknown[] }) => (
+    <div data-testid="causal-dag" data-nodes={nodes.length} data-edges={edges.length} />
+  );
+  return { CausalDAG: FakeDag, default: FakeDag };
+});
+
+import {
+  useExpertReview,
+  usePendingReviews,
+  useReviewAssessment,
+  useReviewSummary,
+  useResolveReview,
+} from '@/hooks/api/use-expert-review';
+import { generateReviewAssessment } from '@/api/expert-review';
+
+function createWrapper(initialPath = '/expert-reviews') {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialPath]}>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
+const mockPending: PendingReviewsResponse = {
+  reviews: [
+    {
+      review_id: 'rev-1',
+      review_type: 'dag_approval',
+      dag_version_hash: 'deadbeefcafebabe0123',
+      brand: 'Remibrutinib',
+      treatment_variable: 'email_frequency',
+      outcome_variable: 'trx',
+      analysis_context: 'confidence=0.60',
+      created_at: '2026-06-01T00:00:00Z',
+      days_pending: 5,
+    },
+  ],
+  total: 1,
+};
+
+function mockResolveReturn(overrides = {}) {
+  return { mutate: vi.fn(), isPending: false, isError: false, error: null, ...overrides };
+}
+
+function mockAssessmentReturn(overrides = {}) {
+  return { mutate: vi.fn(), isPending: false, isError: false, error: null, data: undefined, ...overrides };
+}
+
+function mockQueue(response: PendingReviewsResponse | undefined, extra = {}) {
+  vi.mocked(usePendingReviews).mockReturnValue({
+    data: response,
+    isLoading: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+    ...extra,
+  } as never);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  filtersState.brand = 'All';
+  vi.mocked(useReviewSummary).mockReturnValue({ data: undefined, isError: false } as never);
+  vi.mocked(useResolveReview).mockReturnValue(mockResolveReturn() as never);
+  vi.mocked(useReviewAssessment).mockReturnValue(mockAssessmentReturn() as never);
+  vi.mocked(useExpertReview).mockReturnValue({ data: undefined, isLoading: false, isError: false } as never);
+});
+
+describe('ExpertReviews page', () => {
+  it('shows a loading state while fetching', () => {
+    mockQueue(undefined, { isLoading: true, isFetching: true });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Expert Reviews')).toBeInTheDocument();
+  });
+
+  it('shows an honest empty state (no SAMPLE rows) when the queue is empty', () => {
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('No pending reviews')).toBeInTheDocument();
+  });
+
+  it('shows an error banner on failure', () => {
+    mockQueue(undefined, { isError: true, error: { message: 'boom' } });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Failed to load pending reviews')).toBeInTheDocument();
+  });
+
+  it('renders the live pending queue and resolves a review', async () => {
+    const mutate = vi.fn();
+    vi.mocked(useResolveReview).mockReturnValue(mockResolveReturn({ mutate }) as never);
+    mockQueue(mockPending);
+
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('email_frequency')).toBeInTheDocument();
+    expect(screen.getByText('Remibrutinib')).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^review$/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const [vars] = mutate.mock.calls[0];
+    expect(vars.reviewId).toBe('rev-1');
+    expect(vars.body.approval_status).toBe('approved');
+  });
+});
+
+describe('ExpertReviews brand filter and summary (lane 1)', () => {
+  it('passes the global brand to BOTH the queue and the summary; All sends no brand', () => {
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(vi.mocked(usePendingReviews)).toHaveBeenLastCalledWith(undefined);
+    expect(vi.mocked(useReviewSummary)).toHaveBeenLastCalledWith(undefined);
+    expect(screen.getByText(/including reviews with no brand/i)).toBeInTheDocument();
+  });
+
+  it('scopes to the selected brand', () => {
+    filtersState.brand = 'Kisqali';
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(vi.mocked(usePendingReviews)).toHaveBeenLastCalledWith({ brand: 'Kisqali' });
+    expect(vi.mocked(useReviewSummary)).toHaveBeenLastCalledWith({ brand: 'Kisqali' });
+    expect(screen.getByText(/brand: Kisqali/)).toBeInTheDocument();
+  });
+
+  it('shows a banner instead of silently dropping the counts when the summary fails', () => {
+    vi.mocked(useReviewSummary).mockReturnValue({
+      data: undefined,
+      isError: true,
+      error: { message: 'Expert-review store unavailable. Retry shortly.' },
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Review counts unavailable')).toBeInTheDocument();
+    expect(screen.queryByText(/Pending:/)).not.toBeInTheDocument();
+  });
+});
+
+const STRUCTURE = {
+  nodes: ['t', 'y', 'c'],
+  edges: [
+    ['t', 'y'],
+    ['c', 't'],
+    ['c', 'y'],
+  ],
+  treatment_nodes: ['t'],
+  outcome_nodes: ['y'],
+};
+
+const ASSESSMENT = {
+  items: [
+    { id: 'conf_complete', question: 'Are all known confounders included?', verdict: 'supports', rationale: 'confounder refuters passed' },
+    { id: 'positivity', question: 'Is there sufficient overlap in treatment groups?', verdict: 'concern', rationale: 'data_subset failed' },
+  ],
+  is_fallback: true,
+  evidence: { refutation_tests: 2, has_dag_structure: true },
+};
+
+function renderWithRow(row: Record<string, unknown>, path?: string) {
+  mockQueue({ reviews: [{ ...mockPending.reviews[0], ...row }], total: 1 });
+  return render(<ExpertReviews />, { wrapper: createWrapper(path) });
+}
+
+describe('ExpertReviews DAG snapshot (mig 097)', () => {
+  it('renders the stored DAG in the expanded row', async () => {
+    renderWithRow({ dag_structure_json: STRUCTURE });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    const dag = await screen.findByTestId('causal-dag');
+    expect(dag).toHaveAttribute('data-nodes', '3');
+    expect(dag).toHaveAttribute('data-edges', '3');
+  });
+
+  it('shows an honest fallback when the structure was never captured', async () => {
+    renderWithRow({ dag_structure_json: null });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByText(/DAG structure not captured for this review/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('causal-dag')).not.toBeInTheDocument();
+  });
+});
+
+describe('ExpertReviews agent assessment (advisory)', () => {
+  it('generates the assessment once when a row without a cache is expanded, then regenerates on click', async () => {
+    const mutate = vi.fn();
+    vi.mocked(useReviewAssessment).mockReturnValue(mockAssessmentReturn({ mutate }) as never);
+    renderWithRow({ dag_structure_json: STRUCTURE });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^review$/i }));
+
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(mutate.mock.calls[0][0]).toEqual({ reviewId: 'rev-1' });
+
+    await user.click(await screen.findByRole('button', { name: /agent assessment/i }));
+    expect(mutate).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not auto-generate when a cached assessment exists', async () => {
+    const mutate = vi.fn();
+    vi.mocked(useReviewAssessment).mockReturnValue(mockAssessmentReturn({ mutate }) as never);
+    renderWithRow({ dag_structure_json: STRUCTURE, agent_assessment_json: ASSESSMENT });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByText('supports')).toBeInTheDocument();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it('renders cached verdict chips beside the checklist, labeled advisory, never pre-checked', async () => {
+    renderWithRow({ dag_structure_json: STRUCTURE, agent_assessment_json: ASSESSMENT });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByText('supports')).toBeInTheDocument();
+    expect(screen.getByText('concern')).toBeInTheDocument();
+    expect(screen.getAllByText(/advisory/i).length).toBeGreaterThan(0);
+    screen.getAllByRole('checkbox').forEach((cb) => expect(cb).not.toBeChecked());
+  });
+
+  it('prepares the missing assessments one row at a time', async () => {
+    vi.mocked(generateReviewAssessment).mockResolvedValue({
+      review_id: 'x', assessment: ASSESSMENT, cached: false, persisted: true,
+    } as never);
+    mockQueue({
+      reviews: [
+        { ...mockPending.reviews[0], review_id: 'rev-1' },
+        { ...mockPending.reviews[0], review_id: 'rev-2', agent_assessment_json: ASSESSMENT },
+        { ...mockPending.reviews[0], review_id: 'rev-3' },
+      ],
+      total: 3,
+    });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    const button = screen.getByRole('button', { name: /prepare assessments/i });
+    expect(button).toHaveTextContent('2 missing');
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(generateReviewAssessment).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(generateReviewAssessment).mock.calls.map((c) => c[0])).toEqual(['rev-1', 'rev-3']);
+  });
+
+  it('stops the prefetch on the first error and says how far it got', async () => {
+    vi.mocked(generateReviewAssessment)
+      .mockResolvedValueOnce({ review_id: 'rev-1', assessment: ASSESSMENT, cached: false, persisted: true } as never)
+      .mockRejectedValueOnce(new Error('LM unavailable'));
+    mockQueue({
+      reviews: [
+        { ...mockPending.reviews[0], review_id: 'rev-1' },
+        { ...mockPending.reviews[0], review_id: 'rev-2' },
+        { ...mockPending.reviews[0], review_id: 'rev-3' },
+      ],
+      total: 3,
+    });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    await userEvent.setup().click(screen.getByRole('button', { name: /prepare assessments/i }));
+    expect(await screen.findByText('Stopped after 1 of 3')).toBeInTheDocument();
+    expect(screen.getByText('LM unavailable')).toBeInTheDocument();
+    expect(generateReviewAssessment).toHaveBeenCalledTimes(2);
+  });
+});
+
+const DETAIL: ExpertReviewDetailResponse = {
+  review: {
+    review_id: 'rev-rejected',
+    review_type: 'dag_approval',
+    dag_version_hash: 'deadbeefcafebabe0123',
+    brand: null,
+    treatment_variable: 'treatment_arm',
+    outcome_variable: 'persistent_180d',
+    approval_status: 'rejected',
+    reviewer_name: 'Dr. No',
+    concerns_raised: ['collider'],
+    created_at: '2026-07-13T10:00:00Z',
+    dag_structure_json: STRUCTURE,
+  },
+  history: [
+    { review_id: 'rev-rejected', approval_status: 'rejected', created_at: '2026-07-13T10:00:00Z', reviewer_name: 'Dr. No' },
+    { review_id: 'rev-older', approval_status: 'pending', created_at: '2026-07-01T10:00:00Z' },
+  ],
+};
+
+describe('ExpertReviews linked review (lane 1)', () => {
+  it('renders nothing extra without the review param', () => {
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.queryByTestId('linked-review')).not.toBeInTheDocument();
+    expect(vi.mocked(useExpertReview)).toHaveBeenLastCalledWith(null);
+  });
+
+  it('shows a resolved linked review with its decision and same-structure history', () => {
+    vi.mocked(useExpertReview).mockReturnValue({ data: DETAIL, isLoading: false, isError: false } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=rev-rejected') });
+    expect(vi.mocked(useExpertReview)).toHaveBeenLastCalledWith('rev-rejected');
+    const card = screen.getByTestId('linked-review');
+    expect(card).toHaveTextContent('rejected');
+    expect(card).toHaveTextContent('Dr. No');
+    expect(card).toHaveTextContent('collider');
+    expect(card).toHaveTextContent('This review is resolved');
+    expect(screen.getAllByTestId('causal-dag').length).toBe(1);
+    expect(card).toHaveTextContent('rev-older');
+  });
+
+  it('resolves a pending linked review in place', async () => {
+    const mutate = vi.fn();
+    vi.mocked(useResolveReview).mockReturnValue(mockResolveReturn({ mutate }) as never);
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: { ...DETAIL, review: { ...DETAIL.review, review_id: 'rev-p', approval_status: 'pending' }, history: [] },
+      isLoading: false,
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=rev-p') });
+    await userEvent.setup().click(screen.getByRole('button', { name: /reject/i }));
+    expect(mutate.mock.calls[0][0].reviewId).toBe('rev-p');
+    expect(mutate.mock.calls[0][0].body.approval_status).toBe('rejected');
+  });
+
+  it('says so when the linked review no longer exists, and keeps the queue usable', () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: undefined, isLoading: false, isError: true, error: { message: 'Review nope was not found.' },
+    } as never);
+    mockQueue(mockPending);
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=nope') });
+    expect(screen.getByText('This review no longer exists')).toBeInTheDocument();
+    expect(screen.getByText('email_frequency')).toBeInTheDocument();
+  });
+});
+```
+
+- [ ] **Step 8: Run, typecheck, lint, commit**
+
+```bash
+cd frontend && npx vitest run src/pages/ExpertReviews.test.tsx src/components/expert-review src/hooks/api/use-expert-review.test.ts && npm run typecheck && npx eslint src/pages/ExpertReviews.tsx src/components/expert-review && cd ..
+git add frontend/src/pages/ExpertReviews.tsx frontend/src/pages/ExpertReviews.test.tsx frontend/src/components/expert-review
+git commit -m "feat(frontend): expert-review queue -- linked review card, global brand filter, honest summary, assessment prefetch
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+If `npm run typecheck` complains that `filters.brand` is not assignable to `string`, the cast in the page (`filters.brand as string`) is the intended narrowing of the `E2IFilters['brand']` union.
+
+---
+
+### Task 11: Lineage document — sections, map labels, anchors, pinned commit
+
+**Files:**
+- Modify: `docs/lineage/causal_dag_lineage.html`
+- Scratch (not committed): `<scratchpad>/lineage_edit.py`, `<scratchpad>/refresh_anchors.py`
+
+Do this task LAST among the code tasks (after Task 12's gates pass) so the anchors resolve against final line numbers. Every replacement below asserts its `old` string occurs exactly once; the script aborts otherwise, so nothing is edited by guesswork.
+
+- [ ] **Step 1: Section edits (scripted, exact-match replacements)**
+
+Save as `<scratchpad>/lineage_edit.py` and run with `python3 <scratchpad>/lineage_edit.py` from the worktree root:
+
+```python
+#!/usr/bin/env python3
+"""Lane 1: rewrite the lineage page's stale sections to the shipped state."""
+from pathlib import Path
+
+DOC = Path("docs/lineage/causal_dag_lineage.html")
+s = DOC.read_text(encoding="utf-8")
+EDITS = []
+
+def rep(old: str, new: str) -> None:
+    EDITS.append((old, new))
+
+# §3.3 — discovery tables now live in public and have a writer (#1974, #1984).
+rep(
+    '<tr><td><code>ml.discovered_dags</code>, <code>ml.discovered_edges</code></td><td>Schema exists (migration 026). <strong>No writer in <code>src/</code>.</strong></td><td>—</td><td>—</td><td>database/ml/026_causal_discovery_tables.sql</td></tr>',
+    '<tr><td><code>public.discovered_dags</code>, <code>discovered_edges</code>, <code>discovery_algorithm_runs</code></td><td>Ensemble edges, per-algorithm runs, gate evaluation and the shipped DAG with per-edge provenance, written atomically by <code>record_discovered_dag</code> whenever discovery ran (issue #1974; the tables moved from <code>ml</code> to <code>public</code> in ml/036). Persistence failures are visible in <code>warnings</code>, never a crash; the response carries <code>discovered_dag_id</code>, which the drill-down shows as the durable discovery record.</td><td><code>query_id</code> = analysis id; <code>dag_version_hash</code></td><td>durable</td><td>src/repositories/discovered_dag.py:344</td></tr>',
+)
+
+# §4.2 — the two non-critical tests score real evidence; bootstrap thresholds corrected.
+rep(
+    '<tr><td>data_subset</td><td>5 subsets of 80 %</td><td>no</td><td>≥ 80 % of subsets contain the original effect</td><td>70–80 %</td><td class="num">0.125</td></tr>',
+    '<tr><td>data_subset</td><td>5 subsets of 80 %</td><td>no</td><td>≥ 80 % of the per-subset re-fit effects fall inside the reported CI (real evidence since lane 1; recorded SKIPPED on 96/96 live runs before it)</td><td>70–80 %</td><td class="num">0.125</td></tr>',
+)
+rep(
+    '<tr><td>bootstrap</td><td>50 (20)</td><td>no</td><td>bootstrap CI ≤ 50 % wider than original</td><td>50–75 %</td><td class="num">0.125</td></tr>',
+    '<tr><td>bootstrap</td><td>50 (20)</td><td>no</td><td>2.5–97.5 percentile width of the re-fit effects ≤ 1.5 × the reported CI width (lane 1 corrected the thresholds 0.50/0.75, which contradicted their own comment and never scored)</td><td>1.5–1.75 ×</td><td class="num">0.125</td></tr>',
+)
+rep(
+    '(a critical test in WARNING still permits PROCEED, by design)</code></pre>',
+    '(a critical test in WARNING still permits PROCEED, by design)</code></pre>\n  <div class="callout finding"><div class="label">Measured</div><p>96 live runs on record (2026-09-08): 49 PROCEED, 47 BLOCK, <b>0 REVIEW</b>. With only the three critical tests scoring, the reachable confidence values without a critical failure are 1.0 and 0.867, both PROCEED; REVIEW needs a sensitivity WARNING <em>and</em> both non-critical tests FAILED (0.65). Lane 1 made the non-critical evidence real, so REVIEW is now reachable for genuinely unstable estimates; on the two live pairs replicated offline both tests PASS and the band is unchanged. Whether a sensitivity WARNING alone should read as REVIEW is an open owner decision, not a code defect.</p></div>',
+)
+
+# §4.3 — the gate is consulted on every band; the switch; approval structural.
+rep(
+    'Nothing reads those fields to halt execution. The caveat names an expert approval only when a real approval row exists; the no-repository bypass used to claim one (fixed, issue #1969).',
+    'Since issue #1971 the node also runs a read-only rejection probe on <em>every</em> band before persisting anything: the newest adjudication of the structure wins, a pending row newer than a rejection reopens it, and a rejected structure halts the run (status <code>failed</code>, reviewer and review id in the message) on PROCEED as well. An enforcement switch, <code>CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL</code> (env, default off), additionally withholds a REVIEW-band estimate whose structure holds no active approval. Approval is structural only: it never promotes a borderline estimate. The caveat names an expert approval only when a real approval row exists; the no-repository bypass used to claim one (fixed, issue #1969).',
+)
+rep(
+    '<p>On the live agent path a DAG can be estimated against before any human has approved it. The gate queues and annotates; it does not block. The only true precondition is the SQL function <code>can_use_estimate()</code> in migration 010, which no Python code calls. Whether new structures should hard-block is an open product decision, tracked in issue #1971.</p>',
+    '<p>A human REJECTION now halts on every band and is never promoted over (issue #1971; lane 1 evaluates the rule inside the promote statement). Approval is structural and changes no estimate. The enforcement switch is inert on today\'s traffic because the live gate has never produced a REVIEW band (see 4.2, Measured); both <code>can_use_estimate</code> definitions were retired (migration 133). The queue held 39 pending / 1 rejected / 0 approved on 2026-09-08 — every pending row a BLOCK-band structure.</p>',
+)
+rep(
+    'cached in <code>agent_assessment_json</code>. <span class="anchor">src/api/routes/expert_review.py:76</span></li>',
+    'cached in <code>agent_assessment_json</code>; <code>GET /expert-reviews/{id}</code> returns one review in any status with its same-structure history — the destination of the drill-down\'s "Open review" link (lane 1). <span class="anchor">src/api/routes/expert_review.py:76</span></li>\n      <li>The causal drill-down shows the structure\'s review state (<code>refutation.expert_review_decision</code>, the review id, the rejection reason) and the durable <code>discovered_dag_id</code>; the queue page follows the global brand filter, shows an honest error when the counts are unavailable, and generates the advisory assessment when a row is expanded or on demand for every row lacking one. <span class="anchor">frontend/src/components/causal/ReviewStatusPanel.tsx:1</span></li>',
+)
+
+# §4.4 — the guarded promote.
+rep(
+    'Evidence first, status second. <span class="anchor">nodes/refutation.py:57</span> <span class="anchor">:769</span></p>',
+    'Evidence first, status second. Since lane 1 the status write is the SQL function <code>promote_causal_path_guarded</code> (migration 134): one UPDATE conditioned on the allowed current status <em>and</em> on <code>dag_structure_rejected(hash, brand)</code> being false, so a rejection committed after the node\'s read-only probe can never be promoted over. <span class="anchor">nodes/refutation.py:57</span> <span class="anchor">:769</span> <span class="anchor">database/migrations/134_guarded_causal_path_promote.sql:1</span></p>',
+)
+
+# §4.8 — gaps register.
+rep(
+    '<li><b>No hard block on the live path.</b> Expert-review BLOCKED and PENDING_REVIEW are recorded and now surfaced in the API, not enforced. Whether a new structure should block is an owner decision (issue #1971). Three infrastructure-absent paths still resolve to PROCEED; since issue #1969 none of them can claim an approval to the user.</li>',
+    '<li><b>REVIEW is rare by design.</b> The band needs a sensitivity WARNING plus both non-critical tests FAILED; 0 of 96 live runs reached it. The enforcement switch (<code>CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL</code>, default off) therefore has no live traffic to act on until an unstable estimate appears. A human rejection, by contrast, halts every band (issue #1971). Infrastructure-absent paths resolve to <code>unavailable</code>, never to a claimed approval (issue #1969).</li>',
+)
+rep(
+    '<li><b>The discovery tables are not applied on the live database.</b> Migration 026 defines <code>ml.discovered_dags</code> and friends; the live <code>ml</code> schema has zero tables, so no writer can be wired until the migration is applied (issue #1974).</li>\n',
+    '',
+)
+
+# Map labels (text only; no geometry changes).
+rep(
+    '<text class="s" x="910" y="263">expert_reviews keyed by dag_version_hash</text><text class="s" x="910" y="275">90-day approval · 14-day renewal warning</text>',
+    '<text class="s" x="910" y="263">expert_reviews keyed by dag_version_hash · probe on every band</text><text class="s" x="910" y="275">rejection halts · approval structural · switch default off</text>',
+)
+
+for old, new in EDITS:
+    n = s.count(old)
+    assert n == 1, f"expected exactly one occurrence, found {n}: {old[:80]!r}"
+    s = s.replace(old, new)
+DOC.write_text(s, encoding="utf-8")
+print(f"applied {len(EDITS)} edits")
+```
+
+Expected output: `applied 11 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
+
+- [ ] **Step 2: Add the map's discovery box label**
+
+The API-response box on the map already exists; append a discovery line to it. Find the `<text class="t"` element whose text is `API response` and add, after its last sibling `<text class="s" …>` inside the same `<g>`, a third small line (copy the sibling's `x`, use `y` + 12):
+
+```html
+<text class="s" x="X" y="Y+12">+ public.discovered_dags record (discovered_dag_id)</text>
+```
+
+Verify visually by opening the file in a browser (`python3 -m http.server` from `docs/lineage/` on a spare port) that the new line sits inside its box.
+
+- [ ] **Step 3: Re-resolve anchors and the pinned commit**
+
+Save as `<scratchpad>/refresh_anchors.py`:
+
+```python
+#!/usr/bin/env python3
+"""Re-resolve every file:line anchor in the lineage page against the current tree.
+
+For each anchor, take the referenced line's text at the OLD pinned commit and
+find the same text in the CURRENT file (the occurrence nearest the old line
+number wins). Anchors that cannot be resolved are printed, not guessed.
+Usage: python3 refresh_anchors.py <old_commit> <new_commit>
+"""
+import re, subprocess, sys
+from pathlib import Path
+
+DOC = Path("docs/lineage/causal_dag_lineage.html")
+OLD, NEW = sys.argv[1], sys.argv[2]
+ALIASES = {
+    "causal.py": "src/api/routes/causal.py",
+    "nodes/refutation.py": "src/agents/causal_impact/nodes/refutation.py",
+    "refutation.py": "src/agents/causal_impact/nodes/refutation.py",
+    "estimation.py": "src/agents/causal_impact/nodes/estimation.py",
+    "graph_builder.py": "src/agents/causal_impact/nodes/graph_builder.py",
+    "graph.py": "src/agents/causal_impact/graph.py",
+    "mlflow_tracker.py": "src/agents/causal_impact/mlflow_tracker.py",
+    "memory_hooks.py": "src/agents/causal_impact/memory_hooks.py",
+    "dispatcher.py": "src/agents/orchestrator/nodes/dispatcher.py",
+    "router.py": "src/agents/orchestrator/nodes/router.py",
+    "expert_review_gate.py": "src/causal_engine/expert_review_gate.py",
+    "runner.py": "src/causal_engine/discovery/runner.py",
+    "gate.py": "src/causal_engine/discovery/gate.py",
+    "base.py": "src/causal_engine/discovery/base.py",
+}
+TRACKED = subprocess.check_output(["git", "ls-files"], text=True).split()
+
+def repo_path(short: str):
+    if short in ALIASES:
+        return ALIASES[short]
+    hits = [p for p in TRACKED if p == short or p.endswith("/" + short)]
+    return hits[0] if len(hits) == 1 else None
+
+_cache = {}
+def lines(commit: str, path: str):
+    key = (commit, path)
+    if key not in _cache:
+        try:
+            _cache[key] = subprocess.check_output(["git", "show", f"{commit}:{path}"], text=True).splitlines()
+        except subprocess.CalledProcessError:
+            _cache[key] = None
+    return _cache[key]
+
+def resolve(path: str, old_line: int):
+    old = lines(OLD, path)
+    new = lines(NEW, path)
+    if not old or not new or old_line > len(old):
+        return None
+    needle = old[old_line - 1].strip()
+    if not needle:
+        return None
+    cands = [i + 1 for i, t in enumerate(new) if t.strip() == needle]
+    if not cands:
+        return None
+    return min(cands, key=lambda n: abs(n - old_line))
+
+s = DOC.read_text(encoding="utf-8")
+unresolved, changed, last_path = [], 0, None
+ANCHOR = re.compile(r'(<span class="anchor">)(?:([^<:]+):)?(\d+)(</span>)')
+def fix_anchor(m):
+    global last_path, changed
+    pre, short, line, post = m.group(1), m.group(2), int(m.group(3)), m.group(4)
+    if short:
+        last_path = repo_path(short)
+    path = last_path
+    if not path:
+        unresolved.append(m.group(0)); return m.group(0)
+    new_line = resolve(path, line)
+    if new_line is None:
+        unresolved.append(f"{path}:{line}"); return m.group(0)
+    if new_line != line:
+        changed += 1
+    return f"{pre}{(short + ':') if short else ''}{new_line}{post}"
+s = ANCHOR.sub(fix_anchor, s)
+
+IDX = re.compile(r'(<td>)([A-Za-z0-9_./-]+\.(?:py|tsx?|sql))\:(\d+)(</td>)')
+def fix_idx(m):
+    global changed
+    path, line = m.group(2), int(m.group(3))
+    new_line = resolve(path, line)
+    if new_line is None:
+        unresolved.append(f"{path}:{line}"); return m.group(0)
+    if new_line != line:
+        changed += 1
+    return f"{m.group(1)}{path}:{new_line}{m.group(4)}"
+s = IDX.sub(fix_idx, s)
+
+s = s.replace(f'at commit <span class="mono">{OLD}</span>', f'at commit <span class="mono">{NEW}</span>')
+DOC.write_text(s, encoding="utf-8")
+print(f"changed {changed} anchors; unresolved {len(unresolved)}")
+for u in unresolved:
+    print("  UNRESOLVED", u)
+```
+
+Run it against the lane's last code commit:
+
+```bash
+NEW=$(git rev-parse --short HEAD)
+python3 <scratchpad>/refresh_anchors.py 28dbafb "$NEW"
+```
+
+Expected: a small `changed` count and zero unresolved. Anchors that reference files this lane created (`ReviewStatusPanel.tsx:1`, `134_…sql:1`) resolve trivially (line 1 exists in both). For any UNRESOLVED anchor, open both versions (`git show 28dbafb:<path> | sed -n '<line>p'`) and fix the number by hand; do not leave a stale anchor.
+
+- [ ] **Step 4: Add two rows to the code anchor index**
+
+In the `<tbody>` of `<table id="idx-table">`, append (keep the row style of the existing rows):
+
+```html
+      <tr><td><span class="pill gov">gov</span></td><td>promote_causal_path_guarded</td><td>database/migrations/134_guarded_causal_path_promote.sql:1</td><td>status write conditioned on the review chronology inside the UPDATE</td></tr>
+      <tr><td><span class="pill gov">gov</span></td><td>get_expert_review</td><td>src/api/routes/expert_review.py:1</td><td>one review in any status with its same-structure history (the drill-down's deep link)</td></tr>
+      <tr><td><span class="pill gov">gov</span></td><td>_resample_effects</td><td>src/causal_engine/refutation_runner.py:1</td><td>real per-resample evidence for data_subset and bootstrap, deadline-aware, seeded</td></tr>
+```
+
+Then replace the three `:1` line numbers with the real ones:
+
+```bash
+grep -n 'CREATE OR REPLACE FUNCTION public.promote_causal_path_guarded' database/migrations/134_guarded_causal_path_promote.sql
+grep -n 'async def get_expert_review' src/api/routes/expert_review.py
+grep -n '^def _resample_effects' src/causal_engine/refutation_runner.py
+```
+
+- [ ] **Step 5: Verify and commit**
+
+```bash
+python3 - <<'EOF'
+import re
+s=open('docs/lineage/causal_dag_lineage.html',encoding='utf-8').read()
+assert 'ml.discovered_dags' not in s, 'stale ml.discovered_dags mention'
+assert s.count('promote_causal_path_guarded') >= 2
+assert '28dbafb' not in s, 'pinned commit not updated'
+print('lineage checks OK')
+EOF
+git add docs/lineage/causal_dag_lineage.html
+git commit -m "docs(lineage): rewrite the expert-review, promotion and gaps sections to the shipped state; refresh anchors
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+---
+
+### Task 12: Quality gates and the codex read-only audit
+
+**Files:** none new (fixes land in the files above)
+
+- [ ] **Step 1: Backend gates on the changed files**
+
+```bash
+$PY -m pytest tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_causal_engine/test_refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_1419.py tests/unit/test_causal_engine/test_refutation_runner_randomized.py tests/unit/test_repositories/test_causal_path_promoter_1352.py tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py tests/unit/test_agents/test_causal_impact/test_refutation_expert_review_enforcement_1971.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider -m "not slow" 2>&1 | tail -3
+$PY -m ruff check src/causal_engine/refutation_runner.py src/repositories/causal_path.py src/agents/causal_impact/nodes/refutation.py src/api/routes/expert_review.py src/api/schemas/expert_review.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py
+$PY -m ruff format --check src/causal_engine/refutation_runner.py src/repositories/causal_path.py src/api/routes/expert_review.py src/api/schemas/expert_review.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py
+$PY -m mypy --config-file pyproject.toml src/causal_engine/refutation_runner.py src/repositories/causal_path.py src/api/routes/expert_review.py src/api/schemas/expert_review.py
+```
+
+Expected: all green. Fix and amend into the owning task's commit style (a new `fix(...)` commit is fine).
+
+- [ ] **Step 2: Frontend gates**
+
+```bash
+cd frontend && npx vitest run src/components/causal src/components/expert-review src/pages/ExpertReviews.test.tsx src/hooks/api/use-expert-review.test.ts && npm run typecheck && npx eslint src/components/causal src/components/expert-review src/pages/ExpertReviews.tsx src/hooks/api/use-expert-review.ts src/api/expert-review.ts src/types && cd ..
+```
+
+- [ ] **Step 3: Codex read-only audit to a fixed point (subscription channel only)**
+
+Run from the worktree; the brief MUST contain the pushback paragraph verbatim:
+
+```bash
+SPEC=docs/superpowers/specs/2026-09-08-expert-review-loop-closure-design.md
+git diff origin/main...HEAD --stat > /tmp/lane1_diffstat.txt
+codex exec --sandbox read-only -C "$PWD" < /dev/null "You are auditing branch claude/lane1-expert-review-loop against the spec at $SPEC. Read the spec §2 and §4 first, then 'git diff origin/main...HEAD'. Report findings as HIGH/MED/LOW with file:line and a one-line repro or reasoning, then end with exactly one line 'VERDICT: ACCEPT' or 'VERDICT: REJECT'. Focus: (1) refutation_runner.py resample loops — any path that fabricates evidence, any way SKIPPED/partial results could read as passed, deadline handling, seeding, p-value provenance; (2) migration 134 — is the rejection rule inside the UPDATE equivalent to ExpertReviewGate._latest_adjudication (brand handling, NULL hash, reopened-by-newer-pending), grants; (3) the route — declaration order, 404/503 honesty, brand-scoped history; (4) frontend — anything rendered that the API did not return; (5) tests — vacuous assertions. If a recommendation solves a labeling problem instead of a functional problem, flag it as HIGH finding. If a recommendation preserves code without investigating intent (PR history, linked issues, user-requested functionality), flag it as HIGH finding. If a recommendation deletes code without verifying intent, flag it as HIGH finding. Audit the question being asked, not just the answer given." 2>&1 | tee /tmp/lane1_codex_iter1.txt | tail -40
+```
+
+Read only the FINAL codex block for the verdict. Fix every HIGH and MED with a test first, commit, re-run with `iter2`, `iter3` … until `VERDICT: ACCEPT`. Codex's sandbox has no network and can hang asyncio teardown; a finding about test timing under the sandbox is the sandbox's, not ours (control: an unchanged CI-green test file). On an auth error, ask the owner to run `codex login`; never use an API key.
+
+---
+
+### Task 13: Baseline live run on the CURRENT image (before merge)
+
+The before-half of the impact measurement. Runs against production as an operator would; writes are ordinary product writes (job store, `causal_validations`, `discovered_dags`, existing pending rows are re-used by hash). Authorised 2026-09-08.
+
+**Files:**
+- Create (scratch, then copied into the results dir): `<scratchpad>/lane1_live/run_discovery.py`
+- Create: `docs/demos/results/<YYYY-MM-DD>_expert_review_loop/baseline.json` (+ `baseline.md`)
+
+- [ ] **Step 1: The discovery runner script**
+
+```python
+#!/usr/bin/env python3
+"""Run the Remibrutinib patient-grain discovery job and record every question's
+band and evidence. Usage: run_discovery.py <label> <out_dir>  (reads .env)."""
+import base64, json, os, sys, time, urllib.parse, urllib.request
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv("/home/enunez/Projects/e2i_causal_analytics/.env")
+API = os.environ.get("E2I_API_BASE", "https://eznomics.site/api")
+DATASET, BRAND = "patient_journeys", "Remibrutinib"
+
+def mint_token() -> str:
+    body = json.dumps({"email": os.environ.get("E2I_ADMIN_EMAIL", "admin@e2i.local"),
+                       "password": os.environ["E2I_ADMIN_PASSWORD"]}).encode()
+    req = urllib.request.Request(f"{os.environ['SUPABASE_URL']}/auth/v1/token?grant_type=password",
+                                 data=body, headers={"apikey": os.environ["SUPABASE_ANON_KEY"],
+                                                     "Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())["access_token"]
+
+def call(token, method, path, body=None, timeout=120):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"{API}{path}", data=data, method=method,
+                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+def main(label: str, out_dir: str) -> None:
+    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    token = mint_token()
+    q = urllib.parse.urlencode({"dataset": DATASET, "brand": BRAND})
+    job = call(token, "POST", f"/causal/discover-effects?{q}", body={})
+    job_id = job["job_id"]; print("job", job_id, "total", job["total"], flush=True)
+    t0 = time.time()
+    while True:
+        time.sleep(20)
+        job = call(token, "GET", f"/causal/discover-effects/{job_id}")
+        done = sum(1 for e in job["effects"] if e["status"] not in ("pending", "running"))
+        print(f"  {done}/{job['total']} after {int(time.time()-t0)}s", flush=True)
+        if done >= job["total"] or job.get("error"):
+            break
+        if time.time() - t0 > 3 * 3600:
+            print("giving up after 3h", flush=True); break
+    rows = []
+    for e in job["effects"]:
+        detail = call(token, "GET", f"/causal/agent-analyze/{e['analysis_id']}") if e.get("analysis_id") else {}
+        ref = detail.get("refutation") or {}
+        rows.append({
+            "treatment": e["treatment"], "outcome": e["outcome"], "row_status": e["status"],
+            "gate_decision": ref.get("gate_decision"), "run_status": detail.get("status"),
+            "expert_review_decision": ref.get("expert_review_decision"), "expert_review_id": ref.get("expert_review_id"),
+            "discovered_dag_id": detail.get("discovered_dag_id"), "analysis_id": e.get("analysis_id"),
+            "tests": {t["test_name"]: t.get("status") or ("passed" if t.get("passed") else "failed") for t in ref.get("tests", [])},
+            "ate": detail.get("ate"), "ci": [detail.get("ate_ci_lower"), detail.get("ate_ci_upper")],
+            "warnings": detail.get("warnings", []),
+        })
+    (out / f"{label}.json").write_text(json.dumps({"job_id": job_id, "image_marker": None, "rows": rows}, indent=2))
+    bands = {}
+    for r in rows: bands[r["gate_decision"]] = bands.get(r["gate_decision"], 0) + 1
+    print("bands", bands)
+
+if __name__ == "__main__":
+    main(sys.argv[1], sys.argv[2])
+```
+
+- [ ] **Step 2: Record the image, run, and summarise**
+
+```bash
+OUT=docs/demos/results/$(date +%F)_expert_review_loop
+mkdir -p $OUT
+docker inspect e2i_api --format '{{.Config.Image}}' | tee $OUT/baseline_image.txt
+$PY <scratchpad>/lane1_live/run_discovery.py baseline $OUT 2>&1 | tee $OUT/baseline.log
+```
+
+Expected: 12 rows; bands consistent with the historical per-pair table (spec §7 step 1). Write `$OUT/baseline.md`: a table of question, band, sensitivity status, review decision, DAG id, plus the image tag. Copy the script into `$OUT/run_discovery.py`. Commit the results directory on the lane branch (docs only):
+
+```bash
+git add $OUT && git commit -m "docs(demos): lane 1 baseline discovery run on the pre-lane image
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+---
+
+### Task 14: PR, merge, deploy, certify content
+
+Merging deploys to production (the PR touches `src/**`, `frontend/**`, `database/**`). Pushing the branch and opening the PR are within the lane; **merging waits for the owner's explicit go** after CI is green and Task 13's baseline is committed.
+
+- [ ] **Step 1: Push and open the PR**
+
+```bash
+git push -u origin claude/lane1-expert-review-loop
+cat > /tmp/lane1_pr_body.md <<'EOF'
+Closes the expert-review loop (spec docs/superpowers/specs/2026-09-08-expert-review-loop-closure-design.md).
+
+## What ships
+- refutation_runner: data_subset and bootstrap score REAL per-resample evidence (previously computed and discarded; 96/96 live runs SKIPPED). Bootstrap thresholds 0.50/0.75 → 1.50/1.75 (code contradicted its comment; measured live ratios 1.01 / 0.81). Loops are deadline-aware and seeded from the estimate id.
+- migration 134: promote_causal_path_guarded evaluates the review chronology INSIDE the UPDATE; node passes hash + brand. Rehearsed BEGIN/ROLLBACK ×2 on the live DB.
+- GET /expert-reviews/{review_id}: one review in any status + same-structure history.
+- Drill-down: review state, rejection reason, discovered_dag_id, deep link. Queue page: linked-review card, global brand filter, honest summary error, assessment auto-generate + prefetch.
+- Lineage page rewritten to the shipped state; anchors re-resolved.
+
+## Measured before building
+0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have.
+
+## Verification
+Baseline discovery run on the pre-lane image: docs/demos/results/<date>_expert_review_loop/baseline.md. Post-deploy impact run, approve/reject re-runs and the switch step follow the spec §7 and are recorded in the same directory.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv
+EOF
+gh pr create --title "Expert-review loop closure: real non-critical evidence, guarded promote, review lookup, drill-down + queue UI, lineage refresh" --body-file /tmp/lane1_pr_body.md --base main --head claude/lane1-expert-review-loop
+gh pr view --json number,url -q '"\(.number) \(.url)"'
+```
+
+- [ ] **Step 2: Wait for CI; fix reds on the branch**
+
+```bash
+gh pr checks --watch --interval 60
+```
+
+All required checks green (Backend Tests incl. heavy + agents lanes, Verify OpenAPI Types, Frontend Tests, Security Scanning, guards). A `verify-types` red means Task 7 must be re-run after a later docstring change.
+
+- [ ] **Step 3: Owner go, then merge (never squash)**
+
+```bash
+gh pr merge <number> --merge
+```
+
+- [ ] **Step 4: Certify the deployed content (not the job status)**
+
+Wait for the LAST `deploy.yml` run on main to be terminal, then:
+
+```bash
+gh run list --workflow=deploy.yml --branch main --limit 3
+MERGE_SHA=$(git rev-parse --short origin/main)
+docker inspect e2i_api --format '{{.Config.Image}}' | grep -c "$MERGE_SHA"       # 1
+docker exec e2i_api grep -c '_resample_effects' /app/src/causal_engine/refutation_runner.py   # >= 3
+docker exec e2i_api grep -c 'promote_causal_path_guarded' /app/src/repositories/causal_path.py  # >= 1
+docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_proc where proname in ('dag_structure_rejected','promote_causal_path_guarded')"   # 2
+docker exec supabase-db psql -U postgres -d postgres -tA -c "select has_function_privilege('anon','public.promote_causal_path_guarded(text,text,text[],text,text)','EXECUTE')"   # f
+curl -s https://eznomics.site/api/openapi.json | python3 -c "import sys,json; d=json.load(sys.stdin); print('/api/expert-reviews/{review_id}' in d['paths'] or '/expert-reviews/{review_id}' in d['paths'])"   # True
+curl -s -o /dev/null -w '%{http_code}\n' https://eznomics.site/health   # 200
+```
+
+Negative control for the frontend bundle: before merging, record `docker exec e2i_frontend grep -rl 'Pending expert review' /usr/share/nginx/html/assets | wc -l` (expect 0); after deploy expect ≥ 1.
+
+---
+
+### Task 15: Live verification — impact run, approve, reject, switch
+
+**Files:** `docs/demos/results/<date>_expert_review_loop/{impact.json,impact.md,adjudications.md,switch.md}`
+
+- [ ] **Step 1: Impact run on the new image**
+
+```bash
+OUT=docs/demos/results/<date>_expert_review_loop
+docker inspect e2i_api --format '{{.Config.Image}}' | tee $OUT/impact_image.txt
+$PY $OUT/run_discovery.py impact $OUT 2>&1 | tee $OUT/impact.log
+python3 - "$OUT" <<'EOF'
+import json, sys
+from pathlib import Path
+out = Path(sys.argv[1])
+b = {(r["treatment"], r["outcome"]): r for r in json.loads((out/"baseline.json").read_text())["rows"]}
+i = {(r["treatment"], r["outcome"]): r for r in json.loads((out/"impact.json").read_text())["rows"]}
+lines = ["| question | baseline band | impact band | data_subset | bootstrap | sensitivity | review decision |", "|---|---|---|---|---|---|---|"]
+review_rows = []
+for k in sorted(i):
+    r = i[k]; t = r["tests"]
+    lines.append(f"| {k[0]} → {k[1]} | {b.get(k, {}).get('gate_decision')} | {r['gate_decision']} | {t.get('data_subset')} | {t.get('bootstrap')} | {t.get('unobserved_common_cause') or t.get('sensitivity_e_value')} | {r['expert_review_decision']} |")
+    if r["gate_decision"] == "review": review_rows.append(k)
+(out/"impact.md").write_text("\n".join(lines) + f"\n\nREVIEW rows: {review_rows}\n")
+print("\n".join(lines)); print("REVIEW rows:", review_rows)
+EOF
+```
+
+Expected on stable pairs: data_subset and bootstrap now `passed` (no longer `skipped`), bands unchanged from baseline. Record any REVIEW row; it drives Step 4.
+
+- [ ] **Step 2: Approve the probe's row through the UI, then re-run its pair**
+
+1. Open `https://eznomics.site/expert-reviews?review=4eab7033-7422-422d-83f6-659c9c3b9987` as the operator. The linked-review card shows `pending`, `treatment_arm → persistent_180d`, no brand. Tick the checklist items you can vouch for, add the comment `lane-1 live verification: structural approval`, click **Approve**. The card re-reads as `approved`.
+2. Re-run the exact probe request and read the review fields:
+
+```bash
+$PY - <<'EOF'
+import json, os, sys, time, urllib.request
+sys.path.insert(0, "docs/demos/results/<date>_expert_review_loop"); from run_discovery import mint_token, call
+tok = mint_token()
+body = {"treatment_var": "treatment_arm", "outcome_var": "persistent_180d", "dataset": "patient_journeys", "limit": 1500}
+r = call(tok, "POST", "/causal/agent-analyze", body=body)
+aid = r["analysis_id"]
+while r["status"] not in ("completed", "needs_review", "failed"):
+    time.sleep(10); r = call(tok, "GET", f"/causal/agent-analyze/{aid}")
+ref = r["refutation"]
+print(json.dumps({"analysis_id": aid, "status": r["status"], "gate": ref["gate_decision"], "decision": ref.get("expert_review_decision"), "review_id": ref.get("expert_review_id"), "dag_id": r.get("discovered_dag_id"), "warnings": r.get("warnings")}, indent=2))
+EOF
+```
+
+Expected: `decision: proceed`, `review_id: 4eab7033-…`, `gate: block` (approval is structural; the estimate still fails the sensitivity test), `status: failed`, a caveat naming the approval. Open the run in the Causal Analysis page: the Review status block reads **Structure approved** with the link. Record in `adjudications.md`.
+
+- [ ] **Step 3: Reject one other synthetic row, re-run its pair**
+
+Pick a brand-less pending row other than the probe's (e.g. `treatment_initiated → persistent_180d`; list them with `docker exec supabase-db psql -U postgres -d postgres -c "select review_id, treatment_variable, outcome_variable from public.expert_reviews where approval_status='pending' and brand is null order by created_at desc"`). Open `…/expert-reviews?review=<id>`, comment `lane-1 live verification: rejected to exercise the halt`, click **Reject**. Re-run that pair with the script above (change `treatment_var`/`outcome_var`). Expected: `status: failed`, `decision: rejected`, warnings contain `Estimate withheld: a domain expert REJECTED this DAG structure`, no new pending row for that hash (`select count(*) from expert_reviews where dag_version_hash='<hash>' and approval_status='pending'` = 0), the drill-down shows **Structure rejected** with the reason and link. Record.
+
+- [ ] **Step 4: The switch (only if Step 1 produced a REVIEW row)**
+
+```bash
+cd /home/enunez/Projects/e2i_causal_analytics
+grep -q '^CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=' .env || echo 'CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true' >> .env
+docker compose -f docker/docker-compose.yml up -d --no-deps api
+docker exec e2i_api sh -c 'printenv CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL'   # true
+curl -s -o /dev/null -w '%{http_code}\n' https://eznomics.site/health       # 200
+```
+
+Re-run the REVIEW-band question with the re-run script. Expected: `status: failed`, `current_phase awaiting_expert_review` in the record, warnings naming the review id and `POST /expert-reviews/{id}/resolve`. Record in `switch.md`. **Owner decides**: leave on, or revert with `sed -i '/^CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=/d' .env && docker compose -f docker/docker-compose.yml up -d --no-deps api`.
+
+If Step 1 produced no REVIEW row: write `switch.md` stating so with the impact table, cite `tests/unit/test_agents/test_causal_impact/test_refutation_expert_review_enforcement_1971.py` as the switch's executable demonstration, and put the band-semantics question to the owner with the numbers (spec §2: a sensitivity-WARNING→REVIEW rule would have moved 34 of 49 historical PROCEED runs).
+
+- [ ] **Step 5: Commit the evidence**
+
+```bash
+git -C /home/enunez/Projects/e2i_causal_analytics checkout -b docs/lane1-live-verification origin/main
+# copy docs/demos/results/<date>_expert_review_loop/ into this branch, commit, push, PR (docs only), merge with --merge
+```
+
+---
+
+### Task 16: Record and close out
+
+- [ ] **Step 1: PR certification comment** — image tag, marker counts, migration + privilege checks, impact table, the two adjudications with review ids and analysis ids, the switch outcome.
+- [ ] **Step 2: Issues** (owner already asked for these to be filed with evidence): (a) "REVIEW band unreachable by construction; band-semantics decision" with the §2 arithmetic and the impact table; (b) "Reconstruction's own interval is unusable (SE 4.9 vs 0.034 reported); never use it as a reference" as a documented caveat; (c) the CausalPFN trial (spec §11) as the next lane; (d) the four simplification candidates (spec §10) as one tracking issue.
+- [ ] **Step 3: Memory** — one project memory file for this lane (what the live DB said, the threshold inversion, the arithmetic, the disproof numbers, what the switch step showed), plus a MEMORY.md index line under 200 chars.
+- [ ] **Step 4: Handoff** — `.claude/handoffs/current.md` with `status: complete` (or `in_progress` with the exact next step), and `git worktree remove .worktrees/lane1-review-loop` once merged.
+
+---
+
+## Self-review against the spec
+
+- §4.1 engine → Tasks 1, 2 (loops, thresholds, deadline, seed, p-value, details, minimums). ✔
+- §4.2 route → Task 6 (+ Task 7 types). ✔
+- §4.3 guarded promote → Tasks 3, 4, 5. ✔
+- §4.4 drill-down → Task 9. §4.5 queue page → Tasks 8, 10 (linked card, brand filter, summary error, auto-assessment, prefetch, `detail` key + invalidations). ✔
+- §4.6 lineage → Task 11. §6 testing → each task's red-first steps; CI coverage confirmed (heavy lane runs `test_causal_engine`, agents shards run `test_agents`, main shard runs `test_api`, `test_repositories`, `test_database`). ✔
+- §7 live verification → Tasks 13, 14, 15 in the spec's order (baseline BEFORE merge). ✔
+- §8 rollout → Task 14. §9 decisions → Task 16. ✔
+- Names used consistently: `_resample_effects`, `_refit_effect_on`, `_refutation_frame`, `_significance_p_value`, `_budget_skip_result`, `_resample_seed_for`, `resample_seed`, `deadline`; `promote_causal_path_guarded(p_path_id, p_new_status, p_allowed_current, p_dag_version_hash, p_brand)`, `dag_structure_rejected(hash, brand)`; `ReviewRecord`, `ExpertReviewDetailResponse`, `get_expert_review`, `getExpertReview`, `useExpertReview`, `queryKeys.expertReviews.detail`; `ReviewStatusPanel`, `LinkedReviewCard`, `PrepareAssessmentsButton`, `ResolveForm`, `DagPanel`, `checklist.ts`. ✔
