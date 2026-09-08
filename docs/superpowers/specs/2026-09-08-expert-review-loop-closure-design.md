@@ -339,3 +339,90 @@ Writes performed by this plan are ordinary product writes (job store, `causal_va
 - Filing issues for the two findings surfaced here and not fixed here: REVIEW unreachable by
   construction (with the arithmetic), and the reconstruction's own interval being unusable
   (documented, harmless while unused).
+- Whether to open the CausalPFN trial (§11) as the lane after this one, and whether the
+  simplification candidates in §10 become issues.
+
+## 10. Design retrospective: what a better system would have done differently
+
+Recorded on 2026-09-08 in answer to the owner's question "could we have designed a better
+system?". The principles the causal path was built on hold up: evidence persisted before any
+status changes, fail-closed everywhere, structure and statistics as separate channels,
+provenance on every edge, planted-truth recovery gates in CI. The execution accreted. Four
+debts, each exposed by a measurement in this session; none is in scope for this lane, and
+none justifies a rewrite. They are simplification candidates to sequence after lane 1.
+
+| # | Debt | Evidence | What a better design does |
+|---|---|---|---|
+| 1 | Refutation refits a *reconstruction* of the estimator rather than the fitted one, so the node carries a reconstruction tolerance guard, per-refit cost calibration, a stratified subsampler and a cooperative compute budget. | `nodes/refutation.py` is 1,943 lines with 15 distinct issue references; the reconstruction's own interval is unusable (SE 4.9 vs 0.034 reported); per-run latency 110 s for four fitted estimators. | One fitted object per run shared by estimation and refutation (same worker process), or an amortized estimator whose re-inference is a forward pass (§11), which makes placebo, random-common-cause, subset and bootstrap cheap by construction. |
+| 2 | The gate is an uncalibrated aggregate: a weighted mean of PASSED / WARNING / FAILED labels with hard band edges. | REVIEW unreachable for the life of the system (0 of 96 runs); the bootstrap pass threshold inverted against its own comment, unnoticed because the test never scored. | An evidence-native gate: the effect's bootstrap or posterior distribution and the E-value as continuous quantities, with explicit decision rules calibrated against the DGP's planted truth, and a CI test that enumerates the reachable band values. |
+| 3 | The review key is the structure hash. | Any covariate change mints a new review; the queue holds 39 BLOCK-band structures whose approval changes no outcome; `approval` had no downstream effect for three months without anyone noticing. | Key reviews on the estimand (brand, treatment, outcome, adjustment set), show DAG diffs between versions, and queue only structures whose approval would change an outcome. |
+| 4 | Complexity that hides defects: two gates sharing a vocabulary (discovery accept / review / reject vs refutation proceed / review / block), three chat brains, a 6,368-line route module. | The threshold inversion in debt 2 and the discard-after-compute in §2 both lived in files nobody can hold. | Split `routes/causal.py` by concern (frames, discovery, agent run, jobs, history); one vocabulary per gate; a module-size guard in CI. |
+
+Sequencing recommendation: lane 1 first (it makes the evidence real, which every later
+comparison needs); then §11's trial (it decides whether debt 1 is removed or refactored);
+then debt 2's evidence-native gate, which the impact-run data and the trial both feed; debts
+3 and 4 as issues.
+
+## 11. CausalPFN: assessment and recommended trial
+
+Researched 2026-09-08 (paper, repository, PyPI, and the live container). CausalPFN
+(Balazadeh, Kamkari, Thomas, Li, Ma, Cresswell, Krishnan; NeurIPS 2025; arXiv 2506.07918;
+Apache-2.0; `pip install causalpfn`) is a single transformer trained once on simulated
+data-generating processes that satisfy strong ignorability. Given an observational dataset it
+returns CATE and ATE in-context with a quantized posterior per unit, from which credible
+intervals are drawn, with no per-dataset fitting or tuning.
+
+What it is and is not for this platform:
+
+- It learns no structure and selects no adjustment set. It assumes exactly what the backdoor
+  adjustment assumes. Discovery, the DAG, the adjustment guarantee, and expert review stay as
+  they are; CausalPFN is at most a fifth candidate in the energy-score estimator selector.
+- The strongest argument for it is not accuracy but cost of re-inference: refutation on an
+  amortized estimator is a forward pass, which would let debt 1's reconstruction, calibration
+  and budget machinery go away.
+- The strongest arguments against: its training prior covers continuous outcomes only, and
+  every outcome on this platform is binary 0/1, so our runs are out of the prior's
+  distribution; the paper reports the model "becomes severely overconfident when evaluated on
+  OOD DGPs", corrected by temperature scaling. It is also a black box next to a DML
+  specification a pharma reviewer can read.
+
+| Fact | Value | Fit |
+|---|---|---|
+| Treatment support | binary only; multi-arm in theory, continuous unexplored | fine, the platform binarizes |
+| Outcome prior | continuous only | out of distribution for binary outcomes; the risk to test |
+| Calibration | in-distribution calibrated; OOD overconfident until temperature-scaled | must be measured on our outcomes |
+| Context limit | about 50k rows, degrades above | our runs are 1,500 |
+| Benchmarks (paper) | best average rank on CATE across IHDP, ACIC, Lalonde; competitive on ATE | encouraging, all continuous-outcome |
+| Runtime today | 110 s per run, four estimators fitted | inference would be seconds |
+| Container readiness | torch 2.9.1 CPU present; huggingface_hub present; `faiss-cpu` missing; 2 CPUs; 3.7 GiB headroom under the 5 GiB limit | feasible; one dependency; memory must be measured |
+
+Recommendation: a one-day scratch trial, after lane 1's engine work lands, with pass criteria
+fixed before it runs, on frames whose truth we know. Not part of this lane.
+
+Trial design:
+
+1. Frames: the DGP recovery probe frames (`tests/integration/test_dgp_recovery_probe.py`:
+   three brands, `n_records=3000`, seed 21, heterogeneous DGP, planted `true_ate_by_arm` and
+   segment CATE map) plus the two 1,500-row live frames replicated in §2.
+2. Estimator: `causalpfn` `ATEEstimator` / `CATEEstimator` on CPU, the adjustment set the
+   platform would use for each frame, temperature scaling as the paper prescribes.
+3. Pass criteria, all required:
+   - |ATE − planted truth| < 0.15 on every frame (the gate LinearDML already passes);
+   - segment CATE ordering high > medium > low preserved on every brand;
+   - the 95% credible interval covers the planted truth in at least 18 of 20 seeds;
+   - wall-clock under 10 s per frame and peak RSS under 1 GiB on 2 CPUs, measured in the
+     `e2i_api` image.
+4. On pass: integrate as a logged shadow candidate in the selector (never selected, always
+   compared) for a few weeks of live runs; then allow selection; then decide whether debt 1's
+   reconstruction path is retired.
+5. On fail (most likely on credible-interval coverage for binary outcomes): stop, record the
+   numbers here, and keep the DML / forest estimators.
+
+The one fact that would reverse the recommendation to try it is a coverage collapse on binary
+outcomes, which is exactly what criterion 3 measures. A later caution: a model trained on
+synthetic priors may look best on this synthetic substrate and say less about Optum or CSU
+data when they arrive; the recovery benchmark is still the right first test, and the
+shadow period on live runs is the second.
+
+Sources: https://github.com/vdblm/CausalPFN , https://arxiv.org/abs/2506.07918 ,
+https://arxiv.org/html/2506.07918v2 , https://pypi.org/project/causalpfn/ .
