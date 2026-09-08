@@ -53,9 +53,12 @@ ApprovalValidity = Literal["permanent", "active", "expired"]
 def _valid_until_date(row: Mapping[str, Any]) -> Optional[date]:
     """Parse a row's ``valid_until``; ``None`` means the approval never expires.
 
-    PostgREST returns the DATE column as an ISO string; rows built in Python
-    may carry a ``date`` (or ``datetime``). The 10-char slice tolerates a
-    timestamp string without changing a plain date.
+    PostgREST returns the DATE column as an ISO date string; rows built in
+    Python may carry a ``date`` (or ``datetime``). Anything else -- including
+    an empty string -- raises ``ValueError``: a malformed value is never
+    silently classified as permanent or active (codex iter-1 LOW). In
+    ``get_review_summary`` that surfaces as the logged error + zero counts
+    the outer handler already produces for any malformed row.
     """
     raw = row.get("valid_until")
     if raw is None:
@@ -64,7 +67,7 @@ def _valid_until_date(row: Mapping[str, Any]) -> Optional[date]:
         return raw.date()
     if isinstance(raw, date):
         return raw
-    return date.fromisoformat(str(raw)[:10])
+    return date.fromisoformat(str(raw))
 
 
 def approval_validity(row: Mapping[str, Any], today: Optional[date] = None) -> ApprovalValidity:
@@ -643,12 +646,15 @@ class ExpertReviewRepository(BaseRepository):
         ``supersedes_review_id`` and NO validity of its own -- ``submit_review``
         assigns ``valid_until = today + validity_days`` when it is approved.
         The original row is not modified and nothing filters on
-        ``supersedes_review_id``: ``get_dag_approval`` simply prefers the newest
-        ``approved_at``. So renewing a PERMANENT approval (NULL ``valid_until``)
-        makes the DAG time-limited once the renewal is approved, and if that
-        renewal later expires the original permanent row is the active
-        approval again. The original is also not checked for being approved
-        or active -- any existing row may be renewed.
+        ``supersedes_review_id``, so approving a renewal NEVER revokes the
+        original: ``is_dag_approved`` stays True while EITHER row is active,
+        and ``get_dag_approval`` (newest ``approved_at`` first) reports the
+        renewal while it is active and the original again once the renewal
+        expires. Renewing a PERMANENT approval (NULL ``valid_until``) therefore
+        does not make the DAG time-limited -- it only changes which record the
+        gate reports, and the gate's renewal warning follows that record's
+        ``valid_until``. The original is not checked for being approved or
+        active -- any existing row may be renewed.
 
         Args:
             original_review_id: UUID of the review to renew

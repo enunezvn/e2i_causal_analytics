@@ -46,8 +46,11 @@ SQL_FILE = REPO_ROOT / "database" / "ml" / "010_causal_validation_tables.sql"
 
 # The ONLY places a PostgREST filter on valid_until may live.
 QUERY_HELPERS = frozenset({"_apply_active_validity", "_apply_expiring_window"})
-# The ONLY places a row's valid_until may be read and interpreted.
-PURE_HELPERS = frozenset({"_valid_until_date", "approval_validity", "is_active_approval"})
+# The ONLY places that may CLASSIFY a row's validity.
+CLASSIFIERS = frozenset({"approval_validity", "is_active_approval"})
+# Parses valid_until without classifying it; a caller that uses it must still classify.
+PARSER = "_valid_until_date"
+PURE_HELPERS = CLASSIFIERS | {PARSER}
 
 TODAY = date.today()
 
@@ -86,10 +89,14 @@ def _filters_approved(fn: ast.AST) -> bool:
 
 
 def _reads_valid_until(fn: ast.AST) -> bool:
-    """Reads a row's valid_until: ``row.get("valid_until")`` or ``row["valid_until"]``."""
+    """Reads a row's valid_until: ``row.get("valid_until")``, ``row["valid_until"]``
+    or the parser ``_valid_until_date(row)`` (codex iter-1 MED: a reader that
+    parses via the helper and then compares by hand is the same drift)."""
     for node in ast.walk(fn):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr == "get" and node.args:
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id == PARSER:
+                return True
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args:
                 a = node.args[0]
                 if isinstance(a, ast.Constant) and a.value == "valid_until":
                     return True
@@ -98,6 +105,18 @@ def _reads_valid_until(fn: ast.AST) -> bool:
             if isinstance(s, ast.Constant) and s.value == "valid_until":
                 return True
     return False
+
+
+def _declares_expired_included(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """A reader may legitimately want stored-'approved' rows regardless of
+    validity (an audit/history view). It must SAY so: an ``include_expired``
+    parameter, or a docstring stating that expired rows are included. Silence
+    is what R2 forbids (codex iter-1 MED: R2 must not conflate stored status
+    with active approval, but it must not let the choice be implicit either)."""
+    if any(a.arg == "include_expired" for a in fn.args.args + fn.args.kwonlyargs):
+        return True
+    doc = (ast.get_docstring(fn) or "").lower()
+    return "expired" in doc and any(w in doc for w in ("included", "including", "includes"))
 
 
 def _called_names(fn: ast.AST) -> set[str]:
@@ -119,8 +138,10 @@ def find_validity_violations(source: str) -> List[str]:
     """Return every way ``source`` lets a reader drift from the one definition.
 
     R1 a raw valid_until filter lives outside QUERY_HELPERS
-    R2 a function filters approval_status=='approved' without a query helper
-    R3 a function reads a row's valid_until without a pure helper
+    R2 a function filters approval_status=='approved' without a query helper,
+       and does not declare that expired rows are deliberately included
+    R3 a function reads (or parses) a row's valid_until without classifying it
+       through approval_validity()/is_active_approval()
     R4 a helper is missing altogether
     """
     tree = ast.parse(source)
@@ -140,12 +161,17 @@ def find_validity_violations(source: str) -> List[str]:
                 f"{ast.unparse(raw[0])}"
             )
         called = _called_names(fn)
-        if _filters_approved(fn) and not (called & QUERY_HELPERS):
+        if (
+            _filters_approved(fn)
+            and not (called & QUERY_HELPERS)
+            and not _declares_expired_included(fn)
+        ):
             out.append(
                 f"R2 {fn.name}: filters approval_status=='approved' without routing "
-                "validity through a shared query helper"
+                "validity through a shared query helper (or declaring that expired "
+                "rows are included)"
             )
-        if fn.name not in PURE_HELPERS and _reads_valid_until(fn) and not (called & PURE_HELPERS):
+        if fn.name not in PURE_HELPERS and _reads_valid_until(fn) and not (called & CLASSIFIERS):
             out.append(
                 f"R3 {fn.name}: interprets a row's valid_until by hand instead of via "
                 "approval_validity()/is_active_approval()"
@@ -203,6 +229,34 @@ HAND_ROLLED_SUMMARY = COMPLIANT_MODULE.replace(
 )
 assert HAND_ROLLED_SUMMARY != COMPLIANT_MODULE
 
+# codex iter-1 MED: parses via the helper, then re-derives validity by hand --
+# and gets it wrong (a permanent approval is excluded).
+PARSE_THEN_COMPARE = COMPLIANT_MODULE.replace(
+    'return sum(1 for r in rows if approval_validity(r) == "expired")',
+    "d = [_valid_until_date(r) for r in rows]\n"
+    "        return sum(1 for x in d if x is not None and x >= date.today())",
+)
+assert PARSE_THEN_COMPARE != COMPLIANT_MODULE
+
+HISTORICAL_READER_SILENT = (
+    COMPLIANT_MODULE
+    + """
+    async def all_approvals_ever(self):
+        q = self.client.table("t").select("*").eq("approval_status", "approved")
+        return (await q.execute()).data
+"""
+)
+
+HISTORICAL_READER_DECLARED = (
+    COMPLIANT_MODULE
+    + '''
+    async def all_approvals_ever(self):
+        """Every stored approval, expired ones included (audit view)."""
+        q = self.client.table("t").select("*").eq("approval_status", "approved")
+        return (await q.execute()).data
+'''
+)
+
 
 class TestStructuralGuard:
     """No reader may re-derive validity on its own."""
@@ -221,6 +275,20 @@ class TestStructuralGuard:
             "R3 summary: interprets a row's valid_until by hand instead of via "
             "approval_validity()/is_active_approval()"
         ]
+
+    def test_positive_control_parse_then_compare_bypass_is_caught(self):
+        found = find_validity_violations(PARSE_THEN_COMPARE)
+        assert found == [
+            "R3 summary: interprets a row's valid_until by hand instead of via "
+            "approval_validity()/is_active_approval()"
+        ]
+
+    def test_positive_control_silent_historical_reader_is_caught(self):
+        found = find_validity_violations(HISTORICAL_READER_SILENT)
+        assert any(v.startswith("R2 all_approvals_ever") for v in found), found
+
+    def test_positive_control_declared_historical_reader_is_allowed(self):
+        assert find_validity_violations(HISTORICAL_READER_DECLARED) == []
 
     def test_positive_control_missing_helper_is_caught(self):
         stripped = COMPLIANT_MODULE.replace("def _apply_expiring_window", "def _renamed")
@@ -426,6 +494,14 @@ class TestPureHelpers:
     def test_accepts_a_date_object_as_well_as_the_postgrest_iso_string(self):
         assert er.approval_validity({"valid_until": TODAY - timedelta(days=1)}, TODAY) == "expired"
 
+    @pytest.mark.parametrize("bad", ["", "2026-09-08garbage", "not-a-date"])
+    def test_malformed_valid_until_is_never_silently_classified(self, bad):
+        """codex iter-1 LOW: a lenient parse turned garbage into a date. A DATE
+        column never yields these; if one ever appears, raising is the honest
+        outcome (the summary's outer except logs it and returns zeros)."""
+        with pytest.raises(ValueError):
+            er.approval_validity({"valid_until": bad}, TODAY)
+
     def test_is_active_requires_approved_status(self):
         assert er.is_active_approval(PERMANENT, TODAY) is True
         assert er.is_active_approval(EXPIRES_TODAY, TODAY) is True
@@ -549,7 +625,33 @@ class TestRenewalRow:
         for k in ("valid_from", "valid_until", "approved_at"):
             assert k not in inserted, inserted
 
+    async def test_approving_a_renewal_never_revokes_a_permanent_original(self):
+        """codex iter-1 HIGH: nothing filters on supersedes_review_id, so the
+        original stays eligible. While the renewal is active it is the record
+        reported (newest approved_at); once it expires the permanent original
+        is reported again -- the DAG is approved throughout."""
+        original = dict(PERMANENT, review_id="rev-orig", approved_at=f"{_iso(-400)}T00:00:00+00:00")
+        active_renewal = _row(
+            "approved",
+            _iso(30),
+            review_id="rev-renew",
+            supersedes_review_id="rev-orig",
+            approved_at=f"{_iso(-60)}T00:00:00+00:00",
+        )
+        expired_renewal = dict(active_renewal, valid_until=_iso(-1))
+
+        repo, _ = _repo([original, active_renewal])
+        assert (await repo.get_dag_approval("dag-1"))["review_id"] == "rev-renew"
+        assert await repo.is_dag_approved("dag-1") is True
+
+        repo, _ = _repo([original, expired_renewal])
+        assert (await repo.get_dag_approval("dag-1"))["review_id"] == "rev-orig"
+        assert await repo.is_dag_approved("dag-1") is True
+
     def test_docstring_states_what_renewing_a_permanent_approval_does(self):
         doc = ExpertReviewRepository.renew_review.__doc__ or ""
         assert "permanent" in doc.lower()
         assert "supersedes_review_id" in doc
+        assert "never revoke" in doc.lower(), (
+            "the docstring must not claim a renewal makes a permanent approval time-limited"
+        )
