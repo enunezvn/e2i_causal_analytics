@@ -430,11 +430,28 @@ class CausalValidationRepository(BaseRepository):
         """
         Check if a causal estimate can be used (not blocked).
 
+        .. warning::
+           **This is NOT the SQL ``can_use_estimate``, despite the name (#1971).**
+           ``database/ml/010_causal_validation_tables.sql:396`` defines
+           ``can_use_estimate(estimate_id, dag_hash)``, documented as "combines
+           validation gate **and expert approval**", which returns false for a
+           REVIEW band with no approved DAG. This method takes no ``dag_hash``
+           and **never consults expert approval at all** -- it only asks whether
+           the refutation gate blocked. It is also **fail-open**: with no
+           validation rows it returns ``True``.
+
+           Both are currently uncalled. Wiring this one up believing it enforces
+           approval would silently enforce nothing, which is the failure this
+           note exists to prevent. If enforcement is the goal, call the SQL
+           function (or extend this one and rename it), and see #1971 for the
+           product decision on whether enforcement should block at all.
+
         Args:
             estimate_id: UUID of the causal estimate
 
         Returns:
-            True if estimate can be used (proceed or review with approval)
+            True if the refutation gate did not block, or if there are no
+            validation rows for the estimate. Says nothing about expert approval.
         """
         gate = await self.get_gate_decision(estimate_id)
         return gate != "block" if gate else True  # Allow if no validations

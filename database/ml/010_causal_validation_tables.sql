@@ -148,7 +148,14 @@ CREATE TABLE IF NOT EXISTS expert_reviews (
     reviewer_email VARCHAR(200),
     
     -- Approval status
-    approval_status VARCHAR(30) NOT NULL DEFAULT 'pending',  -- pending, approved, rejected, expired
+    -- Written values: pending, approved, rejected. 'expired' is NEVER written
+    -- (#1972): expiry is derived at read time from valid_until -- get_dag_approval
+    -- requires valid_until >= today, and get_review_summary counts an expired row
+    -- by date comparison. Documenting a fourth value nothing writes sent readers
+    -- looking for a sweep job that does not exist. Comment-only correction: there
+    -- is no CHECK constraint and no COMMENT ON for this column, so nothing in the
+    -- applied database diverges from this file.
+    approval_status VARCHAR(30) NOT NULL DEFAULT 'pending',
     
     -- Review content
     checklist_json JSONB,                   -- Completed checklist items with responses
