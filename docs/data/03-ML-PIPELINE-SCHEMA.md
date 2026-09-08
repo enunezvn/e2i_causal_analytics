@@ -1266,6 +1266,12 @@ the gate decided — see §13.7).
 | `treatment_variable` / `outcome_variable` | VARCHAR(255) | ml/036: the estimand the discovery served (names mirror `expert_reviews`) |
 | `metadata` | JSONB | 026 column; the writer fills `shipped_dag` (nodes, edges, per-edge `edge_provenance`, adjustment sets, augmented edges, `discovery_dag_overridden`), `gate_evaluation` (the gate's full `to_dict()`), `discovery` (runner metadata: bootstrap summary, latent diagnostic, node names, runtime, or a failed run's error), `discovery_latency_ms`, `success`, `algorithm_agreement`, and `session_id_raw` when the session id is not a UUID |
 
+**Views** (`v_recent_discoveries`, `v_high_confidence_edges`): moved to `public` and, since
+ml/036, they also expose `is_synthetic` (plus, on `v_recent_discoveries`,
+`dag_version_hash` / `query_id` / `treatment_variable` / `outcome_variable`) as appended
+columns so an operator can filter provenance in SQL — `HAS_PROVENANCE` governs the
+Python readers only. `v_discordant_features` is ranking-derived and unchanged.
+
 ### 13.2 `discovery_algorithm_runs`
 
 Individual algorithm results within a discovery session.
@@ -1411,10 +1417,15 @@ the payload; the RPC rejects a payload without it.
 (the run id), provenance-filtered by default (`HAS_PROVENANCE = True`, opt in with
 `include_synthetic=True`). `discovered_dags` is in `PROVENANCE_TAGGED_TABLES`.
 
-**Still writer-less.** `driver_rankings` / `feature_rankings`: `DriverRanker` does not run
-on the causal_impact path (it runs only in the feature_analyzer agent's
-`causal_ranker` node, which does not persist), so nothing on the agent path holds that
-data at the write site. They stay empty until that node gets its own writer.
+**Still writer-less (scoped out of #1974's lane).** `driver_rankings` /
+`feature_rankings`: `DriverRanker` does not run on the causal_impact path that writes
+`discovered_dags`. It runs in two other places — the feature_analyzer agent's
+`causal_ranker` node (`rank_from_discovery_result`) and the tool-registry
+`rank_drivers` tool (`src/tool_registry/tools/causal_discovery.py`) — and neither
+persists its `RankingResult`. A follow-on writer belongs at those two sites: a
+`record_driver_ranking(jsonb)` RPC (one `driver_rankings` row + one `feature_rankings`
+row per feature, `dag_id` linking to a `discovered_dags` row persisted by the same
+run), with the same visible-failure contract as §13.7.
 
 ---
 

@@ -239,6 +239,25 @@ def _neutralize_drift_monitoring_client(request, monkeypatch):
     )
 
 
+class _UnitStubDiscoveredDagRepository:
+    """Stand-in for DiscoveredDagRepository under the unit tree (#1974).
+
+    Records nothing, but proves the payload is JSON-serialisable — exactly
+    what httpx would need — so a builder defect on a real discovery-result
+    shape surfaces as a persist error in the node under test, the same way it
+    would in production, instead of being hidden by the stub."""
+
+    def __init__(self) -> None:
+        self.payloads: list = []
+
+    async def record(self, payload: dict) -> str:
+        import json
+
+        json.dumps(payload)
+        self.payloads.append(payload)
+        return "unit-stub-discovered-dag-id"
+
+
 @pytest.fixture(autouse=True)
 def _neutralize_discovered_dag_persistence(request, monkeypatch):
     """Autouse (#1974): graph_builder persists EVERY discovery run to
@@ -249,16 +268,23 @@ def _neutralize_discovered_dag_persistence(request, monkeypatch):
     discovery unit test in the tree, flipping warnings-absence assertions and
     adding an ERROR log per run for an environmental, not functional, reason.
 
-    Stub the persistence STEP to an empty state delta (the #788
-    ``_contribute_to_memory`` precedent: neutralise the side effect, keep the
-    analysis). The wiring tests
-    (``test_graph_builder_persistence_1974``) opt out by nodeid and exercise the
-    real step against a fake repository; ``raising=True`` so a rename of the
-    step breaks loudly instead of silently un-stubbing the tree."""
+    Stub only the REPOSITORY FACTORY (codex iter-1 MED): payload construction
+    and the node wiring still run on every discovery test's real
+    DiscoveryResult shape (including structural_recovery's genuine
+    causal-learn output), so a builder regression is still visible as a
+    persist error there; only the network write is replaced (the #788
+    ``_contribute_to_memory`` precedent). The wiring tests
+    (``test_graph_builder_persistence_1974``) opt out by nodeid and install
+    their own factories; ``raising=True`` so a rename of the factory breaks
+    loudly instead of silently un-stubbing the tree."""
     if "test_graph_builder_persistence_1974" in request.node.nodeid:
         return
     try:
         import src.agents.causal_impact.nodes.graph_builder as _gb
     except Exception:  # pragma: no cover - module always importable in unit env
         return
-    monkeypatch.setattr(_gb, "_persist_discovered_dag", AsyncMock(return_value={}), raising=True)
+
+    async def _stub_factory() -> _UnitStubDiscoveredDagRepository:
+        return _UnitStubDiscoveredDagRepository()
+
+    monkeypatch.setattr(_gb, "_build_discovered_dag_repository", _stub_factory, raising=True)

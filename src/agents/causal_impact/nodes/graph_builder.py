@@ -1153,11 +1153,12 @@ async def _persist_discovered_dag(
     query_id = state.get("query_id")
     context = f"[dag_version_hash={dag_version_hash} session_id={session_id} query_id={query_id}]"
 
-    frame = (state.get("data_cache") or {}).get("estimation_data")
-    if frame is not None and not isinstance(frame, pd.DataFrame):
-        frame = pd.DataFrame(frame)
-
     try:
+        # Inside the boundary on purpose (codex iter-1 LOW): a cache value
+        # pandas cannot convert must become a persist error, never a raise.
+        frame = (state.get("data_cache") or {}).get("estimation_data")
+        if frame is not None and not isinstance(frame, pd.DataFrame):
+            frame = pd.DataFrame(frame)
         payload = build_discovered_dag_payload(
             discovery_result=discovery_result,
             gate_evaluation=gate_evaluation,

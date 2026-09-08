@@ -131,6 +131,25 @@ def test_each_view_moves_guarded(view: str):
     _find(rf"to_regclass\(\s*'ml\.{view}'\s*\)\s+IS\s+NOT\s+NULL", stripped)
 
 
+@pytest.mark.parametrize("view", ("v_recent_discoveries", "v_high_confidence_edges"))
+def test_dag_views_expose_provenance_after_the_column_add(view: str):
+    """ml/031 precedent: the DAG-derived views append is_synthetic so SQL
+    readers can filter provenance (HAS_PROVENANCE only governs Python). The
+    CREATE OR REPLACE must come AFTER the column is added and reference only
+    public relations."""
+    stripped = _stripped()
+    add_at = _find(
+        r"ALTER\s+TABLE\s+public\.discovered_dags\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+is_synthetic",
+        stripped,
+    )
+    view_at = _find(rf"CREATE\s+OR\s+REPLACE\s+VIEW\s+public\.{view}\s+AS", stripped)
+    assert add_at < view_at
+    body = stripped[view_at : stripped.find(";", view_at)]
+    assert re.search(r"\bis_synthetic\b", body)
+    assert not re.search(r"\bml\.", body)
+    _find(r"table_name\s*=\s*v_rel\s+AND\s+column_name\s*=\s*'is_synthetic'", stripped)
+
+
 def test_trigger_function_moves_by_alter():
     """The updated_at trigger function has no schema references in its body,
     so it can move; the trigger references it by OID and follows."""

@@ -39,6 +39,7 @@ from src.causal_engine.discovery.base import (
     AlgorithmResult,
     DiscoveredEdge,
     DiscoveryAlgorithmType,
+    DiscoveryConfig,
     DiscoveryResult,
 )
 from src.memory.services.factories import ServiceConnectionError
@@ -283,6 +284,32 @@ async def test_persist_step_returns_only_new_warnings(monkeypatch):
 
     assert "pre-existing warning" not in result["warnings"]
     assert len(result["warnings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_unconvertible_frame_is_a_persist_error_not_a_raise(monkeypatch):
+    """codex iter-1 LOW: the helper's never-raise guarantee must cover its own
+    frame preparation. A cache value pandas cannot turn into a DataFrame is
+    reported as a persist error, never propagated to the node's outer except."""
+    factory = _Factory(_FakeRepository())
+    monkeypatch.setattr(graph_builder_mod, "_build_discovered_dag_repository", factory)
+    state = _state(data_cache={"estimation_data": object()})
+    result = await _StubRunner().discover_dag(None, DiscoveryConfig(), None)
+
+    delta = await graph_builder_mod._persist_discovered_dag(
+        state=state,
+        discovery_result=result,
+        gate_evaluation={"decision": "reject", "confidence": 0.0, "reasons": []},
+        causal_graph={"dag_version_hash": "h" * 64, "nodes": [], "edges": []},
+        treatment="t",
+        outcome="y",
+        discovery_latency_ms=1.0,
+    )
+
+    assert "discovered_dag_id" not in delta
+    assert "DataFrame" in delta["discovered_dag_persist_error"]
+    assert len(delta["warnings"]) == 1
+    assert factory.calls == 0  # positive control: never reached the repository
 
 
 # ---------------------------------------------------------------------------

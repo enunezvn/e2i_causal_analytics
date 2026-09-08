@@ -201,7 +201,15 @@ def build_discovered_dag_payload(
         feature_names = [str(c) for c in frame.columns]
     if feature_names is None and discovery_result.ensemble_dag is not None:
         feature_names = sorted(str(n) for n in discovery_result.ensemble_dag.nodes())
-    feature_names = [str(name) for name in (feature_names or [])]
+    if feature_names is None:
+        # An EXPLICIT empty node list is data and is kept; absence is not —
+        # feature_names=[] / n_features=0 would read as "discovery saw no
+        # variables" (codex iter-1 MED).
+        raise ValueError(
+            "build_discovered_dag_payload: feature_names cannot be determined "
+            "(no runner node_names, no frame, no ensemble graph)"
+        )
+    feature_names = [str(name) for name in feature_names]
 
     edges = list(discovery_result.edges or [])
     adjacency = None

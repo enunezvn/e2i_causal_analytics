@@ -308,6 +308,58 @@ COMMENT ON COLUMN public.discovered_dags.treatment_variable IS
 COMMENT ON COLUMN public.discovered_dags.outcome_variable IS
     'Outcome variable of the causal question this discovery served. Added by ml/036 (#1974).';
 
+-- 5b) Expose provenance on the two DAG-derived views (after the column adds) (ml/031 precedent:
+--     "expose is_synthetic on ml_model_health_dashboard"). BaseRepository's
+--     HAS_PROVENANCE governs Python readers only; an operator querying the
+--     views directly needs the column to filter on. CREATE OR REPLACE VIEW
+--     may only APPEND columns, so the 026 column list is kept verbatim and the
+--     new columns (all functionally dependent on d.id, the GROUP BY key) come
+--     last. v_discordant_features is ranking-derived and untouched
+--     (driver_rankings carries no provenance column).
+CREATE OR REPLACE VIEW public.v_recent_discoveries AS
+SELECT
+    d.id,
+    d.session_id,
+    d.discovery_timestamp,
+    d.n_samples,
+    d.n_features,
+    d.n_edges,
+    d.gate_decision,
+    d.gate_confidence,
+    d.total_runtime_seconds,
+    d.algorithms_used,
+    d.ensemble_threshold,
+    COUNT(DISTINCT ar.id) as n_algorithm_runs,
+    AVG(ar.runtime_seconds) as avg_algorithm_runtime,
+    SUM(CASE WHEN ar.converged THEN 1 ELSE 0 END) as n_converged,
+    d.is_synthetic,
+    d.dag_version_hash,
+    d.query_id,
+    d.treatment_variable,
+    d.outcome_variable
+FROM public.discovered_dags d
+LEFT JOIN public.discovery_algorithm_runs ar ON ar.dag_id = d.id
+GROUP BY d.id
+ORDER BY d.created_at DESC;
+
+CREATE OR REPLACE VIEW public.v_high_confidence_edges AS
+SELECT
+    e.id,
+    e.dag_id,
+    e.source_node,
+    e.target_node,
+    e.edge_type,
+    e.confidence,
+    e.algorithm_votes,
+    e.algorithms,
+    d.gate_decision,
+    d.session_id,
+    d.is_synthetic
+FROM public.discovered_edges e
+JOIN public.discovered_dags d ON d.id = e.dag_id
+WHERE e.confidence >= 0.8
+ORDER BY e.confidence DESC;
+
 -- ----------------------------------------------------------------------------
 -- 6) THE ATOMIC WRITER RPC
 -- ----------------------------------------------------------------------------
@@ -490,8 +542,9 @@ COMMENT ON TABLE public.discovered_edges IS
     'Edges in discovered DAGs with confidence metadata (moved from ml by ml/036).';
 COMMENT ON TABLE public.driver_rankings IS
     'Causal vs predictive feature importance rankings (moved from ml by ml/036). '
-    'No writer on the causal_impact agent path: DriverRanker runs only in the '
-    'feature_analyzer agent (causal_ranker node), which does not persist here yet.';
+    'Still writer-less: DriverRanker runs in the feature_analyzer agent (causal_ranker '
+    'node) and in the tool-registry rank_drivers tool, neither of which persists here '
+    'yet; it does not run on the causal_impact path that writes discovered_dags.';
 COMMENT ON TABLE public.feature_rankings IS
     'Detailed per-feature ranking information (moved from ml by ml/036). See driver_rankings.';
 COMMENT ON VIEW public.v_recent_discoveries IS 'Summary view of recent causal discovery runs';
@@ -672,6 +725,16 @@ BEGIN
     IF has_schema_privilege('authenticated', 'ml', 'USAGE') THEN
         RAISE EXCEPTION 'migration 036: authenticated still has USAGE on schema ml';
     END IF;
+
+    -- 9e') Provenance exposed on the DAG-derived views (5b).
+    FOREACH v_rel IN ARRAY ARRAY['v_recent_discoveries', 'v_high_confidence_edges'] LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = v_rel AND column_name = 'is_synthetic'
+        ) THEN
+            RAISE EXCEPTION 'migration 036: public.% does not expose is_synthetic', v_rel;
+        END IF;
+    END LOOP;
 
     -- 9f) Views and readers are VALID after the move (executing them is the
     --     proof; an OID-dangling definition would error here, not at 3 a.m.).

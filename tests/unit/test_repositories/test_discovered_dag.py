@@ -455,6 +455,33 @@ def test_payload_requires_n_samples_from_somewhere():
         )
 
 
+def test_payload_requires_feature_names_from_somewhere():
+    """codex iter-1 MED: n_samples present in runner metadata but NO node_names,
+    no frame and no ensemble graph must raise, not persist feature_names=[] /
+    n_features=0 as if the run had seen no variables."""
+    result = _result(success=False)
+    result.metadata["n_samples"] = 40
+    with pytest.raises(ValueError, match="feature_names"):
+        _payload(
+            discovery_result=result,
+            gate_evaluation={"decision": "reject", "confidence": 0.0, "reasons": []},
+        )
+
+
+def test_payload_keeps_an_explicitly_empty_node_list():
+    """Positive control for the test above: an EXPLICIT empty node list from
+    the runner is data, not absence, and is kept as-is."""
+    result = _result(success=False)
+    result.metadata["n_samples"] = 40
+    result.metadata["node_names"] = []
+    payload = _payload(
+        discovery_result=result,
+        gate_evaluation={"decision": "reject", "confidence": 0.0, "reasons": []},
+    )
+    assert payload["feature_names"] == []
+    assert payload["n_features"] == 0
+
+
 def test_payload_requires_dag_version_hash():
     graph = _causal_graph()
     graph.pop("dag_version_hash")
