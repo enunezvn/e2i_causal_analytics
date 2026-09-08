@@ -1060,6 +1060,16 @@ def test_rejection_is_evaluated_inside_the_update_statement():
 
 
 @pytest.mark.unit
+def test_empty_string_brand_means_no_brand():
+    """``get_reviews_for_dag`` filters with ``if brand:`` -- '' is unfiltered. The
+    SQL must read '' the same way or a same-hash rejection under another brand
+    is missed (pre-execution review 2026-09-08, codex HIGH)."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    assert sql.count("NULLIF(p_brand, '') IS NULL OR") == 2
+    assert "(p_brand IS NULL OR" not in sql
+
+
+@pytest.mark.unit
 def test_service_role_only():
     sql = MIGRATION.read_text(encoding="utf-8")
     for fn in FUNCTIONS:
@@ -1068,7 +1078,7 @@ def test_service_role_only():
     assert "has_function_privilege" in sql  # the migration asserts its own grants
 ```
 
-Run: `$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: FAIL with `FileNotFoundError`.
+Run: `$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: FAIL with `FileNotFoundError` (4 tests).
 
 - [ ] **Step 2: Write the migration**
 
@@ -1085,7 +1095,14 @@ Create `database/migrations/134_guarded_causal_path_promote.sql`:
 --     ._latest_adjudication / check_rejection) in SQL: a structure is rejected
 --     when the NEWEST non-pending review row for the hash (and brand, when a
 --     brand is given) is 'rejected' and no pending row is newer than it. A
---     NULL hash means "no structure to check" and reads false.
+--     NULL hash means "no structure to check" and reads false. An EMPTY-STRING
+--     brand means "no brand" (NULLIF) -- the Python reader filters with
+--     ``if brand:`` (src/repositories/expert_review.py get_reviews_for_dag), so
+--     '' must be unfiltered here too or a same-hash rejection is missed
+--     (pre-execution review 2026-09-08, codex HIGH). A pending row with the SAME
+--     created_at as the rejection does NOT reopen it (strict >): the
+--     conservative reading for a promote guard (Task 16 files the Python
+--     tie-breaker as LOW).
 --   public.promote_causal_path_guarded(p_path_id, p_new_status,
 --     p_allowed_current text[], p_dag_version_hash, p_brand) → jsonb
 --     One UPDATE that moves causal_paths.validation_status only when the
@@ -1114,7 +1131,7 @@ AS $$
         SELECT r.approval_status, r.created_at
         FROM public.expert_reviews r
         WHERE r.dag_version_hash = p_dag_version_hash
-          AND (p_brand IS NULL OR r.brand = p_brand)
+          AND (NULLIF(p_brand, '') IS NULL OR r.brand = p_brand)
           AND r.approval_status <> 'pending'
         ORDER BY r.created_at DESC
         LIMIT 1
@@ -1125,9 +1142,9 @@ AS $$
                     SELECT 1
                     FROM public.expert_reviews p
                     WHERE p.dag_version_hash = p_dag_version_hash
-                      AND (p_brand IS NULL OR p.brand = p_brand)
+                      AND (NULLIF(p_brand, '') IS NULL OR p.brand = p_brand)
                       AND p.approval_status = 'pending'
-                      AND p.created_at > l.created_at
+                      AND p.created_at > l.created_at  -- a tie is NOT a reopen
                 )
          FROM latest_np l),
         false
@@ -1216,7 +1233,7 @@ END $$;
 
 - [ ] **Step 3: Run the contract test**
 
-`$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: 3 passed.
+`$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: 4 passed.
 
 - [ ] **Step 4: Rehearse on the live database (BEGIN … ROLLBACK, applied twice, with a positive control)**
 
@@ -1257,6 +1274,66 @@ docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) fro
 ```
 
 Expected: `0`.
+
+- [ ] **Step 4b: Equivalence scenarios against the Python rule (BEGIN … ROLLBACK)**
+
+The pre-execution review (2026-09-08) ran these 13 scenarios through the function and through
+`ExpertReviewGate._latest_adjudication` on the same rows (with `get_reviews_for_dag`'s
+`if brand:` filter). Re-run them after any change to the function; the expected column is the
+MEASURED output of the NULLIF version. Scenario rows use unique hashes, so live rows never interfere.
+
+```bash
+{
+  echo 'BEGIN;'
+  cat database/migrations/134_guarded_causal_path_promote.sql
+  cat <<'SQL'
+CREATE TEMP TABLE sc(hash text, brand text, status text, ts timestamptz, vu date);
+INSERT INTO sc VALUES
+ ('h1', NULL, 'pending',  '2026-01-01', NULL),
+ ('h2', NULL, 'rejected', '2026-01-01', NULL),
+ ('h3', NULL, 'rejected', '2026-01-01', NULL), ('h3', NULL, 'pending',  '2026-01-02', NULL),
+ ('h4', NULL, 'rejected', '2026-01-01', NULL), ('h4', NULL, 'approved', '2026-01-02', '2026-02-01'),
+ ('h5', NULL, 'approved', '2026-01-01', '2099-01-01'), ('h5', NULL, 'rejected', '2026-01-02', NULL),
+ ('h6', NULL, 'rejected', '2026-01-01', NULL),
+ ('h7', NULL, 'rejected', '2026-01-01', NULL), ('h7', NULL, 'pending',  '2026-01-01', NULL),
+ ('h8', 'X',  'rejected', '2026-01-01', NULL),
+ ('h9', 'X',  'rejected', '2026-01-01', NULL), ('h9', 'Y',  'pending',  '2026-01-02', NULL);
+INSERT INTO public.expert_reviews (review_type, dag_version_hash, brand, approval_status, reviewer_id, created_at, valid_until)
+SELECT 'dag_approval', 'lane1-eq-'||hash, brand, status, 'equiv', ts, vu FROM sc;
+SELECT 'S1 only pending' s, public.dag_structure_rejected('lane1-eq-h1', NULL) rejected
+UNION ALL SELECT 'S2 rejected only', public.dag_structure_rejected('lane1-eq-h2', NULL)
+UNION ALL SELECT 'S3 rejected, newer pending (reopened)', public.dag_structure_rejected('lane1-eq-h3', NULL)
+UNION ALL SELECT 'S4 rejected, newer EXPIRED approval', public.dag_structure_rejected('lane1-eq-h4', NULL)
+UNION ALL SELECT 'S5 approval, newer rejection', public.dag_structure_rejected('lane1-eq-h5', NULL)
+UNION ALL SELECT 'S6 NULL-brand rejection, query brand X', public.dag_structure_rejected('lane1-eq-h6', 'X')
+UNION ALL SELECT 'S7 pending with the SAME timestamp (tie)', public.dag_structure_rejected('lane1-eq-h7', NULL)
+UNION ALL SELECT 'S8 brand-X rejection, query NULL', public.dag_structure_rejected('lane1-eq-h8', NULL)
+UNION ALL SELECT 'S8 brand-X rejection, query X', public.dag_structure_rejected('lane1-eq-h8', 'X')
+UNION ALL SELECT 'S8 brand-X rejection, query EMPTY STRING', public.dag_structure_rejected('lane1-eq-h8', '')
+UNION ALL SELECT 'S9 X rejected, Y pending newer, query NULL', public.dag_structure_rejected('lane1-eq-h9', NULL)
+UNION ALL SELECT 'S9 X rejected, Y pending newer, query X', public.dag_structure_rejected('lane1-eq-h9', 'X')
+UNION ALL SELECT 'NULL hash', public.dag_structure_rejected(NULL, NULL);
+SQL
+  echo 'ROLLBACK;'
+} | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 2>&1 | grep -E '^ S|NULL hash|ROLLBACK|ERROR'
+```
+
+Expected (measured 2026-09-08; the Python rule agrees on every row except the tie, where Python is row-order-dependent and the SQL reads the conservative side):
+
+| scenario | rejected |
+|---|---|
+| S1 only pending | f |
+| S2 rejected only | t |
+| S3 rejected, newer pending (reopened) | f |
+| S4 rejected, newer EXPIRED approval | f (expiry is not an adjudication; both readers ignore `valid_until`) |
+| S5 approval, newer rejection | t |
+| S6 NULL-brand rejection, query brand X | f (a brand query excludes NULL-brand rows, as `.eq("brand", X)` does) |
+| S7 pending with the SAME timestamp | t (tie ≠ reopen) |
+| S8 query NULL / X / '' | t / t / t ('' is "no brand"; before NULLIF the '' row read **f** — the codex HIGH) |
+| S9 query NULL / X | f / t |
+| NULL hash | f |
+
+Then `ROLLBACK`; confirm `select count(*) from public.expert_reviews where reviewer_id='equiv'` is `0`.
 
 - [ ] **Step 5: Commit**
 
@@ -1521,7 +1598,10 @@ to
                 new_status,
                 allowed_current,
                 dag_version_hash=(str(state.get("dag_version_hash") or "") or None),
-                brand=cast(Optional[str], state.get("brand")),
+                # '' is "no brand" for the Python probe (``if brand:``) and, via
+                # NULLIF, for the SQL rule; pass None so the two can never
+                # disagree (pre-execution review 2026-09-08).
+                brand=(cast(Optional[str], state.get("brand")) or None),
             )
 ```
 
@@ -1640,6 +1720,21 @@ async def test_store_failure_is_503_never_an_empty_200(monkeypatch, fail):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_client_factory_failure_is_503(monkeypatch):
+    """``_get_expert_review_repo`` raises when Supabase is unset/unreachable; that
+    must be the same honest 503, not an unhandled 500."""
+
+    async def _boom():
+        raise RuntimeError("supabase unavailable")
+
+    monkeypatch.setattr(route_mod, "_get_expert_review_repo", _boom)
+    with pytest.raises(HTTPException) as ei:
+        await route_mod.get_expert_review("rev-1", user={})
+    assert ei.value.status_code == 503
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_row_without_a_hash_has_empty_history(monkeypatch):
     repo = _Repo({**ROW, "dag_version_hash": None})
     _install(monkeypatch, repo)
@@ -1749,8 +1844,11 @@ async def get_expert_review(
     ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
     so it cannot shadow ``/pending`` and ``/summary``.
     """
-    repo = await _get_expert_review_repo()
     try:
+        # The client factory raises ServiceConnectionError when Supabase is
+        # unset/unreachable; inside the try so that is a 503 as well, not a
+        # 500 (pre-execution review 2026-09-08, codex MED).
+        repo = await _get_expert_review_repo()
         row = await repo.get_by_id(review_id)
     except Exception as e:  # store failure (R3): honest 503
         raise _store_unavailable("review read", e) from e
@@ -2389,6 +2487,7 @@ Create `frontend/src/components/expert-review/ResolveForm.tsx`:
  * pre-fills the human checklist.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MutableRefObject } from 'react';
 import { CheckCircle2, RefreshCw, Sparkles, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -2402,9 +2501,17 @@ import { CHECKLIST_ITEMS, VERDICT_VARIANT } from './checklist';
 export interface ResolveFormProps {
   review: PendingReviewItem;
   onClose: () => void;
+  /**
+   * Page-level once-per-review-id guard for the auto-generated assessment. The
+   * linked-review card and the queue row can both mount a form for the SAME
+   * review; sharing one Set keeps the backend from building the assessment
+   * twice (pre-execution review 2026-09-08, codex MED). Optional so the form
+   * still guards itself when rendered alone.
+   */
+  autoAssessGuard?: MutableRefObject<Set<string>>;
 }
 
-export function ResolveForm({ review, onClose }: ResolveFormProps) {
+export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormProps) {
   const [checklist, setChecklist] = useState<Record<string, boolean>>({});
   const [comments, setComments] = useState('');
   const resolve = useResolveReview();
@@ -2416,14 +2523,18 @@ export function ResolveForm({ review, onClose }: ResolveFormProps) {
     assessmentMutation.data?.assessment ?? review.agent_assessment_json ?? null;
   const assessmentById = new Map((assessment?.items ?? []).map((item) => [item.id, item]));
 
-  // Auto-generate once per review id when nothing is cached (spec §4.5).
-  const autoFiredFor = useRef<string | null>(null);
+  // Auto-generate once per review id when nothing is cached (spec §4.5). The
+  // guard is a Set shared by every form on the page when the page provides one;
+  // StrictMode's double-invoked effect and a second form for the same id both
+  // hit it. Refs survive StrictMode's simulated remount, so this fires once.
+  const localGuard = useRef<Set<string>>(new Set());
+  const guard = autoAssessGuard ?? localGuard;
   useEffect(() => {
     if (assessment) return;
-    if (autoFiredFor.current === review.review_id) return;
-    autoFiredFor.current = review.review_id;
+    if (guard.current.has(review.review_id)) return;
+    guard.current.add(review.review_id);
     generateAssessment({ reviewId: review.review_id });
-  }, [assessment, generateAssessment, review.review_id]);
+  }, [assessment, generateAssessment, guard, review.review_id]);
 
   const submit = useCallback(
     (approval_status: ReviewApprovalStatus) => {
@@ -2547,6 +2658,7 @@ Create `frontend/src/components/expert-review/LinkedReviewCard.tsx`:
  * one row in ANY status plus every review of the same DAG structure. A pending
  * linked review resolves in place; a resolved one shows who decided what.
  */
+import type { MutableRefObject } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -2562,7 +2674,13 @@ function fmtDate(value?: string | null): string {
   return value.slice(0, 10);
 }
 
-export function LinkedReviewCard({ reviewId }: { reviewId: string }) {
+export function LinkedReviewCard({
+  reviewId,
+  autoAssessGuard,
+}: {
+  reviewId: string;
+  autoAssessGuard?: MutableRefObject<Set<string>>;
+}) {
   const q = useExpertReview(reviewId);
 
   return (
@@ -2616,7 +2734,11 @@ export function LinkedReviewCard({ reviewId }: { reviewId: string }) {
             <div className="grid gap-4 xl:grid-cols-2">
               <DagPanel structure={q.data.review.dag_structure_json} />
               {q.data.review.approval_status === 'pending' ? (
-                <ResolveForm review={q.data.review} onClose={() => undefined} />
+                <ResolveForm
+                  review={q.data.review}
+                  onClose={() => undefined}
+                  autoAssessGuard={autoAssessGuard}
+                />
               ) : (
                 <div className="text-sm text-[var(--color-muted-foreground)]">
                   This review is resolved. A newer pending review for the same structure would
@@ -2785,7 +2907,7 @@ Replace the full contents of `frontend/src/pages/ExpertReviews.tsx` with:
  * @module pages/ExpertReviews
  */
 
-import { Fragment, useState } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ClipboardCheck, Inbox, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -2813,6 +2935,9 @@ export default function ExpertReviews() {
   const { data, isLoading, isError, error, refetch, isFetching } = usePendingReviews(params);
   const summary = useReviewSummary(params);
   const [openRow, setOpenRow] = useState<string | null>(null);
+  // One auto-generated assessment per review id across the page (the linked
+  // card and a queue row can show the same review).
+  const autoAssessGuard = useRef<Set<string>>(new Set());
 
   const reviews = data?.reviews ?? [];
 
@@ -2853,7 +2978,9 @@ export default function ExpertReviews() {
         </div>
       )}
 
-      {linkedReviewId && <LinkedReviewCard reviewId={linkedReviewId} />}
+      {linkedReviewId && (
+        <LinkedReviewCard reviewId={linkedReviewId} autoAssessGuard={autoAssessGuard} />
+      )}
 
       <Card>
         <CardHeader>
@@ -2927,7 +3054,11 @@ export default function ExpertReviews() {
                         <TableCell colSpan={7}>
                           <div className="grid gap-4 xl:grid-cols-2">
                             <DagPanel structure={review.dag_structure_json} />
-                            <ResolveForm review={review} onClose={() => setOpenRow(null)} />
+                            <ResolveForm
+                              review={review}
+                              onClose={() => setOpenRow(null)}
+                              autoAssessGuard={autoAssessGuard}
+                            />
                           </div>
                         </TableCell>
                       </TableRow>
@@ -3198,6 +3329,22 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
+  it('generates ONCE when the linked card and the queue row show the same pending review', async () => {
+    const mutate = vi.fn();
+    vi.mocked(useReviewAssessment).mockReturnValue(mockAssessmentReturn({ mutate }) as never);
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: { review: { ...mockPending.reviews[0], dag_structure_json: STRUCTURE }, history: [] },
+      isLoading: false,
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [{ ...mockPending.reviews[0], dag_structure_json: STRUCTURE }], total: 1 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=rev-1') });
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect((await screen.findAllByRole('button', { name: /approve/i })).length).toBe(2);
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
   it('renders cached verdict chips beside the checklist, labeled advisory, never pre-checked', async () => {
     renderWithRow({ dag_structure_json: STRUCTURE, agent_assessment_json: ASSESSMENT });
     await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
@@ -3272,7 +3419,9 @@ describe('ExpertReviews linked review (lane 1)', () => {
     mockQueue({ reviews: [], total: 0 });
     render(<ExpertReviews />, { wrapper: createWrapper() });
     expect(screen.queryByTestId('linked-review')).not.toBeInTheDocument();
-    expect(vi.mocked(useExpertReview)).toHaveBeenLastCalledWith(null);
+    // The hook lives in LinkedReviewCard, which is not mounted without the param
+    // (pre-execution review 2026-09-08, codex MED: the old assertion could not pass).
+    expect(vi.mocked(useExpertReview)).not.toHaveBeenCalled();
   });
 
   it('shows a resolved linked review with its decision and same-structure history', () => {
@@ -3450,6 +3599,7 @@ from pathlib import Path
 DOC = Path("docs/lineage/causal_dag_lineage.html")
 OLD, NEW = sys.argv[1], sys.argv[2]
 ALIASES = {
+    "state.py": "src/agents/causal_impact/state.py",  # 10 state.py files; the page means this one
     "causal.py": "src/api/routes/causal.py",
     "nodes/refutation.py": "src/agents/causal_impact/nodes/refutation.py",
     "refutation.py": "src/agents/causal_impact/nodes/refutation.py",
@@ -3518,13 +3668,16 @@ s = ANCHOR.sub(fix_anchor, s)
 IDX = re.compile(r'(<td>)([A-Za-z0-9_./-]+\.(?:py|tsx?|sql))\:(\d+)(</td>)')
 def fix_idx(m):
     global changed
-    path, line = m.group(2), int(m.group(3))
+    short, line = m.group(2), int(m.group(3))
+    path = repo_path(short)  # the index also uses short names (base.py, graph_builder.py)
+    if not path:
+        unresolved.append(m.group(0)); return m.group(0)
     new_line = resolve(path, line)
     if new_line is None:
         unresolved.append(f"{path}:{line}"); return m.group(0)
     if new_line != line:
         changed += 1
-    return f"{m.group(1)}{path}:{new_line}{m.group(4)}"
+    return f"{m.group(1)}{short}:{new_line}{m.group(4)}"
 s = IDX.sub(fix_idx, s)
 
 s = s.replace(f'at commit <span class="mono">{OLD}</span>', f'at commit <span class="mono">{NEW}</span>')
@@ -3541,7 +3694,15 @@ NEW=$(git rev-parse --short HEAD)
 python3 <scratchpad>/refresh_anchors.py 28dbafb "$NEW"
 ```
 
-Expected: a small `changed` count and zero unresolved. Anchors that reference files this lane created (`ReviewStatusPanel.tsx:1`, `134_…sql:1`) resolve trivially (line 1 exists in both). For any UNRESOLVED anchor, open both versions (`git show 28dbafb:<path> | sed -n '<line>p'`) and fix the number by hand; do not leave a stale anchor.
+Measured 2026-09-08 on the unchanged tree (28dbafb → f30e9e9df): `changed 35 anchors; unresolved 4`. The four are TWO anchors that already pointed at BLANK lines at 28dbafb, each present once as an anchor and once as an index row; the script cannot resolve a blank needle, so fix them by hand with the current line numbers (the first version of this script also failed on 10 index rows with short names and on `state.py`; both fixed above):
+
+```bash
+grep -n '^async def _discover_candidate_questions' src/api/routes/causal.py        # 1679 at f30e9e9df; re-read
+grep -n '^export default function ExpertReviews' frontend/src/pages/ExpertReviews.tsx  # after Task 10's rewrite
+sed -i "s#src/api/routes/causal.py:1677#src/api/routes/causal.py:<n1>#g; s#frontend/src/pages/ExpertReviews.tsx:69#frontend/src/pages/ExpertReviews.tsx:<n2>#g" docs/lineage/causal_dag_lineage.html
+```
+
+Anchors that reference files this lane created (`ReviewStatusPanel.tsx:1`, `134_…sql:1`) resolve trivially (line 1 exists in both). Any OTHER unresolved anchor means a lane commit moved text: open both versions (`git show 28dbafb:<path> | sed -n '<line>p'`) and fix the number by hand; do not leave a stale anchor.
 
 - [ ] **Step 4: Add two rows to the code anchor index**
 
@@ -3630,7 +3791,8 @@ The before-half of the impact measurement. Runs against production as an operato
 #!/usr/bin/env python3
 """Run the Remibrutinib patient-grain discovery job and record every question's
 band and evidence. Usage: run_discovery.py <label> <out_dir>  (reads .env)."""
-import base64, json, os, sys, time, urllib.parse, urllib.request
+import base64, json, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -3654,9 +3816,41 @@ def call(token, method, path, body=None, timeout=120):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
+def _psql_rows(where: str) -> dict:
+    sql = ("select test_type, status, coalesce(details_json->>'stopped_for_budget','') as budget, "
+           "coalesce(jsonb_array_length(details_json->'subset_effects'), jsonb_array_length(details_json->'bootstrap_effects'), 0) as n "
+           f"from public.causal_validations where {where} order by created_at desc")
+    proc = subprocess.run(["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tA", "-F", "|", "-c", sql],
+                          capture_output=True, text=True, timeout=60)
+    found = {}
+    for ln in proc.stdout.splitlines():
+        p = ln.split("|")
+        if len(p) == 4 and p[0] not in found:      # newest row per test
+            found[p[0]] = {"status": p[1], "stopped_for_budget": p[2], "n_effects": int(p[3])}
+    return found
+
+def db_tests(analysis_id, treatment: str, outcome: str, since_iso: str) -> dict:
+    """Per-test status and evidence size straight from causal_validations.
+    The API omits SKIPPED tests from refutation.tests and keeps only the message
+    text of details, so the baseline's 'skipped' and the new loops' resample
+    counts are only visible here. Unlinked runs are keyed by the query-derived
+    uuid5 (src/repositories/causal_validation.py); runs linked to a causal_paths
+    row are keyed by the PATH-derived uuid5, which the API does not expose, so
+    fall back to the pair's newest rows written since this job started."""
+    if analysis_id:
+        qid = uuid.uuid5(uuid.NAMESPACE_URL, f"e2i:causal_query:{analysis_id}")
+        found = _psql_rows(f"estimate_id = '{qid}'")
+        if found:
+            return found
+    return _psql_rows(
+        f"estimate_source = 'causal_impact_query' and treatment_variable = '{treatment}' "
+        f"and outcome_variable = '{outcome}' and created_at >= '{since_iso}'"
+    )
+
 def main(label: str, out_dir: str) -> None:
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     token = mint_token()
+    since_iso = datetime.now(timezone.utc).isoformat()
     q = urllib.parse.urlencode({"dataset": DATASET, "brand": BRAND})
     job = call(token, "POST", f"/causal/discover-effects?{q}", body={})
     job_id = job["job_id"]; print("job", job_id, "total", job["total"], flush=True)
@@ -3676,6 +3870,7 @@ def main(label: str, out_dir: str) -> None:
         ref = detail.get("refutation") or {}
         rows.append({
             "treatment": e["treatment"], "outcome": e["outcome"], "row_status": e["status"],
+            "db_tests": db_tests(e.get("analysis_id"), e["treatment"], e["outcome"], since_iso),
             "gate_decision": ref.get("gate_decision"), "run_status": detail.get("status"),
             "expert_review_decision": ref.get("expert_review_decision"), "expert_review_id": ref.get("expert_review_id"),
             "discovered_dag_id": detail.get("discovered_dag_id"), "analysis_id": e.get("analysis_id"),
@@ -3731,7 +3926,7 @@ Closes the expert-review loop (spec docs/superpowers/specs/2026-09-08-expert-rev
 - Lineage page rewritten to the shipped state; anchors re-resolved.
 
 ## Measured before building
-0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have.
+0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have. The plan's own assumptions were attacked before Task 1 (section "Adversarial review before Task 1" at the end of this file): three Task-1 stub assumptions measured true, the SQL rule measured against the Python rule on 13 scenarios (one real divergence, fixed), the lineage edit fragments and anchor script measured, the live scripts' field names and the operator's role checked. Codex iter-1 returned REJECT with 1 HIGH + 5 MED; all six are folded in.
 
 ## Verification
 Baseline discovery run on the pre-lane image: docs/demos/results/<date>_expert_review_loop/baseline.md. Post-deploy impact run, approve/reject re-runs and the switch step follow the spec §7 and are recorded in the same directory.
@@ -3797,15 +3992,18 @@ i = {(r["treatment"], r["outcome"]): r for r in json.loads((out/"impact.json").r
 lines = ["| question | baseline band | impact band | data_subset | bootstrap | sensitivity | review decision |", "|---|---|---|---|---|---|---|"]
 review_rows = []
 for k in sorted(i):
-    r = i[k]; t = r["tests"]
-    lines.append(f"| {k[0]} → {k[1]} | {b.get(k, {}).get('gate_decision')} | {r['gate_decision']} | {t.get('data_subset')} | {t.get('bootstrap')} | {t.get('unobserved_common_cause') or t.get('sensitivity_e_value')} | {r['expert_review_decision']} |")
+    r = i[k]; t = r["tests"]; db = r.get("db_tests", {}); bb = b.get(k, {}); bdb = bb.get("db_tests", {})
+    def st(name): return (db.get(name) or {}).get("status") or t.get(name) or "absent"
+    def bst(name): return (bdb.get(name) or {}).get("status") or bb.get("tests", {}).get(name) or "absent"
+    sens = st("sensitivity_e_value") if st("sensitivity_e_value") != "absent" else t.get("unobserved_common_cause")
+    lines.append(f"| {k[0]} → {k[1]} | {bb.get('gate_decision')} | {r['gate_decision']} | {bst('data_subset')} → {st('data_subset')} ({(db.get('data_subset') or {}).get('n_effects', 0)} effects) | {bst('bootstrap')} → {st('bootstrap')} ({(db.get('bootstrap') or {}).get('n_effects', 0)} effects) | {sens} | {r['expert_review_decision']} |")
     if r["gate_decision"] == "review": review_rows.append(k)
 (out/"impact.md").write_text("\n".join(lines) + f"\n\nREVIEW rows: {review_rows}\n")
 print("\n".join(lines)); print("REVIEW rows:", review_rows)
 EOF
 ```
 
-Expected on stable pairs: data_subset and bootstrap now `passed` (no longer `skipped`), bands unchanged from baseline. Record any REVIEW row; it drives Step 4.
+Expected on stable pairs: data_subset and bootstrap now `passed` (baseline `skipped` → `passed`, with 5 and 50 effects recorded), bands unchanged from baseline. The API omits SKIPPED tests from `refutation.tests` and strips `details` to its message, so both columns read from `causal_validations` (the `db_tests` field) — never from the API's absence of a key. Record any REVIEW row; it drives Step 4.
 
 - [ ] **Step 2: Approve the probe's row through the UI, then re-run its pair**
 
@@ -3859,7 +4057,7 @@ git -C /home/enunez/Projects/e2i_causal_analytics checkout -b docs/lane1-live-ve
 ### Task 16: Record and close out
 
 - [ ] **Step 1: PR certification comment** — image tag, marker counts, migration + privilege checks, impact table, the two adjudications with review ids and analysis ids, the switch outcome.
-- [ ] **Step 2: Issues** (owner already asked for these to be filed with evidence): (a) "REVIEW band unreachable by construction; band-semantics decision" with the §2 arithmetic and the impact table; (b) "Reconstruction's own interval is unusable (SE 4.9 vs 0.034 reported); never use it as a reference" as a documented caveat; (c) the CausalPFN trial (spec §11) as the next lane; (d) the four simplification candidates (spec §10) as one tracking issue.
+- [ ] **Step 2: Issues** (owner already asked for these to be filed with evidence): (a) "REVIEW band unreachable by construction; band-semantics decision" with the §2 arithmetic and the impact table; (b) "Reconstruction's own interval is unusable (SE 4.9 vs 0.034 reported); never use it as a reference" as a documented caveat; (c) the CausalPFN trial (spec §11) as the next lane; (d) the four simplification candidates (spec §10) as one tracking issue; (e) LOW — `ExpertReviewRepository.get_reviews_for_dag` orders by `created_at` only, so a pending row with the SAME timestamp as a rejection reads reopened-or-not by row order (migration 134 reads a tie as NOT reopened, the conservative side); add a secondary order key.
 - [ ] **Step 3: Memory** — one project memory file for this lane (what the live DB said, the threshold inversion, the arithmetic, the disproof numbers, what the switch step showed), plus a MEMORY.md index line under 200 chars.
 - [ ] **Step 4: Handoff** — `.claude/handoffs/current.md` with `status: complete` (or `in_progress` with the exact next step), and `git worktree remove .worktrees/lane1-review-loop` once merged.
 
@@ -3875,3 +4073,48 @@ git -C /home/enunez/Projects/e2i_causal_analytics checkout -b docs/lane1-live-ve
 - §7 live verification → Tasks 13, 14, 15 in the spec's order (baseline BEFORE merge). ✔
 - §8 rollout → Task 14. §9 decisions → Task 16. ✔
 - Names used consistently: `_resample_effects`, `_refit_effect_on`, `_refutation_frame`, `_significance_p_value`, `_budget_skip_result`, `_resample_seed_for`, `resample_seed`, `deadline`; `promote_causal_path_guarded(p_path_id, p_new_status, p_allowed_current, p_dag_version_hash, p_brand)`, `dag_structure_rejected(hash, brand)`; `ReviewRecord`, `ExpertReviewDetailResponse`, `get_expert_review`, `getExpertReview`, `useExpertReview`, `queryKeys.expertReviews.detail`; `ReviewStatusPanel`, `LinkedReviewCard`, `PrepareAssessmentsButton`, `ResolveForm`, `DagPanel`, `checklist.ts`. ✔
+
+## Adversarial review before Task 1 (2026-09-08)
+
+Run before any plan code was written: targeted local disproofs (about a minute each), a 13-scenario
+SQL-versus-Python equivalence check on the live database (BEGIN … ROLLBACK, nothing persisted), and
+one codex read-only audit of spec + plan (subscription channel, pushback paragraph included) which
+returned `VERDICT: REJECT` with 1 HIGH and 5 MED. Everything below was measured on `f30e9e9df` plus
+the three lane doc commits; the edits are folded into the tasks above.
+
+### Local disproofs
+
+| # | Assumption attacked | Result |
+|---|---|---|
+| 1 | `RefutationRunner(config={"data_subset": {"num_subsets": 10}})` merges onto the defaults | TRUE — `__init__` deep-copies `DEFAULT_CONFIG` and `.update()`s per key → `{'enabled': True, 'subset_fraction': 0.8, 'num_subsets': 10, 'critical': False}` |
+| 2 | DoWhy's `test_significance` accepts an estimate with only `.value` | TRUE — dowhy 0.14 `causal_refuter.py`: `perform_normal_distribution_test` (< 100 sims) and `perform_bootstrap_test` (≥ 100) read `estimate.value` only. A zero-variance resample set gives a non-finite z → the plan raises `RefutationError`, the same F-014 contract as today's `_require_p_value` |
+| 3 | `causal_model._data` is the frame the reconstructed estimator was fitted on | TRUE — the refutation node builds `CausalModel(data=…)` AFTER binarising the treatment and encoding covariates (`nodes/refutation.py:607`), DoWhy fits `estimate_effect` on `self._data` (`causal_model.py:64, 416`), and the runner receives that model (`:1606`). Both DoWhy refuters' `_refute_once` make the four calls `_refit_effect_on` makes, verbatim |
+| 4 | sed counts 15 / 2 / 1; helper at 49–61; tests at 751 / 798; import lines 27 / 48 | all TRUE |
+| 5 | `TestReviewBandArithmetic` passes on the CURRENT code | 3 passed |
+| 6 | `_run_test_with_tracing` forwards `**kwargs` (Task 2 wiring) | TRUE (`refutation_runner.py:934`) |
+| 7 | Task 10: `/^review$/i` collides with nothing; the auto-assessment fires once under StrictMode | TRUE — the row button's name toggles `Review` / `Close`; "Prepare assessments" is an aria-label and "(Re)generate agent assessment" do not match; fixtures render one row; `main.tsx:36` wraps in StrictMode and refs survive its simulated remount. A SECOND form for the same review (linked card + queue row) was the real gap — fixed |
+| 8 | Task 11: each `old` fragment occurs exactly once; pinned `28dbafb` present | 11 / 11 count = 1; TRUE |
+| 9 | Task 11: the anchor script yields "zero unresolved" | FALSE — 15 unresolved: 10 index rows use SHORT paths the script never alias-resolved, `state.py` is ambiguous (10 files), and two anchors already pointed at BLANK lines at 28dbafb. With the fixed script: changed 35 / unresolved 4 (the two blank ones, each as anchor + index row) — hand-fix recipe added |
+| 10 | Tasks 13 / 15: field names, parameter style, auth, reachability | TRUE — `DiscoverEffectsResponse` (job_id / total / completed / error / effects[]), `DiscoveredEffect` (treatment / outcome / status / analysis_id), `AgentCausalAnalysisResponse` (refutation.gate_decision / expert_review_id / expert_review_decision, discovered_dag_id, ate_ci_lower / upper), statuses completed / needs_review / failed; discover-effects = query params + optional body; the admin account's `app_metadata.role` is `admin` (≥ operator); `SUPABASE_URL` is the docker bridge (host-reachable); `/health` and `/api/health` 200. BUT the API omits SKIPPED tests and strips `details` to a message → the scripts now read `causal_validations` |
+| 11 | Task 3 / 4: column types, roles, client key, rehearsal safety | `causal_paths.path_id` and `validation_status` are varchar(20) (text params fine); `service_role` / `anon` / `authenticated` exist; the node's client is service-role (`memory/services/factories.py:665–691`, `SUPABASE_SERVICE_KEY` is set) so service_role-only EXECUTE cannot break the promote; the live rejected hash has no open pending row, so the rehearsal INSERT cannot hit `uq_er_pending_dag_brand` |
+
+### SQL ↔ Python equivalence (13 scenarios, live DB, BEGIN … ROLLBACK)
+
+Equal on 12 scenarios. Divergent on S8-'' — Python's `if brand:` treats `''` as unfiltered (rejected), the
+SQL filtered `brand = ''` (not rejected) — fixed with `NULLIF(p_brand, '')` and re-measured equal. S7
+(a pending row with the SAME timestamp as the rejection): SQL `t`, Python row-order-dependent; kept strict
+and documented as the conservative side, LOW follow-up in Task 16 (e). The scenario script and its
+expected table are Task 3 Step 4b.
+
+### Codex iter-1 findings → dispositions
+
+1. HIGH — empty-string brand lets a promote pass over a rejection. CONFIRMED (independently measured) → Task 3 `NULLIF` ×2 + contract test; Task 5 passes `brand or None`.
+2. MED — equal-timestamp pending / rejected rows read differently. CONFIRMED → documented as conservative; scenario S7 pinned; Task 16 (e).
+3. MED — the repository factory sits outside the new route's `try`, so a client failure is a 500 not the promised 503. CONFIRMED (the existing routes behave the same; only the new route changes) → Task 6 + `test_client_factory_failure_is_503`.
+4. MED — the live script cannot see SKIPPED tests or resample sizes. CONFIRMED (`refutation_runner.py:308` omits SKIPPED from `individual_tests`; `routes/causal.py:3621` keeps only message text) → Tasks 13 / 15 read `causal_validations` through the uuid5 the node derives.
+5. MED — `toHaveBeenLastCalledWith(null)` on a hook that lives in an unmounted component. CONFIRMED → assertion inverted to `not.toHaveBeenCalled()`.
+6. MED — two mounted forms for one review fire two auto-assessments. CONFIRMED structurally → page-level `Set` guard threaded to the card and the row, plus a test.
+
+Left as designed, on purpose: a NON-critical test raising `RefutationError` on a degenerate (zero-variance)
+resample distribution fails the suite closed — the same contract today's F-014 path applies to the DoWhy
+refuters; softening it would substitute a placeholder p-value. Flag for the owner, not a silent change.
