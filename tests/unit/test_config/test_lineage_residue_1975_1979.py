@@ -174,3 +174,52 @@ class TestConfigMirrorsLiveConstants:
             "the causal_impact.validation block carries live-looking numbers but is "
             "read by nothing -- it must say so, as the gate_decisions block now does"
         )
+
+
+class TestOurOwnCitationsResolve:
+    """The citations this branch itself writes must resolve (codex, #1979 arc).
+
+    Both started as line numbers and were stale on arrival: each was written
+    against origin/main and then shifted by a sibling edit in the SAME commit --
+    the YAML cited refutation_runner.py:442 (really 441, after a docstring line
+    was removed) and the causal_validation docstring cited the SQL at :396
+    (really 403, after this branch added lines above it). Writing a dead citation
+    inside the change that exists to kill dead citations is exactly the trap, so
+    they are symbol anchors now and this test keeps them honest.
+    """
+
+    def test_the_yaml_anchor_names_a_real_constant(self):
+        cfg = AGENT_CONFIG.read_text(encoding="utf-8")
+        assert 'RefutationRunner.DEFAULT_CONFIG["sensitivity_e_value"]' in cfg
+        runner = (REPO_ROOT / "src" / "causal_engine" / "refutation_runner.py").read_text(
+            encoding="utf-8"
+        )
+        assert "DEFAULT_CONFIG" in runner
+        assert '"sensitivity_e_value"' in runner
+        assert '"e_value_threshold": 2.0' in runner, (
+            "the YAML says the live value is a hardcoded 2.0 in that constant"
+        )
+
+    def test_the_docstring_anchor_names_a_real_sql_function(self):
+        doc = (REPO_ROOT / "src" / "repositories" / "causal_validation.py").read_text(
+            encoding="utf-8"
+        )
+        assert "CREATE OR REPLACE FUNCTION can_use_estimate" in doc, (
+            "the docstring should cite the SQL function by name, not by line"
+        )
+        sql = (REPO_ROOT / "database" / "ml" / "010_causal_validation_tables.sql").read_text(
+            encoding="utf-8"
+        )
+        assert "CREATE OR REPLACE FUNCTION can_use_estimate" in sql
+
+    def test_no_bare_line_number_citations_were_reintroduced(self):
+        """Line-number citations drift; these two already did, in one commit."""
+        import re as _re
+
+        for path in (
+            AGENT_CONFIG,
+            REPO_ROOT / "src" / "repositories" / "causal_validation.py",
+        ):
+            text = path.read_text(encoding="utf-8")
+            hits = _re.findall(r"(?:\.py|\.sql):\d+", text)
+            assert not hits, f"{path.name} reintroduced line citations: {hits}"

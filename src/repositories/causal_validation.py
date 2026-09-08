@@ -432,7 +432,8 @@ class CausalValidationRepository(BaseRepository):
 
         .. warning::
            **This is NOT the SQL ``can_use_estimate``, despite the name (#1971).**
-           ``database/ml/010_causal_validation_tables.sql:396`` defines
+           ``database/ml/010_causal_validation_tables.sql``
+           (``CREATE OR REPLACE FUNCTION can_use_estimate``) defines
            ``can_use_estimate(estimate_id, dag_hash)``, documented as "combines
            validation gate **and expert approval**", which returns false for a
            REVIEW band with no approved DAG. This method takes no ``dag_hash``

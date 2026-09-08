@@ -649,7 +649,8 @@ agents:
       
     # DOCUMENTATION-ONLY (#1975). Nothing reads this block: the live values are
     # class constants on RefutationRunner (src/causal_engine/refutation_runner.py).
-    # `grep -rn "e_value_threshold" src/` finds only the hardcoded 2.0 at :442;
+    # `grep -rn "e_value_threshold" src/` finds only the hardcoded 2.0 in
+    # RefutationRunner.DEFAULT_CONFIG["sensitivity_e_value"];
     # min_refutation_pass_rate's only src/ hits are in src/ml/synthetic/, an
     # unrelated validator with its own Python default -- a name collision, not a
     # consumer of this key. The gate is confidence-weighted, not pass-rate based.
