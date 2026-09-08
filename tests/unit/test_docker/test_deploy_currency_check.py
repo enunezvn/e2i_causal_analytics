@@ -137,31 +137,84 @@ class TestFirstParentIsThePushUnit:
     """The disproved first design walked EVERY commit and would alarm forever.
 
     Runs are keyed to the push, not to each commit: a branch's interior commits
-    arrive inside a merge and have no run of their own. Pinned against this
-    repository's real history so the lesson cannot be quietly reverted.
+    arrive inside a merge and have no run of their own, so counting them reports
+    every merged branch as a pile of missed deploys.
+
+    Built as a synthetic repo rather than pinned to this repository's history.
+    The first version asserted against real shas and passed locally but failed in
+    CI with `git rev-list ... exit 128`, because `actions/checkout` is shallow by
+    default and those commits are simply absent -- an unfaithful local
+    environment hiding a broken test. A repo built here has its whole history by
+    construction, so the property is pinned everywhere it runs.
     """
 
-    def test_branch_interior_commits_are_not_push_units(self):
-        # e5becbccf is a merge; 0c2b16579 is an interior commit of the branch it
-        # merged, and it touches src/repositories/ -- a deploy-trigger path with
-        # no run of its own.
-        out = subprocess.run(
-            ["git", "rev-list", "--first-parent", "e35870e59..e5becbccf"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.split()
-        assert any(s.startswith("e5becbccf") for s in out)
-        assert not any(s.startswith("0c2b16579") for s in out), (
-            "0c2b16579 is a branch-interior commit; counting it as a push unit is "
-            "what made the first design alarm on every merged branch"
+    @pytest.fixture
+    def merged_repo(self, tmp_path):
+        """base <- merge(feature), where feature has an interior commit."""
+
+        def git(*args):
+            return subprocess.run(
+                ["git", *args],
+                cwd=tmp_path,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "t@e2i.test")
+        git("config", "user.name", "t")
+        git("config", "commit.gpgsign", "false")
+        (tmp_path / "f").write_text("base\n")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        base = git("rev-parse", "HEAD")
+
+        git("checkout", "-q", "-b", "feature")
+        (tmp_path / "f").write_text("interior\n")
+        git("add", "-A")
+        git("commit", "-qm", "interior commit on the branch")
+        interior = git("rev-parse", "HEAD")
+
+        git("checkout", "-q", "main")
+        # --no-ff so the merge is a real merge commit, as a PR merge is here.
+        git("merge", "-q", "--no-ff", "-m", "Merge pull request #1 from feature", "feature")
+        merge = git("rev-parse", "HEAD")
+        return {"dir": str(tmp_path), "base": base, "interior": interior, "merge": merge}
+
+    def test_branch_interior_commits_are_not_push_units(self, merged_repo):
+        got = cdc.first_parent_between(
+            merged_repo["base"], merged_repo["merge"], cwd=merged_repo["dir"]
+        )
+        assert merged_repo["merge"] in got, "the merge IS the push unit"
+        assert merged_repo["interior"] not in got, (
+            "the branch-interior commit must not be counted as a push unit -- "
+            "counting it is what made the first design alarm on every merged branch"
         )
 
-    def test_helper_returns_newest_first(self):
-        got = cdc.first_parent_between("1cce45132", "e5becbccf", cwd=str(REPO_ROOT))
-        assert got, "expected first-parent commits between these two merges"
-        assert got[0].startswith("e5becbccf")
+    def test_walking_every_commit_would_have_counted_it(self, merged_repo):
+        """Positive control: the rejected design really does pick it up.
+
+        Without this, the assertion above could pass for the wrong reason (e.g.
+        an empty list), and the lesson would not actually be pinned.
+        """
+        every = subprocess.run(
+            ["git", "rev-list", f"{merged_repo['base']}..{merged_repo['merge']}"],
+            cwd=merged_repo["dir"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+        assert merged_repo["interior"] in every, (
+            "the rejected all-commits walk must include the interior commit, "
+            "otherwise this test proves nothing"
+        )
+
+    def test_helper_returns_newest_first(self, merged_repo):
+        got = cdc.first_parent_between(
+            merged_repo["base"], merged_repo["merge"], cwd=merged_repo["dir"]
+        )
+        assert got[0] == merged_repo["merge"]
 
 
 class TestNewestAttemptWins:
