@@ -315,27 +315,75 @@ class TestRejectionHonouredOnProceedBand:
         assert repo.lookups >= 1, "positive control: the gate WAS consulted"
 
     @pytest.mark.asyncio
-    async def test_non_rejected_proceed_band_is_byte_identical_to_no_gate(self, monkeypatch):
-        """Switch OFF + no rejection: consulting the gate on PROCEED must change
-        nothing in the result -- same keys, same values, same promotion."""
-        repo = _ReviewRepo(rows=[])
-        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
-        gated_paths = _PathRepo()
-        bare_paths = _PathRepo()
-        gated = _node(monkeypatch, GateDecision.PROCEED, gate, path_repo=gated_paths)
-        ungated = _node(monkeypatch, GateDecision.PROCEED, None, path_repo=bare_paths)
+    async def test_switch_off_and_on_are_byte_identical_on_a_cleared_proceed_band(
+        self, monkeypatch
+    ):
+        """Regression pin for "switch OFF = today's behaviour": with a review
+        store that clears the structure, a PROCEED band is byte-identical
+        whether enforcement is off or on -- same keys, same values, same
+        promotion -- and the gate is never asked to queue anything."""
+        off_repo = _ReviewRepo(rows=[])
+        on_repo = _ReviewRepo(rows=[])
+        off_paths = _PathRepo()
+        on_paths = _PathRepo()
+        off = _node(
+            monkeypatch,
+            GateDecision.PROCEED,
+            ExpertReviewGate(repository=off_repo, auto_create_review=True),
+            require_dag_approval=False,
+            path_repo=off_paths,
+        )
+        on = _node(
+            monkeypatch,
+            GateDecision.PROCEED,
+            ExpertReviewGate(repository=on_repo, auto_create_review=True),
+            require_dag_approval=True,
+            path_repo=on_paths,
+        )
 
-        with_gate = await gated.execute(_state())
-        without_gate = await ungated.execute(_state())
+        with_off = await off.execute(_state())
+        with_on = await on.execute(_state())
 
-        assert _comparable(with_gate) == _comparable(without_gate)
-        assert with_gate["status"] != "failed"
-        assert "expert_review_halt" not in with_gate
-        assert "expert_review_decision" not in with_gate
-        assert gated_paths.status_calls == bare_paths.status_calls
-        assert gated_paths.status_calls[0]["new_status"] == "validated"
-        assert repo.create_calls == [], "a PROCEED band must never auto-create a review"
-        assert repo.lookups >= 1, "positive control: the rejection check ran"
+        assert _comparable(with_off) == _comparable(with_on)
+        assert with_off["status"] != "failed"
+        assert "expert_review_halt" not in with_off
+        assert "expert_review_decision" not in with_off
+        assert off_paths.status_calls == on_paths.status_calls
+        assert off_paths.status_calls[0]["new_status"] == "validated"
+        assert off_repo.create_calls == on_repo.create_calls == []
+        assert off_repo.lookups >= 1 and on_repo.lookups >= 1, (
+            "positive control: the rejection check ran in both"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_review_store_never_blesses_a_real_path(self, monkeypatch):
+        """codex iter-2 HIGH-3: a run that performed NO successful structural
+        check (no gate, or a bare no-repository gate) may still serve its
+        estimate under the advisory default, but it may not link evidence to a
+        real causal_paths row or move its status. Only a run that actually
+        cleared the structure promotes. In prod the gate and the persistence
+        repos come from the same Supabase client, so this changes nothing on a
+        healthy box and closes the split-factory flake."""
+        for gate in (None, ExpertReviewGate(repository=None)):
+            paths = _PathRepo()
+            validation_repo = _validation_repo()
+            node = _node(
+                monkeypatch,
+                GateDecision.PROCEED,
+                gate,
+                path_repo=paths,
+                validation_repo=validation_repo,
+            )
+
+            result = await node.execute(_state())
+
+            assert result["status"] != "failed", "the estimate itself is not withheld"
+            assert "expert_review_halt" not in result
+            assert paths.status_calls == [], f"gate={gate!r} promoted without a structural check"
+            assert result["causal_path_promotion"] == {}
+            save_kwargs = validation_repo.save_suite.await_args.kwargs
+            assert save_kwargs["estimate_id"] == derive_query_estimate_id(_QUERY_ID)
+            assert save_kwargs["estimate_source"] == "causal_impact_query"
 
     @pytest.mark.asyncio
     async def test_rejection_lookup_error_continues_but_never_blesses_the_path(

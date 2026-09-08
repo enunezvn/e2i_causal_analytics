@@ -88,14 +88,33 @@ _FALSY = frozenset({"", "0", "false", "no", "off"})
 #   rejected  -- the review store answered: the latest verdict is a rejection
 #   unknown   -- the probe FAILED; the status could not be determined
 #   unchecked -- no review store wired at all (no gate / bare gate / no hash)
-# Only clear / unchecked link evidence to a real causal_paths row and allow a
-# status transition. 'unchecked' keeps today's behaviour for environments
-# without a review store (dev/test; a prod outage degrades persistence too).
+# ONLY 'clear' links evidence to a real causal_paths row and allows a status
+# transition (codex iter-2 HIGH-3): a real-path mutation is authorised by a
+# SUCCESSFUL structural check, never by the absence of one. The estimate
+# itself is still served under the advisory default in every non-rejected
+# case. In prod the gate and the persistence repositories are built from the
+# same Supabase client, so a healthy box always reaches 'clear' or 'rejected';
+# 'unchecked' is dev/test or the split-factory flake, and 'unknown' a probe
+# error -- neither may bless a path.
+#
+# Known residue (reported, not hidden):
+#   * ExpertReviewRepository.get_dag_approval / get_reviews_for_dag SWALLOW
+#     their own exceptions (log + return None / []), so a read error inside
+#     the repository reads as "no rows" = 'clear' rather than 'unknown'. The
+#     probe can only report 'unknown' for errors the repository propagates.
+#     Making those two readers propagate (or return a sentinel) is an edit to
+#     src/repositories/expert_review.py, outside this lane (codex iter-2
+#     HIGH-1).
+#   * A reviewer rejecting the structure in the window between the probe and
+#     the promoter's status write is not caught (codex iter-2 HIGH-2). The
+#     next run on that structure halts but does not demote. Closing it needs a
+#     DB-side conditional promote that checks expert_reviews in the same
+#     statement as the causal_paths update; owner's call.
 _STRUCTURE_CLEAR = "clear"
 _STRUCTURE_REJECTED = "rejected"
 _STRUCTURE_UNKNOWN = "unknown"
 _STRUCTURE_UNCHECKED = "unchecked"
-_STRUCTURE_LINKABLE = frozenset({_STRUCTURE_CLEAR, _STRUCTURE_UNCHECKED})
+_STRUCTURE_LINKABLE = frozenset({_STRUCTURE_CLEAR})
 
 
 def _resolve_require_dag_approval(explicit: Optional[bool] = None) -> bool:
@@ -851,7 +870,7 @@ class RefutationNode:
         state: CausalImpactState,
         suite: "RefutationSuite",
         *,
-        structure_verdict: str = _STRUCTURE_UNCHECKED,
+        structure_verdict: str,
     ) -> Tuple[List[str], Dict[str, Any]]:
         """Persist the suite's evidence and — as SOLE promoter — move the linked
         real path's ``validation_status`` (#1352 item 3).
@@ -881,15 +900,18 @@ class RefutationNode:
           says nothing about the path either, so it does not demote. Operator
           adjudication of the path row itself is untouched.
         * a run whose structural verdict could not be determined
-          (``'unknown'``: the review store errored on the probe) is treated
-          the same way: a run that cannot prove the structure was not rejected
-          does not bless (or demote) the path. The estimate itself is not
-          withheld on that account; a later run that can look moves the path.
+          (``'unknown'``: the review store errored on the probe) or was never
+          attempted (``'unchecked'``: no review store wired) is treated the
+          same way: a run that cannot prove the structure was not rejected
+          does not bless the path. Only ``'clear'`` links (``structure_verdict``
+          is required so no caller inherits a silent default). The estimate
+          itself is not withheld on that account; a later run that can look
+          moves the path.
 
         Returns ``(validation_ids, promotion_info)``; ``promotion_info`` is
         ``{}`` unless a status transition actually happened. Best-effort
         throughout: any persistence/promotion failure degrades with a logged
-        warning and never breaks the analysis — but a promotion can NEVER
+        warning and never breaks the analysis -- but a promotion can NEVER
         happen without its evidence persisted first.
         """
         query_id = str(state.get("query_id") or "")
@@ -1013,8 +1035,10 @@ class RefutationNode:
         WARNING so the degradation is observable.
 
         ``unchecked`` (no gate, a bare no-repository gate, a duck-typed
-        stand-in without the probe, or no ``dag_version_hash``) keeps today's
-        behaviour: there is no review store to honour.
+        stand-in without the probe, or no ``dag_version_hash``): there is no
+        review store to honour, so the estimate proceeds as before -- but,
+        like ``unknown``, it persists unlinked and moves no path (codex iter-2
+        HIGH-3: no successful check, no real-path mutation).
         """
         gate = self.expert_review_gate
         probe = getattr(gate, "check_rejection", None)
