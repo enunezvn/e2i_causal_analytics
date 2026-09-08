@@ -62,8 +62,12 @@ class AgentMethodSpec:
 # the harness now use ``.run()`` so they exercise the same code path.
 AGENT_METHOD_MAP: Dict[str, AgentMethodSpec] = {
     # NOTE: cohort_profiler (Tier 0) is intentionally NOT here. AGENT_METHOD_MAP
-    # is the Tier 1-5 dispatcher contract (13 agents, pinned by
-    # test_agent_registry_consistency). Tier-0 chat-dispatched agents use the
+    # is the Tier 1-5 dispatcher contract, pinned as SET EQUALITY against the
+    # registry's tier>=1 agents by TestAgentMethodMapEqualsTiers1To5 in
+    # tests/unit/test_agents/test_config_roster_ssot_1779.py (13 agents today;
+    # the guard is derived, so the number is not what is asserted). Adding a
+    # Tier 1-5 agent to the registry fails that test until this map learns
+    # about it. Tier-0 chat-dispatched agents use the
     # default ``analyze`` method spec (get_method_spec fall-through), same as
     # cohort_constructor; its dispatch timeout comes from the router's
     # AgentDispatch.timeout_ms, and its narrative field from AGENT_RESPONSE_FIELDS.
