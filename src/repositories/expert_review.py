@@ -28,10 +28,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # ONE definition of "active approval" (#1972)
 #
-# The schema owns it. 010_causal_validation_tables.sql's is_dag_approved() and
-# the v_active_expert_approvals view both test
+# The schema owns it. 010_causal_validation_tables.sql's is_dag_approved()
+# tests
 #     approval_status = 'approved' AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
-# and the view labels a NULL valid_until 'permanent'.
+# and the v_active_expert_approvals view (which filters only on
+# approval_status = 'approved' and returns expired rows too) classifies each
+# row's validity_status the same way: NULL -> 'permanent', >= CURRENT_DATE ->
+# 'active', else 'expired'. approval_validity() mirrors that classification;
+# is_active_approval() / _apply_active_validity() mirror the function.
 #
 # Why the helpers exist (measured on the live droplet, 2026-09-08): three
 # readers here used ``.gte("valid_until", today)``. Under SQL three-valued

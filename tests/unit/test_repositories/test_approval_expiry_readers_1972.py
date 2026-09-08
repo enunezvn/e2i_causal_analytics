@@ -116,12 +116,22 @@ def _declares_expired_included(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
     if any(a.arg == "include_expired" for a in fn.args.args + fn.args.kwonlyargs):
         return True
     doc = (ast.get_docstring(fn) or "").lower()
-    # codex iter-2 MED: "expired rows are NOT included" must not count as a
-    # declaration. Accept only an affirmative phrase with no negation.
+    # codex iter-2/iter-3 MED: "expired rows are NOT included" / "never
+    # including expired rows" must not count as a declaration. Accept only an
+    # affirmative phrase, and reject the docstring outright if any negation
+    # word ("not", "never", "no", "without", "neither", "nor"), "exclud" or an
+    # "active ... only" restriction appears in the same sentence as "includ"
+    # or "expired". Conservative on purpose: an `include_expired` parameter is
+    # the unambiguous, structural way to declare a historical reader.
     affirmative = re.search(
         r"\b(including|includes)\s+expired\b|\bexpired\b(\s+\w+){0,2}\s+included\b", doc
     )
-    negated = re.search(r"\bnot\s+includ|\bexclud|\bwithout\s+expired\b", doc)
+    negated = re.search(
+        r"\b(not|never|no|without|neither|nor)\b[^.;]*\b(includ|expired)"
+        r"|\bexclud"
+        r"|\bactive\b[^.;]*\bonly\b|\bonly\b[^.;]*\bactive\b",
+        doc,
+    )
     return bool(affirmative) and not negated
 
 
@@ -277,6 +287,10 @@ HISTORICAL_READER_NEGATED = [
         "Active approvals. Expired rows are not included.",
         "Approvals, excluding expired ones.",
         "Approvals without expired rows; nothing else is included.",
+        # codex iter-3 MED: the affirmative regex matched "including expired"
+        # and the negation list had no "never".
+        "Active approvals only, never including expired rows.",
+        "Current approvals; no expired rows are included.",
     )
 ]
 
@@ -314,7 +328,9 @@ class TestStructuralGuard:
         assert find_validity_violations(HISTORICAL_READER_DECLARED) == []
 
     @pytest.mark.parametrize(
-        "module", HISTORICAL_READER_NEGATED, ids=["not-included", "excluding", "without"]
+        "module",
+        HISTORICAL_READER_NEGATED,
+        ids=["not-included", "excluding", "without", "never-including", "no-expired"],
     )
     def test_positive_control_negated_declaration_is_still_caught(self, module):
         found = find_validity_violations(module)
