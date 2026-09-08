@@ -1,7 +1,8 @@
 """Pins for two semantics traps in the expert-review path (#1971, #1972).
 
-Neither is a behaviour change -- both are cases where the code is defensible but
-what it *communicates* is wrong, which is how a future change goes wrong.
+#1972 is not a behaviour change -- the code is defensible but what it
+*communicates* was wrong. #1971 WAS a behaviour change: the two same-named
+``can_use_estimate`` functions are now retired (see TestCanUseEstimateRetired).
 
 Parsed from source rather than imported: these modules pull the Supabase client
 and scipy/dowhy transitively, which makes the tests unrunnable where those are
@@ -31,55 +32,42 @@ def _func(path: Path, name: str) -> ast.AsyncFunctionDef | ast.FunctionDef:
     raise AssertionError(f"{name} not found in {path.name}")
 
 
-class TestCanUseEstimateDivergence:
-    """#1971: two functions share a name and do NOT share a contract.
+class TestCanUseEstimateRetired:
+    """#1971: both ``can_use_estimate`` are retired, not reconciled.
 
-    SQL `can_use_estimate(estimate_id, dag_hash)` combines the validation gate
-    AND expert approval. The Python method of the same name takes no dag_hash,
-    never consults approval, and is fail-open. Both are uncalled today, so the
-    risk is not current behaviour -- it is that someone wires the Python one up
-    believing the SQL contract and silently enforces nothing.
+    They shared a name and not a contract (SQL: ``(estimate_id, dag_hash)``,
+    gate + expert approval; Python: one arg, no approval, fail-open). Neither
+    had a caller. Rather than wire one up, #1971 makes the gate real on the live
+    agent path (``CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL``) and leaves ONE
+    definition of "usable": ``causal_paths.validation_status``, moved only by
+    the sole promoter (migration 119). The Python method is deleted here;
+    migration 133 drops the SQL function.
     """
 
-    def test_the_two_signatures_really_do_differ(self):
-        py = _func(CAUSAL_VALIDATION, "can_use_estimate")
-        py_args = [a.arg for a in py.args.args if a.arg != "self"]
-        assert py_args == ["estimate_id"], (
-            f"Python can_use_estimate now takes {py_args}. If it grew a dag_hash "
-            "it may finally match the SQL contract -- update this pin and the "
-            "warning docstring together, deliberately."
+    def test_the_python_method_is_gone(self):
+        tree = ast.parse(CAUSAL_VALIDATION.read_text(encoding="utf-8"))
+        names = {
+            n.name for n in ast.walk(tree) if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+        }
+        assert "can_use_estimate" not in names, (
+            "Python can_use_estimate is back. It was retired because it never "
+            "consulted expert approval and was fail-open (#1971/#1982); the live "
+            "gate is RefutationNode + CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL."
         )
+        # Positive control: the walk sees the surviving neighbours.
+        assert {"get_gate_decision", "get_validation_summary"} <= names
 
-        sql = VALIDATION_SQL.read_text(encoding="utf-8")
-        match = re.search(
-            r"CREATE OR REPLACE FUNCTION can_use_estimate\s*\((.*?)\)\s*RETURNS",
-            sql,
-            re.S | re.I,
+    def test_the_sql_function_is_dropped_by_migration_133(self):
+        migration = REPO_ROOT / "database" / "migrations" / "133_retire_can_use_estimate.sql"
+        assert migration.exists()
+        text = migration.read_text(encoding="utf-8")
+        assert re.search(r"DROP FUNCTION IF EXISTS\s+public\.can_use_estimate\s*\(", text, re.I), (
+            "migration 133 must drop the SQL can_use_estimate"
         )
-        assert match, "SQL can_use_estimate signature not found"
-        sql_params = [p for p in match.group(1).split(",") if p.strip()]
-        assert len(sql_params) == 2, (
-            f"SQL can_use_estimate takes {len(sql_params)} params; the divergence "
-            "this test pins is that it takes a dag_hash the Python one does not"
-        )
-
-    def test_the_python_method_warns_that_it_is_not_the_sql_one(self):
-        doc = ast.get_docstring(_func(CAUSAL_VALIDATION, "can_use_estimate")) or ""
-        assert "#1971" in doc
-        assert "expert approval" in doc.lower(), (
-            "the docstring must say it does NOT consult expert approval"
-        )
-        assert "fail-open" in doc.lower(), (
-            "the docstring must say it returns True when there are no validations"
-        )
-
-    def test_the_fail_open_branch_is_still_there(self):
-        """Pins the behaviour the warning describes, so they cannot drift apart."""
-        src = ast.unparse(_func(CAUSAL_VALIDATION, "can_use_estimate"))
-        assert "if gate else True" in src.replace("\n", " "), (
-            "can_use_estimate no longer returns True on 'no validations'. That may "
-            "be a real improvement -- but the docstring calls it fail-open, so "
-            "change both together."
+        # The baseline file is deliberately untouched (applied 2026-06-04; the
+        # DROP is the forward migration), so the function it defines is real.
+        assert "CREATE OR REPLACE FUNCTION can_use_estimate" in VALIDATION_SQL.read_text(
+            encoding="utf-8"
         )
 
 

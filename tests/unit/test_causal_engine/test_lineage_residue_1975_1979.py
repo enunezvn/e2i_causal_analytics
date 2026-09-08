@@ -200,12 +200,15 @@ class TestOurOwnCitationsResolve:
             "the YAML says the live value is a hardcoded 2.0 in that constant"
         )
 
-    def test_the_docstring_anchor_names_a_real_sql_function(self):
-        doc = (REPO_ROOT / "src" / "repositories" / "causal_validation.py").read_text(
-            encoding="utf-8"
-        )
-        assert "CREATE OR REPLACE FUNCTION can_use_estimate" in doc, (
-            "the docstring should cite the SQL function by name, not by line"
+    def test_the_migration_anchor_names_a_real_sql_function(self):
+        """#1971 retired the Python ``can_use_estimate`` (and its docstring), so
+        the symbol anchor now lives in migration 133, which drops the SQL one.
+        The anchor must still resolve to the function ml/010 defines."""
+        migration = (
+            REPO_ROOT / "database" / "migrations" / "133_retire_can_use_estimate.sql"
+        ).read_text(encoding="utf-8")
+        assert "CREATE OR REPLACE FUNCTION can_use_estimate" in migration, (
+            "the migration should cite the baseline definition by name, not by line"
         )
         sql = (REPO_ROOT / "database" / "ml" / "010_causal_validation_tables.sql").read_text(
             encoding="utf-8"
