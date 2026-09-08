@@ -180,7 +180,14 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          TITLE="Deploy currency: production is not running main"
+          # Dedup on a stable TITLE PREFIX this workflow controls, read from a
+          # plain listing -- NOT `--search` (whose index lags, so a second alarm
+          # files a duplicate) and NOT `--label` (`gh issue list --label <missing>`
+          # silently returns nothing, so a label-keyed dedup dies with the label
+          # and files a new issue every run). Both lessons are maintenance-freshness.yml's,
+          # learned live in its #1807 certification.
+          TITLE_PREFIX="Deploy currency: production is not running main"
+          TITLE="$TITLE_PREFIX"
           BODY=$(printf '%s\n' \
             "**Verdict:** \`$VERDICT\`" \
             "" \
@@ -191,12 +198,26 @@ jobs:
             "\`fresh\`/\`hold\` are clean; \`alarm\` means at least one deploy-triggering push is past the grace window and still not live; \`unreachable\`/\`unknown\` mean the question could not be answered and currency is undetermined." \
             "" \
             "Recovery for a skipped deploy chain is \`gh run rerun --failed <run-id>\` on the deploy run named above; only the container image tag confirms it worked.")
-          EXISTING=$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" \
-                      --json number,title --jq "[.[] | select(.title == \"$TITLE\")][0].number" || echo "")
-          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-            echo "==> updating #$EXISTING"
+
+          # Use the label when it exists, create it when we can, file WITHOUT it
+          # otherwise. `gh issue create --label <missing>` dies "label not found"
+          # and the alarm lands nowhere -- the alarm matters more than its colour.
+          LABEL=bug
+          LABEL_ARGS=()
+          if gh label list --repo "$REPO" --search "$LABEL" --json name --jq '.[].name' | grep -qxF "$LABEL"; then
+            LABEL_ARGS=(--label "$LABEL")
+          else
+            echo "::warning::label '$LABEL' not found -- filing without it so the alarm still lands"
+          fi
+
+          EXISTING=$(gh issue list --repo "$REPO" --state open --limit 500 \
+            --json number,title \
+            --jq "[.[] | select(.title | startswith(\"$TITLE_PREFIX\"))] | .[0].number // empty")
+
+          if [ -n "$EXISTING" ]; then
+            echo "==> commenting on existing #$EXISTING"
             gh issue comment "$EXISTING" --repo "$REPO" --body "$BODY"
           else
             echo "==> filing a new tracking issue"
-            gh issue create --repo "$REPO" --title "$TITLE" --label bug --body "$BODY"
+            gh issue create --repo "$REPO" --title "$TITLE" "${LABEL_ARGS[@]}" --body "$BODY"
           fi
