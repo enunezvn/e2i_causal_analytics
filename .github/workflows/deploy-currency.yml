@@ -112,11 +112,12 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --quiet origin main
+          # pipefail + set -e: a non-zero verdict exit fails this step directly.
+          # tee still writes the file first, which is what `classify` reads.
           python3 .github/scripts/check_deploy_currency.py \
             --running-sha "$RUNNING_SHA" \
             ${GRACE:+--grace-minutes "$GRACE"} \
             | tee "$RUNNER_TEMP/verdict.txt"
-          exit "${PIPESTATUS[0]}"
 
       - name: Classify the outcome
         id: classify
@@ -131,6 +132,9 @@ jobs:
             # observability failure, and it is reported as one.
             VERDICT=unreachable
             SUMMARY="could not read the running image from the droplet (SSH/auth/box down) -- currency is UNKNOWN, not clean"
+          elif [ ! -s "$RUNNER_TEMP/verdict.txt" ]; then
+            VERDICT=unknown
+            SUMMARY="the currency check produced no output (it crashed before writing a verdict)"
           else
             VERDICT=$(sed -n 's/^==> verdict: //p' "$RUNNER_TEMP/verdict.txt" | head -1 | tr 'A-Z' 'a-z')
             SUMMARY=$(sed -n 's/^==> //p' "$RUNNER_TEMP/verdict.txt" | sed -n 2p)
