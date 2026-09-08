@@ -293,8 +293,28 @@ class TestRejectedStructureNeverBlessesAPath:
     would satisfy migration 119's evidence gate for a later ``validated`` claim.
     A suite that passed on a structure a reviewer rejected is conditional on a
     premise the reviewer threw out; it must not be able to bless the path even
-    in principle. Same mechanism as the synthetic-fixture rule above.
+    in principle. Same mechanism as the synthetic-fixture rule above. The same
+    holds when the verdict could not be determined (``"unknown"``): a run that
+    cannot prove the structure was not rejected does not bless the path.
     """
+
+    @pytest.mark.asyncio
+    async def test_unknown_verdict_is_unlinked_and_not_promoted(self) -> None:
+        validation_repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=validation_repo, causal_path_repo=path_repo)
+
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="unknown",
+        )
+
+        assert promotion == {}
+        assert path_repo.status_calls == []
+        assert validation_repo.save_suite.await_args.kwargs["estimate_source"] == (
+            "causal_impact_query"
+        )
 
     @pytest.mark.asyncio
     async def test_proceed_on_rejected_structure_is_unlinked_and_not_promoted(self) -> None:
@@ -305,7 +325,7 @@ class TestRejectedStructureNeverBlessesAPath:
         ids, promotion = await node._persist_suite_and_promote(
             _state(causal_path_id="cp_real_000000001"),
             _suite(GateDecision.PROCEED),
-            structure_rejected=True,
+            structure_verdict="rejected",
         )
 
         assert ids == ["v-1", "v-2"]
@@ -324,7 +344,7 @@ class TestRejectedStructureNeverBlessesAPath:
         _ids, promotion = await node._persist_suite_and_promote(
             _state(causal_path_id="cp_real_000000001"),
             _suite(GateDecision.BLOCK),
-            structure_rejected=True,
+            structure_verdict="rejected",
         )
 
         assert promotion == {}
@@ -339,7 +359,7 @@ class TestRejectedStructureNeverBlessesAPath:
         _ids, promotion = await node._persist_suite_and_promote(
             _state(causal_path_id="cp_real_000000001"),
             _suite(GateDecision.PROCEED),
-            structure_rejected=False,
+            structure_verdict="clear",
         )
 
         assert promotion["new_status"] == "validated"

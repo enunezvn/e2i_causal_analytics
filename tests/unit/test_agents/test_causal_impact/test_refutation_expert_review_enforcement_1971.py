@@ -338,25 +338,145 @@ class TestRejectionHonouredOnProceedBand:
         assert repo.lookups >= 1, "positive control: the rejection check ran"
 
     @pytest.mark.asyncio
-    async def test_rejection_lookup_error_degrades_to_todays_behaviour(self, monkeypatch, caplog):
-        """The read-only rejection check is a safety net, not a new failure mode:
-        a review-store error on a PROCEED band logs a WARNING and the run
-        continues exactly as before the check existed."""
+    async def test_rejection_lookup_error_continues_but_never_blesses_the_path(
+        self, monkeypatch, caplog
+    ):
+        """A review-store error on the probe means the structure's rejection
+        status is UNKNOWN for this run. The estimate is not withheld (the
+        default is advisory, and failing every PROCEED run on a transient
+        store error would be a new failure mode) -- but a run that cannot
+        prove the structure was not rejected must not bless the path: the
+        evidence is persisted UNLINKED and no transition fires. A later run
+        that can look promotes it. Observable in logs. (codex iter-1 HIGH-2)"""
         repo = _ReviewRepo(raise_on_lookup=True)
         gate = ExpertReviewGate(repository=repo, auto_create_review=True)
         paths = _PathRepo()
-        node = _node(monkeypatch, GateDecision.PROCEED, gate, path_repo=paths)
+        validation_repo = _validation_repo()
+        node = _node(
+            monkeypatch,
+            GateDecision.PROCEED,
+            gate,
+            path_repo=paths,
+            validation_repo=validation_repo,
+        )
 
         with caplog.at_level(logging.WARNING):
             result = await node.execute(_state())
 
         assert result["status"] != "failed"
         assert "expert_review_halt" not in result
-        assert paths.status_calls and paths.status_calls[0]["new_status"] == "validated"
+        assert paths.status_calls == []
+        assert result["causal_path_promotion"] == {}
+        save_kwargs = validation_repo.save_suite.await_args.kwargs
+        assert save_kwargs["estimate_id"] == derive_query_estimate_id(_QUERY_ID)
+        assert save_kwargs["estimate_source"] == "causal_impact_query"
         assert any(
             "rejection check" in r.getMessage().lower() and r.levelno == logging.WARNING
             for r in caplog.records
         ), "the degraded check must be observable in logs"
+
+
+class _ProbeFindsRejectionThenConsultRaises(ExpertReviewGate):
+    """check_rejection works (the repo answers), check_approval then raises."""
+
+    async def check_approval(self, **kwargs):  # type: ignore[override]
+        raise RuntimeError("review store went away between the two lookups")
+
+
+class _ProbeRaisesThenConsultFindsRejection(ExpertReviewGate):
+    """check_rejection raises, check_approval (real) then finds the rejection."""
+
+    async def check_rejection(self, dag_hash, brand=None):  # type: ignore[override]
+        raise RuntimeError("transient store error on the probe")
+
+
+class TestOneStructuralVerdictPerRun:
+    """codex iter-1: the structural verdict is resolved ONCE and reused.
+
+    Two lookups (the read-only probe, then the REVIEW/BLOCK consult) can
+    disagree when the review store flakes between them. Neither order may
+    lose a rejection the run actually observed, and neither may move a path
+    on evidence whose structure could not be cleared.
+    """
+
+    @pytest.mark.asyncio
+    async def test_probe_rejection_is_authoritative_even_if_the_consult_raises(self, monkeypatch):
+        """HIGH-1: probe says REJECTED, consult raises -> still halted as
+        rejected (never 'unavailable' + continue), evidence unlinked."""
+        repo = _ReviewRepo(rows=[_rejected_row()])
+        gate = _ProbeFindsRejectionThenConsultRaises(repository=repo, auto_create_review=True)
+        paths = _PathRepo()
+        validation_repo = _validation_repo()
+        node = _node(
+            monkeypatch,
+            GateDecision.REVIEW,
+            gate,
+            require_dag_approval=False,
+            path_repo=paths,
+            validation_repo=validation_repo,
+        )
+
+        result = await node.execute(_state())
+
+        assert result["status"] == "failed"
+        assert result["expert_review_halt"] is True
+        assert result["expert_review_decision"] == "rejected"
+        assert result["expert_review_id"] == "rev-rejected"
+        assert "Dr. No" in result["error_message"]
+        assert paths.status_calls == []
+        save_kwargs = validation_repo.save_suite.await_args.kwargs
+        assert save_kwargs["estimate_source"] == "causal_impact_query"
+        assert repo.create_calls == []
+
+    @pytest.mark.asyncio
+    async def test_probe_error_then_consult_rejection_never_moved_the_path(
+        self, monkeypatch, caplog
+    ):
+        """HIGH-2: probe errors (verdict unknown), consult then finds the
+        rejection -> halted as rejected AND the evidence was persisted
+        unlinked with no transition, because 'unknown' already withheld the
+        linkage before anything was written."""
+        repo = _ReviewRepo(rows=[_rejected_row()])
+        gate = _ProbeRaisesThenConsultFindsRejection(repository=repo, auto_create_review=True)
+        paths = _PathRepo()
+        validation_repo = _validation_repo()
+        node = _node(
+            monkeypatch,
+            GateDecision.REVIEW,
+            gate,
+            require_dag_approval=False,
+            path_repo=paths,
+            validation_repo=validation_repo,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = await node.execute(_state())
+
+        assert result["status"] == "failed"
+        assert result["expert_review_decision"] == "rejected"
+        assert paths.status_calls == []
+        assert result["causal_path_promotion"] == {}
+        save_kwargs = validation_repo.save_suite.await_args.kwargs
+        assert save_kwargs["estimate_id"] == derive_query_estimate_id(_QUERY_ID)
+        assert save_kwargs["estimate_source"] == "causal_impact_query"
+        assert repo.create_calls == []
+
+    @pytest.mark.asyncio
+    async def test_block_band_with_probe_rejection_skips_the_consult(self, monkeypatch):
+        """Positive control for 'one verdict': on BLOCK the rejection found by
+        the probe is reused -- no second lookup, no queue row, no demotion."""
+        repo = _ReviewRepo(rows=[_rejected_row()])
+        gate = _ProbeFindsRejectionThenConsultRaises(repository=repo, auto_create_review=True)
+        paths = _PathRepo()
+        node = _node(monkeypatch, GateDecision.BLOCK, gate, path_repo=paths)
+
+        result = await node.execute(_state())
+
+        assert result["status"] == "failed"
+        assert result["expert_review_decision"] == "rejected"
+        assert "REJECTED" in result["review_caveat"]
+        assert paths.status_calls == []
+        assert repo.create_calls == []
 
 
 # ============================================================================

@@ -79,6 +79,24 @@ _ENV_REQUIRE_DAG_APPROVAL = "CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _FALSY = frozenset({"", "0", "false", "no", "off"})
 
+# #1971: the structural verdict for a run, resolved ONCE (read-only probe)
+# BEFORE evidence is persisted and reused by every band afterwards (codex
+# iter-1: two lookups that can disagree must not be able to lose a rejection
+# the run observed, nor move a path on evidence whose structure was never
+# cleared).
+#   clear     -- the review store answered: no human rejection on record
+#   rejected  -- the review store answered: the latest verdict is a rejection
+#   unknown   -- the probe FAILED; the status could not be determined
+#   unchecked -- no review store wired at all (no gate / bare gate / no hash)
+# Only clear / unchecked link evidence to a real causal_paths row and allow a
+# status transition. 'unchecked' keeps today's behaviour for environments
+# without a review store (dev/test; a prod outage degrades persistence too).
+_STRUCTURE_CLEAR = "clear"
+_STRUCTURE_REJECTED = "rejected"
+_STRUCTURE_UNKNOWN = "unknown"
+_STRUCTURE_UNCHECKED = "unchecked"
+_STRUCTURE_LINKABLE = frozenset({_STRUCTURE_CLEAR, _STRUCTURE_UNCHECKED})
+
 
 def _resolve_require_dag_approval(explicit: Optional[bool] = None) -> bool:
     """Resolve the enforcement switch: explicit argument > env var > OFF.
@@ -833,7 +851,7 @@ class RefutationNode:
         state: CausalImpactState,
         suite: "RefutationSuite",
         *,
-        structure_rejected: bool = False,
+        structure_verdict: str = _STRUCTURE_UNCHECKED,
     ) -> Tuple[List[str], Dict[str, Any]]:
         """Persist the suite's evidence and — as SOLE promoter — move the linked
         real path's ``validation_status`` (#1352 item 3).
@@ -853,15 +871,20 @@ class RefutationNode:
         * a synthetic-FIXTURE run (``data_source='synthetic'``, the dev/test
           path) persists only unlinked evidence and NEVER promotes: promoting a
           real path off fixture data would be fabricated validation.
-        * a run whose DAG structure a human REJECTED (``structure_rejected``,
-          #1971) persists only unlinked evidence and NEVER promotes -- on any
-          band. A suite that passed on a rejected structure is conditional on
-          a premise the reviewer threw out; linked *passed* rows would satisfy
-          migration 119's evidence gate for a later ``validated`` claim, so the
-          evidence must not be able to bless the path even in principle. And
-          a failed suite on a rejected structure says nothing about the path
-          either, so it does not demote. Operator adjudication of the path row
-          itself is untouched.
+        * a run whose DAG structure a human REJECTED (``structure_verdict ==
+          'rejected'``, #1971) persists only unlinked evidence and NEVER
+          promotes -- on any band. A suite that passed on a rejected structure
+          is conditional on a premise the reviewer threw out; linked *passed*
+          rows would satisfy migration 119's evidence gate for a later
+          ``validated`` claim, so the evidence must not be able to bless the
+          path even in principle. And a failed suite on a rejected structure
+          says nothing about the path either, so it does not demote. Operator
+          adjudication of the path row itself is untouched.
+        * a run whose structural verdict could not be determined
+          (``'unknown'``: the review store errored on the probe) is treated
+          the same way: a run that cannot prove the structure was not rejected
+          does not bless (or demote) the path. The estimate itself is not
+          withheld on that account; a later run that can look moves the path.
 
         Returns ``(validation_ids, promotion_info)``; ``promotion_info`` is
         ``{}`` unless a status transition actually happened. Best-effort
@@ -876,7 +899,7 @@ class RefutationNode:
         synthetic_fixture_run = state.get("data_source") == "synthetic"
 
         linked_row: Optional[Dict[str, Any]] = None
-        if not synthetic_fixture_run and not structure_rejected:
+        if not synthetic_fixture_run and structure_verdict in _STRUCTURE_LINKABLE:
             try:
                 linked_row = await self._resolve_linked_path(state)
             except Exception as link_err:  # noqa: BLE001 - linkage is best-effort
@@ -964,36 +987,72 @@ class RefutationNode:
             "estimate_id": estimate_id,
         }
 
-    async def _check_structure_rejection(self, state: CausalImpactState) -> Optional[Any]:
-        """#1971: READ-ONLY probe -- did a human REJECT this DAG structure?
+    async def _check_structure_rejection(
+        self, state: CausalImpactState
+    ) -> Tuple[str, Optional[Any]]:
+        """#1971: resolve the run's structural verdict ONCE, before persistence.
 
-        Runs on EVERY band, BEFORE evidence is persisted, so a run on a rejected
-        structure can never link its evidence to (or move the status of) a
-        real ``causal_paths`` row. Uses ``ExpertReviewGate.check_rejection``
-        (never creates a review row). A gate without that method (a duck-typed
-        stand-in) or without a repository cannot tell, and says ``None``.
+        Returns ``(verdict, rejection)`` where ``verdict`` is one of
+        ``_STRUCTURE_CLEAR`` / ``_STRUCTURE_REJECTED`` / ``_STRUCTURE_UNKNOWN`` /
+        ``_STRUCTURE_UNCHECKED`` and ``rejection`` is the REJECTED
+        ``ReviewGateResult`` (reviewer, review id, reason) when the verdict is
+        rejected. Uses ``ExpertReviewGate.check_rejection`` (read-only; never
+        creates a review row).
 
-        A lookup error degrades to ``None`` with a WARNING: this probe is a
-        safety net over the previous behaviour (no check at all), and turning
-        a transient review-store error into a failed run on every PROCEED band
-        would be a new failure mode, not a fix. The degradation is logged so it
-        is observable; the run itself carries no false claim (no decision is
-        written on a PROCEED band unless a rejection was actually found).
+        The verdict is authoritative for the whole run: every band reuses it,
+        and the REVIEW/BLOCK consult is skipped when it is ``rejected`` (codex
+        iter-1 HIGH-1: a consult that raised after the probe found a rejection
+        must not turn the run into "unavailable, carry on").
+
+        A probe that FAILS yields ``unknown`` (codex iter-1 HIGH-2): the
+        estimate is not withheld on that account (the default is advisory, and
+        turning a transient store error into a failed run on every PROCEED
+        band would be a new failure mode) -- but evidence is persisted
+        UNLINKED and no path transition fires, so a rejection the consult may
+        still find can never arrive after the path was moved. Logged at
+        WARNING so the degradation is observable.
+
+        ``unchecked`` (no gate, a bare no-repository gate, a duck-typed
+        stand-in without the probe, or no ``dag_version_hash``) keeps today's
+        behaviour: there is no review store to honour.
         """
         gate = self.expert_review_gate
         probe = getattr(gate, "check_rejection", None)
         dag_hash = str(state.get("dag_version_hash") or "")
-        if gate is None or probe is None or not dag_hash:
-            return None
+        if gate is None or probe is None or not dag_hash or not getattr(gate, "repository", None):
+            return _STRUCTURE_UNCHECKED, None
         try:
-            return await probe(dag_hash, brand=state.get("brand"))
+            rejection = await probe(dag_hash, brand=state.get("brand"))
         except Exception as probe_err:  # noqa: BLE001 - probe must never break the node
             logger.warning(
-                "Expert-review rejection check failed (%s); proceeding as before the "
-                "check existed -- a rejection, if any, is not visible to this run.",
+                "Expert-review rejection check failed (%s); the structure's rejection "
+                "status is UNKNOWN for this run -- evidence is persisted unlinked and the "
+                "causal_paths row is not moved.",
                 probe_err,
             )
-            return None
+            return _STRUCTURE_UNKNOWN, None
+        if rejection is not None:
+            return _STRUCTURE_REJECTED, rejection
+        return _STRUCTURE_CLEAR, None
+
+    async def _review_fields_for_band(
+        self,
+        state: CausalImpactState,
+        suite: "RefutationSuite",
+        validation_ids: List[str],
+        rejection: Optional[Any],
+    ) -> Dict[str, Any]:
+        """REVIEW/BLOCK: the probe's rejection is authoritative; otherwise consult.
+
+        A rejection already observed is reused as-is -- no second lookup, no
+        queue row (the verdict is durable, #1970). Only a structure the probe
+        did not reject (or could not check) is taken to the queue-or-lookup
+        consult, which may itself still find a rejection (verdict ``unknown``),
+        in which case the evidence was already persisted unlinked.
+        """
+        if rejection is not None:
+            return self._review_fields(suite, ReviewGateDecision.REJECTED.value, rejection)
+        return await self._consult_review_gate(state, suite, validation_ids=validation_ids)
 
     @staticmethod
     def _band_caveat(suite: "RefutationSuite") -> str:
@@ -1539,12 +1598,12 @@ class RefutationNode:
             refutation_results = cast(RefutationResults, suite.to_legacy_format())
 
             # #1971: READ-ONLY rejection probe on EVERY band, BEFORE evidence
-            # is persisted. Before this, the gate was consulted only on
-            # REVIEW/BLOCK, so a DAG a reviewer had explicitly rejected still
-            # yielded a PROCEED-band estimate promoted to 'validated' and
-            # surfaced as completed. None = no rejection found (or none could
-            # be looked up -- see _check_structure_rejection).
-            rejection = await self._check_structure_rejection(state)
+            # is persisted -- resolved once, reused by every band below.
+            # Before this, the gate was consulted only on REVIEW/BLOCK, so a
+            # DAG a reviewer had explicitly rejected still yielded a
+            # PROCEED-band estimate promoted to 'validated' and surfaced as
+            # completed. See _check_structure_rejection for the verdicts.
+            structure_verdict, rejection = await self._check_structure_rejection(state)
 
             # Persist validation results + SOLE-promoter path transition
             # (#1352 item 3, extracted to _persist_suite_and_promote): linked
@@ -1553,9 +1612,10 @@ class RefutationNode:
             # runs write per-run history under the query-derived uuid (the old
             # ``estimate_id=query_id`` write ALWAYS failed the uuid cast — half
             # of #1352's "causal_validations never populated"). A rejected
-            # structure is persisted UNLINKED and never moves the path.
+            # (or unverifiable) structure is persisted UNLINKED and never
+            # moves the path.
             validation_ids, causal_path_promotion = await self._persist_suite_and_promote(
-                state, suite, structure_rejected=rejection is not None
+                state, suite, structure_verdict=structure_verdict
             )
 
             # Phase 4: Log ValidationOutcome for Feedback Learner integration
@@ -1589,8 +1649,9 @@ class RefutationNode:
                 # queue too, so a human can adjudicate or override the failure. The
                 # estimate still surfaces as failed (needs_review stays False from
                 # suite.needs_review); the queued row carries the gate=block context.
-                review_fields = await self._consult_review_gate(
-                    state, suite, validation_ids=validation_ids
+                # A structure the probe found REJECTED is not re-consulted (#1971).
+                review_fields = await self._review_fields_for_band(
+                    state, suite, validation_ids, rejection
                 )
             elif suite.gate_decision == GateDecision.REVIEW:
                 logger.info(
@@ -1602,8 +1663,9 @@ class RefutationNode:
                 error_message = None
                 # H2: consult the ExpertReviewGate and flag needs_review + caveat
                 # so a REVIEW band is NOT surfaced/persisted as robust/validated.
-                review_fields = await self._consult_review_gate(
-                    state, suite, validation_ids=validation_ids
+                # A structure the probe found REJECTED is not re-consulted (#1971).
+                review_fields = await self._review_fields_for_band(
+                    state, suite, validation_ids, rejection
                 )
                 # #1971: a human rejection halts; a missing approval halts only
                 # when the owner's switch is ON (post-hoc / advisory by default).
