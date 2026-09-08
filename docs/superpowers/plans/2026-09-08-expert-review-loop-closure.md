@@ -1060,6 +1060,17 @@ def test_rejection_is_evaluated_inside_the_update_statement():
 
 
 @pytest.mark.unit
+def test_promote_share_locks_the_structure_rows_before_the_update():
+    """A rejection racing the promote must either be seen by the UPDATE or wait
+    for it; the STABLE predicate alone leaves a statement-sized window
+    (pre-execution review iter-2, codex HIGH)."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    fn = sql[sql.index("CREATE OR REPLACE FUNCTION public.promote_causal_path_guarded("):]
+    assert "FOR SHARE" in fn
+    assert fn.index("FOR SHARE") < fn.index("UPDATE public.causal_paths")
+
+
+@pytest.mark.unit
 def test_empty_string_brand_means_no_brand():
     """``get_reviews_for_dag`` filters with ``if brand:`` -- '' is unfiltered. The
     SQL must read '' the same way or a same-hash rejection under another brand
@@ -1078,7 +1089,7 @@ def test_service_role_only():
     assert "has_function_privilege" in sql  # the migration asserts its own grants
 ```
 
-Run: `$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: FAIL with `FileNotFoundError` (4 tests).
+Run: `$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: FAIL with `FileNotFoundError` (5 tests).
 
 - [ ] **Step 2: Write the migration**
 
@@ -1100,9 +1111,17 @@ Create `database/migrations/134_guarded_causal_path_promote.sql`:
 --     ``if brand:`` (src/repositories/expert_review.py get_reviews_for_dag), so
 --     '' must be unfiltered here too or a same-hash rejection is missed
 --     (pre-execution review 2026-09-08, codex HIGH). A pending row with the SAME
---     created_at as the rejection does NOT reopen it (strict >): the
---     conservative reading for a promote guard (Task 16 files the Python
---     tie-breaker as LOW).
+--     created_at as the rejection does NOT reopen it (strict >); Task 3b gives
+--     ExpertReviewGate._latest_adjudication the same tie rule, so the probe
+--     and the promote read a tie identically.
+--   CONCURRENCY: promote_causal_path_guarded share-locks this structure's
+--     review rows BEFORE its UPDATE. A resolve (an in-place UPDATE of the
+--     pending expert_reviews row) racing it either committed first -- READ
+--     COMMITTED gives the UPDATE below a fresh snapshot that sees it -- or
+--     waits for this transaction and lands strictly after the promote. Without
+--     the lock a rejection committed between the UPDATE's snapshot and its
+--     write was invisible to the STABLE predicate (pre-execution review
+--     iter-2, codex HIGH; blocking measured live 2026-09-08, Step 4c).
 --   public.promote_causal_path_guarded(p_path_id, p_new_status,
 --     p_allowed_current text[], p_dag_version_hash, p_brand) → jsonb
 --     One UPDATE that moves causal_paths.validation_status only when the
@@ -1176,6 +1195,15 @@ BEGIN
         RAISE EXCEPTION 'promote_causal_path_guarded: p_path_id, p_new_status and p_allowed_current are required';
     END IF;
 
+    IF p_dag_version_hash IS NOT NULL THEN
+        -- Pin the chronology for the rest of this transaction (see header).
+        PERFORM 1
+           FROM public.expert_reviews r
+          WHERE r.dag_version_hash = p_dag_version_hash
+            AND (NULLIF(p_brand, '') IS NULL OR r.brand = p_brand)
+            FOR SHARE;
+    END IF;
+
     UPDATE public.causal_paths
        SET validation_status = p_new_status
      WHERE path_id = p_path_id
@@ -1233,7 +1261,7 @@ END $$;
 
 - [ ] **Step 3: Run the contract test**
 
-`$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: 4 passed.
+`$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: 5 passed.
 
 - [ ] **Step 4: Rehearse on the live database (BEGIN … ROLLBACK, applied twice, with a positive control)**
 
@@ -1335,6 +1363,32 @@ Expected (measured 2026-09-08; the Python rule agrees on every row except the ti
 
 Then `ROLLBACK`; confirm `select count(*) from public.expert_reviews where reviewer_id='equiv'` is `0`.
 
+- [ ] **Step 4c: Concurrency rehearsal — the share lock blocks a racing resolve (no writes)**
+
+Two sessions on the live probe row `4eab7033-…` (its structure has one review row). Session A takes the
+same `FOR SHARE` the function takes and holds it 20 s inside a transaction it rolls back; session B runs a
+resolve-shaped UPDATE with a 3 s `statement_timeout` and rolls back too. Nothing is written by either.
+The monitor loop must exclude its own backend (`pid <> pg_backend_pid()`) — its query text also contains
+`pg_sleep`, and the first attempt at this rehearsal waited on itself until A had finished (a false "no block").
+
+```bash
+RID=4eab7033-7422-422d-83f6-659c9c3b9987
+HASH=$(docker exec supabase-db psql -U postgres -d postgres -tA -c "select dag_version_hash from public.expert_reviews where review_id='$RID'")
+docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "BEGIN; SELECT 'A-locked '||clock_timestamp()::time FROM public.expert_reviews WHERE dag_version_hash='$HASH' FOR SHARE; SELECT pg_sleep(20); SELECT 'A-release '||clock_timestamp()::time; ROLLBACK;" > /tmp/sessA.log 2>&1 &
+until docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query ilike '%pg_sleep(20)%' and state='active'" | grep -q '^1'; do :; done
+docker exec supabase-db psql -U postgres -d postgres -tA -F' ' -c "select l.locktype, l.mode, l.granted from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.relation='public.expert_reviews'::regclass and a.pid <> pg_backend_pid()"
+docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
+wait; tr '\n' ' ' < /tmp/sessA.log; echo
+docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B2-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
+docker exec supabase-db psql -U postgres -d postgres -tA -c "select approval_status, updated_at::date from public.expert_reviews where review_id='$RID'"
+```
+
+Measured 2026-09-08 (pre-execution review): lock row `relation RowShareLock t`; B → `ERROR:  canceling statement
+due to statement timeout CONTEXT:  while locking tuple (5,6) in relation "expert_reviews"` (blocked for the
+full 3 s while A held the lock); A → `A-locked … A-release … ROLLBACK`; positive control B2 after A ended →
+`UPDATE 1 B2-updated ROLLBACK`; the probe row still `pending`. A B that returns `UPDATE 1` while A holds the
+lock means the function's lock does not cover the resolve path — stop and investigate before committing.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -1344,6 +1398,105 @@ git commit -m "feat(db): migration 134 -- guarded causal_paths promote evaluates
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
 ```
+
+---
+
+### Task 3b: Gate — `_latest_adjudication` reads a timestamp tie the way migration 134 does
+
+**Files:**
+- Modify: `src/causal_engine/expert_review_gate.py` (`_latest_adjudication`, ~line 428)
+- Modify: `tests/unit/test_causal_engine/test_expert_review_gate.py` (`TestCheckRejection`, after `test_pending_row_means_reopened_not_rejected` ~line 939)
+
+Why: the SQL rule treats a pending row with the SAME `created_at` as the rejection as NOT newer (strict `>`);
+the Python probe was row-order-dependent on that tie (measured 2026-09-08: `false/true` depending on the order
+the repository returned). Codex iter-2 (HIGH) was right that documenting the difference does not make the two
+readers one rule. A global re-sort by `created_at` breaks two existing tests whose rows carry no timestamps, so
+the change is tie-only: the repository's order is kept except for an exact tie.
+
+- [ ] **Step 1: Failing test** — add to `TestCheckRejection`:
+
+```python
+    @pytest.mark.asyncio
+    async def test_pending_row_tied_with_the_rejection_is_not_a_reopen(self, mock_repo):
+        """Migration 134 reads a pending row with the SAME created_at as the
+        rejection as NOT newer (strict >). The probe must read the tie the same
+        way whatever order the repository returns it in (lane 1, Task 3b); a
+        genuinely newer pending row still reopens."""
+        ts = "2026-09-08T12:00:00+00:00"
+        rejected = self._rejected(created_at=ts)
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        for rows in (
+            [{"review_id": "rev-tie", "approval_status": "pending", "created_at": ts}, rejected],
+            [rejected, {"review_id": "rev-tie", "approval_status": "pending", "created_at": ts}],
+        ):
+            mock_repo.get_reviews_for_dag = AsyncMock(return_value=rows)
+            result = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
+            assert result is not None and result.decision == ReviewGateDecision.REJECTED
+
+        newer = [
+            {"review_id": "rev-new", "approval_status": "pending", "created_at": "2026-09-09T00:00:00+00:00"},
+            rejected,
+        ]
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=newer)
+        assert await ExpertReviewGate(repository=mock_repo).check_rejection("abc123") is None
+```
+
+Run: `$PY -m pytest tests/unit/test_causal_engine/test_expert_review_gate.py -q -p no:cacheprovider -k tied` → Expected: FAIL on the pending-first ordering (`result is None`).
+
+- [ ] **Step 2: The tie-only rule** — in `_latest_adjudication` replace the loop
+
+```python
+        reopened = False
+        for row in history:
+            if row.get("approval_status") == "pending":
+                reopened = True
+                continue
+            return row, reopened
+        return None, reopened
+```
+
+with
+
+```python
+        reopened = False
+        for idx, row in enumerate(history):
+            if row.get("approval_status") == "pending":
+                # Tie-break (lane 1): a pending row that shares its created_at
+                # with the adjudication that follows it is NOT newer than it --
+                # the reading migration 134's strict ``>`` gives -- so the probe
+                # and the promote can never disagree on a tie. Rows without a
+                # timestamp keep the repository's order (unchanged behaviour).
+                nxt = next(
+                    (r for r in history[idx + 1 :] if r.get("approval_status") != "pending"),
+                    None,
+                )
+                if (
+                    nxt is not None
+                    and row.get("created_at")
+                    and row.get("created_at") == nxt.get("created_at")
+                ):
+                    continue
+                reopened = True
+                continue
+            return row, reopened
+        return None, reopened
+```
+
+and extend the docstring's ordering sentence with: "An exact `created_at` tie between a pending row and the adjudication after it is not a reopen (migration 134 reads it the same way)."
+
+- [ ] **Step 3: Run, lint, commit**
+
+```bash
+$PY -m pytest tests/unit/test_causal_engine/test_expert_review_gate.py tests/unit/test_agents/test_causal_impact/test_refutation_expert_review_enforcement_1971.py -q -p no:cacheprovider 2>&1 | tail -2
+$PY -m ruff check src/causal_engine/expert_review_gate.py tests/unit/test_causal_engine/test_expert_review_gate.py && $PY -m ruff format --check src/causal_engine/expert_review_gate.py
+git add src/causal_engine/expert_review_gate.py tests/unit/test_causal_engine/test_expert_review_gate.py
+git commit -m "fix(expert-review): a created_at tie between a pending row and the adjudication after it is not a reopen (matches migration 134)
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+Expected: 93 passed (measured 2026-09-08 with this exact change applied in scratch: 92 passed before the new test; the earlier global re-sort variant broke `test_reopened_after_rejection_is_not_cleared_by_an_older_approval` and `test_pending_row_means_reopened_not_rejected`, which is why the rule is tie-only).
 
 ---
 
@@ -2486,7 +2639,7 @@ Create `frontend/src/components/expert-review/ResolveForm.tsx`:
  * review id, StrictMode-safe — and can be regenerated on demand. It never
  * pre-fills the human checklist.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import { CheckCircle2, RefreshCw, Sparkles, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -2512,6 +2665,10 @@ export interface ResolveFormProps {
 }
 
 export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormProps) {
+  // Unique per FORM INSTANCE: the linked card and the queue row can render the
+  // same review, and duplicate element ids would let a label operate the other
+  // form (pre-execution review iter-2, codex MED).
+  const uid = useId();
   const [checklist, setChecklist] = useState<Record<string, boolean>>({});
   const [comments, setComments] = useState('');
   const resolve = useResolveReview();
@@ -2588,13 +2745,13 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
             <div key={item.id} className="space-y-0.5">
               <div className="flex items-center gap-2">
                 <Checkbox
-                  id={`${review.review_id}-${item.id}`}
+                  id={`${uid}-${item.id}`}
                   checked={!!checklist[item.id]}
                   onCheckedChange={(v) =>
                     setChecklist((prev) => ({ ...prev, [item.id]: v === true }))
                   }
                 />
-                <Label htmlFor={`${review.review_id}-${item.id}`} className="text-sm">
+                <Label htmlFor={`${uid}-${item.id}`} className="text-sm">
                   {item.question}
                 </Label>
                 {graded && (
@@ -2610,11 +2767,11 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor={`${review.review_id}-comments`} className="text-sm">
+        <Label htmlFor={`${uid}-comments`} className="text-sm">
           Comments
         </Label>
         <textarea
-          id={`${review.review_id}-comments`}
+          id={`${uid}-comments`}
           value={comments}
           onChange={(e) => setComments(e.target.value)}
           rows={3}
@@ -2794,6 +2951,7 @@ Create `frontend/src/components/expert-review/PrepareAssessmentsButton.tsx`:
  * is cancellable, stops on the first error and shows it. No new endpoint.
  */
 import { useRef, useState } from 'react';
+import type { MutableRefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Sparkles, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -2809,7 +2967,15 @@ interface RunState {
   error: string | null;
 }
 
-export function PrepareAssessmentsButton({ reviews }: { reviews: PendingReviewItem[] }) {
+export function PrepareAssessmentsButton({
+  reviews,
+  autoAssessGuard,
+}: {
+  reviews: PendingReviewItem[];
+  /** The page's once-per-review-id guard; marked before each request so a form
+   *  expanded meanwhile does not start a second generation for the same review. */
+  autoAssessGuard?: MutableRefObject<Set<string>>;
+}) {
   const queryClient = useQueryClient();
   const cancelRef = useRef(false);
   const [state, setState] = useState<RunState>({ running: false, done: 0, total: 0, error: null });
@@ -2824,6 +2990,7 @@ export function PrepareAssessmentsButton({ reviews }: { reviews: PendingReviewIt
     for (const review of missing) {
       if (cancelRef.current) break;
       try {
+        autoAssessGuard?.current.add(review.review_id);
         await generateReviewAssessment(review.review_id);
         setState((s) => ({ ...s, done: s.done + 1 }));
       } catch (e) {
@@ -2993,7 +3160,9 @@ export default function ExpertReviews() {
                   : 'Oldest reviews first · all brands, including reviews with no brand.'}
               </CardDescription>
             </div>
-            {reviews.length > 0 && <PrepareAssessmentsButton reviews={reviews} />}
+            {reviews.length > 0 && (
+              <PrepareAssessmentsButton reviews={reviews} autoAssessGuard={autoAssessGuard} />
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -3343,6 +3512,9 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
     expect((await screen.findAllByRole('button', { name: /approve/i })).length).toBe(2);
     expect(mutate).toHaveBeenCalledTimes(1);
+    // Two forms for one review must not share element ids (labels would target the other form).
+    const ids = Array.from(document.querySelectorAll('[id]')).map((el) => el.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('renders cached verdict chips beside the checklist, labeled advisory, never pre-checked', async () => {
@@ -3355,6 +3527,8 @@ describe('ExpertReviews agent assessment (advisory)', () => {
   });
 
   it('prepares the missing assessments one row at a time', async () => {
+    const mutate = vi.fn();
+    vi.mocked(useReviewAssessment).mockReturnValue(mockAssessmentReturn({ mutate }) as never);
     vi.mocked(generateReviewAssessment).mockResolvedValue({
       review_id: 'x', assessment: ASSESSMENT, cached: false, persisted: true,
     } as never);
@@ -3372,6 +3546,10 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     await userEvent.setup().click(button);
     await waitFor(() => expect(generateReviewAssessment).toHaveBeenCalledTimes(2));
     expect(vi.mocked(generateReviewAssessment).mock.calls.map((c) => c[0])).toEqual(['rev-1', 'rev-3']);
+    // The bulk run marked rev-1 in the shared guard: expanding it must not start a second generation.
+    await userEvent.setup().click(screen.getAllByRole('button', { name: /^review$/i })[0]);
+    await screen.findByRole('button', { name: /approve/i });
+    expect(mutate).not.toHaveBeenCalled();
   });
 
   it('stops the prefetch on the first error and says how far it got', async () => {
@@ -3648,7 +3826,7 @@ def resolve(path: str, old_line: int):
 
 s = DOC.read_text(encoding="utf-8")
 unresolved, changed, last_path = [], 0, None
-ANCHOR = re.compile(r'(<span class="anchor">)(?:([^<:]+):)?(\d+)(</span>)')
+ANCHOR = re.compile(r'(<span class="anchor">)(?:([^<:]*):)?(\d+)(</span>)')  # `*`: ":769" shorthand inherits the previous path
 def fix_anchor(m):
     global last_path, changed
     pre, short, line, post = m.group(1), m.group(2), int(m.group(3)), m.group(4)
@@ -3694,12 +3872,13 @@ NEW=$(git rev-parse --short HEAD)
 python3 <scratchpad>/refresh_anchors.py 28dbafb "$NEW"
 ```
 
-Measured 2026-09-08 on the unchanged tree (28dbafb → f30e9e9df): `changed 35 anchors; unresolved 4`. The four are TWO anchors that already pointed at BLANK lines at 28dbafb, each present once as an anchor and once as an index row; the script cannot resolve a blank needle, so fix them by hand with the current line numbers (the first version of this script also failed on 10 index rows with short names and on `state.py`; both fixed above):
+Measured 2026-09-08 on the unchanged tree (28dbafb → f30e9e9df): `changed 42 anchors; unresolved 5`. Three of the page's anchors cannot be resolved by text: two already pointed at BLANK lines at 28dbafb (each present once as an anchor and once as an index row) and one shorthand anchor (`:1387`, the `_consult_review_gate` call) whose line was rewritten by #1985. Fix them by hand with the current line numbers (earlier versions of this script also silently skipped the 18 `:NNN` shorthand anchors, failed on 10 index rows with short names and on `state.py`; all fixed above):
 
 ```bash
 grep -n '^async def _discover_candidate_questions' src/api/routes/causal.py        # 1679 at f30e9e9df; re-read
 grep -n '^export default function ExpertReviews' frontend/src/pages/ExpertReviews.tsx  # after Task 10's rewrite
-sed -i "s#src/api/routes/causal.py:1677#src/api/routes/causal.py:<n1>#g; s#frontend/src/pages/ExpertReviews.tsx:69#frontend/src/pages/ExpertReviews.tsx:<n2>#g" docs/lineage/causal_dag_lineage.html
+grep -n 'return await self._consult_review_gate(' src/agents/causal_impact/nodes/refutation.py   # 1086 at f30e9e9df; re-read
+sed -i "s#src/api/routes/causal.py:1677#src/api/routes/causal.py:<n1>#g; s#frontend/src/pages/ExpertReviews.tsx:69#frontend/src/pages/ExpertReviews.tsx:<n2>#g; s#<span class=\"anchor\">:1387</span>#<span class=\"anchor\">:<n3></span>#" docs/lineage/causal_dag_lineage.html
 ```
 
 Anchors that reference files this lane created (`ReviewStatusPanel.tsx:1`, `134_…sql:1`) resolve trivially (line 1 exists in both). Any OTHER unresolved anchor means a lane commit moved text: open both versions (`git show 28dbafb:<path> | sed -n '<line>p'`) and fix the number by hand; do not leave a stale anchor.
@@ -3817,9 +3996,15 @@ def call(token, method, path, body=None, timeout=120):
         return json.loads(r.read())
 
 def _psql_rows(where: str) -> dict:
-    sql = ("select test_type, status, coalesce(details_json->>'stopped_for_budget','') as budget, "
-           "coalesce(jsonb_array_length(details_json->'subset_effects'), jsonb_array_length(details_json->'bootstrap_effects'), 0) as n "
-           f"from public.causal_validations where {where} order by created_at desc")
+    # The agent path writes json.dumps(details) INTO the jsonb column, so 480 live
+    # rows are JSON *strings* (measured 2026-09-08: 480 string / 545 object);
+    # decode both shapes or every key read below is NULL.
+    sql = ("with d as (select test_type, status, created_at, "
+           "case when jsonb_typeof(details_json) = 'string' then (details_json #>> '{}')::jsonb else details_json end as dj "
+           f"from public.causal_validations where {where}) "
+           "select test_type, status, coalesce(dj->>'stopped_for_budget','') as budget, "
+           "coalesce(jsonb_array_length(dj->'subset_effects'), jsonb_array_length(dj->'bootstrap_effects'), 0) as n "
+           "from d order by created_at desc")
     proc = subprocess.run(["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tA", "-F", "|", "-c", sql],
                           capture_output=True, text=True, timeout=60)
     found = {}
@@ -3842,9 +4027,11 @@ def db_tests(analysis_id, treatment: str, outcome: str, since_iso: str) -> dict:
         found = _psql_rows(f"estimate_id = '{qid}'")
         if found:
             return found
+    # Linked suites are written with estimate_source='causal_paths' (545 live rows),
+    # so no source filter; the pair + brand + this job's time window pin the run.
     return _psql_rows(
-        f"estimate_source = 'causal_impact_query' and treatment_variable = '{treatment}' "
-        f"and outcome_variable = '{outcome}' and created_at >= '{since_iso}'"
+        f"treatment_variable = '{treatment}' and outcome_variable = '{outcome}' "
+        f"and (brand = '{BRAND}' or brand is null) and created_at >= '{since_iso}'"
     )
 
 def main(label: str, out_dir: str) -> None:
@@ -3926,7 +4113,7 @@ Closes the expert-review loop (spec docs/superpowers/specs/2026-09-08-expert-rev
 - Lineage page rewritten to the shipped state; anchors re-resolved.
 
 ## Measured before building
-0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have. The plan's own assumptions were attacked before Task 1 (section "Adversarial review before Task 1" at the end of this file): three Task-1 stub assumptions measured true, the SQL rule measured against the Python rule on 13 scenarios (one real divergence, fixed), the lineage edit fragments and anchor script measured, the live scripts' field names and the operator's role checked. Codex iter-1 returned REJECT with 1 HIGH + 5 MED; all six are folded in.
+0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have. The plan's own assumptions were attacked before Task 1 (section "Adversarial review before Task 1" at the end of this file): three Task-1 stub assumptions measured true, the SQL rule measured against the Python rule on 13 scenarios (one real divergence, fixed), the lineage edit fragments and anchor script measured, the live scripts' field names and the operator's role checked. Codex iter-1 returned REJECT with 1 HIGH + 5 MED and iter-2 REJECT with 2 HIGH + 4 MED + 1 LOW; all thirteen were verified and folded in (two of them by live measurement: the share lock blocks a racing resolve; the tie-only Python rule keeps every gate test green).
 
 ## Verification
 Baseline discovery run on the pre-lane image: docs/demos/results/<date>_expert_review_loop/baseline.md. Post-deploy impact run, approve/reject re-runs and the switch step follow the spec §7 and are recorded in the same directory.
@@ -4057,7 +4244,7 @@ git -C /home/enunez/Projects/e2i_causal_analytics checkout -b docs/lane1-live-ve
 ### Task 16: Record and close out
 
 - [ ] **Step 1: PR certification comment** — image tag, marker counts, migration + privilege checks, impact table, the two adjudications with review ids and analysis ids, the switch outcome.
-- [ ] **Step 2: Issues** (owner already asked for these to be filed with evidence): (a) "REVIEW band unreachable by construction; band-semantics decision" with the §2 arithmetic and the impact table; (b) "Reconstruction's own interval is unusable (SE 4.9 vs 0.034 reported); never use it as a reference" as a documented caveat; (c) the CausalPFN trial (spec §11) as the next lane; (d) the four simplification candidates (spec §10) as one tracking issue; (e) LOW — `ExpertReviewRepository.get_reviews_for_dag` orders by `created_at` only, so a pending row with the SAME timestamp as a rejection reads reopened-or-not by row order (migration 134 reads a tie as NOT reopened, the conservative side); add a secondary order key.
+- [ ] **Step 2: Issues** (owner already asked for these to be filed with evidence): (a) "REVIEW band unreachable by construction; band-semantics decision" with the §2 arithmetic and the impact table; (b) "Reconstruction's own interval is unusable (SE 4.9 vs 0.034 reported); never use it as a reference" as a documented caveat; (c) the CausalPFN trial (spec §11) as the next lane; (d) the four simplification candidates (spec §10) as one tracking issue; (e) `causal_validation.py` writes `json.dumps(test.details)` into the JSONB `details_json` column, so the agent path's rows are JSON strings (480 live) while other rows are objects (545) — readers must decode both; fix the writer and backfill; (f) `POST /expert-reviews/{id}/assessment` has no in-flight lock, so two concurrent uncached requests both build (the UI now guards client-side).
 - [ ] **Step 3: Memory** — one project memory file for this lane (what the live DB said, the threshold inversion, the arithmetic, the disproof numbers, what the switch step showed), plus a MEMORY.md index line under 200 chars.
 - [ ] **Step 4: Handoff** — `.claude/handoffs/current.md` with `status: complete` (or `in_progress` with the exact next step), and `git worktree remove .worktrees/lane1-review-loop` once merged.
 
@@ -4118,3 +4305,13 @@ expected table are Task 3 Step 4b.
 Left as designed, on purpose: a NON-critical test raising `RefutationError` on a degenerate (zero-variance)
 resample distribution fails the suite closed — the same contract today's F-014 path applies to the DoWhy
 refuters; softening it would substitute a placeholder p-value. Flag for the owner, not a silent change.
+
+### Codex iter-2 findings → dispositions (after the iter-1 fold)
+
+1. HIGH — the tie disposition "documented as conservative" is not equivalence. CONFIRMED → **Task 3b** (new): tie-only rule in `_latest_adjudication`; measured in scratch: 92 existing gate tests stay green (a global re-sort by `created_at` broke two tests whose rows carry no timestamps, hence tie-only), new test red-first.
+2. HIGH — the STABLE predicate inside the UPDATE still leaves a statement-sized window for a rejection committed after the snapshot. CONFIRMED → `FOR SHARE` on the structure's review rows before the UPDATE (rejections are in-place UPDATEs of the pending row, `repository.resolve`). **Measured live, no writes**: with the lock held the racing UPDATE blocked (`while locking tuple … expert_reviews`) until its 3 s `statement_timeout`; after release it went through. First attempt was a false "no block" because the monitor loop matched its own `pg_sleep` query text — recipe fixed (Step 4c).
+3. MED — the evidence reader would see NULL keys because the agent path stores `json.dumps(details)` in the JSONB column. CONFIRMED (480 string rows / 545 object rows live) → decode both shapes; writer fix filed as Task 16 (e).
+4. MED — the fallback filtered `estimate_source='causal_impact_query'` and so excluded linked suites (`'causal_paths'`, 545 rows) and could pick another run. CONFIRMED → no source filter; pair + brand + job window.
+5. MED — duplicate element ids when the linked card and the queue row render the same review. CONFIRMED (`${review.review_id}-${item.id}`) → `useId()` per form instance + an id-uniqueness assertion.
+6. MED — "Prepare assessments" bypassed the shared guard. CONFIRMED → the button marks each id in the guard before its request; test expands a prepared row and asserts no second generation.
+7. LOW — the anchor regex skipped the 18 `:NNN` shorthand anchors. CONFIRMED → `[^<:]*`; re-measured 42 changed / 5 unresolved, third hand-fix (`:1387` → the `_consult_review_gate` call, 1086 at f30e9e9df).
