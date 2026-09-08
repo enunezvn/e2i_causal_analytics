@@ -290,11 +290,15 @@ class TestExpertReviewRepository:
 
     @pytest.mark.asyncio
     async def test_is_dag_approved_true(self, repo, mock_client):
-        """Test is_dag_approved returns True for approved DAG."""
+        """Test is_dag_approved returns True for approved DAG.
+
+        Chain pins the #1972 predicate: validity is ``.or_(gte-or-is.null)``,
+        not a bare ``.gte`` (which drops NULL = permanent rows).
+        """
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.or_.return_value = mock_query
 
         result = await repo.is_dag_approved("abc123")
 
@@ -306,7 +310,7 @@ class TestExpertReviewRepository:
         mock_execute = AsyncMock(return_value=MagicMock(data=[]))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.or_.return_value = mock_query
 
         result = await repo.is_dag_approved("abc123")
 
@@ -314,14 +318,18 @@ class TestExpertReviewRepository:
 
     @pytest.mark.asyncio
     async def test_is_dag_approved_without_client(self):
-        """Test is_dag_approved returns True without client (dev mode)."""
+        """is_dag_approved is fail-closed without a client (#1972).
+
+        It used to return True ("assuming DAG is approved") -- a plausible-wrong
+        value indistinguishable from a verified approval. Every other no-client
+        path in this repository already fails closed.
+        """
         repo = ExpertReviewRepository()
         repo.client = None
 
         result = await repo.is_dag_approved("abc123")
 
-        # Default to True in dev mode
-        assert result is True
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_get_dag_approval(self, repo, mock_client):
@@ -336,7 +344,8 @@ class TestExpertReviewRepository:
         mock_query = MagicMock()
         mock_query.execute = mock_execute
         mock_query.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value.order.return_value = mock_query
+        # #1972: validity goes through .or_(gte-or-is.null), not a bare .gte
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.or_.return_value.order.return_value = mock_query
 
         result = await repo.get_dag_approval("abc123")
 
@@ -564,7 +573,8 @@ class TestExpertReviewRepositoryErrorHandling:
 
         mock_query = MagicMock()
         mock_query.execute = failing_execute
-        client.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value = mock_query
+        # #1972: is_dag_approved's validity filter is .or_(...), not .gte(...)
+        client.table.return_value.select.return_value.eq.return_value.eq.return_value.or_.return_value = mock_query
         client.table.return_value.insert.return_value.execute = failing_execute
 
         repo.client = client

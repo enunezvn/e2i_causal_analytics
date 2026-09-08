@@ -5,16 +5,109 @@ Handles persistence of domain expert reviews for causal DAG validation.
 
 Version: 4.3
 Database: expert_reviews table (010_causal_validation_tables.sql)
+
+Validity semantics (#1972) -- ONE definition, owned by the schema:
+    active approval  ==  approval_status = 'approved'
+                         AND (valid_until IS NULL OR valid_until >= today)
+A NULL ``valid_until`` is a PERMANENT approval (``v_active_expert_approvals``
+labels it ``'permanent'``). ``expired`` is never stored; it is derived from
+``valid_until`` at read time. Every reader in this module routes through the
+helpers below so the gate, the summary and SQL ``is_dag_approved()`` agree.
 """
 
 import json
 import logging
-from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from src.repositories.base import BaseRepository
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# ONE definition of "active approval" (#1972)
+#
+# The schema owns it. 010_causal_validation_tables.sql's is_dag_approved() and
+# the v_active_expert_approvals view both test
+#     approval_status = 'approved' AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
+# and the view labels a NULL valid_until 'permanent'.
+#
+# Why the helpers exist (measured on the live droplet, 2026-09-08): three
+# readers here used ``.gte("valid_until", today)``. Under SQL three-valued
+# logic ``NULL >= date`` is not true, so a NULL row was invisible to them
+# (PostgREST ``valid_until=gte.<today>`` -> 0 of 39 rows; the
+# ``or=(valid_until.gte.<today>,valid_until.is.null)`` form -> 39 of 39) while
+# SQL and get_reviews_for_dag called the same row permanent, and the summary
+# counted it approved. Nothing writes NULL on approval today (submit_review
+# always sets today + validity_days), so the harm was latent -- but a
+# SQL-side write, a backfill or a future permanent approval would have been
+# re-queued by ExpertReviewGate as "not approved". The AST guard in
+# tests/unit/test_repositories/test_approval_expiry_readers_1972.py rejects
+# any raw valid_until filter outside these helpers.
+# ---------------------------------------------------------------------------
+
+ApprovalValidity = Literal["permanent", "active", "expired"]
+
+
+def _valid_until_date(row: Mapping[str, Any]) -> Optional[date]:
+    """Parse a row's ``valid_until``; ``None`` means the approval never expires.
+
+    PostgREST returns the DATE column as an ISO string; rows built in Python
+    may carry a ``date`` (or ``datetime``). The 10-char slice tolerates a
+    timestamp string without changing a plain date.
+    """
+    raw = row.get("valid_until")
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    return date.fromisoformat(str(raw)[:10])
+
+
+def approval_validity(row: Mapping[str, Any], today: Optional[date] = None) -> ApprovalValidity:
+    """Classify a row exactly as ``v_active_expert_approvals.validity_status`` does.
+
+    ``'permanent'`` when ``valid_until`` is NULL; ``'active'`` while
+    ``valid_until >= today`` (inclusive, like SQL ``>= CURRENT_DATE``);
+    ``'expired'`` after that. Pure -- pass ``today`` for determinism.
+    Meaningful only for ``approval_status == 'approved'`` rows: pending and
+    rejected rows carry a NULL ``valid_until`` but are not approvals.
+    """
+    expires = _valid_until_date(row)
+    if expires is None:
+        return "permanent"
+    return "active" if expires >= (today or date.today()) else "expired"
+
+
+def is_active_approval(row: Mapping[str, Any], today: Optional[date] = None) -> bool:
+    """Per-row mirror of SQL ``is_dag_approved()``:
+    ``approval_status = 'approved' AND (valid_until IS NULL OR valid_until >= today)``.
+    """
+    return row.get("approval_status") == "approved" and approval_validity(row, today) != "expired"
+
+
+def _apply_active_validity(query: Any, today: Optional[date] = None) -> Any:
+    """Query-side form of the one definition: ``valid_until >= today OR valid_until IS NULL``.
+
+    The ``or=(...)`` form is required. A bare ``.gte("valid_until", today)``
+    drops NULL rows under three-valued logic -- that was the drift.
+    """
+    day = (today or date.today()).isoformat()
+    return query.or_(f"valid_until.gte.{day},valid_until.is.null")
+
+
+def _apply_expiring_window(query: Any, days: int, today: Optional[date] = None) -> Any:
+    """``today <= valid_until <= today + days`` (both ends inclusive).
+
+    A NULL ``valid_until`` (permanent approval) never matches -- by design, a
+    permanent approval is never "expiring soon".
+    """
+    start = today or date.today()
+    end = start + timedelta(days=days)
+    return query.gte("valid_until", start.isoformat()).lte("valid_until", end.isoformat())
 
 
 class ExpertReviewRepository(BaseRepository):
@@ -26,6 +119,11 @@ class ExpertReviewRepository(BaseRepository):
     - Checking DAG approval status
     - Querying pending reviews for admin UI
     - Managing review validity periods
+
+    Validity: see the module docstring -- NULL ``valid_until`` is permanent,
+    ``expired`` is derived at read time, and every reader goes through
+    ``_apply_active_validity`` / ``_apply_expiring_window`` /
+    ``approval_validity`` (#1972).
 
     Database Schema (expert_reviews):
     - review_id: UUID PRIMARY KEY
@@ -341,20 +439,24 @@ class ExpertReviewRepository(BaseRepository):
             brand: Optional brand filter
 
         Returns:
-            True if DAG has active approval, False otherwise
+            True if DAG has active approval (permanent or unexpired), False
+            otherwise -- including when there is no client to ask (#1972:
+            "assuming approved" was a plausible-wrong value a caller could not
+            tell apart from a verified one; fail-closed, like every other
+            no-client path in this repository).
         """
         if not self.client:
-            # Default to allowing when no client (development mode)
-            logger.warning("No Supabase client, assuming DAG is approved")
-            return True
+            logger.warning(
+                "No Supabase client; cannot verify DAG approval, treating it as NOT approved"
+            )
+            return False
 
         try:
-            query = (
+            query = _apply_active_validity(
                 self.client.table(self.table_name)
                 .select("review_id")
                 .eq("dag_version_hash", dag_hash)
                 .eq("approval_status", "approved")
-                .gte("valid_until", date.today().isoformat())
             )
 
             if brand:
@@ -379,21 +481,20 @@ class ExpertReviewRepository(BaseRepository):
             brand: Optional brand filter
 
         Returns:
-            Active approval record or None if not approved
+            The newest active approval record (permanent or unexpired --
+            same predicate as ``is_dag_approved``), or None if not approved
         """
         if not self.client:
             return None
 
         try:
-            query = (
+            query = _apply_active_validity(
                 self.client.table(self.table_name)
                 .select("*")
                 .eq("dag_version_hash", dag_hash)
                 .eq("approval_status", "approved")
-                .gte("valid_until", date.today().isoformat())
-                .order("approved_at", desc=True)
-                .limit(1)
             )
+            query = query.order("approved_at", desc=True).limit(1)
 
             if brand:
                 query = query.eq("brand", brand)
@@ -450,31 +551,30 @@ class ExpertReviewRepository(BaseRepository):
         brand: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Get reviews expiring within the specified days.
+        Get approved reviews whose ``valid_until`` falls within the next
+        ``days_until_expiry`` days (today and the horizon both inclusive).
 
-        Used for proactive renewal notifications.
+        Used for proactive renewal notifications. A PERMANENT approval
+        (NULL ``valid_until``) is never "expiring soon" and is never returned
+        here -- renewal reminders are only for time-limited approvals. This is
+        the one reader that deliberately does NOT use the active-approval
+        predicate: "active" includes permanent, "expiring" excludes it.
 
         Args:
             days_until_expiry: Number of days until expiration
             brand: Optional brand filter
 
         Returns:
-            List of soon-to-expire review records
+            List of soon-to-expire review records, soonest first
         """
         if not self.client:
             return []
 
-        expiry_date = (date.today() + timedelta(days=days_until_expiry)).isoformat()
-
         try:
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("approval_status", "approved")
-                .gte("valid_until", date.today().isoformat())
-                .lte("valid_until", expiry_date)
-                .order("valid_until", desc=False)
-            )
+            query = _apply_expiring_window(
+                self.client.table(self.table_name).select("*").eq("approval_status", "approved"),
+                days_until_expiry,
+            ).order("valid_until", desc=False)
 
             if brand:
                 query = query.eq("brand", brand)
@@ -496,7 +596,10 @@ class ExpertReviewRepository(BaseRepository):
 
         Args:
             dag_hash: SHA256 hash of the DAG structure
-            include_expired: Whether to include expired reviews
+            include_expired: When False (default), rows whose ``valid_until``
+                has passed are dropped using the same predicate as
+                ``is_dag_approved``; a NULL ``valid_until`` (pending and
+                rejected rows, and permanent approvals) is kept
             brand: Optional brand filter; when set, only reviews for this brand are returned
 
         Returns:
@@ -514,7 +617,7 @@ class ExpertReviewRepository(BaseRepository):
             )
 
             if not include_expired:
-                query = query.or_(f"valid_until.gte.{date.today().isoformat()},valid_until.is.null")
+                query = _apply_active_validity(query)
 
             if brand:
                 query = query.eq("brand", brand)
@@ -535,6 +638,17 @@ class ExpertReviewRepository(BaseRepository):
     ) -> Optional[str]:
         """
         Create a renewal review that supersedes an existing one.
+
+        Validity (#1972): the renewal is a ``pending`` row carrying
+        ``supersedes_review_id`` and NO validity of its own -- ``submit_review``
+        assigns ``valid_until = today + validity_days`` when it is approved.
+        The original row is not modified and nothing filters on
+        ``supersedes_review_id``: ``get_dag_approval`` simply prefers the newest
+        ``approved_at``. So renewing a PERMANENT approval (NULL ``valid_until``)
+        makes the DAG time-limited once the renewal is approved, and if that
+        renewal later expires the original permanent row is the active
+        approval again. The original is also not checked for being approved
+        or active -- any existing row may be renewed.
 
         Args:
             original_review_id: UUID of the review to renew
@@ -594,7 +708,13 @@ class ExpertReviewRepository(BaseRepository):
             brand: Optional brand filter
 
         Returns:
-            Summary dict with counts by status
+            Summary dict with counts by status. ``pending`` / ``approved`` /
+            ``rejected`` / ``expired`` partition the rows; ``expiring_soon`` is
+            a SUBSET of ``approved`` (within 14 days). ``expired`` is derived
+            from ``valid_until`` via ``approval_validity`` -- the same predicate
+            the gate's queries use -- and a NULL ``valid_until`` is a permanent
+            approval: counted in ``approved``, never in ``expired`` or
+            ``expiring_soon`` (#1972).
         """
         if not self.client:
             return {
@@ -625,22 +745,23 @@ class ExpertReviewRepository(BaseRepository):
 
             for r in reviews:
                 status = r.get("approval_status")
-                valid_until = r.get("valid_until")
 
                 if status == "pending":
                     pending += 1
                 elif status == "rejected":
                     rejected += 1
                 elif status == "approved":
-                    if valid_until:
-                        exp_date = date.fromisoformat(valid_until)
-                        if exp_date < today:
-                            expired += 1
-                        elif exp_date <= soon:
-                            expiring_soon += 1
-                            approved += 1
-                        else:
-                            approved += 1
+                    # ONE definition (#1972): approval_validity() is the same
+                    # predicate _apply_active_validity() sends to PostgREST.
+                    exp_date = _valid_until_date(r)
+                    if exp_date is None:
+                        # NULL valid_until = permanent: approved, never expiring.
+                        approved += 1
+                    elif approval_validity(r, today) == "expired":
+                        expired += 1
+                    elif exp_date <= soon:
+                        expiring_soon += 1
+                        approved += 1
                     else:
                         approved += 1
 
