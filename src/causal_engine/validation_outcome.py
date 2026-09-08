@@ -12,7 +12,6 @@ Phase 4 of Causal Validation Protocol:
 
 References (#1979):
 - docs/decisions/adr-017-discovery-corroboration-and-honest-provenance.md
-- docs/reports/causal-validation-pipeline-review-20260605.md
 - docs/lineage/causal_dag_lineage.html (governance section)
 """
 
