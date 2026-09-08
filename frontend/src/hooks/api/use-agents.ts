@@ -7,7 +7,9 @@
  * in `pages/AgentOrchestration.tsx` (#1941): the fetches themselves were
  * already validated, so this is a consistency refactor — the query options
  * below reproduce the page's previous ones exactly (30s poll, no retry, no
- * explicit staleTime).
+ * explicit staleTime). `useAgentStatus()` has since absorbed the four further
+ * inline copies that lived in Home, ExecutiveSummary and the two chat
+ * surfaces (#1958 step 1).
  *
  * @module hooks/api/use-agents
  */
@@ -32,15 +34,15 @@ import type {
 /**
  * Cache keys for the agent-orchestration queries.
  *
- * `status()` still returns the bare `['agent-status']` value it replaced, and
- * is now the only DEFINITION of that key in the app: Home, ExecutiveSummary
- * and both chat surfaces read `/agents/status` through `useAgentStatus()` as
- * of #1958 (step 1), so no component hardcodes the key any more and all five
- * consumers still share one cache entry.
- * Namespacing the value (e.g. `['agents', 'status']`) is #1958 step 2, kept
- * out of that migration so it stayed behaviour-preserving. With every consumer
- * on the hook it is now a single safe edit here — there is no second literal
- * left for it to split the cache entry against.
+ * `status()` is namespaced `['agents', 'status']` and is the only DEFINITION
+ * of that key in the app: Home, ExecutiveSummary, AgentOrchestration and both
+ * chat surfaces all read `/agents/status` through `useAgentStatus()`, so the
+ * five consumers share one cache entry. Keep it that way — an inline
+ * `useQuery` carrying its own literal would split that one entry into two and
+ * let the copies refetch independently and drift out of sync. That is why the
+ * namespacing had to wait for #1958 step 1 to move every consumer onto the
+ * hook first; it landed here as step 2. `use-agents.cache-key.test.ts` pins
+ * both halves.
  *
  * `activity()` / `tierMetrics()` fold their result-affecting params into the
  * key so a different window cannot collide with the cached 24h read. Their
@@ -48,7 +50,7 @@ import type {
  * and no other module reads those keys.
  */
 export const agentKeys = {
-  status: () => ['agent-status'] as const,
+  status: () => ['agents', 'status'] as const,
   activity: (hours: number = 24, limit: number = 50) =>
     ['agent-activity', hours, limit] as const,
   tierMetrics: (hours: number = 24) => ['tier-metrics', hours] as const,
