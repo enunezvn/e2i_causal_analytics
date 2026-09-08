@@ -108,8 +108,9 @@ class Switch:
     why: str
 
 
-#: Every switch #1931 found unforwarded. Read by `src/`, documented as operator-
-#: settable, and absent from `x-common-env` until this issue.
+#: Every switch #1931 found unforwarded (read by `src/`, documented as operator-
+#: settable, absent from `x-common-env` until that issue) -- plus every operator
+#: switch added since, so a new knob cannot ship host-side only.
 _SWITCHES: dict[str, Switch] = {
     "ADAPTIVE_CRITERIA": Switch(
         reader="src/agents/ml_foundation/scope_definer/nodes/criteria_validator.py",
@@ -158,6 +159,14 @@ _SWITCHES: dict[str, Switch] = {
         reader_literal='os.environ.get("HEAVY_OFFLOAD_ENABLED", "false").strip().lower() in _TRUTHY',
         read=_truthy_flag("false"),
         why="P2 heavy-offload feature flag, DARK by default",
+    ),
+    # #1971: added with the switch itself. Reader: unset -> False; "" -> False
+    # (in _FALSY); truthy set -> True. So `${VAR:-}` cannot flip behaviour.
+    "CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL": Switch(
+        reader="src/agents/causal_impact/nodes/refutation.py",
+        reader_literal="raw = os.environ.get(_ENV_REQUIRE_DAG_APPROVAL)",
+        read=_empty_guarded(False),
+        why="expert-review enforcement on the causal_impact path (halt a REVIEW band without approval)",
     ),
 }
 
