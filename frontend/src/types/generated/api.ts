@@ -15976,6 +15976,11 @@ export interface components {
              * @description ID of the expert-review queue row created/looked-up for this DAG when the gate is REVIEW or BLOCK; None when the result auto-proceeded.
              */
             expert_review_id?: string | null;
+            /**
+             * Expert Review Decision
+             * @description ExpertReviewGate decision recorded on a REVIEW/BLOCK gate: proceed (active structural approval) / renewal_required / pending_review / blocked. None when the gate was not consulted. Advisory: the run is not halted on it (#1971); consumers that need approved structure filter on this field.
+             */
+            expert_review_decision?: string | null;
             /** Tests Passed */
             tests_passed?: number | null;
             /** Tests Total */
