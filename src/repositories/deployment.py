@@ -204,7 +204,15 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
 
         Args:
             model_registry_id: ID of the model being deployed
-            deployment_name: Unique deployment name
+            deployment_name: Deployment name. NOT unique, despite what this
+                line claimed until #1957 -- ``ml_deployments`` has no UNIQUE
+                constraint or index on the column, and the tier-0 caller emits
+                one name per brand+outcome because the run suffix it appends
+                (``experiment_id[:8]``) is a constant, so repeat runs collide
+                by construction. Do not key a lookup on it. A specific run is
+                identified through ``model_registry_id`` ->
+                ``ml_model_registry.mlflow_run_id`` / ``experiment_id``; the
+                name never carried that.
             environment: Target environment (development, staging, production)
             endpoint_name: Name of the endpoint
             endpoint_url: URL of the deployed endpoint
