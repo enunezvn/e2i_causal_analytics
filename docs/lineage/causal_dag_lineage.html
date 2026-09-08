@@ -498,7 +498,7 @@
     </li>
     <li class="stage"><a href="#idx"><span class="dot" style="background:var(--line-strong)"></span>Code anchor index</a></li>
   </ol>
-  <div class="side-note">Every claim on this page is anchored to a <span class="anchor">file:line</span> in the repository at commit <span class="mono">e5becbc</span>. Line numbers drift; symbols do not.</div>
+  <div class="side-note">Every claim on this page is anchored to a <span class="anchor">file:line</span> in the repository at commit <span class="mono">28dbafb</span>. Line numbers drift; symbols do not.</div>
 </nav>
 
 <main>
@@ -648,7 +648,7 @@
     <li><strong>One-hot encoding.</strong> <code>geographic_region</code> becomes <code>geographic_region=&lt;level&gt;</code> float dummies, sorted levels, first level dropped as reference. The DAG's node names are these dummy names. <span class="anchor">causal.py:2762</span></li>
     <li><strong>Row cap.</strong> Request default 1500, bounds 100–20000. The leaderboard uses 5000 because measured medium-severity effects fail the refutation gate at 1500 and pass at 5000. <span class="anchor">src/api/schemas/causal.py:501</span> <span class="anchor">causal.py:1030</span></li>
   </ol>
-  <p>The loaded frame is placed at <code>state["data_cache"]["estimation_data"]</code>. This exact key matters: the graph builder previously read a key that was always <code>None</code> for real callers, which silently disabled discovery on every production run until it was fixed. <span class="anchor">graph_builder.py:757</span></p>
+  <p>The loaded frame is placed at <code>state["data_cache"]["estimation_data"]</code>. This exact key matters: the graph builder previously read a key that was always <code>None</code> for real callers, which silently disabled discovery on every production run until it was fixed. <span class="anchor">graph_builder.py:732</span></p>
 
   <h3 id="s1-4">1.4 Declared knowledge</h3>
   <p>Four things are asserted rather than learned. They are the ochre edges on the map.</p>
@@ -657,7 +657,7 @@
     <dl class="kv">
       <dt>modeled_confounders</dt><dd><strong>Adjustment-guarantee channel.</strong> Every name here is unioned into the final adjustment set regardless of what the DAG shows. It forces no DAG edge.</dd>
       <dt>anchored_confounders</dt><dd><strong>Structural-prior channel.</strong> When the key is present, exactly these names become required <code>conf→T</code> and <code>conf→Y</code> edges for guided discovery. The API passes an <strong>empty list</strong>, so in production only the estimand edge is prior-required and the data selects the confounder edges.</dd>
-      <dt>confounders</dt><dd>Legacy single channel. When <code>anchored_confounders</code> is absent, the builder falls back to anchoring <code>modeled_confounders</code>, then <code>confounders</code>, so pre-split callers keep their old shape. <span class="anchor">graph_builder.py:604</span></dd>
+      <dt>confounders</dt><dd>Legacy single channel. When <code>anchored_confounders</code> is absent, the builder falls back to anchoring <code>modeled_confounders</code>, then <code>confounders</code>, so pre-split callers keep their old shape. <span class="anchor">graph_builder.py:579</span></dd>
     </dl>
     <div class="callout measured"><div class="label">Measured, recorded in the source</div><p>Declaring every covariate as a required edge produced a DAG that was identical for real data and pure noise (F1 0.78, SHD 4 on the recovery benchmark). Empty anchors give F1 mean 0.93 and SHD ≤ 1 at n = 2000, and let the gate score real bootstrap evidence instead of a prior-determined renormalisation.</p></div>
   </div></details>
@@ -671,7 +671,7 @@
     <p><code>_infer_variables_from_query</code> matches six treatment keywords and six outcome keywords and defaults to <code>hcp_engagement_level → patient_conversion_rate</code>. The estimation node refuses to run when the treatment or outcome is not a frame column, precisely so this default can never silently estimate against the wrong positional columns. <span class="anchor">graph_builder.py:287</span> <span class="anchor">estimation.py:744</span></p>
   </div></details>
   <details class="proc" data-stage="prior"><summary>Structural priors for the learner <span class="sub">CausalPriorKnowledge</span></summary><div class="body">
-    <p>The only prior-edge channel into structure learning has three fields: <code>tiers</code> (an earlier tier cannot be caused by a later one), <code>required_edges</code>, and <code>forbidden_edges</code>. The graph builder is the sole producer. It sets <code>tiers = [[all covariates], [T], [Y]]</code> and <code>required_edges = [(T, Y)] + anchored pairs</code>. Nothing in the repository ever sets <code>forbidden_edges</code>. <span class="anchor">src/causal_engine/discovery/base.py:94</span> <span class="anchor">graph_builder.py:786</span></p>
+    <p>The only prior-edge channel into structure learning has three fields: <code>tiers</code> (an earlier tier cannot be caused by a later one), <code>required_edges</code>, and <code>forbidden_edges</code>. The graph builder is the sole producer. It sets <code>tiers = [[all covariates], [T], [Y]]</code> and <code>required_edges = [(T, Y)] + anchored pairs</code>. Nothing in the repository ever sets <code>forbidden_edges</code>. <span class="anchor">src/causal_engine/discovery/base.py:94</span> <span class="anchor">graph_builder.py:761</span></p>
   </div></details>
 
   <h3 id="s1-5">1.5 The causal_paths registry</h3>
@@ -729,20 +729,20 @@ otherwise                                → do not act</code></pre>
     <li><code>data_cache["estimation_data"]</code> present? Missing raises a distinct error that the node catches and records as <code>discovery_skip_reason</code> plus a warning. The run degrades to the manual DAG and says so.</li>
     <li><code>discovery_guided</code> and both T and Y are frame columns? Yes → guided single-algorithm PC. No → the legacy unguided GES + PC ensemble with bootstrap off and the latent diagnostic off.</li>
   </ol>
-  <p><span class="anchor">graph_builder.py:119</span> <span class="anchor">:757</span> <span class="anchor">:785</span></p>
+  <p><span class="anchor">graph_builder.py:119</span> <span class="anchor">:732</span> <span class="anchor">:760</span></p>
 
   <h3 id="s2-3">2.3 Guided discovery configuration</h3>
   <div class="tablewrap"><table>
     <thead><tr><th>Knob</th><th>Guided (production)</th><th>Unguided (legacy consumers)</th><th>Source</th></tr></thead>
     <tbody>
-      <tr><td>algorithms</td><td><code>[PC]</code> only, because only PC consumes <code>BackgroundKnowledge</code></td><td><code>state.discovery_algorithms</code>, default <code>["ges","pc"]</code></td><td>graph_builder.py:826</td></tr>
+      <tr><td>algorithms</td><td><code>[PC]</code> only, because only PC consumes <code>BackgroundKnowledge</code></td><td><code>state.discovery_algorithms</code>, default <code>["ges","pc"]</code></td><td>graph_builder.py:801</td></tr>
       <tr><td>tiers</td><td><code>[[covariates], [T], [Y]]</code>; covariates exclude <code>is_synthetic</code></td><td>none</td><td>:797</td></tr>
       <tr><td>required_edges</td><td><code>[(T, Y)]</code> + <code>(c, T), (c, Y)</code> per anchored confounder present in the frame</td><td>none</td><td>:814</td></tr>
-      <tr><td class="mono">alpha</td><td class="num">0.05</td><td class="num">0.05</td><td>base.py:146</td></tr>
-      <tr><td class="mono">ensemble_threshold</td><td class="num">0.5</td><td class="num">0.5</td><td>base.py:148</td></tr>
+      <tr><td class="mono">alpha</td><td class="num">0.05</td><td class="num">0.05</td><td>base.py:152</td></tr>
+      <tr><td class="mono">ensemble_threshold</td><td class="num">0.5</td><td class="num">0.5</td><td>base.py:154</td></tr>
       <tr><td class="mono">bootstrap_resamples</td><td class="num">20</td><td class="num">0</td><td>graph_builder.py:26</td></tr>
       <tr><td class="mono">latent_diagnostic</td><td>on</td><td>off</td><td>:833, :851</td></tr>
-      <tr><td class="mono">random_state</td><td class="num">42</td><td class="num">42</td><td>base.py:150</td></tr>
+      <tr><td class="mono">random_state</td><td class="num">42</td><td class="num">42</td><td>base.py:156</td></tr>
     </tbody>
   </table></div>
   <p>Why single-algorithm PC is the production choice: observational discovery only recovers a Markov equivalence class, so unconstrained PC or GES emitted <code>treatment → disease_severity</code> and a reversed estimand on <code>patient_journeys</code>. Tiers fix orientation and let the data decide <em>which</em> covariates are confounders. The gate evaluates the run against the minimal expectation <code>expected_edges = [(T, Y)]</code>.</p>
@@ -752,20 +752,20 @@ otherwise                                → do not act</code></pre>
     <pre><code>alpha=config.alpha, indep_test=…, stable=True, uc_rule=0, uc_priority=-1
 node_names=…, background_knowledge=build_background_knowledge(prior, node_names)   # guided only</code></pre>
     <p>Independence test: <code>fisherz</code> if all columns are float or int dtypes or <code>assume_gaussian</code>; <code>chisq</code> if every column has ≤ 10 distinct values; otherwise <code>fisherz</code>. CPDAG undirected edges become both adjacency cells. A parse failure must reach the outer handler so the result is <code>converged=False</code>, never a silently empty converged graph. <span class="anchor">src/causal_engine/discovery/algorithms/pc_wrapper.py:96</span> <span class="anchor">:154</span></p>
-    <p>Input validation for every algorithm: non-empty, no missing values ("impute first"), at least two columns. <span class="anchor">base.py:422</span></p>
-    <p>Each algorithm is bounded by the runner's <code>timeout_seconds</code> (default 300). A timeout is recorded as a non-converged run with an error, so the gate scores no evidence rather than an empty converged graph; the worker thread itself cannot be cancelled and its result is abandoned (issue #1978). <span class="anchor">runner.py:427</span></p>
+    <p>Input validation for every algorithm: non-empty, no missing values ("impute first"), at least two columns. <span class="anchor">base.py:428</span></p>
+    <p>Each algorithm is bounded by the runner's <code>timeout_seconds</code> (default 300). A timeout is recorded as a non-converged run with an error, so the gate scores no evidence rather than an empty converged graph; the worker thread itself cannot be cancelled and its result is abandoned (issue #1978). <span class="anchor">runner.py:434</span></p>
   </div></details>
   <details class="proc" data-stage="disc"><summary>Ensemble voting and cycle removal <span class="sub">_build_ensemble, _remove_cycles</span></summary><div class="body">
     <pre><code>n_converged = converged algorithms only
 min_votes   = max(1, int(n_converged * ensemble_threshold))
 confidence  = n_votes / n_converged          # denominator is converged, not attempted</code></pre>
-    <p>Then <code>_remove_cycles</code> repeatedly finds a cycle and drops its lowest-confidence edge until none remain. This is the <strong>only</strong> acyclicity guarantee in the system; the gate does not re-check, and the former inert <code>require_dag</code> flag was deleted as false assurance. <span class="anchor">runner.py:545</span> <span class="anchor">:770</span> <span class="anchor">gate.py:44</span></p>
+    <p>Then <code>_remove_cycles</code> repeatedly finds a cycle and drops its lowest-confidence edge until none remain. This is the <strong>only</strong> acyclicity guarantee in the system; the gate does not re-check, and the former inert <code>require_dag</code> flag was deleted as false assurance. <span class="anchor">runner.py:579</span> <span class="anchor">:804</span> <span class="anchor">gate.py:44</span></p>
   </div></details>
   <details class="proc" data-stage="disc"><summary>Bootstrap edge stability <span class="sub">the corroboration signal for a single-algorithm run</span></summary><div class="body">
-    <p>Runs only when <code>bootstrap_resamples &gt; 0</code>, exactly one algorithm converged, and edges exist. Resamples rows with replacement (seed 42), re-runs the algorithm, and sets <code>bootstrap_stability = recovered / succeeded</code> per edge, overwriting the vacuous <code>confidence = 1.0</code>. If fewer than <code>max(2, n // 2)</code> resamples succeed the stability is <code>None</code> and the gate treats the run as uncorroborated. <span class="anchor">runner.py:628</span> <span class="anchor">:678</span></p>
+    <p>Runs only when <code>bootstrap_resamples &gt; 0</code>, exactly one algorithm converged, and edges exist. Resamples rows with replacement (seed 42), re-runs the algorithm, and sets <code>bootstrap_stability = recovered / succeeded</code> per edge, overwriting the vacuous <code>confidence = 1.0</code>. If fewer than <code>max(2, n // 2)</code> resamples succeed the stability is <code>None</code> and the gate treats the run as uncorroborated. <span class="anchor">runner.py:662</span> <span class="anchor">:712</span></p>
   </div></details>
   <details class="proc" data-stage="disc"><summary>FCI latent-confounding diagnostic <span class="sub">annotates, never gates</span></summary><div class="body">
-    <p>A second, unguided FCI run (priors stripped, no bootstrap) reports bidirected edges, the PAG signature of an unmeasured common cause. The builder sets <code>flag = True</code> only when the <strong>estimand pair itself</strong> is bidirected. Measured on the platform's binary-logit frames: 10/10 detection on a null-effect latent DGP at n = 2000, 0/10 false alarms on observed-confounder and noise controls; covariate bidirected pairs are false alarms on every control and stay in the payload as data only. The interpretation node surfaces the warning only when the E-value corroborates fragility, or fails open on a terminal path where it cannot check. <span class="anchor">runner.py:700</span> <span class="anchor">graph_builder.py:904</span> <span class="anchor">interpretation.py:253</span></p>
+    <p>A second, unguided FCI run (priors stripped, no bootstrap) reports bidirected edges, the PAG signature of an unmeasured common cause. The builder sets <code>flag = True</code> only when the <strong>estimand pair itself</strong> is bidirected. Measured on the platform's binary-logit frames: 10/10 detection on a null-effect latent DGP at n = 2000, 0/10 false alarms on observed-confounder and noise controls; covariate bidirected pairs are false alarms on every control and stay in the payload as data only. The interpretation node surfaces the warning only when the E-value corroborates fragility, or fails open on a terminal path where it cannot check. <span class="anchor">runner.py:734</span> <span class="anchor">graph_builder.py:879</span> <span class="anchor">interpretation.py:253</span></p>
   </div></details>
 
   <h3 id="s2-5">2.5 The discovery gate</h3>
@@ -826,7 +826,7 @@ decision:
   </div>
 
   <h3 id="s2-6">2.6 Merge rules: from gate decision to shipped DAG</h3>
-  <p><code>_build_dag_with_discovery</code> is where a discovered structure meets the curated one. It returns the DAG, the list of augmented edges, and a flag <code>dag_overridden</code> that is the only honest discriminator when the gate said ACCEPT but the shipped graph is manual. <span class="anchor">graph_builder.py:938</span></p>
+  <p><code>_build_dag_with_discovery</code> is where a discovered structure meets the curated one. It returns the DAG, the list of augmented edges, and a flag <code>dag_overridden</code> that is the only honest discriminator when the gate said ACCEPT but the shipped graph is manual. <span class="anchor">graph_builder.py:913</span></p>
   <div class="tablewrap"><table>
     <thead><tr><th>Gate decision</th><th>What ships</th><th>Guards</th><th>dag_overridden</th></tr></thead>
     <tbody>
@@ -848,10 +848,10 @@ decision:
 
   <h3 id="s2-7">2.7 Backdoor identification and the adjustment guarantee</h3>
   <details class="proc" data-stage="disc" open><summary>Backdoor search <span class="sub">_find_adjustment_sets, _satisfies_backdoor_criterion</span></summary><div class="body">
-    <p>Pearl's criterion, checked with NetworkX d-separation on the proper backdoor graph (T's outgoing edges removed): no member may be a descendant of T, and Z must d-separate T and Y. Candidates are all nodes except T, Y, and T's descendants, which excludes colliders and prevents M-bias by construction. Search by increasing size up to 3, return the first non-empty band, at most 3 sets. If no set of size ≤ 3 works, try the full candidate set (with more than 3 independent confounders it is the only admissible set). Only then fall back to <code>[[]]</code>. A degenerate T = Y returns <code>[[]]</code> rather than crashing. <span class="anchor">graph_builder.py:457</span> <span class="anchor">:545</span></p>
+    <p>Pearl's criterion, checked with NetworkX d-separation on the proper backdoor graph (T's outgoing edges removed): no member may be a descendant of T, and Z must d-separate T and Y. Candidates are all nodes except T, Y, and T's descendants, which excludes colliders and prevents M-bias by construction. Search by increasing size up to 3, return the first non-empty band, at most 3 sets. If no set of size ≤ 3 works, try the full candidate set (with more than 3 independent confounders it is the only admissible set). Only then fall back to <code>[[]]</code>. A degenerate T = Y returns <code>[[]]</code> rather than crashing. <span class="anchor">graph_builder.py:457</span> <span class="anchor">:520</span></p>
   </div></details>
   <details class="proc" data-stage="prior" open><summary>Adjustment guarantee <span class="sub">_apply_adjustment_guarantee</span></summary><div class="body">
-    <p>Every declared covariate (<code>modeled_confounders</code>, else <code>confounders</code>) that is a node of the shipped DAG and not a descendant of T is unioned into every adjustment set. The merged set is <strong>not</strong> re-checked against the backdoor criterion: declaration wins over DAG evidence by design. The measured reason: tiers-only discovery drops a true confounder from the DAG in 7 of 20 benchmark runs, and this union is what makes those misses harmless. The residual risk (a declared pre-treatment collider whose parents are latent) is assigned to the STRICT adjustment-set policy downstream, with M-bias detection tracked in issue #359. <span class="anchor">graph_builder.py:614</span></p>
+    <p>Every declared covariate (<code>modeled_confounders</code>, else <code>confounders</code>) that is a node of the shipped DAG and not a descendant of T is unioned into every adjustment set. The merged set is <strong>not</strong> re-checked against the backdoor criterion: declaration wins over DAG evidence by design. The measured reason: tiers-only discovery drops a true confounder from the DAG in 7 of 20 benchmark runs, and this union is what makes those misses harmless. The residual risk (a declared pre-treatment collider whose parents are latent) is assigned to the STRICT adjustment-set policy downstream, with M-bias detection tracked in issue #359. <span class="anchor">graph_builder.py:589</span></p>
     <div class="callout caution"><div class="label">Semantics that estimation depends on</div><p><code>[[]]</code> means a validated-empty backdoor (a randomized or exogenous treatment, estimate unadjusted). <code>[]</code> would mean "no set", which the estimation node treats as <code>None</code>. The two must never be conflated. <span class="anchor">estimation.py:737</span></p></div>
   </div></details>
 
@@ -867,7 +867,7 @@ graph confidence:
   else    → 0.85 if T and Y known, else 0.5
 
 dag_version_hash = sha256(json({"nodes": sorted, "edges": sorted, "treatment_nodes": sorted, "outcome_nodes": sorted}))</code></pre>
-  <p>The hash covers structure and estimand only. Adjustment sets, confidence, DOT text, discovery metadata, and the latent diagnostic are excluded, which is why the diagnostic is attached to the graph <em>after</em> hashing (its runtime is nondeterministic) and why a separate <code>adjustment_set_hash</code> exists for the policy node. The DAG hash is the primary key of the expert-review table at 15 lookup sites and must never be mutated after this node. <span class="anchor">graph_builder.py:683</span> <span class="anchor">:221</span> <span class="anchor">src/causal_engine/dag_hash.py:20</span> <span class="anchor">:126</span></p>
+  <p>The hash covers structure and estimand only. Adjustment sets, confidence, DOT text, discovery metadata, and the latent diagnostic are excluded, which is why the diagnostic is attached to the graph <em>after</em> hashing (its runtime is nondeterministic) and why a separate <code>adjustment_set_hash</code> exists for the policy node. The DAG hash is the primary key of the expert-review table at 15 lookup sites and must never be mutated after this node. <span class="anchor">graph_builder.py:658</span> <span class="anchor">:221</span> <span class="anchor">src/causal_engine/dag_hash.py:20</span> <span class="anchor">:126</span></p>
 </section>
 
 <!-- ====================================================== STAGE 3 -->
@@ -942,7 +942,7 @@ discovered_confounders = adjustment_sets[0] − everything declared through any 
   <div class="callout finding"><div class="label">Live status</div><p>Default OFF, and no producer fills <code>role_attributions</code> for this agent. Today the node is a double-gated no-op whose only effect is the two hash stamps.</p></div>
 
   <h3 id="s4-2">4.2 Refutation gate</h3>
-  <p>After estimation, the DoWhy model is rebuilt from the same DAG inputs with the same estimator that produced the ATE, and five refuters run under a cooperative compute deadline (720 s budget inside a 900 s hard cap for the API path). The gate that results drives LangGraph routing: <code>block</code> goes to the error handler. <span class="anchor">src/causal_engine/refutation_runner.py:414</span> <span class="anchor">causal.py:174</span></p>
+  <p>After estimation, the DoWhy model is rebuilt from the same DAG inputs with the same estimator that produced the ATE, and five refuters run under a cooperative compute deadline (720 s budget inside a 900 s hard cap for the API path). The gate that results drives LangGraph routing: <code>block</code> goes to the error handler. <span class="anchor">src/causal_engine/refutation_runner.py:417</span> <span class="anchor">causal.py:174</span></p>
   <div class="tablewrap"><table>
     <thead><tr><th>Test</th><th>Default sims (API override)</th><th>Critical</th><th>Pass rule</th><th>Warning band</th><th class="num">Weight</th></tr></thead>
     <tbody>
@@ -958,7 +958,7 @@ decision:  any critical test FAILED → BLOCK
            confidence ≥ 0.70 → PROCEED · ≥ 0.50 → REVIEW · else BLOCK
            (a critical test in WARNING still permits PROCEED, by design)</code></pre>
   <details class="proc" data-stage="gov"><summary>E-value details <span class="sub">standardisation, null-crossing, randomized designs</span></summary><div class="body">
-    <p><code>rr = exp(0.91 · |effect| / outcome_std)</code>, <code>E = rr + sqrt(rr·(rr − 1))</code>. Standardising by the outcome's standard deviation is mandatory; without it the number depends only on units. The verdict uses the conservative CI E-value, which is set to 1.0 whenever the CI straddles zero. When <code>randomized_design</code> is true the test is SKIPPED as not applicable rather than failed, because the honest 8-point <code>nba_triggers</code> RCT effect was hard-blocked by this gate before that fix. <span class="anchor">refutation_runner.py:1442</span></p>
+    <p><code>rr = exp(0.91 · |effect| / outcome_std)</code>, <code>E = rr + sqrt(rr·(rr − 1))</code>. Standardising by the outcome's standard deviation is mandatory; without it the number depends only on units. The verdict uses the conservative CI E-value, which is set to 1.0 whenever the CI straddles zero. When <code>randomized_design</code> is true the test is SKIPPED as not applicable rather than failed, because the honest 8-point <code>nba_triggers</code> RCT effect was hard-blocked by this gate before that fix. <span class="anchor">refutation_runner.py:1445</span></p>
   </div></details>
   <details class="proc" data-stage="gov"><summary>Fail-closed surfaces <span class="sub">what was removed and why</span></summary><div class="body">
     <ul>
@@ -982,7 +982,7 @@ decision:  any critical test FAILED → BLOCK
   <h3 id="s4-3">4.3 Expert review</h3>
   <p>The human governance surface is a table of reviews keyed by <code>dag_version_hash</code>, a gate object that consults it, an operator-only API, and a React page. Here is how each behaves and when it is reached.</p>
   <details class="proc" data-stage="gov" open><summary>When the gate is consulted <span class="sub">only on REVIEW or BLOCK bands, and never to stop the run</span></summary><div class="body">
-    <p>The refutation node calls <code>ExpertReviewGate.check_approval</code> only when its own gate returned REVIEW or BLOCK. The call passes the hash, brand, T, Y, the sanitised DAG snapshot, and the ids of the <code>causal_validations</code> rows it just wrote so the review can show its statistical evidence. The result is recorded on state as <code>expert_review_decision</code>, <code>expert_review_id</code>, and a caveat string, and both the id and the decision are surfaced in the API's refutation summary (issue #1971). Nothing reads those fields to halt execution. The caveat names an expert approval only when a real approval row exists; the no-repository bypass used to claim one (fixed, issue #1969). <span class="anchor">nodes/refutation.py:892</span> <span class="anchor">:1379</span></p>
+    <p>The refutation node calls <code>ExpertReviewGate.check_approval</code> only when its own gate returned REVIEW or BLOCK. The call passes the hash, brand, T, Y, the sanitised DAG snapshot, and the ids of the <code>causal_validations</code> rows it just wrote so the review can show its statistical evidence. The result is recorded on state as <code>expert_review_decision</code>, <code>expert_review_id</code>, and a caveat string, and both the id and the decision are surfaced in the API's refutation summary (issue #1971). Nothing reads those fields to halt execution. The caveat names an expert approval only when a real approval row exists; the no-repository bypass used to claim one (fixed, issue #1969). <span class="anchor">nodes/refutation.py:892</span> <span class="anchor">:1387</span></p>
     <div class="callout finding"><div class="label">Finding</div><p>On the live agent path a DAG can be estimated against before any human has approved it. The gate queues and annotates; it does not block. The only true precondition is the SQL function <code>can_use_estimate()</code> in migration 010, which no Python code calls. Whether new structures should hard-block is an open product decision, tracked in issue #1971.</p></div>
   </div></details>
   <details class="proc" data-stage="gov"><summary>Gate state machine <span class="sub">ExpertReviewGate.check_approval</span></summary><div class="body">
@@ -994,7 +994,7 @@ decision:  any critical test FAILED → BLOCK
       <li>Nothing exists and <code>auto_create_review</code> with a requester → create a <code>dag_approval</code> row → PENDING_REVIEW. The refutation node builds its gate with <code>auto_create_review=True</code> explicitly; the class default is False so no orphan rows are created by callers without a human queue consumer.</li>
       <li>Otherwise <span class="pill crit">BLOCKED</span>.</li>
     </ol>
-    <p><span class="anchor">src/causal_engine/expert_review_gate.py:138</span> <span class="anchor">nodes/refutation.py:1486</span></p>
+    <p><span class="anchor">src/causal_engine/expert_review_gate.py:138</span> <span class="anchor">nodes/refutation.py:1494</span></p>
   </div></details>
   <details class="proc" data-stage="gov"><summary>Table, constraints, and lifecycle <span class="sub">expert_reviews</span></summary><div class="body">
     <dl class="kv">
@@ -1110,22 +1110,22 @@ decision:  any critical test FAILED → BLOCK
       <tr><td><span class="pill input">input</span></td><td>should_act</td><td>src/data/role_attribution.py:181</td><td>trust gate C1</td></tr>
       <tr><td><span class="pill prior">prior</span></td><td>KNOWN_CAUSAL_RELATIONSHIPS</td><td>src/agents/causal_impact/nodes/graph_builder.py:57</td><td>13 hard-coded pharma-commercial edges</td></tr>
       <tr><td><span class="pill prior">prior</span></td><td>_infer_variables_from_query</td><td>src/agents/causal_impact/nodes/graph_builder.py:287</td><td>keyword T/Y with hazardous defaults</td></tr>
-      <tr><td><span class="pill prior">prior</span></td><td>_resolve_anchored_confounders</td><td>src/agents/causal_impact/nodes/graph_builder.py:604</td><td>structural-prior channel resolution</td></tr>
+      <tr><td><span class="pill prior">prior</span></td><td>_resolve_anchored_confounders</td><td>src/agents/causal_impact/nodes/graph_builder.py:579</td><td>structural-prior channel resolution</td></tr>
       <tr><td><span class="pill prior">prior</span></td><td>CausalPriorKnowledge</td><td>src/causal_engine/discovery/base.py:94</td><td>tiers, required_edges, forbidden_edges</td></tr>
       <tr><td><span class="pill prior">prior</span></td><td>build_background_knowledge</td><td>src/causal_engine/discovery/background_knowledge.py:24</td><td>priors → causal-learn BackgroundKnowledge</td></tr>
       <tr><td><span class="pill disc">disc</span></td><td>GraphBuilderNode.execute</td><td>src/agents/causal_impact/nodes/graph_builder.py:96</td><td>the whole construction sequence</td></tr>
-      <tr><td><span class="pill disc">disc</span></td><td>_run_discovery</td><td>src/agents/causal_impact/nodes/graph_builder.py:739</td><td>guided vs unguided config, gate evaluation</td></tr>
+      <tr><td><span class="pill disc">disc</span></td><td>_run_discovery</td><td>src/agents/causal_impact/nodes/graph_builder.py:714</td><td>guided vs unguided config, gate evaluation</td></tr>
       <tr><td><span class="pill disc">disc</span></td><td>PCAlgorithm.discover</td><td>src/causal_engine/discovery/algorithms/pc_wrapper.py:96</td><td>stable PC, independence test choice</td></tr>
-      <tr><td><span class="pill disc">disc</span></td><td>DiscoveryRunner._build_ensemble</td><td>src/causal_engine/discovery/runner.py:545</td><td>voting over converged runs</td></tr>
-      <tr><td><span class="pill disc">disc</span></td><td>DiscoveryRunner._remove_cycles</td><td>src/causal_engine/discovery/runner.py:770</td><td>the only acyclicity guarantee</td></tr>
-      <tr><td><span class="pill disc">disc</span></td><td>_bootstrap_edge_stability</td><td>src/causal_engine/discovery/runner.py:628</td><td>corroboration for single-algorithm runs</td></tr>
-      <tr><td><span class="pill disc">disc</span></td><td>_run_latent_diagnostic</td><td>src/causal_engine/discovery/runner.py:700</td><td>unguided FCI, bidirected edges</td></tr>
+      <tr><td><span class="pill disc">disc</span></td><td>DiscoveryRunner._build_ensemble</td><td>src/causal_engine/discovery/runner.py:579</td><td>voting over converged runs</td></tr>
+      <tr><td><span class="pill disc">disc</span></td><td>DiscoveryRunner._remove_cycles</td><td>src/causal_engine/discovery/runner.py:804</td><td>the only acyclicity guarantee</td></tr>
+      <tr><td><span class="pill disc">disc</span></td><td>_bootstrap_edge_stability</td><td>src/causal_engine/discovery/runner.py:662</td><td>corroboration for single-algorithm runs</td></tr>
+      <tr><td><span class="pill disc">disc</span></td><td>_run_latent_diagnostic</td><td>src/causal_engine/discovery/runner.py:734</td><td>unguided FCI, bidirected edges</td></tr>
       <tr><td><span class="pill disc">disc</span></td><td>DiscoveryGate.evaluate</td><td>src/causal_engine/discovery/gate.py:137</td><td>confidence formula and decision ladder</td></tr>
-      <tr><td><span class="pill disc">disc</span></td><td>_build_dag_with_discovery</td><td>src/agents/causal_impact/nodes/graph_builder.py:938</td><td>merge rules and ACCEPT overrides</td></tr>
+      <tr><td><span class="pill disc">disc</span></td><td>_build_dag_with_discovery</td><td>src/agents/causal_impact/nodes/graph_builder.py:913</td><td>merge rules and ACCEPT overrides</td></tr>
       <tr><td><span class="pill disc">disc</span></td><td>_add_curated_confounder_edges</td><td>src/agents/causal_impact/nodes/graph_builder.py:403</td><td>atomic common-cause placement</td></tr>
       <tr><td><span class="pill disc">disc</span></td><td>_find_adjustment_sets</td><td>src/agents/causal_impact/nodes/graph_builder.py:457</td><td>backdoor search</td></tr>
-      <tr><td><span class="pill disc">disc</span></td><td>_apply_adjustment_guarantee</td><td>src/agents/causal_impact/nodes/graph_builder.py:614</td><td>declared covariates unioned in</td></tr>
-      <tr><td><span class="pill disc">disc</span></td><td>_compute_edge_provenance</td><td>src/agents/causal_impact/nodes/graph_builder.py:683</td><td>required_prior / discovered / curated</td></tr>
+      <tr><td><span class="pill disc">disc</span></td><td>_apply_adjustment_guarantee</td><td>src/agents/causal_impact/nodes/graph_builder.py:589</td><td>declared covariates unioned in</td></tr>
+      <tr><td><span class="pill disc">disc</span></td><td>_compute_edge_provenance</td><td>src/agents/causal_impact/nodes/graph_builder.py:658</td><td>required_prior / discovered / curated</td></tr>
       <tr><td><span class="pill disc">disc</span></td><td>compute_dag_hash</td><td>src/causal_engine/dag_hash.py:20</td><td>SHA-256 over sorted structure and estimand</td></tr>
       <tr><td><span class="pill prior">outcome</span></td><td>CausalGraph</td><td>src/agents/causal_impact/state.py:14</td><td>the DAG contract on state</td></tr>
       <tr><td><span class="pill prior">outcome</span></td><td>_agent_state_to_response</td><td>src/api/routes/causal.py:3673</td><td>dag_source classifier, discovered_confounders, status</td></tr>
@@ -1133,8 +1133,8 @@ decision:  any critical test FAILED → BLOCK
       <tr><td><span class="pill prior">outcome</span></td><td>store_causal_path</td><td>src/agents/causal_impact/memory_hooks.py:524</td><td>FalkorDB CAUSES edge for the estimand pair</td></tr>
       <tr><td><span class="pill gov">gov</span></td><td>apply_adjustment_set_policy</td><td>src/agents/causal_impact/nodes/adjustment_set_policy.py:306</td><td>OFF / ADVISORY / STRICT, trust-gated</td></tr>
       <tr><td><span class="pill gov">gov</span></td><td>EstimationNode.execute</td><td>src/agents/causal_impact/nodes/estimation.py:688</td><td>reads adjustment_sets[0]; refuses degenerate graphs</td></tr>
-      <tr><td><span class="pill gov">gov</span></td><td>RefutationRunner.PASS_THRESHOLDS / GATE_THRESHOLDS</td><td>src/causal_engine/refutation_runner.py:445</td><td>test pass rules and gate bands</td></tr>
-      <tr><td><span class="pill gov">gov</span></td><td>_determine_gate_decision</td><td>src/causal_engine/refutation_runner.py:1677</td><td>critical fail → block; 0.70 / 0.50 bands</td></tr>
+      <tr><td><span class="pill gov">gov</span></td><td>RefutationRunner.PASS_THRESHOLDS / GATE_THRESHOLDS</td><td>src/causal_engine/refutation_runner.py:448</td><td>test pass rules and gate bands</td></tr>
+      <tr><td><span class="pill gov">gov</span></td><td>_determine_gate_decision</td><td>src/causal_engine/refutation_runner.py:1680</td><td>critical fail → block; 0.70 / 0.50 bands</td></tr>
       <tr><td><span class="pill gov">gov</span></td><td>_GATE_STATUS_TRANSITIONS</td><td>src/agents/causal_impact/nodes/refutation.py:66</td><td>causal_paths promotion map</td></tr>
       <tr><td><span class="pill gov">gov</span></td><td>_consult_review_gate</td><td>src/agents/causal_impact/nodes/refutation.py:892</td><td>expert-review consult on REVIEW / BLOCK</td></tr>
       <tr><td><span class="pill gov">gov</span></td><td>ExpertReviewGate.check_approval</td><td>src/causal_engine/expert_review_gate.py:138</td><td>PROCEED / RENEWAL_REQUIRED / PENDING_REVIEW / BLOCKED</td></tr>
