@@ -1216,10 +1216,10 @@ write time.
 | **E · Deploy & ops runbooks** | U2 pipeline items, C1 maintenance-cron, C2 deploy-operations, C3 reseed, U12–U16 runbook fixes, U18 | **DONE** — #1921, #1922, #1927 |
 | **F · Data dictionary catch-up** | X7 (U19–U25), X9 (U23 + pointers), X8 in docs/data, U26, U27, U28 | **DONE** — #1926 |
 | **G · Architecture & API docs** | U6 remainder (X10, X11, middleware, routes, KG types, package map, new service sections), U17 chat.md, C9 decision outcome, C10, C11 | **DONE** — #1923, #1927, #1929 |
-| **H · Method docs & frontend** | U29–U33, U34 archive, U7 | **DONE** — #1928 (frontend/README.md deferred — deploy trigger) |
-| **I · Code items** | N1–N10 as small separate PRs (each needs an intent check; N1/N7 first) | **INTENT-CHECKED AND FILED** — 12 issues #1930–#1937, #1939–#1942; N8 disproved and deliberately not filed. See *Bundle I disposition*. |
+| **H · Method docs & frontend** | U29–U33, U34 archive, U7 | **DONE** — #1928; U7 `frontend/README.md` shipped separately as **#1944** (2026-09-07) |
+| **I · Code items** | N1–N10 as small separate PRs (each needs an intent check; N1/N7 first) | **SHIPPED** — 12 issues #1930–#1937, #1939–#1942 filed, then **all 12 closed** by PRs #1946–#1956 (+ follow-ons #1960/#1961); N8 disproved and deliberately not filed. See *Bundle I disposition* and *Bundle-I execution record*. |
 
-*Last updated: 2026-09-07 (phase 1 complete; **phase 2 doc bundles A–H executed** — see Phase-2 execution record).*
+*Last updated: 2026-09-08 (phase 1 complete; **phase 2 doc bundles A–H executed** — see Phase-2 execution record; **bundle I executed** — all 12 issues closed, see Bundle-I execution record).*
 
 ---
 
@@ -1281,7 +1281,7 @@ These are recorded so a future audit does not re-derive them from this file.
 - **U4 `docker/env.example` → 3-line pointer**, `Makefile` hint fixed.
 
 ### Deliberately NOT done
-- **U7 `frontend/README.md`** — correct and ready, but `frontend/**` is a deploy trigger, so merging it rebuilds and redeploys production. Held for an explicit go.
+- ~~**U7 `frontend/README.md`** — correct and ready, but `frontend/**` is a deploy trigger, so merging it rebuilds and redeploys production. Held for an explicit go.~~ **Superseded 2026-09-07:** shipped as **#1944** once the go was given; four of its claims were disproved by an adversarial pass and corrected in-branch before merge (`711e29af8`, `acab79120`, `4f62c1d97`).
 - **Bundle I (N1–N10)** — code/config items. Each needs an intent check under REASON-BEFORE-RULES, and several fire a deploy. Two were confirmed and widened during phase 2: **N1** (`ADAPTIVE_CRITERIA` and friends are documented as rollback switches but are inert in containers — now also `SEGMENT_ANALYSIS_BUDGET_SECONDS` and the compute-pool vars) and **N7** (`e2i_agent_name` has no `cohort_profiler` value; latent only because that agent writes no memory rows — and the same enum carries `fairness_guardian` and `corpus_ingestion`, which are not in the 22-roster).
 
 ### New code defects surfaced by phase 2 (not in N1–N10)
@@ -1346,3 +1346,74 @@ Forwarding `"$@"` to the three unguarded stages is **worse** than the bug:
 id; `history_capture.py` strips `--`-prefixed args and recognises only `--purge`, so
 `--dry-run` is **silently swallowed and the stage still writes**. The fix must guard
 the stages, not forward the flag to them.
+
+---
+
+## Bundle-I execution record (2026-09-07 → 2026-09-08)
+
+All 12 filed issues are **closed**. Six non-bug items landed 09-07, the six bug
+items 09-08, each in its own worktree with its own PR. The headline finding
+mirrors phase 2's, one level up: **phase 2 learned that the ledger's *facts* were
+often wrong; bundle I learned that the issues' *prescriptions* were.** Three of
+the filed fixes were unsafe or wrong as written and were disproved before being
+applied — two of them would have shipped a regression wearing a fix's credibility.
+
+| Issue | PR | Outcome |
+|---|---|---|
+| #1930 | #1950 | `--dry-run` now **guards** the three stages that cannot take the flag (never forwards it — see *The trap*, below) |
+| #1931 + #1933 | #1955 | one stated env-forwarding policy for `x-common-env`; 8 dropped operator switches forwarded, the one deliberately host-side-only no longer read |
+| #1932 | #1951 | `e2i_agent_name` accepts `cohort_profiler` |
+| #1934 | #1946 | alertmanager **discards** instead of posting to a route no router serves |
+| #1935 | #1948 | superseded `docker-compose.monitoring.yml` deleted |
+| #1936 | #1949 | false "droplet exposes no `SUPABASE_DB_URL`" reason removed from both files |
+| #1937 | #1947 | `docs/api/index.html` git-ignored |
+| #1939 | #1952, then #1960 (via #1957) | Step-7 deployment name derived from `CONFIG.brand`/`target`, slugged to BentoML's alphabet |
+| #1940 | #1953 | three stale comments + a trace-label bug from the fast-tier rename |
+| #1941 | #1954 | `AgentOrchestration` queries layered into `api/agents` + `hooks/api/use-agents` |
+| #1942 | #1956 | **no fix** — the prescribed fix was disproved; mechanism kept, both behaviours pinned by tests |
+
+Adjacent: **#1938** corrected `docs/data/07` on the two roster-less enum values,
+**#1943** recorded the disposition above, **#1944** shipped U7, and **#1961**
+turned the `AGENT_METHOD_MAP` Tier 1-5 pin from documented into real.
+
+### Prescriptions that did not survive their own disproof
+
+- **#1942 — the prescribed fix was a regression.** Gating `useE2ICopilot()` behind
+  `useCopilotEnabled()` rests on "`enabled === false` implies no provider above".
+  False here: `CopilotKitWrapper` renders its children **unconditionally**, so
+  `E2ICopilotProvider` is mounted and `E2IContext` is real even when copilot is
+  off — which is the dev default *and* the CI e2e build. The swap would have
+  routed filter/highlight writes into an isolated local `useState` in exactly
+  those environments, silently breaking readers like `AIAgentInsights.tsx`.
+  `useCopilotEnabled()` cannot distinguish "no provider" from "provider mounted,
+  copilot off". The `try/catch` was kept and the distinction pinned by tests.
+- **#1931 — the remedy would have performed the rollback it was enabling.** The
+  issue proposed adding all eight vars with empty defaults "so the in-code SSOT
+  still governs". But `${VAR:-}` does not leave a var unset — docker sets it to
+  the **empty string** (measured on the live container: `printenv ADAPTIVE_CRITERIA`
+  → rc 1 absent, `printenv CHATBOT_RAG_REWRITE_COT` → rc 0 present-and-empty).
+  Seven readers treat `""` as unset; `ADAPTIVE_CRITERIA`'s does not
+  (`os.getenv(..., "true")` → `""` → **False**), so the edit would have switched
+  the v3 adaptive engine **off platform-wide** on the next deploy. Forwarded as
+  `${ADAPTIVE_CRITERIA:-true}` instead, mirroring the in-code default.
+- **#1939 — raw interpolation produces illegal names.** The proposed
+  `f"{CONFIG.brand.lower()}_{CONFIG.target_outcome}_..."` fails **5 of 8**
+  realistic inputs against the *installed* validators: `--brand`/`--target` are
+  free-form and BentoML's tag regex (`^[a-z0-9]([-._a-z0-9]*[a-z0-9])?$`, ≤63) is
+  the binding constraint, strictly tighter than MLflow's. The fix slugs and trims
+  each part instead.
+- **#1933's own body was wrong about the harm.** It claimed the span records
+  `claude-sonnet-4-6`, "a plausible-looking id that is never the model actually
+  called". It does not — the red-first test for that string **passed against
+  unfixed code**. Defect B masked defect A: the operator-precedence bug threw
+  `model_name` away before it was recorded, so the observable value was
+  `"unknown"`. The harm was **under-attribution, not mis-attribution**.
+
+### A fix that removed a misleading string and added one
+
+#1952 correctly replaced the hard-coded `kisqali_discontinuation_` literal, but
+its replacement appended `experiment_id[:8]`, which at that call site is always
+the constant `"tier0_e2"` — a suffix that *looks* like a unique run id and is not.
+Filed as **#1957** and dropped in **#1960**, with the repository docs corrected
+where uniqueness was claimed (`0c2b16579`). A fix inherits the credibility of the
+thing it fixed; that is exactly when a new misleading string is hardest to see.
