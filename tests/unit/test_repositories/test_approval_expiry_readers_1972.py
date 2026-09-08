@@ -765,6 +765,84 @@ class TestRenewalRow:
 
 
 # --------------------------------------------------------------------------
+# R3 structural guard: a READER's except-handler must re-raise
+# --------------------------------------------------------------------------
+
+WRITERS = frozenset(
+    {
+        "create_review",
+        "_find_pending_review_id",
+        "submit_review",
+        "update_agent_assessment",
+        "update_dag_structure",
+        "renew_review",
+    }
+)
+
+
+def find_swallowing_readers(source: str, writers: frozenset[str]) -> List[str]:
+    """Every `except` handler inside a non-writer function must contain a
+    `raise` statement (substring checks are not enough: `pass` that falls
+    through to `return []`, or a log message containing the word "raise",
+    both swallow the error)."""
+    offenders: List[str] = []
+    for fn in _functions(ast.parse(source)):
+        if fn.name in writers:
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.ExceptHandler):
+                if not any(isinstance(n, ast.Raise) for n in ast.walk(node)):
+                    offenders.append(f"{fn.name}: {ast.unparse(node).splitlines()[0]}")
+    return offenders
+
+
+SWALLOWING_READERS = {
+    "pass-then-return": """
+async def reader(self):
+    try:
+        return (await self.client.table("t").select("*").execute()).data
+    except Exception:
+        pass
+    return []
+""",
+    "log-text-says-raise": """
+async def reader(self):
+    try:
+        return (await self.client.table("t").select("*").execute()).data
+    except Exception as e:
+        logger.error(f"cannot raise here: {e}")
+        return []
+""",
+    "returns-zeros": """
+async def reader(self):
+    try:
+        return (await self.client.table("t").select("*").execute()).data
+    except Exception as e:
+        logger.error(f"failed: {e}")
+        return {"pending": 0}
+""",
+}
+
+RERAISING_READER = """
+async def reader(self):
+    try:
+        return (await self.client.table("t").select("*").execute()).data
+    except Exception as e:
+        logger.error(f"failed: {e}")
+        raise
+"""
+
+SWALLOWING_WRITER = """
+async def submit_review(self):
+    try:
+        return bool((await self.client.table("t").update({}).execute()).data)
+    except Exception as e:
+        logger.error(f"failed: {e}")
+        return False
+"""
+
+
+# --------------------------------------------------------------------------
 # R1 (lane-1971 audit): a store error must not read as "nothing on file"
 # --------------------------------------------------------------------------
 
@@ -867,30 +945,25 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
             assert "Raises" in (fn.__doc__ or ""), fn.__name__
 
     def test_no_reader_swallows_a_query_error_structurally(self):
-        """AST: inside ExpertReviewRepository, no `except Exception` handler
-        that wraps a `.execute()` call may `return` a value -- it must re-raise.
-        Writers (create_review, submit_review, update_*, renew_review) are the
-        documented exceptions: their False/None is a fail-closed non-success,
-        not a plausible-wrong read."""
-        tree = ast.parse(REPO_FILE.read_text(encoding="utf-8"))
-        writers = {
-            "create_review",
-            "_find_pending_review_id",
-            "submit_review",
-            "update_agent_assessment",
-            "update_dag_structure",
-            "renew_review",
-        }
-        offenders = []
-        for fn in _functions(tree):
-            if fn.name in writers:
-                continue
-            for node in ast.walk(fn):
-                if isinstance(node, ast.ExceptHandler):
-                    body_src = ast.unparse(node)
-                    if "return" in body_src and "raise" not in body_src:
-                        offenders.append(f"{fn.name}: {body_src.splitlines()[0]}")
+        """AST: inside ExpertReviewRepository, every `except` handler in a
+        READER must re-raise. Writers (create_review, submit_review, update_*,
+        renew_review, and the creation-recovery lookup _find_pending_review_id)
+        are the documented exceptions: their False/None is a fail-closed
+        non-success, not a plausible-wrong read."""
+        offenders = find_swallowing_readers(REPO_FILE.read_text(encoding="utf-8"), WRITERS)
         assert offenders == [], offenders
+
+    def test_positive_control_swallowing_handlers_are_caught(self):
+        """codex LOW (R3 round): substring checks missed `except: pass` that
+        falls through to `return []`, and a handler whose LOG TEXT contains
+        the word "raise". The check must look for an actual raise statement."""
+        for name, module in SWALLOWING_READERS.items():
+            found = find_swallowing_readers(module, WRITERS)
+            assert found and all(o.startswith("reader:") for o in found), (name, found)
+
+    def test_positive_control_reraising_reader_and_writer_are_allowed(self):
+        assert find_swallowing_readers(RERAISING_READER, WRITERS) == []
+        assert find_swallowing_readers(SWALLOWING_WRITER, WRITERS) == []
 
 
 # --------------------------------------------------------------------------
