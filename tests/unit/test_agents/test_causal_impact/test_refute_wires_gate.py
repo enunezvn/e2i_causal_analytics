@@ -15,7 +15,8 @@ passes its result into the node. These tests pin:
    ``create_review`` once with ``review_type="dag_approval"`` (the C1 enum) and
    surfaces ``needs_review=True`` + ``expert_review_decision="pending_review"``.
 3. Supabase absent (factory raises) -> ``_build_expert_review_gate`` returns
-   None and the node still flags ``needs_review=True`` (no crash, no orphan row).
+   None and the node still flags ``needs_review=True`` (no crash, no orphan row);
+   the bare gate then reports ``unavailable``, never ``proceed`` (#1971).
 
 NO live PostgREST insert: the gate is backed by a kwargs-capturing fake repo, so
 the live ``expert_reviews`` table is never touched.
@@ -190,19 +191,21 @@ class TestBypassNeverClaimsApproval:
 
     @pytest.mark.asyncio
     async def test_bare_gate_bypass_never_claims_expert_approval(self):
-        """A bare gate (repository=None) returns PROCEED/is_approved=True with no
-        review_id. That is a dev/test convenience — and exactly what a prod
-        ServiceConnectionError degrades to — so the caveat must not tell the
-        user an unreachable Supabase "expert-approved" the DAG."""
+        """A bare gate (repository=None) is exactly what a prod
+        ServiceConnectionError degrades to. #1969 stopped the caveat from
+        claiming approval; #1971 stops the DECISION from saying "proceed" when
+        nothing was checked: it is ``unavailable``, with no review_id, and the
+        caveat says the gate was not consulted."""
         node = RefutationNode(expert_review_gate=ExpertReviewGate(repository=None))
         fields = await node._consult_review_gate(
             {"treatment_var": "t", "outcome_var": "y", "dag_version_hash": "x"},
             _review_suite(),
         )
-        assert fields["expert_review_decision"] == "proceed"
+        assert fields["expert_review_decision"] == "unavailable"
         assert fields["expert_review_id"] is None
         assert "expert-approved" not in fields["review_caveat"]
-        assert "needs expert review" in fields["review_caveat"]
+        assert "could not be consulted" in fields["review_caveat"]
+        assert "REVIEW" in fields["review_caveat"]
 
     @pytest.mark.asyncio
     async def test_real_approval_row_still_surfaces_reviewer(self):

@@ -1,0 +1,58 @@
+-- ============================================================================
+-- Migration 133: retire the SQL can_use_estimate(estimate_id, dag_hash) (#1971)
+-- ============================================================================
+-- WHAT: DROP FUNCTION IF EXISTS public.can_use_estimate(UUID, VARCHAR).
+--
+-- WHY: two functions shared this name and did not share a contract (#1982).
+--   * database/ml/010_causal_validation_tables.sql
+--       CREATE OR REPLACE FUNCTION can_use_estimate(p_estimate_id UUID,
+--       p_dag_hash VARCHAR(64)) -- "combines validation gate and expert
+--       approval": FALSE on a BLOCK gate, TRUE on PROCEED, and on a REVIEW
+--       gate TRUE only if is_dag_approved(p_dag_hash).
+--   * src/repositories/causal_validation.py  CausalValidationRepository
+--       .can_use_estimate(estimate_id) -- one argument, never consulted expert
+--       approval, and returned TRUE when there were no validation rows at all
+--       (fail-open).
+--   Neither had a caller (measured 2026-09-08: no src/ reference, no
+--   dependent function / view / policy in the live database). The hazard was
+--   that someone would wire the Python one up believing the SQL contract and
+--   silently enforce nothing. #1971 retires BOTH: the Python method is
+--   deleted in the same change, and this migration drops the SQL function.
+--
+-- WHAT REPLACES IT: nothing needs a second definition of "usable".
+--   * causal_paths.validation_status -- pinned by migration 119 ('validated'
+--     asserts "RefutationSuite evidence exists and passed", schema-enforced)
+--     and moved ONLY by the causal_impact RefutationNode (the sole promoter)
+--     -- is the ONE definition every reader uses (the Home dashboard and the
+--     value-chain leaderboard filter .eq("validation_status", "validated")).
+--     One definition across readers is the #1902 lesson.
+--   * The gate contract the SQL function promised now runs on the LIVE agent
+--     path instead of in an uncalled function: the RefutationNode honours a
+--     human REJECTION of the DAG structure on every refutation band (never
+--     promotes, withholds the estimate), and the owner's switch
+--     CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL (env; default off) makes a REVIEW-band
+--     estimate without an active structural approval halt honestly with the
+--     review id and how to resolve it. PROCEED never needs approval, exactly
+--     as the SQL function said.
+--
+-- SCOPE: this file touches only the function. is_dag_approved(),
+-- get_validation_gate(), expert_reviews and causal_validations are untouched.
+-- The baseline file ml/010 is deliberately NOT edited (applied 2026-06-04;
+-- applied migrations are not rewritten). Consequence, documented rather than
+-- hidden: scripts/run_migrations.sh applies database/migrations BEFORE
+-- database/ml, so on a BRAND-NEW database this DROP no-ops (IF EXISTS) and
+-- ml/010 then re-creates the function. On the live droplet (010 long applied)
+-- it is dropped for good. Nothing calls it either way
+-- (tests/unit/test_database/test_migration_133_retire_can_use_estimate.py
+-- pins the absence of any src/ caller). Removing it from the baseline is a
+-- separate, owner-approved edit of an applied file.
+--
+-- Idempotent (IF EXISTS). Rehearsed on the live database inside
+-- BEGIN; ... ROLLBACK; -- function gone inside the transaction, present
+-- again after the rollback.
+-- ----------------------------------------------------------------------------
+
+DROP FUNCTION IF EXISTS public.can_use_estimate(UUID, VARCHAR);
+
+NOTIFY pgrst, 'reload schema';
+-- (No COMMIT; run_migrations.sh owns the outer --single-transaction.)

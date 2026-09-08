@@ -15980,12 +15980,12 @@ export interface components {
             needs_review: boolean;
             /**
              * Expert Review Id
-             * @description ID of the expert-review queue row created/looked-up for this DAG when the gate is REVIEW or BLOCK; None when the result auto-proceeded.
+             * @description ID of the expert-review row for this DAG structure: the queue row created/looked-up on a REVIEW or BLOCK gate, the approval row when one is active, or the rejection row when a human rejected the structure (any gate). None when no row was involved.
              */
             expert_review_id?: string | null;
             /**
              * Expert Review Decision
-             * @description ExpertReviewGate decision recorded on a REVIEW/BLOCK gate: proceed (active structural approval) / renewal_required / pending_review / blocked. None when the gate was not consulted. Advisory: the run is not halted on it (#1971); consumers that need approved structure filter on this field.
+             * @description ExpertReviewGate decision for the DAG structure: proceed (active structural approval) / renewal_required (approval expiring) / pending_review (queued; resolve via POST /expert-reviews/{id}/resolve) / rejected (a human rejected this structure) / blocked (no approval, no review could be queued) / unavailable (the gate could not be consulted; nothing was checked or queued). Recorded on REVIEW/BLOCK gates, and on a PROCEED gate only when a rejection was found. None when not consulted. Approval is STRUCTURAL and never promotes a borderline estimate. The run is halted (status 'failed', reason in warnings) on 'rejected' always, and on pending_review/blocked/unavailable only when CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true (default off, #1971).
              */
             expert_review_decision?: string | null;
             /** Tests Passed */

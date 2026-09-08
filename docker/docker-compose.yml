@@ -275,6 +275,15 @@ x-common-env: &common-env
   # flips, this must flip with it (pinned by
   # tests/integration/test_compose_env_operator_switch_forwarding.py).
   ADAPTIVE_CRITERIA: ${ADAPTIVE_CRITERIA:-true}
+  # Expert-review enforcement on the causal_impact path (#1971). Default OFF:
+  # a REVIEW-band estimate queues its DAG for review and carries the gate
+  # decision + caveat; the run continues (post-hoc sign-off). Set true to make
+  # a REVIEW-band run without an active structural approval halt with the
+  # review id and how to resolve it. A human REJECTION of the structure halts
+  # regardless of this switch. Empty default is safe here: the reader
+  # (src/agents/causal_impact/nodes/refutation.py) treats "" exactly like
+  # unset (off), so host-unset behaviour is unchanged by the forwarding.
+  CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL: ${CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL:-}
   # KPI synthetic-visibility (demo/review). Default OFF -> production's
   # migration-066 synthetic-exclusion gate stands. A synthetic-gold-only
   # instance opts in by setting E2I_KPI_INCLUDE_SYNTHETIC=true in its host .env:

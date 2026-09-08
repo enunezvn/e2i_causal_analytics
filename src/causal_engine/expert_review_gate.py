@@ -7,6 +7,7 @@ Integrates with ExpertReviewRepository for persistence.
 Version: 4.3
 """
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -56,12 +57,78 @@ def sanitize_dag_structure(causal_graph: Optional[Mapping[str, Any]]) -> Optiona
 
 
 class ReviewGateDecision(Enum):
-    """Expert review gate decisions."""
+    """Expert review gate decisions.
+
+    ``is_approved`` is True only for PROCEED / RENEWAL_REQUIRED (a real, active
+    approval row). Every other value means "no usable approval", and they are
+    deliberately distinct so a consumer never has to guess WHY:
+
+    * PENDING_REVIEW -- a queue row exists; a human can resolve it
+      (``POST /expert-reviews/{review_id}/resolve``).
+    * REJECTED -- a human adjudicated this structure and turned it down.
+      Durable: never re-queued on a later run (#1970); honoured on EVERY
+      refutation band, PROCEED included (#1971).
+    * BLOCKED -- no approval, no pending row, and no review could be queued.
+    * UNAVAILABLE -- the gate could not be consulted at all (no repository /
+      review store unreachable). Nothing was checked and nothing was queued.
+      Replaces the old no-repository bypass that answered PROCEED with
+      ``is_approved=True`` for a DAG nobody had looked at (#1969, #1971).
+    """
 
     PROCEED = "proceed"  # DAG has active approval
     PENDING_REVIEW = "pending_review"  # Review request created, awaiting approval
     RENEWAL_REQUIRED = "renewal_required"  # Approval expiring soon, needs renewal
-    BLOCKED = "blocked"  # No approval and no pending review
+    REJECTED = "rejected"  # A human rejected this structure (durable verdict)
+    BLOCKED = "blocked"  # No approval, no pending review, none could be created
+    UNAVAILABLE = "unavailable"  # Gate could not be consulted; nothing checked/queued
+
+
+# Upper bound on a rejection reason carried into caveats / error messages.
+_REASON_MAX_CHARS = 300
+
+
+def rejection_reason_from_row(row: Mapping[str, Any]) -> Optional[str]:
+    """The reviewer's stated reason for a rejection, read from the review row.
+
+    Precedence mirrors what ``ExpertReviewRepository.submit_review`` writes:
+    ``concerns_raised`` (the specific concerns) first, then ``comments_json``
+    (free-form notes; stored via ``json.dumps`` so it may come back as a JSON
+    string -- a dict is rendered ``key: value``), then ``conditions``.
+    Bounded so a caveat stays readable. ``None`` when the reviewer recorded
+    nothing -- never a placeholder.
+    """
+    reason: Optional[str] = None
+
+    concerns = row.get("concerns_raised")
+    if isinstance(concerns, (list, tuple)):
+        parts = [str(c).strip() for c in concerns if str(c).strip()]
+        if parts:
+            reason = "; ".join(parts)
+
+    if reason is None:
+        comments: Any = row.get("comments_json")
+        if isinstance(comments, str) and comments.strip():
+            try:
+                comments = json.loads(comments)
+            except ValueError:
+                comments = comments.strip()
+        if isinstance(comments, Mapping):
+            parts = [f"{k}: {v}" for k, v in comments.items() if str(v).strip()]
+            if parts:
+                reason = "; ".join(parts)
+        elif isinstance(comments, str) and comments.strip():
+            reason = comments.strip()
+
+    if reason is None:
+        conditions = row.get("conditions")
+        if isinstance(conditions, str) and conditions.strip():
+            reason = conditions.strip()
+
+    if reason is None:
+        return None
+    if len(reason) > _REASON_MAX_CHARS:
+        reason = reason[: _REASON_MAX_CHARS - 3] + "..."
+    return reason
 
 
 @dataclass
@@ -78,6 +145,8 @@ class ReviewGateResult:
     reviewer_name: Optional[str] = None
     message: str = ""
     requires_action: bool = False
+    # REJECTED only: the reviewer's recorded reason (see rejection_reason_from_row).
+    rejection_reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -92,6 +161,7 @@ class ReviewGateResult:
             "reviewer_name": self.reviewer_name,
             "message": self.message,
             "requires_action": self.requires_action,
+            "rejection_reason": self.rejection_reason,
         }
 
 
@@ -109,6 +179,13 @@ class ExpertReviewGate:
         elif result.decision == ReviewGateDecision.PENDING_REVIEW:
             # Analysis blocked until review complete
             pass
+
+    Live path (#1971): the causal_impact RefutationNode calls ``check_rejection``
+    on every refutation band (read-only) and ``check_approval`` on REVIEW/BLOCK
+    (queue-or-lookup). Whether a missing approval HALTS a run is the node's
+    ``CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL`` switch; a human REJECTION always does.
+    A gate without a repository answers UNAVAILABLE -- it never vouches for a
+    DAG it could not look up.
     """
 
     # Default renewal warning threshold (days before expiry)
@@ -169,17 +246,48 @@ class ExpertReviewGate:
             ReviewGateResult with decision and metadata
         """
         if not self.repository:
-            # No repository means no gating (development mode)
-            logger.warning("No repository configured, bypassing expert review gate")
+            # #1971: no repository means nothing CAN be checked. Say so. The
+            # old answer here (PROCEED / is_approved=True, "development mode")
+            # was exactly what a prod ServiceConnectionError degraded to, and
+            # it told the refutation node an unreachable Supabase had cleared
+            # the DAG (#1969). An honest "unavailable" lets the caller decide
+            # (advisory: caveat; enforcing: halt).
+            logger.warning(
+                "No repository configured; expert review gate could not be consulted "
+                "(decision: unavailable)"
+            )
             return ReviewGateResult(
-                decision=ReviewGateDecision.PROCEED,
+                decision=ReviewGateDecision.UNAVAILABLE,
                 dag_hash=dag_hash,
-                is_approved=True,
-                message="Expert review gate bypassed (no repository)",
+                is_approved=False,
+                message=(
+                    "Expert review gate could not be consulted: no review repository is "
+                    "configured (Supabase unavailable or unset). The DAG holds no approval "
+                    "and was not queued for review."
+                ),
+                requires_action=True,
             )
 
-        # Check for active approval
-        approval = await self.repository.get_dag_approval(dag_hash, brand)
+        # Chronology first (#1971, codex iter-3): the MOST RECENT adjudication
+        # of this structure wins. An approval that is still unexpired but OLDER
+        # than a rejection (approve A, renew as B, reject B while A's 90 days
+        # run) is superseded -- ``get_dag_approval`` would still return A, so
+        # it must not be consulted on its own. The whole history is needed
+        # for that ordering, expired approvals included.
+        history = await self.repository.get_reviews_for_dag(
+            dag_hash, include_expired=True, brand=brand
+        )
+        latest_verdict, reopened = self._latest_adjudication(history)
+        superseded_by_rejection = (
+            latest_verdict is not None and latest_verdict.get("approval_status") == "rejected"
+        )
+
+        # Check for active approval -- only if no newer rejection supersedes it.
+        approval = (
+            None
+            if superseded_by_rejection
+            else await self.repository.get_dag_approval(dag_hash, brand)
+        )
 
         if approval:
             # DAG has active approval - check expiry
@@ -221,11 +329,9 @@ class ExpertReviewGate:
                 message="DAG has active expert approval",
             )
 
-        # No active approval - check for pending review
-        pending_reviews = await self.repository.get_reviews_for_dag(
-            dag_hash, include_expired=False, brand=brand
-        )
-        pending = [r for r in pending_reviews if r.get("approval_status") == "pending"]
+        # No usable approval - check for pending review (a pending row NEWER
+        # than a rejection is a reviewer re-opening the structure).
+        pending = [r for r in history if r.get("approval_status") == "pending"]
 
         if pending:
             # Review already pending. Backfill-on-encounter (097): this
@@ -257,23 +363,18 @@ class ExpertReviewGate:
             )
 
         # A REJECTED verdict is durable (#1970). ``get_reviews_for_dag`` orders
-        # created_at DESC, so if the most recent row for this DAG is 'rejected'
-        # a human already adjudicated this structure and turned it down.
+        # created_at DESC, so if the most recent adjudication of this DAG is
+        # 'rejected' a human already turned this structure down.
         # Auto-creating a fresh pending row on the next REVIEW/BLOCK band would
-        # silently undo that decision. A newer approval or pending row wins
-        # because those branches returned above; a reviewer who wants to
-        # re-open the structure does so from the review UI, not by re-running.
-        latest = pending_reviews[0] if pending_reviews else None
-        if latest and latest.get("approval_status") == "rejected":
-            return ReviewGateResult(
-                decision=ReviewGateDecision.BLOCKED,
-                dag_hash=dag_hash,
-                is_approved=False,
-                review_id=latest.get("review_id"),
-                reviewer_name=latest.get("reviewer_name"),
-                message="DAG structure was rejected by expert review; not re-queued",
-                requires_action=True,
-            )
+        # silently undo that decision. A NEWER approval or pending row wins
+        # (handled above -- ``reopened`` covers the pending case); a reviewer
+        # who wants to re-open the structure does so from the review UI, not
+        # by re-running. #1971 gives the verdict its own decision value
+        # (REJECTED, not BLOCKED) so consumers can tell "a human said no" from
+        # "nobody has looked yet and no row could be queued".
+        if superseded_by_rejection and not reopened:
+            assert latest_verdict is not None  # narrowed by superseded_by_rejection
+            return self._rejection_result(latest_verdict, dag_hash)
 
         # No approval and no pending review
         if self.auto_create_review and requester_id:
@@ -323,6 +424,85 @@ class ExpertReviewGate:
             requires_action=True,
         )
 
+    @staticmethod
+    def _latest_adjudication(
+        history: List[Dict[str, Any]],
+    ) -> tuple[Optional[Dict[str, Any]], bool]:
+        """``(most recent non-pending row, a pending row is newer than it)``.
+
+        ``history`` is newest-first (``get_reviews_for_dag`` orders created_at
+        DESC; rows are created and resolved in order because the unique-pending
+        index (migration 062) allows one open review per structure at a time,
+        so creation order is adjudication order). ``None`` when nothing has
+        been adjudicated yet.
+        """
+        reopened = False
+        for row in history:
+            if row.get("approval_status") == "pending":
+                reopened = True
+                continue
+            return row, reopened
+        return None, reopened
+
+    @staticmethod
+    def _rejection_result(latest: Mapping[str, Any], dag_hash: str) -> ReviewGateResult:
+        """The REJECTED result for the most recent (rejected) review row."""
+        reviewer = latest.get("reviewer_name")
+        reason = rejection_reason_from_row(latest)
+        return ReviewGateResult(
+            decision=ReviewGateDecision.REJECTED,
+            dag_hash=dag_hash,
+            is_approved=False,
+            review_id=latest.get("review_id"),
+            reviewer_name=reviewer,
+            rejection_reason=reason,
+            message=(
+                "DAG structure was rejected by expert review"
+                + (f" by {reviewer}" if reviewer else "")
+                + (f": {reason}" if reason else "")
+                + "; not re-queued"
+            ),
+            requires_action=True,
+        )
+
+    async def check_rejection(
+        self,
+        dag_hash: str,
+        brand: Optional[str] = None,
+    ) -> Optional[ReviewGateResult]:
+        """READ-ONLY: did a human REJECT this DAG structure? (#1971)
+
+        Consulted by the refutation node on EVERY band -- a PROCEED band
+        included, where ``check_approval`` is deliberately not called because
+        a robust estimate does not need a queue row. Same chronology as
+        ``check_approval`` so the two can never disagree: the most recent
+        adjudication of the structure wins (an older still-unexpired approval
+        never masks a newer rejection -- codex iter-3), and a pending row
+        newer than that rejection means a reviewer re-opened the structure.
+        Never creates a review row. One read (the full history).
+
+        Returns:
+            The REJECTED ``ReviewGateResult`` (reviewer, review id, reason) when
+            the most recent adjudication of this structure is a rejection and
+            nothing re-opened it; ``None`` otherwise -- including when there is
+            no repository, in which case the answer is "cannot tell", not "not
+            rejected".
+        """
+        if not self.repository:
+            return None
+
+        history = await self.repository.get_reviews_for_dag(
+            dag_hash, include_expired=True, brand=brand
+        )
+        latest_verdict, reopened = self._latest_adjudication(history)
+        if (
+            latest_verdict is not None
+            and latest_verdict.get("approval_status") == "rejected"
+            and not reopened
+        ):
+            return self._rejection_result(latest_verdict, dag_hash)
+        return None
+
     async def can_proceed(
         self,
         dag_hash: str,
@@ -340,7 +520,8 @@ class ExpertReviewGate:
             allow_expiring: If True, allow proceeding with expiring approvals
 
         Returns:
-            True if analysis can proceed
+            True if analysis can proceed. REJECTED, BLOCKED and UNAVAILABLE are
+            never a yes: a gate that could not look is not a gate that cleared.
         """
         result = await self.check_approval(dag_hash, brand)
 

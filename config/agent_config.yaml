@@ -629,10 +629,15 @@ agents:
         - refutation
         - sensitivity
         - interpretation
-      # NOT CONSUMED at runtime (#1975): no module reads these two keys. DAG
-      # approval is advisory on the live path (#1971), and a refutation BLOCK
-      # routes to error_handler by the class constants in
-      # src/causal_engine/refutation_runner.py, not by this flag.
+      # NOT CONSUMED at runtime (#1975): no module reads these two keys. The
+      # REAL DAG-approval switch is the env var CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL
+      # read by src/agents/causal_impact/nodes/refutation.py (#1971): default OFF
+      # (advisory: a REVIEW band queues the DAG for review and carries the gate
+      # decision); ON halts a REVIEW-band run without an active structural
+      # approval. A human REJECTION of the structure halts regardless. The value
+      # below is documentation and does NOT reflect the live default. A
+      # refutation BLOCK routes to error_handler by the class constants in
+      # src/causal_engine/refutation_runner.py, not by the second flag.
       require_dag_approval: true
       gate_on_refutation_failure: true
     
@@ -1144,8 +1149,12 @@ causal_validation:
     block_threshold: 0.50    # confidence < 0.50, or any critical test FAILED -> block
 
   expert_review:
-    # Advisory on the live agent path: consulted only on REVIEW/BLOCK bands and
-    # never halts a run (#1971). Validity mirrors
+    # DOCUMENTATION ONLY -- not read by src/. The live gate (#1971): a human
+    # REJECTION of the DAG structure is honoured on every refutation band; a
+    # missing approval halts a REVIEW-band run only when the env var
+    # CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true (default off; reader:
+    # src/agents/causal_impact/nodes/refutation.py). The value below does NOT
+    # reflect that default. Validity mirrors
     # ExpertReviewRepository.DEFAULT_VALIDITY_DAYS.
     require_dag_approval: true
     approval_validity_days: 90

@@ -121,7 +121,9 @@ class TestUnlinkedPersistence:
         repo = _validation_repo()
         node = RefutationNode(validation_repo=repo, causal_path_repo=_FakePathRepo())
         ids, promotion = await node._persist_suite_and_promote(
-            _state(), _suite(GateDecision.PROCEED)
+            _state(),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
         )
         assert ids == ["v-1", "v-2"]
         kwargs = repo.save_suite.call_args.kwargs
@@ -133,7 +135,9 @@ class TestUnlinkedPersistence:
     async def test_no_repo_skips_persistence_and_promotion(self) -> None:
         node = RefutationNode(validation_repo=None, causal_path_repo=None)
         ids, promotion = await node._persist_suite_and_promote(
-            _state(), _suite(GateDecision.PROCEED)
+            _state(),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
         )
         assert ids == []
         assert promotion == {}
@@ -156,7 +160,9 @@ class TestLinkedPromotion:
 
         node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
         ids, promotion = await node._persist_suite_and_promote(
-            _state(causal_path_id="cp_real_000000001"), _suite(GateDecision.PROCEED)
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
         )
         kwargs = repo.save_suite.call_args.kwargs
         assert kwargs["estimate_id"] == derive_causal_path_estimate_id("cp_real_000000001")
@@ -177,7 +183,9 @@ class TestLinkedPromotion:
         path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
         node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
         _ids, promotion = await node._persist_suite_and_promote(
-            _state(causal_path_id="cp_real_000000001"), _suite(GateDecision.REVIEW)
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.REVIEW),
+            structure_verdict="clear",
         )
         assert promotion["new_status"] == "needs_review"
         assert set(path_repo.status_calls[0]["allowed_current"]) == {"pending"}
@@ -188,7 +196,9 @@ class TestLinkedPromotion:
         path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
         node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
         _ids, promotion = await node._persist_suite_and_promote(
-            _state(causal_path_id="cp_real_000000001"), _suite(GateDecision.BLOCK)
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.BLOCK),
+            structure_verdict="clear",
         )
         assert promotion["new_status"] == "refuted"
         assert set(path_repo.status_calls[0]["allowed_current"]) == {
@@ -203,7 +213,9 @@ class TestLinkedPromotion:
         path_repo = _FakePathRepo(pair_rows=[_real_row()])
         node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
         _ids, promotion = await node._persist_suite_and_promote(
-            _state(), _suite(GateDecision.PROCEED)
+            _state(),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
         )
         assert promotion.get("path_id") == "cp_real_000000001"
         kwargs = repo.save_suite.call_args.kwargs
@@ -217,7 +229,9 @@ class TestLinkedPromotion:
         )
         node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
         _ids, promotion = await node._persist_suite_and_promote(
-            _state(), _suite(GateDecision.PROCEED)
+            _state(),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
         )
         assert promotion == {}
         assert path_repo.status_calls == []
@@ -235,6 +249,7 @@ class TestPromotionGuards:
         _ids, promotion = await node._persist_suite_and_promote(
             _state(data_source="synthetic", causal_path_id="cp_real_000000001"),
             _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
         )
         assert promotion == {}
         assert path_repo.status_calls == []
@@ -247,7 +262,9 @@ class TestPromotionGuards:
         path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": row})
         node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
         _ids, promotion = await node._persist_suite_and_promote(
-            _state(causal_path_id="cp_real_000000001"), _suite(GateDecision.PROCEED)
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
         )
         assert promotion == {}
         assert path_repo.status_calls == []
@@ -261,7 +278,9 @@ class TestPromotionGuards:
         path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()}, fail_update=True)
         node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
         ids, promotion = await node._persist_suite_and_promote(
-            _state(causal_path_id="cp_real_000000001"), _suite(GateDecision.PROCEED)
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
         )
         # Evidence persisted; the failed flip is reported as no promotion.
         assert ids == ["v-1", "v-2"]
@@ -283,3 +302,107 @@ class TestQueryEstimateDerivation:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-q"])
+
+
+class TestRejectedStructureNeverBlessesAPath:
+    """#1971: a run whose DAG structure a human REJECTED persists only UNLINKED
+    evidence and never moves the path's status -- on every band.
+
+    Why unlinked, not just "skip the transition": path-linked *passed* rows
+    would satisfy migration 119's evidence gate for a later ``validated`` claim.
+    A suite that passed on a structure a reviewer rejected is conditional on a
+    premise the reviewer threw out; it must not be able to bless the path even
+    in principle. Same mechanism as the synthetic-fixture rule above. The same
+    holds when the verdict could not be determined (``"unknown"``): a run that
+    cannot prove the structure was not rejected does not bless the path.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_unchecked_verdict_is_unlinked_and_not_promoted(self) -> None:
+        """codex iter-2 HIGH-3: no structural check at all (no review store)
+        may not authorise a real-path mutation either."""
+        validation_repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=validation_repo, causal_path_repo=path_repo)
+
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="unchecked",
+        )
+
+        assert promotion == {}
+        assert path_repo.status_calls == []
+        assert validation_repo.save_suite.await_args.kwargs["estimate_source"] == (
+            "causal_impact_query"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_verdict_is_unlinked_and_not_promoted(self) -> None:
+        validation_repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=validation_repo, causal_path_repo=path_repo)
+
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="unknown",
+        )
+
+        assert promotion == {}
+        assert path_repo.status_calls == []
+        assert validation_repo.save_suite.await_args.kwargs["estimate_source"] == (
+            "causal_impact_query"
+        )
+
+    @pytest.mark.asyncio
+    async def test_proceed_on_rejected_structure_is_unlinked_and_not_promoted(self) -> None:
+        validation_repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=validation_repo, causal_path_repo=path_repo)
+
+        ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="rejected",
+        )
+
+        assert ids == ["v-1", "v-2"]
+        assert promotion == {}
+        assert path_repo.status_calls == []
+        kwargs = validation_repo.save_suite.await_args.kwargs
+        assert kwargs["estimate_id"] == derive_query_estimate_id("q-abc123def456")
+        assert kwargs["estimate_source"] == "causal_impact_query"
+
+    @pytest.mark.asyncio
+    async def test_block_on_rejected_structure_does_not_demote_either(self) -> None:
+        """A failed suite on a rejected structure says nothing about the path."""
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=_validation_repo(), causal_path_repo=path_repo)
+
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.BLOCK),
+            structure_verdict="rejected",
+        )
+
+        assert promotion == {}
+        assert path_repo.status_calls == []
+
+    @pytest.mark.asyncio
+    async def test_positive_control_same_call_without_the_flag_promotes(self) -> None:
+        validation_repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=validation_repo, causal_path_repo=path_repo)
+
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
+        )
+
+        assert promotion["new_status"] == "validated"
+        assert validation_repo.save_suite.await_args.kwargs[
+            "estimate_id"
+        ] == derive_causal_path_estimate_id("cp_real_000000001")

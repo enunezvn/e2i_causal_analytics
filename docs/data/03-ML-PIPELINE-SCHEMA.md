@@ -337,7 +337,7 @@ adjudication.
 |----------|---------|
 | `is_dag_approved(hash, brand)` | Check if a DAG has active expert approval |
 | `get_validation_gate(estimate_id)` | Get aggregate gate decision for an estimate |
-| `can_use_estimate(estimate_id, dag_hash)` | Combined gate + expert approval check |
+| ~~`can_use_estimate(estimate_id, dag_hash)`~~ | Retired by migration 133 (#1971): uncalled; `causal_paths.validation_status` is the one definition of "usable", and the gate contract runs on the live agent path (`CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL`) |
 
 ---
 

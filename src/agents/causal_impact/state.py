@@ -453,6 +453,11 @@ class CausalImpactState(TypedDict):
             "refuting",
             "analyzing_sensitivity",
             "interpreting",
+            # #1971: the RefutationNode withheld the estimate on the
+            # expert-review gate (see ``expert_review_halt``). Terminal: the
+            # router sends status='failed' to error_handler, whose errors entry
+            # records this phase as the failure's phase.
+            "awaiting_expert_review",
             "completed",
             "failed",
         ]
@@ -482,9 +487,22 @@ class CausalImpactState(TypedDict):
     refutation_passed: NotRequired[bool]
     needs_review: NotRequired[bool]  # REVIEW-band gate: borderline-robust, not "passed"
     gate_decision: NotRequired[str]  # refutation gate: "proceed" | "review" | "block"
-    review_caveat: NotRequired[str]  # band-specific caveat surfaced for REVIEW/BLOCK
-    expert_review_decision: NotRequired[str | None]  # ExpertReviewGate decision value
-    expert_review_id: NotRequired[str | None]  # expert_reviews row id (REVIEW/BLOCK)
+    review_caveat: NotRequired[str]  # band-specific caveat surfaced for REVIEW/BLOCK/halt
+    # ExpertReviewGate decision value: proceed | renewal_required | pending_review |
+    # rejected | blocked | unavailable (ReviewGateDecision). Set on REVIEW/BLOCK
+    # bands and on a PROCEED band ONLY when a human rejection was found (#1971).
+    expert_review_decision: NotRequired[str | None]
+    expert_review_id: NotRequired[str | None]  # expert_reviews row id (REVIEW/BLOCK/rejected)
+    # #1971: True when the RefutationNode WITHHELD the estimate on the
+    # expert-review gate -- a human REJECTED the DAG structure (any band), or
+    # CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true and a REVIEW-band structure holds
+    # no active approval. Travels with status='failed',
+    # current_phase='awaiting_expert_review' and an error_message naming the
+    # review id and how to resolve it. Read by CausalImpactAgent._build_output
+    # and the API mapping so the run is never surfaced as completed/needs_review
+    # on the strength of its statistical gate alone. Declared so LangGraph
+    # persists it (undeclared channels are dropped).
+    expert_review_halt: NotRequired[bool]
     # #1352 item 3: the sole-promoter transition the refutation node applied to
     # a linked REAL causal_paths row this run ({} when unlinked / no
     # transition). Declared so LangGraph persists it (undeclared channels are

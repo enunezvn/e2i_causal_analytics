@@ -416,6 +416,16 @@ class CausalImpactAgent(SkillsMixin):
         if sensitivity_failed:
             needs_review = True
 
+        # #1971: the RefutationNode WITHHELD the estimate on the expert-review
+        # gate (a human rejected the DAG structure, or enforcement is on and a
+        # REVIEW-band structure holds no approval). The statistical gate may
+        # even be PROCEED, so the status must key on the halt explicitly or a
+        # withheld estimate reads as "completed". The halt message becomes the
+        # narrative: interpretation never ran, and the old default text
+        # ("Analysis completed successfully.") would be a false claim here.
+        expert_review_halt = bool(state.get("expert_review_halt"))
+        halt_message = str(state.get("error_message") or "") if expert_review_halt else ""
+
         # Determine overall confidence
         if not refutation_ran or "confidence_adjustment" not in refutation_results:
             # H1: never default to 1.0 (no penalty) when validation did not run or
@@ -458,11 +468,14 @@ class CausalImpactAgent(SkillsMixin):
                     and refutation_ran
                     and not gate_blocked
                     and not sensitivity_failed
+                    and not expert_review_halt
                 )
                 else "failed"
             ),
             # Core results
-            "causal_narrative": interpretation.get("narrative", "Analysis completed successfully."),
+            "causal_narrative": interpretation.get(
+                "narrative", halt_message or "Analysis completed successfully."
+            ),
             "ate_estimate": estimation_result.get("ate"),  # type: ignore[typeddict-item]
             "confidence_interval": (
                 (  # type: ignore[typeddict-item]
@@ -490,7 +503,9 @@ class CausalImpactAgent(SkillsMixin):
             "actionable_recommendations": interpretation.get(
                 "recommendations", []
             ),  # Contract field (was recommendations)
-            "requires_further_analysis": overall_confidence < 0.7,  # Contract REQUIRED
+            # Contract REQUIRED. #1971: a withheld estimate always needs a human
+            # step (resolve / re-review the structure) before it is usable.
+            "requires_further_analysis": overall_confidence < 0.7 or expert_review_halt,
             "refutation_passed": refutation_passed,  # Contract REQUIRED (PROCEED only)
             # H2: a REVIEW-band estimate is borderline-robust, surfaced distinctly
             # so it is not consumed/persisted as validated.
