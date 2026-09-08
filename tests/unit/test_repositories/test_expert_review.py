@@ -596,8 +596,11 @@ class TestExpertReviewRepositoryErrorHandling:
 
     @pytest.mark.asyncio
     async def test_is_dag_approved_handles_error(self, repo_with_failing_client):
-        """Test is_dag_approved handles database errors gracefully."""
-        result = await repo_with_failing_client.is_dag_approved("abc123")
+        """R3: a query error is logged and RE-RAISED, never returned as False.
 
-        # Should return False on error
-        assert result is False
+        It used to return False -- fail-closed, but indistinguishable from a
+        verified "not approved", the same defect class as the readers that
+        served [] / zeros on an outage.
+        """
+        with pytest.raises(Exception, match="Database error"):
+            await repo_with_failing_client.is_dag_approved("abc123")

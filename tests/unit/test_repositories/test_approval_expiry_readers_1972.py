@@ -806,6 +806,93 @@ class TestReadErrorsAreNotSwallowed:
             assert "Raises" in (fn.__doc__ or ""), fn.__name__
 
 
+class TestNoReaderServesEmptyOrZeroOnStoreError:
+    """R3 (second follow-on): the same defect class as R1 on USER-FACING paths.
+    ``get_review_summary`` -> all-zero counts and ``get_pending_reviews`` ->
+    [] on a store error meant the Expert Reviews page rendered "0 pending"
+    with HTTP 200 during an outage -- a plausible-wrong value. Every reader
+    now logs and re-raises; only the no-client early returns keep their
+    honest, documented defaults."""
+
+    async def test_is_dag_approved_raises_on_store_error(self, caplog):
+        repo = ExpertReviewRepository(supabase_client=FakeClient([PERMANENT], StoreDown("down")))
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(StoreDown):
+                await repo.is_dag_approved("dag-1")
+        assert any("Failed to check DAG approval" in r.getMessage() for r in caplog.records)
+
+    async def test_get_pending_reviews_raises_on_store_error(self, caplog):
+        repo = ExpertReviewRepository(supabase_client=FakeClient([PENDING], StoreDown("down")))
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(StoreDown):
+                await repo.get_pending_reviews()
+        assert any("Failed to get pending reviews" in r.getMessage() for r in caplog.records)
+
+    async def test_get_expiring_reviews_raises_on_store_error(self, caplog):
+        repo = ExpertReviewRepository(
+            supabase_client=FakeClient([EXPIRING_SOON], StoreDown("down"))
+        )
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(StoreDown):
+                await repo.get_expiring_reviews(14)
+        assert any("Failed to get expiring reviews" in r.getMessage() for r in caplog.records)
+
+    async def test_get_review_summary_raises_on_store_error(self, caplog):
+        repo = ExpertReviewRepository(supabase_client=FakeClient([PENDING], StoreDown("down")))
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(StoreDown):
+                await repo.get_review_summary()
+        assert any("Failed to get review summary" in r.getMessage() for r in caplog.records)
+
+    async def test_no_client_early_returns_are_unchanged(self):
+        repo = ExpertReviewRepository(supabase_client=None)
+        assert await repo.is_dag_approved("dag-1") is False
+        assert await repo.get_pending_reviews() == []
+        assert await repo.get_expiring_reviews(14) == []
+        assert await repo.get_review_summary() == {
+            "pending": 0,
+            "approved": 0,
+            "rejected": 0,
+            "expired": 0,
+            "expiring_soon": 0,
+        }
+
+    def test_every_reader_docstring_says_it_raises(self):
+        for fn in (
+            ExpertReviewRepository.is_dag_approved,
+            ExpertReviewRepository.get_pending_reviews,
+            ExpertReviewRepository.get_expiring_reviews,
+            ExpertReviewRepository.get_review_summary,
+        ):
+            assert "Raises" in (fn.__doc__ or ""), fn.__name__
+
+    def test_no_reader_swallows_a_query_error_structurally(self):
+        """AST: inside ExpertReviewRepository, no `except Exception` handler
+        that wraps a `.execute()` call may `return` a value -- it must re-raise.
+        Writers (create_review, submit_review, update_*, renew_review) are the
+        documented exceptions: their False/None is a fail-closed non-success,
+        not a plausible-wrong read."""
+        tree = ast.parse(REPO_FILE.read_text(encoding="utf-8"))
+        writers = {
+            "create_review",
+            "_find_pending_review_id",
+            "submit_review",
+            "update_agent_assessment",
+            "update_dag_structure",
+            "renew_review",
+        }
+        offenders = []
+        for fn in _functions(tree):
+            if fn.name in writers:
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.ExceptHandler):
+                    body_src = ast.unparse(node)
+                    if "return" in body_src and "raise" not in body_src:
+                        offenders.append(f"{fn.name}: {body_src.splitlines()[0]}")
+        assert offenders == [], offenders
+
+
 # --------------------------------------------------------------------------
 # R2 (lane-1971 audit): only a PENDING row can be resolved
 # --------------------------------------------------------------------------

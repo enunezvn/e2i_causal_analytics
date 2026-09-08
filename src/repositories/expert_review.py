@@ -460,6 +460,11 @@ class ExpertReviewRepository(BaseRepository):
             "assuming approved" was a plausible-wrong value a caller could not
             tell apart from a verified one; fail-closed, like every other
             no-client path in this repository).
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R3). An outage must not read as "not approved" any more than as
+            "approved" -- only the no-client early return keeps its False.
         """
         if not self.client:
             logger.warning(
@@ -481,8 +486,9 @@ class ExpertReviewRepository(BaseRepository):
             result = await query.execute()
             return len(result.data) > 0
         except Exception as e:
+            # R3: log, then re-raise -- never turn an outage into "not approved".
             logger.error(f"Failed to check DAG approval: {e}")
-            return False
+            raise
 
     async def get_dag_approval(
         self,
@@ -545,6 +551,13 @@ class ExpertReviewRepository(BaseRepository):
 
         Returns:
             List of pending review records, oldest first
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R3). This feeds the Expert Reviews page: an empty queue on an
+            outage would render "0 pending" with HTTP 200, a plausible-wrong
+            value. The route maps the raise to 503. The no-client early
+            return ([]) is unchanged.
         """
         if not self.client:
             return []
@@ -566,8 +579,9 @@ class ExpertReviewRepository(BaseRepository):
             result = await query.execute()
             return result.data or []
         except Exception as e:
+            # R3: log, then re-raise -- never serve an empty queue on an outage.
             logger.error(f"Failed to get pending reviews: {e}")
-            return []
+            raise
 
     async def get_expiring_reviews(
         self,
@@ -590,6 +604,11 @@ class ExpertReviewRepository(BaseRepository):
 
         Returns:
             List of soon-to-expire review records, soonest first
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R3): "nothing expiring" must be a measured fact, not an outage.
+            The no-client early return ([]) is unchanged.
         """
         if not self.client:
             return []
@@ -606,8 +625,9 @@ class ExpertReviewRepository(BaseRepository):
             result = await query.execute()
             return result.data or []
         except Exception as e:
+            # R3: log, then re-raise -- never serve "nothing expiring" on an outage.
             logger.error(f"Failed to get expiring reviews: {e}")
-            return []
+            raise
 
     async def get_reviews_for_dag(
         self,
@@ -752,6 +772,12 @@ class ExpertReviewRepository(BaseRepository):
             the gate's queries use -- and a NULL ``valid_until`` is a permanent
             approval: counted in ``approved``, never in ``expired`` or
             ``expiring_soon`` (#1972).
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R3). All-zero counts on an outage rendered as real counts on the
+            Expert Reviews page with HTTP 200; the route now maps the raise
+            to 503. Only the no-client early return keeps the zero dict.
         """
         if not self.client:
             return {
@@ -810,11 +836,7 @@ class ExpertReviewRepository(BaseRepository):
                 "expiring_soon": expiring_soon,
             }
         except Exception as e:
+            # R3: log, then re-raise -- zero counts on an outage are a
+            # plausible-wrong value on a user-facing page.
             logger.error(f"Failed to get review summary: {e}")
-            return {
-                "pending": 0,
-                "approved": 0,
-                "rejected": 0,
-                "expired": 0,
-                "expiring_soon": 0,
-            }
+            raise
