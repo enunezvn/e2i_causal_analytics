@@ -4345,6 +4345,8 @@ export interface paths {
         /**
          * Expert-review status counts
          * @description Return status counts (pending/approved/rejected/expired/expiring_soon).
+         *
+         *     A store failure is 503 (R3) -- never all-zero counts with a 200.
          */
         get: operations["get_expert_review_summary"];
         put?: never;
