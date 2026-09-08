@@ -3826,6 +3826,9 @@ def _agent_state_to_response(
         # Link to the expert-review queue row created for a REVIEW/BLOCK gate
         # (None when the run auto-proceeded), so the result references its review.
         expert_review_id=final_state.get("expert_review_id"),
+        # #1971: the gate's verdict travels with its row id so consumers can
+        # distinguish pending_review from an active structural approval.
+        expert_review_decision=final_state.get("expert_review_decision"),
         tests_passed=refutation.get("tests_passed"),
         tests_total=refutation.get("total_tests"),
         sensitivity_e_value=sensitivity.get("e_value"),

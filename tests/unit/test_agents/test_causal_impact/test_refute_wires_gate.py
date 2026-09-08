@@ -183,3 +183,46 @@ class TestRefuteBuildsRepoBackedGate:
         assert "needs_review" not in fields
         # The REVIEW band is the (gate-independent) source of needs_review.
         assert _review_suite().needs_review is True
+
+
+class TestBypassNeverClaimsApproval:
+    """#1969: the no-repository bypass must never surface as an expert approval."""
+
+    @pytest.mark.asyncio
+    async def test_bare_gate_bypass_never_claims_expert_approval(self):
+        """A bare gate (repository=None) returns PROCEED/is_approved=True with no
+        review_id. That is a dev/test convenience — and exactly what a prod
+        ServiceConnectionError degrades to — so the caveat must not tell the
+        user an unreachable Supabase "expert-approved" the DAG."""
+        node = RefutationNode(expert_review_gate=ExpertReviewGate(repository=None))
+        fields = await node._consult_review_gate(
+            {"treatment_var": "t", "outcome_var": "y", "dag_version_hash": "x"},
+            _review_suite(),
+        )
+        assert fields["expert_review_decision"] == "proceed"
+        assert fields["expert_review_id"] is None
+        assert "expert-approved" not in fields["review_caveat"]
+        assert "needs expert review" in fields["review_caveat"]
+
+    @pytest.mark.asyncio
+    async def test_real_approval_row_still_surfaces_reviewer(self):
+        """The approval note is kept for a REAL approval (row id present)."""
+
+        class _ApprovedRepo(_CapturingRepo):
+            async def get_dag_approval(self, dag_hash, brand=None):
+                return {
+                    "review_id": "rev-approved",
+                    "approved_at": "2026-01-01T00:00:00Z",
+                    "valid_until": "2099-01-01",
+                    "reviewer_name": "Dr. Structure",
+                }
+
+        gate = ExpertReviewGate(repository=_ApprovedRepo())
+        node = RefutationNode(expert_review_gate=gate)
+        fields = await node._consult_review_gate(
+            {"treatment_var": "t", "outcome_var": "y", "dag_version_hash": "x"},
+            _review_suite(),
+        )
+        assert fields["expert_review_id"] == "rev-approved"
+        assert "expert-approved by Dr. Structure" in fields["review_caveat"]
+        assert "not this estimate's statistical robustness" in fields["review_caveat"]

@@ -10,7 +10,10 @@ Phase 4 of Causal Validation Protocol:
 - Connect Feedback Learner to validation outcomes
 - Enable learning from validation failures
 
-Reference: docs/E2I_Causal_Validation_Protocol.html
+References (#1979):
+- docs/decisions/adr-017-discovery-corroboration-and-honest-provenance.md
+- docs/reports/causal-validation-pipeline-review-20260605.md
+- docs/lineage/causal_dag_lineage.html (governance section)
 """
 
 from __future__ import annotations

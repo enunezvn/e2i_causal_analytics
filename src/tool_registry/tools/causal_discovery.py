@@ -83,6 +83,33 @@ class DiscoverDagInput(BaseModel):
         default=None,
         description="Maximum conditioning set size (-1 for unlimited)",
     )
+    treatment_var: Optional[str] = Field(
+        default=None,
+        description=(
+            "Treatment column. When BOTH treatment_var and outcome_var are given and "
+            "present in the data, discovery is GUIDED exactly as the causal_impact "
+            "agent does it (#1977): tiers [covariates] < [treatment] < [outcome], a "
+            "required treatment->outcome edge, PC only (the sole consumer of priors), "
+            "and bootstrap corroboration (default 20 resamples). Omit for unguided."
+        ),
+    )
+    outcome_var: Optional[str] = Field(
+        default=None,
+        description="Outcome column; see treatment_var.",
+    )
+    bootstrap_resamples: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Bootstrap resamples for single-algorithm edge stability. Default 20 when "
+            "guided, 0 when unguided. Under ADR-017 a single-algorithm run with 0 "
+            "resamples is uncorroborated and gates REJECT."
+        ),
+    )
+    latent_diagnostic: bool = Field(
+        default=False,
+        description="Run the unguided FCI latent-confounding diagnostic (annotates, never gates).",
+    )
     node_names: Optional[List[str]] = Field(
         default=None,
         description="Custom node names (defaults to column names)",
@@ -327,12 +354,47 @@ class CausalDiscoveryTool:
                 algorithms = [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
                 errors.append("No valid algorithms specified, using defaults (GES, PC)")
 
+            # Guided discovery (#1977): mirror graph_builder._run_discovery so a
+            # chat-routed "learn the DAG" call gets the same oriented, corroborated
+            # structure the analyze endpoint ships, instead of an unconstrained
+            # Markov-equivalence-class guess that reverses confounder edges.
+            prior_knowledge = None
+            bootstrap_resamples = (
+                params.bootstrap_resamples if params.bootstrap_resamples is not None else 0
+            )
+            t, o = params.treatment_var, params.outcome_var
+            guided = bool(t and o and t != o and t in df.columns and o in df.columns)
+            if t and o and not guided:
+                errors.append(
+                    "treatment_var/outcome_var are not both distinct data columns; running unguided"
+                )
+            if guided:
+                from src.causal_engine.discovery import CausalPriorKnowledge
+                from src.repositories.provenance import PROVENANCE_DROP_COLS
+
+                covariate_cols = [
+                    c for c in df.columns if c not in (t, o) and c not in PROVENANCE_DROP_COLS
+                ]
+                tiers = [covariate_cols, [t], [o]] if covariate_cols else [[t], [o]]
+                prior_knowledge = CausalPriorKnowledge(
+                    tiers=tiers,
+                    required_edges=[(str(t), str(o))],
+                )
+                # Only PC consumes BackgroundKnowledge; other algorithms would
+                # pollute the ensemble with unconstrained orientations.
+                algorithms = [DiscoveryAlgorithmType.PC]
+                if params.bootstrap_resamples is None:
+                    bootstrap_resamples = 20
+
             # Create config
             config = DiscoveryConfig(
                 algorithms=algorithms,
                 ensemble_threshold=params.ensemble_threshold,
                 alpha=params.alpha,
                 max_cond_vars=params.max_k if params.max_k is not None else None,
+                prior_knowledge=prior_knowledge,
+                bootstrap_resamples=bootstrap_resamples,
+                latent_diagnostic=params.latent_diagnostic,
             )
 
             # Run discovery

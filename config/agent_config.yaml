@@ -629,6 +629,10 @@ agents:
         - refutation
         - sensitivity
         - interpretation
+      # NOT CONSUMED at runtime (#1975): no module reads these two keys. DAG
+      # approval is advisory on the live path (#1971), and a refutation BLOCK
+      # routes to error_handler by the class constants in
+      # src/causal_engine/refutation_runner.py, not by this flag.
       require_dag_approval: true
       gate_on_refutation_failure: true
     
@@ -1121,12 +1125,19 @@ causal_validation:
       - sensitivity_e_value
     min_pass_rate: 0.6
     
+  # DOCUMENTATION ONLY (#1975): nothing under src/ reads this block. The live
+  # gate is confidence-WEIGHTED (not pass-rate based); its bands are the class
+  # constants RefutationRunner.GATE_THRESHOLDS / PASS_THRESHOLDS in
+  # src/causal_engine/refutation_runner.py. The values below mirror them.
   gate_decisions:
-    proceed_threshold: 0.8  # Pass rate >= 0.8 → proceed
-    review_threshold: 0.6   # 0.6 <= pass rate < 0.8 → review
-    block_threshold: 0.6    # Pass rate < 0.6 → block
-    
+    proceed_threshold: 0.70  # weighted confidence >= 0.70 -> proceed
+    review_threshold: 0.50   # 0.50 <= confidence < 0.70 -> review
+    block_threshold: 0.50    # confidence < 0.50, or any critical test FAILED -> block
+
   expert_review:
+    # Advisory on the live agent path: consulted only on REVIEW/BLOCK bands and
+    # never halts a run (#1971). Validity mirrors
+    # ExpertReviewRepository.DEFAULT_VALIDITY_DAYS.
     require_dag_approval: true
     approval_validity_days: 90
     review_types:

@@ -747,6 +747,10 @@ def _resolve_causal_impact_input(
             "experiment_name",
             "query_id",
             "randomized_design",
+            # #1976: the adjustment_set_policy node reads state.role_attributions;
+            # without this passthrough (present for heterogeneous_optimizer, absent
+            # here) no caller could ever reach it.
+            "role_attributions",
         )
         out: Dict[str, Any] = {k: params[k] for k in passthrough if params.get(k) is not None}
         out.setdefault("data_source", "router_parameters")

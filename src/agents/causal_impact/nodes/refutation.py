@@ -951,7 +951,15 @@ class RefutationNode:
             # approval vouches the DAG STRUCTURE, not this estimate's
             # statistical robustness (structure sign-off never upgrades a
             # borderline/failed estimate to validated).
-            if getattr(review_result, "is_approved", False):
+            # #1969: only a REAL approval row may claim approval. The
+            # no-repository bypass returns PROCEED/is_approved=True with no
+            # review_id (dev/test convenience), and that bypass is exactly
+            # what a prod ServiceConnectionError degrades to — so gating on
+            # is_approved alone told users an unreachable Supabase had
+            # "expert-approved" their DAG.
+            if getattr(review_result, "is_approved", False) and getattr(
+                review_result, "review_id", None
+            ):
                 reviewer = getattr(review_result, "reviewer_name", None)
                 valid_until = getattr(review_result, "valid_until", None)
                 active_approval_note = (

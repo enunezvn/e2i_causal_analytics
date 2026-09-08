@@ -256,6 +256,25 @@ class ExpertReviewGate:
                 requires_action=True,
             )
 
+        # A REJECTED verdict is durable (#1970). ``get_reviews_for_dag`` orders
+        # created_at DESC, so if the most recent row for this DAG is 'rejected'
+        # a human already adjudicated this structure and turned it down.
+        # Auto-creating a fresh pending row on the next REVIEW/BLOCK band would
+        # silently undo that decision. A newer approval or pending row wins
+        # because those branches returned above; a reviewer who wants to
+        # re-open the structure does so from the review UI, not by re-running.
+        latest = pending_reviews[0] if pending_reviews else None
+        if latest and latest.get("approval_status") == "rejected":
+            return ReviewGateResult(
+                decision=ReviewGateDecision.BLOCKED,
+                dag_hash=dag_hash,
+                is_approved=False,
+                review_id=latest.get("review_id"),
+                reviewer_name=latest.get("reviewer_name"),
+                message="DAG structure was rejected by expert review; not re-queued",
+                requires_action=True,
+            )
+
         # No approval and no pending review
         if self.auto_create_review and requester_id:
             # Auto-create review request.

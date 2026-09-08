@@ -228,6 +228,14 @@ try:
 
         Given treatment and outcome variables, construct a plausible
         causal graph including confounders and adjustment sets.
+
+        Status note (#1973): NOT WIRED. No call site exists; the shipped DAG
+        never contains an LLM-proposed edge (graph_builder builds from the
+        caller's declared covariates, the estimand, and guided PC discovery).
+        This is a roadmap stake, kept deliberately. Wiring it requires a new
+        ``edge_provenance`` label (e.g. ``llm_proposed``) and a gate, per
+        ADR-017's rule that a prior-asserted edge is never reported as
+        discovered.
         """
 
         treatment_var: str = dspy.InputField(desc="Treatment variable name")
