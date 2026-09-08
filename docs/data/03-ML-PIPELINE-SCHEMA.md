@@ -15,7 +15,7 @@
 
 The ML pipeline schema spans **60+ tables** across 14 functional groups in `database/ml/`. These tables track the full ML lifecycle: experiment definition, model training, deployment, monitoring, causal validation, digital twin simulation, A/B testing, self-improvement, and prompt optimization. All tables live in the Supabase (Postgres) database and are referenced by the agent roster in `config/agent_config.yaml` (22 agents across 6 tiers; Tier 0 = 9).
 
-**Migration files**: `database/ml/mlops_tables.sql` through `database/ml/035_gepa_persistence_constraints.sql`. Some ML-relevant objects also arrive through the shared series in `database/migrations/` — notably the `causal_paths.validation_status` pin (119), `validation_outcomes` realignment (121) and `drift_qualifying_features()` (131). Current ceilings:
+**Migration files**: `database/ml/mlops_tables.sql` through `database/ml/036_move_discovery_tables_to_public.sql`. Some ML-relevant objects also arrive through the shared series in `database/migrations/` — notably the `causal_paths.validation_status` pin (119), `validation_outcomes` realignment (121) and `drift_qualifying_features()` (131). Current ceilings:
 
 ```bash
 ls database/ml | sort | tail -1          # highest database/ml file
@@ -1219,21 +1219,33 @@ Feature freshness tracking with staleness thresholds.
 
 ## 13. Causal Discovery
 
-**Source**: `database/ml/026_causal_discovery_tables.sql`
+**Source**: `database/ml/026_causal_discovery_tables.sql` (created the tables in schema
+`ml`), `database/ml/036_move_discovery_tables_to_public.sql` (moved them into `public`,
+added the provenance/key columns and the writer RPC — #1974)
 
-Stores causal structure learning results from multiple algorithms (GES, PC, FCI, LiNGAM). Implements ensemble voting across algorithms, gate evaluation for discovered DAGs, and comparison of causal vs. predictive feature importance rankings. Tables are in the `ml` schema.
+Stores causal structure learning results from multiple algorithms (GES, PC, FCI, LiNGAM). Implements ensemble voting across algorithms, gate evaluation for discovered DAGs, and comparison of causal vs. predictive feature importance rankings.
 
-### Custom Enums (ml schema)
+**Schema**: `public` since ml/036. 026 had created these in a dedicated `ml` schema — the
+only file under `database/` that does so — which PostgREST does not expose (`PGRST106`),
+so no Supabase-client repository could write them and they held 0 rows for three
+months. ml/036 moves the five tables, three views, three enum types, three functions
+and the `updated_at` trigger into `public` (free while empty), where they inherit
+migration 058's anon/authenticated revocation and get explicit `service_role` grants
+that the migration asserts. The `ml` schema itself is left in place (empty on prod).
 
-| Enum | Values |
-|------|--------|
-| `ml.discovery_algorithm` | `ges`, `pc`, `fci`, `lingam`, `direct_lingam`, `ica_lingam` |
-| `ml.gate_decision` | `accept`, `review`, `reject`, `augment` |
-| `ml.edge_type` | `directed`, `undirected`, `bidirected` |
+### Custom Enums
 
-### 13.1 `ml.discovered_dags`
+| Enum | Values | Note |
+|------|--------|------|
+| `discovery_algorithm` | `ges`, `pc`, `fci`, `lingam`, `direct_lingam`, `ica_lingam` | moved from `ml` |
+| `discovery_gate_decision` | `accept`, `review`, `reject`, `augment` | **renamed** from `ml.gate_decision` by ml/036: `public.gate_decision` already exists and is the *refutation* gate enum (`proceed`, `review`, `block`, migration 010) |
+| `edge_type` | `directed`, `undirected`, `bidirected` | moved from `ml` |
+
+### 13.1 `discovered_dags`
 
 Stores discovered causal DAG structures with ensemble configuration and gate evaluation.
+One row per discovery **run** (written whenever auto-discovery actually ran, whatever
+the gate decided — see §13.7).
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -1245,11 +1257,16 @@ Stores discovered causal DAG structures with ensemble configuration and gate eva
 | `ensemble_threshold` | FLOAT | Voting threshold |
 | `n_edges` | INTEGER | Edges discovered |
 | `edge_list` | JSONB | Full edge list |
-| `gate_decision` | ml.gate_decision | accept, review, reject, or augment |
+| `gate_decision` | discovery_gate_decision | accept, review, reject, or augment |
 | `gate_confidence` | FLOAT | Gate confidence score |
 | `total_runtime_seconds` | FLOAT | Discovery wall-clock time |
+| `is_synthetic` | BOOLEAN NOT NULL DEFAULT false | ml/036: provenance (ADR-017). TRUE when the DAG was discovered from data the read path admitted as synthetic; the writer must STATE it (the RPC rejects a payload without it). Default-excluded by `HAS_PROVENANCE` readers. Partial index `WHERE is_synthetic`. |
+| `dag_version_hash` | VARCHAR(64) | ml/036: SHA256 of the **shipped** DAG (`compute_dag_hash`) — the key `expert_reviews.dag_version_hash` uses, so a discovery joins to its review. Indexed. |
+| `query_id` | TEXT | ml/036: the run id (`POST /causal/agent-analyze` `analysis_id`, or the orchestrator `query_id`). Indexed. |
+| `treatment_variable` / `outcome_variable` | VARCHAR(255) | ml/036: the estimand the discovery served (names mirror `expert_reviews`) |
+| `metadata` | JSONB | 026 column; the writer fills `shipped_dag` (nodes, edges, per-edge `edge_provenance`, adjustment sets, augmented edges, `discovery_dag_overridden`), `gate_evaluation` (the gate's full `to_dict()`), `discovery` (runner metadata: bootstrap summary, latent diagnostic, node names, runtime, or a failed run's error), `discovery_latency_ms`, `success`, `algorithm_agreement`, and `session_id_raw` when the session id is not a UUID |
 
-### 13.2 `ml.discovery_algorithm_runs`
+### 13.2 `discovery_algorithm_runs`
 
 Individual algorithm results within a discovery session.
 
@@ -1257,13 +1274,13 @@ Individual algorithm results within a discovery session.
 |--------|------|-------------|
 | `id` | UUID PK | Run identifier |
 | `dag_id` | UUID FK | Parent DAG |
-| `algorithm` | ml.discovery_algorithm | Algorithm used |
+| `algorithm` | discovery_algorithm | Algorithm used |
 | `runtime_seconds` | FLOAT | Algorithm execution time |
 | `converged` | BOOLEAN | Whether algorithm converged |
 | `n_edges` | INTEGER | Edges found by this algorithm |
 | `score` | FLOAT | Score-based method result |
 
-### 13.3 `ml.discovered_edges`
+### 13.3 `discovered_edges`
 
 Edges in discovered DAGs with confidence metadata and algorithm vote counts.
 
@@ -1273,14 +1290,14 @@ Edges in discovered DAGs with confidence metadata and algorithm vote counts.
 | `dag_id` | UUID FK | Parent DAG |
 | `source_node` | VARCHAR(255) | Cause variable |
 | `target_node` | VARCHAR(255) | Effect variable |
-| `edge_type` | ml.edge_type | directed, undirected, or bidirected |
+| `edge_type` | edge_type | directed, undirected, or bidirected |
 | `confidence` | FLOAT | Ensemble confidence (0--1) |
 | `algorithm_votes` | INTEGER | Number of algorithms that found this edge |
 | `algorithms` | TEXT[] | Which algorithms found it |
 
 **Key constraints**: `UNIQUE(dag_id, source_node, target_node)`
 
-### 13.4 `ml.driver_rankings`
+### 13.4 `driver_rankings`
 
 Causal vs. predictive feature importance rankings with Spearman correlation.
 
@@ -1295,7 +1312,7 @@ Causal vs. predictive feature importance rankings with Spearman correlation.
 | `predictive_only_features` | TEXT[] | Features only important predictively |
 | `concordant_features` | TEXT[] | Features important in both |
 
-### 13.5 `ml.feature_rankings`
+### 13.5 `feature_rankings`
 
 Detailed per-feature ranking information with auto-computed rank difference.
 
@@ -1321,7 +1338,7 @@ multi-algorithm run already has cross-algorithm agreement. It re-runs that one
 algorithm on B bootstrap resamples and sets each edge's `bootstrap_stability`
 to the directed-match resample frequency. It then **overwrites
 `confidence` with that frequency**, because on a single-algorithm run
-`confidence` is vacuously `1.0`. So in `ml.discovered_edges`:
+`confidence` is vacuously `1.0`. So in `discovered_edges`:
 
 - `confidence` on a bootstrapped single-algorithm run is a **resample
   frequency**, not an algorithm-vote share;
@@ -1351,6 +1368,53 @@ payload distinguishes two failure modes and **neither fails discovery**:
 
 `graph_builder` later annotates the payload with the estimand and the flag; the
 runner does not know treatment/outcome.
+
+### 13.7 Writer: `DiscoveredDagRepository` and `record_discovered_dag()` (#1974)
+
+**Who writes, when.** `GraphBuilderNode.execute`
+(`src/agents/causal_impact/nodes/graph_builder.py`, `_persist_discovered_dag`) persists
+every run where auto-discovery **actually ran** (`discovery_result` present), whatever
+the gate decided — REJECT/REVIEW runs are recorded too, with the manual DAG that
+shipped in `metadata.shipped_dag` and every shipped edge labelled `curated`. A manual
+(no-discovery) or skipped-discovery run writes nothing: the row *is* a discovery run
+(`n_samples`, `algorithms_used`, `ensemble_threshold`, `alpha` are NOT NULL) and a
+manual DAG has none of those to record honestly.
+
+**How.** `DiscoveredDagRepository.record(payload)`
+(`src/repositories/discovered_dag.py`) makes ONE call to the SECURITY INVOKER RPC
+`public.record_discovered_dag(jsonb)`, which inserts the `discovered_dags` row, one
+`discovery_algorithm_runs` row per algorithm and one `discovered_edges` row per
+ensemble edge atomically and returns `{dag_id, n_algorithm_runs, n_edges}`; the
+repository verifies those counts against what it sent. The RPC is executable by
+`service_role` only (the backend's role); `anon`/`authenticated` hold no privilege on
+any of the eight relations. `build_discovered_dag_payload` maps `DiscoveryResult`, the
+gate's `to_dict()` and the shipped `CausalGraph` onto the columns above and
+normalises numpy/tuple leaves to plain JSON.
+
+**Where failures surface (never silently best-effort).** On success the node returns
+`discovered_dag_id` into the agent state; on any failure it returns
+`discovered_dag_persist_error` **and** appends the same message (with
+`dag_version_hash`, `session_id`, `query_id`) to the `warnings` accumulator, and logs it
+— WARNING when Supabase is simply not configured (`ServiceConnectionError`), ERROR for
+anything else. The run itself continues (a lost audit row never fails an analysis).
+Both keys are declared in `CausalImpactState`; `POST /causal/agent-analyze` surfaces
+`discovered_dag_id` as a response field and the warning in `warnings`.
+
+**Provenance.** `resolve_frame_provenance` decides `is_synthetic` from the strongest
+evidence at the write site: the frame's own `is_synthetic` column if present, else a
+declared `data_source='synthetic'`, else the deployment's `E2I_INCLUDE_SYNTHETIC`
+(under which every read skips the provenance predicate — the same fact the
+agent-analyze API already reports as `data_source='synthetic'`). It is always stated in
+the payload; the RPC rejects a payload without it.
+
+**Readers.** `find_by_dag_version_hash` (the expert-review key) and `find_by_query_id`
+(the run id), provenance-filtered by default (`HAS_PROVENANCE = True`, opt in with
+`include_synthetic=True`). `discovered_dags` is in `PROVENANCE_TAGGED_TABLES`.
+
+**Still writer-less.** `driver_rankings` / `feature_rankings`: `DriverRanker` does not run
+on the causal_impact path (it runs only in the feature_analyzer agent's
+`causal_ranker` node, which does not persist), so nothing on the agent path holds that
+data at the write site. They stay empty until that node gets its own writer.
 
 ---
 
