@@ -16311,6 +16311,13 @@ export interface components {
          * @description Response for ``GET /expert-reviews/summary``.
          *
          *     Mirrors ``get_review_summary`` (repo :507-513).
+         *
+         *     These counts are NOT all disjoint (#1972). ``pending`` / ``approved`` /
+         *     ``rejected`` / ``expired`` partition the rows, but **``expiring_soon`` is a
+         *     subset of ``approved``** -- a row approved and within 14 days of
+         *     ``valid_until`` is counted in both. Summing all five double-counts those
+         *     rows. ``expired`` is derived from ``valid_until`` at read time and is never
+         *     a stored ``approval_status``.
          */
         ReviewSummaryResponse: {
             /** Pending */

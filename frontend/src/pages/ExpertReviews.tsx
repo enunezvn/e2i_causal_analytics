@@ -319,10 +319,16 @@ export default function ExpertReviews() {
 
       {summary && (
         <div className="flex flex-wrap gap-2">
+          {/* pending/approved/rejected/expired partition the rows; expiring_soon
+              is a SUBSET of approved (#1972), so it is labelled and styled as a
+              qualifier rather than a fourth peer count that could be added in. */}
           <Badge variant="secondary">Pending: {summary.pending}</Badge>
           <Badge variant="secondary">Approved: {summary.approved}</Badge>
           <Badge variant="secondary">Rejected: {summary.rejected}</Badge>
-          <Badge variant="secondary">Expiring soon: {summary.expiring_soon}</Badge>
+          <Badge variant="secondary">Expired: {summary.expired}</Badge>
+          <Badge variant="outline">
+            of which expiring soon: {summary.expiring_soon}
+          </Badge>
         </div>
       )}
 
