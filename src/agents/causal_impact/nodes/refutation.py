@@ -97,19 +97,26 @@ _FALSY = frozenset({"", "0", "false", "no", "off"})
 # 'unchecked' is dev/test or the split-factory flake, and 'unknown' a probe
 # error -- neither may bless a path.
 #
-# Known residue (reported, not hidden):
-#   * ExpertReviewRepository.get_dag_approval / get_reviews_for_dag SWALLOW
-#     their own exceptions (log + return None / []), so a read error inside
-#     the repository reads as "no rows" = 'clear' rather than 'unknown'. The
-#     probe can only report 'unknown' for errors the repository propagates.
-#     Making those two readers propagate (or return a sentinel) is an edit to
-#     src/repositories/expert_review.py, outside this lane (codex iter-2
-#     HIGH-1).
+# Known residue (reported to the dispatcher, not hidden):
+#   * src/repositories/expert_review.py: ExpertReviewRepository.get_reviews_for_dag
+#     (the probe's one read; also get_dag_approval) SWALLOWS its own exception
+#     (logger.error + return []), so a read error INSIDE the repository reads
+#     as "no history" = 'clear' rather than 'unknown'. The probe's 'unknown'
+#     branch fires only on an exception that reaches it. Needed change, in
+#     that file (another lane): let get_reviews_for_dag / get_dag_approval
+#     RAISE on a query error instead of returning [] / None -- the gate and
+#     this node already handle a raise (consult -> 'unavailable', probe ->
+#     'unknown'); no other consumer change is required (codex iter-2 HIGH-1).
 #   * A reviewer rejecting the structure in the window between the probe and
-#     the promoter's status write is not caught (codex iter-2 HIGH-2). The
-#     next run on that structure halts but does not demote. Closing it needs a
-#     DB-side conditional promote that checks expert_reviews in the same
-#     statement as the causal_paths update; owner's call.
+#     CausalPathRepository.set_validation_status (src/repositories/causal_path.py,
+#     which conditions the UPDATE only on path_id + current status) is not
+#     caught (codex iter-2 HIGH-2). The promoted status and the linked
+#     evidence then persist; a later run whose probe sees the rejection
+#     halts its own estimate but does not demote the path. Closing it needs a
+#     DB-side conditional promote -- a new migration adding a function that
+#     checks the latest expert_reviews verdict for the dag hash in the same
+#     statement as the causal_paths UPDATE, plus the causal_path.py method
+#     that calls it and the promoter passing the hash. Owner's call.
 _STRUCTURE_CLEAR = "clear"
 _STRUCTURE_REJECTED = "rejected"
 _STRUCTURE_UNKNOWN = "unknown"

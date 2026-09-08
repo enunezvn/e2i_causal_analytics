@@ -24,6 +24,7 @@ class TestExpertReviewGate:
     def mock_repo(self):
         """Create mock ExpertReviewRepository."""
         repo = MagicMock()
+        repo.get_reviews_for_dag = AsyncMock(return_value=[])
         return repo
 
     @pytest.fixture
@@ -428,6 +429,7 @@ class TestExpertReviewGateCanProceed:
     @pytest.mark.asyncio
     async def test_can_proceed_approved(self, mock_repo):
         """Test can_proceed returns True for approved DAG."""
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
         mock_repo.get_dag_approval = AsyncMock(
             return_value={
                 "review_id": "rev-123",
@@ -443,6 +445,7 @@ class TestExpertReviewGateCanProceed:
     @pytest.mark.asyncio
     async def test_can_proceed_expiring_allowed(self, mock_repo):
         """Test can_proceed with expiring approval allowed."""
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
         mock_repo.get_dag_approval = AsyncMock(
             return_value={
                 "review_id": "rev-123",
@@ -458,6 +461,7 @@ class TestExpertReviewGateCanProceed:
     @pytest.mark.asyncio
     async def test_can_proceed_expiring_not_allowed(self, mock_repo):
         """Test can_proceed with expiring approval not allowed."""
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
         mock_repo.get_dag_approval = AsyncMock(
             return_value={
                 "review_id": "rev-123",
@@ -474,6 +478,7 @@ class TestExpertReviewGateCanProceed:
     @pytest.mark.asyncio
     async def test_can_proceed_pending_allowed(self, mock_repo):
         """Test can_proceed with pending review allowed."""
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
         mock_repo.get_dag_approval = AsyncMock(return_value=None)
         mock_repo.get_reviews_for_dag = AsyncMock(
             return_value=[
@@ -489,6 +494,7 @@ class TestExpertReviewGateCanProceed:
     @pytest.mark.asyncio
     async def test_can_proceed_blocked(self, mock_repo):
         """Test can_proceed returns False for blocked DAG."""
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
         mock_repo.get_dag_approval = AsyncMock(return_value=None)
         mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
 
@@ -690,6 +696,7 @@ class TestCheckDagApprovalFunction:
     async def test_standalone_function(self):
         """Test check_dag_approval standalone function."""
         mock_repo = MagicMock()
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
         mock_repo.get_dag_approval = AsyncMock(
             return_value={
                 "review_id": "rev-123",
@@ -821,6 +828,7 @@ class TestCheckRejection:
     @pytest.fixture
     def mock_repo(self):
         repo = MagicMock()
+        repo.get_reviews_for_dag = AsyncMock(return_value=[])
         repo.create_review = AsyncMock(return_value="rev-should-not-exist")
         return repo
 
@@ -855,17 +863,77 @@ class TestCheckRejection:
         assert result.rejection_reason == "formulary_status is a collider"
         mock_repo.create_review.assert_not_called()
         mock_repo.get_reviews_for_dag.assert_awaited_once_with(
-            "abc123", include_expired=False, brand="Kisqali"
+            "abc123", include_expired=True, brand="Kisqali"
         )
 
     @pytest.mark.asyncio
-    async def test_active_approval_wins_over_an_older_rejection(self, mock_repo):
+    async def test_newer_active_approval_wins_over_an_older_rejection(self, mock_repo):
+        """Chronology (rows newest first): approval after rejection -> cleared."""
         mock_repo.get_dag_approval = AsyncMock(
             return_value={"review_id": "rev-approved", "valid_until": "2099-01-01"}
         )
-        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[self._rejected()])
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {
+                    "review_id": "rev-approved",
+                    "approval_status": "approved",
+                    "valid_until": "2099-01-01",
+                },
+                self._rejected(),
+            ]
+        )
 
         assert await ExpertReviewGate(repository=mock_repo).check_rejection("abc123") is None
+
+    @pytest.mark.asyncio
+    async def test_newer_rejection_is_not_masked_by_an_older_active_approval(self, mock_repo):
+        """codex iter-3 HIGH: approve A (90-day validity), renew as B, reject B
+        while A is still unexpired. get_dag_approval still returns A, but the
+        most recent adjudication of this structure is a rejection -- the
+        probe must say so, and never clear the structure on A."""
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={"review_id": "rev-a", "valid_until": "2099-01-01"}
+        )
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                self._rejected(review_id="rev-b"),
+                {"review_id": "rev-a", "approval_status": "approved", "valid_until": "2099-01-01"},
+            ]
+        )
+
+        result = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
+
+        assert result is not None
+        assert result.decision == ReviewGateDecision.REJECTED
+        assert result.review_id == "rev-b"
+        # Chronology needs the WHOLE history, expired approvals included.
+        mock_repo.get_reviews_for_dag.assert_awaited_once_with(
+            "abc123", include_expired=True, brand=None
+        )
+
+    @pytest.mark.asyncio
+    async def test_reopened_after_rejection_is_not_cleared_by_an_older_approval(self, mock_repo):
+        """[pending C, rejected B, approved A(active)]: the rejection superseded
+        A; C re-opened the structure. check_rejection says "not rejected"
+        (re-opened), and check_approval must report the pending re-review --
+        not PROCEED on A."""
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={"review_id": "rev-a", "valid_until": "2099-01-01"}
+        )
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {"review_id": "rev-c", "approval_status": "pending"},
+                self._rejected(review_id="rev-b"),
+                {"review_id": "rev-a", "approval_status": "approved", "valid_until": "2099-01-01"},
+            ]
+        )
+        gate = ExpertReviewGate(repository=mock_repo)
+
+        assert await gate.check_rejection("abc123") is None
+        result = await gate.check_approval("abc123")
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert result.review_id == "rev-c"
+        assert result.is_approved is False
 
     @pytest.mark.asyncio
     async def test_pending_row_means_reopened_not_rejected(self, mock_repo):
@@ -945,3 +1013,66 @@ class TestUnavailableNeverProceeds:
             await ExpertReviewGate(repository=None).can_proceed("abc123", allow_pending=True)
             is False
         )
+
+
+class TestApprovalPrecedenceIsChronological:
+    """codex iter-3 HIGH: check_approval must apply the same chronology as
+    check_rejection -- the most recent adjudication wins; an older active
+    approval never masks a newer rejection; a newer pending row re-opens."""
+
+    @pytest.fixture
+    def mock_repo(self):
+        repo = MagicMock()
+        repo.get_reviews_for_dag = AsyncMock(return_value=[])
+        repo.create_review = AsyncMock(return_value="rev-should-not-exist")
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_newer_rejection_beats_older_active_approval(self, mock_repo):
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={
+                "review_id": "rev-a",
+                "valid_until": "2099-01-01",
+                "reviewer_name": "Dr. Yes",
+            }
+        )
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {
+                    "review_id": "rev-b",
+                    "approval_status": "rejected",
+                    "reviewer_name": "Dr. No",
+                    "concerns_raised": ["renewal found a collider"],
+                },
+                {"review_id": "rev-a", "approval_status": "approved", "valid_until": "2099-01-01"},
+            ]
+        )
+        gate = ExpertReviewGate(repository=mock_repo, auto_create_review=True)
+
+        result = await gate.check_approval("abc123", requester_id="user-1")
+
+        assert result.decision == ReviewGateDecision.REJECTED
+        assert result.is_approved is False
+        assert result.review_id == "rev-b"
+        assert result.reviewer_name == "Dr. No"
+        mock_repo.create_review.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_newer_active_approval_still_beats_older_rejection(self, mock_repo):
+        """#1970 direction, kept."""
+        mock_repo.get_dag_approval = AsyncMock(
+            return_value={"review_id": "rev-a", "valid_until": "2099-01-01"}
+        )
+        mock_repo.get_reviews_for_dag = AsyncMock(
+            return_value=[
+                {"review_id": "rev-a", "approval_status": "approved", "valid_until": "2099-01-01"},
+                {"review_id": "rev-old", "approval_status": "rejected"},
+            ]
+        )
+        gate = ExpertReviewGate(repository=mock_repo, auto_create_review=True)
+
+        result = await gate.check_approval("abc123", requester_id="user-1")
+
+        assert result.decision == ReviewGateDecision.PROCEED
+        assert result.review_id == "rev-a"
+        mock_repo.create_review.assert_not_called()

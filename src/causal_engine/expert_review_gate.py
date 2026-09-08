@@ -268,8 +268,26 @@ class ExpertReviewGate:
                 requires_action=True,
             )
 
-        # Check for active approval
-        approval = await self.repository.get_dag_approval(dag_hash, brand)
+        # Chronology first (#1971, codex iter-3): the MOST RECENT adjudication
+        # of this structure wins. An approval that is still unexpired but OLDER
+        # than a rejection (approve A, renew as B, reject B while A's 90 days
+        # run) is superseded -- ``get_dag_approval`` would still return A, so
+        # it must not be consulted on its own. The whole history is needed
+        # for that ordering, expired approvals included.
+        history = await self.repository.get_reviews_for_dag(
+            dag_hash, include_expired=True, brand=brand
+        )
+        latest_verdict, reopened = self._latest_adjudication(history)
+        superseded_by_rejection = (
+            latest_verdict is not None and latest_verdict.get("approval_status") == "rejected"
+        )
+
+        # Check for active approval -- only if no newer rejection supersedes it.
+        approval = (
+            None
+            if superseded_by_rejection
+            else await self.repository.get_dag_approval(dag_hash, brand)
+        )
 
         if approval:
             # DAG has active approval - check expiry
@@ -311,11 +329,9 @@ class ExpertReviewGate:
                 message="DAG has active expert approval",
             )
 
-        # No active approval - check for pending review
-        pending_reviews = await self.repository.get_reviews_for_dag(
-            dag_hash, include_expired=False, brand=brand
-        )
-        pending = [r for r in pending_reviews if r.get("approval_status") == "pending"]
+        # No usable approval - check for pending review (a pending row NEWER
+        # than a rejection is a reviewer re-opening the structure).
+        pending = [r for r in history if r.get("approval_status") == "pending"]
 
         if pending:
             # Review already pending. Backfill-on-encounter (097): this
@@ -347,18 +363,18 @@ class ExpertReviewGate:
             )
 
         # A REJECTED verdict is durable (#1970). ``get_reviews_for_dag`` orders
-        # created_at DESC, so if the most recent row for this DAG is 'rejected'
-        # a human already adjudicated this structure and turned it down.
+        # created_at DESC, so if the most recent adjudication of this DAG is
+        # 'rejected' a human already turned this structure down.
         # Auto-creating a fresh pending row on the next REVIEW/BLOCK band would
-        # silently undo that decision. A newer approval or pending row wins
-        # because those branches returned above; a reviewer who wants to
-        # re-open the structure does so from the review UI, not by re-running.
-        # #1971 gives the verdict its own decision value (REJECTED, not
-        # BLOCKED) so consumers can tell "a human said no" from "nobody has
-        # looked yet and no row could be queued".
-        latest = pending_reviews[0] if pending_reviews else None
-        if latest and latest.get("approval_status") == "rejected":
-            return self._rejection_result(latest, dag_hash)
+        # silently undo that decision. A NEWER approval or pending row wins
+        # (handled above -- ``reopened`` covers the pending case); a reviewer
+        # who wants to re-open the structure does so from the review UI, not
+        # by re-running. #1971 gives the verdict its own decision value
+        # (REJECTED, not BLOCKED) so consumers can tell "a human said no" from
+        # "nobody has looked yet and no row could be queued".
+        if superseded_by_rejection and not reopened:
+            assert latest_verdict is not None  # narrowed by superseded_by_rejection
+            return self._rejection_result(latest_verdict, dag_hash)
 
         # No approval and no pending review
         if self.auto_create_review and requester_id:
@@ -409,6 +425,26 @@ class ExpertReviewGate:
         )
 
     @staticmethod
+    def _latest_adjudication(
+        history: List[Dict[str, Any]],
+    ) -> tuple[Optional[Dict[str, Any]], bool]:
+        """``(most recent non-pending row, a pending row is newer than it)``.
+
+        ``history`` is newest-first (``get_reviews_for_dag`` orders created_at
+        DESC; rows are created and resolved in order because the unique-pending
+        index (migration 062) allows one open review per structure at a time,
+        so creation order is adjudication order). ``None`` when nothing has
+        been adjudicated yet.
+        """
+        reopened = False
+        for row in history:
+            if row.get("approval_status") == "pending":
+                reopened = True
+                continue
+            return row, reopened
+        return None, reopened
+
+    @staticmethod
     def _rejection_result(latest: Mapping[str, Any], dag_hash: str) -> ReviewGateResult:
         """The REJECTED result for the most recent (rejected) review row."""
         reviewer = latest.get("reviewer_name")
@@ -438,32 +474,33 @@ class ExpertReviewGate:
 
         Consulted by the refutation node on EVERY band -- a PROCEED band
         included, where ``check_approval`` is deliberately not called because
-        a robust estimate does not need a queue row. Same precedence as
-        ``check_approval`` so the two can never disagree: an active approval
-        wins, then any pending row (a reviewer re-opened the structure), then
-        the most recent verdict. Never creates a review row.
+        a robust estimate does not need a queue row. Same chronology as
+        ``check_approval`` so the two can never disagree: the most recent
+        adjudication of the structure wins (an older still-unexpired approval
+        never masks a newer rejection -- codex iter-3), and a pending row
+        newer than that rejection means a reviewer re-opened the structure.
+        Never creates a review row. One read (the full history).
 
         Returns:
             The REJECTED ``ReviewGateResult`` (reviewer, review id, reason) when
-            the most recent adjudication of this structure is a rejection;
-            ``None`` otherwise -- including when there is no repository, in
-            which case the answer is "cannot tell", not "not rejected".
+            the most recent adjudication of this structure is a rejection and
+            nothing re-opened it; ``None`` otherwise -- including when there is
+            no repository, in which case the answer is "cannot tell", not "not
+            rejected".
         """
         if not self.repository:
             return None
 
-        approval = await self.repository.get_dag_approval(dag_hash, brand)
-        if approval:
-            return None
-
-        rows = await self.repository.get_reviews_for_dag(
-            dag_hash, include_expired=False, brand=brand
+        history = await self.repository.get_reviews_for_dag(
+            dag_hash, include_expired=True, brand=brand
         )
-        if any(r.get("approval_status") == "pending" for r in rows):
-            return None
-        latest = rows[0] if rows else None
-        if latest and latest.get("approval_status") == "rejected":
-            return self._rejection_result(latest, dag_hash)
+        latest_verdict, reopened = self._latest_adjudication(history)
+        if (
+            latest_verdict is not None
+            and latest_verdict.get("approval_status") == "rejected"
+            and not reopened
+        ):
+            return self._rejection_result(latest_verdict, dag_hash)
         return None
 
     async def can_proceed(
