@@ -407,6 +407,70 @@ class TestRegisterAlgorithm:
         del DiscoveryRunner.ALGORITHM_REGISTRY[DiscoveryAlgorithmType.LINGAM]
 
 
+class TestPoolWorkerFallback:
+    """#1978: the pool path must fall back to the runner's own ``max_workers``.
+
+    The timeout half of #1978 is pinned by TestPerAlgorithmTimeout; this is the
+    other half, which shipped untested. ``max_workers`` was the *other* attribute
+    the issue named as "stored but never read", and the fix
+    (``config.max_workers or self.max_workers``) is exactly the kind of one-line
+    expression that silently reverts.
+
+    The real ``ProcessPoolExecutor`` is deliberately NOT spawned: forking a pool
+    that re-imports causal-learn on a memory-capped box is a genuine OOM risk,
+    and the behaviour under test is which value reaches the constructor, not what
+    the pool computes. The recorder captures the real call from the real code
+    path and then aborts, so nothing is faked -- no substitute result is ever
+    returned to the code under test.
+    """
+
+    @staticmethod
+    async def _record_max_workers(runner, config):
+        seen = {}
+
+        class _Abort(RuntimeError):
+            pass
+
+        class _Recorder:
+            def __init__(self, max_workers=None):
+                seen["max_workers"] = max_workers
+                raise _Abort
+
+        data = pd.DataFrame({"a": [1, 2, 3], "b": [1, 2, 3]})
+        with patch("src.causal_engine.discovery.runner.ProcessPoolExecutor", _Recorder):
+            try:
+                await runner._run_algorithms_parallel(data, config)
+            except _Abort:
+                pass
+        return seen
+
+    @pytest.mark.asyncio
+    async def test_runner_max_workers_is_used_when_config_does_not_pin_one(self):
+        runner = DiscoveryRunner(max_workers=7)
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC, DiscoveryAlgorithmType.GES],
+            use_process_pool=True,
+            max_workers=None,
+        )
+        seen = await self._record_max_workers(runner, config)
+        assert seen["max_workers"] == 7, (
+            "the runner's max_workers must be the fallback -- it was stored and "
+            "never read before #1978"
+        )
+
+    @pytest.mark.asyncio
+    async def test_config_max_workers_still_wins_when_pinned(self):
+        """Negative control: the fallback must not override an explicit config."""
+        runner = DiscoveryRunner(max_workers=7)
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC, DiscoveryAlgorithmType.GES],
+            use_process_pool=True,
+            max_workers=2,
+        )
+        seen = await self._record_max_workers(runner, config)
+        assert seen["max_workers"] == 2
+
+
 class TestPerAlgorithmTimeout:
     """#1978: ``timeout_seconds`` bounds each algorithm on the sequential path."""
 
