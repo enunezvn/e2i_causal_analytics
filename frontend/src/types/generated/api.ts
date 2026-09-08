@@ -5983,6 +5983,11 @@ export interface components {
              */
             discovered_confounders?: string[];
             /**
+             * Discovered Dag Id
+             * @description Row id of this run's durable discovery record in public.discovered_dags (ensemble edges, per-algorithm runs, gate evaluation, and the shipped DAG with per-edge provenance). None when discovery did not run, or when persistence failed — then warnings carries the reason (#1974).
+             */
+            discovered_dag_id?: string | null;
+            /**
              * Ate
              * @description Average treatment effect (ADJUSTED for confounders)
              */

@@ -606,9 +606,9 @@ async def test_causal_path_get_by_id_filters_path_id() -> None:
 
 
 def test_provenance_tagged_tables_match_migrations() -> None:
-    """PROVENANCE_TAGGED_TABLES must be the 26 tables migrations 063/067/069
-    tagged — the loader's stale pre-063 subset hard-excluded causal_paths and
-    agent_activities on an obsolete 42703 rationale."""
+    """PROVENANCE_TAGGED_TABLES must be the 27 tables migrations 063/067/069
+    (+ ml/036, #1974) tagged — the loader's stale pre-063 subset hard-excluded
+    causal_paths and agent_activities on an obsolete 42703 rationale."""
     from src.repositories.provenance import PROVENANCE_TAGGED_TABLES
 
     expected = {
@@ -641,6 +641,8 @@ def test_provenance_tagged_tables_match_migrations() -> None:
         "feature_groups",
         "features",
         "feature_values",
+        # ml/036_move_discovery_tables_to_public.sql (#1974)
+        "discovered_dags",
     }
     assert set(PROVENANCE_TAGGED_TABLES) == expected
 

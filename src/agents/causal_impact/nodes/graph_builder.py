@@ -246,6 +246,30 @@ class GraphBuilderNode:
                         outcome,
                     )
 
+            # #1974: durable record of the discovery run (public.discovered_dags).
+            # Persist ONLY when discovery actually ran: the discovered_dags row
+            # IS a discovery run (n_samples, algorithms_used, ensemble_threshold
+            # and alpha are NOT NULL) — a manual DAG has none of those and
+            # writing it would fabricate them. The DAG that shipped after the
+            # gate (manual fallback included) rides in metadata.shipped_dag with
+            # its per-edge provenance, so every discovery run is recorded
+            # whatever the gate decided. NEVER silently best-effort: the step
+            # returns a state delta — {discovered_dag_id} on success, or
+            # {discovered_dag_persist_error, warnings} on failure — and never
+            # raises into this node's outer ``except``.
+            persist_delta: Dict[str, Any] = {}
+            if discovery_result is not None and gate_evaluation is not None:
+                persist_delta = await _persist_discovered_dag(
+                    state=state,
+                    discovery_result=discovery_result,
+                    gate_evaluation=gate_evaluation,
+                    causal_graph=causal_graph,
+                    treatment=treatment,
+                    outcome=outcome,
+                    discovery_latency_ms=discovery_latency_ms,
+                )
+                new_warnings.extend(persist_delta.pop("warnings", []))
+
             latency_ms = (time.time() - start_time) * 1000
 
             result = {
@@ -254,6 +278,7 @@ class GraphBuilderNode:
                 "dag_version_hash": dag_version_hash,
                 "graph_builder_latency_ms": latency_ms,
                 "current_phase": "estimating",
+                **persist_delta,
             }
 
             # Add discovery metadata if used
@@ -1071,6 +1096,101 @@ class GraphBuilderNode:
         logger.info("Using manual DAG (REJECT or fallback)")
         dag = self._construct_dag(treatment, outcome, confounders)
         return dag, augmented_edges, False
+
+
+async def _build_discovered_dag_repository() -> Any:
+    """Service-role repository for ``public.discovered_dags`` (#1974).
+
+    Mirrors ``refutation._build_expert_review_gate``: ``get_async_supabase_client``
+    raises ``ServiceConnectionError`` when no Supabase is configured (dev/test),
+    which the caller classifies as "unavailable" (WARNING) as opposed to any
+    other failure (ERROR). Resolved through the module global at call time so
+    tests substitute a fake factory the way the refutation tests do.
+    """
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.discovered_dag import DiscoveredDagRepository
+
+    client = await get_async_supabase_client()
+    return DiscoveredDagRepository(supabase_client=client)
+
+
+async def _persist_discovered_dag(
+    *,
+    state: CausalImpactState,
+    discovery_result: DiscoveryResult,
+    gate_evaluation: Dict[str, Any],
+    causal_graph: CausalGraph,
+    treatment: Optional[str],
+    outcome: Optional[str],
+    discovery_latency_ms: Optional[float],
+) -> Dict[str, Any]:
+    """Persist one discovery run; return a STATE DELTA, never raise (#1974).
+
+    Success  -> ``{"discovered_dag_id": <uuid>}``.
+    Failure  -> ``{"discovered_dag_persist_error": <msg>, "warnings": [<msg>]}``
+    with the dag hash, session id and query id in the message, logged at
+    WARNING when Supabase is simply not configured (``ServiceConnectionError``,
+    the refutation precedent's degrade branch) and at ERROR for anything else.
+
+    Deliberate departure from ``_build_expert_review_gate``, which re-raises
+    unexpected errors: a self-bypassed review gate would mislabel a REVIEW-band
+    estimate as approved, so it must fail loud. A lost audit row changes no
+    result, so failing the whole analysis (minutes of compute, ``status=failed``)
+    over it would be the wrong trade — but it must never be SILENT either,
+    which is what the state key + warning + ERROR log guarantee. Under the
+    unit tree's dead-Supabase pin the transport raises ``httpx.ConnectError``
+    (measured), not ``ServiceConnectionError``, so the broad except is what
+    keeps a persistence hiccup out of the node's outer failure path.
+    """
+    from src.memory.services.factories import ServiceConnectionError
+    from src.repositories.discovered_dag import (
+        build_discovered_dag_payload,
+        resolve_frame_provenance,
+    )
+
+    dag_version_hash = causal_graph.get("dag_version_hash")
+    session_id = state.get("session_id")
+    query_id = state.get("query_id")
+    context = f"[dag_version_hash={dag_version_hash} session_id={session_id} query_id={query_id}]"
+
+    try:
+        # Inside the boundary on purpose (codex iter-1 LOW): a cache value
+        # pandas cannot convert must become a persist error, never a raise.
+        frame = (state.get("data_cache") or {}).get("estimation_data")
+        if frame is not None and not isinstance(frame, pd.DataFrame):
+            frame = pd.DataFrame(frame)
+        payload = build_discovered_dag_payload(
+            discovery_result=discovery_result,
+            gate_evaluation=gate_evaluation,
+            causal_graph=causal_graph,
+            treatment=treatment,
+            outcome=outcome,
+            query_id=query_id,
+            session_id=session_id,
+            is_synthetic=resolve_frame_provenance(frame, state),
+            frame=frame,
+            discovery_latency_ms=discovery_latency_ms,
+        )
+        repository = await _build_discovered_dag_repository()
+        dag_id = await repository.record(payload)
+    except ServiceConnectionError as exc:
+        message = f"Discovered DAG NOT persisted (Supabase unavailable): {exc} {context}"
+        logger.warning(message)
+        return {"discovered_dag_persist_error": message, "warnings": [message]}
+    except Exception as exc:
+        message = f"Discovered DAG persistence FAILED: {exc} {context}"
+        logger.error(message, exc_info=True)
+        return {"discovered_dag_persist_error": message, "warnings": [message]}
+
+    logger.info(
+        "Discovered DAG persisted: dag_id=%s gate=%s n_edges=%s is_synthetic=%s %s",
+        dag_id,
+        payload.get("gate_decision"),
+        payload.get("n_edges"),
+        payload.get("is_synthetic"),
+        context,
+    )
+    return {"discovered_dag_id": dag_id}
 
 
 # Standalone function for LangGraph integration

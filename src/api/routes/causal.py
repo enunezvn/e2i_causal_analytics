@@ -3861,6 +3861,9 @@ def _agent_state_to_response(
         dag=dag,
         dag_source=dag_source,
         discovered_confounders=discovered_confounders,
+        # #1974: the persisted discovery row (None = not run / persist failed,
+        # with the reason already in warnings via the state accumulator).
+        discovered_dag_id=final_state.get("discovered_dag_id"),
         ate=ate,
         ate_ci_lower=estimation.get("ate_ci_lower"),
         ate_ci_upper=estimation.get("ate_ci_upper"),
