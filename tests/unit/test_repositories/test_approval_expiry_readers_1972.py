@@ -4,9 +4,11 @@ PR #1982 took the issue's option (a): ``expired`` is never written, expiry is
 derived at read time from ``valid_until``. That only holds if every reader
 derives it identically. Measured 2026-09-08 on the live droplet, they did not:
 
-* SQL ``is_dag_approved()`` and ``v_active_expert_approvals`` (010):
-  ``approved AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)``;
-  the view labels NULL ``'permanent'``.
+* SQL ``is_dag_approved()`` (010) tests
+  ``approved AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)``; the
+  ``v_active_expert_approvals`` view filters on ``approval_status`` alone
+  (expired rows included) and classifies each row's ``validity_status``:
+  NULL -> ``'permanent'``, ``>= CURRENT_DATE`` -> ``'active'``, else ``'expired'``.
 * Python ``is_dag_approved`` / ``get_dag_approval`` / ``get_expiring_reviews``
   used ``.gte("valid_until", today)`` -- and under SQL three-valued logic
   ``NULL >= date`` is not true, so a NULL row was EXCLUDED
@@ -126,8 +128,12 @@ def _declares_expired_included(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
     affirmative = re.search(
         r"\b(including|includes)\s+expired\b|\bexpired\b(\s+\w+){0,2}\s+included\b", doc
     )
+    # codex iter-4 MED: the negation may come AFTER the phrase ("Including
+    # expired rows is never permitted"), so test both orders.
+    neg = r"\b(not|never|no|without|neither|nor)\b"
+    key = r"\b(includ|expired)"
     negated = re.search(
-        r"\b(not|never|no|without|neither|nor)\b[^.;]*\b(includ|expired)"
+        rf"{neg}[^.;]*{key}|{key}[^.;]*{neg}"
         r"|\bexclud"
         r"|\bactive\b[^.;]*\bonly\b|\bonly\b[^.;]*\bactive\b",
         doc,
@@ -291,6 +297,8 @@ HISTORICAL_READER_NEGATED = [
         # and the negation list had no "never".
         "Active approvals only, never including expired rows.",
         "Current approvals; no expired rows are included.",
+        # codex iter-4 MED: negation AFTER the affirmative phrase.
+        "Including expired rows is never permitted.",
     )
 ]
 
@@ -330,7 +338,14 @@ class TestStructuralGuard:
     @pytest.mark.parametrize(
         "module",
         HISTORICAL_READER_NEGATED,
-        ids=["not-included", "excluding", "without", "never-including", "no-expired"],
+        ids=[
+            "not-included",
+            "excluding",
+            "without",
+            "never-including",
+            "no-expired",
+            "never-after",
+        ],
     )
     def test_positive_control_negated_declaration_is_still_caught(self, module):
         found = find_validity_violations(module)
