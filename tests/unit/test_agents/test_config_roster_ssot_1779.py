@@ -69,6 +69,7 @@ import pytest
 import yaml
 
 from src.agents.factory import AGENT_REGISTRY_CONFIG, AGENT_TIER_NAMES
+from src.agents.orchestrator._agent_method_map import AGENT_METHOD_MAP
 from src.memory.episodic_memory import E2IAgentName
 from src.mlops.opik_connector import OpikConnector
 from src.mlops.slo_monitor import AGENT_TIER_MAP, AgentTier, get_agent_tier
@@ -712,3 +713,70 @@ class TestE2IAgentNameEnumCoversTheRegistry:
             "Adding one means recording its reason on _ENUM_ONLY_LABELS; losing one "
             "means an agent left the registry while its enum label stayed behind."
         )
+
+
+# ---------------------------------------------------------------------------
+# AGENT_METHOD_MAP is the Tier 1-5 dispatcher contract
+# ---------------------------------------------------------------------------
+# ``_agent_method_map.py`` and ``cohort_profiler/CONTRACT_VALIDATION.md`` both
+# stated that this map is "pinned to 13 agents by test_agent_registry_consistency".
+# The count was correct; the guard was fictional -- that test has never existed
+# anywhere in the tree. So the documented invariant was enforced by nothing, and
+# a 14th entry (or a silently dropped 13th) would have shipped green.
+#
+# Pinned here as SET EQUALITY against the registry rather than as the literal 13,
+# for the reason this file's own header gives: a number can only be checked
+# against the file it sits in, and "correct new number" is a weaker fix than one
+# that cannot drift. Registering a Tier 1-5 agent now fails HERE until the map
+# learns about it, and a Tier-0 agent still correctly requires no map entry.
+
+TIER_1_TO_5_IDS: Set[str] = {
+    name for name, cfg in AGENT_REGISTRY_CONFIG.items() if int(cfg["tier"]) >= 1
+}
+
+
+class TestAgentMethodMapReadIsNotVacuous:
+    """An empty or mis-imported map would make the equality guard below pass.
+
+    ``AGENT_METHOD_MAP`` is a plain module-level dict, so the failure mode is an
+    import that silently yields ``{}`` -- against which set equality with an
+    equally empty derived set would be trivially true.
+    """
+
+    def test_the_map_is_populated(self) -> None:
+        assert AGENT_METHOD_MAP, "AGENT_METHOD_MAP imported empty"
+
+    def test_the_derived_tier_set_is_populated(self) -> None:
+        assert TIER_1_TO_5_IDS, "registry yielded no Tier 1-5 agents"
+
+    def test_reads_a_known_member(self) -> None:
+        """``orchestrator`` is Tier 1 and must always have a method spec."""
+        assert "orchestrator" in AGENT_METHOD_MAP
+
+    def test_does_not_invent_members(self) -> None:
+        assert _NOT_AN_AGENT not in AGENT_METHOD_MAP
+
+
+class TestAgentMethodMapEqualsTiers1To5:
+    """The map must equal the registry's Tier 1-5 set -- no more, no less."""
+
+    def test_map_equals_the_tier_1_to_5_registry_set(self) -> None:
+        actual = set(AGENT_METHOD_MAP)
+        assert actual == TIER_1_TO_5_IDS, (
+            "AGENT_METHOD_MAP does not equal the registry's Tier 1-5 agents.\n"
+            f"  missing a method spec: {sorted(TIER_1_TO_5_IDS - actual) or 'none'}\n"
+            f"  specced but not Tier 1-5: {sorted(actual - TIER_1_TO_5_IDS) or 'none'}\n"
+            f"  ({len(actual)} in the map vs {len(TIER_1_TO_5_IDS)} in the registry)\n"
+            "A Tier 1-5 agent without a spec falls through to the default "
+            "``analyze`` method, which is the Tier-0 contract, not this one."
+        )
+
+    def test_no_tier_0_agent_has_a_method_spec(self) -> None:
+        """Tier-0 agents dispatch via ``get_method_spec``'s fall-through.
+
+        ``cohort_profiler`` is the intentional example named in the map's own
+        comment; this asserts the rule rather than that one instance.
+        """
+        tier_0 = {name for name, cfg in AGENT_REGISTRY_CONFIG.items() if int(cfg["tier"]) == 0}
+        leaked = sorted(tier_0 & set(AGENT_METHOD_MAP))
+        assert not leaked, f"Tier-0 agents must not carry a Tier 1-5 method spec: {leaked}"
