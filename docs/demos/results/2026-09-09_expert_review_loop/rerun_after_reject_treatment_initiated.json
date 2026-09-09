@@ -1,0 +1,20 @@
+{
+  "analysis_id": "e9dc7a0c-3cf9-4516-a402-950956231bce",
+  "status": "failed",
+  "current_phase": null,
+  "gate": "block",
+  "decision": "rejected",
+  "review_id": "2f79f11f-63e3-4075-ab84-07c3eef3cd52",
+  "dag_id": "33596e7a-34b4-4c57-a66c-85a3f991a9e0",
+  "ate": 0.07218126298429725,
+  "warnings": [
+    "Refutation gate BLOCKED \u2014 the estimate did not survive robustness checks."
+  ],
+  "error": null,
+  "request": {
+    "treatment_var": "treatment_initiated",
+    "outcome_var": "persistent_180d",
+    "dataset": "patient_journeys",
+    "limit": 1500
+  }
+}
