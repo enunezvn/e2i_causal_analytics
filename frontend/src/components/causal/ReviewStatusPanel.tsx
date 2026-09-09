@@ -4,12 +4,20 @@
  *
  * Renders ONLY what the API returned (spec §4.4): the structural verdict from
  * `refutation.expert_review_decision`, a link to the review row when the run
- * touched one, the expert-review halt message from `warnings` (a rejection,
- * the approval-enforcement switch, or the route's fallback — the run's
- * warnings are rendered nowhere else in the drill-down, so the halt shows for
- * any decision that carries one), and the durable discovered-DAG record id in
+ * touched one, ONE reason line, and the durable discovered-DAG record id in
  * full with a copy affordance. Absent fields render nothing; an unknown
  * decision renders verbatim rather than a guessed label.
+ *
+ * The reason line: the expert-review halt message from `warnings` when the
+ * run carries one (a rejection, the approval-enforcement switch, or the
+ * route's fallback — the run's warnings are rendered nowhere else in the
+ * drill-down, so the halt shows for any decision that carries one); otherwise
+ * the agent's caveat from `refutation.review_caveat` (#1995) — the sentence
+ * naming the approval (reviewer, validity window), the rejection (reviewer,
+ * reason) or the queued / blocked / unavailable state. A BLOCK-band run never
+ * halts (the statistical gate already withheld the estimate), so the caveat
+ * is its only adjudication prose. The halt line embeds the caveat verbatim,
+ * which is why the two are never rendered together.
  *
  * @module components/causal/ReviewStatusPanel
  */
@@ -67,6 +75,12 @@ export interface ReviewStatusPanelProps {
    * approval-enforcement switch, or the route's fallback — lives there.
    */
   warnings?: string[];
+  /**
+   * `refutation.review_caveat` (#1995): the agent's band + expert-review
+   * sentence. Rendered as the reason line only when `warnings` carries no halt
+   * (the halt embeds it verbatim).
+   */
+  reviewCaveat?: string | null;
 }
 
 export function ReviewStatusPanel({
@@ -74,6 +88,7 @@ export function ReviewStatusPanel({
   reviewId,
   discoveredDagId,
   warnings,
+  reviewCaveat,
 }: ReviewStatusPanelProps) {
   const [copied, setCopied] = useState(false);
   if (!decision && !discoveredDagId) return null;
@@ -85,6 +100,8 @@ export function ReviewStatusPanel({
       : undefined;
   // At most one halt per run, and every producer of it starts with this prefix.
   const halt = (warnings ?? []).find((w) => w.startsWith('Estimate withheld'));
+  // One reason line: the halt (which embeds the caveat) wins; else the caveat.
+  const reason = halt ?? (reviewCaveat?.trim() ? reviewCaveat : undefined);
 
   return (
     <div
@@ -108,7 +125,7 @@ export function ReviewStatusPanel({
         )}
       </div>
       {copy && <p className="text-xs text-muted-foreground">{copy.meaning}</p>}
-      {halt && <p className="text-xs text-muted-foreground">{halt}</p>}
+      {reason && <p className="text-xs text-muted-foreground">{reason}</p>}
       {discoveredDagId && (
         <p className="text-xs text-muted-foreground">
           Durable discovery record:{' '}

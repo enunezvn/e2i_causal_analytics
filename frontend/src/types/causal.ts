@@ -256,6 +256,14 @@ export interface RefutationSummary {
    * borderline estimate; a rejection halts the run on every band.
    */
   expert_review_decision?: string | null;
+  /**
+   * The agent's band + expert-review sentence (#1995): the approval (reviewer,
+   * validity window), the rejection (reviewer, reason) or the queued / blocked /
+   * unavailable variant. Present on REVIEW/BLOCK gates and on a PROCEED-gate
+   * rejection; absent when the gate was not consulted. Also in `warnings`
+   * (standalone, or embedded in the "Estimate withheld" halt line).
+   */
+  review_caveat?: string | null;
   tests_passed?: number | null;
   tests_total?: number | null;
   sensitivity_e_value?: number | null;

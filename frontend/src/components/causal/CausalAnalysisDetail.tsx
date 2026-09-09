@@ -415,6 +415,7 @@ export function CausalAnalysisDetail({
         reviewId={result.refutation.expert_review_id}
         discoveredDagId={result.discovered_dag_id}
         warnings={result.warnings}
+        reviewCaveat={result.refutation.review_caveat}
       />
 
       <ConfoundingAdjustmentPanel result={result} />
