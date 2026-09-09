@@ -101,7 +101,8 @@ export function ReviewStatusPanel({
   // At most one halt per run, and every producer of it starts with this prefix.
   const halt = (warnings ?? []).find((w) => w.startsWith('Estimate withheld'));
   // One reason line: the halt (which embeds the caveat) wins; else the caveat.
-  const reason = halt ?? (reviewCaveat?.trim() ? reviewCaveat : undefined);
+  const caveat = reviewCaveat?.trim();
+  const reason = halt ?? (caveat ? caveat : undefined);
 
   return (
     <div

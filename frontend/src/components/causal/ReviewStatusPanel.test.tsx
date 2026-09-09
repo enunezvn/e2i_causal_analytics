@@ -134,6 +134,15 @@ describe('ReviewStatusPanel', () => {
     expect(screen.queryByText(REJECTION_CAVEAT, { exact: true })).not.toBeInTheDocument();
   });
 
+  // The panel's render gate is decision / DAG id, exactly as before #1995: a
+  // caveat with neither still renders nothing (the caveat never opens the panel).
+  it('renders nothing for a caveat alone with no decision and no DAG record', () => {
+    const { container } = renderWithAllProviders(
+      <ReviewStatusPanel reviewCaveat={APPROVAL_CAVEAT} warnings={[APPROVAL_CAVEAT]} />
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
   // Positive control for the caveat channel: an empty caveat renders no reason line.
   it('shows no reason line when the caveat is empty and warnings carry no halt', () => {
     renderWithAllProviders(
