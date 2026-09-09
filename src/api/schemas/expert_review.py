@@ -71,12 +71,21 @@ class ReviewRecord(PendingReviewItem):
 
     Extends ``PendingReviewItem`` with the resolution columns so the queue
     page's linked-review card can show who decided what, and until when.
+
+    Provenance (codex whole-diff HIGH F1): ``reviewer_id`` holds the REQUESTER
+    (the originating query id the gate wrote), never the resolver. The
+    resolver is ``reviewer_name`` / ``reviewer_email`` and the decision time is
+    ``resolved_at`` -- the resolution time for BOTH statuses since migration
+    136, NULL for rows resolved before it (``approved_at`` is approval-only).
     """
 
     approval_status: Optional[str] = None
     reviewer_id: Optional[str] = None
     reviewer_name: Optional[str] = None
+    reviewer_email: Optional[str] = None
     approved_at: Optional[datetime] = None
+    #: Resolution time for both statuses (migration 136); None before it.
+    resolved_at: Optional[datetime] = None
     valid_from: Optional[date] = None
     valid_until: Optional[date] = None
     concerns_raised: Optional[List[str]] = None

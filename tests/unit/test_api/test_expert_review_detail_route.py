@@ -100,6 +100,28 @@ async def test_returns_the_row_and_its_same_structure_history(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_resolution_provenance_columns_are_surfaced(monkeypatch):
+    """Codex whole-diff HIGH F1: ``reviewer_email`` and ``resolved_at`` (migration
+    136) reach the client so the card can render RECORDED provenance. Both are
+    None on a row resolved before the migration (positive/negative pair)."""
+    resolved = {
+        **ROW,
+        "reviewer_email": "no@example.com",
+        "resolved_at": "2026-07-14T09:31:00+00:00",
+    }
+    repo = _Repo(resolved, history=[resolved, {**ROW, "review_id": RID_OLDER}])
+    _install(monkeypatch, repo)
+    resp = await route_mod.get_expert_review(RID, user={})
+    assert resp.review.reviewer_email == "no@example.com"
+    assert resp.review.resolved_at == datetime(2026, 7, 14, 9, 31, tzinfo=timezone.utc)
+    assert resp.history[0].resolved_at == resp.review.resolved_at
+    # A pre-136 row carries neither; the reader reports None, not a stand-in.
+    assert resp.history[1].reviewer_email is None
+    assert resp.history[1].resolved_at is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_unknown_review_is_404(monkeypatch):
     """A VALID but unknown uuid: the store answers None -> 404."""
     repo = _Repo(None)

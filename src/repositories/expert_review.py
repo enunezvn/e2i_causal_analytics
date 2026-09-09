@@ -296,6 +296,8 @@ class ExpertReviewRepository(BaseRepository):
         concerns_raised: Optional[List[str]] = None,
         conditions: Optional[str] = None,
         validity_days: int = DEFAULT_VALIDITY_DAYS,
+        reviewer_name: Optional[str] = None,
+        reviewer_email: Optional[str] = None,
     ) -> bool:
         """
         Submit a completed expert review.
@@ -307,6 +309,16 @@ class ExpertReviewRepository(BaseRepository):
         this the filter was ``review_id`` alone and the pending-only claim was
         documentation, not enforcement.
 
+        Resolution provenance (lane 1, codex whole-diff HIGH F1): BOTH statuses
+        stamp ``resolved_at = now()`` (migration 136; ``approved_at`` stays
+        approval-only) and record the RESOLVER's ``reviewer_name`` /
+        ``reviewer_email`` when the caller knows them. ``reviewer_id`` is
+        deliberately NOT written here: the gate stores the REQUESTER in it --
+        the originating query id (src/causal_engine/expert_review_gate.py
+        create_review(reviewer_id=requester_id), ~:392) -- and that breadcrumb
+        must survive the resolution. An absent identity is left absent (the
+        None-strip below drops it): unknown stays unknown, never a placeholder.
+
         Args:
             review_id: UUID of the review to complete
             approval_status: 'approved' or 'rejected'
@@ -315,6 +327,8 @@ class ExpertReviewRepository(BaseRepository):
             concerns_raised: List of specific concerns
             conditions: Any conditions on approval
             validity_days: Days until review expires (default 90)
+            reviewer_name: Display name of the resolving operator, if known
+            reviewer_email: Email of the resolving operator, if known
 
         Returns:
             True if exactly this pending row was resolved, False otherwise
@@ -333,6 +347,10 @@ class ExpertReviewRepository(BaseRepository):
             "comments_json": json.dumps(comments) if comments else None,
             "concerns_raised": concerns_raised,
             "conditions": conditions,
+            # Decision time for BOTH statuses (migration 136).
+            "resolved_at": "now()",
+            "reviewer_name": reviewer_name,
+            "reviewer_email": reviewer_email,
         }
 
         if approval_status == "approved":

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 import src.api.routes.expert_review as expert_review_route
+from src.api.dependencies.auth import require_operator
 from src.api.main import app
 
 
@@ -63,6 +64,8 @@ class _FakeExpertReviewRepo:
         concerns_raised: Optional[List[str]] = None,
         conditions: Optional[str] = None,
         validity_days: int = 90,
+        reviewer_name: Optional[str] = None,
+        reviewer_email: Optional[str] = None,
     ) -> bool:
         self.submit_calls.append(
             {
@@ -73,6 +76,8 @@ class _FakeExpertReviewRepo:
                 "concerns_raised": concerns_raised,
                 "conditions": conditions,
                 "validity_days": validity_days,
+                "reviewer_name": reviewer_name,
+                "reviewer_email": reviewer_email,
             }
         )
         return self.submit_return
@@ -183,6 +188,57 @@ class TestResolveReview:
         assert resp.status_code == 200, resp.text
         assert resp.json()["approval_status"] == "rejected"
         assert fake_repo.submit_calls[0]["approval_status"] == "rejected"
+
+    def test_resolve_records_the_authenticated_operator(self, client, fake_repo):
+        """Codex whole-diff HIGH F1: the operator the route authenticated is the
+        resolver, so their identity must reach ``submit_review`` (call-kwargs
+        pin). The override carries BOTH a metadata name and an email so the
+        assertion cannot pass vacuously on the testing-mode default user."""
+        app.dependency_overrides[require_operator] = lambda: {
+            "id": "op-1",
+            "email": "operator@example.com",
+            "app_metadata": {"role": "admin"},
+            "user_metadata": {"name": "Dr. Operator"},
+        }
+        resp = client.post(
+            "/api/expert-reviews/66666666-6666-6666-6666-666666666666/resolve",
+            json={"approval_status": "rejected", "checklist": {}},
+        )
+        assert resp.status_code == 200, resp.text
+        call = fake_repo.submit_calls[0]
+        assert call["reviewer_name"] == "Dr. Operator"
+        assert call["reviewer_email"] == "operator@example.com"
+
+    @pytest.mark.parametrize(
+        ("user", "expected_name", "expected_email"),
+        [
+            # No metadata name -> the email stands in as the display name.
+            (
+                {"id": "op-2", "email": "op2@example.com", "user_metadata": {}},
+                "op2@example.com",
+                "op2@example.com",
+            ),
+            # No name, no email -> the id; email stays unknown.
+            ({"id": "op-3", "user_metadata": {}}, "op-3", None),
+            # Nothing usable -> unknown stays unknown (None, never a placeholder).
+            ({"user_metadata": {}}, None, None),
+        ],
+    )
+    def test_resolve_operator_identity_fallbacks(
+        self, client, fake_repo, user, expected_name, expected_email
+    ):
+        app.dependency_overrides[require_operator] = lambda: {
+            "app_metadata": {"role": "admin"},
+            **user,
+        }
+        resp = client.post(
+            "/api/expert-reviews/77777777-7777-7777-7777-777777777777/resolve",
+            json={"approval_status": "approved", "checklist": {}},
+        )
+        assert resp.status_code == 200, resp.text
+        call = fake_repo.submit_calls[0]
+        assert call["reviewer_name"] == expected_name
+        assert call["reviewer_email"] == expected_email
 
     def test_bad_approval_status_is_422(self, client, fake_repo):
         resp = client.post(

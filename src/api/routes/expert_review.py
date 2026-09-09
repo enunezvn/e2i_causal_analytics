@@ -140,6 +140,13 @@ async def resolve_review(
 ) -> ResolveReviewResponse:
     """Approve or reject a pending review; the resolution persists.
 
+    The authenticated operator is recorded as the resolver: ``reviewer_name``
+    (their profile name, else their email, else their id) and
+    ``reviewer_email`` are written with the resolution, and ``resolved_at`` is
+    stamped for BOTH statuses (migration 136). ``reviewer_id`` is left as the
+    requester breadcrumb the gate wrote. An identity the token does not carry
+    stays unrecorded.
+
     An ``approved`` resolution sets ``valid_from``/``valid_until``/``approved_at``
     inside ``submit_review`` (repo :169-173). A repo ``False`` is fail-closed —
     never a fabricated success. FIX B (codex HIGH): ``submit_review`` now returns
@@ -149,6 +156,13 @@ async def resolve_review(
     is still a correct non-200 (never a fake success); the repo logs the
     distinction (zero-row WARNING vs exception ERROR).
     """
+    # The resolver's identity, from the verified token (dependencies/auth.py
+    # builds ``id`` / ``email`` / ``user_metadata`` from the Supabase user).
+    # Unknown stays unknown: when the token carries none of them, pass None.
+    reviewer_name = (
+        (user.get("user_metadata") or {}).get("name") or user.get("email") or user.get("id")
+    )
+    reviewer_email = user.get("email")
     repo = await _get_expert_review_repo()
     success = await repo.submit_review(
         review_id=review_id,
@@ -158,6 +172,8 @@ async def resolve_review(
         concerns_raised=request.concerns_raised,
         conditions=request.conditions,
         validity_days=request.validity_days,
+        reviewer_name=reviewer_name or None,
+        reviewer_email=reviewer_email or None,
     )
     if not success:
         raise HTTPException(
