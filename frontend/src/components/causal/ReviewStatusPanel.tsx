@@ -4,13 +4,17 @@
  *
  * Renders ONLY what the API returned (spec §4.4): the structural verdict from
  * `refutation.expert_review_decision`, a link to the review row when the run
- * touched one, the rejection halt message from `warnings`, and the durable
- * discovered-DAG record id. Absent fields render nothing; an unknown decision
- * renders verbatim rather than a guessed label.
+ * touched one, the expert-review halt message from `warnings` (a rejection,
+ * the approval-enforcement switch, or the route's fallback — the run's
+ * warnings are rendered nowhere else in the drill-down, so the halt shows for
+ * any decision that carries one), and the durable discovered-DAG record id in
+ * full with a copy affordance. Absent fields render nothing; an unknown
+ * decision renders verbatim rather than a guessed label.
  *
  * @module components/causal/ReviewStatusPanel
  */
 
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 
@@ -58,7 +62,10 @@ export interface ReviewStatusPanelProps {
   decision?: string | null;
   reviewId?: string | null;
   discoveredDagId?: string | null;
-  /** The run's warnings; the rejection halt message (reviewer + reason) lives there. */
+  /**
+   * The run's warnings; the expert-review halt message — a rejection, the
+   * approval-enforcement switch, or the route's fallback — lives there.
+   */
   warnings?: string[];
 }
 
@@ -68,12 +75,16 @@ export function ReviewStatusPanel({
   discoveredDagId,
   warnings,
 }: ReviewStatusPanelProps) {
+  const [copied, setCopied] = useState(false);
   if (!decision && !discoveredDagId) return null;
-  const copy = decision ? DECISION_COPY[decision] : undefined;
-  const halt =
-    decision === 'rejected'
-      ? (warnings ?? []).find((w) => w.startsWith('Estimate withheld'))
+  // Own-property lookup: a plain object resolves inherited members ("toString",
+  // "constructor"), which would render an empty badge instead of the verbatim string.
+  const copy =
+    decision && Object.prototype.hasOwnProperty.call(DECISION_COPY, decision)
+      ? DECISION_COPY[decision]
       : undefined;
+  // At most one halt per run, and every producer of it starts with this prefix.
+  const halt = (warnings ?? []).find((w) => w.startsWith('Estimate withheld'));
 
   return (
     <div
@@ -101,7 +112,22 @@ export function ReviewStatusPanel({
       {discoveredDagId && (
         <p className="text-xs text-muted-foreground">
           Durable discovery record:{' '}
-          <code className="font-mono text-[11px]">{discoveredDagId}</code>
+          <code className="font-mono text-[11px]">{discoveredDagId}</code>{' '}
+          <button
+            type="button"
+            aria-label="Copy discovery record id"
+            className="text-xs underline"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(discoveredDagId);
+                setCopied(true);
+              } catch {
+                setCopied(false);
+              }
+            }}
+          >
+            {copied ? 'Copied' : 'Copy id'}
+          </button>
         </p>
       )}
     </div>

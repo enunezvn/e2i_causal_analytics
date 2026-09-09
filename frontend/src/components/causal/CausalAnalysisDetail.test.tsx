@@ -320,6 +320,8 @@ describe('CausalAnalysisDetail', () => {
         }}
       />
     );
+    // Positive control for the negative test below: the block carries this testid.
+    expect(screen.getByTestId('review-status')).toBeInTheDocument();
     expect(screen.getByText('Pending expert review')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /open review/i })).toHaveAttribute(
       'href',
