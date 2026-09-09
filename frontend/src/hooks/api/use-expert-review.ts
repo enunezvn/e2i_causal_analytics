@@ -154,7 +154,11 @@ export interface ReviewAssessmentVariables {
  * Hook to generate (or fetch cached) the advisory agent assessment.
  *
  * On success, invalidates the pending queue and any open review detail so the
- * row's cached `agent_assessment_json` stays in sync on the next refetch.
+ * row's cached `agent_assessment_json` stays in sync on the next refetch. A
+ * caller-supplied `onSuccess` is COMPOSED after those invalidations (codex
+ * iter-2 F2): spreading it over the hook's own handler silently switched the
+ * invalidations off. The caller receives the response and its own variables,
+ * which is how ResolveForm keys its guard release on `persisted` / `auto`.
  *
  * @param options - Additional TanStack mutation options
  */
@@ -165,18 +169,20 @@ export function useReviewAssessment(
   >
 ) {
   const queryClient = useQueryClient();
+  const { onSuccess, ...rest } = options ?? {};
 
   return useMutation<AgentAssessmentResponse, ApiError, ReviewAssessmentVariables>({
     mutationFn: ({ reviewId, force }) => generateReviewAssessment(reviewId, force),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
+    ...rest,
+    onSuccess: async (data, variables, ...others) => {
+      await queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'pending'],
       });
       // A fresh assessment also changes any open linked-review card.
-      queryClient.invalidateQueries({
+      await queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'detail'],
       });
+      await onSuccess?.(data, variables, ...others);
     },
-    ...options,
   });
 }

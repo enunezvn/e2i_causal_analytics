@@ -58,6 +58,15 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
     onError: (_error, variables) => {
       if (variables.auto) guard.current.delete(variables.reviewId);
     },
+    // HTTP 200 with persisted:false (codex iter-2 F2): the assessment is valid
+    // but the store rejected the cache write, so the row still has no cache.
+    // Same ownership rule as onError -- only the AUTOMATIC request releases
+    // the id -- so a collapse/remount (or bulk Prepare) can generate again
+    // instead of skipping the uncached row forever. The hook runs this AFTER
+    // its own cache invalidations.
+    onSuccess: (data, variables) => {
+      if (variables.auto && data.persisted === false) guard.current.delete(variables.reviewId);
+    },
   });
   const { mutate: generateAssessment } = assessmentMutation;
 
@@ -125,6 +134,15 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
         <WarningBanner
           title="Failed to generate agent assessment"
           messages={[assessmentMutation.error?.message ?? 'An unexpected error occurred.']}
+        />
+      )}
+
+      {assessmentMutation.data?.persisted === false && (
+        <WarningBanner
+          title="Agent assessment not saved"
+          messages={[
+            'Assessment generated but not saved — it will be lost when this row is collapsed; retry with Generate',
+          ]}
         />
       )}
 

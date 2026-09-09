@@ -148,6 +148,48 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
     expect(guard.current.has('rev-1')).toBe(true);
   });
 
+  // Codex iter-2 F2: an AUTOMATIC request can succeed with persisted:false (HTTP
+  // 200, the store rejected the cache write). Before, the guard stayed marked and
+  // nothing was cached, so after a collapse/remount neither the form nor bulk
+  // Prepare would ever regenerate it.
+  it('automatic persisted:false shows the unsaved state, releases the guard, and a remount generates again', async () => {
+    api.mockResolvedValueOnce({ ...RESPONSE, persisted: false }).mockResolvedValueOnce(RESPONSE);
+    const guard = newGuard();
+    const { unmount } = renderForm({ autoAssessGuard: guard });
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText(
+        'Assessment generated but not saved — it will be lost when this row is collapsed; retry with Generate'
+      )
+    ).toBeInTheDocument();
+    await waitFor(() => expect(guard.current.has('rev-1')).toBe(false));
+    await flushTimers();
+    expect(api).toHaveBeenCalledTimes(1); // no retry loop while mounted
+    unmount();
+    renderForm({ autoAssessGuard: guard });
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+    expect(api.mock.calls[1][0]).toBe('rev-1');
+    expect(guard.current.has('rev-1')).toBe(true); // the second automatic request holds it again
+  });
+
+  it('a MANUAL Regenerate resolving persisted:false shows the unsaved state but never releases the guard', async () => {
+    api.mockResolvedValueOnce(RESPONSE).mockResolvedValueOnce({ ...RESPONSE, persisted: false });
+    const guard = newGuard();
+    renderForm({ autoAssessGuard: guard });
+    const button = await screen.findByRole('button', { name: /regenerate agent assessment/i });
+    expect(guard.current.has('rev-1')).toBe(true);
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+    expect(
+      await screen.findByText(
+        'Assessment generated but not saved — it will be lost when this row is collapsed; retry with Generate'
+      )
+    ).toBeInTheDocument();
+    await flushTimers();
+    expect(guard.current.has('rev-1')).toBe(true); // ownership: only the automatic request releases
+    expect(api).toHaveBeenCalledTimes(2);
+  });
+
   it('does not auto-generate for a cached assessment; Regenerate forces a fresh one', async () => {
     api.mockResolvedValue(RESPONSE);
     renderForm({ review: { ...REVIEW, agent_assessment_json: ASSESSMENT } });

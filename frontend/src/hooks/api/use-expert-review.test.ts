@@ -284,6 +284,36 @@ describe('useReviewAssessment', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'detail'] });
   });
 
+  it('still performs BOTH invalidations when the caller supplies onSuccess, and calls it after them (codex iter-2 F2)', async () => {
+    // Pre-fix: `...options` REPLACED the hook's onSuccess, so a caller callback
+    // silently switched the cache invalidations off.
+    vi.mocked(expertReviewApi.generateReviewAssessment).mockResolvedValueOnce({
+      ...mockAssessmentResponse,
+      persisted: false,
+    });
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const order: string[] = [];
+    invalidateSpy.mockImplementation(async () => {
+      order.push('invalidate');
+    });
+    const onSuccess = vi.fn((..._args: unknown[]) => {
+      order.push('onSuccess');
+    });
+
+    const { result } = renderHook(() => useReviewAssessment({ onSuccess }), { wrapper });
+    result.current.mutate({ reviewId: '11111111-1111-1111-1111-111111111111', auto: true });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'pending'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'detail'] });
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    // The caller sees the response AND its own variables (the form keys its guard release on them).
+    expect(onSuccess.mock.calls[0][0]).toEqual({ ...mockAssessmentResponse, persisted: false });
+    expect(onSuccess.mock.calls[0][1]).toEqual({ reviewId: '11111111-1111-1111-1111-111111111111', auto: true });
+    expect(order).toEqual(['invalidate', 'invalidate', 'onSuccess']);
+  });
+
   it('handles an assessment error', async () => {
     vi.mocked(expertReviewApi.generateReviewAssessment).mockRejectedValueOnce(
       new Error('nope')
