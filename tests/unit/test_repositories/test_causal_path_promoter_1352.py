@@ -119,5 +119,78 @@ class TestSetValidationStatus:
         assert await repo.set_validation_status("cp_1", "validated", ("pending",)) is False
 
 
+@pytest.mark.unit
+class TestGuardedPromoteRpc:
+    """Lane 1 (spec §4.3): with a DAG hash the transition runs through
+    ``promote_causal_path_guarded`` (migration 134); without one the plain
+    conditional update is kept."""
+
+    def _install_rpc(self, mock_client, payload):
+        call = MagicMock()
+        call.execute = AsyncMock(return_value=MagicMock(data=payload))
+        mock_client.rpc.return_value = call
+        return call
+
+    @pytest.mark.asyncio
+    async def test_hash_routes_through_the_guarded_rpc(self, repo, mock_client):
+        self._install_rpc(mock_client, {"moved": 1, "rejected": False})
+        moved = await repo.set_validation_status(
+            "cp_1",
+            "validated",
+            ("pending", "needs_review"),
+            dag_version_hash="h" * 64,
+            brand="Kisqali",
+        )
+        assert moved is True
+        name, params = mock_client.rpc.call_args.args
+        assert name == "promote_causal_path_guarded"
+        assert params == {
+            "p_path_id": "cp_1",
+            "p_new_status": "validated",
+            "p_allowed_current": ["pending", "needs_review"],
+            "p_dag_version_hash": "h" * 64,
+            "p_brand": "Kisqali",
+        }
+        mock_client.table.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejected_structure_moves_nothing(self, repo, mock_client):
+        self._install_rpc(mock_client, {"moved": 0, "rejected": True})
+        moved = await repo.set_validation_status(
+            "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
+        )
+        assert moved is False
+
+    @pytest.mark.asyncio
+    async def test_list_wrapped_payload_is_read(self, repo, mock_client):
+        self._install_rpc(mock_client, [{"moved": 1, "rejected": False}])
+        assert (
+            await repo.set_validation_status(
+                "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
+            )
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_hash_keeps_the_plain_conditional_update(self, repo, mock_client):
+        query = MagicMock()
+        query.eq.return_value = query
+        query.in_.return_value = query
+        query.execute = AsyncMock(return_value=MagicMock(data=[{"path_id": "cp_1"}]))
+        mock_client.table.return_value.update.return_value = query
+        assert await repo.set_validation_status("cp_1", "validated", ("pending",)) is True
+        mock_client.rpc.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rpc_error_propagates(self, repo, mock_client):
+        call = MagicMock()
+        call.execute = AsyncMock(side_effect=RuntimeError("connection refused"))
+        mock_client.rpc.return_value = call
+        with pytest.raises(RuntimeError):
+            await repo.set_validation_status(
+                "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
+            )
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-q"])
