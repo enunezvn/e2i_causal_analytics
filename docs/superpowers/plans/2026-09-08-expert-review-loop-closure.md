@@ -3169,8 +3169,12 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
     // per-call mutate callbacks once the observer is gone. Releasing the id lets
     // a later expand, or the page's Prepare button, retry the FAILED generation
     // once (the effect's deps do not change on error, so there is no loop).
+    // OWNERSHIP: only the AUTOMATIC request's failure releases the id. A manual
+    // Generate from a second form for the same review (linked card + queue row)
+    // fails independently while the automatic request may still be in flight;
+    // releasing then would let a remount or Prepare start a duplicate request.
     onError: (_error, variables) => {
-      guard.current.delete(variables.reviewId);
+      if (variables.auto) guard.current.delete(variables.reviewId);
     },
   });
   const { mutate: generateAssessment } = assessmentMutation;
@@ -3192,7 +3196,7 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
     const timer = setTimeout(() => {
       if (guard.current.has(review.review_id)) return;
       guard.current.add(review.review_id);
-      generateAssessment({ reviewId: review.review_id });
+      generateAssessment({ reviewId: review.review_id, auto: true });
     }, 0);
     return () => clearTimeout(timer);
   }, [assessment, generateAssessment, guard, review.review_id]);
@@ -3309,7 +3313,7 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
 }
 ```
 
-Why (Task 10 review fold, codex 3×MED + review): the auto-assessment guard is released on a FAILED generation through the hook-level `onError` (the guard is defined before the hook so the closure can reach it) because the Mutation itself runs hook-level callbacks even after the form has unmounted, whereas TanStack skips per-call `mutate(vars, { onError })` once the observer is gone — a collapsed row could otherwise never retry and Prepare silently dropped the row (`missing` counted it, `todo` excluded it); the auto-assessment is issued from a zero-delay timer because query-core 5.90 `MutationObserver.onUnsubscribe` detaches from the in-flight mutation and nothing re-attaches on re-subscribe, so under `<StrictMode>` (main.tsx) a `mutate` in the first effect pass left the form pending forever after the request had completed (measured with real hooks: the guard held at one POST, but the Generate button stayed disabled with its spinner and the result never reached the form); the summary banner REPLACES the badges (`summary.data && !summary.isError`) because TanStack keeps the last data on a refetch error and spec §4.5 says the banner replaces the counts; the Prepare button lost its `aria-label`, which masked the visible "(N missing)" / "Preparing k / n" for screen readers; the resolved-copy wording no longer reads as if the row itself reopens; the component tests (Step 7b) use the REAL hooks and deferred promises so sequencing, the first-error stop, the guard release and Stop are observed mid-flight, which the page test (hooks mocked) cannot do; and the backend checklist comment (`src/insights/expert_review_assessment.py`) points at the constants' new home.
+Why (Task 10 review fold, codex 3×MED + review): the auto-assessment guard is released on a FAILED generation through the hook-level `onError` (the guard is defined before the hook so the closure can reach it) because the Mutation itself runs hook-level callbacks even after the form has unmounted, whereas TanStack skips per-call `mutate(vars, { onError })` once the observer is gone — a collapsed row could otherwise never retry and Prepare silently dropped the row (`missing` counted it, `todo` excluded it); the auto-assessment is issued from a zero-delay timer because query-core 5.90 `MutationObserver.onUnsubscribe` detaches from the in-flight mutation and nothing re-attaches on re-subscribe, so under `<StrictMode>` (main.tsx) a `mutate` in the first effect pass left the form pending forever after the request had completed (measured with real hooks: the guard held at one POST, but the Generate button stayed disabled with its spinner and the result never reached the form); the summary banner REPLACES the badges (`summary.data && !summary.isError`) because TanStack keeps the last data on a refetch error and spec §4.5 says the banner replaces the counts; the Prepare button lost its `aria-label`, which masked the visible "(N missing)" / "Preparing k / n" for screen readers; the resolved-copy wording no longer reads as if the row itself reopens; the component tests (Step 7b) use the REAL hooks and deferred promises so sequencing, the first-error stop, the guard release and Stop are observed mid-flight, which the page test (hooks mocked) cannot do; and the backend checklist comment (`src/insights/expert_review_assessment.py`) points at the constants' new home. Second fold (codex iter-2 MED+LOW, review): the guard is released only by the failing AUTOMATIC request (`auto: true` on `ReviewAssessmentVariables`, set by the effect's timer and never by the manual button) because a second form for the same review (linked card + queue row) can fail a MANUAL Generate while the automatic request is still in flight, and an unconditional release would let a remount or Prepare start a duplicate LM call (`PrepareAssessmentsButton` needs no change: it skips guarded ids and deletes only the ids it added itself); the resolved-review copy is status-specific because `check_approval` (src/causal_engine/expert_review_gate.py ~:272-350) consults the ACTIVE approval unless a NEWER rejection supersedes it, and a newer pending row reopens a REJECTED structure without displacing an approval, so a single sentence overstated the gate; and the test files carry a real-timers note above their timer helpers (Node orders the coerced zero-delay timer before the 10 ms wait; `vi.useFakeTimers` would break it).
 
 - [ ] **Step 4: `LinkedReviewCard`**
 
@@ -3335,6 +3339,22 @@ import { shortHash, statusVariant } from './checklist';
 function fmtDate(value?: string | null): string {
   if (!value) return '—';
   return value.slice(0, 10);
+}
+
+/**
+ * Status-specific resolved copy matching the gate's precedence
+ * (src/causal_engine/expert_review_gate.py check_approval, ~:272-350): the
+ * ACTIVE approval governs unless a NEWER rejection supersedes it; a newer
+ * pending row reopens a REJECTED structure but does not displace an approval.
+ */
+function resolvedCopy(status?: string | null): string {
+  if (status === 'approved') {
+    return 'This review is resolved. Its approval applies until it expires or a newer review rejects the structure.';
+  }
+  if (status === 'rejected') {
+    return 'This review is resolved. The rejection holds until a newer pending review of the same structure reopens it.';
+  }
+  return 'This review is resolved.';
 }
 
 export function LinkedReviewCard({
@@ -3412,8 +3432,7 @@ export function LinkedReviewCard({
                 />
               ) : (
                 <div className="text-sm text-[var(--color-muted-foreground)]">
-                  This review is resolved. A newer pending review of the same structure reopens
-                  the structure&apos;s review state (the gate reads the newest adjudication first).
+                  {resolvedCopy(q.data.review.approval_status)}
                 </div>
               )}
             </div>
@@ -3853,6 +3872,8 @@ function createWrapper(initialPath = '/expert-reviews') {
   );
 }
 
+// Relies on REAL timers: Node orders the form's coerced zero-delay timer before this
+// 10 ms wait. Do not add vi.useFakeTimers to this file.
 /** Let a form's deferred auto-assessment timer fire so a "still N calls" assertion is not vacuous. */
 const flushTimers = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
 
@@ -4052,7 +4073,8 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     await user.click(screen.getByRole('button', { name: /^review$/i }));
 
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
-    expect(mutate.mock.calls[0][0]).toEqual({ reviewId: 'rev-1' });
+    // `auto: true` marks the once-per-review automatic request: only ITS failure releases the guard.
+    expect(mutate.mock.calls[0][0]).toEqual({ reviewId: 'rev-1', auto: true });
 
     await user.click(await screen.findByRole('button', { name: /agent assessment/i }));
     expect(mutate).toHaveBeenCalledTimes(2);
@@ -4224,9 +4246,12 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(card).toHaveTextContent('Dr. No');
     expect(card).toHaveTextContent('collider');
     expect(card).toHaveTextContent('This review is resolved');
-    // The resolved copy must not read as if THIS row reopens (review fold, Minor #4).
-    expect(card).toHaveTextContent('reads the newest adjudication first');
-    expect(card).not.toHaveTextContent('would reopen it');
+    // Status-specific copy matching the gate's precedence (check_approval): a newer
+    // pending row reopens a REJECTED structure; it does not displace an approval.
+    expect(card).toHaveTextContent(
+      'The rejection holds until a newer pending review of the same structure reopens it.'
+    );
+    expect(card).not.toHaveTextContent('Its approval applies');
     expect(screen.getAllByTestId('causal-dag').length).toBe(1);
     expect(card).toHaveTextContent('rev-older');
     // The backend history INCLUDES the linked review itself: it is marked exactly
@@ -4237,6 +4262,27 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(current[0]).toHaveTextContent('rev-rejected');
     expect(current[0]).toHaveTextContent('(this review)');
     expect(current[0]).not.toHaveTextContent('rev-older');
+  });
+
+  it('shows an approved linked review with the approval-precedence copy', () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: {
+        ...DETAIL,
+        review: { ...DETAIL.review, review_id: 'rev-ok', approval_status: 'approved', valid_until: '2027-01-01T00:00:00Z' },
+        history: [],
+      },
+      isLoading: false,
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=rev-ok') });
+    const card = screen.getByTestId('linked-review');
+    expect(card).toHaveTextContent('This review is resolved');
+    expect(card).toHaveTextContent(
+      'Its approval applies until it expires or a newer review rejects the structure.'
+    );
+    expect(card).not.toHaveTextContent('The rejection holds');
+    expect(card).toHaveTextContent('2027-01-01');
   });
 
   it('resolves a pending linked review in place', async () => {
@@ -4315,14 +4361,16 @@ Create `frontend/src/components/expert-review/ResolveForm.test.tsx` (real `useRe
  *
  * Pins the once-per-review-id auto-assessment under StrictMode (double-invoked
  * effects) INCLUDING delivery of the result to the form, across an
- * unmount/remount, and the guard RELEASE on failure: the hook-level onError is
- * run by the Mutation itself, so it fires even after the form has unmounted
- * (a collapsed queue row), unlike per-call mutate callbacks.
+ * unmount/remount, the guard RELEASE on an automatic failure (the hook-level
+ * onError is run by the Mutation itself, so it fires even after the form has
+ * unmounted — a collapsed queue row — unlike per-call mutate callbacks), and
+ * guard OWNERSHIP: a failed MANUAL request never releases an id another form's
+ * automatic request still holds.
  */
 import { StrictMode } from 'react';
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ResolveForm } from './ResolveForm';
@@ -4358,13 +4406,16 @@ function newGuard() {
   return { current: new Set<string>() };
 }
 
+function newClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+}
+
+// Relies on REAL timers: Node orders the form's coerced zero-delay timer before this
+// 10 ms wait. Do not add vi.useFakeTimers to this file.
 /** Let any deferred auto-assessment timer fire so a "still N calls" assertion is not vacuous. */
 const flushTimers = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
 
-function renderForm(props: Partial<ResolveFormProps> = {}) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+function renderForm(props: Partial<ResolveFormProps> = {}, queryClient = newClient()) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -4412,7 +4463,7 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
     expect(api).toHaveBeenCalledTimes(1);
   });
 
-  it('releases the guard when the generation FAILS after the form unmounted, so a remount retries once', async () => {
+  it('releases the guard when the AUTOMATIC generation fails after the form unmounted, so a remount retries once', async () => {
     const first = deferred<AgentAssessmentResponse>();
     api.mockReturnValueOnce(first.promise).mockResolvedValueOnce(RESPONSE);
     const guard = newGuard();
@@ -4427,6 +4478,32 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
     renderForm({ autoAssessGuard: guard });
     await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
     expect(api.mock.calls[1][0]).toBe('rev-1');
+  });
+
+  it('a failed MANUAL request from a second form never releases the id the automatic request still holds', async () => {
+    const requestA = deferred<AgentAssessmentResponse>();
+    const requestB = deferred<AgentAssessmentResponse>();
+    api.mockReturnValueOnce(requestA.promise).mockReturnValueOnce(requestB.promise);
+    const guard = newGuard();
+    const queryClient = newClient();
+    const formA = renderForm({ autoAssessGuard: guard }, queryClient); // automatic → request A in flight
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    expect(guard.current.has('rev-1')).toBe(true);
+    const formB = renderForm({ autoAssessGuard: guard }, queryClient); // linked card + queue row: same review
+    await flushTimers();
+    expect(api).toHaveBeenCalledTimes(1); // B's automatic generation is skipped by the shared guard
+    await userEvent
+      .setup()
+      .click(within(formB.container).getByRole('button', { name: /^generate agent assessment$/i }));
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2)); // B's MANUAL request B
+    requestB.reject(new Error('LM unavailable'));
+    await within(formB.container).findByText('Failed to generate agent assessment');
+    expect(guard.current.has('rev-1')).toBe(true); // B's failure is not the automatic request's failure
+    await flushTimers();
+    expect(api).toHaveBeenCalledTimes(2); // no request C
+    requestA.resolve(RESPONSE);
+    await within(formA.container).findByRole('button', { name: /regenerate agent assessment/i });
+    expect(guard.current.has('rev-1')).toBe(true);
   });
 
   it('does not auto-generate for a cached assessment; Regenerate forces a fresh one', async () => {
@@ -4486,6 +4563,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+// Deferred promises and `waitFor` rely on REAL timers here; do not add vi.useFakeTimers to this file.
 function renderButton() {
   const guard = { current: new Set<string>() };
   const queryClient = new QueryClient();
