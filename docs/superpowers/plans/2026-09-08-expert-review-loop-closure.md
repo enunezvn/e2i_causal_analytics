@@ -3014,11 +3014,19 @@ export function PrepareAssessmentsButton({
     setState({ running: true, done: 0, total: todo.length, error: null });
     for (const review of todo) {
       if (cancelRef.current) break;
+      // Re-check per iteration: a form expanded while an earlier request was
+      // in flight may have started this one meanwhile.
+      if (autoAssessGuard?.current.has(review.review_id)) {
+        setState((s) => ({ ...s, done: s.done + 1 }));
+        continue;
+      }
       try {
         autoAssessGuard?.current.add(review.review_id);
         await generateReviewAssessment(review.review_id);
         setState((s) => ({ ...s, done: s.done + 1 }));
       } catch (e) {
+        // Release the id so a later "Prepare" (or the form's button) can retry it.
+        autoAssessGuard?.current.delete(review.review_id);
         setState((s) => ({
           ...s,
           running: false,
@@ -3617,6 +3625,19 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     expect(screen.getByText('LM unavailable')).toBeInTheDocument();
     expect(generateReviewAssessment).toHaveBeenCalledTimes(2);
   });
+
+  it('lets a later Prepare retry a review whose earlier attempt failed', async () => {
+    vi.mocked(generateReviewAssessment)
+      .mockRejectedValueOnce(new Error('LM unavailable'))
+      .mockResolvedValue({ review_id: 'rev-1', assessment: ASSESSMENT, cached: false, persisted: true } as never);
+    mockQueue({ reviews: [{ ...mockPending.reviews[0], review_id: 'rev-1' }], total: 1 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /prepare assessments/i }));
+    expect(await screen.findByText('LM unavailable')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /prepare assessments/i }));
+    await waitFor(() => expect(generateReviewAssessment).toHaveBeenCalledTimes(2));
+  });
 });
 
 const DETAIL: ExpertReviewDetailResponse = {
@@ -4087,7 +4108,9 @@ def db_tests(analysis_id, treatment: str, outcome: str, since_iso: str) -> dict:
     if proc.returncode != 0:
         raise RuntimeError(f"causal_validations lookup failed: {proc.stderr.strip()}")
     suite_id = proc.stdout.strip()
-    return _psql_rows(f"estimate_id = '{suite_id}'") if suite_id else {}
+    # The path-derived id is shared by EVERY run of that path (derive_causal_path_estimate_id),
+    # so keep the job window on the row read too: this run's suite, nothing older.
+    return _psql_rows(f"estimate_id = '{suite_id}' and created_at >= '{since_iso}'") if suite_id else {}
 
 def main(label: str, out_dir: str) -> None:
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
@@ -4168,7 +4191,7 @@ Closes the expert-review loop (spec docs/superpowers/specs/2026-09-08-expert-rev
 - Lineage page rewritten to the shipped state; anchors re-resolved.
 
 ## Measured before building
-0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have. The plan's own assumptions were attacked before Task 1 (section "Adversarial review before Task 1" at the end of this file): three Task-1 stub assumptions measured true, the SQL rule measured against the Python rule on 13 scenarios (one real divergence, fixed), the lineage edit fragments and anchor script measured, the live scripts' field names and the operator's role checked. Codex iter-1 returned REJECT with 1 HIGH + 5 MED, iter-2 REJECT with 2 HIGH + 4 MED + 1 LOW, iter-3 REJECT with 1 HIGH + 4 MED; all eighteen were verified and folded in, four of them by live measurement (row FOR SHARE blocks a racing resolve but not a racing INSERT; LOCK TABLE IN SHARE MODE blocks both and not reads; the tie-only Python rule plus the moved rejection block keep every gate test green with both readers agreeing; the amended migration applies twice and returns the expected verdicts).
+0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have. The plan's own assumptions were attacked before Task 1 (section "Adversarial review before Task 1" at the end of this file): three Task-1 stub assumptions measured true, the SQL rule measured against the Python rule on 13 scenarios (one real divergence, fixed), the lineage edit fragments and anchor script measured, the live scripts' field names and the operator's role checked. Codex iter-1 returned REJECT with 1 HIGH + 5 MED, iter-2 REJECT with 2 HIGH + 4 MED + 1 LOW, iter-3 REJECT with 1 HIGH + 4 MED, iter-4 (the last pre-execution round) REJECT with 3 MED and no HIGH; all twenty-one were verified and folded in, four of them by live measurement (row FOR SHARE blocks a racing resolve but not a racing INSERT; LOCK TABLE IN SHARE MODE blocks both and not reads; the tie-only Python rule plus the moved rejection block keep every gate test green with both readers agreeing; the amended migration applies twice and returns the expected verdicts).
 
 ## Verification
 Baseline discovery run on the pre-lane image: docs/demos/results/<date>_expert_review_loop/baseline.md. Post-deploy impact run, approve/reject re-runs and the switch step follow the spec §7 and are recorded in the same directory.
@@ -4373,10 +4396,20 @@ refuters; softening it would substitute a placeholder p-value. Flag for the owne
 
 ### Codex iter-3 findings → dispositions (after the iter-2 fold)
 
-1. HIGH — a row-level FOR SHARE cannot cover a review row that does not exist yet (renew INSERTs a new pending row, which can then be rejected). CONFIRMED by reasoning and **measured**: with FOR SHARE held, a scratch INSERT was NOT blocked in principle (row locks cover retrieved rows only); with `LOCK TABLE public.expert_reviews IN SHARE MODE` held, the resolve-shaped UPDATE and the renew-shaped INSERT both waited (cancelled at their 3 s `statement_timeout`), a plain read went through, positive controls succeeded after release, nothing persisted → the function takes the table SHARE lock (Step 4c rewritten).
+1. HIGH — a row-level FOR SHARE cannot cover a review row that does not exist yet (renew INSERTs a new pending row, which can then be rejected). CONFIRMED by reasoning (row locks cover retrieved rows only — the INSERT-under-FOR-SHARE case was NOT measured) and the replacement **measured**: with `LOCK TABLE public.expert_reviews IN SHARE MODE` held, the resolve-shaped UPDATE and the renew-shaped INSERT both waited (cancelled at their 3 s `statement_timeout`), a plain read went through, positive controls succeeded after release, nothing persisted → the function takes the table SHARE lock (Step 4c rewritten).
 2. MED — "Prepare assessments" could re-request an id whose generation an expanded form already started. CONFIRMED → the button filters `missing` through the shared guard before running; new test.
 3. MED — the evidence fallback could assemble rows from different suites or a brandless concurrent run. CONFIRMED → it now pins the newest `estimate_id` for the pair + brand + job window and reads that one suite.
 4. MED — a failed `psql` read silently became `{}`. CONFIRMED → non-zero exit raises with stderr.
 5. MED — `check_approval` still read a tied pending row as PENDING_REVIEW while `check_rejection` said REJECTED. CONFIRMED (the existing "REJECTED verdict is durable" block runs after the pending check) → Task 3b MOVES that block above the pending check; **measured in scratch**: both readers agree on the tie in either row order, newer pending rows and timestamp-less rows behave as before, 109 tests green across the gate, enforcement and promoter files.
 
 Codex could not run the gate tests itself (its sandbox lacks a writable cache directory); the 109-green figure is this session's measurement, recorded in Task 3b.
+
+### Codex iter-4 findings → dispositions (last pre-execution round)
+
+1. MED — the linked fallback pins a path-derived `estimate_id` that every run of that path shares, so newest-per-test could still mix runs. CONFIRMED (`derive_causal_path_estimate_id` is per path) → the row read keeps the job window too.
+2. MED — the bulk loop computed its skip list once; a form expanded while an earlier request was in flight could start an id the loop then requests again. CONFIRMED → the guard is re-checked per iteration.
+3. MED — a failed bulk attempt left the id in the guard, so a later "Prepare" skipped it forever (for the page mount). CONFIRMED → the id is released on error; new test.
+
+Stopping rule: four pre-execution rounds; the last returned no HIGH and three MED, all folded. Everything from
+here is code, and Task 12's read-only audit runs on the real diff, where each of these dispositions is
+re-checked against executed tests rather than plan text.
