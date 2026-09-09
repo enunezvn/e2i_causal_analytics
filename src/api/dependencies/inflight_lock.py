@@ -22,8 +22,11 @@ Redis path (the app's already-initialised ``redis.asyncio`` client):
   seconds so the TTL can be revisited on data.
 - wait: a loser polls ``GET`` every ``poll_seconds`` until the key is gone
   (released or expired) and then retries the SET. The wait is bounded by the
-  TTL, after which the request proceeds UNLOCKED (logged): the lock is a cost
-  optimisation and must never fail or hang a request.
+  TTL; on exhaustion ``hold`` yields ``mode == "none"`` (NO lock held) and the
+  CALLER decides. The assessment route answers 409 rather than building
+  unlocked: an unlocked build could overlap a legitimate holder, and a client
+  that waited the full TTL has already received nginx's 504, so it would serve
+  nobody. A Redis OUTAGE is different and never fails a request (below).
 - release: compare-and-delete Lua (``GET == token -> DEL``) in ``finally``, so
   a lease that outlived its TTL can never delete the NEXT holder's key. A
   failed release is logged and left to the TTL; it is not an outage signal.
@@ -105,7 +108,8 @@ class Lease:
     """What ``InflightLock.hold`` yields.
 
     ``mode``: ``"redis"`` (cross-worker), ``"local"`` (this process only) or
-    ``"none"`` (the bounded wait was exhausted; running unlocked).
+    ``"none"`` (the bounded wait was exhausted; NO lock is held and the caller
+    must not build).
     ``waited``: another request held this id when we arrived, so the caller
     should re-read whatever that request may have produced before building.
     """
@@ -264,8 +268,8 @@ class InflightLock:
                 if not held_redis:
                     lease.mode = "none"
                     logger.warning(
-                        f"{lease.key}: in-flight lock wait exceeded {self._wait_seconds:g}s; "
-                        "proceeding unlocked"
+                        f"{lease.key}: in-flight lock wait exhausted after "
+                        f"{self._wait_seconds:g}s; no lock held, the caller decides"
                     )
             except _REDIS_DEGRADE_ERRORS as e:
                 self._degrade(e)
@@ -286,8 +290,8 @@ class InflightLock:
             except TimeoutError:
                 lease.mode = "none"
                 logger.warning(
-                    f"{lease.key}: local in-flight lock wait exceeded {self._wait_seconds:g}s; "
-                    "proceeding unlocked"
+                    f"{lease.key}: local in-flight lock wait exhausted after "
+                    f"{self._wait_seconds:g}s; no lock held, the caller decides"
                 )
             except BaseException:
                 self._local_unref(key_id)

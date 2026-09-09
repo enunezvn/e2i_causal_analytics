@@ -177,9 +177,10 @@ async def test_loser_acquires_after_a_dead_holders_key_expires():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_wait_is_bounded_by_the_ttl_then_proceeds_unlocked(caplog):
-    """A key that never clears (a never-expiring foreign holder): after ~TTL the
-    request proceeds WITHOUT a lock rather than hanging or failing."""
+async def test_wait_is_bounded_by_the_ttl_then_reports_exhaustion(caplog):
+    """A key that never clears (a never-expiring foreign holder): after ~TTL
+    ``hold`` yields ``mode == "none"`` -- NO lock held, no local fallback taken
+    -- and the caller decides (the route answers 409; codex HIGH 2)."""
     redis = _FakeRedis()
     redis.preset(f"{PREFIX}:r1", "stuck", px=None)
     lock = _lock(redis, ttl_ms=100, poll_seconds=0.02)
@@ -187,9 +188,10 @@ async def test_wait_is_bounded_by_the_ttl_then_proceeds_unlocked(caplog):
     with caplog.at_level(logging.WARNING, logger=mod.__name__):
         async with lock.hold("r1") as lease:
             assert lease.mode == "none" and lease.waited is True
+            assert lock._local == {}  # exhaustion never falls through to the local lock
     assert time.monotonic() - t0 < 5.0
     assert redis._live(f"{PREFIX}:r1") == "stuck"  # not ours; untouched
-    assert any("unlocked" in r.getMessage() for r in caplog.records)
+    assert any("exhausted" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.unit
