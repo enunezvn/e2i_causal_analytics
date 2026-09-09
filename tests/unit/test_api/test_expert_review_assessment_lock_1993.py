@@ -25,6 +25,7 @@ DIFFERENT payloads (measured on main before the fix: builds=2, both
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import threading
@@ -195,8 +196,19 @@ class _Harness:
 
 
 def _harness(
-    monkeypatch, repo: _Repo, redis: _FakeRedis, *, identical: bool = False, **lock_kwargs: Any
+    monkeypatch,
+    repo: _Repo,
+    redis: _FakeRedis,
+    *,
+    identical: bool = False,
+    mod: Any = route_mod,
+    **lock_kwargs: Any,
 ) -> _Harness:
+    """One "worker": a bare app over ``mod.router`` with ``mod``'s seams patched.
+    ``mod`` defaults to the route module; a second, independently loaded copy
+    of it models a second gunicorn worker (its own lock instance and local
+    table, sharing only Redis and the repository)."""
+
     async def _repo_factory():
         return repo
 
@@ -214,7 +226,7 @@ def _harness(
         "expert_review:assessment:inflight", redis_factory=_redis_factory, **lock_kwargs
     )
     app = FastAPI()
-    app.include_router(route_mod.router, prefix="/api")
+    app.include_router(mod.router, prefix="/api")
     app.dependency_overrides[require_operator] = lambda: OPERATOR
     h = _Harness(app, lock, redis)
 
@@ -227,11 +239,23 @@ def _harness(
             return dict(IDENTICAL)  # a deterministic regeneration (codex MED 3)
         return {"items": [{"id": "q1", "verdict": "supports"}], "is_fallback": False, "n": n}
 
-    monkeypatch.setattr(route_mod, "_get_expert_review_repo", _repo_factory)
-    monkeypatch.setattr(route_mod, "_get_validation_rows", _no_validation_rows)
-    monkeypatch.setattr(route_mod, "_build_assessment", _gated_build)
-    monkeypatch.setattr(route_mod, "_ASSESSMENT_LOCK", lock)
+    monkeypatch.setattr(mod, "_get_expert_review_repo", _repo_factory)
+    monkeypatch.setattr(mod, "_get_validation_rows", _no_validation_rows)
+    monkeypatch.setattr(mod, "_build_assessment", _gated_build)
+    monkeypatch.setattr(mod, "_ASSESSMENT_LOCK", lock)
     return h
+
+
+def _second_worker_module() -> Any:
+    """Load the route file AGAIN as an independent module: its own ``router``,
+    its own ``_ASSESSMENT_LOCK`` and ``_INFLIGHT_BUILDS`` -- the separate
+    process state of a second gunicorn worker."""
+    spec = importlib.util.spec_from_file_location("expert_review_worker_b", route_mod.__file__)
+    assert spec is not None and spec.loader is not None
+    mod_b = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod_b)
+    assert mod_b is not route_mod and mod_b.router is not route_mod.router
+    return mod_b
 
 
 async def _until(pred: Callable[[], bool], what: str, timeout: float = GATE_TIMEOUT) -> None:
@@ -307,6 +331,41 @@ async def test_two_concurrent_uncached_requests_build_once(monkeypatch, caplog):
     msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     assert sum("assessment built in" in m and "lock mode=redis" in m for m in msgs) == 1
     assert sum("waited=True" in m and "replaying the stored result" in m for m in msgs) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_two_workers_share_the_redis_key_and_build_once(monkeypatch):
+    """Codex round-7 LOW: the cross-worker path itself. Two independent route
+    modules (see ``_second_worker_module``) with their own lock instances and
+    local tables share ONE fake Redis and ONE fake repository, like the two
+    gunicorn workers. Worker B's waiter cannot queue on A's local mutex: it
+    holds its own and polls the Redis key (observed before the gate opens)."""
+    repo, redis = _Repo(ROW), _FakeRedis()
+    ha = _harness(monkeypatch, repo, redis)  # worker A: the route module itself
+    hb = _harness(monkeypatch, repo, redis, mod=_second_worker_module())  # worker B
+    hb.gate.set()  # a wrong build on B would complete and be counted, not hang
+    assert ha.lock is not hb.lock and ha.lock._local is not hb.lock._local
+
+    async with ha.client() as ca, hb.client() as cb:
+        ta = asyncio.create_task(ca.post(URL))
+        await _until(lambda: ha.builds >= 1, "worker A entered the build holding the Redis key")
+        tb = asyncio.create_task(cb.post(URL))
+        await _until(ha.redis_waiting, "worker B's waiter observed polling the Redis key")
+        assert hb.lock._local[RID].refs == 1  # B holds ITS local mutex and waits on Redis
+        assert ha.lock._local[RID].refs == 1  # nothing queued on A's
+        ha.gate.set()
+        ra, rb = await ta, await tb
+
+    assert (ra.status_code, rb.status_code) == (200, 200), (ra.text, rb.text)
+    assert ha.builds + hb.builds == 1 and len(repo.writes) == 1
+    assert (ra.json()["cached"], rb.json()["cached"]) == (False, True)
+    assert ra.json()["assessment"] == rb.json()["assessment"]
+    assert ra.json()["assessment"]["generation_id"] == rb.json()["assessment"]["generation_id"]
+    assert redis.live_keys() == []
+    assert ha.lock._local == {} and hb.lock._local == {}
+    assert redis.ops.count("set") == 3  # A's SET, B's refused SET, B's late SET
+    assert redis.ops.count("eval") == 2  # both released their own token
 
 
 @pytest.mark.unit
