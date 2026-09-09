@@ -160,6 +160,12 @@ export interface ReviewAssessmentVariables {
  * invalidations off. The caller receives the response and its own variables,
  * which is how ResolveForm keys its guard release on `persisted` / `auto`.
  *
+ * The invalidations are fire-and-forget (fold-2 review minor): TanStack
+ * dispatches the mutation's success state -- and `data`, hence the form's
+ * assessment and its not-saved banner -- only after `onSuccess` settles, so
+ * awaiting them would hold what the reviewer sees behind the queue and
+ * detail REFETCHES.
+ *
  * @param options - Additional TanStack mutation options
  */
 export function useReviewAssessment(
@@ -174,15 +180,15 @@ export function useReviewAssessment(
   return useMutation<AgentAssessmentResponse, ApiError, ReviewAssessmentVariables>({
     mutationFn: ({ reviewId, force }) => generateReviewAssessment(reviewId, force),
     ...rest,
-    onSuccess: async (data, variables, ...others) => {
-      await queryClient.invalidateQueries({
+    onSuccess: (data, variables, ...others) => {
+      void queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'pending'],
       });
       // A fresh assessment also changes any open linked-review card.
-      await queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'detail'],
       });
-      await onSuccess?.(data, variables, ...others);
+      return onSuccess?.(data, variables, ...others);
     },
   });
 }

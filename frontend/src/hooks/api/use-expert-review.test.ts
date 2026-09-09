@@ -314,6 +314,33 @@ describe('useReviewAssessment', () => {
     expect(order).toEqual(['invalidate', 'invalidate', 'onSuccess']);
   });
 
+  it('reaches isSuccess before the invalidations settle, so a slow queue refetch never delays the assessment (review minor)', async () => {
+    vi.mocked(expertReviewApi.generateReviewAssessment).mockResolvedValueOnce(
+      mockAssessmentResponse
+    );
+    const { wrapper, queryClient } = createWrapper();
+    // Both invalidations hang on ONE deferred promise that is released only AFTER
+    // success has been asserted: an awaiting hook could not pass this.
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const invalidateSpy = vi
+      .spyOn(queryClient, 'invalidateQueries')
+      .mockImplementation(() => pending);
+    const onSuccess = vi.fn();
+
+    const { result } = renderHook(() => useReviewAssessment({ onSuccess }), { wrapper });
+    result.current.mutate({ reviewId: '11111111-1111-1111-1111-111111111111', auto: true });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(mockAssessmentResponse);
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    release();
+    await pending;
+  });
+
   it('handles an assessment error', async () => {
     vi.mocked(expertReviewApi.generateReviewAssessment).mockRejectedValueOnce(
       new Error('nope')
