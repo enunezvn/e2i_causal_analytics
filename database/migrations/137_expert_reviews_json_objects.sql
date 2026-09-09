@@ -19,10 +19,30 @@
 --   controlled with a plain-text cell and a bare NaN token); run inside the
 --   migration runner's transaction, that error aborts the whole deploy
 --   before the container flips, nothing half-applied. Live data has ZERO
---   such rows today (measured 2026-09-09) on all four columns; to find any
---   before a future run, per column:
---   SELECT review_id FROM public.expert_reviews
---    WHERE jsonb_typeof(<col>) = 'string' AND (<col> #>> '{}') !~ '^\s*[\[{]';
+--   such rows today (measured 2026-09-09) on all four columns; a plain
+--   prefix check (does the string start with '{' or '[') is NOT a reliable
+--   recovery query -- it MISSES a malformed cell that happens to start with
+--   '{' or '[' (codex round 2 LOW), and the live server is PostgreSQL 15.8,
+--   where pg_input_is_valid() is not available. Recovery: attempt the cast
+--   row by row and catch invalid_text_representation, e.g.
+--   DO $$ DECLARE r record; c text; BEGIN
+--     FOREACH c IN ARRAY ARRAY['checklist_json','comments_json',
+--         'agent_assessment_json','dag_structure_json'] LOOP
+--       FOR r IN EXECUTE format(
+--           'SELECT review_id, %I #>> ''{}'' AS s FROM public.expert_reviews'
+--           ' WHERE jsonb_typeof(%I) = ''string''', c, c) LOOP
+--         BEGIN PERFORM r.s::jsonb;
+--         EXCEPTION WHEN invalid_text_representation THEN
+--           RAISE NOTICE 'malformed %: %', c, r.review_id;
+--         END;
+--       END LOOP;
+--     END LOOP;
+--   END $$;
+--   Positive-controlled ROLLBACK-only on the live DB 2026-09-09: a throwaway
+--   row with checklist_json = '{not json' (a string scalar starting with
+--   '{' that is not valid JSON) produced exactly one NOTICE naming that
+--   row's review_id; run again against the real rows with no throwaway
+--   insert, it reported none.
 --   TRANSITIONAL WINDOW (codex round 1 MED): run_migrations.sh tracks this
 --   file by filename in public.schema_migrations and never re-runs it, so
 --   any row the OLD (pre-fix) image writes between this migration running
