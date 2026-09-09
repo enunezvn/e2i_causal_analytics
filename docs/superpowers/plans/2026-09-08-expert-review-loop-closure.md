@@ -2662,7 +2662,7 @@ Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
 - Create: `frontend/src/components/causal/ReviewStatusPanel.tsx`
 - Create: `frontend/src/components/causal/ReviewStatusPanel.test.tsx`
 - Modify: `frontend/src/components/causal/CausalAnalysisDetail.tsx` (after the discovered-confounders paragraph, ~line 409)
-- Modify: `frontend/src/components/causal/CausalAnalysisDetail.test.tsx` (append one test)
+- Modify: `frontend/src/components/causal/CausalAnalysisDetail.test.tsx` (append two tests)
 
 - [ ] **Step 1: Types**
 
@@ -2696,21 +2696,26 @@ In `AgentCausalAnalysisResponse` add after `dag_source?: string;`:
 
 - [ ] **Step 2: Failing component tests**
 
-Create `frontend/src/components/causal/ReviewStatusPanel.test.tsx`:
+Create `frontend/src/components/causal/ReviewStatusPanel.test.tsx`. Every case renders through `renderWithAllProviders` (frontend/src/test/utils.tsx): the panel's "Open review" deep link is a react-router `<Link>`, and `renderWithProviders` wraps only a `QueryClientProvider` — measured, the two link-rendering cases threw `TypeError: Cannot destructure property 'basename' of 'React10.useContext(...)' as it is null.` under it. The router wrapper renders no DOM of its own, so `toBeEmptyDOMElement` still holds for the null render:
 
 ```tsx
-import { describe, it, expect } from 'vitest';
-import { renderWithProviders, screen } from '@/test/utils';
+import { describe, it, expect, vi } from 'vitest';
+// The "Open review" deep link is a router <Link>: render under the router-wrapped helper.
+import { fireEvent, renderWithAllProviders, screen, waitFor } from '@/test/utils';
 import { ReviewStatusPanel } from './ReviewStatusPanel';
+
+const SWITCH_HALT =
+  'Estimate withheld: CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true requires an active expert approval of the DAG structure for a REVIEW-band estimate, and this structure holds none (gate decision: pending_review). Re-run once the review is resolved.';
+const GATE_BLOCKED = 'Refutation gate BLOCKED — the estimate did not survive robustness checks.';
 
 describe('ReviewStatusPanel', () => {
   it('renders nothing when the run carried no review state and no DAG record', () => {
-    const { container } = renderWithProviders(<ReviewStatusPanel />);
+    const { container } = renderWithAllProviders(<ReviewStatusPanel />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it('shows a pending structure with a deep link into the queue', () => {
-    renderWithProviders(
+    renderWithAllProviders(
       <ReviewStatusPanel decision="pending_review" reviewId="rev-9" discoveredDagId={null} />
     );
     expect(screen.getByText('Pending expert review')).toBeInTheDocument();
@@ -2719,7 +2724,7 @@ describe('ReviewStatusPanel', () => {
   });
 
   it('shows the rejection and the halt message from the run warnings', () => {
-    renderWithProviders(
+    renderWithAllProviders(
       <ReviewStatusPanel
         decision="rejected"
         reviewId="rev-rejected"
@@ -2735,14 +2740,58 @@ describe('ReviewStatusPanel', () => {
   });
 
   it('shows the durable discovery record id', () => {
-    renderWithProviders(<ReviewStatusPanel discoveredDagId="8a61b3db-6aad-4b01-96e4-bbea0af861b4" />);
+    renderWithAllProviders(<ReviewStatusPanel discoveredDagId="8a61b3db-6aad-4b01-96e4-bbea0af861b4" />);
     expect(screen.getByText(/Durable discovery record/)).toBeInTheDocument();
     expect(screen.getByText('8a61b3db-6aad-4b01-96e4-bbea0af861b4')).toBeInTheDocument();
   });
 
   it('never invents a label for an unknown decision', () => {
-    renderWithProviders(<ReviewStatusPanel decision="something_new" />);
+    renderWithAllProviders(<ReviewStatusPanel decision="something_new" />);
     expect(screen.getByText('something_new')).toBeInTheDocument();
+  });
+
+  // The run's warnings are rendered nowhere else in the drill-down, and the
+  // approval-enforcement switch withholds the estimate on pending / blocked /
+  // unavailable structures too (refutation.py:1215) — the halt must show for
+  // any decision that carries one, not only a rejection.
+  it.each(['pending_review', 'blocked', 'unavailable'])(
+    'shows the approval-enforcement halt from the run warnings for %s',
+    (decision) => {
+      renderWithAllProviders(
+        <ReviewStatusPanel decision={decision} warnings={[SWITCH_HALT, GATE_BLOCKED]} />
+      );
+      expect(screen.getByText(SWITCH_HALT)).toBeInTheDocument();
+      expect(screen.queryByText(/Refutation gate BLOCKED/)).not.toBeInTheDocument();
+    }
+  );
+
+  it('shows no halt line for an approved structure whose warnings carry none', () => {
+    renderWithAllProviders(<ReviewStatusPanel decision="proceed" warnings={[GATE_BLOCKED]} />);
+    expect(screen.getByText('Structure approved')).toBeInTheDocument();
+    expect(screen.queryByText(/Estimate withheld/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Refutation gate BLOCKED/)).not.toBeInTheDocument();
+  });
+
+  // A plain-object lookup resolves inherited members: "toString" must render
+  // verbatim like any other unknown decision, never as an empty badge.
+  it('renders an inherited-property decision verbatim, never an empty badge', () => {
+    renderWithAllProviders(<ReviewStatusPanel decision="toString" />);
+    expect(screen.getByText('toString')).toBeInTheDocument();
+  });
+
+  it('copies the full discovery record id to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    renderWithAllProviders(
+      <ReviewStatusPanel discoveredDagId="8a61b3db-6aad-4b01-96e4-bbea0af861b4" />
+    );
+    const button = screen.getByRole('button', { name: /copy discovery record id/i });
+    expect(button).toHaveTextContent('Copy id');
+    fireEvent.click(button);
+    expect(writeText).toHaveBeenCalledWith('8a61b3db-6aad-4b01-96e4-bbea0af861b4');
+    await waitFor(() => expect(button).toHaveTextContent('Copied'));
+    // The full id stays visible beside the affordance.
+    expect(screen.getByText('8a61b3db-6aad-4b01-96e4-bbea0af861b4')).toBeInTheDocument();
   });
 });
 ```
@@ -2760,13 +2809,17 @@ Create `frontend/src/components/causal/ReviewStatusPanel.tsx`:
  *
  * Renders ONLY what the API returned (spec §4.4): the structural verdict from
  * `refutation.expert_review_decision`, a link to the review row when the run
- * touched one, the rejection halt message from `warnings`, and the durable
- * discovered-DAG record id. Absent fields render nothing; an unknown decision
- * renders verbatim rather than a guessed label.
+ * touched one, the expert-review halt message from `warnings` (a rejection,
+ * the approval-enforcement switch, or the route's fallback — the run's
+ * warnings are rendered nowhere else in the drill-down, so the halt shows for
+ * any decision that carries one), and the durable discovered-DAG record id in
+ * full with a copy affordance. Absent fields render nothing; an unknown
+ * decision renders verbatim rather than a guessed label.
  *
  * @module components/causal/ReviewStatusPanel
  */
 
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 
@@ -2814,7 +2867,10 @@ export interface ReviewStatusPanelProps {
   decision?: string | null;
   reviewId?: string | null;
   discoveredDagId?: string | null;
-  /** The run's warnings; the rejection halt message (reviewer + reason) lives there. */
+  /**
+   * The run's warnings; the expert-review halt message — a rejection, the
+   * approval-enforcement switch, or the route's fallback — lives there.
+   */
   warnings?: string[];
 }
 
@@ -2824,12 +2880,16 @@ export function ReviewStatusPanel({
   discoveredDagId,
   warnings,
 }: ReviewStatusPanelProps) {
+  const [copied, setCopied] = useState(false);
   if (!decision && !discoveredDagId) return null;
-  const copy = decision ? DECISION_COPY[decision] : undefined;
-  const halt =
-    decision === 'rejected'
-      ? (warnings ?? []).find((w) => w.startsWith('Estimate withheld'))
+  // Own-property lookup: a plain object resolves inherited members ("toString",
+  // "constructor"), which would render an empty badge instead of the verbatim string.
+  const copy =
+    decision && Object.prototype.hasOwnProperty.call(DECISION_COPY, decision)
+      ? DECISION_COPY[decision]
       : undefined;
+  // At most one halt per run, and every producer of it starts with this prefix.
+  const halt = (warnings ?? []).find((w) => w.startsWith('Estimate withheld'));
 
   return (
     <div
@@ -2857,13 +2917,30 @@ export function ReviewStatusPanel({
       {discoveredDagId && (
         <p className="text-xs text-muted-foreground">
           Durable discovery record:{' '}
-          <code className="font-mono text-[11px]">{discoveredDagId}</code>
+          <code className="font-mono text-[11px]">{discoveredDagId}</code>{' '}
+          <button
+            type="button"
+            aria-label="Copy discovery record id"
+            className="text-xs underline"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(discoveredDagId);
+                setCopied(true);
+              } catch {
+                setCopied(false);
+              }
+            }}
+          >
+            {copied ? 'Copied' : 'Copy id'}
+          </button>
         </p>
       )}
     </div>
   );
 }
 ```
+
+Why (Task 9 review fold, codex HIGH/MED/LOW): the halt line is found for ANY decision because the run's `warnings` are rendered nowhere else in the drill-down and the approval-enforcement switch withholds the estimate on pending/blocked/unavailable structures too (all producers start with `Estimate withheld`, at most one per run); the decision lookup is own-property because a plain-object index resolves inherited members (`"toString"` would render an empty badge instead of the verbatim string); the DAG id stays visible in full (the exact lineage handle) with a clipboard copy affordance per spec §4.4.
 
 - [ ] **Step 4: Wire into the detail view and add its test**
 
@@ -2878,11 +2955,12 @@ In `CausalAnalysisDetail.tsx`, add the import `import { ReviewStatusPanel } from
       />
 ```
 
-Append to `CausalAnalysisDetail.test.tsx` (inside `describe('CausalAnalysisDetail', …)`):
+Append to `CausalAnalysisDetail.test.tsx` (inside `describe('CausalAnalysisDetail', …)`). The positive test renders through `renderWithAllProviders` (imported beside the file's existing `renderWithProviders`) because it renders the panel's router `<Link>`; the negative test stays on `renderWithProviders`, which also proves the detail view still renders without a router when the run carries no review id:
 
 ```tsx
   it('surfaces the review state and the discovered-DAG record when the run carries them', () => {
-    renderWithProviders(
+    // The panel's "Open review" deep link is a router <Link>; render under the router.
+    renderWithAllProviders(
       <CausalAnalysisDetail
         result={{
           ...RESULT,
@@ -2895,6 +2973,8 @@ Append to `CausalAnalysisDetail.test.tsx` (inside `describe('CausalAnalysisDetai
         }}
       />
     );
+    // Positive control for the negative test below: the block carries this testid.
+    expect(screen.getByTestId('review-status')).toBeInTheDocument();
     expect(screen.getByText('Pending expert review')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /open review/i })).toHaveAttribute(
       'href',

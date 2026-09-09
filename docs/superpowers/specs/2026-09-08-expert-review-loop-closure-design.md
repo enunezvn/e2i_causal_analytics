@@ -208,11 +208,14 @@ defence for `validated`.
   `expert_review_decision` or `discovered_dag_id` is present:
   - decision label and one-line meaning (`pending_review`: "structure queued for expert
     review"; `rejected`: "a reviewer rejected this structure", with reviewer and reason from
-    the run's warnings when present; `proceed` / `renewal_required`: "structure approved",
+    the run's warnings when present — the `Estimate withheld` halt line is shown for any decision
+    that carries one (rejection, the approval-enforcement switch, or the route's fallback), since
+    the run's warnings are rendered nowhere else in the drill-down; `proceed` /
+    `renewal_required`: "structure approved",
     with the renewal note; `blocked` / `unavailable`: honest text from the schema description);
   - a link to `/expert-reviews?review=<expert_review_id>` when an id exists;
-  - the discovered DAG record id, shortened, with a copy affordance and the sentence "durable
-    discovery record" (no route exists for it yet; the id is the lineage handle).
+  - the discovered DAG record id in full (the exact lineage handle), with a copy affordance and
+    the sentence "durable discovery record" (no route exists for it yet).
 - Nothing is inferred: absent fields render nothing.
 
 ### 4.5 Frontend: queue page
