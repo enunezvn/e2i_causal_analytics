@@ -244,8 +244,10 @@ def test_http_store_failure_is_a_safe_503(monkeypatch):
 
 @pytest.mark.unit
 def test_http_pending_is_not_shadowed_by_the_lookup(monkeypatch):
-    repo = _Repo(ROW)
-    r = _client(monkeypatch, repo).get("/api/expert-reviews/pending")
+    r = _client(monkeypatch, _Repo(ROW)).get("/api/expert-reviews/pending")
+    # The 200 + the pending body are the proof. A store-call count could not
+    # discriminate: were /{review_id} declared first, "pending" would fail the
+    # uuid pre-check and answer 404 BEFORE any store read (measured), which the
+    # status assertion catches.
     assert r.status_code == 200, r.text
     assert r.json() == {"reviews": [], "total": 0}
-    assert repo.get_calls == []  # the lookup route was not hit
