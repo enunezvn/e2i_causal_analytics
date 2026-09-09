@@ -116,6 +116,13 @@ regexes = [
   '''discontinued_180d''',
   '''comorbidity_burden''',
   '''prior_therapy_lines''',
+
+  # Lane-1 live-verification evidence (docs/demos/results/2026-09-09_expert_review_loop/
+  # cert_task14.txt, impact_image.txt, impact.md) records the deployed container
+  # image tag `ghcr.io/enunezvn/e2i-api:<40-hex>`; the tag IS the public git
+  # merge sha of main (989eec83d…), not a key. The generic-api-key rule fires
+  # on `api:<hex>`. Verified non-secret: a commit id anyone can `git show`.
+  '''989eec83d4334d0fd7447d7805c36272baac3286''',
 ]
 
 # Stopwords — a finding whose captured secret CONTAINS any of these is
