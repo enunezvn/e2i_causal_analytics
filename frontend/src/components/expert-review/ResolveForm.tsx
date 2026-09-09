@@ -51,8 +51,12 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
     // per-call mutate callbacks once the observer is gone. Releasing the id lets
     // a later expand, or the page's Prepare button, retry the FAILED generation
     // once (the effect's deps do not change on error, so there is no loop).
+    // OWNERSHIP: only the AUTOMATIC request's failure releases the id. A manual
+    // Generate from a second form for the same review (linked card + queue row)
+    // fails independently while the automatic request may still be in flight;
+    // releasing then would let a remount or Prepare start a duplicate request.
     onError: (_error, variables) => {
-      guard.current.delete(variables.reviewId);
+      if (variables.auto) guard.current.delete(variables.reviewId);
     },
   });
   const { mutate: generateAssessment } = assessmentMutation;
@@ -74,7 +78,7 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
     const timer = setTimeout(() => {
       if (guard.current.has(review.review_id)) return;
       guard.current.add(review.review_id);
-      generateAssessment({ reviewId: review.review_id });
+      generateAssessment({ reviewId: review.review_id, auto: true });
     }, 0);
     return () => clearTimeout(timer);
   }, [assessment, generateAssessment, guard, review.review_id]);

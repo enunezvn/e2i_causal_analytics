@@ -19,6 +19,22 @@ function fmtDate(value?: string | null): string {
   return value.slice(0, 10);
 }
 
+/**
+ * Status-specific resolved copy matching the gate's precedence
+ * (src/causal_engine/expert_review_gate.py check_approval, ~:272-350): the
+ * ACTIVE approval governs unless a NEWER rejection supersedes it; a newer
+ * pending row reopens a REJECTED structure but does not displace an approval.
+ */
+function resolvedCopy(status?: string | null): string {
+  if (status === 'approved') {
+    return 'This review is resolved. Its approval applies until it expires or a newer review rejects the structure.';
+  }
+  if (status === 'rejected') {
+    return 'This review is resolved. The rejection holds until a newer pending review of the same structure reopens it.';
+  }
+  return 'This review is resolved.';
+}
+
 export function LinkedReviewCard({
   reviewId,
   autoAssessGuard,
@@ -94,8 +110,7 @@ export function LinkedReviewCard({
                 />
               ) : (
                 <div className="text-sm text-[var(--color-muted-foreground)]">
-                  This review is resolved. A newer pending review of the same structure reopens
-                  the structure&apos;s review state (the gate reads the newest adjudication first).
+                  {resolvedCopy(q.data.review.approval_status)}
                 </div>
               )}
             </div>

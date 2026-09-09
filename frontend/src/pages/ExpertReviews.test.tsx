@@ -68,6 +68,8 @@ function createWrapper(initialPath = '/expert-reviews') {
   );
 }
 
+// Relies on REAL timers: Node orders the form's coerced zero-delay timer before this
+// 10 ms wait. Do not add vi.useFakeTimers to this file.
 /** Let a form's deferred auto-assessment timer fire so a "still N calls" assertion is not vacuous. */
 const flushTimers = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
 
@@ -267,7 +269,8 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     await user.click(screen.getByRole('button', { name: /^review$/i }));
 
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
-    expect(mutate.mock.calls[0][0]).toEqual({ reviewId: 'rev-1' });
+    // `auto: true` marks the once-per-review automatic request: only ITS failure releases the guard.
+    expect(mutate.mock.calls[0][0]).toEqual({ reviewId: 'rev-1', auto: true });
 
     await user.click(await screen.findByRole('button', { name: /agent assessment/i }));
     expect(mutate).toHaveBeenCalledTimes(2);
@@ -439,9 +442,12 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(card).toHaveTextContent('Dr. No');
     expect(card).toHaveTextContent('collider');
     expect(card).toHaveTextContent('This review is resolved');
-    // The resolved copy must not read as if THIS row reopens (review fold, Minor #4).
-    expect(card).toHaveTextContent('reads the newest adjudication first');
-    expect(card).not.toHaveTextContent('would reopen it');
+    // Status-specific copy matching the gate's precedence (check_approval): a newer
+    // pending row reopens a REJECTED structure; it does not displace an approval.
+    expect(card).toHaveTextContent(
+      'The rejection holds until a newer pending review of the same structure reopens it.'
+    );
+    expect(card).not.toHaveTextContent('Its approval applies');
     expect(screen.getAllByTestId('causal-dag').length).toBe(1);
     expect(card).toHaveTextContent('rev-older');
     // The backend history INCLUDES the linked review itself: it is marked exactly
@@ -452,6 +458,27 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(current[0]).toHaveTextContent('rev-rejected');
     expect(current[0]).toHaveTextContent('(this review)');
     expect(current[0]).not.toHaveTextContent('rev-older');
+  });
+
+  it('shows an approved linked review with the approval-precedence copy', () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: {
+        ...DETAIL,
+        review: { ...DETAIL.review, review_id: 'rev-ok', approval_status: 'approved', valid_until: '2027-01-01T00:00:00Z' },
+        history: [],
+      },
+      isLoading: false,
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=rev-ok') });
+    const card = screen.getByTestId('linked-review');
+    expect(card).toHaveTextContent('This review is resolved');
+    expect(card).toHaveTextContent(
+      'Its approval applies until it expires or a newer review rejects the structure.'
+    );
+    expect(card).not.toHaveTextContent('The rejection holds');
+    expect(card).toHaveTextContent('2027-01-01');
   });
 
   it('resolves a pending linked review in place', async () => {

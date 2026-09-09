@@ -141,6 +141,13 @@ export interface ReviewAssessmentVariables {
   reviewId: string;
   /** Regenerate even when a cached assessment exists. */
   force?: boolean;
+  /**
+   * true for ResolveForm's once-per-review AUTOMATIC generation. A failed
+   * automatic request releases the page guard so the review can be retried; a
+   * manual Generate/Regenerate never does (another form's automatic request may
+   * still hold the id). Not sent to the API.
+   */
+  auto?: boolean;
 }
 
 /**

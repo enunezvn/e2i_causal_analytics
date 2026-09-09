@@ -40,6 +40,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+// Deferred promises and `waitFor` rely on REAL timers here; do not add vi.useFakeTimers to this file.
 function renderButton() {
   const guard = { current: new Set<string>() };
   const queryClient = new QueryClient();

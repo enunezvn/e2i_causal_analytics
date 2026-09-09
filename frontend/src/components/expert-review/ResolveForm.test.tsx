@@ -3,14 +3,16 @@
  *
  * Pins the once-per-review-id auto-assessment under StrictMode (double-invoked
  * effects) INCLUDING delivery of the result to the form, across an
- * unmount/remount, and the guard RELEASE on failure: the hook-level onError is
- * run by the Mutation itself, so it fires even after the form has unmounted
- * (a collapsed queue row), unlike per-call mutate callbacks.
+ * unmount/remount, the guard RELEASE on an automatic failure (the hook-level
+ * onError is run by the Mutation itself, so it fires even after the form has
+ * unmounted — a collapsed queue row — unlike per-call mutate callbacks), and
+ * guard OWNERSHIP: a failed MANUAL request never releases an id another form's
+ * automatic request still holds.
  */
 import { StrictMode } from 'react';
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ResolveForm } from './ResolveForm';
@@ -46,13 +48,16 @@ function newGuard() {
   return { current: new Set<string>() };
 }
 
+function newClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+}
+
+// Relies on REAL timers: Node orders the form's coerced zero-delay timer before this
+// 10 ms wait. Do not add vi.useFakeTimers to this file.
 /** Let any deferred auto-assessment timer fire so a "still N calls" assertion is not vacuous. */
 const flushTimers = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
 
-function renderForm(props: Partial<ResolveFormProps> = {}) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+function renderForm(props: Partial<ResolveFormProps> = {}, queryClient = newClient()) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -100,7 +105,7 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
     expect(api).toHaveBeenCalledTimes(1);
   });
 
-  it('releases the guard when the generation FAILS after the form unmounted, so a remount retries once', async () => {
+  it('releases the guard when the AUTOMATIC generation fails after the form unmounted, so a remount retries once', async () => {
     const first = deferred<AgentAssessmentResponse>();
     api.mockReturnValueOnce(first.promise).mockResolvedValueOnce(RESPONSE);
     const guard = newGuard();
@@ -115,6 +120,32 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
     renderForm({ autoAssessGuard: guard });
     await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
     expect(api.mock.calls[1][0]).toBe('rev-1');
+  });
+
+  it('a failed MANUAL request from a second form never releases the id the automatic request still holds', async () => {
+    const requestA = deferred<AgentAssessmentResponse>();
+    const requestB = deferred<AgentAssessmentResponse>();
+    api.mockReturnValueOnce(requestA.promise).mockReturnValueOnce(requestB.promise);
+    const guard = newGuard();
+    const queryClient = newClient();
+    const formA = renderForm({ autoAssessGuard: guard }, queryClient); // automatic → request A in flight
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    expect(guard.current.has('rev-1')).toBe(true);
+    const formB = renderForm({ autoAssessGuard: guard }, queryClient); // linked card + queue row: same review
+    await flushTimers();
+    expect(api).toHaveBeenCalledTimes(1); // B's automatic generation is skipped by the shared guard
+    await userEvent
+      .setup()
+      .click(within(formB.container).getByRole('button', { name: /^generate agent assessment$/i }));
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2)); // B's MANUAL request B
+    requestB.reject(new Error('LM unavailable'));
+    await within(formB.container).findByText('Failed to generate agent assessment');
+    expect(guard.current.has('rev-1')).toBe(true); // B's failure is not the automatic request's failure
+    await flushTimers();
+    expect(api).toHaveBeenCalledTimes(2); // no request C
+    requestA.resolve(RESPONSE);
+    await within(formA.container).findByRole('button', { name: /regenerate agent assessment/i });
+    expect(guard.current.has('rev-1')).toBe(true);
   });
 
   it('does not auto-generate for a cached assessment; Regenerate forces a fresh one', async () => {
