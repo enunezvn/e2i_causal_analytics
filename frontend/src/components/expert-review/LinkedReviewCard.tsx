@@ -28,7 +28,14 @@ function fmtDate(value?: string | null): string {
  */
 const NOT_RECORDED = 'not recorded';
 
-function reviewerLabel(row: { reviewer_name?: string | null; reviewer_email?: string | null }): string | null {
+function reviewerLabel(row: {
+  approval_status?: string | null;
+  reviewer_name?: string | null;
+  reviewer_email?: string | null;
+}): string | null {
+  // A PENDING row has no reviewer yet: whatever its name/email hold belongs to
+  // the requester (a renewal pre-fills them), so it is never shown as one.
+  if (row.approval_status === 'pending') return null;
   return row.reviewer_name ?? row.reviewer_email ?? null;
 }
 

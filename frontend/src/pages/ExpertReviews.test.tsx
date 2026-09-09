@@ -544,6 +544,24 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(card).not.toHaveTextContent('q-older-query');
   });
 
+  it('shows no reviewer for a PENDING history row: its name/email belong to the requester (codex iter-2 F1)', () => {
+    const { card } = renderLinked({}, [
+      { review_id: 'rev-rejected', approval_status: 'rejected', created_at: '2026-07-13T10:00:00Z', reviewer_name: 'Dr. No' },
+      {
+        review_id: 'rev-newer',
+        approval_status: 'pending',
+        created_at: '2026-08-01T10:00:00Z',
+        reviewer_name: 'Requester Bot',
+        reviewer_email: 'bot@example.com',
+      },
+    ]);
+    const rows = card.querySelectorAll('tbody tr');
+    expect(rows[0]).toHaveTextContent('Dr. No');
+    expect(rows[1]).toHaveTextContent('—');
+    expect(card).not.toHaveTextContent('Requester Bot');
+    expect(card).not.toHaveTextContent('bot@example.com');
+  });
+
   it("shows the reviewer's comment note on a resolved review (codex F2)", () => {
     const { cell } = renderLinked({ comments_json: { note: 'DAG omits the payer confounder' } });
     expect(cell('Comments')).toHaveTextContent('DAG omits the payer confounder');

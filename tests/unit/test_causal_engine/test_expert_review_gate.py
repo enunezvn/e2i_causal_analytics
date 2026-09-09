@@ -867,6 +867,30 @@ class TestCheckRejection:
         )
 
     @pytest.mark.asyncio
+    async def test_halt_message_names_the_reviewer_only_when_one_was_recorded(self, mock_repo):
+        """Codex iter-2 HIGH F1: the halt reason names whoever ``reviewer_name``
+        holds. A resolution now writes the RESOLVER's name (NULL when unknown),
+        so a None must read as no one -- never a requester, never a placeholder
+        -- and a recorded name must be named (positive control)."""
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[self._rejected(reviewer_name=None)])
+        anonymous = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
+        assert anonymous is not None
+        assert anonymous.reviewer_name is None
+        assert anonymous.message == (
+            "DAG structure was rejected by expert review: "
+            "formulary_status is a collider; not re-queued"
+        )
+
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[self._rejected()])
+        named = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
+        assert named is not None
+        assert named.message == (
+            "DAG structure was rejected by expert review by Dr. No: "
+            "formulary_status is a collider; not re-queued"
+        )
+
+    @pytest.mark.asyncio
     async def test_newer_active_approval_wins_over_an_older_rejection(self, mock_repo):
         """Chronology (rows newest first): approval after rejection -> cleared."""
         mock_repo.get_dag_approval = AsyncMock(

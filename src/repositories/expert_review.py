@@ -309,15 +309,19 @@ class ExpertReviewRepository(BaseRepository):
         this the filter was ``review_id`` alone and the pending-only claim was
         documentation, not enforcement.
 
-        Resolution provenance (lane 1, codex whole-diff HIGH F1): BOTH statuses
-        stamp ``resolved_at = now()`` (migration 136; ``approved_at`` stays
-        approval-only) and record the RESOLVER's ``reviewer_name`` /
-        ``reviewer_email`` when the caller knows them. ``reviewer_id`` is
-        deliberately NOT written here: the gate stores the REQUESTER in it --
-        the originating query id (src/causal_engine/expert_review_gate.py
+        Resolution provenance (lane 1, codex whole-diff HIGH F1 + iter-2 HIGH
+        F1): BOTH statuses stamp ``resolved_at = now()`` (migration 136;
+        ``approved_at`` stays approval-only), and on resolution the reviewer
+        display fields ``reviewer_name`` / ``reviewer_email`` describe the
+        RESOLVER -- they are written EXPLICITLY on every resolution, JSON null
+        when unknown, overwriting whatever a renewal pre-filled
+        (``renew_review`` inserts the REQUESTER's name/email into these same
+        columns). ``reviewer_id`` is deliberately NOT written here: the gate
+        stores the REQUESTER in it -- the originating query id
+        (src/causal_engine/expert_review_gate.py
         create_review(reviewer_id=requester_id), ~:392) -- and that breadcrumb
-        must survive the resolution. An absent identity is left absent (the
-        None-strip below drops it): unknown stays unknown, never a placeholder.
+        must survive the resolution. Unknown stays unknown: a null, never a
+        placeholder and never a leftover requester.
 
         Args:
             review_id: UUID of the review to complete
@@ -347,10 +351,11 @@ class ExpertReviewRepository(BaseRepository):
             "comments_json": json.dumps(comments) if comments else None,
             "concerns_raised": concerns_raised,
             "conditions": conditions,
-            # Decision time for BOTH statuses (migration 136).
+            # Decision time for BOTH statuses (migration 136). The literal is cast
+            # by Postgres to the current timestamp (measured 2026-09-09:
+            # select 'now()'::timestamptz, and json_populate_record over
+            # {"approved_at":"now()"}, both return now()).
             "resolved_at": "now()",
-            "reviewer_name": reviewer_name,
-            "reviewer_email": reviewer_email,
         }
 
         if approval_status == "approved":
@@ -361,6 +366,11 @@ class ExpertReviewRepository(BaseRepository):
 
         # Remove None values
         update_data = {k: v for k, v in update_data.items() if v is not None}
+        # ... except the resolver's identity, which is written on EVERY
+        # resolution -- null when unknown -- so a requester's name/email that a
+        # renewal pre-filled can never stand as the reviewer (iter-2 HIGH F1).
+        update_data["reviewer_name"] = reviewer_name
+        update_data["reviewer_email"] = reviewer_email
 
         try:
             result = await (
