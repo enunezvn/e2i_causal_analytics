@@ -8,6 +8,7 @@
  * - usePendingReviews: read the oldest-first pending queue
  * - useReviewSummary:  read status counts
  * - useResolveReview:  approve/reject a review, then invalidate the queue/summary
+ * - useExpertReview:   read one review (any status) + same-DAG history
  *
  * @module hooks/api/use-expert-review
  */
@@ -17,12 +18,14 @@ import type { UseQueryOptions, UseMutationOptions } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-client';
 import {
   generateReviewAssessment,
+  getExpertReview,
   getPendingReviews,
   getReviewSummary,
   resolveReview,
 } from '@/api/expert-review';
 import type {
   AgentAssessmentResponse,
+  ExpertReviewDetailResponse,
   PendingReviewsResponse,
   ResolveReviewRequest,
   ResolveReviewResponse,
@@ -70,6 +73,26 @@ export function useReviewSummary(
   });
 }
 
+/**
+ * Hook to fetch one review (any status) with its same-structure history —
+ * the linked-review card behind the drill-down's deep link. Idle until an id
+ * is present.
+ */
+export function useExpertReview(
+  reviewId: string | null | undefined,
+  options?: Omit<
+    UseQueryOptions<ExpertReviewDetailResponse, ApiError>,
+    'queryKey' | 'queryFn' | 'enabled'
+  >
+) {
+  return useQuery<ExpertReviewDetailResponse, ApiError>({
+    queryKey: queryKeys.expertReviews.detail(reviewId ?? ''),
+    queryFn: () => getExpertReview(reviewId as string),
+    enabled: !!reviewId,
+    ...options,
+  });
+}
+
 /** Variables for the resolve mutation. */
 export interface ResolveReviewVariables {
   reviewId: string;
@@ -104,6 +127,10 @@ export function useResolveReview(
       queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'summary'],
       });
+      // A resolution also changes any open linked-review card.
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.expertReviews.all(), 'detail'],
+      });
     },
     ...options,
   });
@@ -137,6 +164,10 @@ export function useReviewAssessment(
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'pending'],
+      });
+      // A fresh assessment also changes any open linked-review card.
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.expertReviews.all(), 'detail'],
       });
     },
     ...options,

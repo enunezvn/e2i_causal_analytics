@@ -410,6 +410,8 @@ export const queryKeys = {
       ] as const,
     summary: (params?: { brand?: string }) =>
       [...queryKeys.expertReviews.all(), 'summary', params?.brand ?? null] as const,
+    detail: (reviewId: string) =>
+      [...queryKeys.expertReviews.all(), 'detail', reviewId] as const,
   },
 
   digitalTwin: {

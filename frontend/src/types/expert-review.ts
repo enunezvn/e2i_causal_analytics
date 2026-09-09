@@ -130,3 +130,31 @@ export interface AgentAssessmentResponse {
   cached: boolean;
   persisted: boolean;
 }
+
+/**
+ * One expert_reviews row in ANY status (GET /expert-reviews/{review_id}).
+ * Extends the pending shape with the resolution columns.
+ */
+export interface ReviewRecord extends PendingReviewItem {
+  /** pending / approved / rejected (expired is derived at read time from valid_until) */
+  approval_status?: string | null;
+  reviewer_id?: string | null;
+  reviewer_name?: string | null;
+  approved_at?: string | null;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  concerns_raised?: string[] | null;
+  conditions?: string | null;
+  checklist_json?: Record<string, unknown> | null;
+  comments_json?: Record<string, unknown> | null;
+  supersedes_review_id?: string | null;
+}
+
+/**
+ * Response for GET /expert-reviews/{review_id}: the row plus every review of
+ * the same DAG structure (newest first, expired included).
+ */
+export interface ExpertReviewDetailResponse {
+  review: ReviewRecord;
+  history: ReviewRecord[];
+}

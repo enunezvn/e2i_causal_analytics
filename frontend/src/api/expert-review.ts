@@ -9,6 +9,7 @@
  * - GET  /expert-reviews/pending            : List pending reviews
  * - POST /expert-reviews/{review_id}/resolve : Approve/reject a review
  * - GET  /expert-reviews/summary            : Status counts
+ * - GET  /expert-reviews/{review_id}          : One review (any status) + same-DAG history
  *
  * @module api/expert-review
  */
@@ -16,6 +17,7 @@
 import { get, post } from '@/lib/api-client';
 import type {
   AgentAssessmentResponse,
+  ExpertReviewDetailResponse,
   PendingReviewsResponse,
   ResolveReviewRequest,
   ResolveReviewResponse,
@@ -83,4 +85,13 @@ export async function generateReviewAssessment(
     undefined,
     force ? { params: { force: true } } : undefined
   );
+}
+
+/**
+ * One review in any status plus its same-structure history.
+ *
+ * @param reviewId - The review identifier
+ */
+export async function getExpertReview(reviewId: string): Promise<ExpertReviewDetailResponse> {
+  return get<ExpertReviewDetailResponse>(`${EXPERT_REVIEW_BASE}/${encodeURIComponent(reviewId)}`);
 }

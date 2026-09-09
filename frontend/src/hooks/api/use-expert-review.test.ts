@@ -12,6 +12,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
 import type {
+  ExpertReviewDetailResponse,
   PendingReviewsResponse,
   ResolveReviewResponse,
   ReviewSummaryResponse,
@@ -23,6 +24,7 @@ vi.mock('@/api/expert-review', () => ({
   resolveReview: vi.fn(),
   getReviewSummary: vi.fn(),
   generateReviewAssessment: vi.fn(),
+  getExpertReview: vi.fn(),
 }));
 
 // Mock query-client
@@ -42,11 +44,13 @@ vi.mock('@/lib/query-client', () => ({
         ] as const,
       summary: (params?: { brand?: string }) =>
         ['e2i', 'expert-reviews', 'summary', params?.brand ?? null] as const,
+      detail: (reviewId: string) => ['e2i', 'expert-reviews', 'detail', reviewId] as const,
     },
   },
 }));
 
 import {
+  useExpertReview,
   usePendingReviews,
   useResolveReview,
   useReviewAssessment,
@@ -195,8 +199,8 @@ describe('useResolveReview', () => {
       '11111111-1111-1111-1111-111111111111',
       { approval_status: 'approved', checklist: { conf_complete: true } }
     );
-    // invalidate both the pending queue and the summary
-    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    // invalidate the pending queue, the summary AND any open linked-review detail
+    expect(invalidateSpy).toHaveBeenCalledTimes(3);
   });
 
   it('handles a resolve error', async () => {
@@ -274,7 +278,8 @@ describe('useReviewAssessment', () => {
       '11111111-1111-1111-1111-111111111111',
       true
     );
-    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    // invalidate the pending queue AND any open linked-review detail
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
   });
 
   it('handles an assessment error', async () => {
@@ -288,5 +293,44 @@ describe('useReviewAssessment', () => {
     result.current.mutate({ reviewId: 'bad' });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+const mockDetailResponse: ExpertReviewDetailResponse = {
+  review: {
+    review_id: 'rev-1',
+    review_type: 'dag_approval',
+    dag_version_hash: 'deadbeefcafebabe0123',
+    brand: 'Kisqali',
+    treatment_variable: 'treatment_arm',
+    outcome_variable: 'persistent_180d',
+    approval_status: 'rejected',
+    reviewer_name: 'Dr. No',
+    created_at: '2026-07-13T10:00:00Z',
+  },
+  history: [],
+};
+
+describe('useExpertReview', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fetches one review (any status) by id', async () => {
+    vi.mocked(expertReviewApi.getExpertReview).mockResolvedValueOnce(mockDetailResponse);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useExpertReview('rev-1'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(mockDetailResponse);
+    expect(expertReviewApi.getExpertReview).toHaveBeenCalledWith('rev-1');
+  });
+
+  it('stays idle without an id', () => {
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useExpertReview(null), { wrapper });
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(expertReviewApi.getExpertReview).not.toHaveBeenCalled();
   });
 });
