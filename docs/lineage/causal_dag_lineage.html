@@ -873,7 +873,7 @@ dag_version_hash = sha256(json({"nodes": sorted, "edges": sorted, "treatment_nod
 <!-- ====================================================== STAGE 3 -->
 <section id="s3" class="stage">
   <h2><span class="stage-no" style="background:var(--prior)">3</span>Outcome</h2>
-  <p class="stage-intro">The DAG leaves the builder as a typed dictionary on LangGraph state. From there it is read by three nodes, serialised into the API response with an honest provenance label, and copied into several side channels. It is not written to a DAG table.</p>
+  <p class="stage-intro">The DAG leaves the builder as a typed dictionary on LangGraph state. From there it is read by three nodes, serialised into the API response with an honest provenance label, and copied into several side channels. Since issue #1974 the shipped DAG is also written, with its edges and gate evaluation, to <code>public.discovered_dags</code> (see 3.3); the response carries that record's <code>discovered_dag_id</code>.</p>
 
   <h3 id="s3-1">3.1 The CausalGraph contract</h3>
   <dl class="kv">

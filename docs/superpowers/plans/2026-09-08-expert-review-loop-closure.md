@@ -6371,6 +6371,12 @@ rep(
     '<td>ExpertReviewGate.check_approval</td><td>src/causal_engine/expert_review_gate.py:215</td><td>PROCEED / RENEWAL_REQUIRED / PENDING_REVIEW / BLOCKED / UNAVAILABLE</td></tr>\n      <tr><td><span class="pill gov">gov</span></td><td>ExpertReviewGate.check_rejection</td><td>src/causal_engine/expert_review_gate.py:487</td><td>every-band rejection probe: newest adjudication wins, a newer pending row re-opens, REJECTED halts</td></tr>',
 )
 
+# §3 stage intro (codex iter-4b docs audit): the shipped DAG IS written to a table since #1974.
+rep(
+    'It is not written to a DAG table.',
+    "Since issue #1974 the shipped DAG is also written, with its edges and gate evaluation, to <code>public.discovered_dags</code> (see 3.3); the response carries that record's <code>discovered_dag_id</code>.",
+)
+
 for old, new in EDITS:
     n = s.count(old)
     assert n == 1, f"expected exactly one occurrence, found {n}: {old[:80]!r}"
@@ -6379,9 +6385,9 @@ DOC.write_text(s, encoding="utf-8")
 print(f"applied {len(EDITS)} edits")
 ```
 
-Expected output: `applied 17 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
+Expected output: `applied 18 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
 
-Why (codex iter-4 docs audit): the §4.3 "Gate state machine" list still described the pre-#1969 no-repository PROCEED bypass and a rejected-row BLOCKED branch, contradicting the Finding callout above it and the shipped gate — `check_approval` answers UNAVAILABLE (`is_approved=False`) without a store, and the every-band `check_rejection` probe (node `_consult_review_gate`) halts a rejected structure — so the list, its summary chips, its anchors and the index rows were rewritten by the same exact-match script (six more `rep` entries).
+Why (codex iter-4 docs audit): the §4.3 "Gate state machine" list still described the pre-#1969 no-repository PROCEED bypass and a rejected-row BLOCKED branch, contradicting the Finding callout above it and the shipped gate — `check_approval` answers UNAVAILABLE (`is_approved=False`) without a store, and the every-band `check_rejection` probe (node `_consult_review_gate`) halts a rejected structure — so the list, its summary chips, its anchors and the index rows were rewritten by the same exact-match script (six more `rep` entries). Iter-4b: the §3 stage intro still ended "It is not written to a DAG table", stale since the §3.3 row described the durable `public.discovered_dags` record (#1974); one more `rep` entry replaces that sentence.
 
 - [ ] **Step 2: Add the map's discovery box label**
 
