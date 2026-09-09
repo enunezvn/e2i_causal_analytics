@@ -4,7 +4,6 @@ Version: 4.3
 Tests the expert review repository CRUD operations.
 """
 
-import json
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -157,7 +156,28 @@ class TestExpertReviewRepository:
 
         assert review_id == "rev-dag"
         inserted_row = mock_client.table.return_value.insert.call_args[0][0]
-        assert json.loads(inserted_row["dag_structure_json"]) == structure
+        # #1992: the writer must hand PostgREST a JSON OBJECT, not a JSON
+        # string -- a still-serialized value would fail this equality (the LHS
+        # is a str, the RHS a dict) rather than round-trip through json.loads.
+        assert inserted_row["dag_structure_json"] == structure
+
+    @pytest.mark.asyncio
+    async def test_create_review_persists_checklist_json_as_object(self, repo, mock_client):
+        """#1992: the initial checklist rides the insert as a JSON OBJECT, not a
+        json.dumps'ed string."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-checklist"}]))
+        mock_client.table.return_value.insert.return_value.execute = mock_execute
+        checklist = {"confounder_check": True, "edge_direction": False}
+
+        review_id = await repo.create_review(
+            reviewer_id="user-1",
+            review_type="initial_dag",
+            checklist=checklist,
+        )
+
+        assert review_id == "rev-checklist"
+        inserted_row = mock_client.table.return_value.insert.call_args[0][0]
+        assert inserted_row["checklist_json"] == checklist
 
     @pytest.mark.asyncio
     async def test_create_review_omits_dag_structure_when_absent(self, repo, mock_client):
@@ -181,7 +201,8 @@ class TestExpertReviewRepository:
 
         assert ok is True
         updated = mock_client.table.return_value.update.call_args[0][0]
-        assert json.loads(updated["agent_assessment_json"]) == assessment
+        # #1992: JSON OBJECT, not a json.dumps'ed string.
+        assert updated["agent_assessment_json"] == assessment
 
     @pytest.mark.asyncio
     async def test_update_agent_assessment_zero_rows_returns_false(self, repo, mock_client):
@@ -215,7 +236,8 @@ class TestExpertReviewRepository:
 
         assert ok is True
         updated = mock_client.table.return_value.update.call_args[0][0]
-        assert json.loads(updated["dag_structure_json"]) == structure
+        # #1992: JSON OBJECT, not a json.dumps'ed string.
+        assert updated["dag_structure_json"] == structure
         assert updated["related_validation_ids"] == ["val-1"]
 
     @pytest.mark.asyncio
@@ -260,6 +282,48 @@ class TestExpertReviewRepository:
         )
 
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_submit_review_persists_checklist_and_comments_as_objects(
+        self, repo, mock_client
+    ):
+        """#1992: the resolve path (submit_review) must hand PostgREST JSON
+        OBJECTS for checklist_json / comments_json, not json.dumps'ed strings."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        checklist = {"confounder_check": True, "edge_direction": True}
+        comments = {"note": "looks good", "reviewer": "Dr. Expert"}
+
+        result = await repo.submit_review(
+            review_id="rev-123",
+            approval_status="approved",
+            checklist=checklist,
+            comments=comments,
+        )
+
+        assert result is True
+        payload = mock_client.table.return_value.update.call_args[0][0]
+        assert payload["checklist_json"] == checklist
+        assert payload["comments_json"] == comments
+
+    @pytest.mark.asyncio
+    async def test_submit_review_comments_json_absent_when_comments_empty(self, repo, mock_client):
+        """No comments supplied -> comments_json is stripped by the existing
+        None-strip (unchanged behavior), never a json.dumps'ed empty string."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+
+        result = await repo.submit_review(
+            review_id="rev-123",
+            approval_status="approved",
+            checklist={"confounder_check": True},
+        )
+
+        assert result is True
+        payload = mock_client.table.return_value.update.call_args[0][0]
+        assert "comments_json" not in payload
+        # checklist_json is always present (submit_review requires it) as an object.
+        assert payload["checklist_json"] == {"confounder_check": True}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("approval_status", ["rejected", "approved"])

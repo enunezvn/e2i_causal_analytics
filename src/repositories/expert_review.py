@@ -15,12 +15,12 @@ labels it ``'permanent'``). ``expired`` is never stored; it is derived from
 helpers below so the gate, the summary and SQL ``is_dag_approved()`` agree.
 """
 
-import json
 import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from src.repositories.base import BaseRepository
+from src.repositories.json_utils import to_plain_json
 
 logger = logging.getLogger(__name__)
 
@@ -222,9 +222,15 @@ class ExpertReviewRepository(BaseRepository):
             "treatment_variable": treatment_variable,
             "outcome_variable": outcome_variable,
             "analysis_context": analysis_context,
-            "checklist_json": json.dumps(checklist) if checklist else None,
+            # #1992: JSON OBJECTS, not json.dumps'ed strings, so PostgREST
+            # stores a jsonb object (queryable) instead of a jsonb string
+            # scalar -- mirrors causal_validation.py (lane 1, migration 135).
+            # to_plain_json also coerces datetime/enum/numpy values and maps
+            # NaN to null where json.dumps used to raise (today's inputs here
+            # are already plain dicts, so nothing observable changes).
+            "checklist_json": to_plain_json(checklist) if checklist else None,
             "related_validation_ids": related_validation_ids,
-            "dag_structure_json": json.dumps(dag_structure) if dag_structure else None,
+            "dag_structure_json": to_plain_json(dag_structure) if dag_structure else None,
         }
 
         # Remove None values
@@ -347,8 +353,9 @@ class ExpertReviewRepository(BaseRepository):
 
         update_data = {
             "approval_status": approval_status,
-            "checklist_json": json.dumps(checklist),
-            "comments_json": json.dumps(comments) if comments else None,
+            # #1992: JSON OBJECTS, not json.dumps'ed strings.
+            "checklist_json": to_plain_json(checklist),
+            "comments_json": to_plain_json(comments) if comments else None,
             "concerns_raised": concerns_raised,
             "conditions": conditions,
             # Decision time for BOTH statuses (migration 136). The literal is cast
@@ -418,7 +425,8 @@ class ExpertReviewRepository(BaseRepository):
         try:
             result = await (
                 self.client.table(self.table_name)
-                .update({"agent_assessment_json": json.dumps(assessment)})
+                # #1992: JSON OBJECT, not a json.dumps'ed string.
+                .update({"agent_assessment_json": to_plain_json(assessment)})
                 .eq("review_id", review_id)
                 .execute()
             )
@@ -449,7 +457,8 @@ class ExpertReviewRepository(BaseRepository):
         if not self.client or not dag_structure:
             return False
 
-        update_data: Dict[str, Any] = {"dag_structure_json": json.dumps(dag_structure)}
+        # #1992: JSON OBJECT, not a json.dumps'ed string.
+        update_data: Dict[str, Any] = {"dag_structure_json": to_plain_json(dag_structure)}
         if related_validation_ids:
             update_data["related_validation_ids"] = related_validation_ids
 
