@@ -14,7 +14,15 @@
 -- SAFETY: pure data fix, no DDL, deliberately NO CHECK constraint --
 --   migrations run before the container flips, and a constraint would make
 --   the OLD image's writer fail during that window. The writer fix ships in
---   the same deploy.
+--   the same deploy. (col #>> '{}')::jsonb RAISES 'invalid input syntax for
+--   type json' on a string cell that is not valid JSON text (positive-
+--   controlled with a plain-text cell and a bare NaN token); run inside the
+--   migration runner's transaction, that error aborts the whole deploy
+--   before the container flips, nothing half-applied. Live data has ZERO
+--   such rows today (measured 2026-09-09) on all four columns; to find any
+--   before a future run, per column:
+--   SELECT review_id FROM public.expert_reviews
+--    WHERE jsonb_typeof(<col>) = 'string' AND (<col> #>> '{}') !~ '^\s*[\[{]';
 -- ============================================================================
 
 UPDATE public.expert_reviews
