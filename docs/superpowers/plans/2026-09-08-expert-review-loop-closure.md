@@ -3156,7 +3156,23 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
   const [checklist, setChecklist] = useState<Record<string, boolean>>({});
   const [comments, setComments] = useState('');
   const resolve = useResolveReview();
-  const assessmentMutation = useReviewAssessment();
+
+  // Once-per-review-id guard for the auto-generated assessment (spec §4.5): a
+  // Set shared by every form on the page when the page provides one, so a second
+  // form for the same id (linked card + queue row) and StrictMode's double-run
+  // effect both hit it. Defined BEFORE the mutation hook so onError can use it.
+  const localGuard = useRef<Set<string>>(new Set());
+  const guard = autoAssessGuard ?? localGuard;
+  const assessmentMutation = useReviewAssessment({
+    // Hook-level, not per-call: the Mutation itself runs this, so it fires even
+    // after the form has unmounted (a collapsed row), whereas TanStack skips the
+    // per-call mutate callbacks once the observer is gone. Releasing the id lets
+    // a later expand, or the page's Prepare button, retry the FAILED generation
+    // once (the effect's deps do not change on error, so there is no loop).
+    onError: (_error, variables) => {
+      guard.current.delete(variables.reviewId);
+    },
+  });
   const { mutate: generateAssessment } = assessmentMutation;
 
   // Prefer the freshly generated assessment; fall back to the row's cache.
@@ -3164,17 +3180,21 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
     assessmentMutation.data?.assessment ?? review.agent_assessment_json ?? null;
   const assessmentById = new Map((assessment?.items ?? []).map((item) => [item.id, item]));
 
-  // Auto-generate once per review id when nothing is cached (spec §4.5). The
-  // guard is a Set shared by every form on the page when the page provides one;
-  // StrictMode's double-invoked effect and a second form for the same id both
-  // hit it. Refs survive StrictMode's simulated remount, so this fires once.
-  const localGuard = useRef<Set<string>>(new Set());
-  const guard = autoAssessGuard ?? localGuard;
   useEffect(() => {
     if (assessment) return;
     if (guard.current.has(review.review_id)) return;
-    guard.current.add(review.review_id);
-    generateAssessment({ reviewId: review.review_id });
+    // Deferred past StrictMode's synchronous effect cleanup + re-run. A mutate
+    // issued in the FIRST pass is orphaned: query-core's MutationObserver
+    // detaches from the in-flight mutation on unsubscribe and never re-attaches
+    // (mutationObserver.js onUnsubscribe), so the form stayed pending after the
+    // request had completed (measured under <StrictMode>, which main.tsx uses).
+    // The guard is marked when the timer fires, so a cancelled pass marks nothing.
+    const timer = setTimeout(() => {
+      if (guard.current.has(review.review_id)) return;
+      guard.current.add(review.review_id);
+      generateAssessment({ reviewId: review.review_id });
+    }, 0);
+    return () => clearTimeout(timer);
   }, [assessment, generateAssessment, guard, review.review_id]);
 
   const submit = useCallback(
@@ -3289,6 +3309,8 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
 }
 ```
 
+Why (Task 10 review fold, codex 3×MED + review): the auto-assessment guard is released on a FAILED generation through the hook-level `onError` (the guard is defined before the hook so the closure can reach it) because the Mutation itself runs hook-level callbacks even after the form has unmounted, whereas TanStack skips per-call `mutate(vars, { onError })` once the observer is gone — a collapsed row could otherwise never retry and Prepare silently dropped the row (`missing` counted it, `todo` excluded it); the auto-assessment is issued from a zero-delay timer because query-core 5.90 `MutationObserver.onUnsubscribe` detaches from the in-flight mutation and nothing re-attaches on re-subscribe, so under `<StrictMode>` (main.tsx) a `mutate` in the first effect pass left the form pending forever after the request had completed (measured with real hooks: the guard held at one POST, but the Generate button stayed disabled with its spinner and the result never reached the form); the summary banner REPLACES the badges (`summary.data && !summary.isError`) because TanStack keeps the last data on a refetch error and spec §4.5 says the banner replaces the counts; the Prepare button lost its `aria-label`, which masked the visible "(N missing)" / "Preparing k / n" for screen readers; the resolved-copy wording no longer reads as if the row itself reopens; the component tests (Step 7b) use the REAL hooks and deferred promises so sequencing, the first-error stop, the guard release and Stop are observed mid-flight, which the page test (hooks mocked) cannot do; and the backend checklist comment (`src/insights/expert_review_assessment.py`) points at the constants' new home.
+
 - [ ] **Step 4: `LinkedReviewCard`**
 
 Create `frontend/src/components/expert-review/LinkedReviewCard.tsx`:
@@ -3323,6 +3345,14 @@ export function LinkedReviewCard({
   autoAssessGuard?: MutableRefObject<Set<string>>;
 }) {
   const q = useExpertReview(reviewId);
+  // The history INCLUDES the linked review itself (GET /expert-reviews/{id});
+  // hoisted so the row marker survives TS narrowing inside the map callback.
+  const currentId = q.data?.review.review_id;
+  // Branch on the HTTP status (ApiError.status); the message text is only a
+  // fallback for an error that carries no status at all.
+  const notFound =
+    q.error?.status === 404 ||
+    (q.error?.status === undefined && /not found/i.test(q.error?.message ?? ''));
 
   return (
     <Card data-testid="linked-review">
@@ -3340,7 +3370,7 @@ export function LinkedReviewCard({
         )}
         {q.isError && (
           <WarningBanner
-            title={/not found/i.test(q.error?.message ?? '') ? 'This review no longer exists' : 'Failed to load the linked review'}
+            title={notFound ? 'This review no longer exists' : 'Failed to load the linked review'}
             messages={[q.error?.message ?? 'An unexpected error occurred.']}
           />
         )}
@@ -3382,8 +3412,8 @@ export function LinkedReviewCard({
                 />
               ) : (
                 <div className="text-sm text-[var(--color-muted-foreground)]">
-                  This review is resolved. A newer pending review for the same structure would
-                  reopen it.
+                  This review is resolved. A newer pending review of the same structure reopens
+                  the structure&apos;s review state (the gate reads the newest adjudication first).
                 </div>
               )}
             </div>
@@ -3402,16 +3432,24 @@ export function LinkedReviewCard({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {q.data.history.map((h) => (
-                      <TableRow key={h.review_id}>
-                        <TableCell className="font-mono text-xs">{shortHash(h.review_id)}</TableCell>
-                        <TableCell>
-                          <Badge variant={statusVariant(h.approval_status)}>{h.approval_status ?? '—'}</Badge>
-                        </TableCell>
-                        <TableCell>{fmtDate(h.created_at)}</TableCell>
-                        <TableCell>{h.reviewer_name ?? '—'}</TableCell>
-                      </TableRow>
-                    ))}
+                    {q.data.history.map((h) => {
+                      const isCurrent = h.review_id === currentId;
+                      return (
+                        <TableRow key={h.review_id} data-current={isCurrent ? 'true' : undefined}>
+                          <TableCell className="font-mono text-xs">
+                            {shortHash(h.review_id)}
+                            {isCurrent && (
+                              <span className="ml-1 text-[var(--color-muted-foreground)]">(this review)</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={statusVariant(h.approval_status)}>{h.approval_status ?? '—'}</Badge>
+                          </TableCell>
+                          <TableCell>{fmtDate(h.created_at)}</TableCell>
+                          <TableCell>{h.reviewer_name ?? '—'}</TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}
@@ -3509,7 +3547,6 @@ export function PrepareAssessmentsButton({
         variant="outline"
         onClick={run}
         disabled={state.running || missing.length === 0}
-        aria-label="Prepare assessments"
       >
         <Sparkles className="mr-1 h-4 w-4" />
         {state.running
@@ -3627,7 +3664,9 @@ export default function ExpertReviews() {
           messages={[summary.error?.message ?? 'An unexpected error occurred.']}
         />
       )}
-      {summary.data && (
+      {/* TanStack keeps the last data on a refetch error; the banner REPLACES the
+          counts (spec §4.5) rather than sitting above stale ones. */}
+      {summary.data && !summary.isError && (
         <div className="flex flex-wrap gap-2">
           {/* pending/approved/rejected/expired partition the rows; expiring_soon
               is a SUBSET of approved (#1972), so it is labelled and styled as a
@@ -3756,12 +3795,16 @@ Replace the full contents of `frontend/src/pages/ExpertReviews.test.tsx` with:
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import ExpertReviews from './ExpertReviews';
-import type { ExpertReviewDetailResponse, PendingReviewsResponse } from '@/types/expert-review';
+import type {
+  AgentAssessment,
+  ExpertReviewDetailResponse,
+  PendingReviewsResponse,
+} from '@/types/expert-review';
 
 vi.mock('@/hooks/api/use-expert-review', () => ({
   usePendingReviews: vi.fn(),
@@ -3809,6 +3852,9 @@ function createWrapper(initialPath = '/expert-reviews') {
     </QueryClientProvider>
   );
 }
+
+/** Let a form's deferred auto-assessment timer fire so a "still N calls" assertion is not vacuous. */
+const flushTimers = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
 
 const mockPending: PendingReviewsResponse = {
   reviews: [
@@ -3925,6 +3971,32 @@ describe('ExpertReviews brand filter and summary (lane 1)', () => {
     expect(screen.getByText('Review counts unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/Pending:/)).not.toBeInTheDocument();
   });
+
+  it('renders the counts when the summary succeeds (positive control for the two banner cases)', () => {
+    vi.mocked(useReviewSummary).mockReturnValue({
+      data: { pending: 3, approved: 1, rejected: 0, expired: 0, expiring_soon: 1 },
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Pending: 3')).toBeInTheDocument();
+    expect(screen.getByText('of which expiring soon: 1')).toBeInTheDocument();
+    expect(screen.queryByText('Review counts unavailable')).not.toBeInTheDocument();
+  });
+
+  it('replaces STALE counts with the banner when a refetch fails (TanStack keeps data on error)', () => {
+    vi.mocked(useReviewSummary).mockReturnValue({
+      data: { pending: 3, approved: 1, rejected: 0, expired: 0, expiring_soon: 1 },
+      isError: true,
+      error: { message: 'Expert-review store unavailable. Retry shortly.' },
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Review counts unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Expert-review store unavailable. Retry shortly.')).toBeInTheDocument();
+    expect(screen.queryByText(/Pending:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/expiring soon/)).not.toBeInTheDocument();
+  });
 });
 
 const STRUCTURE = {
@@ -3938,7 +4010,9 @@ const STRUCTURE = {
   outcome_nodes: ['y'],
 };
 
-const ASSESSMENT = {
+// Typed so the literal verdicts stay `AssessmentVerdict` when the fixture is
+// handed to the typed queue mock (untyped, they widen to `string`).
+const ASSESSMENT: AgentAssessment = {
   items: [
     { id: 'conf_complete', question: 'Are all known confounders included?', verdict: 'supports', rationale: 'confounder refuters passed' },
     { id: 'positivity', question: 'Is there sufficient overlap in treatment groups?', verdict: 'concern', rationale: 'data_subset failed' },
@@ -3990,14 +4064,20 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     renderWithRow({ dag_structure_json: STRUCTURE, agent_assessment_json: ASSESSMENT });
     await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
     expect(await screen.findByText('supports')).toBeInTheDocument();
+    await flushTimers();
     expect(mutate).not.toHaveBeenCalled();
   });
 
   it('generates ONCE when the linked card and the queue row show the same pending review', async () => {
     const mutate = vi.fn();
     vi.mocked(useReviewAssessment).mockReturnValue(mockAssessmentReturn({ mutate }) as never);
+    // A ReviewRecord always carries approval_status (GET /expert-reviews/{id});
+    // the card only mounts a form for a PENDING record.
     vi.mocked(useExpertReview).mockReturnValue({
-      data: { review: { ...mockPending.reviews[0], dag_structure_json: STRUCTURE }, history: [] },
+      data: {
+        review: { ...mockPending.reviews[0], approval_status: 'pending', dag_structure_json: STRUCTURE },
+        history: [],
+      },
       isLoading: false,
       isError: false,
     } as never);
@@ -4006,6 +4086,7 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
     await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
     expect((await screen.findAllByRole('button', { name: /approve/i })).length).toBe(2);
+    await flushTimers();
     expect(mutate).toHaveBeenCalledTimes(1);
     // Two forms for one review must not share element ids (labels would target the other form).
     const ids = Array.from(document.querySelectorAll('[id]')).map((el) => el.id);
@@ -4044,6 +4125,7 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     // The bulk run marked rev-1 in the shared guard: expanding it must not start a second generation.
     await userEvent.setup().click(screen.getAllByRole('button', { name: /^review$/i })[0]);
     await screen.findByRole('button', { name: /approve/i });
+    await flushTimers();
     expect(mutate).not.toHaveBeenCalled();
   });
 
@@ -4142,8 +4224,19 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(card).toHaveTextContent('Dr. No');
     expect(card).toHaveTextContent('collider');
     expect(card).toHaveTextContent('This review is resolved');
+    // The resolved copy must not read as if THIS row reopens (review fold, Minor #4).
+    expect(card).toHaveTextContent('reads the newest adjudication first');
+    expect(card).not.toHaveTextContent('would reopen it');
     expect(screen.getAllByTestId('causal-dag').length).toBe(1);
     expect(card).toHaveTextContent('rev-older');
+    // The backend history INCLUDES the linked review itself: it is marked exactly
+    // once, on its own row, and never on the sibling rows (dispatcher deviation 1).
+    expect(screen.getAllByText('(this review)')).toHaveLength(1);
+    const current = card.querySelectorAll('[data-current="true"]');
+    expect(current).toHaveLength(1);
+    expect(current[0]).toHaveTextContent('rev-rejected');
+    expect(current[0]).toHaveTextContent('(this review)');
+    expect(current[0]).not.toHaveTextContent('rev-older');
   });
 
   it('resolves a pending linked review in place', async () => {
@@ -4161,14 +4254,311 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(mutate.mock.calls[0][0].body.approval_status).toBe('rejected');
   });
 
-  it('says so when the linked review no longer exists, and keeps the queue usable', () => {
+  it('says so when the linked review no longer exists (404), and keeps the queue usable', () => {
     vi.mocked(useExpertReview).mockReturnValue({
-      data: undefined, isLoading: false, isError: true, error: { message: 'Review nope was not found.' },
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { status: 404, message: 'Review nope was not found.' },
     } as never);
     mockQueue(mockPending);
     render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=nope') });
     expect(screen.getByText('This review no longer exists')).toBeInTheDocument();
+    expect(screen.getByText('Review nope was not found.')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load the linked review')).not.toBeInTheDocument();
     expect(screen.getByText('email_frequency')).toBeInTheDocument();
+  });
+
+  it('shows the generic failure title with the backend message when the store is unavailable (503)', () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { status: 503, message: 'Expert-review store unavailable. Retry shortly.' },
+    } as never);
+    mockQueue(mockPending);
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=rev-1') });
+    expect(screen.getByText('Failed to load the linked review')).toBeInTheDocument();
+    expect(screen.getByText('Expert-review store unavailable. Retry shortly.')).toBeInTheDocument();
+    expect(screen.queryByText('This review no longer exists')).not.toBeInTheDocument();
+    expect(screen.getByText('email_frequency')).toBeInTheDocument();
+  });
+
+  it('falls back to the message text only when the error carries no status', () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { message: 'Review nope was not found.' },
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=nope') });
+    expect(screen.getByText('This review no longer exists')).toBeInTheDocument();
+  });
+
+  it('ignores a blank review param', () => {
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=%20%20') });
+    expect(screen.queryByTestId('linked-review')).not.toBeInTheDocument();
+    expect(vi.mocked(useExpertReview)).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 7b: Component tests with real hooks and deferred promises**
+
+Create `frontend/src/components/expert-review/ResolveForm.test.tsx` (real `useReviewAssessment`/`useResolveReview` under `<StrictMode>`; only `@/api/expert-review` is mocked):
+
+```tsx
+/**
+ * ResolveForm tests — REAL TanStack hooks, only the API module mocked.
+ *
+ * Pins the once-per-review-id auto-assessment under StrictMode (double-invoked
+ * effects) INCLUDING delivery of the result to the form, across an
+ * unmount/remount, and the guard RELEASE on failure: the hook-level onError is
+ * run by the Mutation itself, so it fires even after the form has unmounted
+ * (a collapsed queue row), unlike per-call mutate callbacks.
+ */
+import { StrictMode } from 'react';
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ResolveForm } from './ResolveForm';
+import type { ResolveFormProps } from './ResolveForm';
+import type { AgentAssessment, AgentAssessmentResponse, PendingReviewItem } from '@/types/expert-review';
+
+vi.mock('@/api/expert-review', () => ({
+  generateReviewAssessment: vi.fn(),
+  resolveReview: vi.fn(),
+  getExpertReview: vi.fn(),
+  getPendingReviews: vi.fn(),
+  getReviewSummary: vi.fn(),
+}));
+import { generateReviewAssessment } from '@/api/expert-review';
+
+const api = vi.mocked(generateReviewAssessment);
+
+const REVIEW: PendingReviewItem = { review_id: 'rev-1', brand: 'Kisqali', treatment_variable: 't', outcome_variable: 'y' };
+const ASSESSMENT: AgentAssessment = { items: [], is_fallback: true };
+const RESPONSE: AgentAssessmentResponse = { review_id: 'rev-1', assessment: ASSESSMENT, cached: false, persisted: true };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function newGuard() {
+  return { current: new Set<string>() };
+}
+
+/** Let any deferred auto-assessment timer fire so a "still N calls" assertion is not vacuous. */
+const flushTimers = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
+
+function renderForm(props: Partial<ResolveFormProps> = {}) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </StrictMode>
+  );
+  return render(<ResolveForm review={REVIEW} onClose={() => undefined} {...props} />, { wrapper });
+}
+
+beforeEach(() => {
+  // mockReset (not clear): a test that aborts early must not leak its `Once` queue.
+  api.mockReset();
+});
+
+describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
+  it('generates exactly once on mount with a shared guard, and the result reaches the form', async () => {
+    api.mockResolvedValue(RESPONSE);
+    const guard = newGuard();
+    renderForm({ autoAssessGuard: guard });
+    // "Regenerate" + enabled = the mutation result was delivered (not orphaned by StrictMode's resubscribe).
+    const button = await screen.findByRole('button', { name: /regenerate agent assessment/i });
+    expect(button).toBeEnabled();
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(api.mock.calls[0][0]).toBe('rev-1');
+    expect(api.mock.calls[0][1]).toBeFalsy();
+    expect(guard.current.has('rev-1')).toBe(true);
+  });
+
+  it('generates exactly once with its own local guard (no page guard)', async () => {
+    api.mockResolvedValue(RESPONSE);
+    renderForm();
+    await screen.findByRole('button', { name: /regenerate agent assessment/i });
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not generate again after an unmount and remount with the same guard (success path)', async () => {
+    api.mockResolvedValue(RESPONSE);
+    const guard = newGuard();
+    const { unmount } = renderForm({ autoAssessGuard: guard });
+    await screen.findByRole('button', { name: /regenerate agent assessment/i });
+    unmount();
+    renderForm({ autoAssessGuard: guard });
+    // The remounted form has no cache yet (the page refetches it) and offers a manual Generate.
+    await screen.findByRole('button', { name: /^generate agent assessment$/i });
+    await flushTimers();
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the guard when the generation FAILS after the form unmounted, so a remount retries once', async () => {
+    const first = deferred<AgentAssessmentResponse>();
+    api.mockReturnValueOnce(first.promise).mockResolvedValueOnce(RESPONSE);
+    const guard = newGuard();
+    const { unmount } = renderForm({ autoAssessGuard: guard });
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    expect(guard.current.has('rev-1')).toBe(true); // positive control for the release below
+    unmount(); // the row collapsed while the request was in flight
+    first.reject(new Error('LM unavailable'));
+    await waitFor(() => expect(guard.current.has('rev-1')).toBe(false));
+    await flushTimers();
+    expect(api).toHaveBeenCalledTimes(1); // no retry loop: the effect deps do not change on error
+    renderForm({ autoAssessGuard: guard });
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+    expect(api.mock.calls[1][0]).toBe('rev-1');
+  });
+
+  it('does not auto-generate for a cached assessment; Regenerate forces a fresh one', async () => {
+    api.mockResolvedValue(RESPONSE);
+    renderForm({ review: { ...REVIEW, agent_assessment_json: ASSESSMENT } });
+    await flushTimers();
+    expect(api).not.toHaveBeenCalled();
+    await userEvent.setup().click(screen.getByRole('button', { name: /regenerate agent assessment/i }));
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    expect(api).toHaveBeenCalledWith('rev-1', true);
+  });
+});
+```
+
+Create `frontend/src/components/expert-review/PrepareAssessmentsButton.test.tsx` (real `QueryClient` with `invalidateQueries` spied; deferred promises observe the walk mid-flight):
+
+```tsx
+/**
+ * PrepareAssessmentsButton tests — real QueryClient, only the API module mocked,
+ * DEFERRED promises so the strictly sequential walk, the first-error stop, the
+ * guard release and the Stop button are observed mid-flight, not inferred.
+ */
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { PrepareAssessmentsButton } from './PrepareAssessmentsButton';
+import { queryKeys } from '@/lib/query-client';
+import type { AgentAssessmentResponse, PendingReviewItem } from '@/types/expert-review';
+
+vi.mock('@/api/expert-review', () => ({
+  generateReviewAssessment: vi.fn(),
+  resolveReview: vi.fn(),
+  getExpertReview: vi.fn(),
+  getPendingReviews: vi.fn(),
+  getReviewSummary: vi.fn(),
+}));
+import { generateReviewAssessment } from '@/api/expert-review';
+
+const api = vi.mocked(generateReviewAssessment);
+
+const ROWS: PendingReviewItem[] = [{ review_id: 'rev-1' }, { review_id: 'rev-2' }];
+const PENDING_PREFIX = [...queryKeys.expertReviews.all(), 'pending'];
+
+function response(id: string): AgentAssessmentResponse {
+  return { review_id: id, assessment: { items: [], is_fallback: true }, cached: false, persisted: true };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function renderButton() {
+  const guard = { current: new Set<string>() };
+  const queryClient = new QueryClient();
+  const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  render(<PrepareAssessmentsButton reviews={ROWS} autoAssessGuard={guard} />, { wrapper });
+  return { guard, invalidate, button: screen.getByRole('button', { name: /prepare assessments/i }) };
+}
+
+beforeEach(() => {
+  // mockReset (not clear): a test that aborts early must not leak its `Once` queue
+  // of deferred promises into the next test (measured: a never-resolving leftover
+  // left the button stuck at "Preparing 0 / 2…").
+  api.mockReset();
+});
+
+describe('PrepareAssessmentsButton', () => {
+  it('walks the missing rows strictly one at a time, then invalidates the pending queue once', async () => {
+    const first = deferred<AgentAssessmentResponse>();
+    const second = deferred<AgentAssessmentResponse>();
+    api.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { guard, invalidate, button } = renderButton();
+    // The visible label IS the accessible name (no aria-label masking the count / progress).
+    expect(button).toHaveAccessibleName('Prepare assessments (2 missing)');
+
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    expect(api).toHaveBeenLastCalledWith('rev-1');
+    expect(guard.current.has('rev-1')).toBe(true); // positive control for the release assertion below
+    expect(button).toHaveTextContent('Preparing 0 / 2');
+    expect(button).toBeDisabled();
+
+    first.resolve(response('rev-1'));
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+    expect(api).toHaveBeenLastCalledWith('rev-2');
+    expect(button).toHaveTextContent('Preparing 1 / 2');
+    expect(invalidate).not.toHaveBeenCalled();
+
+    second.resolve(response('rev-2'));
+    await waitFor(() => expect(button).toHaveTextContent('Prepare assessments (2 missing)'));
+    expect(button).toBeEnabled();
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_PREFIX });
+  });
+
+  it('stops on the first error, says how far it got, and releases the failed id from the guard', async () => {
+    api.mockRejectedValueOnce(new Error('LM unavailable'));
+    const { guard, invalidate, button } = renderButton();
+    await userEvent.setup().click(button);
+    expect(await screen.findByText('Stopped after 0 of 2')).toBeInTheDocument();
+    expect(screen.getByText('LM unavailable')).toBeInTheDocument();
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(api).not.toHaveBeenCalledWith('rev-2');
+    expect(guard.current.has('rev-1')).toBe(false);
+    expect(guard.current.has('rev-2')).toBe(false);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
+    expect(button).toBeEnabled();
+  });
+
+  it('Stop ends the walk after the in-flight request; the next row is never requested', async () => {
+    const first = deferred<AgentAssessmentResponse>();
+    api.mockReturnValueOnce(first.promise).mockResolvedValue(response('rev-2'));
+    const { button } = renderButton();
+    const user = userEvent.setup();
+    await user.click(button);
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: /stop/i }));
+    first.resolve(response('rev-1'));
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /stop/i })).not.toBeInTheDocument();
   });
 });
 ```
