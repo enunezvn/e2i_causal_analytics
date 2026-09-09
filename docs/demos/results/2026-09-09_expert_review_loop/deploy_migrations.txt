@@ -1,0 +1,5 @@
+# deploy run 34394202788 / job 'Deploy to Droplet' 102616806034 — migration step excerpt (gh api .../actions/jobs/102616806034/logs, ANSI stripped)
+2026-09-09T19:39:55.7573522Z Applying 134_guarded_causal_path_promote.sql ... OK
+2026-09-09T19:39:56.0499035Z Applying 135_causal_validations_json_objects.sql ... OK
+2026-09-09T19:39:56.2104764Z Applying 136_expert_reviews_resolved_at.sql ... OK
+2026-09-09T19:39:56.9296479Z Applied 3 migration(s) successfully.

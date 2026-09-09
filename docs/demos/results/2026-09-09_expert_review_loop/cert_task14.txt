@@ -1,0 +1,27 @@
+== deploy runs (main) ==
+34394202788 completed success 989eec83d 2026-09-09T19:17:48Z
+34266924244 completed success f30e9e9df 2026-09-08T19:05:34Z
+34266900152 completed cancelled 902aa2d0c 2026-09-08T19:05:19Z
+api image: ghcr.io/enunezvn/e2i-api:989eec83d4334d0fd7447d7805c36272baac3286
+OK   api image carries merge sha = 1
+frontend image: ghcr.io/enunezvn/e2i-frontend:989eec83d4334d0fd7447d7805c36272baac3286
+OK   frontend image carries merge sha = 1
+OK   _resample_effects in container runner (>=3) = y
+OK   promote_causal_path_guarded in container repo (>=1) = y
+OK   to_plain_json in container causal_validation (>=2) = y
+OK   resolved_at written by container submit_review = y
+OK   pg_proc has both 134 functions = 2
+rpc signature: promote_causal_path_guarded(text,text,text[],text,text)
+OK   anon EXECUTE on the guarded promote = f
+OK   authenticated EXECUTE on the guarded promote = f
+OK   schema_migrations 134/135/136 applied = 3
+OK   zero string-shaped causal_validations rows = 0
+OK   expert_reviews.created_at NOT NULL = NO
+OK   expert_reviews.resolved_at present = 1
+OK   openapi has the review lookup path = True
+OK   /health 200 = 200
+OK   frontend bundle has 'Pending expert review' (>=1; negative control 0) = y
+== DB state ==
+pending|39
+rejected|1
+RESULT: ok=16 bad=0
