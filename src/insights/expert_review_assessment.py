@@ -28,7 +28,7 @@ from src.insights.common import run_signature
 logger = logging.getLogger(__name__)
 
 # Single source of truth for the six questions; ids MUST stay in sync with the
-# review UI checkboxes (frontend/src/pages/ExpertReviews.tsx CHECKLIST_ITEMS)
+# review UI checkboxes (frontend/src/components/expert-review/checklist.ts CHECKLIST_ITEMS)
 # so verdict chips join onto the right rows.
 CHECKLIST_QUESTIONS: List[Dict[str, str]] = [
     {"id": "conf_complete", "question": "Are all known confounders included?"},

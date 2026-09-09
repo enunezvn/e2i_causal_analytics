@@ -86,7 +86,9 @@ export default function ExpertReviews() {
           messages={[summary.error?.message ?? 'An unexpected error occurred.']}
         />
       )}
-      {summary.data && (
+      {/* TanStack keeps the last data on a refetch error; the banner REPLACES the
+          counts (spec §4.5) rather than sitting above stale ones. */}
+      {summary.data && !summary.isError && (
         <div className="flex flex-wrap gap-2">
           {/* pending/approved/rejected/expired partition the rows; expiring_soon
               is a SUBSET of approved (#1972), so it is labelled and styled as a

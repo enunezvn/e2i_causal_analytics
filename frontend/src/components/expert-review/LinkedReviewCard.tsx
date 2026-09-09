@@ -94,8 +94,8 @@ export function LinkedReviewCard({
                 />
               ) : (
                 <div className="text-sm text-[var(--color-muted-foreground)]">
-                  This review is resolved. A newer pending review for the same structure would
-                  reopen it.
+                  This review is resolved. A newer pending review of the same structure reopens
+                  the structure&apos;s review state (the gate reads the newest adjudication first).
                 </div>
               )}
             </div>

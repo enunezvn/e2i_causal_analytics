@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -67,6 +67,9 @@ function createWrapper(initialPath = '/expert-reviews') {
     </QueryClientProvider>
   );
 }
+
+/** Let a form's deferred auto-assessment timer fire so a "still N calls" assertion is not vacuous. */
+const flushTimers = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
 
 const mockPending: PendingReviewsResponse = {
   reviews: [
@@ -183,6 +186,32 @@ describe('ExpertReviews brand filter and summary (lane 1)', () => {
     expect(screen.getByText('Review counts unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/Pending:/)).not.toBeInTheDocument();
   });
+
+  it('renders the counts when the summary succeeds (positive control for the two banner cases)', () => {
+    vi.mocked(useReviewSummary).mockReturnValue({
+      data: { pending: 3, approved: 1, rejected: 0, expired: 0, expiring_soon: 1 },
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Pending: 3')).toBeInTheDocument();
+    expect(screen.getByText('of which expiring soon: 1')).toBeInTheDocument();
+    expect(screen.queryByText('Review counts unavailable')).not.toBeInTheDocument();
+  });
+
+  it('replaces STALE counts with the banner when a refetch fails (TanStack keeps data on error)', () => {
+    vi.mocked(useReviewSummary).mockReturnValue({
+      data: { pending: 3, approved: 1, rejected: 0, expired: 0, expiring_soon: 1 },
+      isError: true,
+      error: { message: 'Expert-review store unavailable. Retry shortly.' },
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Review counts unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Expert-review store unavailable. Retry shortly.')).toBeInTheDocument();
+    expect(screen.queryByText(/Pending:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/expiring soon/)).not.toBeInTheDocument();
+  });
 });
 
 const STRUCTURE = {
@@ -250,6 +279,7 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     renderWithRow({ dag_structure_json: STRUCTURE, agent_assessment_json: ASSESSMENT });
     await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
     expect(await screen.findByText('supports')).toBeInTheDocument();
+    await flushTimers();
     expect(mutate).not.toHaveBeenCalled();
   });
 
@@ -271,6 +301,7 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
     await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
     expect((await screen.findAllByRole('button', { name: /approve/i })).length).toBe(2);
+    await flushTimers();
     expect(mutate).toHaveBeenCalledTimes(1);
     // Two forms for one review must not share element ids (labels would target the other form).
     const ids = Array.from(document.querySelectorAll('[id]')).map((el) => el.id);
@@ -309,6 +340,7 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     // The bulk run marked rev-1 in the shared guard: expanding it must not start a second generation.
     await userEvent.setup().click(screen.getAllByRole('button', { name: /^review$/i })[0]);
     await screen.findByRole('button', { name: /approve/i });
+    await flushTimers();
     expect(mutate).not.toHaveBeenCalled();
   });
 
@@ -407,6 +439,9 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(card).toHaveTextContent('Dr. No');
     expect(card).toHaveTextContent('collider');
     expect(card).toHaveTextContent('This review is resolved');
+    // The resolved copy must not read as if THIS row reopens (review fold, Minor #4).
+    expect(card).toHaveTextContent('reads the newest adjudication first');
+    expect(card).not.toHaveTextContent('would reopen it');
     expect(screen.getAllByTestId('causal-dag').length).toBe(1);
     expect(card).toHaveTextContent('rev-older');
     // The backend history INCLUDES the linked review itself: it is marked exactly

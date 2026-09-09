@@ -38,7 +38,23 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
   const [checklist, setChecklist] = useState<Record<string, boolean>>({});
   const [comments, setComments] = useState('');
   const resolve = useResolveReview();
-  const assessmentMutation = useReviewAssessment();
+
+  // Once-per-review-id guard for the auto-generated assessment (spec §4.5): a
+  // Set shared by every form on the page when the page provides one, so a second
+  // form for the same id (linked card + queue row) and StrictMode's double-run
+  // effect both hit it. Defined BEFORE the mutation hook so onError can use it.
+  const localGuard = useRef<Set<string>>(new Set());
+  const guard = autoAssessGuard ?? localGuard;
+  const assessmentMutation = useReviewAssessment({
+    // Hook-level, not per-call: the Mutation itself runs this, so it fires even
+    // after the form has unmounted (a collapsed row), whereas TanStack skips the
+    // per-call mutate callbacks once the observer is gone. Releasing the id lets
+    // a later expand, or the page's Prepare button, retry the FAILED generation
+    // once (the effect's deps do not change on error, so there is no loop).
+    onError: (_error, variables) => {
+      guard.current.delete(variables.reviewId);
+    },
+  });
   const { mutate: generateAssessment } = assessmentMutation;
 
   // Prefer the freshly generated assessment; fall back to the row's cache.
@@ -46,17 +62,21 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
     assessmentMutation.data?.assessment ?? review.agent_assessment_json ?? null;
   const assessmentById = new Map((assessment?.items ?? []).map((item) => [item.id, item]));
 
-  // Auto-generate once per review id when nothing is cached (spec §4.5). The
-  // guard is a Set shared by every form on the page when the page provides one;
-  // StrictMode's double-invoked effect and a second form for the same id both
-  // hit it. Refs survive StrictMode's simulated remount, so this fires once.
-  const localGuard = useRef<Set<string>>(new Set());
-  const guard = autoAssessGuard ?? localGuard;
   useEffect(() => {
     if (assessment) return;
     if (guard.current.has(review.review_id)) return;
-    guard.current.add(review.review_id);
-    generateAssessment({ reviewId: review.review_id });
+    // Deferred past StrictMode's synchronous effect cleanup + re-run. A mutate
+    // issued in the FIRST pass is orphaned: query-core's MutationObserver
+    // detaches from the in-flight mutation on unsubscribe and never re-attaches
+    // (mutationObserver.js onUnsubscribe), so the form stayed pending after the
+    // request had completed (measured under <StrictMode>, which main.tsx uses).
+    // The guard is marked when the timer fires, so a cancelled pass marks nothing.
+    const timer = setTimeout(() => {
+      if (guard.current.has(review.review_id)) return;
+      guard.current.add(review.review_id);
+      generateAssessment({ reviewId: review.review_id });
+    }, 0);
+    return () => clearTimeout(timer);
   }, [assessment, generateAssessment, guard, review.review_id]);
 
   const submit = useCallback(

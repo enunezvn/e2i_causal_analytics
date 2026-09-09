@@ -78,7 +78,6 @@ export function PrepareAssessmentsButton({
         variant="outline"
         onClick={run}
         disabled={state.running || missing.length === 0}
-        aria-label="Prepare assessments"
       >
         <Sparkles className="mr-1 h-4 w-4" />
         {state.running
