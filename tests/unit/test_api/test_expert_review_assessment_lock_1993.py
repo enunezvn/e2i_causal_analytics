@@ -112,11 +112,16 @@ class _FakeRedis:
     """In-memory subset the lock uses: SET NX PX, GET, DELETE, EVAL (compare-and-
     delete release script). PX expiry is honoured on read."""
 
-    def __init__(self, *, fail_set: bool = False, factory_down: bool = False) -> None:
+    def __init__(
+        self, *, fail_set: bool = False, factory_down: bool = False, get_delay: float = 0.0
+    ) -> None:
         self.store: Dict[str, Tuple[str, Optional[float]]] = {}
         self.ops: List[str] = []
         self.fail_set = fail_set
         self.factory_down = factory_down  # the client getter itself fails (outage)
+        self.get_delay = get_delay  # a slow server: each GET takes this long
+        self.set_times: List[float] = []
+        self.cancelled_gets = 0
 
     def _live(self, name: str) -> Optional[str]:
         item = self.store.get(name)
@@ -136,6 +141,7 @@ class _FakeRedis:
 
     async def set(self, name: str, value: str, nx: bool = False, px: Optional[int] = None):
         self.ops.append("set")
+        self.set_times.append(asyncio.get_running_loop().time())
         if self.fail_set:
             raise ConnectionError("redis down")
         if nx and self._live(name) is not None:
@@ -145,6 +151,12 @@ class _FakeRedis:
 
     async def get(self, name: str) -> Optional[str]:
         self.ops.append("get")
+        if self.get_delay:
+            try:
+                await asyncio.sleep(self.get_delay)
+            except asyncio.CancelledError:
+                self.cancelled_gets += 1
+                raise
         return self._live(name)
 
     async def delete(self, name: str) -> int:
@@ -589,6 +601,38 @@ async def test_wait_exhaustion_is_409_with_retry_after_and_no_build(monkeypatch)
     assert r.json()["detail"] == route_mod._BUILD_IN_PROGRESS_DETAIL
     assert h.builds == 0 and repo.writes == []
     assert redis._live(LOCK_KEY) == "stuck-elsewhere"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_budget_exhaustion_on_a_slow_redis_is_409_within_the_budget(monkeypatch, caplog):
+    """Codex round-5, end to end: behind another worker's holder on a SLOW
+    Redis (GET 2 s) with a 0.3 s budget, the waiter answers 409 in ~0.3 s (not
+    ~2 s), attempts no SET after the deadline, builds nothing, and the lock
+    stays in redis mode for the next request (exhaustion is not an outage)."""
+    repo, redis = _Repo(ROW), _FakeRedis(get_delay=2.0)
+    redis.preset(LOCK_KEY, "held-by-another-worker", px=None)
+    h = _harness(monkeypatch, repo, redis, ttl_ms=300, op_timeout_seconds=1.0)
+    loop = asyncio.get_running_loop()
+
+    t0 = loop.time()
+    with caplog.at_level(logging.WARNING, logger="src.api.dependencies.inflight_lock"):
+        r = await _single(h)
+    elapsed = loop.time() - t0
+
+    assert r.status_code == 409, r.text
+    assert r.headers.get("retry-after") == "5"
+    assert elapsed < 1.0, elapsed
+    assert h.builds == 0 and repo.writes == []
+    assert redis.cancelled_gets == 1
+    assert len(redis.set_times) == 1 and redis.set_times[0] < t0 + h.lock._wait_seconds
+    assert h.lock._degraded_until == 0.0
+    assert not [r for r in caplog.records if "unavailable" in r.getMessage()]
+
+    del redis.store[LOCK_KEY]  # the other worker released
+    r2 = await _single(h)
+    assert r2.status_code == 200 and r2.json()["cached"] is False and h.builds == 1
+    assert redis.live_keys() == []
 
 
 @pytest.mark.unit

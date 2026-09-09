@@ -35,6 +35,7 @@ class _FakeRedis:
         hang: bool = False,
         fail_set_with: Optional[BaseException] = None,
         fail_eval: bool = False,
+        get_delay: float = 0.0,
     ) -> None:
         self.store: Dict[str, Tuple[str, Optional[float]]] = {}
         self.ops: List[str] = []
@@ -42,6 +43,9 @@ class _FakeRedis:
         self.hang = hang
         self.fail_set_with = fail_set_with
         self.fail_eval = fail_eval
+        self.get_delay = get_delay  # a slow server: each GET takes this long
+        self.set_times: List[float] = []  # loop time of every SET attempt
+        self.cancelled_gets = 0  # GETs cut short by the caller's timeout
 
     def _live(self, name: str) -> Optional[str]:
         item = self.store.get(name)
@@ -61,6 +65,7 @@ class _FakeRedis:
 
     async def set(self, name: str, value: str, nx: bool = False, px: Optional[int] = None):
         self.ops.append("set")
+        self.set_times.append(asyncio.get_running_loop().time())
         if self.hang:
             await asyncio.Event().wait()  # never returns
         if self.fail_set:
@@ -74,6 +79,12 @@ class _FakeRedis:
 
     async def get(self, name: str) -> Optional[str]:
         self.ops.append("get")
+        if self.get_delay:
+            try:
+                await asyncio.sleep(self.get_delay)
+            except asyncio.CancelledError:
+                self.cancelled_gets += 1
+                raise
         return self._live(name)
 
     async def delete(self, name: str) -> int:
@@ -196,6 +207,38 @@ async def test_wait_is_bounded_by_the_ttl_then_reports_exhaustion(caplog):
     assert redis._live(f"{PREFIX}:r1") == "stuck"  # not ours; untouched
     assert lock._local == {}  # the stage-1 mutex is dropped with the lease
     assert any("exhausted" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_budget_exhaustion_trims_the_last_command_and_attempts_no_late_set(caplog):
+    """Codex round-5: a waiter behind another worker's holder, on a SLOW Redis
+    (each GET takes 2 s), with a 0.3 s budget. Untrimmed, the GET alone would
+    overrun the budget by ~1.7 s and a SET could follow; trimmed, the GET is
+    cut at the deadline, no SET is attempted afterwards, the outcome is
+    ``mode == "none"`` and it is NOT a degrade event (no cooldown, no outage
+    warning). Wall-clock bound 1.0 s: far below the untrimmed 2 s, far above
+    the trimmed ~0.32 s, so CI load cannot flip it."""
+    redis = _FakeRedis(get_delay=2.0)
+    redis.preset(f"{PREFIX}:r1", "held-by-another-worker", px=None)
+    lock = _lock(redis, ttl_ms=300, poll_seconds=0.02, op_timeout_seconds=1.0)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    with caplog.at_level(logging.WARNING, logger=mod.__name__):
+        async with lock.hold("r1") as lease:
+            assert lease.mode == "none" and lease.waited is True
+    elapsed = loop.time() - t0
+    assert elapsed < 1.0, elapsed
+    assert redis.cancelled_gets == 1  # the last GET was trimmed to the budget
+    assert redis.set_times == [pytest.approx(t0, abs=0.1)]  # one SET, none after the deadline
+    assert all(t < t0 + lock._wait_seconds for t in redis.set_times)
+    assert lock._degraded_until == 0.0  # exhaustion never degrades
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(msgs) == 1 and "budget exhausted" in msgs[0] and "unavailable" not in msgs[0]
+    # Redis is still used by the next request (no cooldown was entered)
+    redis.store.clear()
+    async with lock.hold("r1") as lease:
+        assert lease.mode == "redis"
 
 
 @pytest.mark.unit

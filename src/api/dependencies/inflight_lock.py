@@ -40,7 +40,16 @@ Redis path (the app's already-initialised ``redis.asyncio`` client):
   CALLER decides. The assessment route answers 409 rather than building
   unlocked: an unlocked build could overlap a legitimate holder, and a client
   that waited the full TTL has already received nginx's 504, so it would serve
-  nobody. The guarantee, precisely: Redis being DOWN never fails a request
+  nobody. Budget accounting (codex round-5): every stage-2 command (client
+  getter, SET, GET) and every poll sleep is trimmed to the remaining budget;
+  no SET is attempted once the budget is gone; and budget exhaustion is a
+  distinct outcome from a Redis failure (it never enters the degrade
+  cooldown). A SET that succeeds inside the last trimmed command is KEPT, not
+  released to answer 409: the key is held so no overlap is possible and the
+  build is persisted for the next caller, while discarding a won key serves
+  nobody (nginx has already dropped a client that waited the full TTL). The
+  release EVAL runs after the build, outside the wait budget, and keeps the
+  plain per-command cap. The guarantee, precisely: Redis being DOWN never fails a request
   (local fallback below); exhausting the wait bound DOES, in EITHER mode,
   because that client has already been 504'd by nginx, so a LOCAL holder
   exceeding the bound also yields ``mode == "none"``.
@@ -109,6 +118,11 @@ _RELEASE_LUA = (
 
 # Zero-arg async factory yielding a Redis client (injectable for tests).
 RedisFactory = Callable[[], Awaitable[Any]]
+
+
+class _BudgetExhausted(Exception):
+    """The shared wait budget ran out during stage 2 -- never a Redis failure,
+    never a degrade event; the caller yields ``mode == "none"``."""
 
 
 async def _default_redis_factory() -> Any:
@@ -186,11 +200,15 @@ class InflightLock:
 
     # -- Redis side --------------------------------------------------------
 
-    async def _redis(self) -> Optional[Any]:
+    async def _redis(self, deadline: Optional[float] = None) -> Optional[Any]:
+        """The client, or None to run in local mode. Raises _BudgetExhausted when
+        the getter itself cannot complete inside the remaining budget."""
         if time.monotonic() < self._degraded_until:
             return None
         try:
-            return await asyncio.wait_for(self._redis_factory(), timeout=self.op_timeout_seconds)
+            return await self._op(self._redis_factory, deadline)
+        except _BudgetExhausted:
+            raise
         except _REDIS_DEGRADE_ERRORS as e:
             self._degrade(e)
             return None
@@ -201,7 +219,8 @@ class InflightLock:
     def _degrade(self, exc: BaseException, *, unexpected: bool = False) -> None:
         # Per process: each gunicorn worker has its own instance, hence its own
         # cooldown and its own one-time warning. Reserved for factory/acquire
-        # failures; a failed RELEASE never enters the cooldown (see _release_redis).
+        # failures; a failed RELEASE never enters the cooldown (see _release_redis)
+        # and neither does budget exhaustion (_BudgetExhausted).
         self._degraded_until = time.monotonic() + self.degrade_cooldown_seconds
         if unexpected:
             logger.error(
@@ -222,34 +241,58 @@ class InflightLock:
         else:
             logger.debug(msg)
 
-    async def _op(self, awaitable: Awaitable[Any]) -> Any:
-        return await asyncio.wait_for(awaitable, timeout=self.op_timeout_seconds)
+    async def _op(
+        self, command: Callable[[], Awaitable[Any]], deadline: Optional[float] = None
+    ) -> Any:
+        """Run one Redis command capped by ``op_timeout_seconds`` and, when a
+        ``deadline`` is given, by the remaining wait budget. A timeout that
+        coincides with the deadline is budget exhaustion, not a Redis failure."""
+        if deadline is None:
+            return await asyncio.wait_for(command(), timeout=self.op_timeout_seconds)
+        loop = asyncio.get_running_loop()
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise _BudgetExhausted()
+        try:
+            return await asyncio.wait_for(
+                command(), timeout=min(self.op_timeout_seconds, remaining)
+            )
+        except TimeoutError:
+            if loop.time() >= deadline:
+                raise _BudgetExhausted() from None
+            raise
 
     async def _acquire_redis(self, client: Any, lease: Lease, deadline: float) -> bool:
-        """True = acquired. False = the shared wait budget is exhausted. Raises
-        on a Redis error (the caller degrades to local mode). Only the holder
-        of the per-id local mutex calls this, so at most one waiter per worker
-        polls Redis for a given id."""
+        """True = acquired (a SET that lands inside the last trimmed command is
+        kept; see the module docstring). Raises _BudgetExhausted when the
+        shared budget runs out -- no SET is attempted past the deadline -- and
+        a Redis error otherwise (the caller degrades to local mode). Only the
+        holder of the per-id local mutex calls this, so at most one waiter per
+        worker polls Redis for a given id."""
         loop = asyncio.get_running_loop()
         while True:
-            if await self._op(client.set(lease.key, lease.token, nx=True, px=self.ttl_ms)):
+            if loop.time() >= deadline:
+                raise _BudgetExhausted()
+            if await self._op(
+                lambda: client.set(lease.key, lease.token, nx=True, px=self.ttl_ms), deadline
+            ):
                 return True
             lease.waited = True  # held by ANOTHER worker
             # Poll for the holder's release (or its TTL expiry), then retry the SET.
-            while await self._op(client.get(lease.key)) is not None:
-                if loop.time() >= deadline:
-                    return False
-                await asyncio.sleep(self.poll_seconds)
-            if loop.time() >= deadline:
-                return False
+            while await self._op(lambda: client.get(lease.key), deadline) is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise _BudgetExhausted()
+                await asyncio.sleep(min(self.poll_seconds, remaining))
 
     async def _release_redis(self, client: Any, lease: Lease) -> None:
         # A lost release is NOT an outage signal: the TTL bounds the leaked key
         # and the next acquire judges Redis for itself. Entering the cooldown
         # here would send this whole worker to the local lock for 30 s on one
-        # lost DEL. Never fail the response.
+        # lost DEL. Never fail the response. Runs after the build, outside the
+        # wait budget: only the per-command cap applies.
         try:
-            await self._op(client.eval(_RELEASE_LUA, 1, lease.key, lease.token))
+            await self._op(lambda: client.eval(_RELEASE_LUA, 1, lease.key, lease.token))
         except _REDIS_DEGRADE_ERRORS as e:
             logger.warning(
                 f"{lease.key}: in-flight lock release failed ({e!r}); the key expires "
@@ -303,30 +346,32 @@ class InflightLock:
             except TimeoutError:
                 lease.mode = "none"
                 logger.warning(
-                    f"{lease.key}: local in-flight lock wait exhausted after "
-                    f"{self._wait_seconds:g}s; no lock held, the caller decides"
+                    f"{lease.key}: in-flight lock wait budget exhausted after "
+                    f"{self._wait_seconds:g}s behind a local holder; no lock held, "
+                    "the caller decides"
                 )
             # Stage 2 (the local holder only): cross-worker exclusion via SET NX,
-            # within the remaining budget.
+            # every command and sleep trimmed to the remaining budget.
             if held_local:
-                client = await self._redis()
-                if client is not None:
-                    try:
+                try:
+                    client = await self._redis(deadline)
+                    if client is not None:
                         held_redis = await self._acquire_redis(client, lease, deadline)
-                        if not held_redis:
-                            lease.mode = "none"
-                            logger.warning(
-                                f"{lease.key}: in-flight lock wait exhausted after "
-                                f"{self._wait_seconds:g}s; no lock held, the caller decides"
-                            )
-                    except _REDIS_DEGRADE_ERRORS as e:
-                        self._degrade(e)
-                        client = None
-                    except (
-                        Exception
-                    ) as e:  # never fail the request; but do not call a bug an outage
-                        self._degrade(e, unexpected=True)
-                        client = None
+                except _BudgetExhausted:
+                    # Distinct from a Redis failure: Redis answered, the budget
+                    # simply ran out behind another worker's holder. No degrade.
+                    lease.mode = "none"
+                    logger.warning(
+                        f"{lease.key}: in-flight lock wait budget exhausted after "
+                        f"{self._wait_seconds:g}s behind another worker's holder; no "
+                        "lock held, the caller decides"
+                    )
+                except _REDIS_DEGRADE_ERRORS as e:
+                    self._degrade(e)
+                    client = None
+                except Exception as e:  # never fail the request; but do not call a bug an outage
+                    self._degrade(e, unexpected=True)
+                    client = None
                 if not held_redis and lease.mode != "none":
                     lease.mode = "local"
         except BaseException:
