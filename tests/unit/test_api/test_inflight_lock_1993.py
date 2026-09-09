@@ -28,11 +28,20 @@ PREFIX = "test:inflight"
 
 
 class _FakeRedis:
-    def __init__(self, *, fail_set: bool = False, hang: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_set: bool = False,
+        hang: bool = False,
+        fail_set_with: Optional[BaseException] = None,
+        fail_eval: bool = False,
+    ) -> None:
         self.store: Dict[str, Tuple[str, Optional[float]]] = {}
         self.ops: List[str] = []
         self.fail_set = fail_set
         self.hang = hang
+        self.fail_set_with = fail_set_with
+        self.fail_eval = fail_eval
 
     def _live(self, name: str) -> Optional[str]:
         item = self.store.get(name)
@@ -56,6 +65,8 @@ class _FakeRedis:
             await asyncio.Event().wait()  # never returns
         if self.fail_set:
             raise ConnectionError("redis down")
+        if self.fail_set_with is not None:
+            raise self.fail_set_with
         if nx and self._live(name) is not None:
             return None
         self.store[name] = (value, time.monotonic() + px / 1000.0 if px else None)
@@ -71,6 +82,8 @@ class _FakeRedis:
 
     async def eval(self, script: str, numkeys: int, *args: Any) -> int:
         self.ops.append("eval")
+        if self.fail_eval:
+            raise ConnectionError("redis down at release")
         key, token = args[0], args[1]
         if self._live(key) == token:
             del self.store[key]
@@ -223,6 +236,42 @@ async def test_set_failure_mid_request_degrades_to_local():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_release_failure_warns_and_does_not_enter_the_cooldown(caplog):
+    """A lost DEL leaks one key until its TTL; it must not send the whole
+    worker to the local lock for the cooldown (quality review item 3)."""
+    redis = _FakeRedis(fail_eval=True)
+    lock = _lock(redis)
+    with caplog.at_level(logging.WARNING, logger=mod.__name__):
+        async with lock.hold("r1") as lease:
+            assert lease.mode == "redis"
+    assert redis.live_keys() == [f"{PREFIX}:r1"]  # left to the TTL
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "release failed" in warnings[0].getMessage()
+
+    redis.fail_eval = False
+    async with lock.hold("r2") as lease:
+        assert lease.mode == "redis"  # a cooldown would have made this "local"
+    assert redis.ops.count("set") == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unexpected_error_still_degrades_but_is_logged_as_a_bug_not_an_outage(caplog):
+    """Only transport errors are outages (warning once). Anything else still
+    degrades (never fail the request) but is an ERROR with a traceback."""
+    redis = _FakeRedis(fail_set_with=TypeError("bad call"))
+    lock = _lock(redis)
+    with caplog.at_level(logging.DEBUG, logger=mod.__name__):
+        async with lock.hold("r1") as lease:
+            assert lease.mode == "local"
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1 and "unexpected TypeError" in errors[0].getMessage()
+    assert errors[0].exc_info is not None
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_hanging_redis_op_is_bounded_by_the_op_timeout():
     redis = _FakeRedis(hang=True)
     lock = _lock(redis, op_timeout_seconds=0.05)
@@ -296,9 +345,9 @@ async def test_default_factory_uses_the_initialised_client_and_never_calls_init_
 
 @pytest.mark.unit
 def test_defaults_match_the_gunicorn_request_timeout():
-    """TTL ~ gunicorn --timeout 120 (measured on the live container): a build
-    can never hold the key longer than its own request may live."""
-    assert mod.DEFAULT_TTL_MS == 120_000
+    """TTL ~ nginx ``proxy_read_timeout 120s`` for /api/, the longest a caller
+    waits on a build (gunicorn --timeout does not cap a UvicornWorker build)."""
+    assert mod.DEFAULT_TTL_MS == 120_000  # nginx proxy_read_timeout 120s for /api/
     assert mod.DEFAULT_POLL_SECONDS == pytest.approx(0.2)
     assert mod.DEFAULT_OP_TIMEOUT_SECONDS <= 1.0
     lock = InflightLock("expert_review:assessment:inflight")

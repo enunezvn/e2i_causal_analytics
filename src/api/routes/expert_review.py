@@ -26,6 +26,7 @@ Version: 4.3.0
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -65,8 +66,10 @@ logger = logging.getLogger(__name__)
 _STORE_UNAVAILABLE_DETAIL = "Expert-review store unavailable. Retry shortly."
 
 # #1993: one LLM build per review id across BOTH gunicorn workers. Redis
-# ``SET NX PX`` (TTL ~ the request timeout) with a process-local fallback; see
-# dependencies/inflight_lock.py for the degradation and wait bounds.
+# ``SET NX PX`` with a process-local fallback. The TTL (120 s) tracks nginx's
+# ``proxy_read_timeout 120s`` for /api/ (docker/nginx/nginx.secure.conf:227),
+# the longest a caller waits on a build; see dependencies/inflight_lock.py for
+# the degradation and wait bounds and what happens when a build outlives it.
 _ASSESSMENT_LOCK = InflightLock("expert_review:assessment:inflight")
 
 
@@ -273,14 +276,31 @@ async def generate_review_assessment(
         if lease.waited:
             regenerated = await _reread_assessment(repo, review_id)
             if regenerated is not None and regenerated != cached:
+                logger.info(
+                    f"Expert-review {review_id}: assessment waited on an in-flight build "
+                    f"(lock mode={lease.mode}); replaying the winner's stored result"
+                )
                 return AgentAssessmentResponse(
                     review_id=review_id, assessment=regenerated, cached=True, persisted=True
                 )
+            logger.info(
+                f"Expert-review {review_id}: assessment waited on an in-flight build "
+                f"(lock mode={lease.mode}) but no new stored result appeared (the winner "
+                "failed to persist or died); building"
+            )
         validation_ids = review.get("related_validation_ids") or []
         validations = await _get_validation_rows(validation_ids)
         # run_signature is a BLOCKING LM call; keep the event loop free.
+        started = time.monotonic()
         assessment = await asyncio.to_thread(_build_assessment, review, validations)
+        elapsed = time.monotonic() - started
         persisted = await repo.update_agent_assessment(review_id, assessment)
+        # No p99 exists for this build anywhere; record the elapsed seconds so the
+        # lock TTL (120 s, nginx proxy_read_timeout) can be revisited on data.
+        logger.info(
+            f"Expert-review {review_id}: assessment built in {elapsed:.1f}s "
+            f"(lock mode={lease.mode}, force={force}, persisted={persisted})"
+        )
     return AgentAssessmentResponse(
         review_id=review_id, assessment=assessment, cached=False, persisted=persisted
     )

@@ -165,14 +165,19 @@ async def _post(app: FastAPI, n: int = 1, *, force: bool = False) -> List[httpx.
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_two_concurrent_uncached_requests_build_once(monkeypatch):
+async def test_two_concurrent_uncached_requests_build_once(monkeypatch, caplog):
     repo, redis = _Repo(ROW), _FakeRedis()
     app, counter = _app(monkeypatch, repo, redis)
 
-    r1, r2 = await _post(app, 2)
+    with caplog.at_level(logging.INFO, logger=route_mod.__name__):
+        r1, r2 = await _post(app, 2)
 
     assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
     assert counter["builds"] == 1
+    # observability: the build's elapsed seconds and the waiter's outcome are logged
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert sum("assessment built in" in m and "lock mode=redis" in m for m in msgs) == 1
+    assert sum("replaying the winner's stored result" in m for m in msgs) == 1
     b1, b2 = r1.json(), r2.json()
     assert (
         b1["assessment"]
@@ -212,16 +217,20 @@ async def test_lock_is_released_so_a_later_force_builds_again(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_winner_persist_failure_makes_the_loser_build(monkeypatch):
+async def test_winner_persist_failure_makes_the_loser_build(monkeypatch, caplog):
     """The loser waits, re-reads, finds NO stored assessment (the winner's
     write failed) and builds itself: one extra build, never an error."""
     repo, redis = _Repo(ROW, persist=False), _FakeRedis()
     app, counter = _app(monkeypatch, repo, redis)
 
-    r1, r2 = await _post(app, 2)
+    with caplog.at_level(logging.INFO, logger=route_mod.__name__):
+        r1, r2 = await _post(app, 2)
 
     assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
     assert counter["builds"] == 2
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert sum("no new stored result appeared" in m for m in msgs) == 1
+    assert sum("assessment built in" in m for m in msgs) == 2
     assert [r1.json()["cached"], r2.json()["cached"]] == [False, False]
     assert [r1.json()["persisted"], r2.json()["persisted"]] == [False, False]
     assert {r1.json()["assessment"]["n"], r2.json()["assessment"]["n"]} == {1, 2}
