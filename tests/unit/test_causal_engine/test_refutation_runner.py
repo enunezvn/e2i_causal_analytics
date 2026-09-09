@@ -16,7 +16,10 @@ returns deterministic refutation results, or (b) assert that calling
 """
 
 from types import SimpleNamespace
+from typing import Callable, List, Optional
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from src.causal_engine.errors import RefutationError
@@ -46,11 +49,62 @@ def _make_refutation_result(new_effect: float, p_value: float, **extra) -> Simpl
     return SimpleNamespace(new_effect=new_effect, refutation_result=rr)
 
 
-def _make_stub_causal_model(refutation_results_by_method: dict) -> SimpleNamespace:
+class _StubRefitEstimator:
+    """What ``estimate.estimator.get_new_estimator_object`` returns (spec §4.1).
+
+    ``fit`` records the resample and ``estimate_effect`` reports an effect
+    computed FROM it, so subset and bootstrap draws vary the way a real re-fit
+    would (a constant series would make DoWhy's normal test divide by zero).
+    """
+
+    def __init__(self, effect_fn: Callable[[pd.DataFrame], float]) -> None:
+        self._effect_fn = effect_fn
+        self.fitted_on: Optional[pd.DataFrame] = None
+
+    def fit(self, data: pd.DataFrame, effect_modifier_names=None, **_fit_params) -> None:  # noqa: ANN001
+        self.fitted_on = data
+
+    def estimate_effect(  # noqa: ANN001
+        self, data: pd.DataFrame, control_value=0, treatment_value=1, target_units="ate"
+    ) -> SimpleNamespace:
+        return SimpleNamespace(value=float(self._effect_fn(data)))
+
+
+def _stub_frame(n: int = 60, seed: int = 0) -> pd.DataFrame:
+    """The frame a stub CausalModel was 'built on' (DoWhy keeps it as ``_data``)."""
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame({"t": rng.integers(0, 2, n), "y": rng.random(n), "c": rng.random(n)})
+
+
+def _stub_estimate(
+    value: float = 0.15,
+    effect_fn: Optional[Callable[[pd.DataFrame], float]] = None,
+) -> SimpleNamespace:
+    """A DoWhy-shaped CausalEstimate: ``.value`` plus the four estimator
+    attributes ``refutation_runner._refit_effect_on`` reads."""
+    fn = effect_fn or (lambda df: value + 0.01 * (float(df["y"].mean()) - 0.5))
+    estimator = SimpleNamespace(
+        get_new_estimator_object=lambda _estimand: _StubRefitEstimator(fn),
+        _effect_modifier_names=[],
+        _target_units="ate",
+    )
+    return SimpleNamespace(value=value, estimator=estimator, control_value=0, treatment_value=1)
+
+
+def _sequence_estimate(values: List[float], value: float = 0.15) -> SimpleNamespace:
+    """An estimate whose successive re-fits report ``values`` in order."""
+    it = iter(values)
+    return _stub_estimate(value=value, effect_fn=lambda _df: next(it))
+
+
+def _make_stub_causal_model(
+    refutation_results_by_method: dict, data: Optional[pd.DataFrame] = None
+) -> SimpleNamespace:
     """Construct a stub object shaped like DoWhy's CausalModel.
 
-    Only ``refute_estimate(estimand, estimate, method_name=..., **kwargs)`` is
-    implemented; it returns the canned result for ``method_name``.
+    ``refute_estimate(estimand, estimate, method_name=..., **kwargs)`` returns
+    the canned result for ``method_name`` (placebo / random_common_cause still
+    go through it); ``_data`` is the frame the two resample loops draw from.
     """
 
     def refute_estimate(*_args, method_name: str, **_kwargs):  # noqa: ANN001
@@ -58,7 +112,10 @@ def _make_stub_causal_model(refutation_results_by_method: dict) -> SimpleNamespa
             raise KeyError(f"stub did not register method_name={method_name!r}")
         return refutation_results_by_method[method_name]
 
-    return SimpleNamespace(refute_estimate=refute_estimate)
+    return SimpleNamespace(
+        refute_estimate=refute_estimate,
+        _data=data if data is not None else _stub_frame(),
+    )
 
 
 # ============================================================================
@@ -592,7 +649,7 @@ class TestDefaultConfigLatencyBounds:
             original_effect=0.15,
             causal_model=stub_model,
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             use_dowhy=True,
         )
         assert captured["method_name"] == "random_common_cause"
@@ -647,7 +704,7 @@ class TestPlaceboTest:
             original_effect=0.15,
             causal_model=stub_model,
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             use_dowhy=True,
         )
 
@@ -663,7 +720,7 @@ class TestPlaceboTest:
             original_effect=0.15,
             causal_model=stub_model,
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             use_dowhy=True,
         )
 
@@ -702,7 +759,7 @@ class TestRandomCommonCauseTest:
             original_effect=0.15,
             causal_model=stub_model,
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             use_dowhy=True,
         )
 
@@ -717,7 +774,7 @@ class TestRandomCommonCauseTest:
             original_effect=0.15,
             causal_model=stub_model,
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             use_dowhy=True,
         )
 
@@ -749,27 +806,20 @@ class TestDataSubsetTest:
         assert exc_info.value.details.get("test_name") == "data_subset"
 
     def test_run_data_subset_test_passed(self, runner):
-        """Test data subset test that passes (via stub CausalModel)."""
-        # subset_effects span keeps within original_ci so CI coverage is 1.0 (pass).
-        stub_model = _make_stub_causal_model(
-            {
-                "data_subset_refuter": _make_refutation_result(
-                    new_effect=0.15,
-                    p_value=0.75,
-                    subset_effects=[0.13, 0.14, 0.15, 0.16, 0.17],
-                )
-            }
-        )
+        """Real evidence (spec §4.1): the test re-fits on subsets of the model's
+        frame and scores how many subset effects fall inside original_ci."""
         result = runner._run_data_subset_test(
             original_effect=0.15,
             original_ci=(0.10, 0.20),
-            causal_model=stub_model,
+            causal_model=_make_stub_causal_model({}),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             use_dowhy=True,
         )
 
         assert result.status == RefutationStatus.PASSED
+        assert len(result.details["subset_effects"]) == 5
+        assert result.details["ci_coverage"] == 1.0
 
 
 # ============================================================================
@@ -796,34 +846,23 @@ class TestBootstrapTest:
         assert exc_info.value.details.get("test_name") == "bootstrap"
 
     def test_run_bootstrap_test_passed(self, runner):
-        """Test bootstrap test that passes (via stub CausalModel).
-
-        Bootstrap CI must be <= 50% wider than original to pass.
-        - original_ci width = 0.20 - 0.10 = 0.10
-        - bootstrap_ci width must be <= 0.05 (50% of 0.10)
-        - Bootstrap effects centered at 0.15 with width 0.05 → ratio = 0.5.
-        """
-        # Provide bootstrap_estimates whose mean ≈ 0.15 and whose 2.5/97.5
-        # percentiles fall around (0.125, 0.175).
-        stub_model = _make_stub_causal_model(
-            {
-                "bootstrap_refuter": _make_refutation_result(
-                    new_effect=0.15,
-                    p_value=0.85,
-                    bootstrap_estimates=[0.125, 0.13, 0.14, 0.15, 0.16, 0.17, 0.175],
-                )
-            }
-        )
+        """Real evidence (spec §4.1): bootstrap re-fits on row resamples; the
+        2.5–97.5 percentile width is compared with original_ci under the
+        INTENDED thresholds (pass ≤ 1.5× the original width)."""
         result = runner._run_bootstrap_test(
             original_effect=0.15,
             original_ci=(0.10, 0.20),
-            causal_model=stub_model,
+            causal_model=_make_stub_causal_model({}),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             use_dowhy=True,
         )
 
         assert result.status == RefutationStatus.PASSED
+        assert (
+            len(result.details["bootstrap_effects"]) == runner.config["bootstrap"]["num_bootstraps"]
+        )
+        assert result.details["ci_ratio"] <= 1.5
 
 
 # ============================================================================
@@ -1199,7 +1238,7 @@ class TestRunAllTests:
             original_ci=(0.10, 0.20),
             causal_model=_full_stub_causal_model(),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
         )
 
         assert isinstance(suite, RefutationSuite)
@@ -1223,7 +1262,7 @@ class TestRunAllTests:
             original_ci=(0.10, 0.20),
             causal_model=_full_stub_causal_model(),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
         )
 
         # Should not include placebo test
@@ -1237,7 +1276,7 @@ class TestRunAllTests:
             original_ci=(0.10, 0.20),
             causal_model=_full_stub_causal_model(),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             treatment="hcp_engagement",
             outcome="conversion_rate",
             brand="Kisqali",
@@ -1280,7 +1319,7 @@ class TestRunAllTests:
                 original_ci=(0.10, 0.20),
                 causal_model=_full_stub_causal_model(),
                 identified_estimand=object(),
-                estimate=object(),
+                estimate=_stub_estimate(),
                 deadline=_t.monotonic() - 1.0,
             )
         assert ei.value.details.get("reason") == "time_budget_exceeded"
@@ -1297,7 +1336,7 @@ class TestRunAllTests:
             original_ci=(0.10, 0.20),
             causal_model=_full_stub_causal_model(),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             deadline=_t.monotonic() + 1e9,
         )
         assert isinstance(suite, RefutationSuite)
@@ -1337,7 +1376,7 @@ class TestRunAllTests:
                 original_ci=(0.10, 0.20),
                 causal_model=_full_stub_causal_model(),
                 identified_estimand=object(),
-                estimate=object(),
+                estimate=_stub_estimate(),
                 deadline=1000.0 + 100.0,  # 100s budget from t=1000
             )
         # placebo runs first (no estimate yet, 1000 < 1100); after it the
@@ -1372,7 +1411,7 @@ class TestRunAllTests:
                 original_ci=(0.10, 0.20),
                 causal_model=_full_stub_causal_model(),
                 identified_estimand=object(),
-                estimate=object(),
+                estimate=_stub_estimate(),
                 deadline=_t.monotonic() + 10.0,
                 per_refit_hint=40.0,
             )
@@ -1402,7 +1441,7 @@ class TestConvenienceFunctions:
             original_ci=(0.10, 0.20),
             causal_model=_full_stub_causal_model(),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             treatment="test_treatment",
             outcome="test_outcome",
         )

@@ -24,7 +24,10 @@ from src.causal_engine.refutation_runner import (
     RefutationStatus,
     RefutationTestType,
 )
-from tests.unit.test_causal_engine.test_refutation_runner import _full_stub_causal_model
+from tests.unit.test_causal_engine.test_refutation_runner import (
+    _full_stub_causal_model,
+    _stub_estimate,
+)
 
 # A weak-but-real standardized effect: point E-value ≈ 1.42, CI-bound
 # E-value ≈ 1.36 — below the 1.5 warning threshold → FAILED for an
@@ -91,7 +94,7 @@ class TestRunAllTestsRandomizedDesign:
             original_ci=(0.10, 0.20),
             causal_model=_full_stub_causal_model(),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
             randomized_design=True,
         )
         by_name = {t.test_name: t for t in suite.tests}
@@ -108,7 +111,7 @@ class TestRunAllTestsRandomizedDesign:
             original_ci=(0.10, 0.20),
             causal_model=_full_stub_causal_model(),
             identified_estimand=object(),
-            estimate=object(),
+            estimate=_stub_estimate(),
         )
         by_name = {t.test_name: t for t in suite.tests}
         assert by_name[RefutationTestType.SENSITIVITY_E_VALUE].status == RefutationStatus.FAILED

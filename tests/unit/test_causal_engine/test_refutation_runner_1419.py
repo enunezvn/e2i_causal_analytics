@@ -45,7 +45,10 @@ from src.causal_engine.refutation_runner import (
     RefutationStatus,
     RefutationSuite,
 )
-from tests.unit.test_causal_engine.test_refutation_runner import _full_stub_causal_model
+from tests.unit.test_causal_engine.test_refutation_runner import (
+    _full_stub_causal_model,
+    _stub_estimate,
+)
 
 
 def _config(sensitivity_enabled: bool) -> dict:
@@ -66,7 +69,7 @@ def _run(runner, **overrides):
         "original_ci": (0.10, 0.20),
         "causal_model": _full_stub_causal_model(),
         "identified_estimand": object(),
-        "estimate": object(),
+        "estimate": _stub_estimate(),
     }
     kwargs.update(overrides)
     return runner.run_all_tests(**kwargs)
