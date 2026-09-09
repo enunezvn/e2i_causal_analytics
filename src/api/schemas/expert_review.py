@@ -20,6 +20,19 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+def _json_string_to_dict(value: Any) -> Any:
+    """Shared ``mode="before"`` body for JSONB columns the repo writes as
+    ``json.dumps`` strings: parse a string, keep only a dict, pass anything
+    else through untouched."""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return value
+
+
 class PendingReviewItem(BaseModel):
     """A single pending expert review.
 
@@ -50,13 +63,7 @@ class PendingReviewItem(BaseModel):
     @field_validator("dag_structure_json", "agent_assessment_json", mode="before")
     @classmethod
     def _parse_json_string(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except (ValueError, TypeError):
-                return None
-            return parsed if isinstance(parsed, dict) else None
-        return value
+        return _json_string_to_dict(value)
 
 
 class ReviewRecord(PendingReviewItem):
@@ -81,13 +88,7 @@ class ReviewRecord(PendingReviewItem):
     @field_validator("checklist_json", "comments_json", mode="before")
     @classmethod
     def _parse_resolution_json(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except (ValueError, TypeError):
-                return None
-            return parsed if isinstance(parsed, dict) else None
-        return value
+        return _json_string_to_dict(value)
 
 
 class ExpertReviewDetailResponse(BaseModel):

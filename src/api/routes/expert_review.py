@@ -26,6 +26,7 @@ Version: 4.3.0
 import asyncio
 import json
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -301,12 +302,26 @@ async def get_expert_review(
     ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
     so it cannot shadow ``/pending`` and ``/summary``.
     """
+    # A malformed id is 404, not 503 (review 2026-09-09, measured live):
+    # ``expert_reviews.review_id`` is a uuid column, so a non-UUID string makes
+    # PostgREST raise APIError 22P02 ("invalid input syntax for type uuid"),
+    # which the store-failure guard below would report as an outage with an
+    # ERROR traceback -- while the sibling ``POST /{review_id}/resolve``
+    # answers 404 for the same input. Pre-check for parity, and hand the store
+    # the CANONICAL form so any form Python accepts (uppercase, braces) can
+    # never trip the cast. The raw path value stays in the 404 messages.
+    try:
+        canonical_id = str(uuid.UUID(review_id))
+    except ValueError:
+        raise HTTPException(
+            status_code=404, detail=f"Review {review_id} was not found (not a valid review id)."
+        ) from None
     try:
         # The client factory raises ServiceConnectionError when Supabase is
         # unset/unreachable; inside the try so that is a 503 as well, not a
         # 500 (pre-execution review 2026-09-08, codex MED).
         repo = await _get_expert_review_repo()
-        row = await repo.get_by_id(review_id)
+        row = await repo.get_by_id(canonical_id)
     except Exception as e:  # store failure (R3): honest 503
         raise _store_unavailable("review read", e) from e
     if not row:
