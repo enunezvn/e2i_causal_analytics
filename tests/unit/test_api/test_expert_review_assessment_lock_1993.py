@@ -38,6 +38,7 @@ from fastapi import FastAPI
 import src.api.routes.expert_review as route_mod
 from src.api.dependencies.auth import require_operator
 from src.api.dependencies.inflight_lock import InflightLock
+from src.api.errors import SAFE_503_DETAIL_PREFIX
 
 RID = "1c8f3d6a-5b7e-4c21-9f0a-2d4e6b8a0c13"
 RID_UNKNOWN = "9e8d7c6b-5a49-4382-b1c0-d9e8f7a6b5c4"
@@ -47,6 +48,9 @@ OPERATOR = {"id": "op-1", "email": "operator@example.com", "app_metadata": {"rol
 GATE_TIMEOUT = 5.0  # bounded: a broken test fails, never hangs the worker
 T0 = "2026-09-09T12:00:00+00:00"
 IDENTICAL = {"items": [{"id": "q1", "verdict": "insufficient"}], "is_fallback": True}
+# A stored payload the route stamped on an earlier build (round-3 MED-B).
+STORED_IDENTICAL = {**IDENTICAL, "generation_id": "gen-0", "generated_at": T0}
+STAMP_KEYS = {"generation_id", "generated_at"}
 
 ROW: Dict[str, Any] = {
     "review_id": RID,
@@ -62,35 +66,46 @@ ROW: Dict[str, Any] = {
 
 class _Repo:
     """Row store whose ``update_agent_assessment`` makes the write VISIBLE to the
-    next reader (the JSONB-string form the live write path produces) and bumps
-    ``updated_at`` like the live ``trg_er_updated_at`` BEFORE UPDATE trigger."""
+    next reader (the JSONB-string form the live write path produces)."""
 
     def __init__(self, row: Dict[str, Any], *, persist: bool = True) -> None:
         self.rows: Dict[str, Dict[str, Any]] = {row["review_id"]: dict(row)}
         self.persist = persist
         self.writes: List[Dict[str, Any]] = []
-        self.version = 0
         self.reads = 0
         # When set, the FIRST read returns its snapshot only after this opens:
         # the snapshot is taken now, the caller proceeds later (round-2 HIGH).
         self.first_read_gate: Optional[asyncio.Event] = None
+        # When set, every read numbered above it raises (a store outage that
+        # starts after N successful reads; round-3 MED-A).
+        self.fail_reads_after: Optional[int] = None
 
     async def get_by_id(self, review_id: str) -> Optional[Dict[str, Any]]:
         self.reads += 1
+        if self.fail_reads_after is not None and self.reads > self.fail_reads_after:
+            raise RuntimeError("connection refused")
         row = self.rows.get(review_id)
         snapshot = dict(row) if row is not None else None
         if self.reads == 1 and self.first_read_gate is not None:
             await asyncio.wait_for(self.first_read_gate.wait(), timeout=GATE_TIMEOUT)
         return snapshot
 
+    def stored(self) -> Dict[str, Any]:
+        """The stored assessment as a dict: a seeded row holds a dict, a
+        persisted one the JSON string (both forms the route decodes)."""
+        raw = self.rows[RID]["agent_assessment_json"]
+        return raw if isinstance(raw, dict) else json.loads(raw)
+
     async def update_agent_assessment(self, review_id: str, assessment: Dict[str, Any]) -> bool:
         self.writes.append(dict(assessment))
         if not self.persist:
             return False
-        self.version += 1
         self.rows[review_id]["agent_assessment_json"] = json.dumps(assessment)
-        self.rows[review_id]["updated_at"] = f"2026-09-09T12:00:{self.version:02d}+00:00"
         return True
+
+
+def _unstamped(assessment: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in assessment.items() if k not in STAMP_KEYS}
 
 
 class _FakeRedis:
@@ -256,11 +271,15 @@ async def test_two_concurrent_uncached_requests_build_once(monkeypatch, caplog):
     assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
     assert h.builds == 1
     b1, b2 = r1.json(), r2.json()
-    assert (
-        b1["assessment"]
-        == b2["assessment"]
-        == {"items": [{"id": "q1", "verdict": "supports"}], "is_fallback": False, "n": 1}
-    )
+    assert b1["assessment"] == b2["assessment"]
+    assert _unstamped(b1["assessment"]) == {
+        "items": [{"id": "q1", "verdict": "supports"}],
+        "is_fallback": False,
+        "n": 1,
+    }
+    # the build is stamped before it is persisted, and the replay carries the stamp
+    assert STAMP_KEYS <= set(b1["assessment"]) and len(b1["assessment"]["generation_id"]) == 32
+    assert repo.stored()["generation_id"] == b1["assessment"]["generation_id"]
     # the first request is the winner (fresh); the second replayed its write
     assert (b1["cached"], b2["cached"]) == (False, True)
     assert b1["persisted"] is b2["persisted"] is True
@@ -359,11 +378,11 @@ async def test_force_loser_does_not_replay_a_stale_row_when_the_winner_failed_to
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_force_loser_replays_a_byte_identical_regeneration_via_updated_at(monkeypatch):
-    """Codex MED 3: a forced regeneration can be byte-identical to the stored
-    one (deterministic fallbacks exist). Payload equality alone would make the
-    loser rebuild; the trigger-maintained ``updated_at`` moved, so it replays."""
-    repo = _Repo({**ROW, "agent_assessment_json": dict(IDENTICAL)})
+async def test_force_loser_replays_a_byte_identical_regeneration_via_generation_id(monkeypatch):
+    """Codex MED 3 / round-3 MED-B: a forced regeneration can be byte-identical
+    to the stored one (deterministic fallbacks exist). The loser replays ONLY
+    because the winner's fresh ``generation_id`` differs from the snapshot's."""
+    repo = _Repo({**ROW, "agent_assessment_json": dict(STORED_IDENTICAL)})
     h = _harness(monkeypatch, repo, _FakeRedis(), identical=True)
 
     async with h.client() as client:
@@ -373,16 +392,18 @@ async def test_force_loser_replays_a_byte_identical_regeneration_via_updated_at(
     assert h.builds == 1
     assert len(repo.writes) == 1
     assert (r1.json()["cached"], r2.json()["cached"]) == (False, True)
-    assert r1.json()["assessment"] == r2.json()["assessment"] == IDENTICAL
-    assert repo.rows[RID]["updated_at"] != T0
+    fresh, replay = r1.json()["assessment"], r2.json()["assessment"]
+    assert _unstamped(fresh) == _unstamped(replay) == IDENTICAL  # byte-identical content
+    assert fresh["generation_id"] == replay["generation_id"] != "gen-0"  # the signal
+    assert fresh["generated_at"] != T0
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_force_loser_builds_when_identical_and_the_winner_failed_to_persist(monkeypatch):
-    """The negative twin: identical payload AND unchanged ``updated_at`` (the
-    persist failed) is not a winner's result -- the loser builds."""
-    repo = _Repo({**ROW, "agent_assessment_json": dict(IDENTICAL)}, persist=False)
+    """The negative twin: the persist failed, so the stored ``generation_id``
+    is still the snapshot's -- not a winner's result; the loser builds."""
+    repo = _Repo({**ROW, "agent_assessment_json": dict(STORED_IDENTICAL)}, persist=False)
     h = _harness(monkeypatch, repo, _FakeRedis(), identical=True)
 
     async with h.client() as client:
@@ -391,7 +412,78 @@ async def test_force_loser_builds_when_identical_and_the_winner_failed_to_persis
     assert (r1.status_code, r2.status_code) == (200, 200)
     assert h.builds == 2
     assert (r1.json()["cached"], r2.json()["cached"]) == (False, False)
-    assert repo.rows[RID]["updated_at"] == T0
+    assert repo.stored()["generation_id"] == "gen-0"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_force_builds_after_an_unrelated_row_update_landed_before_an_idle_acquire(
+    monkeypatch,
+):
+    """Codex round-3 MED-B: a forced request snapshots the OLD assessment, an
+    UNRELATED update (resolve / DAG backfill) moves ``updated_at`` before it
+    acquires an idle lock. An ``updated_at`` signal would replay the OLD value
+    and skip the requested regeneration; the ``generation_id`` is unchanged, so
+    it BUILDS."""
+    repo = _Repo({**ROW, "agent_assessment_json": dict(STORED_IDENTICAL)})
+    repo.first_read_gate = asyncio.Event()
+    h = _harness(monkeypatch, repo, _FakeRedis())
+    h.gate.set()
+
+    async with h.client() as client:
+        t = asyncio.create_task(client.post(URL, params={"force": "true"}))
+        await _until(lambda: repo.reads == 1, "the forced request took its snapshot")
+        repo.rows[RID]["approval_status"] = "approved"  # an unrelated write...
+        repo.rows[RID]["updated_at"] = "2026-09-09T12:00:59+00:00"  # ...moved updated_at
+        repo.first_read_gate.set()  # the request now acquires an IDLE lock
+        r = await t
+
+    assert r.status_code == 200, r.text
+    assert r.json()["cached"] is False and r.json()["persisted"] is True
+    assert h.builds == 1 and len(repo.writes) == 1
+    assert repo.stored()["generation_id"] != "gen-0"
+    assert _unstamped(r.json()["assessment"])["n"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_legacy_stored_payload_without_generation_id_builds_under_force(monkeypatch):
+    """Two legacy payloads without the key compare as NOT new: a forced request
+    on a pre-stamp row builds (and the row is stamped from then on)."""
+    legacy = {"items": [{"id": "q1", "verdict": "supports"}], "is_fallback": False}
+    repo = _Repo({**ROW, "agent_assessment_json": dict(legacy)})
+    h = _harness(monkeypatch, repo, _FakeRedis())
+
+    r = await _single(h, force=True)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["cached"] is False and h.builds == 1
+    assert STAMP_KEYS <= set(repo.stored())
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_failed_reread_after_acquire_is_a_safe_503_with_no_build(monkeypatch):
+    """Codex round-3 MED-A: A persists and releases; B acquires and its re-read
+    raises twice (one retry). B must NOT build from its stale snapshot over A's
+    fresh result: it answers the SAFE 503 with zero builds and releases the lock."""
+    repo, redis = _Repo(ROW), _FakeRedis()
+    h = _harness(monkeypatch, repo, redis)
+
+    a = await _single(h)
+    assert a.status_code == 200 and a.json()["cached"] is False and h.builds == 1
+    assert repo.reads == 2  # A: initial read + re-read under the lock
+    stored_by_a = repo.stored()
+
+    repo.fail_reads_after = 3  # B's initial read succeeds; its re-reads fail
+    b = await _single(h, force=True)
+
+    assert b.status_code == 503, b.text
+    assert b.json()["detail"].startswith(SAFE_503_DETAIL_PREFIX)
+    assert repo.reads == 5  # B: initial + 2 re-read attempts
+    assert h.builds == 1 and len(repo.writes) == 1  # zero builds by B
+    assert repo.stored() == stored_by_a  # A's result intact
+    assert redis.live_keys() == []  # the lease was released
 
 
 @pytest.mark.unit

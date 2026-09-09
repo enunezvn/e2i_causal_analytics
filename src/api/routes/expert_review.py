@@ -28,6 +28,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -80,6 +81,24 @@ _INFLIGHT_BUILDS: "set[asyncio.Task[Any]]" = set()
 _BUILD_IN_PROGRESS_DETAIL = (
     "An assessment build for this review is still in progress; retry shortly."
 )
+
+# Codex round-3 MED-B: the replay signal is a per-build generation id stamped
+# INTO the persisted payload (assessment-specific, cross-worker, survives a
+# byte-identical regeneration). ``updated_at`` was rejected as the signal:
+# unrelated writes (submit_review/resolve, update_dag_structure) move it, so a
+# forced request that snapshotted the OLD assessment, lost the race to such a
+# write and then took an idle lock would replay the OLD value and the requested
+# regeneration would never run. Extra keys are tolerated end to end:
+# ``AgentAssessmentResponse.assessment`` and ``agent_assessment_json`` are open
+# dicts, and the frontend reads only items/is_fallback/evidence (ResolveForm.tsx,
+# PrepareAssessmentsButton.tsx; no Zod parse on this response).
+_GENERATION_ID_KEY = "generation_id"
+_GENERATED_AT_KEY = "generated_at"
+
+# Codex round-3 MED-A: bounded re-read retry before the honest 503 (never build
+# from the stale snapshot over a result persisted meanwhile).
+_REREAD_ATTEMPTS = 2
+_REREAD_BACKOFF_SECONDS = 0.2
 
 
 def _store_unavailable(operation: str, exc: Exception) -> HTTPException:
@@ -319,24 +338,18 @@ async def _build_under_lock(
     lock. After EVERY acquisition the row is re-read under the lock and judged
     against that snapshot (codex round-2 HIGH: a request that snapshotted
     before another's acquire and acquired only after its release would see
-    ``waited=False`` and build again). A stored assessment that is new since
-    the snapshot is another request's finished build and is replayed as
-    ``cached=True`` regardless of ``force``. "New" means the payload changed OR
-    ``updated_at`` moved: a forced regeneration can be byte-identical
-    (deterministic fallbacks exist) and the payload carries no generation
-    stamp (``generate_assessment`` returns only items/is_fallback/evidence).
-    ``updated_at`` is trigger-maintained on every UPDATE of ``expert_reviews``
-    (``trg_er_updated_at`` -> ``update_updated_at_column()``,
-    database/ml/010_causal_validation_tables.sql:471; verified on the live
-    table) and the repo's write is a plain UPDATE, so a persist always moves it.
+    ``waited=False`` and build again). A stored assessment whose
+    ``generation_id`` differs from the snapshot's (or any stored assessment when
+    the snapshot had none) is another request's finished build and is replayed
+    as ``cached=True`` regardless of ``force``. Every build stamps the payload
+    with a fresh ``generation_id``/``generated_at`` before persisting, so a
+    byte-identical forced regeneration (deterministic fallbacks exist) is still
+    recognised, while two legacy payloads without the key compare as NOT new
+    and a forced request on a pre-stamp row builds.
 
-    Residual window of the ``updated_at`` rule (codex round-2 MED, accepted):
-    unrelated writes bump it too (``submit_review``/resolve,
-    ``update_dag_structure``). Only when ``force=true`` AND the winner's
-    assessment persist FAILED AND such an unrelated update landed inside the
-    same wait does a waiter replay the OLD assessment labelled ``cached=True``.
-    Consequence: a stale value, recoverable by forcing again; nothing is
-    corrupted. A Redis persist-marker was rejected as an extra failure mode.
+    A failed re-read after the acquire is retried once and then answered with
+    the SAFE 503 (``_reread_row``): building from the stale snapshot could
+    overwrite a result persisted meanwhile.
 
     Worker shutdown (bounded limitation): the shielded build is still cancelled
     when the worker's loop shuts down (recycle, deploy) before its persist, the
@@ -357,10 +370,10 @@ async def _build_under_lock(
                 detail=_BUILD_IN_PROGRESS_DETAIL,
                 headers={"Retry-After": "5"},
             )
-        row = await _reread_row(repo, review_id) or {}
-        regenerated = _as_json_object(row.get("agent_assessment_json"))
-        if regenerated is not None and (
-            regenerated != cached or row.get("updated_at") != review.get("updated_at")
+        row = await _reread_row(repo, review_id)  # SAFE 503 on failure; lease released
+        stored = _as_json_object(row.get("agent_assessment_json"))
+        if stored is not None and (
+            cached is None or stored.get(_GENERATION_ID_KEY) != cached.get(_GENERATION_ID_KEY)
         ):
             logger.info(
                 f"Expert-review {review_id}: a build finished between this request's read "
@@ -368,7 +381,7 @@ async def _build_under_lock(
                 "the stored result"
             )
             return AgentAssessmentResponse(
-                review_id=review_id, assessment=regenerated, cached=True, persisted=True
+                review_id=review_id, assessment=stored, cached=True, persisted=True
             )
         if lease.waited:
             logger.info(
@@ -384,6 +397,11 @@ async def _build_under_lock(
         started = time.monotonic()
         assessment = await asyncio.to_thread(_build_assessment, source, validations)
         elapsed = time.monotonic() - started
+        assessment = {
+            **assessment,
+            _GENERATION_ID_KEY: uuid.uuid4().hex,
+            _GENERATED_AT_KEY: datetime.now(timezone.utc).isoformat(),
+        }
         persisted = await repo.update_agent_assessment(review_id, assessment)
         # No p99 exists for this build anywhere; record the elapsed seconds so the
         # lock TTL (120 s, nginx proxy_read_timeout) can be revisited on data.
@@ -396,15 +414,28 @@ async def _build_under_lock(
     )
 
 
-async def _reread_row(repo: "ExpertReviewRepository", review_id: str) -> Optional[Dict[str, Any]]:
-    """The review row as it is NOW (after waiting on the in-flight lock). A
-    failed re-read is not a reason to fail the request: log it and let the
-    caller build, exactly as if nothing had been stored."""
-    try:
-        return await repo.get_by_id(review_id)
-    except Exception as e:
-        logger.warning(f"Expert-review {review_id}: post-wait re-read failed, building: {e}")
-        return None
+async def _reread_row(repo: "ExpertReviewRepository", review_id: str) -> Dict[str, Any]:
+    """The review row as it is NOW, read under the lock (a vanished row reads as ``{}``).
+
+    Codex round-3 MED-A: a failed re-read must NOT fall back to building from
+    the initial snapshot, which could overwrite a result persisted meanwhile.
+    Retry once after a short backoff; if the store still fails, raise the same
+    SAFE 503 the detail route uses for a failed row read -- the caller's
+    ``async with`` releases the lease, and nothing is built.
+    """
+    failure: Exception = RuntimeError("re-read not attempted")
+    for attempt in range(1, _REREAD_ATTEMPTS + 1):
+        try:
+            return await repo.get_by_id(review_id) or {}
+        except Exception as e:
+            failure = e
+            logger.warning(
+                f"Expert-review {review_id}: post-acquire re-read failed "
+                f"(attempt {attempt}/{_REREAD_ATTEMPTS}): {e}"
+            )
+            if attempt < _REREAD_ATTEMPTS:
+                await asyncio.sleep(_REREAD_BACKOFF_SECONDS)
+    raise _store_unavailable("assessment re-read", failure)
 
 
 def _log_orphaned_build(task: "asyncio.Task[Any]") -> None:
