@@ -1394,7 +1394,7 @@ def test_promote_takes_a_table_share_lock_before_the_update():
     row lock cannot cover a review row inserted meanwhile (pre-execution review
     iter-2 + iter-3, codex HIGH)."""
     sql = MIGRATION.read_text(encoding="utf-8")
-    fn = sql[sql.index("CREATE OR REPLACE FUNCTION public.promote_causal_path_guarded("):]
+    fn = sql[sql.index("CREATE OR REPLACE FUNCTION public.promote_causal_path_guarded(") :]
     lock = "LOCK TABLE public.expert_reviews IN SHARE MODE;"
     assert lock in fn
     assert fn.index(lock) < fn.index("UPDATE public.causal_paths")
@@ -1417,9 +1417,22 @@ def test_service_role_only():
         assert f"REVOKE ALL ON FUNCTION {fn} FROM PUBLIC, anon, authenticated;" in sql
         assert f"GRANT EXECUTE ON FUNCTION {fn} TO service_role;" in sql
     assert "has_function_privilege" in sql  # the migration asserts its own grants
+
+
+@pytest.mark.unit
+def test_created_at_is_made_not_null_so_the_chronology_is_total():
+    """A NULL created_at sorts FIRST under ``ORDER BY created_at DESC`` (the Python
+    probe reads it as newest) while ``NULL > ts`` is UNKNOWN in the SQL predicate
+    (read as "not newer"): the two readers could disagree on such a row. No live
+    row has one and both writers rely on DEFAULT now(), so the migration closes
+    the class (lane 1 codex iter-1, MED)."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    alter = "ALTER TABLE public.expert_reviews ALTER COLUMN created_at SET NOT NULL;"
+    assert alter in sql
+    assert sql.index(alter) < sql.index("CREATE OR REPLACE FUNCTION public.dag_structure_rejected(")
 ```
 
-Run: `$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: FAIL with `FileNotFoundError` (5 tests).
+Run: `$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: FAIL with `FileNotFoundError` (6 tests).
 
 - [ ] **Step 2: Write the migration**
 
@@ -1468,7 +1481,18 @@ Create `database/migrations/134_guarded_causal_path_promote.sql`:
 --   database/ml/036 record_discovered_dag); idempotent (CREATE OR REPLACE);
 --   the asserting DO block below RAISEs on a grant regression. Migration 119's
 --   trigger on 'validated' stays the second line of defence.
+--   Also: expert_reviews.created_at SET NOT NULL (below) so the chronology is total.
 -- ============================================================================
+
+-- The chronology rule below orders review rows by created_at and compares a
+-- pending row's created_at with the adjudication's using strict ``>``. A NULL
+-- created_at would sort FIRST under ORDER BY … DESC (read as "newest" by the
+-- Python probe) while ``NULL > ts`` is UNKNOWN here (read as "not newer"), so the
+-- two readers could disagree on such a row (lane 1 codex iter-1, MED). No live
+-- row has one (0/40 on 2026-09-09), both writers rely on DEFAULT now(), and the
+-- column has carried that default since ml/010, so the honest fix is to make the
+-- anomaly impossible: NOT NULL. Idempotent; fails loudly if a NULL row exists.
+ALTER TABLE public.expert_reviews ALTER COLUMN created_at SET NOT NULL;
 
 CREATE OR REPLACE FUNCTION public.dag_structure_rejected(
     p_dag_version_hash text,
@@ -1590,7 +1614,7 @@ END $$;
 
 - [ ] **Step 3: Run the contract test**
 
-`$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: 5 passed.
+`$PY -m pytest tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider` → Expected: 6 passed.
 
 - [ ] **Step 4: Rehearse on the live database (BEGIN … ROLLBACK, applied twice, with a positive control)**
 
@@ -1624,7 +1648,9 @@ SQL
 } | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 2>&1 | tail -6
 ```
 
-Expected: `NOTICE: rehearsal OK for hash …` then `ROLLBACK`, no ERROR. If the INSERT fails on a NOT NULL column, add the column to the INSERT (read `\d public.expert_reviews`); the rehearsal must end in ROLLBACK either way. Confirm nothing persisted:
+Expected: `NOTICE: rehearsal OK for hash …` then `ROLLBACK`, no ERROR; the output carries `ALTER TABLE` twice
+(the second apply of `created_at SET NOT NULL` is a no-op on an already NOT NULL column) — measured 2026-09-09:
+`ALTER TABLE` lines 2, `ERROR` lines 0, `NOTICE:  rehearsal OK for hash 4f56d9278960`, `ROLLBACK`. If the INSERT fails on a NOT NULL column, add the column to the INSERT (read `\d public.expert_reviews`); the rehearsal must end in ROLLBACK either way. Confirm nothing persisted:
 
 ```bash
 docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_proc where proname in ('dag_structure_rejected','promote_causal_path_guarded')"
@@ -1637,7 +1663,10 @@ Expected: `0`.
 The pre-execution review (2026-09-08) ran these 13 scenarios through the function and through
 `ExpertReviewGate._latest_adjudication` on the same rows (with `get_reviews_for_dag`'s
 `if brand:` filter). Re-run them after any change to the function; the expected column is the
-MEASURED output of the NULLIF version. Scenario rows use unique hashes, so live rows never interfere.
+MEASURED output of the NULLIF version. Scenario rows use unique hashes, so live rows never interfere. S10 is
+not a rule scenario: it proves the NULL-`created_at` class is CLOSED (migration 134 makes the column NOT NULL)
+rather than defined, inside a SAVEPOINT so the transaction recovers and the 13 SELECTs still run; psql's
+`ON_ERROR_STOP` is switched off around it and back on after.
 
 ```bash
 {
@@ -1657,6 +1686,13 @@ INSERT INTO sc VALUES
  ('h9', 'X',  'rejected', '2026-01-01', NULL), ('h9', 'Y',  'pending',  '2026-01-02', NULL);
 INSERT INTO public.expert_reviews (review_type, dag_version_hash, brand, approval_status, reviewer_id, created_at, valid_until)
 SELECT 'dag_approval', 'lane1-eq-'||hash, brand, status, 'equiv', ts, vu FROM sc;
+-- S10: a NULL created_at can no longer be written (the class is closed, not defined).
+\set ON_ERROR_STOP off
+SAVEPOINT s10;
+INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id, created_at)
+VALUES ('dag_approval', 'lane1-eq-h10', 'pending', 'equiv', NULL);
+ROLLBACK TO SAVEPOINT s10;
+\set ON_ERROR_STOP on
 SELECT 'S1 only pending' s, public.dag_structure_rejected('lane1-eq-h1', NULL) rejected
 UNION ALL SELECT 'S2 rejected only', public.dag_structure_rejected('lane1-eq-h2', NULL)
 UNION ALL SELECT 'S3 rejected, newer pending (reopened)', public.dag_structure_rejected('lane1-eq-h3', NULL)
@@ -1672,7 +1708,7 @@ UNION ALL SELECT 'S9 X rejected, Y pending newer, query X', public.dag_structure
 UNION ALL SELECT 'NULL hash', public.dag_structure_rejected(NULL, NULL);
 SQL
   echo 'ROLLBACK;'
-} | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 2>&1 | grep -E '^ S|NULL hash|ROLLBACK|ERROR'
+} | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 2>&1 | grep -E '^ S|NULL hash|ROLLBACK|ERROR|SAVEPOINT'
 ```
 
 Expected (measured 2026-09-08; the Python rule agrees on every row except the tie, where Python is row-order-dependent and the SQL reads the conservative side):
@@ -1689,8 +1725,11 @@ Expected (measured 2026-09-08; the Python rule agrees on every row except the ti
 | S8 query NULL / X / '' | t / t / t ('' is "no brand"; before NULLIF the '' row read **f** — the codex HIGH) |
 | S9 query NULL / X | f / t |
 | NULL hash | f |
+| S10 pending with NULL created_at (SAVEPOINT) | `ERROR:  null value in column "created_at" of relation "expert_reviews" violates not-null constraint` — the class is closed, not defined (measured 2026-09-09); `ROLLBACK TO SAVEPOINT s10` recovers and the 13 rows above still all match |
 
-Then `ROLLBACK`; confirm `select count(*) from public.expert_reviews where reviewer_id='equiv'` is `0`.
+Then `ROLLBACK`; confirm `select count(*) from public.expert_reviews where reviewer_id='equiv'` is `0`, the
+`pg_proc` count is `0`, `information_schema.columns.is_nullable` for `expert_reviews.created_at` is still `YES`
+(the constraint was rolled back with everything else) and the tallies are unchanged (pending 39 / rejected 1).
 
 - [ ] **Step 4c: Concurrency rehearsal — the table SHARE lock blocks a racing resolve AND a racing renew, not reads (no writes)**
 
@@ -1710,7 +1749,7 @@ The monitor loop must exclude its own backend (`pid <> pg_backend_pid()`) — it
 RID=4eab7033-7422-422d-83f6-659c9c3b9987
 PSQL="docker exec supabase-db psql -U postgres -d postgres -tA"
 $PSQL -v ON_ERROR_STOP=1 -c "BEGIN; LOCK TABLE public.expert_reviews IN SHARE MODE; SELECT 'A-locked '||clock_timestamp()::time; SELECT pg_sleep(6); SELECT 'A-release '||clock_timestamp()::time; ROLLBACK;" > /tmp/sessA.log 2>&1 &
-until $PSQL -c "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query ilike '%pg_sleep(6)%' and state='active'" | grep -q '^1'; do :; done
+until $PSQL -c "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query ilike '%pg_sleep(6)%' and state='active'" | grep -q '^1'; do sleep 0.2; done
 $PSQL -F' ' -c "select l.locktype, l.mode, l.granted from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.relation='public.expert_reviews'::regclass and a.pid <> pg_backend_pid()"
 { echo "B-start $(date -u +%T.%N)"; $PSQL -c "SET lock_timeout='1s'; SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo; echo "B-end $(date -u +%T.%N)"; } > /tmp/sessB.log 2>&1 &
 { echo "B2-start $(date -u +%T.%N)"; $PSQL -c "SET lock_timeout='1s'; SET statement_timeout='3s'; BEGIN; INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id) VALUES ('dag_approval','lane1-lock-probe','pending','lockprobe'); SELECT 'B2-inserted'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo; echo "B2-end $(date -u +%T.%N)"; } > /tmp/sessB2.log 2>&1 &
@@ -1762,7 +1801,9 @@ Why: the SQL rule treats a pending row with the SAME `created_at` as the rejecti
 the Python probe was row-order-dependent on that tie (measured 2026-09-08: `false/true` depending on the order
 the repository returned). Codex iter-2 (HIGH) was right that documenting the difference does not make the two
 readers one rule. A global re-sort by `created_at` breaks two existing tests whose rows carry no timestamps, so
-the change is tie-only: the repository's order is kept except for an exact tie.
+the change is tie-only: the repository's order is kept except for an exact tie. With `expert_reviews.created_at`
+NOT NULL since migration 134, only mock rows in tests can lack a timestamp — the tie-only rule never has to
+define an order for a real NULL-timestamp row.
 
 - [ ] **Step 1: Failing test** — add to `TestCheckRejection`:
 
