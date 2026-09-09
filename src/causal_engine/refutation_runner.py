@@ -959,6 +959,11 @@ class RefutationRunner:
             _budget["sim_time"] += elapsed
             _budget["sims"] += max(1, n_sims)
 
+        # Spec §4.1: the two resample loops check the deadline between re-fits
+        # and seed their draws from the estimate id so a re-run reproduces its
+        # evidence (None → unseeded, the pre-lane-1 behaviour).
+        resample_seed = _resample_seed_for(estimate_id)
+
         tests: List[RefutationResult] = []
 
         # Determine if we can use DoWhy or need mock mode
@@ -1089,6 +1094,8 @@ class RefutationRunner:
                     identified_estimand=identified_estimand,
                     estimate=estimate,
                     use_dowhy=use_dowhy,
+                    deadline=deadline,
+                    resample_seed=resample_seed,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1111,6 +1118,8 @@ class RefutationRunner:
                     identified_estimand=identified_estimand,
                     estimate=estimate,
                     use_dowhy=use_dowhy,
+                    deadline=deadline,
+                    resample_seed=resample_seed,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)

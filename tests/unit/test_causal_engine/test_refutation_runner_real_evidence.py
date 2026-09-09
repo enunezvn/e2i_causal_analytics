@@ -541,3 +541,47 @@ class TestExactBoundaries:
         c = _bootstrap(runner, _stub_estimate(), resample_seed=8)
         assert a.details["bootstrap_effects"] == b.details["bootstrap_effects"]
         assert a.details["bootstrap_effects"] != c.details["bootstrap_effects"]
+
+
+_ONLY_NONCRITICAL = {
+    "placebo_treatment": {"enabled": False},
+    "random_common_cause": {"enabled": False},
+    "sensitivity_e_value": {"enabled": False},
+}
+
+
+class TestRunAllTestsWiring:
+    def _kw(self):
+        return {
+            "original_effect": 0.15,
+            "original_ci": CI,
+            "causal_model": _make_stub_causal_model({}),
+            "identified_estimand": object(),
+        }
+
+    def test_estimate_id_seeds_the_resamples(self):
+        runner = RefutationRunner(config=_ONLY_NONCRITICAL)
+        a = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-1", **self._kw())
+        b = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-1", **self._kw())
+        c = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-2", **self._kw())
+
+        def effects(suite):
+            return {t.test_name.value: t.details.get("subset_effects") for t in suite.tests}
+
+        assert effects(a)["data_subset"] == effects(b)["data_subset"]
+        assert effects(a)["data_subset"] != effects(c)["data_subset"]
+
+    def test_deadline_and_seed_reach_the_loops(self, monkeypatch):
+        runner = RefutationRunner(config=_ONLY_NONCRITICAL)
+        seen: dict = {}
+        real = runner._run_data_subset_test
+
+        def spy(*args, **kwargs):
+            seen.update(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(runner, "_run_data_subset_test", spy)
+        far = _t.monotonic() + 3600.0
+        runner.run_all_tests(estimate=_stub_estimate(), deadline=far, **self._kw())
+        assert seen["deadline"] == far
+        assert seen["resample_seed"] is None
