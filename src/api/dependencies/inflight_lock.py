@@ -7,6 +7,20 @@ two bills for one value. The API runs ``gunicorn --workers 2`` (measured on the
 live container), so a process-local ``asyncio.Lock`` covers only the requests
 that land on the same worker; the cross-worker lock lives in Redis.
 
+How ``hold`` works (two stages, ONE wait budget of TTL + one poll):
+
+1. Always take the per-id, refcounted, process-local ``asyncio.Lock`` FIRST,
+   whatever the Redis state. Same-worker requests queue here, so at most one
+   request per worker goes on to Redis for a given id, and a Redis recovery
+   can never bypass an active local holder (codex round-4: A acquired locally
+   during an outage and was still building when the cooldown lifted; B on the
+   same worker found no key and built concurrently).
+2. The local holder then attempts ``SET NX`` for cross-worker exclusion.
+
+``Lease.mode``: ``"redis"`` when the key was obtained, ``"local"`` when Redis
+is unavailable (same-worker exclusion only), ``"none"`` when the budget was
+exhausted in either stage (no usable lock; the caller decides).
+
 Redis path (the app's already-initialised ``redis.asyncio`` client):
 
 - acquire: ``SET <prefix>:<id> <uuid-token> NX PX <ttl_ms>``. The TTL tracks
@@ -45,8 +59,8 @@ that would BUILD -- ``force=true``, or a retry after a failed persist -- by at
 most the remaining TTL: the cached fast path runs before the lock, so a review
 with a stored assessment is never held up.
 
-Degraded path (Redis unavailable, erroring, or hanging): fall back to a
-process-local ``asyncio.Lock`` per id (same-worker requests still serialise;
+Degraded path (Redis unavailable, erroring, or hanging): the stage-1 local
+mutex is the only exclusion (same-worker requests still serialise;
 cross-worker duplicates are possible: the pre-#1993 behaviour, degraded by
 design), warn ONCE per process, and stop probing Redis for
 ``degrade_cooldown_seconds`` so a dead Redis costs one bounded attempt, not a
@@ -211,15 +225,16 @@ class InflightLock:
     async def _op(self, awaitable: Awaitable[Any]) -> Any:
         return await asyncio.wait_for(awaitable, timeout=self.op_timeout_seconds)
 
-    async def _acquire_redis(self, client: Any, lease: Lease) -> bool:
-        """True = acquired. False = the bounded wait was exhausted. Raises on a
-        Redis error (the caller degrades to the local lock)."""
+    async def _acquire_redis(self, client: Any, lease: Lease, deadline: float) -> bool:
+        """True = acquired. False = the shared wait budget is exhausted. Raises
+        on a Redis error (the caller degrades to local mode). Only the holder
+        of the per-id local mutex calls this, so at most one waiter per worker
+        polls Redis for a given id."""
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._wait_seconds
         while True:
             if await self._op(client.set(lease.key, lease.token, nx=True, px=self.ttl_ms)):
                 return True
-            lease.waited = True
+            lease.waited = True  # held by ANOTHER worker
             # Poll for the holder's release (or its TTL expiry), then retry the SET.
             while await self._op(client.get(lease.key)) is not None:
                 if loop.time() >= deadline:
@@ -269,32 +284,21 @@ class InflightLock:
     @asynccontextmanager
     async def hold(self, key_id: str) -> AsyncIterator[Lease]:
         lease = Lease(key=self.key(key_id), token=uuid.uuid4().hex)
-        client = await self._redis()
-        held_redis = False
-        if client is not None:
-            try:
-                held_redis = await self._acquire_redis(client, lease)
-                if not held_redis:
-                    lease.mode = "none"
-                    logger.warning(
-                        f"{lease.key}: in-flight lock wait exhausted after "
-                        f"{self._wait_seconds:g}s; no lock held, the caller decides"
-                    )
-            except _REDIS_DEGRADE_ERRORS as e:
-                self._degrade(e)
-                client = None
-            except Exception as e:  # never fail the request; but do not call a bug an outage
-                self._degrade(e, unexpected=True)
-                client = None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._wait_seconds  # ONE budget for both stages
 
-        entry: Optional[_LocalEntry] = None
-        held_local = False
-        if not held_redis and lease.mode != "none":
-            lease.mode = "local"
-            entry = self._local_ref(key_id)
+        # Stage 1 (both modes): the per-id local mutex. Same-worker requests
+        # queue here, so at most one of them goes on to Redis for this id and a
+        # Redis recovery can never bypass an active local holder.
+        entry = self._local_ref(key_id)
+        held_local = held_redis = False
+        client: Any = None
+        try:
+            lease.waited = entry.lock.locked()
             try:
-                lease.waited = lease.waited or entry.lock.locked()
-                await asyncio.wait_for(entry.lock.acquire(), timeout=self._wait_seconds)
+                await asyncio.wait_for(
+                    entry.lock.acquire(), timeout=max(0.0, deadline - loop.time())
+                )
                 held_local = True
             except TimeoutError:
                 lease.mode = "none"
@@ -302,16 +306,40 @@ class InflightLock:
                     f"{lease.key}: local in-flight lock wait exhausted after "
                     f"{self._wait_seconds:g}s; no lock held, the caller decides"
                 )
-            except BaseException:
-                self._local_unref(key_id)
-                raise
+            # Stage 2 (the local holder only): cross-worker exclusion via SET NX,
+            # within the remaining budget.
+            if held_local:
+                client = await self._redis()
+                if client is not None:
+                    try:
+                        held_redis = await self._acquire_redis(client, lease, deadline)
+                        if not held_redis:
+                            lease.mode = "none"
+                            logger.warning(
+                                f"{lease.key}: in-flight lock wait exhausted after "
+                                f"{self._wait_seconds:g}s; no lock held, the caller decides"
+                            )
+                    except _REDIS_DEGRADE_ERRORS as e:
+                        self._degrade(e)
+                        client = None
+                    except (
+                        Exception
+                    ) as e:  # never fail the request; but do not call a bug an outage
+                        self._degrade(e, unexpected=True)
+                        client = None
+                if not held_redis and lease.mode != "none":
+                    lease.mode = "local"
+        except BaseException:
+            if held_local:
+                entry.lock.release()
+            self._local_unref(key_id)
+            raise
 
         try:
             yield lease
         finally:
             if held_redis:
                 await self._release_redis(client, lease)
-            if held_local and entry is not None:
+            if held_local:
                 entry.lock.release()
-            if entry is not None:
-                self._local_unref(key_id)
+            self._local_unref(key_id)

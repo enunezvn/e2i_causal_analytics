@@ -112,10 +112,11 @@ class _FakeRedis:
     """In-memory subset the lock uses: SET NX PX, GET, DELETE, EVAL (compare-and-
     delete release script). PX expiry is honoured on read."""
 
-    def __init__(self, *, fail_set: bool = False) -> None:
+    def __init__(self, *, fail_set: bool = False, factory_down: bool = False) -> None:
         self.store: Dict[str, Tuple[str, Optional[float]]] = {}
         self.ops: List[str] = []
         self.fail_set = fail_set
+        self.factory_down = factory_down  # the client getter itself fails (outage)
 
     def _live(self, name: str) -> Optional[str]:
         item = self.store.get(name)
@@ -166,11 +167,12 @@ class _Harness:
         self.gate = threading.Event()
 
     def redis_waiting(self) -> bool:
-        """The second request is polling the held key."""
+        """A request is polling a key held by ANOTHER worker (foreign key)."""
         return self.redis.ops.count("get") >= 1
 
     def local_waiting(self) -> bool:
-        """The second request is queued on the process-local lock entry."""
+        """The second request is queued on the per-id local mutex -- where every
+        same-worker waiter queues, in redis AND local mode (round-4)."""
         entry = self.lock._local.get(RID)
         return entry is not None and entry.refs >= 2
 
@@ -190,6 +192,8 @@ def _harness(
         return []
 
     async def _redis_factory():
+        if redis.factory_down:
+            raise ConnectionError("redis down")
         return redis
 
     # poll fast so a waiter is observed quickly; the default is pinned in the helper tests
@@ -245,7 +249,7 @@ async def _contended_pair(
         (outcome,) = await asyncio.gather(t1, return_exceptions=True)
         assert isinstance(outcome, asyncio.CancelledError)
     t2 = asyncio.create_task(client.post(URL, params=params))
-    await _until(waiting or h.redis_waiting, "the second request observed waiting on the lock")
+    await _until(waiting or h.local_waiting, "the second request observed waiting on the lock")
     h.gate.set()
     r2 = await t2
     r1 = None if cancel_first else await t1
@@ -599,7 +603,7 @@ async def test_redis_failure_falls_back_to_a_process_local_lock(monkeypatch, cap
 
     with caplog.at_level(logging.WARNING, logger="src.api.dependencies.inflight_lock"):
         async with h.client() as client:
-            r1, r2 = await _contended_pair(h, client, waiting=h.local_waiting)
+            r1, r2 = await _contended_pair(h, client)
 
     assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
     assert h.builds == 1
@@ -608,6 +612,39 @@ async def test_redis_failure_falls_back_to_a_process_local_lock(monkeypatch, cap
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1, [r.getMessage() for r in warnings]
     assert "fallback" in warnings[0].getMessage()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_redis_recovery_mid_build_does_not_bypass_the_local_holder(monkeypatch, caplog):
+    """Codex round-4 gated regression: A holds in LOCAL mode (client getter
+    failing) mid-build; Redis recovers and the cooldown lifts; B on the same
+    worker waits on the local mutex and never acquires Redis while A holds;
+    A persists and releases; B replays cached=True -- one build."""
+    repo, redis = _Repo(ROW), _FakeRedis(factory_down=True)
+    h = _harness(monkeypatch, repo, redis)
+
+    with caplog.at_level(logging.INFO, logger=route_mod.__name__):
+        async with h.client() as client:
+            t1 = asyncio.create_task(client.post(URL))
+            await _until(lambda: h.builds >= 1, "A entered the build holding the LOCAL mutex")
+            redis.factory_down = False  # Redis recovers...
+            h.lock._degraded_until = 0.0  # ...and the cooldown has lifted
+            t2 = asyncio.create_task(client.post(URL))
+            await _until(h.local_waiting, "B queued on the local mutex")
+            assert redis.ops == []  # B never touched Redis while A holds
+            h.gate.set()
+            r1, r2 = await t1, await t2
+
+    assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
+    assert h.builds == 1 and len(repo.writes) == 1
+    assert (r1.json()["cached"], r2.json()["cached"]) == (False, True)
+    assert r1.json()["assessment"] == r2.json()["assessment"]
+    assert redis.ops == ["set", "eval"] and redis.live_keys() == []  # B's own lease only
+    assert h.lock._local == {}
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert sum("assessment built in" in m and "lock mode=local" in m for m in msgs) == 1
+    assert sum("lock mode=redis" in m and "replaying the stored result" in m for m in msgs) == 1
 
 
 @pytest.mark.unit

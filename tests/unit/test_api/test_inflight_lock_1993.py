@@ -137,7 +137,11 @@ async def test_loser_waits_for_the_holder_then_acquires():
     await asyncio.gather(holder(), follower())
     assert order == ["A-in:False", "A-out", "B-in:True", "B-out"]
     assert redis.live_keys() == []
-    assert redis.ops.count("get") >= 1  # B polled instead of spinning on SET
+    # A same-worker waiter queues on the local mutex and never polls Redis
+    # (round-4); polling is only for a key held by ANOTHER worker, covered by
+    # the dead-holder / never-clearing foreign-key tests below.
+    assert redis.ops.count("get") == 0
+    assert redis.ops.count("set") == 2  # one SET per holder, none while waiting
 
 
 @pytest.mark.unit
@@ -188,9 +192,9 @@ async def test_wait_is_bounded_by_the_ttl_then_reports_exhaustion(caplog):
     with caplog.at_level(logging.WARNING, logger=mod.__name__):
         async with lock.hold("r1") as lease:
             assert lease.mode == "none" and lease.waited is True
-            assert lock._local == {}  # exhaustion never falls through to the local lock
     assert time.monotonic() - t0 < 5.0
     assert redis._live(f"{PREFIX}:r1") == "stuck"  # not ours; untouched
+    assert lock._local == {}  # the stage-1 mutex is dropped with the lease
     assert any("exhausted" in r.getMessage() for r in caplog.records)
 
 
@@ -270,6 +274,50 @@ async def test_unexpected_error_still_degrades_but_is_logged_as_a_bug_not_an_out
     assert len(errors) == 1 and "unexpected TypeError" in errors[0].getMessage()
     assert errors[0].exc_info is not None
     assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_redis_recovery_does_not_bypass_an_active_local_holder():
+    """Codex round-4: A acquired in LOCAL mode during an outage and is still
+    holding when Redis recovers and the cooldown lifts. B on the same worker
+    must queue on the local mutex (never SET while A holds), then acquire in
+    redis mode after A releases."""
+    redis = _FakeRedis()
+    state = {"healthy": False}
+
+    async def _factory():
+        if not state["healthy"]:
+            raise ConnectionError("redis down")
+        return redis
+
+    lock = InflightLock(PREFIX, redis_factory=_factory, poll_seconds=0.02)
+    order: List[str] = []
+    a_holding = asyncio.Event()
+    b_waiting = asyncio.Event()
+
+    async def holder_a():
+        async with lock.hold("r1") as lease:
+            order.append(f"A-in:{lease.mode}")
+            a_holding.set()
+            await asyncio.wait_for(b_waiting.wait(), timeout=5.0)
+            assert redis.ops == []  # B has not touched Redis while A holds
+            order.append("A-out")
+
+    async def follower_b():
+        await asyncio.wait_for(a_holding.wait(), timeout=5.0)
+        state["healthy"] = True  # Redis recovers...
+        lock._degraded_until = 0.0  # ...and the cooldown has lifted
+        b_waiting.set()
+        async with lock.hold("r1") as lease:
+            order.append(f"B-in:{lease.mode}:waited={lease.waited}")
+
+    # b_waiting is set just before B blocks on the mutex; A then verifies no
+    # Redis traffic happened and releases, which is the only way B proceeds.
+    await asyncio.gather(holder_a(), follower_b())
+    assert order == ["A-in:local", "A-out", "B-in:redis:waited=True"]
+    assert redis.ops == ["set", "eval"]  # B's own acquire/release only
+    assert redis.live_keys() == [] and lock._local == {}
 
 
 @pytest.mark.unit
