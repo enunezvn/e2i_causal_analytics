@@ -1716,7 +1716,8 @@ MIGRATION = REPO / "database" / "migrations" / "135_causal_validations_json_obje
 
 @pytest.mark.unit
 def test_backfills_both_columns_and_asserts_none_remain():
-    sql = MIGRATION.read_text(encoding="utf-8")
+    # Whitespace-normalised: the migration formats SET / WHERE on separate lines.
+    sql = " ".join(MIGRATION.read_text(encoding="utf-8").split())
     for col in ("details_json", "test_config"):
         assert f"SET {col} = ({col} #>> '{{}}')::jsonb WHERE jsonb_typeof({col}) = 'string'" in sql
     assert "RAISE EXCEPTION 'migration 135: string-shaped evidence rows remain'" in sql
@@ -2437,8 +2438,11 @@ class TestGuardedPromoteRpc:
     async def test_hash_routes_through_the_guarded_rpc(self, repo, mock_client):
         self._install_rpc(mock_client, {"moved": 1, "rejected": False})
         moved = await repo.set_validation_status(
-            "cp_1", "validated", ("pending", "needs_review"),
-            dag_version_hash="h" * 64, brand="Kisqali",
+            "cp_1",
+            "validated",
+            ("pending", "needs_review"),
+            dag_version_hash="h" * 64,
+            brand="Kisqali",
         )
         assert moved is True
         name, params = mock_client.rpc.call_args.args
@@ -2464,7 +2468,9 @@ class TestGuardedPromoteRpc:
     async def test_list_wrapped_payload_is_read(self, repo, mock_client):
         self._install_rpc(mock_client, [{"moved": 1, "rejected": False}])
         assert (
-            await repo.set_validation_status("cp_1", "validated", ("pending",), dag_version_hash="h" * 64)
+            await repo.set_validation_status(
+                "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
+            )
             is True
         )
 
@@ -2484,7 +2490,21 @@ class TestGuardedPromoteRpc:
         call.execute = AsyncMock(side_effect=RuntimeError("connection refused"))
         mock_client.rpc.return_value = call
         with pytest.raises(RuntimeError):
-            await repo.set_validation_status("cp_1", "validated", ("pending",), dag_version_hash="h" * 64)
+            await repo.set_validation_status(
+                "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
+            )
+
+    @pytest.mark.asyncio
+    async def test_unexpected_payload_returns_false_and_warns(self, repo, mock_client, caplog):
+        # postgrest falls back to ``data = response.text`` on a non-JSON 2xx body:
+        # a str payload must read as "no transition" AND leave a trace.
+        self._install_rpc(mock_client, "not json")
+        caplog.set_level(logging.WARNING, logger="src.repositories.causal_path")
+        moved = await repo.set_validation_status(
+            "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
+        )
+        assert moved is False
+        assert "unexpected payload" in caplog.text
 ```
 
 Run: `$PY -m pytest tests/unit/test_repositories/test_causal_path_promoter_1352.py -q -p no:cacheprovider -k Guarded` → Expected: FAIL with `TypeError: ... unexpected keyword argument 'dag_version_hash'`.
@@ -2537,6 +2557,12 @@ Replace `set_validation_status` in `src/repositories/causal_path.py` with:
             if isinstance(payload, list):
                 payload = payload[0] if payload else {}
             if not isinstance(payload, dict):
+                logger.warning(
+                    "guarded promote: unexpected payload %r for causal_paths.%s; "
+                    "treating as no transition",
+                    result.data,
+                    path_id,
+                )
                 payload = {}
             if payload.get("rejected"):
                 logger.info(
@@ -3258,15 +3284,19 @@ In `src/repositories/expert_review.py`, replace `submit_review` with:
         this the filter was ``review_id`` alone and the pending-only claim was
         documentation, not enforcement.
 
-        Resolution provenance (lane 1, codex whole-diff HIGH F1): BOTH statuses
-        stamp ``resolved_at = now()`` (migration 136; ``approved_at`` stays
-        approval-only) and record the RESOLVER's ``reviewer_name`` /
-        ``reviewer_email`` when the caller knows them. ``reviewer_id`` is
-        deliberately NOT written here: the gate stores the REQUESTER in it --
-        the originating query id (src/causal_engine/expert_review_gate.py
+        Resolution provenance (lane 1, codex whole-diff HIGH F1 + iter-2 HIGH
+        F1): BOTH statuses stamp ``resolved_at = now()`` (migration 136;
+        ``approved_at`` stays approval-only), and on resolution the reviewer
+        display fields ``reviewer_name`` / ``reviewer_email`` describe the
+        RESOLVER -- they are written EXPLICITLY on every resolution, JSON null
+        when unknown, overwriting whatever a renewal pre-filled
+        (``renew_review`` inserts the REQUESTER's name/email into these same
+        columns). ``reviewer_id`` is deliberately NOT written here: the gate
+        stores the REQUESTER in it -- the originating query id
+        (src/causal_engine/expert_review_gate.py
         create_review(reviewer_id=requester_id), ~:392) -- and that breadcrumb
-        must survive the resolution. An absent identity is left absent (the
-        None-strip below drops it): unknown stays unknown, never a placeholder.
+        must survive the resolution. Unknown stays unknown: a null, never a
+        placeholder and never a leftover requester.
 
         Args:
             review_id: UUID of the review to complete
@@ -3296,10 +3326,11 @@ In `src/repositories/expert_review.py`, replace `submit_review` with:
             "comments_json": json.dumps(comments) if comments else None,
             "concerns_raised": concerns_raised,
             "conditions": conditions,
-            # Decision time for BOTH statuses (migration 136).
+            # Decision time for BOTH statuses (migration 136). The literal is cast
+            # by Postgres to the current timestamp (measured 2026-09-09:
+            # select 'now()'::timestamptz, and json_populate_record over
+            # {"approved_at":"now()"}, both return now()).
             "resolved_at": "now()",
-            "reviewer_name": reviewer_name,
-            "reviewer_email": reviewer_email,
         }
 
         if approval_status == "approved":
@@ -3310,6 +3341,11 @@ In `src/repositories/expert_review.py`, replace `submit_review` with:
 
         # Remove None values
         update_data = {k: v for k, v in update_data.items() if v is not None}
+        # ... except the resolver's identity, which is written on EVERY
+        # resolution -- null when unknown -- so a requester's name/email that a
+        # renewal pre-filled can never stand as the reviewer (iter-2 HIGH F1).
+        update_data["reviewer_name"] = reviewer_name
+        update_data["reviewer_email"] = reviewer_email
 
         try:
             result = await (
@@ -3435,24 +3471,51 @@ Append to `TestExpertReviewRepository` in `tests/unit/test_repositories/test_exp
         assert ("approved_at" in payload) is (approval_status == "approved")
 
     @pytest.mark.asyncio
-    async def test_submit_review_without_identity_leaves_the_columns_untouched(
-        self, repo, mock_client
+    @pytest.mark.parametrize("approval_status", ["rejected", "approved"])
+    async def test_submit_review_writes_null_identity_when_the_resolver_is_unknown(
+        self, repo, mock_client, approval_status
     ):
-        """Unknown stays unknown: no identity -> no identity keys in the UPDATE
-        (the None-strip drops them), but ``resolved_at`` is still stamped."""
+        """Codex iter-2 HIGH F1: the reviewer display fields describe the RESOLVER
+        by construction. ``renew_review`` pre-fills ``reviewer_name`` /
+        ``reviewer_email`` with the REQUESTER's, so a None-strip that dropped an
+        unknown resolver's fields would leave that requester standing as the
+        "reviewer". Both keys are therefore PRESENT in the UPDATE with JSON null
+        -- never omitted -- while ``reviewer_id`` (the requester breadcrumb) is
+        never touched."""
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
         mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
-            review_id="rev-123", approval_status="rejected", checklist={}
+            review_id="rev-123", approval_status=approval_status, checklist={}
         )
 
         assert result is True
         payload = mock_client.table.return_value.update.call_args[0][0]
         assert payload["resolved_at"] == "now()"
-        assert "reviewer_name" not in payload
-        assert "reviewer_email" not in payload
+        assert "reviewer_name" in payload and payload["reviewer_name"] is None
+        assert "reviewer_email" in payload and payload["reviewer_email"] is None
         assert "reviewer_id" not in payload
+        # The None-strip still applies to everything else (no fabricated nulls).
+        assert "conditions" not in payload and "concerns_raised" not in payload
+
+    @pytest.mark.asyncio
+    async def test_submit_review_id_only_resolver_writes_the_name_and_a_null_email(
+        self, repo, mock_client
+    ):
+        """An id-only resolver (the route passes the id as the display name): the
+        name is written and the email is EXPLICITLY null, so a renewal's requester
+        email cannot survive as the resolver's."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+
+        result = await repo.submit_review(
+            review_id="rev-123", approval_status="rejected", checklist={}, reviewer_name="op-3"
+        )
+
+        assert result is True
+        payload = mock_client.table.return_value.update.call_args[0][0]
+        assert payload["reviewer_name"] == "op-3"
+        assert "reviewer_email" in payload and payload["reviewer_email"] is None
 ```
 
 Append to `TestResolveReview` in `tests/api/test_expert_review_routes.py` (its fake `submit_review` gains the `reviewer_name` / `reviewer_email` kwargs; the file is not in `backend-tests.yml`'s allowlist, so run it locally):
@@ -4376,6 +4439,15 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
     onError: (_error, variables) => {
       if (variables.auto) guard.current.delete(variables.reviewId);
     },
+    // HTTP 200 with persisted:false (codex iter-2 F2): the assessment is valid
+    // but the store rejected the cache write, so the row still has no cache.
+    // Same ownership rule as onError -- only the AUTOMATIC request releases
+    // the id -- so a collapse/remount (or bulk Prepare) can generate again
+    // instead of skipping the uncached row forever. The hook runs this AFTER
+    // its own cache invalidations.
+    onSuccess: (data, variables) => {
+      if (variables.auto && data.persisted === false) guard.current.delete(variables.reviewId);
+    },
   });
   const { mutate: generateAssessment } = assessmentMutation;
 
@@ -4443,6 +4515,15 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
         <WarningBanner
           title="Failed to generate agent assessment"
           messages={[assessmentMutation.error?.message ?? 'An unexpected error occurred.']}
+        />
+      )}
+
+      {assessmentMutation.data?.persisted === false && (
+        <WarningBanner
+          title="Agent assessment not saved"
+          messages={[
+            'Assessment generated but not saved — it will be lost when this row is collapsed; retry with Generate',
+          ]}
         />
       )}
 
@@ -4550,7 +4631,14 @@ function fmtDate(value?: string | null): string {
  */
 const NOT_RECORDED = 'not recorded';
 
-function reviewerLabel(row: { reviewer_name?: string | null; reviewer_email?: string | null }): string | null {
+function reviewerLabel(row: {
+  approval_status?: string | null;
+  reviewer_name?: string | null;
+  reviewer_email?: string | null;
+}): string | null {
+  // A PENDING row has no reviewer yet: whatever its name/email hold belongs to
+  // the requester (a renewal pre-fills them), so it is never shown as one.
+  if (row.approval_status === 'pending') return null;
   return row.reviewer_name ?? row.reviewer_email ?? null;
 }
 
@@ -5599,6 +5687,24 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(card).not.toHaveTextContent('q-older-query');
   });
 
+  it('shows no reviewer for a PENDING history row: its name/email belong to the requester (codex iter-2 F1)', () => {
+    const { card } = renderLinked({}, [
+      { review_id: 'rev-rejected', approval_status: 'rejected', created_at: '2026-07-13T10:00:00Z', reviewer_name: 'Dr. No' },
+      {
+        review_id: 'rev-newer',
+        approval_status: 'pending',
+        created_at: '2026-08-01T10:00:00Z',
+        reviewer_name: 'Requester Bot',
+        reviewer_email: 'bot@example.com',
+      },
+    ]);
+    const rows = card.querySelectorAll('tbody tr');
+    expect(rows[0]).toHaveTextContent('Dr. No');
+    expect(rows[1]).toHaveTextContent('—');
+    expect(card).not.toHaveTextContent('Requester Bot');
+    expect(card).not.toHaveTextContent('bot@example.com');
+  });
+
   it("shows the reviewer's comment note on a resolved review (codex F2)", () => {
     const { cell } = renderLinked({ comments_json: { note: 'DAG omits the payer confounder' } });
     expect(cell('Comments')).toHaveTextContent('DAG omits the payer confounder');
@@ -5828,6 +5934,48 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
     requestA.resolve(RESPONSE);
     await within(formA.container).findByRole('button', { name: /regenerate agent assessment/i });
     expect(guard.current.has('rev-1')).toBe(true);
+  });
+
+  // Codex iter-2 F2: an AUTOMATIC request can succeed with persisted:false (HTTP
+  // 200, the store rejected the cache write). Before, the guard stayed marked and
+  // nothing was cached, so after a collapse/remount neither the form nor bulk
+  // Prepare would ever regenerate it.
+  it('automatic persisted:false shows the unsaved state, releases the guard, and a remount generates again', async () => {
+    api.mockResolvedValueOnce({ ...RESPONSE, persisted: false }).mockResolvedValueOnce(RESPONSE);
+    const guard = newGuard();
+    const { unmount } = renderForm({ autoAssessGuard: guard });
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText(
+        'Assessment generated but not saved — it will be lost when this row is collapsed; retry with Generate'
+      )
+    ).toBeInTheDocument();
+    await waitFor(() => expect(guard.current.has('rev-1')).toBe(false));
+    await flushTimers();
+    expect(api).toHaveBeenCalledTimes(1); // no retry loop while mounted
+    unmount();
+    renderForm({ autoAssessGuard: guard });
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+    expect(api.mock.calls[1][0]).toBe('rev-1');
+    expect(guard.current.has('rev-1')).toBe(true); // the second automatic request holds it again
+  });
+
+  it('a MANUAL Regenerate resolving persisted:false shows the unsaved state but never releases the guard', async () => {
+    api.mockResolvedValueOnce(RESPONSE).mockResolvedValueOnce({ ...RESPONSE, persisted: false });
+    const guard = newGuard();
+    renderForm({ autoAssessGuard: guard });
+    const button = await screen.findByRole('button', { name: /regenerate agent assessment/i });
+    expect(guard.current.has('rev-1')).toBe(true);
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+    expect(
+      await screen.findByText(
+        'Assessment generated but not saved — it will be lost when this row is collapsed; retry with Generate'
+      )
+    ).toBeInTheDocument();
+    await flushTimers();
+    expect(guard.current.has('rev-1')).toBe(true); // ownership: only the automatic request releases
+    expect(api).toHaveBeenCalledTimes(2);
   });
 
   it('does not auto-generate for a cached assessment; Regenerate forces a fresh one', async () => {
