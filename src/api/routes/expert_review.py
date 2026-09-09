@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_operator
+from src.api.dependencies.inflight_lock import InflightLock
 from src.api.errors import user_safe_503_detail
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.expert_review import (
@@ -62,6 +63,11 @@ logger = logging.getLogger(__name__)
 # builds its own JSONResponse, so an HTTPException ``Retry-After`` header
 # would be dropped -- its body already says "try again in 30 seconds".)
 _STORE_UNAVAILABLE_DETAIL = "Expert-review store unavailable. Retry shortly."
+
+# #1993: one LLM build per review id across BOTH gunicorn workers. Redis
+# ``SET NX PX`` (TTL ~ the request timeout) with a process-local fallback; see
+# dependencies/inflight_lock.py for the degradation and wait bounds.
+_ASSESSMENT_LOCK = InflightLock("expert_review:assessment:inflight")
 
 
 def _store_unavailable(operation: str, exc: Exception) -> HTTPException:
@@ -257,14 +263,41 @@ async def generate_review_assessment(
             review_id=review_id, assessment=cached, cached=True, persisted=True
         )
 
-    validation_ids = review.get("related_validation_ids") or []
-    validations = await _get_validation_rows(validation_ids)
-    # run_signature is a BLOCKING LM call; keep the event loop free.
-    assessment = await asyncio.to_thread(_build_assessment, review, validations)
-    persisted = await repo.update_agent_assessment(review_id, assessment)
+    # #1993: serialise the build per review id across workers. A request that
+    # WAITED re-reads the row under the lock: a stored assessment that is new
+    # since it first looked (absent then, or changed under ``force``) is the
+    # winner's fresh result and is replayed as cached=True even under ``force``
+    # (the winner just regenerated it). An unchanged row (the winner failed to
+    # persist, or died) means we build ourselves: at most one extra build.
+    async with _ASSESSMENT_LOCK.hold(review_id) as lease:
+        if lease.waited:
+            regenerated = await _reread_assessment(repo, review_id)
+            if regenerated is not None and regenerated != cached:
+                return AgentAssessmentResponse(
+                    review_id=review_id, assessment=regenerated, cached=True, persisted=True
+                )
+        validation_ids = review.get("related_validation_ids") or []
+        validations = await _get_validation_rows(validation_ids)
+        # run_signature is a BLOCKING LM call; keep the event loop free.
+        assessment = await asyncio.to_thread(_build_assessment, review, validations)
+        persisted = await repo.update_agent_assessment(review_id, assessment)
     return AgentAssessmentResponse(
         review_id=review_id, assessment=assessment, cached=False, persisted=persisted
     )
+
+
+async def _reread_assessment(
+    repo: "ExpertReviewRepository", review_id: str
+) -> Optional[Dict[str, Any]]:
+    """The stored assessment as it is NOW (after waiting on the in-flight lock).
+    A failed re-read is not a reason to fail the request: log it and let the
+    caller build, exactly as if nothing had been stored."""
+    try:
+        row = await repo.get_by_id(review_id)
+    except Exception as e:
+        logger.warning(f"Expert-review {review_id}: post-wait re-read failed, building: {e}")
+        return None
+    return _as_json_object((row or {}).get("agent_assessment_json"))
 
 
 @router.get(
