@@ -40,7 +40,18 @@
 --   database/ml/036 record_discovered_dag); idempotent (CREATE OR REPLACE);
 --   the asserting DO block below RAISEs on a grant regression. Migration 119's
 --   trigger on 'validated' stays the second line of defence.
+--   Also: expert_reviews.created_at SET NOT NULL (below) so the chronology is total.
 -- ============================================================================
+
+-- The chronology rule below orders review rows by created_at and compares a
+-- pending row's created_at with the adjudication's using strict ``>``. A NULL
+-- created_at would sort FIRST under ORDER BY … DESC (read as "newest" by the
+-- Python probe) while ``NULL > ts`` is UNKNOWN here (read as "not newer"), so the
+-- two readers could disagree on such a row (lane 1 codex iter-1, MED). No live
+-- row has one (0/40 on 2026-09-09), both writers rely on DEFAULT now(), and the
+-- column has carried that default since ml/010, so the honest fix is to make the
+-- anomaly impossible: NOT NULL. Idempotent; fails loudly if a NULL row exists.
+ALTER TABLE public.expert_reviews ALTER COLUMN created_at SET NOT NULL;
 
 CREATE OR REPLACE FUNCTION public.dag_structure_rejected(
     p_dag_version_hash text,

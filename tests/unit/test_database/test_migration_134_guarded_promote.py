@@ -63,3 +63,16 @@ def test_service_role_only():
         assert f"REVOKE ALL ON FUNCTION {fn} FROM PUBLIC, anon, authenticated;" in sql
         assert f"GRANT EXECUTE ON FUNCTION {fn} TO service_role;" in sql
     assert "has_function_privilege" in sql  # the migration asserts its own grants
+
+
+@pytest.mark.unit
+def test_created_at_is_made_not_null_so_the_chronology_is_total():
+    """A NULL created_at sorts FIRST under ``ORDER BY created_at DESC`` (the Python
+    probe reads it as newest) while ``NULL > ts`` is UNKNOWN in the SQL predicate
+    (read as "not newer"): the two readers could disagree on such a row. No live
+    row has one and both writers rely on DEFAULT now(), so the migration closes
+    the class (lane 1 codex iter-1, MED)."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    alter = "ALTER TABLE public.expert_reviews ALTER COLUMN created_at SET NOT NULL;"
+    assert alter in sql
+    assert sql.index(alter) < sql.index("CREATE OR REPLACE FUNCTION public.dag_structure_rejected(")
