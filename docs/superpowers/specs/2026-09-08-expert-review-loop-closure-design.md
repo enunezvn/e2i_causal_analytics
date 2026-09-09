@@ -426,3 +426,27 @@ shadow period on live runs is the second.
 
 Sources: https://github.com/vdblm/CausalPFN , https://arxiv.org/abs/2506.07918 ,
 https://arxiv.org/html/2506.07918v2 , https://pypi.org/project/causalpfn/ .
+
+## 12. Owner decisions after the pre-execution review (2026-09-09)
+
+The plan was adversarially reviewed before Task 1 (four codex read-only rounds, 21 findings, five local
+disproofs, live BEGIN/ROLLBACK experiments — recorded at the end of the plan). Six decisions were put to the
+owner with recommendations; the owner's answers, now part of this design:
+
+1. **Execution**: subagent-driven, one task at a time in the lane worktree, red-first TDD, codex fixed point per
+   task (ralph-loop + codex-rescue), memory monitored, CI batched into one push/PR/deploy at the end.
+2. **Degenerate resample distribution** (every re-fit returns the same effect) in a NON-critical test: an honest
+   SKIPPED with reason `degenerate_resample_distribution`, never a placeholder p-value and never a fail-closed
+   halt — the critical placebo gate catches an estimator that ignores its data. (§4.1 amended by this note;
+   exceptions inside the loops still raise `RefutationError`, §5.)
+3. **Promote concurrency**: `promote_causal_path_guarded` takes `LOCK TABLE public.expert_reviews IN SHARE MODE`
+   before its UPDATE (measured live: blocks a racing resolve UPDATE and a racing renew INSERT, not reads). An
+   advisory lock keyed by hash, shared with the resolve/renew paths, only if reviewer contention ever appears.
+4. **Timestamp tie**: a pending row with the same `created_at` as the adjudication after it is NOT a reopen — in
+   SQL (strict `>`) and in both Python readers (`_latest_adjudication` tie-only rule; the durable-rejection block
+   in `check_approval` moved above the pending check). "Most recent adjudication wins" (#1971) is preserved.
+5. **Live lock rehearsal** holds the table for 6 s, not 20 s.
+6. **Evidence writer**: `causal_validations.details_json` / `test_config` are written as JSON objects (the writer
+   json.dumps'ed into jsonb since `0742b81f6`; 480 live rows were strings), with backfill migration 135, so the
+   lane's per-resample evidence is written, backfilled and tested in one shape. The same pattern on
+   `expert_reviews.agent_assessment_json` / `checklist_json` is a filed follow-up, not this lane.

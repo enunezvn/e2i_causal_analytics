@@ -49,6 +49,23 @@ Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv
 | `frontend/src/pages/ExpertReviews.tsx` (+ test) | linked card, brand filter, summary error, prefetch | 10 |
 | `docs/lineage/causal_dag_lineage.html` | sections + anchors | 11 |
 | `docs/demos/results/<date>_expert_review_loop/` | live evidence | 13, 15 |
+| `src/repositories/json_utils.py` (new), `src/repositories/causal_validation.py`, `src/repositories/discovered_dag.py` | evidence rows written as JSON OBJECTS (non-finite → null); shared sanitiser | 2b |
+| `tests/unit/test_repositories/test_causal_validation.py` | new class `TestEvidenceRowsAreJsonObjects` | 2b |
+| `database/migrations/135_causal_validations_json_objects.sql`, `tests/unit/test_database/test_migration_135_json_objects.py` | backfill of the 480 string-shaped rows + contract test | 2b |
+| `src/causal_engine/expert_review_gate.py`, `tests/unit/test_causal_engine/test_expert_review_gate.py` | tie-only rule; durable-rejection block moved above the pending check | 3b |
+
+---
+
+## Execution protocol (owner decisions, 2026-09-09)
+
+- **Subagent-driven**: a fresh subagent per task, working IN this worktree (`.worktrees/lane1-review-loop`, branch `claude/lane1-expert-review-loop`), ONE task at a time — never two subagents at once (this box is prod and has been OOM-killed before). The dispatcher reviews each task's result against the plan and the spec before the next task starts (`superpowers:subagent-driven-development`).
+- **TDD red-first** for every task (the steps are written that way). **No mocks in production paths, no stubbed "results"**: real evidence, real DB rehearsals (BEGIN … ROLLBACK), real container content.
+- **Fixed point per task**: once a task's tests are green, run `ralph-wiggum:ralph-loop` around a codex read-only audit (`codex:codex-rescue`, subscription channel only; if the plugin answers "CLI not installed", run `codex exec -s read-only --ephemeral --skip-git-repo-check -C "$PWD" "$(cat brief.md)" < /dev/null` directly) until `VERDICT: ACCEPT`, every HIGH/MED fixed with a test first; the brief carries the mandated pushback paragraph. Task 12 repeats this on the whole diff before the PR.
+- **Questions that come up**: ascertain the codebase's intent first (`git log`, PR bodies, linked issues, comments), use web research when the tree cannot answer, converge with ralph-loop + codex-rescue, and answer with data — run the cheap disproof (a test, a one-line repro, a live read) rather than theorising or pattern-matching.
+- **Memory**: `free -m` before every heavy step (a whole test directory, vitest, `tsc -b`, codex); never whole-tree mypy (CI is the arbiter); targeted pytest only; if `MemAvailable` < 1.5 GiB, stop and report instead of starting the step.
+- **CI batched at the end**: no push per task. One push + one PR at Task 14 after Task 12's fixed point; one deploy; then Task 15's live verification. Migrations 134 and 135 are applied by that deploy (`scripts/run_migrations.sh` runs on every deploy).
+- **Permissions**: migrations, bash, `docker exec` on the live stack, the live BEGIN/ROLLBACK rehearsals and the two synthetic adjudications are authorised (2026-09-08/09). The merge still waits for the owner's explicit go.
+- **Completeness**: nothing in this plan is optional; no listed feature is deferred to a follow-up without the owner's word.
 
 ---
 
@@ -287,6 +304,19 @@ class TestDataSubsetRealEvidence:
         assert result.details["stopped_for_budget"] is False
         assert result.p_value is not None and 0.0 <= result.p_value <= 1.0
 
+    def test_constant_refits_are_an_honest_skip(self):
+        """Owner decision 2026-09-09: a zero-variance distribution is SKIPPED with
+        a reason -- never a fabricated p-value, never a fail-closed halt from a
+        NON-critical test (the critical placebo gate catches an estimator that
+        ignores its data)."""
+        runner = RefutationRunner()
+        result = _subset(runner, _sequence_estimate([0.15] * 5))
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("degenerate_resample_distribution")
+        assert result.details["resamples_completed"] == 5
+        assert result.details["resample_effects"] == [0.15] * 5
+        assert result.p_value is None
+
     @pytest.mark.parametrize(
         "inside,expected",
         [(8, RefutationStatus.PASSED), (7, RefutationStatus.WARNING), (6, RefutationStatus.FAILED)],
@@ -354,6 +384,14 @@ class TestBootstrapRealEvidence:
         result = _bootstrap(runner, _sequence_estimate(_bootstrap_values(width)))
         assert result.details["ci_ratio"] == pytest.approx(width / 0.10, rel=1e-6)
         assert result.status == expected
+
+    def test_constant_refits_are_an_honest_skip(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 12}})
+        result = _bootstrap(runner, _sequence_estimate([0.15] * 12))
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("degenerate_resample_distribution")
+        assert "bootstrap_ci" not in result.details
+        assert result.p_value is None
 
     def test_records_per_bootstrap_effects(self):
         runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 12}})
@@ -640,6 +678,45 @@ def _budget_skip_result(
     )
 
 
+def _degenerate_skip_result(
+    test_name: RefutationTestType,
+    original_effect: float,
+    effects: List[float],
+    requested: int,
+    stopped: bool,
+    config_details: Dict[str, Any],
+) -> RefutationResult:
+    """Honest SKIPPED when every re-fit returned the SAME effect (owner decision
+    2026-09-09). A zero-variance distribution cannot be scored (DoWhy's normal
+    test divides by its standard deviation) and a constant re-fit is not
+    evidence of instability: an estimator that ignores its data fails the
+    CRITICAL placebo test, which decides the suite. Never a placeholder p-value,
+    never a fail-closed halt from a non-critical test."""
+    name = test_name.value
+    return RefutationResult(
+        test_name=test_name,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=float(effects[0]),
+        details={
+            "reason": (
+                "degenerate_resample_distribution — every re-fit returned the same "
+                "effect; a zero-variance distribution cannot be scored; the critical "
+                "gates decide the suite"
+            ),
+            "message": (
+                f"{name} skipped: {len(effects)} re-fits all returned "
+                f"{float(effects[0]):.6g}; non-critical, degraded honestly"
+            ),
+            "resample_effects": [float(e) for e in effects],
+            "resamples_completed": len(effects),
+            "resamples_requested": requested,
+            "stopped_for_budget": stopped,
+            **config_details,
+        },
+    )
+
+
 def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
     """Stable 31-bit seed from the estimate id (``None`` → unseeded, as before)."""
     if not estimate_id:
@@ -724,6 +801,11 @@ Replace the whole method (from `def _run_data_subset_test(` through its `return 
             return _budget_skip_result(
                 test_name, original_effect, len(subset_effects), requested,
                 _MIN_SUBSET_RESAMPLES, config_details,
+            )
+
+        if float(np.std(subset_effects)) == 0.0:
+            return _degenerate_skip_result(
+                test_name, original_effect, subset_effects, requested, stopped, config_details
             )
 
         refuted_effect = float(np.mean(subset_effects))
@@ -835,6 +917,11 @@ Replace the whole method with:
             return _budget_skip_result(
                 test_name, original_effect, len(bootstrap_effects), requested,
                 _MIN_BOOTSTRAP_RESAMPLES, config_details,
+            )
+
+        if float(np.std(bootstrap_effects)) == 0.0:
+            return _degenerate_skip_result(
+                test_name, original_effect, bootstrap_effects, requested, stopped, config_details
             )
 
         refuted_effect = float(np.mean(bootstrap_effects))
@@ -1012,6 +1099,247 @@ Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
 ```
 
 Expected: all green.
+
+---
+
+### Task 2b: Evidence writer — JSON objects in `details_json` / `test_config`, backfill migration 135
+
+**Files:**
+- Create: `src/repositories/json_utils.py` (`json_default`, `to_plain_json` — moved from `src/repositories/discovered_dag.py`, which imports them back)
+- Modify: `src/repositories/causal_validation.py` (`save_single_test` ~lines 199–200; `_test_to_row` ~lines 497–502)
+- Modify: `tests/unit/test_repositories/test_causal_validation.py` (new class)
+- Create: `database/migrations/135_causal_validations_json_objects.sql`, `tests/unit/test_database/test_migration_135_json_objects.py`
+
+Why (measured 2026-09-08/09): both writer sites `json.dumps(...)` into the jsonb columns, a pattern that dates from the original RefutationRunner commit `0742b81f6`; the client already serialises a dict as a JSON object (the DGP seed of migration 119 wrote objects, which is why 545 rows are objects). Every agent-path row — 480 live rows, all of `estimate_source = causal_impact_query` — is therefore a JSON *string*: `details_json->>'message'` is NULL on them and the lane's new per-resample arrays would be unqueryable (`jsonb_array_length(details_json->'subset_effects')`). Readers today decode both shapes (`src/api/routes/chatbot_tools.py:_details`, the expert-review schema validators). Owner decision 2026-09-09 (decision 6): fix the writer in this lane so evidence is written, backfilled and tested in ONE shape. The same pattern on `expert_reviews.agent_assessment_json` (4 string rows) and `checklist_json` (1) is out of this lane — Task 16 (e) files it.
+
+- [ ] **Step 1: Failing tests** — append to `tests/unit/test_repositories/test_causal_validation.py`:
+
+```python
+from src.causal_engine.refutation_runner import (
+    GateDecision,
+    RefutationResult,
+    RefutationStatus,
+    RefutationSuite,
+    RefutationTestType,
+)
+
+
+class TestEvidenceRowsAreJsonObjects:
+    """Lane 1 (owner decision 2026-09-09): evidence is written as JSON OBJECTS,
+    not JSON strings inside the jsonb column, so it can be queried and tested in
+    one shape; non-finite floats become null (the transport encodes with
+    allow_nan=False, so a NaN would otherwise fail the whole write)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def repo(self, mock_client):
+        repo = CausalValidationRepository()
+        repo.client = mock_client
+        return repo
+
+    @staticmethod
+    def _suite() -> RefutationSuite:
+        test = RefutationResult(
+            test_name=RefutationTestType.BOOTSTRAP,
+            status=RefutationStatus.PASSED,
+            original_effect=0.15,
+            refuted_effect=0.151,
+            p_value=0.4,
+            details={
+                "message": "ok",
+                "bootstrap_effects": [0.14, 0.16],
+                "ci_ratio": float("nan"),
+                "config": {"n": 2},
+            },
+            execution_time_ms=12.5,
+        )
+        return RefutationSuite(
+            passed=True,
+            confidence_score=0.9,
+            tests=[test],
+            gate_decision=GateDecision.PROCEED,
+            estimate_id="est-1",
+            brand="Kisqali",
+        )
+
+    @pytest.mark.asyncio
+    async def test_save_suite_writes_objects_not_strings(self, repo, mock_client):
+        insert = mock_client.table.return_value.insert
+        insert.return_value.execute = AsyncMock(return_value=MagicMock(data=[{"validation_id": "v1"}]))
+        ids = await repo.save_suite(self._suite(), estimate_id="e1")
+        assert ids == ["v1"]
+        row = insert.call_args[0][0][0]
+        assert isinstance(row["details_json"], dict)
+        assert isinstance(row["test_config"], dict)
+        assert row["details_json"]["bootstrap_effects"] == [0.14, 0.16]
+        assert row["details_json"]["ci_ratio"] is None  # NaN -> null, never a transport failure
+        assert row["test_config"] == {"execution_time_ms": 12.5}
+
+    @pytest.mark.asyncio
+    async def test_save_single_test_writes_objects_not_strings(self, repo, mock_client):
+        insert = mock_client.table.return_value.insert
+        insert.return_value.execute = AsyncMock(return_value=MagicMock(data=[{"validation_id": "v2"}]))
+        suite = self._suite()
+        vid = await repo.save_single_test(
+            suite.tests[0], estimate_id="e1", gate_decision=GateDecision.PROCEED, confidence_score=0.9
+        )
+        assert vid == "v2"
+        row = insert.call_args[0][0]
+        assert isinstance(row["details_json"], dict)
+        assert row["details_json"]["ci_ratio"] is None
+        assert row["test_config"] == {"n": 2}
+```
+
+And create `tests/unit/test_database/test_migration_135_json_objects.py`:
+
+```python
+"""Migration 135 decodes string-shaped evidence rows into JSON objects (lane 1, owner decision 6)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[3]
+MIGRATION = REPO / "database" / "migrations" / "135_causal_validations_json_objects.sql"
+
+
+@pytest.mark.unit
+def test_backfills_both_columns_and_asserts_none_remain():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    for col in ("details_json", "test_config"):
+        assert f"SET {col} = ({col} #>> '{{}}')::jsonb WHERE jsonb_typeof({col}) = 'string'" in sql
+    assert "RAISE EXCEPTION 'migration 135: string-shaped evidence rows remain'" in sql
+
+
+@pytest.mark.unit
+def test_no_constraint_that_would_break_the_old_image_during_the_deploy_swap():
+    """A CHECK (jsonb_typeof = 'object') would make the OLD writer fail between the
+    migration run and the container flip; the writer fix + this backfill are the
+    guarantee, and Task 14 certifies zero string rows after the deploy."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    assert "ALTER TABLE" not in sql
+    assert "CHECK (" not in sql
+```
+
+Run: `$PY -m pytest tests/unit/test_repositories/test_causal_validation.py tests/unit/test_database/test_migration_135_json_objects.py -q -p no:cacheprovider` → Expected: the two writer tests FAIL on `isinstance(row["details_json"], dict)` (today it is a `str`), the migration tests FAIL with `FileNotFoundError`.
+
+- [ ] **Step 2: Shared sanitiser** — create `src/repositories/json_utils.py` by MOVING `_json_default` and `_to_plain_json` out of `src/repositories/discovered_dag.py` (public names `json_default`, `to_plain_json`, docstrings unchanged, `import json` / `numpy as np` as needed), and in `discovered_dag.py` replace the two definitions with
+
+```python
+from src.repositories.json_utils import json_default as _json_default  # noqa: F401  (kept name)
+from src.repositories.json_utils import to_plain_json as _to_plain_json
+```
+
+so its call sites and tests are untouched. Run `$PY -m pytest tests/unit/test_repositories/test_discovered_dag*.py -q -p no:cacheprovider` → Expected: unchanged green.
+
+- [ ] **Step 3: The writer** — in `src/repositories/causal_validation.py` add `from src.repositories.json_utils import to_plain_json` and replace, at BOTH sites,
+
+```python
+            "test_config": json.dumps(test.details.get("config", {})),
+            "details_json": json.dumps(test.details),
+```
+with
+```python
+            # Lane 1 (owner decision 2026-09-09): JSON OBJECTS, not JSON strings,
+            # so evidence is queryable (jsonb_array_length(details_json->'subset_effects'))
+            # and testable in one shape; non-finite floats -> null (allow_nan=False transport).
+            "test_config": to_plain_json(test.details.get("config", {})),
+            "details_json": to_plain_json(test.details),
+```
+and in `_test_to_row`
+```python
+            "test_config": json.dumps(
+                {
+                    "execution_time_ms": test.execution_time_ms,
+                }
+            ),
+            "details_json": json.dumps(test.details),
+```
+with
+```python
+            "test_config": to_plain_json({"execution_time_ms": test.execution_time_ms}),
+            "details_json": to_plain_json(test.details),
+```
+Drop the now-unused `import json` if ruff reports it.
+
+- [ ] **Step 4: Migration 135** — create `database/migrations/135_causal_validations_json_objects.sql`:
+
+```sql
+-- ============================================================================
+-- Migration 135: causal_validations evidence columns hold JSON OBJECTS (lane 1)
+-- ============================================================================
+-- WHAT: decode every row whose details_json / test_config is a JSON *string*
+--   into the object it encodes. The Python writer json.dumps'ed into the jsonb
+--   column since 0742b81f6, so every agent-path row was a string (480 live rows
+--   on 2026-09-08, all estimate_source = causal_impact_query); the 545 rows the
+--   migration-119 DGP seed wrote were already objects. Idempotent: a re-run
+--   finds nothing to decode.
+-- WHY: the lane's per-resample evidence must be queryable
+--   (jsonb_array_length(details_json->'subset_effects')) and testable in ONE
+--   shape (owner decision 2026-09-09).
+-- SAFETY: pure data fix, no DDL, deliberately NO CHECK constraint -- migrations
+--   run before the container flips, and a constraint would make the OLD image's
+--   writer fail during that window. The writer fix ships in the same deploy;
+--   Task 14 certifies zero string rows afterwards. Rehearsed BEGIN/ROLLBACK
+--   2026-09-09: 480 -> 0 string rows in both columns, every decoded row readable.
+-- ============================================================================
+
+UPDATE public.causal_validations
+   SET details_json = (details_json #>> '{}')::jsonb
+ WHERE jsonb_typeof(details_json) = 'string';
+
+UPDATE public.causal_validations
+   SET test_config = (test_config #>> '{}')::jsonb
+ WHERE jsonb_typeof(test_config) = 'string';
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM public.causal_validations
+         WHERE jsonb_typeof(details_json) = 'string' OR jsonb_typeof(test_config) = 'string'
+    ) THEN
+        RAISE EXCEPTION 'migration 135: string-shaped evidence rows remain';
+    END IF;
+END $$;
+```
+
+- [ ] **Step 5: Rehearse on the live database (BEGIN … ROLLBACK, applied twice)**
+
+```bash
+{ echo 'BEGIN;'; cat database/migrations/135_causal_validations_json_objects.sql; cat database/migrations/135_causal_validations_json_objects.sql
+  echo "SELECT 'after', jsonb_typeof(details_json), jsonb_typeof(test_config), count(*) FROM public.causal_validations GROUP BY 2,3;"
+  echo "SELECT 'readable', count(*) FILTER (WHERE details_json ? 'message'), count(*) FROM public.causal_validations WHERE estimate_source='causal_impact_query';"
+  echo 'ROLLBACK;'; } | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -F' | ' 2>&1 | tail -5
+docker exec supabase-db psql -U postgres -d postgres -tA -c "select jsonb_typeof(details_json), count(*) from public.causal_validations group by 1"
+```
+
+Expected (measured 2026-09-09 with the same statements): `UPDATE 480`, `UPDATE 480`, then `UPDATE 0`, `UPDATE 0` (second apply), `after | object | object | 1025`, `readable | 480 | 480`, `ROLLBACK`; and after the rollback still `string|480`, `object|545`.
+
+- [ ] **Step 6: Run, lint, commit**
+
+```bash
+$PY -m pytest tests/unit/test_repositories/test_causal_validation.py tests/unit/test_repositories/test_discovered_dag*.py tests/unit/test_database/test_migration_135_json_objects.py tests/unit/test_api/test_chatbot_causal_validation_provenance.py -q -p no:cacheprovider 2>&1 | tail -3
+$PY -m ruff check src/repositories/causal_validation.py src/repositories/json_utils.py src/repositories/discovered_dag.py tests/unit/test_repositories/test_causal_validation.py tests/unit/test_database/test_migration_135_json_objects.py && $PY -m ruff format --check src/repositories/causal_validation.py src/repositories/json_utils.py src/repositories/discovered_dag.py
+$PY -m mypy --config-file pyproject.toml src/repositories/causal_validation.py src/repositories/json_utils.py src/repositories/discovered_dag.py
+git add src/repositories/json_utils.py src/repositories/causal_validation.py src/repositories/discovered_dag.py tests/unit/test_repositories/test_causal_validation.py database/migrations/135_causal_validations_json_objects.sql tests/unit/test_database/test_migration_135_json_objects.py
+git commit -m "fix(evidence): write causal_validations details_json/test_config as JSON objects; migration 135 backfills the 480 string-shaped rows
+
+The writer json.dumps'ed into the jsonb columns since 0742b81f6, so every
+agent-path evidence row was a JSON string and its keys unqueryable. Shared
+sanitiser (non-finite -> null) moved to json_utils; readers already accept
+both shapes. Owner decision 2026-09-09: fix in-lane so evidence is written,
+backfilled and tested in one shape.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
+```
+
+The `db_tests` reader in Task 13 keeps its decode of both shapes: the baseline runs on the OLD image, whose rows are still strings; after the deploy every row is an object (Task 14 certifies it).
 
 ---
 
@@ -1366,7 +1694,7 @@ Then `ROLLBACK`; confirm `select count(*) from public.expert_reviews where revie
 
 - [ ] **Step 4c: Concurrency rehearsal — the table SHARE lock blocks a racing resolve AND a racing renew, not reads (no writes)**
 
-Session A takes the lock the function takes and holds it 20 s inside a transaction it rolls back. Session B
+Session A takes the lock the function takes and holds it 6 s inside a transaction it rolls back (owner decision 2026-09-09: the measurement below used 20 s; 6 s is enough for the 3 s timeouts and keeps the live table's write-block short). Session B
 runs a resolve-shaped UPDATE on the live probe row `4eab7033-…`, session B' a renew-shaped INSERT of a scratch
 pending row, both with a 3 s `statement_timeout` and both rolled back; session R is a plain read. Nothing is
 written by any of them. The monitor loop must exclude its own backend (`pid <> pg_backend_pid()`) — its query
@@ -1374,8 +1702,8 @@ text also contains `pg_sleep`, and the first attempt waited on itself until A ha
 
 ```bash
 RID=4eab7033-7422-422d-83f6-659c9c3b9987
-docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "BEGIN; LOCK TABLE public.expert_reviews IN SHARE MODE; SELECT 'A-locked '||clock_timestamp()::time; SELECT pg_sleep(20); SELECT 'A-release '||clock_timestamp()::time; ROLLBACK;" > /tmp/sessA.log 2>&1 &
-until docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query ilike '%pg_sleep(20)%' and state='active'" | grep -q '^1'; do :; done
+docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "BEGIN; LOCK TABLE public.expert_reviews IN SHARE MODE; SELECT 'A-locked '||clock_timestamp()::time; SELECT pg_sleep(6); SELECT 'A-release '||clock_timestamp()::time; ROLLBACK;" > /tmp/sessA.log 2>&1 &
+until docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query ilike '%pg_sleep(6)%' and state='active'" | grep -q '^1'; do :; done
 docker exec supabase-db psql -U postgres -d postgres -tA -F' ' -c "select l.locktype, l.mode, l.granted from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.relation='public.expert_reviews'::regclass and a.pid <> pg_backend_pid()"
 docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
 docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id) VALUES ('dag_approval','lane1-lock-probe','pending','lockprobe'); SELECT 'B2-inserted'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
@@ -3996,10 +4324,11 @@ Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
 - [ ] **Step 1: Backend gates on the changed files**
 
 ```bash
-$PY -m pytest tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_causal_engine/test_refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_1419.py tests/unit/test_causal_engine/test_refutation_runner_randomized.py tests/unit/test_repositories/test_causal_path_promoter_1352.py tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py tests/unit/test_agents/test_causal_impact/test_refutation_expert_review_enforcement_1971.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider -m "not slow" 2>&1 | tail -3
-$PY -m ruff check src/causal_engine/refutation_runner.py src/repositories/causal_path.py src/agents/causal_impact/nodes/refutation.py src/api/routes/expert_review.py src/api/schemas/expert_review.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py
-$PY -m ruff format --check src/causal_engine/refutation_runner.py src/repositories/causal_path.py src/api/routes/expert_review.py src/api/schemas/expert_review.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py
-$PY -m mypy --config-file pyproject.toml src/causal_engine/refutation_runner.py src/repositories/causal_path.py src/api/routes/expert_review.py src/api/schemas/expert_review.py
+$PY -m pytest tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_causal_engine/test_refutation_runner.py tests/unit/test_causal_engine/test_refutation_runner_1419.py tests/unit/test_causal_engine/test_refutation_runner_randomized.py tests/unit/test_repositories/test_causal_path_promoter_1352.py tests/unit/test_agents/test_causal_impact/test_refutation_promoter_1352.py tests/unit/test_agents/test_causal_impact/test_refutation_expert_review_enforcement_1971.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py tests/unit/test_repositories/test_causal_validation.py tests/unit/test_repositories/test_discovered_dag*.py tests/unit/test_database/test_migration_135_json_objects.py tests/unit/test_causal_engine/test_expert_review_gate.py -q -p no:cacheprovider -m "not slow" 2>&1 | tail -3
+$PY -m ruff check src/causal_engine/refutation_runner.py src/causal_engine/expert_review_gate.py src/repositories/causal_path.py src/repositories/causal_validation.py src/repositories/json_utils.py src/repositories/discovered_dag.py src/agents/causal_impact/nodes/refutation.py src/api/routes/expert_review.py src/api/schemas/expert_review.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py
+$PY -m ruff format --check src/causal_engine/refutation_runner.py src/causal_engine/expert_review_gate.py src/repositories/causal_path.py src/repositories/causal_validation.py src/repositories/json_utils.py src/api/routes/expert_review.py src/api/schemas/expert_review.py tests/unit/test_causal_engine/test_refutation_runner_real_evidence.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py
+free -m | awk '/Mem:/ {print "MemAvailable MiB:", $7}'   # stop and report if < 1500
+$PY -m mypy --config-file pyproject.toml src/causal_engine/refutation_runner.py src/causal_engine/expert_review_gate.py src/repositories/causal_path.py src/repositories/causal_validation.py src/repositories/json_utils.py src/repositories/discovered_dag.py src/api/routes/expert_review.py src/api/schemas/expert_review.py
 ```
 
 Expected: all green. Fix and amend into the owning task's commit style (a new `fix(...)` commit is fine).
@@ -4230,6 +4559,9 @@ docker exec e2i_api grep -c '_resample_effects' /app/src/causal_engine/refutatio
 docker exec e2i_api grep -c 'promote_causal_path_guarded' /app/src/repositories/causal_path.py  # >= 1
 docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_proc where proname in ('dag_structure_rejected','promote_causal_path_guarded')"   # 2
 docker exec supabase-db psql -U postgres -d postgres -tA -c "select has_function_privilege('anon','public.promote_causal_path_guarded(text,text,text[],text,text)','EXECUTE')"   # f
+docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from public.schema_migrations where version::text like '%134%' or version::text like '%135%'"   # 2 (read the table's columns first: \d public.schema_migrations)
+docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from public.causal_validations where jsonb_typeof(details_json)='string' or jsonb_typeof(test_config)='string'"   # 0 (was 480 before the deploy)
+docker exec e2i_api grep -c 'to_plain_json' /app/src/repositories/causal_validation.py   # >= 2
 curl -s https://eznomics.site/api/openapi.json | python3 -c "import sys,json; d=json.load(sys.stdin); print('/api/expert-reviews/{review_id}' in d['paths'] or '/expert-reviews/{review_id}' in d['paths'])"   # True
 curl -s -o /dev/null -w '%{http_code}\n' https://eznomics.site/health   # 200
 ```
@@ -4322,7 +4654,7 @@ git -C /home/enunez/Projects/e2i_causal_analytics checkout -b docs/lane1-live-ve
 ### Task 16: Record and close out
 
 - [ ] **Step 1: PR certification comment** — image tag, marker counts, migration + privilege checks, impact table, the two adjudications with review ids and analysis ids, the switch outcome.
-- [ ] **Step 2: Issues** (owner already asked for these to be filed with evidence): (a) "REVIEW band unreachable by construction; band-semantics decision" with the §2 arithmetic and the impact table; (b) "Reconstruction's own interval is unusable (SE 4.9 vs 0.034 reported); never use it as a reference" as a documented caveat; (c) the CausalPFN trial (spec §11) as the next lane; (d) the four simplification candidates (spec §10) as one tracking issue; (e) `causal_validation.py` writes `json.dumps(test.details)` into the JSONB `details_json` column, so the agent path's rows are JSON strings (480 live) while other rows are objects (545) — readers must decode both; fix the writer and backfill; (f) `POST /expert-reviews/{id}/assessment` has no in-flight lock, so two concurrent uncached requests both build (the UI now guards client-side).
+- [ ] **Step 2: Issues** (owner already asked for these to be filed with evidence): (a) "REVIEW band unreachable by construction; band-semantics decision" with the §2 arithmetic and the impact table; (b) "Reconstruction's own interval is unusable (SE 4.9 vs 0.034 reported); never use it as a reference" as a documented caveat; (c) the CausalPFN trial (spec §11) as the next lane; (d) the four simplification candidates (spec §10) as one tracking issue; (e) the same json.dumps-into-jsonb pattern remains on `expert_reviews.agent_assessment_json` (4 string rows live) and `checklist_json` (1) — readers decode both today; fix those writers (`src/repositories/expert_review.py` ~lines 350, 393, 431) and backfill the way Task 2b did for `causal_validations`; (f) `POST /expert-reviews/{id}/assessment` has no in-flight lock, so two concurrent uncached requests both build (the UI now guards client-side).
 - [ ] **Step 3: Memory** — one project memory file for this lane (what the live DB said, the threshold inversion, the arithmetic, the disproof numbers, what the switch step showed), plus a MEMORY.md index line under 200 chars.
 - [ ] **Step 4: Handoff** — `.claude/handoffs/current.md` with `status: complete` (or `in_progress` with the exact next step), and `git worktree remove .worktrees/lane1-review-loop` once merged.
 
@@ -4380,9 +4712,10 @@ expected table are Task 3 Step 4b.
 5. MED — `toHaveBeenLastCalledWith(null)` on a hook that lives in an unmounted component. CONFIRMED → assertion inverted to `not.toHaveBeenCalled()`.
 6. MED — two mounted forms for one review fire two auto-assessments. CONFIRMED structurally → page-level `Set` guard threaded to the card and the row, plus a test.
 
-Left as designed, on purpose: a NON-critical test raising `RefutationError` on a degenerate (zero-variance)
-resample distribution fails the suite closed — the same contract today's F-014 path applies to the DoWhy
-refuters; softening it would substitute a placeholder p-value. Flag for the owner, not a silent change.
+Owner decision 2026-09-09 (decision 2): a degenerate (zero-variance) resample distribution in a NON-critical
+test is an honest SKIPPED with reason `degenerate_resample_distribution` (Task 1, `_degenerate_skip_result`),
+not a fail-closed halt and never a placeholder p-value; the critical placebo gate catches an estimator that
+ignores its data. Exceptions inside the loops still raise `RefutationError` (spec §5).
 
 ### Codex iter-2 findings → dispositions (after the iter-1 fold)
 
@@ -4413,3 +4746,7 @@ Codex could not run the gate tests itself (its sandbox lacks a writable cache di
 Stopping rule: four pre-execution rounds; the last returned no HIGH and three MED, all folded. Everything from
 here is code, and Task 12's read-only audit runs on the real diff, where each of these dispositions is
 re-checked against executed tests rather than plan text.
+
+### Owner decisions (2026-09-09) folded
+
+1. Subagent-driven execution (protocol section near the top). 2. Degenerate resample distribution → honest SKIPPED with reason (Task 1). 3. Table SHARE lock now; advisory lock only if reviewer contention ever appears (Task 3, unchanged). 4. Tie rule and the moved durable-rejection block kept (Task 3b). 5. Lock rehearsal hold 20 s → 6 s (Task 3 Step 4c). 6. Evidence writer fixed in-lane with backfill migration 135 so evidence is written, backfilled and tested in one shape (new Task 2b; Task 12 gates, Task 14 certification and Task 16 (e) updated).
