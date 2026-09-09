@@ -21,6 +21,10 @@ def test_backfills_all_four_columns_and_asserts_none_remain():
         "dag_structure_json",
     ):
         assert f"SET {col} = ({col} #>> '{{}}')::jsonb WHERE jsonb_typeof({col}) = 'string'" in sql
+        # A column dropped from the guard's EXISTS list would still pass the
+        # assertion above (it only checks the UPDATE statement) -- require the
+        # predicate to appear once for the UPDATE and once more for the guard.
+        assert sql.count(f"jsonb_typeof({col}) = 'string'") >= 2
     assert "RAISE EXCEPTION 'migration 137: string-shaped expert_reviews rows remain'" in sql
 
 

@@ -225,6 +225,9 @@ class ExpertReviewRepository(BaseRepository):
             # #1992: JSON OBJECTS, not json.dumps'ed strings, so PostgREST
             # stores a jsonb object (queryable) instead of a jsonb string
             # scalar -- mirrors causal_validation.py (lane 1, migration 135).
+            # to_plain_json also coerces datetime/enum/numpy values and maps
+            # NaN to null where json.dumps used to raise (today's inputs here
+            # are already plain dicts, so nothing observable changes).
             "checklist_json": to_plain_json(checklist) if checklist else None,
             "related_validation_ids": related_validation_ids,
             "dag_structure_json": to_plain_json(dag_structure) if dag_structure else None,
