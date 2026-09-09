@@ -999,6 +999,7 @@ class RefutationNode:
                 new_status,
                 path_id,
                 promote_err,
+                exc_info=True,
             )
             return validation_ids, {}
         if not moved:

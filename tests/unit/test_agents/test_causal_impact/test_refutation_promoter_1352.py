@@ -35,6 +35,7 @@ import pytest
 
 from src.agents.causal_impact.nodes.refutation import RefutationNode
 from src.causal_engine.refutation_runner import GateDecision, RefutationSuite
+from src.repositories.causal_path import CausalPathRepository
 from src.repositories.causal_validation import (
     derive_causal_path_estimate_id,
     derive_query_estimate_id,
@@ -99,6 +100,9 @@ class _FakePathRepo:
                 "allowed_current": allowed_current,
                 "dag_version_hash": kwargs.get("dag_version_hash"),
                 "brand": kwargs.get("brand"),
+                # Raw keywords: ``kwargs.get`` cannot tell "omitted" from "None";
+                # the no-hash test pins that the keyword was explicitly forwarded.
+                "kwargs": dict(kwargs),
             }
         )
         return True
@@ -271,7 +275,52 @@ class TestLinkedPromotion:
         await node._persist_suite_and_promote(
             state, _suite(GateDecision.PROCEED), structure_verdict="clear"
         )
-        assert path_repo.status_calls[0]["dag_version_hash"] is None
+        call = path_repo.status_calls[0]
+        assert call["dag_version_hash"] is None
+        # Explicitly forwarded as None (not merely omitted): the repository's
+        # keyword-only parameter must receive it on every promote.
+        assert "dag_version_hash" in call["kwargs"]
+        assert call["kwargs"]["dag_version_hash"] is None
+
+    @pytest.mark.asyncio
+    async def test_promote_reaches_the_guarded_rpc_through_the_real_repository(self) -> None:
+        """SEAM: the real node drives the real ``CausalPathRepository`` (stubbed
+        client) so the node→repo keyword contract is pinned by executing code,
+        not by two test files agreeing on a fake's signature. A drifted keyword
+        at the call site raises TypeError inside the promoter's swallow and the
+        RPC is never reached — this test then fails on ``call_args``."""
+        client = MagicMock()
+        # get_path_row → base get_many: select → eq → limit → offset → execute.
+        query = MagicMock()
+        query.eq.return_value = query
+        query.limit.return_value = query
+        query.offset.return_value = query
+        query.execute = AsyncMock(return_value=MagicMock(data=[_real_row()]))
+        client.table.return_value.select.return_value = query
+        client.rpc.return_value.execute = AsyncMock(
+            return_value=MagicMock(data={"moved": 1, "rejected": False})
+        )
+        real_repo = CausalPathRepository(supabase_client=client)
+
+        node = RefutationNode(validation_repo=_validation_repo(), causal_path_repo=real_repo)
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001", dag_version_hash="h" * 64, brand="Kisqali"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
+        )
+        # _GATE_STATUS_TRANSITIONS[PROCEED] == ("validated", ("pending", "needs_review")).
+        assert client.rpc.call_args.args == (
+            "promote_causal_path_guarded",
+            {
+                "p_path_id": "cp_real_000000001",
+                "p_new_status": "validated",
+                "p_allowed_current": ["pending", "needs_review"],
+                "p_dag_version_hash": "h" * 64,
+                "p_brand": "Kisqali",
+            },
+        )
+        assert promotion["path_id"] == "cp_real_000000001"
+        assert promotion["new_status"] == "validated"
 
 
 class TestPromotionGuards:
