@@ -6341,7 +6341,7 @@ rep(
 # Map labels (text only; no geometry changes).
 rep(
     '<text class="s" x="910" y="263">expert_reviews keyed by dag_version_hash</text><text class="s" x="910" y="275">90-day approval · 14-day renewal warning</text>',
-    '<text class="s" x="910" y="263">expert_reviews keyed by dag_version_hash · probe on every band</text><text class="s" x="910" y="275">rejection halts · approval structural · switch default off</text>',
+    '<text class="s" x="910" y="263">expert_reviews by dag_version_hash · probe every band</text><text class="s" x="910" y="275">rejection halts · approval structural · switch default off</text>',
 )
 
 for old, new in EDITS:
@@ -6356,11 +6356,13 @@ Expected output: `applied 11 edits`. If an assertion fires, the fragment drifted
 
 - [ ] **Step 2: Add the map's discovery box label**
 
-The API-response box on the map already exists; append a discovery line to it. Find the `<text class="t"` element whose text is `API response` and add, after its last sibling `<text class="s" …>` inside the same `<g>`, a third small line (copy the sibling's `x`, use `y` + 12):
+The API-response box on the map already exists; append a discovery line to it. Find the `<text class="t"` element whose text is `API response` and add, after its last sibling `<text class="s" …>` inside the same `<g>`, a fourth small line (copy the sibling's `x`, use `y` + 12), and grow that one `<rect>`'s `height` 74 → 82 so the new line keeps the siblings' bottom padding (bottom edge 266, 6 px above the next box; no connector is anchored on that edge — the only nearby path runs at x=880):
 
 ```html
-<text class="s" x="X" y="Y+12">+ public.discovered_dags record (discovered_dag_id)</text>
+<text class="s" x="X" y="Y+12">+ public.discovered_dags record</text>
 ```
+
+Why (Task 11 render check): both map labels were shortened because the rendered text exceeded its box (measured with `getBBox` in Chrome, 2026-09-09): the Step 1 label `expert_reviews keyed by dag_version_hash · probe on every band` reached 1211 against a rect right edge of 1170, and the plan's 50-character `+ public.discovered_dags record (discovered_dag_id)` would have exceeded the 190-unit text area whose widest existing line is 179. Geometry otherwise unchanged; every other box renders inside its rect.
 
 Verify visually by opening the file in a browser (`python3 -m http.server` from `docs/lineage/` on a spare port) that the new line sits inside its box.
 
