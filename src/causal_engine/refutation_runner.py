@@ -333,6 +333,37 @@ def _degenerate_skip_result(
     )
 
 
+def _require_finite_ci(
+    original_ci: Tuple[float, float], test_name: str, original_effect: float
+) -> None:
+    """Fail closed when either endpoint of the reported interval is not finite.
+
+    A non-finite endpoint is not a value: it is the same class as a NaN re-fit
+    (spec §5, fail-closed) and would otherwise be SCORED -- ``(-inf, inf)``
+    covers every subset effect (coverage 1.0) and makes the width ratio 0, a
+    PASSED verdict without a usable interval; a NaN endpoint fails from NaN
+    arithmetic and blames the estimate. The node already refuses such an
+    interval upstream (nodes/refutation.py), so this is defense-in-depth. A
+    FINITE zero-width interval is different: it is a real value that merely
+    cannot score a coverage / width test, the same class as a degenerate
+    resample distribution, and stays an honest SKIPPED
+    (``_degenerate_ci_skip_result``).
+    """
+    lo, hi = original_ci[0], original_ci[1]
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"{test_name} received a non-finite reference interval {tuple(original_ci)!r}; "
+            "refusing to score against it.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "original_ci_non_finite",
+                "original_ci": (float(lo), float(hi)),
+            },
+        )
+
+
 def _degenerate_ci_skip_result(
     test_name: RefutationTestType,
     original_effect: float,
@@ -1517,6 +1548,7 @@ class RefutationRunner:
         subset_fraction = float(cfg["subset_fraction"])
         config_details = {"subset_fraction": subset_fraction, "num_subsets": requested}
         frame = _refutation_frame(causal_model, "data_subset", original_effect)
+        _require_finite_ci(original_ci, "data_subset", original_effect)
         if original_ci[1] - original_ci[0] <= 0:
             return _degenerate_ci_skip_result(
                 test_name,
@@ -1654,6 +1686,7 @@ class RefutationRunner:
         requested = int(self.config["bootstrap"]["num_bootstraps"])
         config_details = {"num_bootstraps": requested}
         frame = _refutation_frame(causal_model, "bootstrap", original_effect)
+        _require_finite_ci(original_ci, "bootstrap", original_effect)
         if original_ci[1] - original_ci[0] <= 0:
             return _degenerate_ci_skip_result(
                 test_name,
@@ -1719,7 +1752,11 @@ class RefutationRunner:
         )
         original_ci_width = original_ci[1] - original_ci[0]
         bootstrap_ci_width = bootstrap_ci[1] - bootstrap_ci[0]
-        ci_ratio = bootstrap_ci_width / max(original_ci_width, 1e-10)
+        # The width is finite and > 0 here (_require_finite_ci + the widthless
+        # guard above), so divide by the ACTUAL width: a floor (formerly 1e-10)
+        # understated the ratio for a tiny but valid interval (codex iter-1 F1:
+        # width 1e-12, bootstrap width 2e-11 read 0.2 PASSED; true ratio 20).
+        ci_ratio = bootstrap_ci_width / original_ci_width
 
         if ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["pass"]:
             status = RefutationStatus.PASSED

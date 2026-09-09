@@ -412,3 +412,132 @@ class TestSkipResultsCarryExecutionTime:
         result = _subset(RefutationRunner(), _sequence_estimate([0.15] * 5))
         assert result.status == RefutationStatus.SKIPPED
         assert result.execution_time_ms > 0.0
+
+
+class TestRatioHasNoFloor:
+    """Codex iter-1 F1: ``max(width, 1e-10)`` understated the ratio for a tiny
+    but valid interval (width 1e-12, bootstrap width 2e-11 -> 0.2 PASSED where
+    the true ratio is 20). Once the width is validated finite and positive the
+    divisor is the ACTUAL width, so the verdict is invariant under rescaling."""
+
+    def test_failed_case_stays_failed_when_rescaled_by_1e_minus_12(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 40}})
+        reference = _bootstrap(runner, _sequence_estimate(_bootstrap_values(0.180)))
+        assert reference.status == RefutationStatus.FAILED
+
+        scaled_values = [v * 1e-12 for v in _bootstrap_values(0.180)]
+        result = runner._run_bootstrap_test(
+            original_effect=0.15e-12,
+            original_ci=(1e-13, 2e-13),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_sequence_estimate(scaled_values, value=0.15e-12),
+            use_dowhy=True,
+        )
+        assert result.details["ci_ratio"] == pytest.approx(1.8, rel=1e-6)
+        assert result.status == RefutationStatus.FAILED
+
+
+class TestNonFiniteReferenceIntervalFailsClosed:
+    """Codex iter-1 F2: a non-finite endpoint is not a value (same class as a
+    NaN re-fit -> fail-closed, spec §5; defense-in-depth behind the node's own
+    refusal), unlike a finite zero-width interval which is an honest SKIPPED."""
+
+    @staticmethod
+    def _never_called(_df):
+        raise AssertionError("re-fit must not run for a non-finite original_ci")
+
+    _CIS = [
+        (float("-inf"), float("inf")),
+        (float("nan"), 0.2),
+        (0.1, float("inf")),
+    ]
+
+    @pytest.mark.parametrize("ci", _CIS)
+    def test_subset_non_finite_ci_raises_before_any_refit(self, ci):
+        with pytest.raises(RefutationError) as ei:
+            RefutationRunner()._run_data_subset_test(
+                original_effect=0.15,
+                original_ci=ci,
+                causal_model=_make_stub_causal_model({}),
+                identified_estimand=object(),
+                estimate=_stub_estimate(effect_fn=self._never_called),
+                use_dowhy=True,
+            )
+        assert ei.value.details["reason"] == "original_ci_non_finite"
+        assert ei.value.details["test_name"] == "data_subset"
+        assert "original_ci" in ei.value.details
+
+    @pytest.mark.parametrize("ci", _CIS)
+    def test_bootstrap_non_finite_ci_raises_before_any_refit(self, ci):
+        with pytest.raises(RefutationError) as ei:
+            RefutationRunner()._run_bootstrap_test(
+                original_effect=0.15,
+                original_ci=ci,
+                causal_model=_make_stub_causal_model({}),
+                identified_estimand=object(),
+                estimate=_stub_estimate(effect_fn=self._never_called),
+                use_dowhy=True,
+            )
+        assert ei.value.details["reason"] == "original_ci_non_finite"
+        assert ei.value.details["test_name"] == "bootstrap"
+        assert "original_ci" in ei.value.details
+
+
+def _exact_percentile_values(upper: float) -> List[float]:
+    """41 sorted values whose 2.5th / 97.5th percentiles are EXACTLY the second
+    and fortieth (positions 0.025*40 = 1.0 and 0.975*40 = 39.0, no
+    interpolation): lower = 0.0, upper = ``upper``."""
+    x = [-0.01, 0.0] + [0.01 * k for k in range(2, 39)] + [upper, upper + 0.01]
+    assert len(x) == 41 and x == sorted(x)
+    return x
+
+
+class TestExactBoundaries:
+    """Spec §6: the thresholds at their exact boundaries (0.79 / 0.80 coverage,
+    1.50 / 1.51 and 1.75 / 1.76 width ratio) and bootstrap seed reproducibility."""
+
+    @pytest.mark.parametrize(
+        "inside,expected_cov,expected",
+        [(80, 0.80, RefutationStatus.PASSED), (79, 0.79, RefutationStatus.WARNING)],
+    )
+    def test_coverage_boundary_exact(self, inside, expected_cov, expected):
+        runner = RefutationRunner(config={"data_subset": {"num_subsets": 100}})
+        values = [0.15 + 0.0001 * i for i in range(inside)] + [
+            0.5 + 0.001 * i for i in range(100 - inside)
+        ]
+        result = _subset(runner, _sequence_estimate(values))
+        assert result.details["ci_coverage"] == pytest.approx(expected_cov)
+        assert result.details["ci_coverage"] == inside / 100
+        assert result.status == expected
+
+    @pytest.mark.parametrize(
+        "upper,expected_ratio,expected",
+        [
+            (0.75, 1.50, RefutationStatus.PASSED),
+            (0.755, 1.51, RefutationStatus.WARNING),
+            (0.875, 1.75, RefutationStatus.WARNING),
+            (0.88, 1.76, RefutationStatus.FAILED),
+        ],
+    )
+    def test_ratio_boundary_exact(self, upper, expected_ratio, expected):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 41}})
+        result = runner._run_bootstrap_test(
+            original_effect=0.25,
+            original_ci=(0.0, 0.5),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_sequence_estimate(_exact_percentile_values(upper), value=0.25),
+            use_dowhy=True,
+        )
+        assert result.details["bootstrap_ci"] == (0.0, upper)
+        assert result.details["ci_ratio"] == pytest.approx(expected_ratio)
+        assert result.status == expected
+
+    def test_bootstrap_seeded_runs_reproduce_their_evidence(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 12}})
+        a = _bootstrap(runner, _stub_estimate(), resample_seed=7)
+        b = _bootstrap(runner, _stub_estimate(), resample_seed=7)
+        c = _bootstrap(runner, _stub_estimate(), resample_seed=8)
+        assert a.details["bootstrap_effects"] == b.details["bootstrap_effects"]
+        assert a.details["bootstrap_effects"] != c.details["bootstrap_effects"]
