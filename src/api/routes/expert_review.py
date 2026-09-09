@@ -11,6 +11,7 @@ Endpoints (all ``require_operator`` — OD-1):
 - GET  /expert-reviews/pending            -> oldest-first pending queue
 - POST /expert-reviews/{review_id}/resolve -> approve/reject + checklist/comments
 - GET  /expert-reviews/summary            -> status counts
+- GET  /expert-reviews/{review_id}        -> one review (any status) + same-structure history
 
 Persistence: ``ExpertReviewRepository`` over an ASYNC Supabase (service-role)
 client. The repo methods are ``await self.client.table(...).execute()`` so the
@@ -25,6 +26,7 @@ Version: 4.3.0
 import asyncio
 import json
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -34,10 +36,12 @@ from src.api.errors import user_safe_503_detail
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.expert_review import (
     AgentAssessmentResponse,
+    ExpertReviewDetailResponse,
     PendingReviewItem,
     PendingReviewsResponse,
     ResolveReviewRequest,
     ResolveReviewResponse,
+    ReviewRecord,
     ReviewSummaryResponse,
 )
 
@@ -136,6 +140,13 @@ async def resolve_review(
 ) -> ResolveReviewResponse:
     """Approve or reject a pending review; the resolution persists.
 
+    The authenticated operator is recorded as the resolver: ``reviewer_name``
+    (their profile name, else their email, else their id) and
+    ``reviewer_email`` are written with the resolution, and ``resolved_at`` is
+    stamped for BOTH statuses (migration 136). ``reviewer_id`` is left as the
+    requester breadcrumb the gate wrote. An identity the token does not carry
+    stays unrecorded.
+
     An ``approved`` resolution sets ``valid_from``/``valid_until``/``approved_at``
     inside ``submit_review`` (repo :169-173). A repo ``False`` is fail-closed —
     never a fabricated success. FIX B (codex HIGH): ``submit_review`` now returns
@@ -145,6 +156,13 @@ async def resolve_review(
     is still a correct non-200 (never a fake success); the repo logs the
     distinction (zero-row WARNING vs exception ERROR).
     """
+    # The resolver's identity, from the verified token (dependencies/auth.py
+    # builds ``id`` / ``email`` / ``user_metadata`` from the Supabase user).
+    # Unknown stays unknown: when the token carries none of them, pass None.
+    reviewer_name = (
+        (user.get("user_metadata") or {}).get("name") or user.get("email") or user.get("id")
+    )
+    reviewer_email = user.get("email")
     repo = await _get_expert_review_repo()
     success = await repo.submit_review(
         review_id=review_id,
@@ -154,6 +172,8 @@ async def resolve_review(
         concerns_raised=request.concerns_raised,
         conditions=request.conditions,
         validity_days=request.validity_days,
+        reviewer_name=reviewer_name or None,
+        reviewer_email=reviewer_email or None,
     )
     if not success:
         raise HTTPException(
@@ -272,4 +292,66 @@ async def get_summary(
         rejected=summary.get("rejected", 0),
         expired=summary.get("expired", 0),
         expiring_soon=summary.get("expiring_soon", 0),
+    )
+
+
+@router.get(
+    "/{review_id}",
+    response_model=ExpertReviewDetailResponse,
+    summary="One expert review (any status) with its same-structure history",
+    operation_id="get_expert_review",
+    responses={
+        404: {"model": ErrorResponse, "description": "Review not found"},
+        503: {"model": ErrorResponse, "description": "Expert-review store unavailable"},
+    },
+)
+async def get_expert_review(
+    review_id: str,
+    user: Dict[str, Any] = Depends(require_operator),
+) -> ExpertReviewDetailResponse:
+    """Return one review row in any status plus every review of the same DAG structure.
+
+    Powers the linked-review card the causal drill-down deep-links to
+    (``/expert-reviews?review=<id>``), so a run whose structure is pending,
+    approved or rejected always resolves to its record. ``history`` is the full
+    same-hash (and same-brand) list, newest first, expired included -- the read
+    ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
+    so it cannot shadow ``/pending`` and ``/summary``.
+    """
+    # A malformed id is 404, not 503 (review 2026-09-09, measured live):
+    # ``expert_reviews.review_id`` is a uuid column, so a non-UUID string makes
+    # PostgREST raise APIError 22P02 ("invalid input syntax for type uuid"),
+    # which the store-failure guard below would report as an outage with an
+    # ERROR traceback -- while the sibling ``POST /{review_id}/resolve``
+    # answers 404 for the same input. Pre-check for parity, and hand the store
+    # the CANONICAL form so any form Python accepts (uppercase, braces) can
+    # never trip the cast. The raw path value stays in the 404 messages.
+    try:
+        canonical_id = str(uuid.UUID(review_id))
+    except ValueError:
+        raise HTTPException(
+            status_code=404, detail=f"Review {review_id} was not found (not a valid review id)."
+        ) from None
+    try:
+        # The client factory raises ServiceConnectionError when Supabase is
+        # unset/unreachable; inside the try so that is a 503 as well, not a
+        # 500 (pre-execution review 2026-09-08, codex MED).
+        repo = await _get_expert_review_repo()
+        row = await repo.get_by_id(canonical_id)
+    except Exception as e:  # store failure (R3): honest 503
+        raise _store_unavailable("review read", e) from e
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Review {review_id} was not found.")
+    dag_hash = row.get("dag_version_hash")
+    history_rows: List[Dict[str, Any]] = []
+    if dag_hash:
+        try:
+            history_rows = await repo.get_reviews_for_dag(
+                dag_hash, include_expired=True, brand=row.get("brand")
+            )
+        except Exception as e:
+            raise _store_unavailable("review history read", e) from e
+    return ExpertReviewDetailResponse(
+        review=ReviewRecord.model_validate(row),
+        history=[ReviewRecord.model_validate(r) for r in history_rows],
     )

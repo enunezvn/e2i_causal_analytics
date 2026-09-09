@@ -8,6 +8,7 @@
  * - usePendingReviews: read the oldest-first pending queue
  * - useReviewSummary:  read status counts
  * - useResolveReview:  approve/reject a review, then invalidate the queue/summary
+ * - useExpertReview:   read one review (any status) + same-DAG history
  *
  * @module hooks/api/use-expert-review
  */
@@ -17,12 +18,14 @@ import type { UseQueryOptions, UseMutationOptions } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-client';
 import {
   generateReviewAssessment,
+  getExpertReview,
   getPendingReviews,
   getReviewSummary,
   resolveReview,
 } from '@/api/expert-review';
 import type {
   AgentAssessmentResponse,
+  ExpertReviewDetailResponse,
   PendingReviewsResponse,
   ResolveReviewRequest,
   ResolveReviewResponse,
@@ -70,6 +73,26 @@ export function useReviewSummary(
   });
 }
 
+/**
+ * Hook to fetch one review (any status) with its same-structure history —
+ * the linked-review card behind the drill-down's deep link. Idle until an id
+ * is present.
+ */
+export function useExpertReview(
+  reviewId: string | null | undefined,
+  options?: Omit<
+    UseQueryOptions<ExpertReviewDetailResponse, ApiError>,
+    'queryKey' | 'queryFn' | 'enabled'
+  >
+) {
+  return useQuery<ExpertReviewDetailResponse, ApiError>({
+    queryKey: queryKeys.expertReviews.detail(reviewId ?? ''),
+    queryFn: () => getExpertReview(reviewId as string),
+    enabled: !!reviewId,
+    ...options,
+  });
+}
+
 /** Variables for the resolve mutation. */
 export interface ResolveReviewVariables {
   reviewId: string;
@@ -79,8 +102,8 @@ export interface ResolveReviewVariables {
 /**
  * Hook to resolve (approve/reject) an expert review.
  *
- * On success, invalidates BOTH the pending queue and the summary so the UI
- * reflects the resolution immediately.
+ * On success, invalidates the pending queue, the summary and any open review
+ * detail so the UI reflects the resolution immediately.
  *
  * @param options - Additional TanStack mutation options
  */
@@ -104,6 +127,10 @@ export function useResolveReview(
       queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'summary'],
       });
+      // A resolution also changes any open linked-review card.
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.expertReviews.all(), 'detail'],
+      });
     },
     ...options,
   });
@@ -114,13 +141,30 @@ export interface ReviewAssessmentVariables {
   reviewId: string;
   /** Regenerate even when a cached assessment exists. */
   force?: boolean;
+  /**
+   * true for ResolveForm's once-per-review AUTOMATIC generation. A failed
+   * automatic request releases the page guard so the review can be retried; a
+   * manual Generate/Regenerate never does (another form's automatic request may
+   * still hold the id). Not sent to the API.
+   */
+  auto?: boolean;
 }
 
 /**
  * Hook to generate (or fetch cached) the advisory agent assessment.
  *
- * On success, invalidates the pending queue so the row's cached
- * `agent_assessment_json` stays in sync on the next refetch.
+ * On success, invalidates the pending queue and any open review detail so the
+ * row's cached `agent_assessment_json` stays in sync on the next refetch. A
+ * caller-supplied `onSuccess` is COMPOSED after those invalidations (codex
+ * iter-2 F2): spreading it over the hook's own handler silently switched the
+ * invalidations off. The caller receives the response and its own variables,
+ * which is how ResolveForm keys its guard release on `persisted` / `auto`.
+ *
+ * The invalidations are fire-and-forget (fold-2 review minor): TanStack
+ * dispatches the mutation's success state -- and `data`, hence the form's
+ * assessment and its not-saved banner -- only after `onSuccess` settles, so
+ * awaiting them would hold what the reviewer sees behind the queue and
+ * detail REFETCHES.
  *
  * @param options - Additional TanStack mutation options
  */
@@ -131,14 +175,20 @@ export function useReviewAssessment(
   >
 ) {
   const queryClient = useQueryClient();
+  const { onSuccess, ...rest } = options ?? {};
 
   return useMutation<AgentAssessmentResponse, ApiError, ReviewAssessmentVariables>({
     mutationFn: ({ reviewId, force }) => generateReviewAssessment(reviewId, force),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
+    ...rest,
+    onSuccess: (data, variables, ...others) => {
+      void queryClient.invalidateQueries({
         queryKey: [...queryKeys.expertReviews.all(), 'pending'],
       });
+      // A fresh assessment also changes any open linked-review card.
+      void queryClient.invalidateQueries({
+        queryKey: [...queryKeys.expertReviews.all(), 'detail'],
+      });
+      return onSuccess?.(data, variables, ...others);
     },
-    ...options,
   });
 }

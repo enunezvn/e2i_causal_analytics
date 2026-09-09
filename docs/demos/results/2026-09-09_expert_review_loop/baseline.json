@@ -1,0 +1,559 @@
+{
+  "job_id": "b827adfe-7c8f-4077-b4be-cde1cec3d09b",
+  "image_marker": null,
+  "rows": [
+    {
+      "treatment": "treatment_arm",
+      "outcome": "treatment_initiated",
+      "row_status": "completed",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "proceed",
+      "run_status": "completed",
+      "expert_review_decision": null,
+      "expert_review_id": null,
+      "discovered_dag_id": "9da1aaac-d781-44f3-9a18-646409b0810a",
+      "analysis_id": "ae637ced-228e-4471-aa78-7509e1ca045d",
+      "tests": {
+        "unobserved_common_cause": "passed",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.19152036637134534,
+      "ci": [
+        0.156899144541957,
+        0.22614158820073368
+      ],
+      "warnings": []
+    },
+    {
+      "treatment": "urticaria_severity_uas7",
+      "outcome": "persistent_180d",
+      "row_status": "completed",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "warning",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "proceed",
+      "run_status": "completed",
+      "expert_review_decision": null,
+      "expert_review_id": null,
+      "discovered_dag_id": "26a23584-94f7-4218-ad18-5a8809c9e7be",
+      "analysis_id": "1d4f4879-88dd-465d-9cd0-ba2d68d8b27d",
+      "tests": {
+        "unobserved_common_cause": "warning",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.15054055379531292,
+      "ci": [
+        0.12411295218893154,
+        0.1769681554016943
+      ],
+      "warnings": []
+    },
+    {
+      "treatment": "copay_support",
+      "outcome": "low_gap_180d",
+      "row_status": "completed",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "warning",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "proceed",
+      "run_status": "completed",
+      "expert_review_decision": null,
+      "expert_review_id": null,
+      "discovered_dag_id": "c626710a-9f5d-4b9e-a6a9-183b7ce5da20",
+      "analysis_id": "90c164dc-91a7-4278-86e6-24580a3edaef",
+      "tests": {
+        "unobserved_common_cause": "warning",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.10322530364492336,
+      "ci": [
+        0.07579855848220073,
+        0.13065204880764597
+      ],
+      "warnings": []
+    },
+    {
+      "treatment": "copay_support",
+      "outcome": "adherent_180d",
+      "row_status": "completed",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "warning",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "proceed",
+      "run_status": "completed",
+      "expert_review_decision": null,
+      "expert_review_id": null,
+      "discovered_dag_id": "3e8cc4d0-00f9-49bd-874d-8cd8808a580b",
+      "analysis_id": "5b3e37d7-640c-470f-950b-0b252f1ddabe",
+      "tests": {
+        "unobserved_common_cause": "warning",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.09883855807657488,
+      "ci": [
+        0.07052886468367277,
+        0.12714825146947697
+      ],
+      "warnings": []
+    },
+    {
+      "treatment": "trigger_accepted",
+      "outcome": "treatment_initiated",
+      "row_status": "completed",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "warning",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "proceed",
+      "run_status": "completed",
+      "expert_review_decision": null,
+      "expert_review_id": null,
+      "discovered_dag_id": "216c7fdc-fb35-4ee8-85c5-4a8d548370f0",
+      "analysis_id": "135556fa-79b4-4698-9734-748bee300919",
+      "tests": {
+        "unobserved_common_cause": "warning",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.09599679544000578,
+      "ci": [
+        0.07002503037249885,
+        0.1219685605075127
+      ],
+      "warnings": []
+    },
+    {
+      "treatment": "psp_enrolled",
+      "outcome": "adherent_180d",
+      "row_status": "blocked",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "failed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "block",
+      "run_status": "failed",
+      "expert_review_decision": "pending_review",
+      "expert_review_id": "8317fde2-742a-42a2-8412-27df439c7c91",
+      "discovered_dag_id": "5655762f-9835-4f73-884a-61e972edb68f",
+      "analysis_id": "2463e00c-b931-451e-8b1a-ceff0b9e936c",
+      "tests": {
+        "unobserved_common_cause": "failed",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.08397866753300202,
+      "ci": [
+        0.05576345014202365,
+        0.11219388492398034
+      ],
+      "warnings": [
+        "Refutation gate BLOCKED \u2014 the estimate did not survive robustness checks."
+      ]
+    },
+    {
+      "treatment": "psp_enrolled",
+      "outcome": "persistent_180d",
+      "row_status": "blocked",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "failed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "block",
+      "run_status": "failed",
+      "expert_review_decision": "pending_review",
+      "expert_review_id": "4be7e6b3-a0df-4b6a-b1c6-c88bd842767c",
+      "discovered_dag_id": "722863ff-b95b-4fdd-9759-71bc24896411",
+      "analysis_id": "f20cdb3d-a06e-49ee-ac63-4dfa918e5c68",
+      "tests": {
+        "unobserved_common_cause": "failed",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.08302577269415709,
+      "ci": [
+        0.054088446588920605,
+        0.11196309879939356
+      ],
+      "warnings": [
+        "Latent-confounding diagnostic (FCI): the data's dependence pattern marks psp_enrolled <-> persistent_180d as sharing an unmeasured common cause, and FCI could not attribute this dependence to psp_enrolled itself. Unmeasured confounding may account for part or all of the estimated effect. The E-value sensitivity analysis was unavailable for this run, so the diagnostic could not be cross-checked and is surfaced as a precaution.",
+        "Refutation gate BLOCKED \u2014 the estimate did not survive robustness checks."
+      ]
+    },
+    {
+      "treatment": "rep_detailing_high",
+      "outcome": "treatment_initiated",
+      "row_status": "blocked",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "failed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "block",
+      "run_status": "failed",
+      "expert_review_decision": "pending_review",
+      "expert_review_id": "df88e399-4364-44c2-a0e8-d6eea1864da8",
+      "discovered_dag_id": "ab22a6d0-89b2-4ed3-a933-3e1deb1fc921",
+      "analysis_id": "fb1e6967-2887-41cf-9b0e-47d998521264",
+      "tests": {
+        "unobserved_common_cause": "failed",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.07228558281534068,
+      "ci": [
+        0.045879822259579275,
+        0.0986913433711021
+      ],
+      "warnings": [
+        "Refutation gate BLOCKED \u2014 the estimate did not survive robustness checks."
+      ]
+    },
+    {
+      "treatment": "copay_support",
+      "outcome": "persistent_180d",
+      "row_status": "blocked",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "failed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "block",
+      "run_status": "failed",
+      "expert_review_decision": "pending_review",
+      "expert_review_id": "c296ce6a-8e1a-40ae-b7f5-8002f6ea0c7a",
+      "discovered_dag_id": "38c2d56a-6166-477a-ad4e-37e9897f8063",
+      "analysis_id": "17643bea-bf4b-44df-bb7c-1e0f7f3ab397",
+      "tests": {
+        "unobserved_common_cause": "failed",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.0662609090036163,
+      "ci": [
+        0.03761555451065613,
+        0.09490626349657645
+      ],
+      "warnings": [
+        "Refutation gate BLOCKED \u2014 the estimate did not survive robustness checks."
+      ]
+    },
+    {
+      "treatment": "sample_dropped",
+      "outcome": "treatment_initiated",
+      "row_status": "blocked",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "failed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "block",
+      "run_status": "failed",
+      "expert_review_decision": "pending_review",
+      "expert_review_id": "703d03d0-6ae7-4d66-b5c2-6c83f8f0ead4",
+      "discovered_dag_id": "00cedd66-b809-4de9-b878-bf64f810d33d",
+      "analysis_id": "868eed5c-7b5d-4f0f-af7b-4b24e615bea0",
+      "tests": {
+        "unobserved_common_cause": "failed",
+        "placebo_treatment": "passed",
+        "random_common_cause": "passed"
+      },
+      "ate": 0.042490131367739,
+      "ci": [
+        0.015455641310341973,
+        0.06952462142513602
+      ],
+      "warnings": [
+        "Latent-confounding diagnostic (FCI): the data's dependence pattern marks sample_dropped <-> treatment_initiated as sharing an unmeasured common cause, and FCI could not attribute this dependence to sample_dropped itself. Unmeasured confounding may account for part or all of the estimated effect. The E-value sensitivity analysis was unavailable for this run, so the diagnostic could not be cross-checked and is surfaced as a precaution.",
+        "Refutation gate BLOCKED \u2014 the estimate did not survive robustness checks."
+      ]
+    },
+    {
+      "treatment": "treatment_arm",
+      "outcome": "persistent_180d",
+      "row_status": "blocked",
+      "db_tests": {
+        "sensitivity_e_value": {
+          "status": "failed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "placebo_treatment": {
+          "status": "passed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "random_common_cause": {
+          "status": "failed",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "data_subset": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        },
+        "bootstrap": {
+          "status": "skipped",
+          "stopped_for_budget": "",
+          "n_effects": 0
+        }
+      },
+      "gate_decision": "block",
+      "run_status": "failed",
+      "expert_review_decision": "pending_review",
+      "expert_review_id": "678e28f3-21c5-4b91-82eb-1a1098403f79",
+      "discovered_dag_id": "b0fb4994-de54-41d7-a359-f8a9dfc7249a",
+      "analysis_id": "9a688350-03ef-4eb0-aa13-a1682ea4a6b7",
+      "tests": {
+        "unobserved_common_cause": "failed",
+        "placebo_treatment": "passed",
+        "random_common_cause": "failed"
+      },
+      "ate": 0.03572485283610669,
+      "ci": [
+        -0.0029380639757581872,
+        0.07438776964797156
+      ],
+      "warnings": [
+        "Refutation gate BLOCKED \u2014 the estimate did not survive robustness checks."
+      ]
+    }
+  ]
+}

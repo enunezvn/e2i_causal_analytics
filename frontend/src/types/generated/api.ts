@@ -4292,6 +4292,13 @@ export interface paths {
          * Resolve (approve/reject) an expert review
          * @description Approve or reject a pending review; the resolution persists.
          *
+         *     The authenticated operator is recorded as the resolver: ``reviewer_name``
+         *     (their profile name, else their email, else their id) and
+         *     ``reviewer_email`` are written with the resolution, and ``resolved_at`` is
+         *     stamped for BOTH statuses (migration 136). ``reviewer_id`` is left as the
+         *     requester breadcrumb the gate wrote. An identity the token does not carry
+         *     stays unrecorded.
+         *
          *     An ``approved`` resolution sets ``valid_from``/``valid_until``/``approved_at``
          *     inside ``submit_review`` (repo :169-173). A repo ``False`` is fail-closed —
          *     never a fabricated success. FIX B (codex HIGH): ``submit_review`` now returns
@@ -4349,6 +4356,33 @@ export interface paths {
          *     A store failure is 503 (R3) -- never all-zero counts with a 200.
          */
         get: operations["get_expert_review_summary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/expert-reviews/{review_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One expert review (any status) with its same-structure history
+         * @description Return one review row in any status plus every review of the same DAG structure.
+         *
+         *     Powers the linked-review card the causal drill-down deep-links to
+         *     (``/expert-reviews?review=<id>``), so a run whose structure is pending,
+         *     approved or rejected always resolves to its record. ``history`` is the full
+         *     same-hash (and same-brand) list, newest first, expired included -- the read
+         *     ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
+         *     so it cannot shadow ``/pending`` and ``/summary``.
+         */
+        get: operations["get_expert_review"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10101,6 +10135,18 @@ export interface components {
              * @default false
              */
             include_synthetic: boolean;
+        };
+        /**
+         * ExpertReviewDetailResponse
+         * @description ``GET /expert-reviews/{review_id}``: the row plus its same-structure history.
+         *
+         *     ``history`` is every review sharing the DAG hash (and brand), newest first,
+         *     expired rows included -- the same read the gate's rejection probe performs.
+         */
+        ExpertReviewDetailResponse: {
+            review: components["schemas"]["ReviewRecord"];
+            /** History */
+            history: components["schemas"]["ReviewRecord"][];
         };
         /**
          * ExplainRequest
@@ -16313,6 +16359,77 @@ export interface components {
          * @enum {string}
          */
         RetrievalMethod: "dense" | "sparse" | "graph" | "hybrid";
+        /**
+         * ReviewRecord
+         * @description One ``expert_reviews`` row in ANY status (lane 1, spec §4.2).
+         *
+         *     Extends ``PendingReviewItem`` with the resolution columns so the queue
+         *     page's linked-review card can show who decided what, and until when.
+         *
+         *     Provenance (codex whole-diff HIGH F1): ``reviewer_id`` holds the REQUESTER
+         *     (the originating query id the gate wrote), never the resolver. The
+         *     resolver is ``reviewer_name`` / ``reviewer_email`` and the decision time is
+         *     ``resolved_at`` -- the resolution time for BOTH statuses since migration
+         *     136, NULL for rows resolved before it (``approved_at`` is approval-only).
+         */
+        ReviewRecord: {
+            /** Review Id */
+            review_id: string;
+            /** Review Type */
+            review_type?: string | null;
+            /** Dag Version Hash */
+            dag_version_hash?: string | null;
+            /** Brand */
+            brand?: string | null;
+            /** Treatment Variable */
+            treatment_variable?: string | null;
+            /** Outcome Variable */
+            outcome_variable?: string | null;
+            /** Analysis Context */
+            analysis_context?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Days Pending */
+            days_pending?: number | null;
+            /** Dag Structure Json */
+            dag_structure_json?: {
+                [key: string]: unknown;
+            } | null;
+            /** Agent Assessment Json */
+            agent_assessment_json?: {
+                [key: string]: unknown;
+            } | null;
+            /** Approval Status */
+            approval_status?: string | null;
+            /** Reviewer Id */
+            reviewer_id?: string | null;
+            /** Reviewer Name */
+            reviewer_name?: string | null;
+            /** Reviewer Email */
+            reviewer_email?: string | null;
+            /** Approved At */
+            approved_at?: string | null;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /** Valid From */
+            valid_from?: string | null;
+            /** Valid Until */
+            valid_until?: string | null;
+            /** Concerns Raised */
+            concerns_raised?: string[] | null;
+            /** Conditions */
+            conditions?: string | null;
+            /** Checklist Json */
+            checklist_json?: {
+                [key: string]: unknown;
+            } | null;
+            /** Comments Json */
+            comments_json?: {
+                [key: string]: unknown;
+            } | null;
+            /** Supersedes Review Id */
+            supersedes_review_id?: string | null;
+        };
         /**
          * ReviewSummaryResponse
          * @description Response for ``GET /expert-reviews/summary``.
@@ -28721,6 +28838,73 @@ export interface operations {
             };
             /** @description Internal server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_expert_review: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExpertReviewDetailResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Review not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Expert-review store unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

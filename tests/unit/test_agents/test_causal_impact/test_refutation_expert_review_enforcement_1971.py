@@ -181,7 +181,9 @@ class _PathRepo:
     async def find_real_paths_for_pair(self, **kwargs: Any) -> List[Dict[str, Any]]:
         return []
 
-    async def set_validation_status(self, path_id: str, new_status: str, allowed_current) -> bool:
+    async def set_validation_status(
+        self, path_id: str, new_status: str, allowed_current, **kwargs: Any
+    ) -> bool:
         self.status_calls.append(
             {"path_id": path_id, "new_status": new_status, "allowed_current": allowed_current}
         )

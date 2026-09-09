@@ -100,6 +100,320 @@ def _require_p_value(refutation: Any, test_name: str, original_effect: float) ->
 
 
 # ============================================================================
+# REAL NON-CRITICAL EVIDENCE (lane 1, spec §4.1)
+# ============================================================================
+# DoWhy 0.14's data_subset / bootstrap refuters compute per-sample effects and
+# keep only their mean and a p-value on the CausalRefutation object, so the two
+# distributional tests below could never score and were recorded SKIPPED on
+# every live run (96/96 measured 2026-09-08). The loops below re-fit the SAME
+# reported estimator with the SAME public calls DoWhy's ``_refute_once`` uses
+# and keep every effect. Reference interval: ``original_ci`` from the
+# estimation node (the reported interval) -- never the reconstruction's own.
+
+_MIN_SUBSET_RESAMPLES = 3
+_MIN_BOOTSTRAP_RESAMPLES = 10
+
+
+def _refit_effect_on(new_data: Any, identified_estimand: Any, estimate: Any) -> float:
+    """Re-fit the reported estimator on ``new_data`` and return its effect.
+
+    The four calls are the public estimator API DoWhy 0.14's own
+    ``data_subset_refuter._refute_once`` / ``bootstrap_refuter._refute_once``
+    use; nothing here substitutes a different model.
+    """
+    new_estimator = estimate.estimator.get_new_estimator_object(identified_estimand)
+    fit_params = getattr(new_estimator, "_fit_params", None) or {}
+    new_estimator.fit(
+        new_data,
+        effect_modifier_names=estimate.estimator._effect_modifier_names,
+        **fit_params,
+    )
+    new_effect = new_estimator.estimate_effect(
+        new_data,
+        control_value=estimate.control_value,
+        treatment_value=estimate.treatment_value,
+        target_units=estimate.estimator._target_units,
+    )
+    return float(new_effect.value)
+
+
+def _refutation_frame(causal_model: Any, test_name: str, original_effect: float) -> Any:
+    """The frame the CausalModel was built on (DoWhy stores it as ``_data``)."""
+    frame = getattr(causal_model, "_data", None)
+    if frame is None or not hasattr(frame, "sample") or not hasattr(frame, "columns"):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"{test_name} needs the CausalModel's DataFrame (``_data``) to resample; "
+            "the model exposes none.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "refutation_frame_missing",
+            },
+        )
+    return frame
+
+
+def _resample_effects(
+    *,
+    kind: str,
+    frame: Any,
+    identified_estimand: Any,
+    estimate: Any,
+    requested: int,
+    rng: np.random.Generator,
+    deadline: Optional[float],
+    subset_fraction: float = 0.8,
+) -> Tuple[List[float], bool]:
+    """Run up to ``requested`` re-fits, stopping at the cooperative deadline.
+
+    ``kind`` is ``"subset"`` (``frame.sample(frac=subset_fraction)``) or
+    ``"bootstrap"`` (row resample WITH replacement, same size; no confounder
+    noise -- DoWhy's default bootstrap refuter also perturbs the chosen
+    covariates, which answers a measurement-error question, not the variance
+    question this test scores). Each draw is seeded from ``rng`` so a seeded
+    caller reproduces its evidence. Returns ``(effects, stopped_for_budget)``.
+    """
+    effects: List[float] = []
+    for _ in range(max(1, int(requested))):
+        if deadline is not None and time.monotonic() >= deadline:
+            return effects, True
+        seed = int(rng.integers(0, 2**31 - 1))
+        if kind == "subset":
+            new_data = frame.sample(frac=subset_fraction, random_state=seed)
+        else:
+            new_data = frame.sample(n=len(frame), replace=True, random_state=seed)
+        effects.append(_refit_effect_on(new_data, identified_estimand, estimate))
+    return effects, False
+
+
+def _significance_p_value(
+    estimate: Any, effects: List[float], test_name: str, original_effect: float
+) -> float:
+    """p-value of the reported estimate under the resample distribution --
+    DoWhy's own ``test_significance`` (the refuters' p-value), kept real."""
+    try:
+        from dowhy.causal_refuter import test_significance
+    except ImportError as ie:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "DoWhy import failed while scoring resample evidence.",
+            details={"test_name": test_name, "reason": "dowhy_import_failed"},
+            original_error=ie,
+        ) from ie
+    result = test_significance(estimate, np.asarray(effects, dtype=float))
+    pv = result.get("p_value") if isinstance(result, dict) else None
+    if pv is None or not np.isfinite(float(pv)):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"{test_name} significance test returned no finite p_value; refusing to "
+            "substitute a placeholder.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "missing_p_value",
+            },
+        )
+    return float(pv)
+
+
+def _require_finite_effects(effects: List[float], test_name: str, original_effect: float) -> None:
+    """Fail closed on a NaN / inf re-fit (spec §5: an anomaly inside the loop is
+    treated like an exception). A non-finite effect would otherwise be SCORED:
+    DoWhy's percentile test counts NaN as "below the estimate", np.percentile
+    poisons the bootstrap interval, and coverage silently drops one sample."""
+    for i, e in enumerate(effects):
+        if not np.isfinite(e):
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                f"{test_name} re-fit #{i} returned a non-finite effect ({e!r}); refusing "
+                "to score a distribution that contains it.",
+                details={
+                    "test_name": test_name,
+                    "original_effect": original_effect,
+                    "reason": "non_finite_resample_effect",
+                    "resamples_completed": len(effects),
+                    "first_non_finite_index": i,
+                },
+            )
+
+
+def _budget_skip_result(
+    test_name: RefutationTestType,
+    original_effect: float,
+    completed: int,
+    requested: int,
+    minimum: int,
+    stopped: bool,
+    config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
+) -> RefutationResult:
+    """Honest SKIPPED when fewer than ``minimum`` re-fits completed.
+
+    ``stopped`` says WHY: the deadline stopped the loop (``time_budget``, same
+    ``reason`` / ``message`` contract as the #1419 pre-start skip) or the loop
+    ran to completion because the configured count is below the minimum
+    (``config_below_minimum``) -- a skip must not blame the budget when the
+    budget was never hit.
+    """
+    name = test_name.value
+    if stopped:
+        reason = (
+            "time_budget — non-critical test stopped before its minimum resample "
+            "count; the critical gates decide the suite"
+        )
+        message = (
+            f"{name} skipped: {completed}/{requested} resamples completed before the "
+            f"compute deadline (minimum {minimum}); non-critical, degraded honestly"
+        )
+    else:
+        reason = (
+            "config_below_minimum — requested resample count is below the test's "
+            "minimum; the critical gates decide the suite"
+        )
+        message = (
+            f"{name} skipped: {completed}/{requested} resamples requested, below the "
+            f"minimum {minimum}; non-critical, degraded honestly"
+        )
+    return RefutationResult(
+        test_name=test_name,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=original_effect,
+        details={
+            "reason": reason,
+            "message": message,
+            "resamples_completed": completed,
+            "resamples_requested": requested,
+            "stopped_for_budget": stopped,
+            **config_details,
+        },
+        execution_time_ms=execution_time_ms,
+    )
+
+
+def _degenerate_skip_result(
+    test_name: RefutationTestType,
+    original_effect: float,
+    effects: List[float],
+    requested: int,
+    stopped: bool,
+    config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
+) -> RefutationResult:
+    """Honest SKIPPED when every re-fit returned the SAME effect (owner decision
+    2026-09-09). A zero-variance distribution cannot be scored (DoWhy's normal
+    test divides by its standard deviation) and a constant re-fit is not
+    evidence of instability: an estimator that ignores its data fails the
+    CRITICAL placebo test, which decides the suite. Never a placeholder p-value,
+    never a fail-closed halt from a non-critical test."""
+    name = test_name.value
+    return RefutationResult(
+        test_name=test_name,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=float(effects[0]),
+        details={
+            "reason": (
+                "degenerate_resample_distribution — every re-fit returned the same "
+                "effect; a zero-variance distribution cannot be scored; the critical "
+                "gates decide the suite"
+            ),
+            "message": (
+                f"{name} skipped: {len(effects)} re-fits all returned "
+                f"{float(effects[0]):.6g}; non-critical, degraded honestly"
+            ),
+            "resample_effects": [float(e) for e in effects],
+            "resamples_completed": len(effects),
+            "resamples_requested": requested,
+            "stopped_for_budget": stopped,
+            **config_details,
+        },
+        execution_time_ms=execution_time_ms,
+    )
+
+
+def _require_finite_ci(
+    original_ci: Tuple[float, float], test_name: str, original_effect: float
+) -> None:
+    """Fail closed when either endpoint of the reported interval is not finite.
+
+    A non-finite endpoint is not a value: it is the same class as a NaN re-fit
+    (spec §5, fail-closed) and would otherwise be SCORED -- ``(-inf, inf)``
+    covers every subset effect (coverage 1.0) and makes the width ratio 0, a
+    PASSED verdict without a usable interval; a NaN endpoint fails from NaN
+    arithmetic and blames the estimate. The node already refuses such an
+    interval upstream (nodes/refutation.py), so this is defense-in-depth. A
+    FINITE zero-width interval is different: it is a real value that merely
+    cannot score a coverage / width test, the same class as a degenerate
+    resample distribution, and stays an honest SKIPPED
+    (``_degenerate_ci_skip_result``).
+    """
+    lo, hi = original_ci[0], original_ci[1]
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"{test_name} received a non-finite reference interval {tuple(original_ci)!r}; "
+            "refusing to score against it.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "original_ci_non_finite",
+                "original_ci": (float(lo), float(hi)),
+            },
+        )
+
+
+def _degenerate_ci_skip_result(
+    test_name: RefutationTestType,
+    original_effect: float,
+    original_ci: Tuple[float, float],
+    config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
+) -> RefutationResult:
+    """Honest SKIPPED, decided BEFORE any re-fit, when the reported interval has
+    no width: coverage of a point and a width ratio against ~0 cannot be scored
+    and would blame the estimate for an upstream degenerate interval."""
+    name = test_name.value
+    return RefutationResult(
+        test_name=test_name,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=original_effect,
+        details={
+            "reason": (
+                "original_ci_degenerate — the reported interval has no width, so "
+                "coverage / width ratio cannot be scored; the critical gates decide "
+                "the suite"
+            ),
+            "message": (
+                f"{name} skipped: original_ci={tuple(original_ci)!r} has width "
+                f"{float(original_ci[1] - original_ci[0]):.6g}; no re-fit was run; "
+                "non-critical, degraded honestly"
+            ),
+            "original_ci": (float(original_ci[0]), float(original_ci[1])),
+            "resamples_completed": 0,
+            "stopped_for_budget": False,
+            **config_details,
+        },
+        execution_time_ms=execution_time_ms,
+    )
+
+
+def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
+    """Stable 31-bit seed from the estimate id (``None`` → unseeded, as before).
+
+    The first 8 hex digits of the digest are 32 bits (measured max 4294943764
+    over the live ids, 2026-09-09); the mask keeps the promise in this docstring.
+    """
+    if not estimate_id:
+        return None
+    import hashlib
+
+    return int(hashlib.sha256(str(estimate_id).encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+
+
+# ============================================================================
 # ENUMS (aligned with database/ml/010_causal_validation_tables.sql)
 # ============================================================================
 
@@ -458,8 +772,14 @@ class RefutationRunner:
             "warning": 0.70,
         },
         "bootstrap_ci_ratio": {
-            "pass": 0.50,  # Bootstrap CI must not be > 50% wider than original
-            "warning": 0.75,
+            # ratio = bootstrap_width / original_width. A stable estimate's
+            # bootstrap interval is about as wide as its analytic one (ratio
+            # ≈ 1; measured 1.01 and 0.81 on two live pairs, 2026-09-08). The
+            # pre-lane-1 values 0.50 / 0.75 contradicted the comment beside them
+            # ("must not be > 50% wider") and would have failed nearly every
+            # real run; they never scored because the test was always SKIPPED.
+            "pass": 1.50,  # bootstrap CI at most 50% wider than the original
+            "warning": 1.75,
         },
         "e_value_min": {
             "pass": 2.0,  # E-value must be >= 2.0
@@ -639,6 +959,11 @@ class RefutationRunner:
             _budget["sim_time"] += elapsed
             _budget["sims"] += max(1, n_sims)
 
+        # Spec §4.1: the two resample loops check the deadline between re-fits
+        # and seed their draws from the estimate id so a re-run reproduces its
+        # evidence (None → unseeded, the pre-lane-1 behaviour).
+        resample_seed = _resample_seed_for(estimate_id)
+
         tests: List[RefutationResult] = []
 
         # Determine if we can use DoWhy or need mock mode
@@ -769,6 +1094,8 @@ class RefutationRunner:
                     identified_estimand=identified_estimand,
                     estimate=estimate,
                     use_dowhy=use_dowhy,
+                    deadline=deadline,
+                    resample_seed=resample_seed,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -791,6 +1118,8 @@ class RefutationRunner:
                     identified_estimand=identified_estimand,
                     estimate=estimate,
                     use_dowhy=use_dowhy,
+                    deadline=deadline,
+                    resample_seed=resample_seed,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1193,77 +1522,24 @@ class RefutationRunner:
         identified_estimand: Optional[Any],
         estimate: Optional[Any],
         use_dowhy: bool,
+        *,
+        deadline: Optional[float] = None,
+        resample_seed: Optional[int] = None,
     ) -> RefutationResult:
-        """Run data subset validation test.
+        """Data-subset consistency test on REAL per-subset evidence (spec §4.1).
 
-        Tests effect on random subsets. If effect varies significantly
-        across subsets, it may not be robust.
+        Re-fits the reported estimator on ``num_subsets`` random subsets of
+        ``subset_fraction`` of the model's frame and scores the SHARE of subset
+        effects that fall inside ``original_ci`` (the estimation node's reported
+        interval). Stops at ``deadline`` between re-fits; below
+        ``_MIN_SUBSET_RESAMPLES`` completed it returns an honest SKIPPED.
         """
         import time
 
         start_time = time.time()
-
         test_name = RefutationTestType.DATA_SUBSET
 
-        if use_dowhy and causal_model is not None:
-            try:
-                refutation = causal_model.refute_estimate(
-                    identified_estimand,
-                    estimate,
-                    method_name="data_subset_refuter",
-                    subset_fraction=self.config["data_subset"]["subset_fraction"],
-                    num_simulations=self.config["data_subset"]["num_subsets"],
-                )
-                refuted_effect = float(refutation.new_effect)
-                # Iter-2 codex H4: p_value must come from real refuter output.
-                p_value = _require_p_value(refutation, "data_subset", original_effect)
-                # Iter-6 codex H-iter5-2: the data_subset test answers
-                # "is the effect consistent across data subsets?". That is
-                # a DISTRIBUTIONAL question requiring per-subset effects.
-                # DoWhy >= 0.10 does not expose ``subset_effects`` in
-                # refutation_result by default; collapsing the question to
-                # "is the single aggregated mean within original CI?" is a
-                # silent substitution, not the same answer. Mark the test
-                # SKIPPED when raw subset effects are unavailable instead
-                # of fabricating a coverage signal.
-                subset_effects = refutation.refutation_result.get("subset_effects", [])
-                if not subset_effects:
-                    execution_time = (time.time() - start_time) * 1000
-                    return RefutationResult(
-                        test_name=test_name,
-                        status=RefutationStatus.SKIPPED,
-                        original_effect=original_effect,
-                        refuted_effect=refuted_effect,
-                        p_value=p_value,
-                        delta_percent=0.0,
-                        details={
-                            "message": (
-                                "Data-subset distributional check skipped: "
-                                "DoWhy refutation_result did not expose 'subset_effects'. "
-                                "Single-point coverage would not answer the consistency "
-                                "question. Mark SKIPPED rather than fabricate."
-                            ),
-                            "ci_coverage_available": False,
-                            "subset_fraction": self.config["data_subset"]["subset_fraction"],
-                            "num_subsets": self.config["data_subset"]["num_subsets"],
-                        },
-                        execution_time_ms=execution_time,
-                    )
-                ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
-            except RefutationError:
-                raise
-            except Exception as e:
-                # F-014 fail-closed: no silent mock fallback.
-                raise RefutationError(
-                    "Refutation analysis unavailable for this query, retry without refutation. "
-                    f"DoWhy data_subset refuter failed: {e}",
-                    details={
-                        "test_name": "data_subset",
-                        "original_effect": original_effect,
-                    },
-                    original_error=e,
-                ) from e
-        else:
+        if not (use_dowhy and causal_model is not None):
             # F-014 fail-closed: defense-in-depth for legacy non-agent callers.
             raise RefutationError(
                 "Refutation analysis unavailable for this query, retry without refutation. "
@@ -1276,11 +1552,78 @@ class RefutationRunner:
                 },
             )
 
+        cfg = self.config["data_subset"]
+        requested = int(cfg["num_subsets"])
+        subset_fraction = float(cfg["subset_fraction"])
+        config_details = {"subset_fraction": subset_fraction, "num_subsets": requested}
+        frame = _refutation_frame(causal_model, "data_subset", original_effect)
+        _require_finite_ci(original_ci, "data_subset", original_effect)
+        if original_ci[1] - original_ci[0] <= 0:
+            return _degenerate_ci_skip_result(
+                test_name,
+                original_effect,
+                original_ci,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+        rng = np.random.default_rng(resample_seed)
+        try:
+            subset_effects, stopped = _resample_effects(
+                kind="subset",
+                frame=frame,
+                identified_estimand=identified_estimand,
+                estimate=estimate,
+                requested=requested,
+                rng=rng,
+                deadline=deadline,
+                subset_fraction=subset_fraction,
+            )
+        except RefutationError:
+            raise
+        except Exception as e:
+            # F-014 fail-closed: no silent mock fallback.
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                f"data_subset re-fit failed: {e}",
+                details={"test_name": "data_subset", "original_effect": original_effect},
+                original_error=e,
+            ) from e
+
+        _require_finite_effects(subset_effects, "data_subset", original_effect)
+        if len(subset_effects) < _MIN_SUBSET_RESAMPLES:
+            return _budget_skip_result(
+                test_name,
+                original_effect,
+                len(subset_effects),
+                requested,
+                _MIN_SUBSET_RESAMPLES,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+
+        # "Every re-fit returned the same effect" is tested EXACTLY (max == min):
+        # np.std of n identical floats is not 0.0 for most n (twelve 0.15s give
+        # 2.8e-17, measured 2026-09-09), which would let DoWhy's normal test
+        # score a constant series with a meaningless p-value.
+        if float(np.ptp(subset_effects)) == 0.0:
+            return _degenerate_skip_result(
+                test_name,
+                original_effect,
+                subset_effects,
+                requested,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+
+        refuted_effect = float(np.mean(subset_effects))
+        p_value = _significance_p_value(estimate, subset_effects, "data_subset", original_effect)
+        ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
         delta_percent = (
             abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
         )
 
-        # Determine status based on CI coverage
         if ci_coverage >= self.thresholds["subset_ci_coverage"]["pass"]:
             status = RefutationStatus.PASSED
             message = f"Effect consistent across {int(ci_coverage * 100)}% of data subsets"
@@ -1292,7 +1635,6 @@ class RefutationRunner:
             message = f"WARNING: Effect inconsistent across data subsets ({int(ci_coverage * 100)}% coverage)"
 
         execution_time = (time.time() - start_time) * 1000
-
         return RefutationResult(
             test_name=test_name,
             status=status,
@@ -1303,8 +1645,11 @@ class RefutationRunner:
             details={
                 "message": message,
                 "ci_coverage": ci_coverage,
-                "subset_fraction": self.config["data_subset"]["subset_fraction"],
-                "num_subsets": self.config["data_subset"]["num_subsets"],
+                "subset_effects": [float(e) for e in subset_effects],
+                "resamples_completed": len(subset_effects),
+                "resamples_requested": requested,
+                "stopped_for_budget": stopped,
+                **config_details,
             },
             execution_time_ms=execution_time,
         )
@@ -1317,80 +1662,25 @@ class RefutationRunner:
         identified_estimand: Optional[Any],
         estimate: Optional[Any],
         use_dowhy: bool,
+        *,
+        deadline: Optional[float] = None,
+        resample_seed: Optional[int] = None,
     ) -> RefutationResult:
-        """Run bootstrap stability test.
+        """Bootstrap stability test on REAL per-resample evidence (spec §4.1).
 
-        Tests effect stability via bootstrap resampling.
+        Re-fits the reported estimator on ``num_bootstraps`` row resamples (with
+        replacement, same size) of the model's frame; the 2.5th–97.5th
+        percentile width of the resample effects is compared with the width of
+        ``original_ci``. Thresholds: pass ≤ 1.5×, warning ≤ 1.75×, else failed
+        (``PASS_THRESHOLDS["bootstrap_ci_ratio"]``). Stops at ``deadline``
+        between re-fits; below ``_MIN_BOOTSTRAP_RESAMPLES`` it returns SKIPPED.
         """
         import time
 
         start_time = time.time()
-
         test_name = RefutationTestType.BOOTSTRAP
 
-        if use_dowhy and causal_model is not None:
-            try:
-                refutation = causal_model.refute_estimate(
-                    identified_estimand,
-                    estimate,
-                    method_name="bootstrap_refuter",
-                    num_simulations=self.config["bootstrap"]["num_bootstraps"],
-                )
-                # DoWhy's BootstrapRefuter exposes the bootstrapped mean via
-                # ``new_effect`` and ``p_value`` via ``refutation_result``.
-                # Older / stub variants may also expose ``bootstrap_estimates``.
-                # Iter-6 codex H-iter5-3: the bootstrap test answers
-                # "what is the variance / stability of the effect under
-                # resampling?". That is a DISTRIBUTIONAL question requiring
-                # per-bootstrap effects. When DoWhy does not expose
-                # ``bootstrap_estimates``, delta-based stability against
-                # original_ci is a different question (point-in-interval
-                # check, not variance). Mark SKIPPED rather than substitute.
-                bootstrap_effects = refutation.refutation_result.get("bootstrap_estimates", [])
-                # Iter-2 codex H4: p_value must come from real refuter output.
-                p_value = _require_p_value(refutation, "bootstrap", original_effect)
-                if not bootstrap_effects:
-                    refuted_effect = float(refutation.new_effect)
-                    execution_time = (time.time() - start_time) * 1000
-                    return RefutationResult(
-                        test_name=test_name,
-                        status=RefutationStatus.SKIPPED,
-                        original_effect=original_effect,
-                        refuted_effect=refuted_effect,
-                        p_value=p_value,
-                        delta_percent=0.0,
-                        details={
-                            "message": (
-                                "Bootstrap variance check skipped: "
-                                "DoWhy refutation_result did not expose 'bootstrap_estimates'. "
-                                "Delta-vs-original-CI would not answer the variance "
-                                "question. Mark SKIPPED rather than fabricate."
-                            ),
-                            "bootstrap_ci_available": False,
-                            "num_bootstraps": self.config["bootstrap"]["num_bootstraps"],
-                        },
-                        execution_time_ms=execution_time,
-                    )
-                refuted_effect = float(np.mean(bootstrap_effects))
-                bootstrap_ci = (
-                    float(np.percentile(bootstrap_effects, 2.5)),
-                    float(np.percentile(bootstrap_effects, 97.5)),
-                )
-            except RefutationError:
-                raise
-            except Exception as e:
-                # F-014 fail-closed: no silent mock fallback.
-                raise RefutationError(
-                    "Refutation analysis unavailable for this query, retry without refutation. "
-                    f"DoWhy bootstrap refuter failed: {e}",
-                    details={
-                        "test_name": "bootstrap",
-                        "original_effect": original_effect,
-                    },
-                    original_error=e,
-                ) from e
-        else:
-            # F-014 fail-closed: defense-in-depth for legacy non-agent callers.
+        if not (use_dowhy and causal_model is not None):
             raise RefutationError(
                 "Refutation analysis unavailable for this query, retry without refutation. "
                 "bootstrap test requires a real DoWhy CausalModel; "
@@ -1402,19 +1692,84 @@ class RefutationRunner:
                 },
             )
 
-        # Iter-6 codex H-iter5-3: by this point ``bootstrap_ci_available`` is
-        # guaranteed True (the ``not bootstrap_effects`` branch above returned
-        # SKIPPED early). We compute CI ratio from real bootstrap percentiles.
+        requested = int(self.config["bootstrap"]["num_bootstraps"])
+        config_details = {"num_bootstraps": requested}
+        frame = _refutation_frame(causal_model, "bootstrap", original_effect)
+        _require_finite_ci(original_ci, "bootstrap", original_effect)
+        if original_ci[1] - original_ci[0] <= 0:
+            return _degenerate_ci_skip_result(
+                test_name,
+                original_effect,
+                original_ci,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+        rng = np.random.default_rng(resample_seed)
+        try:
+            bootstrap_effects, stopped = _resample_effects(
+                kind="bootstrap",
+                frame=frame,
+                identified_estimand=identified_estimand,
+                estimate=estimate,
+                requested=requested,
+                rng=rng,
+                deadline=deadline,
+            )
+        except RefutationError:
+            raise
+        except Exception as e:
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                f"bootstrap re-fit failed: {e}",
+                details={"test_name": "bootstrap", "original_effect": original_effect},
+                original_error=e,
+            ) from e
+
+        _require_finite_effects(bootstrap_effects, "bootstrap", original_effect)
+        if len(bootstrap_effects) < _MIN_BOOTSTRAP_RESAMPLES:
+            return _budget_skip_result(
+                test_name,
+                original_effect,
+                len(bootstrap_effects),
+                requested,
+                _MIN_BOOTSTRAP_RESAMPLES,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+
+        # Exact degeneracy check (max == min); see _run_data_subset_test.
+        if float(np.ptp(bootstrap_effects)) == 0.0:
+            return _degenerate_skip_result(
+                test_name,
+                original_effect,
+                bootstrap_effects,
+                requested,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+
+        refuted_effect = float(np.mean(bootstrap_effects))
+        p_value = _significance_p_value(estimate, bootstrap_effects, "bootstrap", original_effect)
+        bootstrap_ci = (
+            float(np.percentile(bootstrap_effects, 2.5)),
+            float(np.percentile(bootstrap_effects, 97.5)),
+        )
         delta_percent = (
             abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
         )
         original_ci_width = original_ci[1] - original_ci[0]
         bootstrap_ci_width = bootstrap_ci[1] - bootstrap_ci[0]
-        ci_ratio = bootstrap_ci_width / max(original_ci_width, 1e-10)
+        # The width is finite and > 0 here (_require_finite_ci + the widthless
+        # guard above), so divide by the ACTUAL width: a floor (formerly 1e-10)
+        # understated the ratio for a tiny but valid interval (codex iter-1 F1:
+        # width 1e-12, bootstrap width 2e-11 read 0.2 PASSED; true ratio 20).
+        ci_ratio = bootstrap_ci_width / original_ci_width
 
         if ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["pass"]:
             status = RefutationStatus.PASSED
-            message = f"Effect stable across {self.config['bootstrap']['num_bootstraps']} bootstrap samples"
+            message = f"Effect stable across {len(bootstrap_effects)} bootstrap samples"
         elif ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["warning"]:
             status = RefutationStatus.WARNING
             message = "Bootstrap CI moderately wider than original"
@@ -1423,7 +1778,6 @@ class RefutationRunner:
             message = "WARNING: High variance in bootstrap estimates"
 
         execution_time = (time.time() - start_time) * 1000
-
         return RefutationResult(
             test_name=test_name,
             status=status,
@@ -1436,7 +1790,11 @@ class RefutationRunner:
                 "bootstrap_ci": bootstrap_ci,
                 "ci_ratio": ci_ratio,
                 "bootstrap_ci_available": True,
-                "num_bootstraps": self.config["bootstrap"]["num_bootstraps"],
+                "bootstrap_effects": [float(e) for e in bootstrap_effects],
+                "resamples_completed": len(bootstrap_effects),
+                "resamples_requested": requested,
+                "stopped_for_budget": stopped,
+                **config_details,
             },
             execution_time_ms=execution_time,
         )

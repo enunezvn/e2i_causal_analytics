@@ -329,6 +329,22 @@ class ExpertReviewGate:
                 message="DAG has active expert approval",
             )
 
+        # A REJECTED verdict is durable (#1970). ``get_reviews_for_dag`` orders
+        # created_at DESC, so if the most recent adjudication of this DAG is
+        # 'rejected' a human already turned this structure down.
+        # Auto-creating a fresh pending row on the next REVIEW/BLOCK band would
+        # silently undo that decision. A NEWER approval or pending row wins:
+        # ``reopened`` comes from the ``_latest_adjudication`` call above; a
+        # genuinely newer pending row sets it and skips this block, reaching
+        # the pending branch below. A reviewer who wants to re-open the
+        # structure does so from the review UI, not by re-running. #1971
+        # gives the verdict its own decision value
+        # (REJECTED, not BLOCKED) so consumers can tell "a human said no" from
+        # "nobody has looked yet and no row could be queued".
+        if superseded_by_rejection and not reopened:
+            assert latest_verdict is not None  # narrowed by superseded_by_rejection
+            return self._rejection_result(latest_verdict, dag_hash)
+
         # No usable approval - check for pending review (a pending row NEWER
         # than a rejection is a reviewer re-opening the structure).
         pending = [r for r in history if r.get("approval_status") == "pending"]
@@ -361,20 +377,6 @@ class ExpertReviewGate:
                 message="DAG review pending expert approval",
                 requires_action=True,
             )
-
-        # A REJECTED verdict is durable (#1970). ``get_reviews_for_dag`` orders
-        # created_at DESC, so if the most recent adjudication of this DAG is
-        # 'rejected' a human already turned this structure down.
-        # Auto-creating a fresh pending row on the next REVIEW/BLOCK band would
-        # silently undo that decision. A NEWER approval or pending row wins
-        # (handled above -- ``reopened`` covers the pending case); a reviewer
-        # who wants to re-open the structure does so from the review UI, not
-        # by re-running. #1971 gives the verdict its own decision value
-        # (REJECTED, not BLOCKED) so consumers can tell "a human said no" from
-        # "nobody has looked yet and no row could be queued".
-        if superseded_by_rejection and not reopened:
-            assert latest_verdict is not None  # narrowed by superseded_by_rejection
-            return self._rejection_result(latest_verdict, dag_hash)
 
         # No approval and no pending review
         if self.auto_create_review and requester_id:
@@ -433,12 +435,29 @@ class ExpertReviewGate:
         ``history`` is newest-first (``get_reviews_for_dag`` orders created_at
         DESC; rows are created and resolved in order because the unique-pending
         index (migration 062) allows one open review per structure at a time,
-        so creation order is adjudication order). ``None`` when nothing has
-        been adjudicated yet.
+        so creation order is adjudication order). An exact ``created_at`` tie
+        between a pending row and the adjudication after it is not a reopen
+        (migration 134 reads it the same way). ``None`` when nothing has been
+        adjudicated yet.
         """
         reopened = False
-        for row in history:
+        for idx, row in enumerate(history):
             if row.get("approval_status") == "pending":
+                # Tie-break (lane 1): a pending row that shares its created_at
+                # with the adjudication that follows it is NOT newer than it --
+                # the reading migration 134's strict ``>`` gives -- so the probe
+                # and the promote can never disagree on a tie. Rows without a
+                # timestamp keep the repository's order (unchanged behaviour).
+                nxt = next(
+                    (r for r in history[idx + 1 :] if r.get("approval_status") != "pending"),
+                    None,
+                )
+                if (
+                    nxt is not None
+                    and row.get("created_at")
+                    and row.get("created_at") == nxt.get("created_at")
+                ):
+                    continue
                 reopened = True
                 continue
             return row, reopened

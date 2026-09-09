@@ -262,6 +262,81 @@ class TestExpertReviewRepository:
         assert result is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("approval_status", ["rejected", "approved"])
+    async def test_submit_review_records_resolution_provenance(
+        self, repo, mock_client, approval_status
+    ):
+        """Codex whole-diff HIGH F1: BOTH statuses stamp ``resolved_at`` and carry
+        the resolver's identity; ``reviewer_id`` is never overwritten (it holds
+        the REQUESTER -- the originating query id, gate :392)."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+
+        result = await repo.submit_review(
+            review_id="rev-123",
+            approval_status=approval_status,
+            checklist={"confounder_check": True},
+            reviewer_name="Dr. Operator",
+            reviewer_email="operator@example.com",
+        )
+
+        assert result is True
+        payload = mock_client.table.return_value.update.call_args[0][0]
+        assert payload["resolved_at"] == "now()"
+        assert payload["reviewer_name"] == "Dr. Operator"
+        assert payload["reviewer_email"] == "operator@example.com"
+        assert "reviewer_id" not in payload
+        # approved_at stays approval-only; a rejection records resolved_at alone.
+        assert ("approved_at" in payload) is (approval_status == "approved")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("approval_status", ["rejected", "approved"])
+    async def test_submit_review_writes_null_identity_when_the_resolver_is_unknown(
+        self, repo, mock_client, approval_status
+    ):
+        """Codex iter-2 HIGH F1: the reviewer display fields describe the RESOLVER
+        by construction. ``renew_review`` pre-fills ``reviewer_name`` /
+        ``reviewer_email`` with the REQUESTER's, so a None-strip that dropped an
+        unknown resolver's fields would leave that requester standing as the
+        "reviewer". Both keys are therefore PRESENT in the UPDATE with JSON null
+        -- never omitted -- while ``reviewer_id`` (the requester breadcrumb) is
+        never touched."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+
+        result = await repo.submit_review(
+            review_id="rev-123", approval_status=approval_status, checklist={}
+        )
+
+        assert result is True
+        payload = mock_client.table.return_value.update.call_args[0][0]
+        assert payload["resolved_at"] == "now()"
+        assert "reviewer_name" in payload and payload["reviewer_name"] is None
+        assert "reviewer_email" in payload and payload["reviewer_email"] is None
+        assert "reviewer_id" not in payload
+        # The None-strip still applies to everything else (no fabricated nulls).
+        assert "conditions" not in payload and "concerns_raised" not in payload
+
+    @pytest.mark.asyncio
+    async def test_submit_review_id_only_resolver_writes_the_name_and_a_null_email(
+        self, repo, mock_client
+    ):
+        """An id-only resolver (the route passes the id as the display name): the
+        name is written and the email is EXPLICITLY null, so a renewal's requester
+        email cannot survive as the resolver's."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+
+        result = await repo.submit_review(
+            review_id="rev-123", approval_status="rejected", checklist={}, reviewer_name="op-3"
+        )
+
+        assert result is True
+        payload = mock_client.table.return_value.update.call_args[0][0]
+        assert payload["reviewer_name"] == "op-3"
+        assert "reviewer_email" in payload and payload["reviewer_email"] is None
+
+    @pytest.mark.asyncio
     async def test_submit_review_zero_rows_returns_false(self, repo, mock_client):
         """FIX B (codex HIGH): a ZERO-ROW update must return False, not True.
 

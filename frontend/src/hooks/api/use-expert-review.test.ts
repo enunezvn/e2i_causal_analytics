@@ -12,6 +12,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
 import type {
+  ExpertReviewDetailResponse,
   PendingReviewsResponse,
   ResolveReviewResponse,
   ReviewSummaryResponse,
@@ -23,6 +24,7 @@ vi.mock('@/api/expert-review', () => ({
   resolveReview: vi.fn(),
   getReviewSummary: vi.fn(),
   generateReviewAssessment: vi.fn(),
+  getExpertReview: vi.fn(),
 }));
 
 // Mock query-client
@@ -42,11 +44,13 @@ vi.mock('@/lib/query-client', () => ({
         ] as const,
       summary: (params?: { brand?: string }) =>
         ['e2i', 'expert-reviews', 'summary', params?.brand ?? null] as const,
+      detail: (reviewId: string) => ['e2i', 'expert-reviews', 'detail', reviewId] as const,
     },
   },
 }));
 
 import {
+  useExpertReview,
   usePendingReviews,
   useResolveReview,
   useReviewAssessment,
@@ -195,8 +199,9 @@ describe('useResolveReview', () => {
       '11111111-1111-1111-1111-111111111111',
       { approval_status: 'approved', checklist: { conf_complete: true } }
     );
-    // invalidate both the pending queue and the summary
-    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    // invalidate the pending queue, the summary AND any open linked-review detail
+    expect(invalidateSpy).toHaveBeenCalledTimes(3);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'detail'] });
   });
 
   it('handles a resolve error', async () => {
@@ -274,7 +279,66 @@ describe('useReviewAssessment', () => {
       '11111111-1111-1111-1111-111111111111',
       true
     );
-    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    // invalidate the pending queue AND any open linked-review detail
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'detail'] });
+  });
+
+  it('still performs BOTH invalidations when the caller supplies onSuccess, and calls it after them (codex iter-2 F2)', async () => {
+    // Pre-fix: `...options` REPLACED the hook's onSuccess, so a caller callback
+    // silently switched the cache invalidations off.
+    vi.mocked(expertReviewApi.generateReviewAssessment).mockResolvedValueOnce({
+      ...mockAssessmentResponse,
+      persisted: false,
+    });
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const order: string[] = [];
+    invalidateSpy.mockImplementation(async () => {
+      order.push('invalidate');
+    });
+    const onSuccess = vi.fn((..._args: unknown[]) => {
+      order.push('onSuccess');
+    });
+
+    const { result } = renderHook(() => useReviewAssessment({ onSuccess }), { wrapper });
+    result.current.mutate({ reviewId: '11111111-1111-1111-1111-111111111111', auto: true });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'pending'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'detail'] });
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    // The caller sees the response AND its own variables (the form keys its guard release on them).
+    expect(onSuccess.mock.calls[0][0]).toEqual({ ...mockAssessmentResponse, persisted: false });
+    expect(onSuccess.mock.calls[0][1]).toEqual({ reviewId: '11111111-1111-1111-1111-111111111111', auto: true });
+    expect(order).toEqual(['invalidate', 'invalidate', 'onSuccess']);
+  });
+
+  it('reaches isSuccess before the invalidations settle, so a slow queue refetch never delays the assessment (review minor)', async () => {
+    vi.mocked(expertReviewApi.generateReviewAssessment).mockResolvedValueOnce(
+      mockAssessmentResponse
+    );
+    const { wrapper, queryClient } = createWrapper();
+    // Both invalidations hang on ONE deferred promise that is released only AFTER
+    // success has been asserted: an awaiting hook could not pass this.
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const invalidateSpy = vi
+      .spyOn(queryClient, 'invalidateQueries')
+      .mockImplementation(() => pending);
+    const onSuccess = vi.fn();
+
+    const { result } = renderHook(() => useReviewAssessment({ onSuccess }), { wrapper });
+    result.current.mutate({ reviewId: '11111111-1111-1111-1111-111111111111', auto: true });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(mockAssessmentResponse);
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    release();
+    await pending;
   });
 
   it('handles an assessment error', async () => {
@@ -288,5 +352,44 @@ describe('useReviewAssessment', () => {
     result.current.mutate({ reviewId: 'bad' });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+const mockDetailResponse: ExpertReviewDetailResponse = {
+  review: {
+    review_id: 'rev-1',
+    review_type: 'dag_approval',
+    dag_version_hash: 'deadbeefcafebabe0123',
+    brand: 'Kisqali',
+    treatment_variable: 'treatment_arm',
+    outcome_variable: 'persistent_180d',
+    approval_status: 'rejected',
+    reviewer_name: 'Dr. No',
+    created_at: '2026-07-13T10:00:00Z',
+  },
+  history: [],
+};
+
+describe('useExpertReview', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fetches one review (any status) by id', async () => {
+    vi.mocked(expertReviewApi.getExpertReview).mockResolvedValueOnce(mockDetailResponse);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useExpertReview('rev-1'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(mockDetailResponse);
+    expect(expertReviewApi.getExpertReview).toHaveBeenCalledWith('rev-1');
+  });
+
+  it('stays idle without an id', () => {
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useExpertReview(null), { wrapper });
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(expertReviewApi.getExpertReview).not.toHaveBeenCalled();
   });
 });

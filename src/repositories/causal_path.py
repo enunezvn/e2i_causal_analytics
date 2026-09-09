@@ -4,11 +4,14 @@ Causal Path Repository.
 Handles discovered causal relationships.
 """
 
+import logging
 import re
 from typing import Any, List, Optional
 
 from src.repositories.base import BaseRepository
 from src.utils.type_helpers import parse_supabase_rows
+
+logger = logging.getLogger(__name__)
 
 
 def outcome_match_tokens(term: str) -> List[str]:
@@ -379,6 +382,9 @@ class CausalPathRepository(BaseRepository):
         path_id: str,
         new_status: str,
         allowed_current: tuple,
+        *,
+        dag_version_hash: Optional[str] = None,
+        brand: Optional[str] = None,
     ) -> bool:
         """Conditionally move a path's ``validation_status`` (SOLE-promoter write).
 
@@ -389,9 +395,47 @@ class CausalPathRepository(BaseRepository):
         caller (RefutationNode) degrades with a logged warning; a silent False
         on infra failure would be indistinguishable from a legitimate
         no-transition.
+
+        Lane 1 (spec §4.3): when ``dag_version_hash`` is given the transition
+        runs through the ``promote_causal_path_guarded`` RPC (migration 134),
+        which evaluates the expert-review chronology rule INSIDE the same
+        UPDATE statement, so a rejection committed after the node's read-only
+        probe can never be promoted over. Without a hash there is no structure
+        to check and the plain conditional update is kept.
         """
         if not self.client:
             return False
+        if dag_version_hash:
+            result = await self.client.rpc(
+                "promote_causal_path_guarded",
+                {
+                    "p_path_id": path_id,
+                    "p_new_status": new_status,
+                    "p_allowed_current": list(allowed_current),
+                    "p_dag_version_hash": dag_version_hash,
+                    "p_brand": brand,
+                },
+            ).execute()
+            payload: Any = result.data
+            if isinstance(payload, list):
+                payload = payload[0] if payload else {}
+            if not isinstance(payload, dict):
+                logger.warning(
+                    "guarded promote: unexpected payload %r for causal_paths.%s; "
+                    "treating as no transition",
+                    result.data,
+                    path_id,
+                )
+                payload = {}
+            if payload.get("rejected"):
+                logger.info(
+                    "guarded promote: structure %s… is rejected by expert review; "
+                    "causal_paths.%s not moved to %s",
+                    dag_version_hash[:12],
+                    path_id,
+                    new_status,
+                )
+            return int(payload.get("moved") or 0) > 0
         result = await (
             self.client.table(self.table_name)
             .update({"validation_status": new_status})

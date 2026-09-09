@@ -14,10 +14,23 @@ resolves it via ``POST /{review_id}/resolve``.
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _json_string_to_dict(value: Any) -> Any:
+    """Shared ``mode="before"`` body for JSONB columns the repo writes as
+    ``json.dumps`` strings: parse a string, keep only a dict, pass anything
+    else through untouched."""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return value
 
 
 class PendingReviewItem(BaseModel):
@@ -50,13 +63,52 @@ class PendingReviewItem(BaseModel):
     @field_validator("dag_structure_json", "agent_assessment_json", mode="before")
     @classmethod
     def _parse_json_string(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except (ValueError, TypeError):
-                return None
-            return parsed if isinstance(parsed, dict) else None
-        return value
+        return _json_string_to_dict(value)
+
+
+class ReviewRecord(PendingReviewItem):
+    """One ``expert_reviews`` row in ANY status (lane 1, spec §4.2).
+
+    Extends ``PendingReviewItem`` with the resolution columns so the queue
+    page's linked-review card can show who decided what, and until when.
+
+    Provenance (codex whole-diff HIGH F1): ``reviewer_id`` holds the REQUESTER
+    (the originating query id the gate wrote), never the resolver. The
+    resolver is ``reviewer_name`` / ``reviewer_email`` and the decision time is
+    ``resolved_at`` -- the resolution time for BOTH statuses since migration
+    136, NULL for rows resolved before it (``approved_at`` is approval-only).
+    """
+
+    approval_status: Optional[str] = None
+    reviewer_id: Optional[str] = None
+    reviewer_name: Optional[str] = None
+    reviewer_email: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    #: Resolution time for both statuses (migration 136); None before it.
+    resolved_at: Optional[datetime] = None
+    valid_from: Optional[date] = None
+    valid_until: Optional[date] = None
+    concerns_raised: Optional[List[str]] = None
+    conditions: Optional[str] = None
+    checklist_json: Optional[Dict[str, Any]] = None
+    comments_json: Optional[Dict[str, Any]] = None
+    supersedes_review_id: Optional[str] = None
+
+    @field_validator("checklist_json", "comments_json", mode="before")
+    @classmethod
+    def _parse_resolution_json(cls, value: Any) -> Any:
+        return _json_string_to_dict(value)
+
+
+class ExpertReviewDetailResponse(BaseModel):
+    """``GET /expert-reviews/{review_id}``: the row plus its same-structure history.
+
+    ``history`` is every review sharing the DAG hash (and brand), newest first,
+    expired rows included -- the same read the gate's rejection probe performs.
+    """
+
+    review: ReviewRecord
+    history: List[ReviewRecord]
 
 
 class PendingReviewsResponse(BaseModel):

@@ -867,6 +867,30 @@ class TestCheckRejection:
         )
 
     @pytest.mark.asyncio
+    async def test_halt_message_names_the_reviewer_only_when_one_was_recorded(self, mock_repo):
+        """Codex iter-2 HIGH F1: the halt reason names whoever ``reviewer_name``
+        holds. A resolution now writes the RESOLVER's name (NULL when unknown),
+        so a None must read as no one -- never a requester, never a placeholder
+        -- and a recorded name must be named (positive control)."""
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[self._rejected(reviewer_name=None)])
+        anonymous = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
+        assert anonymous is not None
+        assert anonymous.reviewer_name is None
+        assert anonymous.message == (
+            "DAG structure was rejected by expert review: "
+            "formulary_status is a collider; not re-queued"
+        )
+
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[self._rejected()])
+        named = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
+        assert named is not None
+        assert named.message == (
+            "DAG structure was rejected by expert review by Dr. No: "
+            "formulary_status is a collider; not re-queued"
+        )
+
+    @pytest.mark.asyncio
     async def test_newer_active_approval_wins_over_an_older_rejection(self, mock_repo):
         """Chronology (rows newest first): approval after rejection -> cleared."""
         mock_repo.get_dag_approval = AsyncMock(
@@ -946,6 +970,42 @@ class TestCheckRejection:
         )
 
         assert await ExpertReviewGate(repository=mock_repo).check_rejection("abc123") is None
+
+    @pytest.mark.asyncio
+    async def test_pending_row_tied_with_the_rejection_is_not_a_reopen(self, mock_repo):
+        """Migration 134 reads a pending row with the SAME created_at as the
+        rejection as NOT newer (strict >). The probe must read the tie the same
+        way whatever order the repository returns it in (lane 1, Task 3b); a
+        genuinely newer pending row still reopens."""
+        ts = "2026-09-08T12:00:00+00:00"
+        rejected = self._rejected(created_at=ts)
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        for rows in (
+            [{"review_id": "rev-tie", "approval_status": "pending", "created_at": ts}, rejected],
+            [rejected, {"review_id": "rev-tie", "approval_status": "pending", "created_at": ts}],
+        ):
+            mock_repo.get_reviews_for_dag = AsyncMock(return_value=rows)
+            result = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
+            assert result is not None and result.decision == ReviewGateDecision.REJECTED
+            # Both readers, one rule: check_approval must not read the tied
+            # pending row as PENDING_REVIEW while check_rejection says REJECTED.
+            approval = await ExpertReviewGate(repository=mock_repo).check_approval("abc123")
+            assert approval.decision == ReviewGateDecision.REJECTED
+
+        newer = [
+            {
+                "review_id": "rev-new",
+                "approval_status": "pending",
+                "created_at": "2026-09-09T00:00:00+00:00",
+            },
+            rejected,
+        ]
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=newer)
+        assert await ExpertReviewGate(repository=mock_repo).check_rejection("abc123") is None
+        # The moved durable-rejection block must not swallow a genuinely newer
+        # pending row: ``reopened`` skips it and the pending branch answers.
+        approval = await ExpertReviewGate(repository=mock_repo).check_approval("abc123")
+        assert approval.decision == ReviewGateDecision.PENDING_REVIEW
 
     @pytest.mark.asyncio
     async def test_no_rows_is_not_a_rejection(self, mock_repo):

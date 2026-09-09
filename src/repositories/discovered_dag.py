@@ -30,9 +30,7 @@ that omits it, and :meth:`record` refuses to send one.
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import date, datetime
 from typing import Any, Dict, List, Mapping, Optional, cast
 from uuid import UUID
 
@@ -41,6 +39,8 @@ import pandas as pd
 
 from src.causal_engine.discovery.base import DiscoveryResult
 from src.repositories.base import BaseRepository
+from src.repositories.json_utils import json_default as _json_default  # noqa: F401  (kept name)
+from src.repositories.json_utils import to_plain_json as _to_plain_json
 from src.repositories.provenance import (
     PROVENANCE_COLUMN,
     apply_provenance_filter,
@@ -63,36 +63,9 @@ class DiscoveredDagPersistError(RuntimeError):
 # ---------------------------------------------------------------------------
 # JSON normalisation — algorithm wrappers hand back numpy scalars/arrays and
 # the latent diagnostic carries tuples; httpx must see plain JSON types.
+# Shared with the causal_validation writer via src.repositories.json_utils
+# (lane 1); the private names are kept so call sites and tests are untouched.
 # ---------------------------------------------------------------------------
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (set, frozenset, tuple)):
-        return list(value)
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, UUID):
-        return str(value)
-    if hasattr(value, "value") and not isinstance(value, (str, bytes)):
-        # Enum members (GateDecision / EdgeType / DiscoveryAlgorithmType).
-        return value.value
-    return str(value)
-
-
-def _to_plain_json(value: Any) -> Any:
-    """Round-trip through JSON so every leaf is a plain JSON type.
-
-    Non-finite floats (NaN / Infinity / -Infinity, including numpy ones)
-    become ``None``: JSON has no such values and the transport encodes with
-    ``allow_nan=False`` (httpx ``_content.py``), so one stray NaN in a score
-    or a wrapper's metadata would otherwise fail the WHOLE write. ``null`` is
-    the honest JSON reading of "no finite value" (codex iter-2 MED).
-    """
-    return json.loads(json.dumps(value, default=_json_default), parse_constant=lambda _: None)
 
 
 def _enum_value(value: Any) -> Any:

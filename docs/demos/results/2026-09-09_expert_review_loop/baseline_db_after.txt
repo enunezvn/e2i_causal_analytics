@@ -1,0 +1,8 @@
+# measured 2026-09-09T14:29:44Z on supabase-db (docker exec psql), after the baseline job (started 2026-09-09T13:24:40Z, finished 13:56:18Z)
+## expert_reviews by approval_status (status|count)
+pending|39
+rejected|1
+## causal_validations: total|written since the job start
+1080|55
+## discovered_dags: total|written since the job start
+12|11

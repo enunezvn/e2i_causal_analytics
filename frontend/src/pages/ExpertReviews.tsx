@@ -1,16 +1,26 @@
 /**
- * Expert Reviews Page (R6-F2 Phase B4; DAG snapshot + advisory assessment 097)
+ * Expert Reviews Page (R6-F2 Phase B4; DAG snapshot + advisory assessment 097;
+ * lane 1: linked review, brand filter, honest summary, assessment prefetch)
  * ============================================================================
  *
  * Admin review-queue UI for the causal-DAG human-in-the-loop loop.
  *
- * A REVIEW-band causal estimate creates a `pending` expert_reviews row; an
- * operator sees it here and resolves it (approve/reject) with the 010 checklist
- * items + comments. The expanded row renders the DAG under review from its
- * stored snapshot (`dag_structure_json`) — rows created before snapshot capture
- * show an honest "not captured" fallback — and an ADVISORY agent assessment of
- * the checklist questions (`agent_assessment_json`, generated on demand). The
- * assessment never pre-fills the human checklist.
+ * A REVIEW- or BLOCK-band causal estimate creates a `pending` expert_reviews
+ * row; an operator sees it here and resolves it (approve/reject) with the 010
+ * checklist items + comments. The expanded row renders the DAG under review
+ * from its stored snapshot and an ADVISORY agent assessment that never
+ * pre-fills the human checklist.
+ *
+ * Lane 1 (spec §4.5):
+ * - `?review=<id>` opens a linked-review card (any status + same-DAG history),
+ *   the destination of the causal drill-down's "Open review" link.
+ * - The queue and the counts follow the GLOBAL brand filter (the same SSOT the
+ *   Causal Analysis page reads, #1752). "All" is the only way to see the rows
+ *   that carry no brand.
+ * - A summary read failure renders a banner instead of silently dropping the
+ *   counts.
+ * - "Prepare assessments" generates the missing advisory assessments one row
+ *   at a time; expanding a row generates its own if none is cached.
  *
  * Honest states: loading spinner, error banner, and an EmptyState (no hardcoded
  * SAMPLE_ data) when the live queue is empty.
@@ -18,284 +28,37 @@
  * @module pages/ExpertReviews
  */
 
-import { Fragment, useState, useCallback } from 'react';
-import {
-  ClipboardCheck,
-  CheckCircle2,
-  XCircle,
-  RefreshCw,
-  Inbox,
-  Sparkles,
-} from 'lucide-react';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { Fragment, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { ClipboardCheck, Inbox, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { WarningBanner } from '@/components/ui/WarningBanner';
-import { CausalDAG } from '@/components/visualizations/causal/CausalDAG';
-import type {
-  CausalNode,
-  CausalEdge,
-} from '@/components/visualizations/causal/CausalDAG';
-import {
-  usePendingReviews,
-  useResolveReview,
-  useReviewAssessment,
-  useReviewSummary,
-} from '@/hooks/api/use-expert-review';
-import type {
-  AgentAssessment,
-  AssessmentVerdict,
-  DagStructure,
-  PendingReviewItem,
-  ReviewApprovalStatus,
-} from '@/types/expert-review';
-
-// The minimal reviewer checklist (the 010 SYSTEM_TEMPLATE required items).
-const CHECKLIST_ITEMS: { id: string; question: string }[] = [
-  { id: 'conf_complete', question: 'Are all known confounders included?' },
-  { id: 'edge_plausible', question: 'Do causal arrows reflect domain knowledge?' },
-  { id: 'no_forbidden', question: 'Are there no forbidden edges (future→past)?' },
-  { id: 'mediators_correct', question: 'Are intermediate variables correctly positioned?' },
-  { id: 'sutva_plausible', question: 'Is the no-interference assumption reasonable?' },
-  { id: 'positivity', question: 'Is there sufficient overlap in treatment groups?' },
-];
-
-function shortHash(hash?: string | null): string {
-  if (!hash) return '—';
-  return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash;
-}
-
-// Verdict chip styling: concern is the only destructive signal; supports and
-// the two "human judgment required" verdicts stay visually calm.
-const VERDICT_VARIANT: Record<AssessmentVerdict, 'secondary' | 'destructive' | 'outline'> =
-  {
-    supports: 'secondary',
-    concern: 'destructive',
-    unclear: 'outline',
-    no_evidence: 'outline',
-  };
-
-/** Render the stored DAG snapshot, or an honest fallback for pre-097 rows. */
-function DagPanel({ structure }: { structure?: DagStructure | null }) {
-  if (!structure?.nodes?.length) {
-    return (
-      <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-sm text-[var(--color-muted-foreground)]">
-        DAG structure not captured for this review (created before snapshot
-        capture was added). The DAG hash identifies the structure but cannot be
-        rendered from it.
-      </div>
-    );
-  }
-
-  const treatments = new Set(structure.treatment_nodes ?? []);
-  const outcomes = new Set(structure.outcome_nodes ?? []);
-  const augmented = new Set(
-    (structure.augmented_edges ?? []).map(([s, t]) => `${s}->${t}`)
-  );
-
-  const nodes: CausalNode[] = structure.nodes.map((id) => ({
-    id,
-    label: id,
-    type: treatments.has(id) ? 'treatment' : outcomes.has(id) ? 'outcome' : 'variable',
-  }));
-  const edges: CausalEdge[] = (structure.edges ?? []).map(([source, target]) => ({
-    id: `${source}->${target}`,
-    source,
-    target,
-    // Discovery-augmented edges are visually distinct: they were added by the
-    // discovery gate, not the curated domain DAG.
-    type: augmented.has(`${source}->${target}`) ? 'association' : 'causal',
-  }));
-
-  return (
-    <div className="space-y-2">
-      <h4 className="text-sm font-medium">DAG under review</h4>
-      <CausalDAG
-        nodes={nodes}
-        edges={edges}
-        minHeight={320}
-        ariaLabel="Causal DAG under review"
-      />
-      {structure.augmented_edges && structure.augmented_edges.length > 0 && (
-        <p className="text-xs text-[var(--color-muted-foreground)]">
-          Dashed/association edges were discovery-augmented (gate=
-          {structure.discovery_gate_decision ?? 'unknown'}).
-        </p>
-      )}
-    </div>
-  );
-}
-
-interface ResolveFormProps {
-  review: PendingReviewItem;
-  onClose: () => void;
-}
-
-function ResolveForm({ review, onClose }: ResolveFormProps) {
-  const [checklist, setChecklist] = useState<Record<string, boolean>>({});
-  const [comments, setComments] = useState('');
-  const resolve = useResolveReview();
-  const assessmentMutation = useReviewAssessment();
-
-  // Prefer the freshly generated assessment; fall back to the row's cache.
-  const assessment: AgentAssessment | null =
-    assessmentMutation.data?.assessment ?? review.agent_assessment_json ?? null;
-  const assessmentById = new Map(
-    (assessment?.items ?? []).map((item) => [item.id, item])
-  );
-
-  const submit = useCallback(
-    (approval_status: ReviewApprovalStatus) => {
-      resolve.mutate(
-        {
-          reviewId: review.review_id,
-          body: {
-            approval_status,
-            checklist,
-            comments: comments ? { note: comments } : undefined,
-          },
-        },
-        { onSuccess: onClose }
-      );
-    },
-    [resolve, review.review_id, checklist, comments, onClose]
-  );
-
-  return (
-    <div className="space-y-4 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/20 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
-          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-          Agent assessment (advisory — the checklist answers are yours)
-          {assessment?.is_fallback && ' · deterministic, no LLM'}
-        </span>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            assessmentMutation.mutate({
-              reviewId: review.review_id,
-              force: !!assessment,
-            })
-          }
-          disabled={assessmentMutation.isPending}
-        >
-          <RefreshCw
-            className={`mr-1 h-3.5 w-3.5 ${assessmentMutation.isPending ? 'animate-spin' : ''}`}
-          />
-          {assessment ? 'Regenerate agent assessment' : 'Generate agent assessment'}
-        </Button>
-      </div>
-
-      {assessmentMutation.isError && (
-        <WarningBanner
-          title="Failed to generate agent assessment"
-          messages={[
-            assessmentMutation.error?.message ?? 'An unexpected error occurred.',
-          ]}
-        />
-      )}
-
-      <div className="space-y-2">
-        {CHECKLIST_ITEMS.map((item) => {
-          const graded = assessmentById.get(item.id);
-          return (
-            <div key={item.id} className="space-y-0.5">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id={`${review.review_id}-${item.id}`}
-                  checked={!!checklist[item.id]}
-                  onCheckedChange={(v) =>
-                    setChecklist((prev) => ({ ...prev, [item.id]: v === true }))
-                  }
-                />
-                <Label htmlFor={`${review.review_id}-${item.id}`} className="text-sm">
-                  {item.question}
-                </Label>
-                {graded && (
-                  <Badge variant={VERDICT_VARIANT[graded.verdict] ?? 'outline'}>
-                    {graded.verdict}
-                  </Badge>
-                )}
-              </div>
-              {graded && (
-                <p className="pl-6 text-xs text-[var(--color-muted-foreground)]">
-                  {graded.rationale}
-                </p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="space-y-1">
-        <Label htmlFor={`${review.review_id}-comments`} className="text-sm">
-          Comments
-        </Label>
-        <textarea
-          id={`${review.review_id}-comments`}
-          value={comments}
-          onChange={(e) => setComments(e.target.value)}
-          rows={3}
-          className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background)] p-2 text-sm"
-          placeholder="Reviewer notes (optional)"
-        />
-      </div>
-
-      {resolve.isError && (
-        <WarningBanner
-          title="Failed to submit review"
-          messages={[resolve.error?.message ?? 'An unexpected error occurred.']}
-        />
-      )}
-
-      <div className="flex items-center gap-2">
-        <Button
-          size="sm"
-          onClick={() => submit('approved')}
-          disabled={resolve.isPending}
-        >
-          <CheckCircle2 className="mr-1 h-4 w-4" />
-          Approve
-        </Button>
-        <Button
-          size="sm"
-          variant="destructive"
-          onClick={() => submit('rejected')}
-          disabled={resolve.isPending}
-        >
-          <XCircle className="mr-1 h-4 w-4" />
-          Reject
-        </Button>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={resolve.isPending}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
-}
+import { DagPanel } from '@/components/expert-review/DagPanel';
+import { LinkedReviewCard } from '@/components/expert-review/LinkedReviewCard';
+import { PrepareAssessmentsButton } from '@/components/expert-review/PrepareAssessmentsButton';
+import { ResolveForm } from '@/components/expert-review/ResolveForm';
+import { shortHash } from '@/components/expert-review/checklist';
+import { usePendingReviews, useReviewSummary } from '@/hooks/api/use-expert-review';
+import { useE2IFilters } from '@/hooks/use-e2i-filters';
 
 export default function ExpertReviews() {
-  const { data, isLoading, isError, error, refetch, isFetching } = usePendingReviews();
-  const { data: summary } = useReviewSummary();
+  const [searchParams] = useSearchParams();
+  const linkedReviewId = searchParams.get('review')?.trim() || null;
+
+  const { filters } = useE2IFilters();
+  const brand = filters.brand === 'All' ? undefined : (filters.brand as string);
+  const params = brand ? { brand } : undefined;
+
+  const { data, isLoading, isError, error, refetch, isFetching } = usePendingReviews(params);
+  const summary = useReviewSummary(params);
   const [openRow, setOpenRow] = useState<string | null>(null);
+  // One auto-generated assessment per review id across the page (the linked
+  // card and a queue row can show the same review).
+  const autoAssessGuard = useRef<Set<string>>(new Set());
 
   const reviews = data?.reviews ?? [];
 
@@ -317,25 +80,46 @@ export default function ExpertReviews() {
         </Button>
       </div>
 
-      {summary && (
+      {summary.isError && (
+        <WarningBanner
+          title="Review counts unavailable"
+          messages={[summary.error?.message ?? 'An unexpected error occurred.']}
+        />
+      )}
+      {/* TanStack keeps the last data on a refetch error; the banner REPLACES the
+          counts (spec §4.5) rather than sitting above stale ones. */}
+      {summary.data && !summary.isError && (
         <div className="flex flex-wrap gap-2">
           {/* pending/approved/rejected/expired partition the rows; expiring_soon
               is a SUBSET of approved (#1972), so it is labelled and styled as a
               qualifier rather than a fourth peer count that could be added in. */}
-          <Badge variant="secondary">Pending: {summary.pending}</Badge>
-          <Badge variant="secondary">Approved: {summary.approved}</Badge>
-          <Badge variant="secondary">Rejected: {summary.rejected}</Badge>
-          <Badge variant="secondary">Expired: {summary.expired}</Badge>
-          <Badge variant="outline">
-            of which expiring soon: {summary.expiring_soon}
-          </Badge>
+          <Badge variant="secondary">Pending: {summary.data.pending}</Badge>
+          <Badge variant="secondary">Approved: {summary.data.approved}</Badge>
+          <Badge variant="secondary">Rejected: {summary.data.rejected}</Badge>
+          <Badge variant="secondary">Expired: {summary.data.expired}</Badge>
+          <Badge variant="outline">of which expiring soon: {summary.data.expiring_soon}</Badge>
         </div>
+      )}
+
+      {linkedReviewId && (
+        <LinkedReviewCard reviewId={linkedReviewId} autoAssessGuard={autoAssessGuard} />
       )}
 
       <Card>
         <CardHeader>
-          <CardTitle>Pending Queue</CardTitle>
-          <CardDescription>Oldest reviews first.</CardDescription>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <CardTitle>Pending Queue</CardTitle>
+              <CardDescription>
+                {brand
+                  ? `Oldest reviews first · brand: ${brand}. Reviews with no brand are listed under All.`
+                  : 'Oldest reviews first · all brands, including reviews with no brand.'}
+              </CardDescription>
+            </div>
+            {reviews.length > 0 && (
+              <PrepareAssessmentsButton reviews={reviews} autoAssessGuard={autoAssessGuard} />
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -373,9 +157,7 @@ export default function ExpertReviews() {
                       <TableCell>{review.brand ?? '—'}</TableCell>
                       <TableCell>{review.treatment_variable ?? '—'}</TableCell>
                       <TableCell>{review.outcome_variable ?? '—'}</TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {shortHash(review.dag_version_hash)}
-                      </TableCell>
+                      <TableCell className="font-mono text-xs">{shortHash(review.dag_version_hash)}</TableCell>
                       <TableCell>{review.review_type ?? '—'}</TableCell>
                       <TableCell>
                         {review.days_pending != null ? Math.round(review.days_pending) : '—'}
@@ -385,9 +167,7 @@ export default function ExpertReviews() {
                           size="sm"
                           variant="outline"
                           onClick={() =>
-                            setOpenRow((prev) =>
-                              prev === review.review_id ? null : review.review_id
-                            )
+                            setOpenRow((prev) => (prev === review.review_id ? null : review.review_id))
                           }
                         >
                           {openRow === review.review_id ? 'Close' : 'Review'}
@@ -402,6 +182,7 @@ export default function ExpertReviews() {
                             <ResolveForm
                               review={review}
                               onClose={() => setOpenRow(null)}
+                              autoAssessGuard={autoAssessGuard}
                             />
                           </div>
                         </TableCell>

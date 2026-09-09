@@ -244,6 +244,18 @@ export interface RefutationSummary {
   gate_decision?: string | null;
   passed: boolean;
   needs_review: boolean;
+  /**
+   * The expert-review row this run touched: the queue row on a REVIEW/BLOCK
+   * gate, the approval row when one is active, or the rejection row when a
+   * reviewer rejected the structure (any gate). Absent when none was involved.
+   */
+  expert_review_id?: string | null;
+  /**
+   * proceed / renewal_required / pending_review / rejected / blocked /
+   * unavailable — the structural verdict (#1971). Approval never promotes a
+   * borderline estimate; a rejection halts the run on every band.
+   */
+  expert_review_decision?: string | null;
   tests_passed?: number | null;
   tests_total?: number | null;
   sensitivity_e_value?: number | null;
@@ -291,6 +303,12 @@ export interface AgentCausalAnalysisResponse {
   dag: CausalDAGModel;
   /** How the DAG was built: 'discovered' | 'prior_asserted' | 'augmented' | 'domain_knowledge' */
   dag_source?: string;
+  /**
+   * Row id of this run's durable discovery record in public.discovered_dags
+   * (#1974). Absent when discovery did not run or persistence failed (then
+   * `warnings` carries the reason).
+   */
+  discovered_dag_id?: string | null;
   /** Confounders the DATA identified beyond the declared covariates — empty when the adjustment set only echoes the declaration (full set on dag.adjustment_sets). */
   discovered_confounders?: string[];
   /** Adjusted (headline) average treatment effect. */
