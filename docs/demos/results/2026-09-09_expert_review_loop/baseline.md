@@ -1,9 +1,9 @@
 # Lane 1 — baseline discovery run on the CURRENT (pre-lane) image
 
-- Image: `ghcr.io/enunezvn/e2i-api:f30e9e9df4fdd3b6350e3ecc47f891a72902c596`
-- Job: `b827adfe-7c8f-4077-b4be-cde1cec3d09b` (POST /api/causal/discover-effects, dataset `patient_journeys`, brand `Remibrutinib`), started 2026-09-09T13:24:40Z, 11/11 rows after 1887 s
-- Live DB before: pending|39; rejected|1; 1025 (expert_reviews by status; causal_validations count) — after: pending 39 / rejected 1 (all six BLOCK rows re-used existing pending rows by hash), causal_validations 1080 (+55), discovered_dags 12
-- The live question registry returned **11** questions for this brand (spec §7 and the plan say 12); the job's own `total` is the source of truth.
+- Image: `ghcr.io/enunezvn/e2i-api:f30e9e9df4fdd3b6350e3ecc47f891a72902c596` (`baseline_image.txt`; `image_marker` in `baseline.json` is the runner script's placeholder, null by design)
+- Job: `b827adfe-7c8f-4077-b4be-cde1cec3d09b` (POST /api/causal/discover-effects, dataset `patient_journeys`, brand `Remibrutinib`), started 2026-09-09T13:24:40Z (`baseline_started_at.txt`), 11/11 rows after 1887 s (`baseline.log`: line 1 `total 11`, last progress line `11/11 after 1887s`)
+- Live DB before (`baseline_db_before.txt`): pending|39; rejected|1; 1025 (expert_reviews by status; causal_validations count) — after (`baseline_db_after.txt`, measured 2026-09-09T14:29Z): pending 39 / rejected 1, causal_validations 1080 (+55 written since the job start), discovered_dags 12 (11 written since the job start). All six BLOCK rows re-used existing pending rows by hash: `baseline_review_rows_preexisting.txt` lists the six review ids the BLOCK rows returned, created 2026-07-28..2026-09-05, all before the 13:24:40Z start
+- The live question registry returned **11** questions for this brand (`baseline.log` line 1: `total 11`; spec §7 and the plan say 12); the job's own `total` is the source of truth.
 - `data_subset` / `bootstrap` columns read straight from `public.causal_validations` (the API omits SKIPPED tests); `n` = number of recorded per-resample effects.
 
 | question | row | run | band | sensitivity | data_subset | bootstrap | review decision | review id | discovered_dag_id | ate |
