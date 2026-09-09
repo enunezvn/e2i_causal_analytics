@@ -6400,6 +6400,25 @@ rep(
     'review schema; can_use_estimate() at :393 (retired by migration 133 — historical reference)</td>',
 )
 
+# §4.2 (codex iter-4d): pass cells use the code's operators (>= / <=); REVIEW stated as the
+# weighted rule with its reachable values, 0.65 as the observed case, not the requirement.
+rep(
+    '<td>placebo p &gt; 0.05</td>',
+    '<td>placebo p ≥ 0.05</td>',
+)
+rep(
+    '<td>effect change &lt; 20 %</td>',
+    '<td>effect change ≤ 20 %</td>',
+)
+rep(
+    'With only the three critical tests scoring, the reachable confidence values without a critical failure are 1.0 and 0.867, both PROCEED; REVIEW needs one critical test in WARNING <em>and</em> both non-critical tests FAILED (0.65) — only sensitivity or random_common_cause can warn as coded (the placebo WARNING band is unreachable), and in the 96-run sample the warning was always sensitivity.',
+    'The band is the weighted rule in <code>_calculate_confidence_score</code> / <code>_determine_gate_decision</code>: confidence is the weighted mean over the NON-SKIPPED tests (critical 0.25 each, non-critical 0.125 each; PASSED 1.0, WARNING 0.6, FAILED 0.0); any critical FAILED → BLOCK, else ≥ 0.70 PROCEED, ≥ 0.50 REVIEW, else BLOCK. With only the three critical tests scoring — the pre-lane state, both non-critical tests SKIPPED and the placebo WARNING band unreachable as coded — the values reachable without a critical failure are 1.0, 0.867 and 0.733 (two WARNINGs), all PROCEED, so REVIEW was unreachable by construction. With real non-critical evidence several combinations reach it: one critical WARNING plus both non-critical FAILED = 0.65 (the case the design analysis worked through), two critical WARNINGs plus one non-critical FAILED = 0.675, two critical WARNINGs plus one non-critical WARNING and the other FAILED = 0.625; a sensitivity WARNING alone still scores 0.90 (PROCEED). Only sensitivity or random_common_cause can warn as coded, and in the 96-run sample the warning was always sensitivity.',
+)
+rep(
+    'The band needs one critical test in WARNING (in every live run so far, sensitivity) plus both non-critical tests FAILED; 0 of 96 live runs reached it.',
+    'REVIEW is the weighted band (confidence ≥ 0.50 and &lt; 0.70 with no critical FAILED; critical tests weigh 0.25, non-critical 0.125, WARNING scores 0.6): with only the critical tests scoring, the values reachable without a failure are 1.0, 0.867 and 0.733, all PROCEED, so the band needs real non-critical evidence — e.g. one critical WARNING (in every live run so far, sensitivity) plus both non-critical tests FAILED, 0.65; 0 of 96 live runs reached it.',
+)
+
 for old, new in EDITS:
     n = s.count(old)
     assert n == 1, f"expected exactly one occurrence, found {n}: {old[:80]!r}"
@@ -6408,11 +6427,13 @@ DOC.write_text(s, encoding="utf-8")
 print(f"applied {len(EDITS)} edits")
 ```
 
-Expected output: `applied 23 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
+Expected output: `applied 27 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
 
 Why (codex iter-4 docs audit): the §4.3 "Gate state machine" list still described the pre-#1969 no-repository PROCEED bypass and a rejected-row BLOCKED branch, contradicting the Finding callout above it and the shipped gate — `check_approval` answers UNAVAILABLE (`is_approved=False`) without a store, and the every-band `check_rejection` probe (node `_consult_review_gate`) halts a rejected structure — so the list, its summary chips, its anchors and the index rows were rewritten by the same exact-match script (six more `rep` entries). Iter-4b: the §3 stage intro still ended "It is not written to a DAG table", stale since the §3.3 row described the durable `public.discovered_dags` record (#1974); one more `rep` entry replaces that sentence.
 
 Why (codex iter-4c): `PASS_THRESHOLDS["placebo_p_value"]` is pass 0.05 / warning 0.10 and `_run_placebo_test` tests `p >= pass` before `p >= warning`, so the placebo WARNING band has been unreachable since the runner's first commit (0742b81f6); the confidence score is symmetric across the three critical tests, so REVIEW needs ANY critical WARNING plus both non-critical FAILED (0.65), and in the 96-run sample that warning was always sensitivity. Lane 1 does not change the placebo code (band impact on a critical test is an owner decision, filed at close-out): the page's §4.2 band table, Measured callout and §4.8 gaps register describe the shipped behaviour, and the `can_use_estimate` index row is marked retired (migration 133). The spec is untouched.
+
+Why (codex iter-4d): the REVIEW arithmetic was stated as one case, not the rule. `_calculate_confidence_score` is the weighted mean over non-SKIPPED tests (critical 0.25, non-critical 0.125; PASSED 1.0 / WARNING 0.6 / FAILED 0.0) and `_determine_gate_decision` is any-critical-FAILED → BLOCK, else ≥ 0.70 PROCEED, ≥ 0.50 REVIEW (GATE_THRESHOLDS); computed from those weights: critical-only values 1.0 / 0.867 / 0.733 (all PROCEED), REVIEW cases 0.65, 0.675, 0.625, a sensitivity WARNING alone 0.90. The Measured callout and the gaps item now state the rule with 0.65 as the observed case; the §4.2 pass cells use the code's operators (placebo `p >= 0.05`, random_common_cause `delta <= 20 %`; sensitivity already `>= 2.0`). Spec untouched.
 
 - [ ] **Step 2: Add the map's discovery box label**
 
