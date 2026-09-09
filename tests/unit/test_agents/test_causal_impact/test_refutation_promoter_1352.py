@@ -88,12 +88,18 @@ class _FakePathRepo:
         return list(self.pair_rows)
 
     async def set_validation_status(
-        self, path_id: str, new_status: str, allowed_current: tuple
+        self, path_id: str, new_status: str, allowed_current: tuple, **kwargs: Any
     ) -> bool:
         if self.fail_update:
             raise RuntimeError("db write failed")
         self.status_calls.append(
-            {"path_id": path_id, "new_status": new_status, "allowed_current": allowed_current}
+            {
+                "path_id": path_id,
+                "new_status": new_status,
+                "allowed_current": allowed_current,
+                "dag_version_hash": kwargs.get("dag_version_hash"),
+                "brand": kwargs.get("brand"),
+            }
         )
         return True
 
@@ -238,6 +244,34 @@ class TestLinkedPromotion:
         # Evidence still lands, under the run's own query-derived id.
         kwargs = repo.save_suite.call_args.kwargs
         assert kwargs["estimate_source"] == "causal_impact_query"
+
+    @pytest.mark.asyncio
+    async def test_promote_carries_the_structure_hash_and_brand(self) -> None:
+        """Lane 1 (spec §4.3): the guarded RPC needs the run's DAG hash and brand
+        to evaluate the rejection rule inside the UPDATE."""
+        repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
+        await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001", dag_version_hash="h" * 64, brand="Kisqali"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
+        )
+        call = path_repo.status_calls[0]
+        assert call["dag_version_hash"] == "h" * 64
+        assert call["brand"] == "Kisqali"
+
+    @pytest.mark.asyncio
+    async def test_promote_without_a_hash_passes_none(self) -> None:
+        repo = _validation_repo()
+        path_repo = _FakePathRepo(rows_by_id={"cp_real_000000001": _real_row()})
+        node = RefutationNode(validation_repo=repo, causal_path_repo=path_repo)
+        state = _state(causal_path_id="cp_real_000000001")
+        state.pop("dag_version_hash", None)
+        await node._persist_suite_and_promote(
+            state, _suite(GateDecision.PROCEED), structure_verdict="clear"
+        )
+        assert path_repo.status_calls[0]["dag_version_hash"] is None
 
 
 class TestPromotionGuards:

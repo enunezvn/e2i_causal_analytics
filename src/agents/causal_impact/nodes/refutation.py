@@ -978,8 +978,18 @@ class RefutationNode:
             return validation_ids, {}
         new_status, allowed_current = transition
         try:
+            # Lane 1 (spec §4.3): the guarded RPC re-evaluates the rejection rule
+            # inside the UPDATE, so the probe→write window can no longer be won
+            # by a rejection committed in between.
             moved = await self.causal_path_repo.set_validation_status(
-                path_id, new_status, allowed_current
+                path_id,
+                new_status,
+                allowed_current,
+                dag_version_hash=(str(state.get("dag_version_hash") or "") or None),
+                # '' is "no brand" for the Python probe (``if brand:``) and, via
+                # NULLIF, for the SQL rule; pass None so the two can never
+                # disagree (pre-execution review 2026-09-08).
+                brand=(cast(Optional[str], state.get("brand")) or None),
             )
         except Exception as promote_err:  # noqa: BLE001 - never break the analysis
             logger.warning(
