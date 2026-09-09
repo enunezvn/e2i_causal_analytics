@@ -617,6 +617,19 @@ class RefutationSummary(BaseModel):
             "CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true (default off, #1971)."
         ),
     )
+    review_caveat: Optional[str] = Field(
+        default=None,
+        description=(
+            "The band-specific expert-review caveat the agent built (#1995): the "
+            "refutation band sentence followed by the HITL sentence -- the approval "
+            "(reviewer + validity window; approval is STRUCTURAL and covers the DAG, "
+            "not this estimate's robustness), the rejection (reviewer + reason), or "
+            "the queued / blocked / unavailable variant. Present on REVIEW and BLOCK "
+            "gates and on a PROCEED-gate rejection; None when the gate was not "
+            "consulted. Also carried in warnings: standalone on a non-halted run, "
+            "embedded verbatim in the 'Estimate withheld' halt line on a halted one."
+        ),
+    )
     tests_passed: Optional[int] = Field(default=None)
     tests_total: Optional[int] = Field(default=None)
     sensitivity_e_value: Optional[float] = Field(default=None)

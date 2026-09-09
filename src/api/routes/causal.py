@@ -3691,7 +3691,12 @@ def _agent_state_to_response(
     id and how to resolve it -- in warnings, and the gate verdict in
     ``refutation.expert_review_decision`` / ``expert_review_id``. ``failed`` is
     reused rather than a fourth status because the frontend poll loop treats
-    only completed / needs_review / failed as terminal.
+    only completed / needs_review / failed as terminal. The agent's
+    ``review_caveat`` (#1995: the band + HITL sentence naming the approval or
+    rejection, reviewer and validity window) is surfaced as
+    ``refutation.review_caveat`` and appended to warnings unless a warning
+    already contains it -- the agent's halt line embeds it verbatim -- so the
+    caveat text appears in warnings exactly once.
     """
     causal_graph = final_state.get("causal_graph") or {}
     estimation = final_state.get("estimation_result") or {}
@@ -3822,6 +3827,11 @@ def _agent_state_to_response(
     needs_review = gate_decision == "review"
     # #1971: withheld on the expert-review gate -- may sit on a PROCEED gate.
     expert_review_halt = bool(final_state.get("expert_review_halt"))
+    # #1995: the agent's band + HITL sentence (approval with reviewer and validity
+    # window, rejection with reason, queued / blocked / unavailable). Built on
+    # every REVIEW/BLOCK consult and on a PROCEED-band rejection; blank = not
+    # consulted.
+    review_caveat = str(final_state.get("review_caveat") or "").strip() or None
 
     if (
         ate is not None
@@ -3844,6 +3854,10 @@ def _agent_state_to_response(
         # #1971: the gate's verdict travels with its row id so consumers can
         # distinguish pending_review from an active structural approval.
         expert_review_decision=final_state.get("expert_review_decision"),
+        # #1995: the caveat as a structured field, so a BLOCK-band run (which
+        # never halts -- the statistical gate already withheld the estimate)
+        # still records who approved / rejected the structure and why.
+        review_caveat=review_caveat,
         tests_passed=refutation.get("tests_passed"),
         tests_total=refutation.get("total_tests"),
         sensitivity_e_value=sensitivity.get("e_value"),
@@ -3869,6 +3883,14 @@ def _agent_state_to_response(
             str(final_state.get("error_message") or "")
             or "Estimate withheld on the expert-review gate (no reason recorded)."
         )
+    if review_caveat and not any(review_caveat in w for w in warnings):
+        # #1995: warnings is the drill-down's only prose channel. Containment
+        # rule rather than "not halted": the agent's halt line embeds the caveat
+        # verbatim (refutation.py _expert_review_halt_reason), in which case it
+        # is already present and must not be repeated; a halt whose message does
+        # NOT carry it (e.g. the fallback above) still gets it standalone. Either
+        # way the caveat text appears exactly once.
+        warnings.append(review_caveat)
 
     return AgentCausalAnalysisResponse(
         analysis_id=analysis_id,
