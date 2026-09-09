@@ -4292,6 +4292,13 @@ export interface paths {
          * Resolve (approve/reject) an expert review
          * @description Approve or reject a pending review; the resolution persists.
          *
+         *     The authenticated operator is recorded as the resolver: ``reviewer_name``
+         *     (their profile name, else their email, else their id) and
+         *     ``reviewer_email`` are written with the resolution, and ``resolved_at`` is
+         *     stamped for BOTH statuses (migration 136). ``reviewer_id`` is left as the
+         *     requester breadcrumb the gate wrote. An identity the token does not carry
+         *     stays unrecorded.
+         *
          *     An ``approved`` resolution sets ``valid_from``/``valid_until``/``approved_at``
          *     inside ``submit_review`` (repo :169-173). A repo ``False`` is fail-closed —
          *     never a fabricated success. FIX B (codex HIGH): ``submit_review`` now returns
@@ -16358,6 +16365,12 @@ export interface components {
          *
          *     Extends ``PendingReviewItem`` with the resolution columns so the queue
          *     page's linked-review card can show who decided what, and until when.
+         *
+         *     Provenance (codex whole-diff HIGH F1): ``reviewer_id`` holds the REQUESTER
+         *     (the originating query id the gate wrote), never the resolver. The
+         *     resolver is ``reviewer_name`` / ``reviewer_email`` and the decision time is
+         *     ``resolved_at`` -- the resolution time for BOTH statuses since migration
+         *     136, NULL for rows resolved before it (``approved_at`` is approval-only).
          */
         ReviewRecord: {
             /** Review Id */
@@ -16392,8 +16405,12 @@ export interface components {
             reviewer_id?: string | null;
             /** Reviewer Name */
             reviewer_name?: string | null;
+            /** Reviewer Email */
+            reviewer_email?: string | null;
             /** Approved At */
             approved_at?: string | null;
+            /** Resolved At */
+            resolved_at?: string | null;
             /** Valid From */
             valid_from?: string | null;
             /** Valid Until */
