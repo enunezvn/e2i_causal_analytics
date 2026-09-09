@@ -16034,6 +16034,11 @@ export interface components {
              * @description ExpertReviewGate decision for the DAG structure: proceed (active structural approval) / renewal_required (approval expiring) / pending_review (queued; resolve via POST /expert-reviews/{id}/resolve) / rejected (a human rejected this structure) / blocked (no approval, no review could be queued) / unavailable (the gate could not be consulted; nothing was checked or queued). Recorded on REVIEW/BLOCK gates, and on a PROCEED gate only when a rejection was found. None when not consulted. Approval is STRUCTURAL and never promotes a borderline estimate. The run is halted (status 'failed', reason in warnings) on 'rejected' always, and on pending_review/blocked/unavailable only when CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true (default off, #1971).
              */
             expert_review_decision?: string | null;
+            /**
+             * Review Caveat
+             * @description The band-specific expert-review caveat the agent built (#1995): the refutation band sentence followed by the HITL sentence -- the approval (reviewer + validity window; approval is STRUCTURAL and covers the DAG, not this estimate's robustness), the rejection (reviewer + reason), or the queued / blocked / unavailable variant. Present on REVIEW and BLOCK gates and on a PROCEED-gate rejection; None when the gate was not consulted. Also carried in warnings: standalone on a non-halted run, embedded verbatim in the 'Estimate withheld' halt line on a halted one.
+             */
+            review_caveat?: string | null;
             /** Tests Passed */
             tests_passed?: number | null;
             /** Tests Total */
