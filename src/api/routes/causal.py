@@ -3694,8 +3694,9 @@ def _agent_state_to_response(
     only completed / needs_review / failed as terminal. The agent's
     ``review_caveat`` (#1995: the band + HITL sentence naming the approval or
     rejection, reviewer and validity window) is surfaced as
-    ``refutation.review_caveat`` and, on a non-halted run, appended to warnings
-    -- the halt line already embeds it verbatim, so it never appears twice.
+    ``refutation.review_caveat`` and appended to warnings unless a warning
+    already contains it -- the agent's halt line embeds it verbatim -- so the
+    caveat text appears in warnings exactly once.
     """
     causal_graph = final_state.get("causal_graph") or {}
     estimation = final_state.get("estimation_result") or {}
@@ -3882,11 +3883,13 @@ def _agent_state_to_response(
             str(final_state.get("error_message") or "")
             or "Estimate withheld on the expert-review gate (no reason recorded)."
         )
-    elif review_caveat:
-        # #1995: warnings is the drill-down's only prose channel. The halt line
-        # above embeds the caveat verbatim (refutation.py _expert_review_halt_reason),
-        # so it is appended standalone only when the run was NOT halted -- never
-        # twice.
+    if review_caveat and not any(review_caveat in w for w in warnings):
+        # #1995: warnings is the drill-down's only prose channel. Containment
+        # rule rather than "not halted": the agent's halt line embeds the caveat
+        # verbatim (refutation.py _expert_review_halt_reason), in which case it
+        # is already present and must not be repeated; a halt whose message does
+        # NOT carry it (e.g. the fallback above) still gets it standalone. Either
+        # way the caveat text appears exactly once.
         warnings.append(review_caveat)
 
     return AgentCausalAnalysisResponse(

@@ -169,6 +169,34 @@ def test_halt_run_carries_the_caveat_exactly_once_inside_the_halt_line():
 
 
 @pytest.mark.unit
+def test_halt_run_whose_message_lacks_the_caveat_gets_it_standalone_once():
+    """Containment rule, not "not halted": a halt whose message does NOT embed
+    the caveat (the route's own fallback when error_message is empty) still
+    surfaces the caveat in warnings -- standalone, exactly once."""
+    caveat = (
+        "Refutation gate is REVIEW (borderline robust, confidence=0.55). The DAG "
+        "structure is queued for expert review (review rev-created; resolve via "
+        "POST /expert-reviews/rev-created/resolve)."
+    )
+    resp = _response(
+        _state(
+            refutation_results={"gate_decision": "review", "tests_passed": 2, "total_tests": 3},
+            expert_review_halt=True,
+            expert_review_decision="pending_review",
+            expert_review_id="rev-created",
+            review_caveat=caveat,
+            error_message="",
+            status="failed",
+        )
+    )
+    assert resp.status == "failed"
+    assert resp.refutation.review_caveat == caveat
+    assert "Estimate withheld on the expert-review gate (no reason recorded)." in resp.warnings
+    assert resp.warnings.count(caveat) == 1
+    assert sum(1 for w in resp.warnings if caveat in w) == 1
+
+
+@pytest.mark.unit
 def test_proceed_band_without_a_consult_has_no_caveat_and_unchanged_warnings():
     """Positive control: a PROCEED gate that never consulted the review gate
     (no ``review_caveat`` in state) is byte-for-byte what it was before."""
