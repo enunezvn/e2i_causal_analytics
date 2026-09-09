@@ -23,6 +23,15 @@
 --   before a future run, per column:
 --   SELECT review_id FROM public.expert_reviews
 --    WHERE jsonb_typeof(<col>) = 'string' AND (<col> #>> '{}') !~ '^\s*[\[{]';
+--   TRANSITIONAL WINDOW (codex round 1 MED): run_migrations.sh tracks this
+--   file by filename in public.schema_migrations and never re-runs it, so
+--   any row the OLD (pre-fix) image writes between this migration running
+--   and the container flip stays string-shaped for good -- NOT re-decoded
+--   by a later deploy. Same decision as migration 135's precedent for
+--   causal_validations (owner decision 6): no trigger, no constraint to
+--   close that window. The four UPDATE statements above are idempotent and
+--   safe to re-run by hand at any time; if post-deploy certification finds
+--   any string cells remaining, re-run them once the new writer is live.
 -- ============================================================================
 
 UPDATE public.expert_reviews
