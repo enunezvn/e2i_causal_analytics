@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 // The "Open review" deep link is a router <Link>: render under the router-wrapped helper.
 import { fireEvent, renderWithAllProviders, screen, waitFor } from '@/test/utils';
 import { ReviewStatusPanel } from './ReviewStatusPanel';
@@ -8,6 +8,12 @@ const SWITCH_HALT =
 const GATE_BLOCKED = 'Refutation gate BLOCKED — the estimate did not survive robustness checks.';
 
 describe('ReviewStatusPanel', () => {
+  // The copy-affordance test stubs `navigator` (jsdom has no clipboard); drop
+  // the stub after every test so no later case inherits it.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('renders nothing when the run carried no review state and no DAG record', () => {
     const { container } = renderWithAllProviders(<ReviewStatusPanel />);
     expect(container).toBeEmptyDOMElement();
@@ -80,7 +86,7 @@ describe('ReviewStatusPanel', () => {
 
   it('copies the full discovery record id to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     renderWithAllProviders(
       <ReviewStatusPanel discoveredDagId="8a61b3db-6aad-4b01-96e4-bbea0af861b4" />
     );
@@ -91,5 +97,11 @@ describe('ReviewStatusPanel', () => {
     await waitFor(() => expect(button).toHaveTextContent('Copied'));
     // The full id stays visible beside the affordance.
     expect(screen.getByText('8a61b3db-6aad-4b01-96e4-bbea0af861b4')).toBeInTheDocument();
+  });
+
+  // Positive control for the afterEach restore: runs after the copy test (file
+  // order) and would inherit the stub if it leaked.
+  it('does not leak the clipboard stub past the copy test', () => {
+    expect(navigator.clipboard).toBeUndefined();
   });
 });
