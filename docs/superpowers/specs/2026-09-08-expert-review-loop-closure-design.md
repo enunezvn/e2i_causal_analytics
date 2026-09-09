@@ -170,12 +170,16 @@ FastAPI's first-match routing cannot shadow them):
 ```
 public.promote_causal_path_guarded(
     p_path_id text, p_new_status text, p_allowed_current text[],
-    p_dag_version_hash text, p_brand text) RETURNS integer
+    p_dag_version_hash text, p_brand text) RETURNS jsonb
 ```
 
 One `UPDATE public.causal_paths SET validation_status = p_new_status WHERE path_id = p_path_id
 AND validation_status = ANY(p_allowed_current) AND NOT public.dag_structure_rejected(
-p_dag_version_hash, p_brand)`, returning the row count. `dag_structure_rejected` is a STABLE
+p_dag_version_hash, p_brand)`, returning `{"moved": 0|1, "rejected": bool}` — `moved` is the row
+count and `rejected` is `dag_structure_rejected(hash, brand)` re-evaluated only when nothing moved, so the
+caller can log "rejected, not moved" distinctly from "current status not in `p_allowed_current`" (a bare
+row count cannot tell the two apart; the migration's own DO block reads `->> 'moved'`).
+`dag_structure_rejected` is a STABLE
 SQL function encoding the gate's chronology rule exactly as `ExpertReviewGate._latest_adjudication`
 does: take the newest row whose `approval_status <> 'pending'` for the hash (and brand when
 `p_brand` is not null, else any brand — the Python reader filters by brand only when given);

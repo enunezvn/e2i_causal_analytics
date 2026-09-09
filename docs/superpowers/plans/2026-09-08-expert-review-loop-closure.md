@@ -1694,32 +1694,45 @@ Then `ROLLBACK`; confirm `select count(*) from public.expert_reviews where revie
 
 - [ ] **Step 4c: Concurrency rehearsal — the table SHARE lock blocks a racing resolve AND a racing renew, not reads (no writes)**
 
-Session A takes the lock the function takes and holds it 6 s inside a transaction it rolls back (owner decision 2026-09-09: the measurement below used 20 s; 6 s is enough for the 3 s timeouts and keeps the live table's write-block short). Session B
-runs a resolve-shaped UPDATE on the live probe row `4eab7033-…`, session B' a renew-shaped INSERT of a scratch
-pending row, both with a 3 s `statement_timeout` and both rolled back; session R is a plain read. Nothing is
-written by any of them. The monitor loop must exclude its own backend (`pid <> pg_backend_pid()`) — its query
-text also contains `pg_sleep`, and the first attempt waited on itself until A had finished (a false "no block").
+Session A takes the lock the function takes and holds it 6 s inside a transaction it rolls back (owner decision
+2026-09-09, decision 5: 6 s, not the 20 s of the pre-execution measurement). Once the lock row is visible, session B
+(a resolve-shaped UPDATE on the live probe row `4eab7033-…`), session B' (a renew-shaped INSERT of a scratch
+pending row) and session R (a plain read) are launched **concurrently**, B and B' each with `lock_timeout='1s'`
+and `statement_timeout='3s'`, each wrapped in `date -u +%T.%N` timestamps and rolled back. Nothing is written by
+any of them. Why concurrent + `lock_timeout`: at a 6 s hold the earlier sequential recipe (B, then B', each under a
+3 s `statement_timeout`) cannot discriminate — B burns its full 3 s, B' starts ~3.5 s into the hold and its 3 s
+window straddles A's release, so B' completes either way (measured 2026-09-09, first run: B timed out, B' returned
+`INSERT 0 1` after `A-release`). A `lock timeout` error is unambiguous: the statement was waiting on the table lock.
+The monitor loop must exclude its own backend (`pid <> pg_backend_pid()`) — its query text also contains
+`pg_sleep`, and the first attempt waited on itself until A had finished (a false "no block").
 
 ```bash
 RID=4eab7033-7422-422d-83f6-659c9c3b9987
-docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "BEGIN; LOCK TABLE public.expert_reviews IN SHARE MODE; SELECT 'A-locked '||clock_timestamp()::time; SELECT pg_sleep(6); SELECT 'A-release '||clock_timestamp()::time; ROLLBACK;" > /tmp/sessA.log 2>&1 &
-until docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query ilike '%pg_sleep(6)%' and state='active'" | grep -q '^1'; do :; done
-docker exec supabase-db psql -U postgres -d postgres -tA -F' ' -c "select l.locktype, l.mode, l.granted from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.relation='public.expert_reviews'::regclass and a.pid <> pg_backend_pid()"
-docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
-docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id) VALUES ('dag_approval','lane1-lock-probe','pending','lockprobe'); SELECT 'B2-inserted'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
-docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; SELECT 'R-read '||count(*) FROM public.expert_reviews;" 2>&1 | tr '\n' ' '; echo
-wait; tr '\n' ' ' < /tmp/sessA.log; echo
-docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
-docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id) VALUES ('dag_approval','lane1-lock-probe','pending','lockprobe'); SELECT 'B2-inserted'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
-docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from public.expert_reviews where reviewer_id='lockprobe'; select approval_status, count(*) from public.expert_reviews group by 1"
+PSQL="docker exec supabase-db psql -U postgres -d postgres -tA"
+$PSQL -v ON_ERROR_STOP=1 -c "BEGIN; LOCK TABLE public.expert_reviews IN SHARE MODE; SELECT 'A-locked '||clock_timestamp()::time; SELECT pg_sleep(6); SELECT 'A-release '||clock_timestamp()::time; ROLLBACK;" > /tmp/sessA.log 2>&1 &
+until $PSQL -c "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query ilike '%pg_sleep(6)%' and state='active'" | grep -q '^1'; do :; done
+$PSQL -F' ' -c "select l.locktype, l.mode, l.granted from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.relation='public.expert_reviews'::regclass and a.pid <> pg_backend_pid()"
+{ echo "B-start $(date -u +%T.%N)"; $PSQL -c "SET lock_timeout='1s'; SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo; echo "B-end $(date -u +%T.%N)"; } > /tmp/sessB.log 2>&1 &
+{ echo "B2-start $(date -u +%T.%N)"; $PSQL -c "SET lock_timeout='1s'; SET statement_timeout='3s'; BEGIN; INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id) VALUES ('dag_approval','lane1-lock-probe','pending','lockprobe'); SELECT 'B2-inserted'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo; echo "B2-end $(date -u +%T.%N)"; } > /tmp/sessB2.log 2>&1 &
+{ echo "R-start $(date -u +%T.%N)"; $PSQL -c "SET statement_timeout='3s'; SELECT 'R-read '||count(*) FROM public.expert_reviews;" 2>&1 | tr '\n' ' '; echo; echo "R-end $(date -u +%T.%N)"; } > /tmp/sessR.log 2>&1 &
+wait
+for f in A B B2 R; do tr '\n' ' ' < /tmp/sess$f.log; echo; done
+$PSQL -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
+$PSQL -c "SET statement_timeout='3s'; BEGIN; INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id) VALUES ('dag_approval','lane1-lock-probe','pending','lockprobe'); SELECT 'B2-inserted'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
+$PSQL -c "select count(*) from public.expert_reviews where reviewer_id='lockprobe'; select approval_status, count(*) from public.expert_reviews group by 1; select count(*) from pg_proc where proname in ('dag_structure_rejected','promote_causal_path_guarded')"
 ```
 
-Measured 2026-09-08 (pre-execution review): lock row `relation ShareLock t`; B → `ERROR:  canceling statement due
-to statement timeout`; B' → the same error (the INSERT waited too — the row-level FOR SHARE of an earlier draft
-could not block it); R → `R-read 40` immediately; A → `LOCK TABLE A-locked … A-release … ROLLBACK`; positive
-controls after A ended → `UPDATE 1 B-updated ROLLBACK` and `INSERT 0 1 B2-inserted ROLLBACK`; `lockprobe` count
-`0`, tallies unchanged (`rejected 1`, `pending 39`). A B or B' that completes while A holds the lock means the
-function's lock does not cover that write path — stop and investigate before committing.
+Measured 2026-09-09 (Task 3 execution, 6 s hold): lock row `relation ShareLock t`; A → `A-locked 02:25:07.809747 …
+A-release 02:25:13.811422 ROLLBACK`; B → `B-start 02:25:08.122 … ERROR:  canceling statement due to lock timeout …
+B-end 02:25:09.316`; B' → `B2-start 02:25:08.122 … ERROR:  canceling statement due to lock timeout … B2-end
+02:25:09.300` — both ended ~4.5 s BEFORE `A-release`, i.e. inside the hold, each after waiting the full 1 s
+`lock_timeout` on the table lock; R → `R-read 40` at 02:25:08.30 (0.18 s, not blocked); positive controls after A
+ended → `UPDATE 1 B-updated ROLLBACK` and `INSERT 0 1 B2-inserted ROLLBACK`; `lockprobe` count `0`, tallies
+unchanged (`rejected 1`, `pending 39`), `pg_proc` count `0`. History: the 2026-09-08 pre-execution measurement held
+the lock 20 s and ran B then B' sequentially under 3 s `statement_timeout`s; both timed out (`canceling statement
+due to statement timeout`), R read 40 immediately, and the row-level FOR SHARE of an earlier draft could not block
+the INSERT. A B or B' that COMPLETES inside A's hold window (its end timestamp before `A-release`, no lock-timeout
+error) means the function's lock does not cover that write path — stop and investigate before committing.
 
 The amended migration itself was also rehearsed on the live DB in BEGIN … ROLLBACK (applied twice, its DO-block
 grant/smoke assertions passing): `promote_causal_path_guarded('no-such-path','validated',ARRAY['pending'],<hash>,<brand>)`
