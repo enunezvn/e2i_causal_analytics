@@ -36,6 +36,7 @@ class _FakeRedis:
         fail_set_with: Optional[BaseException] = None,
         fail_eval: bool = False,
         get_delay: float = 0.0,
+        eval_gate: Optional[asyncio.Event] = None,
     ) -> None:
         self.store: Dict[str, Tuple[str, Optional[float]]] = {}
         self.ops: List[str] = []
@@ -46,6 +47,9 @@ class _FakeRedis:
         self.get_delay = get_delay  # a slow server: each GET takes this long
         self.set_times: List[float] = []  # loop time of every SET attempt
         self.cancelled_gets = 0  # GETs cut short by the caller's timeout
+        # When set, EVAL blocks on this gate; a cancellation while blocked means
+        # the command never reached the server (worst case: no delete happens).
+        self.eval_gate = eval_gate
 
     def _live(self, name: str) -> Optional[str]:
         item = self.store.get(name)
@@ -93,6 +97,8 @@ class _FakeRedis:
 
     async def eval(self, script: str, numkeys: int, *args: Any) -> int:
         self.ops.append("eval")
+        if self.eval_gate is not None:
+            await self.eval_gate.wait()
         if self.fail_eval:
             raise ConnectionError("redis down at release")
         key, token = args[0], args[1]
@@ -301,6 +307,44 @@ async def test_release_failure_warns_and_does_not_enter_the_cooldown(caplog):
     async with lock.hold("r2") as lease:
         assert lease.mode == "redis"  # a cooldown would have made this "local"
     assert redis.ops.count("set") == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancellation_during_the_release_eval_never_strands_the_local_mutex():
+    """Codex round-6: the release EVAL is awaited inside ``finally``; a
+    cancellation landing there must still release/unref the per-id local
+    mutex (a stranded entry would 409 every later same-worker request for the
+    id until the worker recycled). The cancellation still propagates. The
+    Redis key, whose EVAL never landed, clears by the TTL path and the next
+    same-worker request acquires in redis mode without exhaustion."""
+    redis = _FakeRedis(eval_gate=asyncio.Event())  # EVAL blocks; never opened
+    lock = _lock(redis, ttl_ms=200, poll_seconds=0.02)
+    body_done = asyncio.Event()
+
+    async def holder():
+        async with lock.hold("r1") as lease:
+            assert lease.mode == "redis"
+            body_done.set()
+        # not reached: the release EVAL blocks and the task is cancelled there
+
+    task = asyncio.create_task(holder())
+    await asyncio.wait_for(body_done.wait(), timeout=5.0)
+    deadline = asyncio.get_running_loop().time() + 5.0
+    while redis.ops.count("eval") < 1:  # the release is in flight, blocked on the gate
+        assert asyncio.get_running_loop().time() < deadline, "release EVAL never started"
+        await asyncio.sleep(0.005)
+    task.cancel()
+    (outcome,) = await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(outcome, asyncio.CancelledError)  # propagation preserved
+
+    assert lock._local == {}  # the fix: released and unref'd despite the cancel
+    assert redis.live_keys() == [f"{PREFIX}:r1"]  # the EVAL never landed: TTL path
+
+    redis.eval_gate = None
+    async with lock.hold("r1") as lease:  # same worker, next request
+        assert lease.mode == "redis" and lease.waited is True  # waited out the TTL, no 409
+    assert redis.live_keys() == [] and lock._local == {}
 
 
 @pytest.mark.unit

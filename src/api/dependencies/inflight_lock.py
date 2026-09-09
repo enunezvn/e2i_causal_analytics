@@ -63,6 +63,12 @@ process dies first the key clears at its TTL. The in-flight build is lost like
 any in-flight request on that worker; nothing is corrupted. Draining in-flight
 builds is the lifespan's job (main.py follow-up, outside this module).
 
+Cleanup ordering: the release EVAL is the only await on a cleanup path (the
+stage-1/stage-2 exception handlers and the budget-exhaustion path are
+synchronous), and the local mutex release/unref sits in a nested ``finally``
+below it, so a cancellation arriving during the EVAL can never strand the
+per-id local entry; the Redis key then clears at its TTL.
+
 A leaked key (a worker dying mid-hold, a lost release) only delays the requests
 that would BUILD -- ``force=true``, or a retry after a failed persist -- by at
 most the remaining TTL: the cached fast path runs before the lock, so a review
@@ -383,8 +389,16 @@ class InflightLock:
         try:
             yield lease
         finally:
-            if held_redis:
-                await self._release_redis(client, lease)
-            if held_local:
-                entry.lock.release()
-            self._local_unref(key_id)
+            try:
+                if held_redis:
+                    await self._release_redis(client, lease)
+            finally:
+                # ALWAYS runs, even when the release EVAL is cancelled mid-await
+                # (codex round-6): a locked local entry would otherwise outlive
+                # the request and 409 every later same-worker request for this
+                # id until the worker recycled -- the Redis TTL cannot clear a
+                # process-local lock. The cancellation still propagates; the
+                # Redis key, if the EVAL never landed, clears at its TTL.
+                if held_local:
+                    entry.lock.release()
+                self._local_unref(key_id)
