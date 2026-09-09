@@ -6419,6 +6419,21 @@ rep(
     'REVIEW is the weighted band (confidence ≥ 0.50 and &lt; 0.70 with no critical FAILED; critical tests weigh 0.25, non-critical 0.125, WARNING scores 0.6): with only the critical tests scoring, the values reachable without a failure are 1.0, 0.867 and 0.733, all PROCEED, so the band needs real non-critical evidence — e.g. one critical WARNING (in every live run so far, sensitivity) plus both non-critical tests FAILED, 0.65; 0 of 96 live runs reached it.',
 )
 
+# index row + two trace entries (codex iter-4e LOW): causal.py:3185 defines run_causal_agent_analysis;
+# submit_causal_agent_analysis no longer exists in the file.
+rep(
+    '<td>submit_causal_agent_analysis</td><td>src/api/routes/causal.py:3185</td>',
+    '<td>run_causal_agent_analysis</td><td>src/api/routes/causal.py:3185</td>',
+)
+rep(
+    "['submit_causal_agent_analysis', 'patient_journeys, <em>treatment_arm → persistent_180d</em>",
+    "['run_causal_agent_analysis', 'patient_journeys, <em>treatment_arm → persistent_180d</em>",
+)
+rep(
+    "['submit_causal_agent_analysis', '_is_randomized_treatment is true",
+    "['run_causal_agent_analysis', '_is_randomized_treatment is true",
+)
+
 for old, new in EDITS:
     n = s.count(old)
     assert n == 1, f"expected exactly one occurrence, found {n}: {old[:80]!r}"
@@ -6427,7 +6442,7 @@ DOC.write_text(s, encoding="utf-8")
 print(f"applied {len(EDITS)} edits")
 ```
 
-Expected output: `applied 27 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
+Expected output: `applied 30 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
 
 Why (codex iter-4 docs audit): the §4.3 "Gate state machine" list still described the pre-#1969 no-repository PROCEED bypass and a rejected-row BLOCKED branch, contradicting the Finding callout above it and the shipped gate — `check_approval` answers UNAVAILABLE (`is_approved=False`) without a store, and the every-band `check_rejection` probe (node `_consult_review_gate`) halts a rejected structure — so the list, its summary chips, its anchors and the index rows were rewritten by the same exact-match script (six more `rep` entries). Iter-4b: the §3 stage intro still ended "It is not written to a DAG table", stale since the §3.3 row described the durable `public.discovered_dags` record (#1974); one more `rep` entry replaces that sentence.
 

@@ -1099,7 +1099,7 @@ decision:  any critical test FAILED → BLOCK
       <tr><td><span class="pill input">input</span></td><td>_CAUSAL_NUMERIC_DERIVATIONS</td><td>src/api/routes/causal.py:1251</td><td>0/1 axis derivations for three brand-distinct treatments</td></tr>
       <tr><td><span class="pill input">input</span></td><td>_one_hot_categoricals</td><td>src/api/routes/causal.py:2762</td><td>geographic_region → sorted dummies, first level dropped</td></tr>
       <tr><td><span class="pill input">input</span></td><td>_load_agent_estimation_frame</td><td>src/api/routes/causal.py:3014</td><td>allowlist, provenance filter, coercion, NULL drop, one-hot</td></tr>
-      <tr><td><span class="pill input">input</span></td><td>submit_causal_agent_analysis</td><td>src/api/routes/causal.py:3185</td><td>default covariates, baseline split, sync load, background task</td></tr>
+      <tr><td><span class="pill input">input</span></td><td>run_causal_agent_analysis</td><td>src/api/routes/causal.py:3185</td><td>default covariates, baseline split, sync load, background task</td></tr>
       <tr><td><span class="pill input">input</span></td><td>_run_agent_analysis_task</td><td>src/api/routes/causal.py:3331</td><td>seeds state: two confounder channels, auto_discover, discovery_guided, compute deadline</td></tr>
       <tr><td><span class="pill input">input</span></td><td>_discover_candidate_questions</td><td>src/api/routes/causal.py:1679</td><td>leaderboard questions from causal_paths SSOT</td></tr>
       <tr><td><span class="pill input">input</span></td><td>CausalPathRepository</td><td>src/repositories/causal_path.py:118</td><td>reads and dedupes the registry; set_validation_status</td></tr>
@@ -1299,7 +1299,7 @@ decision:  any critical test FAILED → BLOCK
     {
       name: 'Production run, data selects confounders',
       steps: [
-        ['submit_causal_agent_analysis', 'patient_journeys, <em>treatment_arm → persistent_180d</em>, brand Kisqali. Default covariates = spec list minus off-brand clinical columns. Frame loaded synchronously; geographic_region one-hot expanded.'],
+        ['run_causal_agent_analysis', 'patient_journeys, <em>treatment_arm → persistent_180d</em>, brand Kisqali. Default covariates = spec list minus off-brand clinical columns. Frame loaded synchronously; geographic_region one-hot expanded.'],
         ['_run_agent_analysis_task', 'State seeded: modeled_confounders = covariates, <em>anchored_confounders = []</em>, auto_discover true, discovery_guided true.'],
         ['GraphBuilderNode._run_discovery', 'Guided PC: tiers [covariates] &lt; [T] &lt; [Y], required only (T, Y), alpha 0.05, 20 bootstrap resamples, FCI diagnostic on.'],
         ['DiscoveryGate.evaluate', 'One converged algorithm, edges beyond the prior have bootstrap stability → basis bootstrap_stability. Suppose confidence 0.86 → <em>ACCEPT</em>.'],
@@ -1358,7 +1358,7 @@ decision:  any critical test FAILED → BLOCK
     {
       name: 'Randomized design: nba_triggers control_group_flag',
       steps: [
-        ['submit_causal_agent_analysis', '_is_randomized_treatment is true → default covariates = []. Baselines are a separate opt-in efficiency role.'],
+        ['run_causal_agent_analysis', '_is_randomized_treatment is true → default covariates = []. Baselines are a separate opt-in efficiency role.'],
         ['_run_agent_analysis_task', 'randomized_design = true on state; modeled_confounders empty.'],
         ['_run_discovery', 'Guided PC with tiers [[T], [Y]] only (no covariates), required (T, Y).'],
         ['_find_adjustment_sets', 'Candidates empty → returns <em>[[]]</em>: a validated-empty backdoor, not a missing one.'],
