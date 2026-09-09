@@ -26,10 +26,19 @@ Redis path (the app's already-initialised ``redis.asyncio`` client):
   CALLER decides. The assessment route answers 409 rather than building
   unlocked: an unlocked build could overlap a legitimate holder, and a client
   that waited the full TTL has already received nginx's 504, so it would serve
-  nobody. A Redis OUTAGE is different and never fails a request (below).
+  nobody. The guarantee, precisely: Redis being DOWN never fails a request
+  (local fallback below); exhausting the wait bound DOES, in EITHER mode,
+  because that client has already been 504'd by nginx, so a LOCAL holder
+  exceeding the bound also yields ``mode == "none"``.
 - release: compare-and-delete Lua (``GET == token -> DEL``) in ``finally``, so
   a lease that outlived its TTL can never delete the NEXT holder's key. A
   failed release is logged and left to the TTL; it is not an outage signal.
+
+Worker shutdown (bounded limitation): a holder cancelled by its worker's loop
+shutdown (recycle, deploy) releases in ``finally`` where it still can; if the
+process dies first the key clears at its TTL. The in-flight build is lost like
+any in-flight request on that worker; nothing is corrupted. Draining in-flight
+builds is the lifespan's job (main.py follow-up, outside this module).
 
 A leaked key (a worker dying mid-hold, a lost release) only delays the requests
 that would BUILD -- ``force=true``, or a retry after a failed persist -- by at

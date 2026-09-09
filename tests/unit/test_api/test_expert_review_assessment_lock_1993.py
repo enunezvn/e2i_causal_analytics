@@ -70,10 +70,18 @@ class _Repo:
         self.persist = persist
         self.writes: List[Dict[str, Any]] = []
         self.version = 0
+        self.reads = 0
+        # When set, the FIRST read returns its snapshot only after this opens:
+        # the snapshot is taken now, the caller proceeds later (round-2 HIGH).
+        self.first_read_gate: Optional[asyncio.Event] = None
 
     async def get_by_id(self, review_id: str) -> Optional[Dict[str, Any]]:
+        self.reads += 1
         row = self.rows.get(review_id)
-        return dict(row) if row is not None else None
+        snapshot = dict(row) if row is not None else None
+        if self.reads == 1 and self.first_read_gate is not None:
+            await asyncio.wait_for(self.first_read_gate.wait(), timeout=GATE_TIMEOUT)
+        return snapshot
 
     async def update_agent_assessment(self, review_id: str, assessment: Dict[str, Any]) -> bool:
         self.writes.append(dict(assessment))
@@ -263,7 +271,7 @@ async def test_two_concurrent_uncached_requests_build_once(monkeypatch, caplog):
     # observability: the build's elapsed seconds and the waiter's outcome are logged
     msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     assert sum("assessment built in" in m and "lock mode=redis" in m for m in msgs) == 1
-    assert sum("replaying the winner's stored result" in m for m in msgs) == 1
+    assert sum("waited=True" in m and "replaying the stored result" in m for m in msgs) == 1
 
 
 @pytest.mark.unit
@@ -405,6 +413,67 @@ async def test_cancelled_request_keeps_the_lock_until_its_build_persists(monkeyp
     assert r2.json()["cached"] is True and r2.json()["persisted"] is True
     assert r2.json()["assessment"]["n"] == 1
     assert redis.live_keys() == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_request_that_snapshotted_before_a_concurrent_build_replays_after_a_late_acquire(
+    monkeypatch, caplog
+):
+    """Codex round-2 HIGH: r2 reads the UNCACHED row before r1 acquires; r1
+    builds, persists and releases; r2 then acquires an idle lock
+    (``waited=False``). The row is re-read after EVERY acquisition, so r2
+    replays instead of building again."""
+    repo, redis = _Repo(ROW), _FakeRedis()
+    repo.first_read_gate = asyncio.Event()
+    h = _harness(monkeypatch, repo, redis)
+
+    with caplog.at_level(logging.INFO, logger=route_mod.__name__):
+        async with h.client() as client:
+            t2 = asyncio.create_task(client.post(URL))
+            await _until(lambda: repo.reads == 1, "the late request took its uncached snapshot")
+            t1 = asyncio.create_task(client.post(URL))
+            await _until(lambda: h.builds >= 1, "the other request entered the build")
+            h.gate.set()
+            r1 = await t1  # built, persisted, released
+            assert redis.live_keys() == []
+            repo.first_read_gate.set()  # the late request now acquires an IDLE lock
+            r2 = await t2
+
+    assert (r1.status_code, r2.status_code) == (200, 200), (r1.text, r2.text)
+    assert h.builds == 1 and len(repo.writes) == 1
+    assert (r1.json()["cached"], r2.json()["cached"]) == (False, True)
+    assert r1.json()["assessment"] == r2.json()["assessment"]
+    assert r2.json()["assessment"]["n"] == 1 and r2.json()["persisted"] is True
+    assert redis.ops.count("get") == 0  # r2 never polled: it did not wait
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert sum("waited=False" in m and "replaying the stored result" in m for m in msgs) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_local_holder_exceeding_the_wait_bound_is_409_too(monkeypatch):
+    """Codex round-2 MED: the guarantee is "Redis being DOWN never fails a
+    request", not "the local lock never fails one". A second request that
+    exhausts the bound behind a LOCAL holder is 409 (that client has already
+    been 504'd by nginx); no build, and the local table is empty afterwards."""
+    repo, redis = _Repo(ROW), _FakeRedis(fail_set=True)
+    h = _harness(monkeypatch, repo, redis, ttl_ms=100)  # wait bound ~0.12 s
+
+    async with h.client() as client:
+        t1 = asyncio.create_task(client.post(URL))
+        await _until(lambda: h.builds >= 1, "the first request holds the LOCAL lock")
+        r2 = await client.post(URL)  # exhausts the bound behind the local holder
+        assert r2.status_code == 409, r2.text
+        assert r2.headers.get("retry-after") == "5"
+        assert r2.json()["detail"] == route_mod._BUILD_IN_PROGRESS_DETAIL
+        assert h.builds == 1
+        h.gate.set()
+        r1 = await t1
+
+    assert r1.status_code == 200 and r1.json()["cached"] is False
+    assert h.builds == 1 and len(repo.writes) == 1
+    assert h.lock._local == {}
 
 
 @pytest.mark.unit

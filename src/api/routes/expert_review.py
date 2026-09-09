@@ -315,54 +315,74 @@ async def _build_under_lock(
 ) -> AgentAssessmentResponse:
     """The lock-guarded half of ``generate_review_assessment`` (its own task; see there).
 
-    A request that WAITED re-reads the row under the lock. The winner's persist
-    is recognised by a stored assessment that is new since the pre-wait read:
-    the payload changed, or (codex MED 3) ``updated_at`` moved, since a forced
-    regeneration can be byte-identical (deterministic fallbacks exist).
+    ``review``/``cached`` are the request's INITIAL snapshot, read outside the
+    lock. After EVERY acquisition the row is re-read under the lock and judged
+    against that snapshot (codex round-2 HIGH: a request that snapshotted
+    before another's acquire and acquired only after its release would see
+    ``waited=False`` and build again). A stored assessment that is new since
+    the snapshot is another request's finished build and is replayed as
+    ``cached=True`` regardless of ``force``. "New" means the payload changed OR
+    ``updated_at`` moved: a forced regeneration can be byte-identical
+    (deterministic fallbacks exist) and the payload carries no generation
+    stamp (``generate_assessment`` returns only items/is_fallback/evidence).
     ``updated_at`` is trigger-maintained on every UPDATE of ``expert_reviews``
     (``trg_er_updated_at`` -> ``update_updated_at_column()``,
     database/ml/010_causal_validation_tables.sql:471; verified on the live
-    table) and the repo's write is a plain UPDATE, so a successful persist always
-    moves it. The replay is ``cached=True`` regardless of ``force`` (the winner
-    just regenerated it); an unchanged row (the winner failed to persist, or
-    died) means build: at most one extra build.
+    table) and the repo's write is a plain UPDATE, so a persist always moves it.
+
+    Residual window of the ``updated_at`` rule (codex round-2 MED, accepted):
+    unrelated writes bump it too (``submit_review``/resolve,
+    ``update_dag_structure``). Only when ``force=true`` AND the winner's
+    assessment persist FAILED AND such an unrelated update landed inside the
+    same wait does a waiter replay the OLD assessment labelled ``cached=True``.
+    Consequence: a stale value, recoverable by forcing again; nothing is
+    corrupted. A Redis persist-marker was rejected as an extra failure mode.
+
+    Worker shutdown (bounded limitation): the shielded build is still cancelled
+    when the worker's loop shuts down (recycle, deploy) before its persist, the
+    same loss as any in-flight request; the key clears at its TTL and nothing
+    is corrupted. Draining belongs to main.py's lifespan (follow-up).
     """
     async with _ASSESSMENT_LOCK.hold(review_id) as lease:
         if lease.mode == "none":
             # Codex HIGH 2: the bounded wait (the TTL) is exhausted. An unlocked
             # build could overlap a legitimate holder, and a client that waited
             # the full TTL has already received nginx's 504, so it would serve
-            # nobody. A Redis OUTAGE never lands here: ``hold`` degrades that to
-            # the process-local lock and yields normally.
+            # nobody. Holds in EITHER mode (a local holder exceeding the bound
+            # is the same case); Redis being DOWN never lands here, ``hold``
+            # degrades that to the process-local lock and yields normally.
             logger.warning(f"Expert-review {review_id}: in-flight lock wait exhausted; 409")
             raise HTTPException(
                 status_code=409,
                 detail=_BUILD_IN_PROGRESS_DETAIL,
                 headers={"Retry-After": "5"},
             )
+        row = await _reread_row(repo, review_id) or {}
+        regenerated = _as_json_object(row.get("agent_assessment_json"))
+        if regenerated is not None and (
+            regenerated != cached or row.get("updated_at") != review.get("updated_at")
+        ):
+            logger.info(
+                f"Expert-review {review_id}: a build finished between this request's read "
+                f"and its lock (waited={lease.waited}, lock mode={lease.mode}); replaying "
+                "the stored result"
+            )
+            return AgentAssessmentResponse(
+                review_id=review_id, assessment=regenerated, cached=True, persisted=True
+            )
         if lease.waited:
-            row = await _reread_row(repo, review_id) or {}
-            regenerated = _as_json_object(row.get("agent_assessment_json"))
-            if regenerated is not None and (
-                regenerated != cached or row.get("updated_at") != review.get("updated_at")
-            ):
-                logger.info(
-                    f"Expert-review {review_id}: assessment waited on an in-flight build "
-                    f"(lock mode={lease.mode}); replaying the winner's stored result"
-                )
-                return AgentAssessmentResponse(
-                    review_id=review_id, assessment=regenerated, cached=True, persisted=True
-                )
             logger.info(
                 f"Expert-review {review_id}: assessment waited on an in-flight build "
                 f"(lock mode={lease.mode}) but no new stored result appeared (the winner "
                 "failed to persist or died); building"
             )
-        validation_ids = review.get("related_validation_ids") or []
+        # Build from the row as it is NOW (the snapshot can be up to a full wait old).
+        source = row or review
+        validation_ids = source.get("related_validation_ids") or []
         validations = await _get_validation_rows(validation_ids)
         # run_signature is a BLOCKING LM call; keep the event loop free.
         started = time.monotonic()
-        assessment = await asyncio.to_thread(_build_assessment, review, validations)
+        assessment = await asyncio.to_thread(_build_assessment, source, validations)
         elapsed = time.monotonic() - started
         persisted = await repo.update_agent_assessment(review_id, assessment)
         # No p99 exists for this build anywhere; record the elapsed seconds so the
