@@ -420,6 +420,12 @@ class CausalPathRepository(BaseRepository):
             if isinstance(payload, list):
                 payload = payload[0] if payload else {}
             if not isinstance(payload, dict):
+                logger.warning(
+                    "guarded promote: unexpected payload %r for causal_paths.%s; "
+                    "treating as no transition",
+                    result.data,
+                    path_id,
+                )
                 payload = {}
             if payload.get("rejected"):
                 logger.info(

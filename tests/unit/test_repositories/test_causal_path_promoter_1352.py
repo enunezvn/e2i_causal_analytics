@@ -14,6 +14,7 @@ Mock style mirrors test_causal_path.py (self-chaining query mocks tolerate the
 provenance predicate appended by real-mode reads).
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -190,6 +191,18 @@ class TestGuardedPromoteRpc:
             await repo.set_validation_status(
                 "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
             )
+
+    @pytest.mark.asyncio
+    async def test_unexpected_payload_returns_false_and_warns(self, repo, mock_client, caplog):
+        # postgrest falls back to ``data = response.text`` on a non-JSON 2xx body:
+        # a str payload must read as "no transition" AND leave a trace.
+        self._install_rpc(mock_client, "not json")
+        caplog.set_level(logging.WARNING, logger="src.repositories.causal_path")
+        moved = await repo.set_validation_status(
+            "cp_1", "validated", ("pending",), dag_version_hash="h" * 64
+        )
+        assert moved is False
+        assert "unexpected payload" in caplog.text
 
 
 if __name__ == "__main__":  # pragma: no cover
