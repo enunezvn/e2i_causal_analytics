@@ -1527,12 +1527,12 @@ _ONLY_NONCRITICAL = {
 
 class TestRunAllTestsWiring:
     def _kw(self):
-        return dict(
-            original_effect=0.15,
-            original_ci=CI,
-            causal_model=_make_stub_causal_model({}),
-            identified_estimand=object(),
-        )
+        return {
+            "original_effect": 0.15,
+            "original_ci": CI,
+            "causal_model": _make_stub_causal_model({}),
+            "identified_estimand": object(),
+        }
 
     def test_estimate_id_seeds_the_resamples(self):
         runner = RefutationRunner(config=_ONLY_NONCRITICAL)
@@ -1541,25 +1541,35 @@ class TestRunAllTestsWiring:
         c = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-2", **self._kw())
 
         def effects(suite):
-            return {t.test_name.value: t.details.get("subset_effects") for t in suite.tests}
+            return {
+                t.test_name.value: t.details.get("subset_effects")
+                or t.details.get("bootstrap_effects")
+                for t in suite.tests
+            }
 
         assert effects(a)["data_subset"] == effects(b)["data_subset"]
         assert effects(a)["data_subset"] != effects(c)["data_subset"]
+        assert effects(a)["bootstrap"] == effects(b)["bootstrap"]
+        assert effects(a)["bootstrap"] != effects(c)["bootstrap"]
 
     def test_deadline_and_seed_reach_the_loops(self, monkeypatch):
         runner = RefutationRunner(config=_ONLY_NONCRITICAL)
-        seen: dict = {}
-        real = runner._run_data_subset_test
+        seen: dict = {"_run_data_subset_test": {}, "_run_bootstrap_test": {}}
 
-        def spy(*args, **kwargs):
-            seen.update(kwargs)
-            return real(*args, **kwargs)
+        for method in seen:
+            real = getattr(runner, method)
 
-        monkeypatch.setattr(runner, "_run_data_subset_test", spy)
+            def spy(*args, _real=real, _method=method, **kwargs):
+                seen[_method].update(kwargs)
+                return _real(*args, **kwargs)
+
+            monkeypatch.setattr(runner, method, spy)
+
         far = _t.monotonic() + 3600.0
         runner.run_all_tests(estimate=_stub_estimate(), deadline=far, **self._kw())
-        assert seen["deadline"] == far
-        assert seen["resample_seed"] is None
+        for method in ("_run_data_subset_test", "_run_bootstrap_test"):
+            assert seen[method]["deadline"] == far, method
+            assert seen[method]["resample_seed"] is None, method
 ```
 
 - [ ] **Step 2: Run them to see the failure**
@@ -1674,7 +1684,9 @@ class TestEvidenceRowsAreJsonObjects:
     @pytest.mark.asyncio
     async def test_save_suite_writes_objects_not_strings(self, repo, mock_client):
         insert = mock_client.table.return_value.insert
-        insert.return_value.execute = AsyncMock(return_value=MagicMock(data=[{"validation_id": "v1"}]))
+        insert.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=[{"validation_id": "v1"}])
+        )
         ids = await repo.save_suite(self._suite(), estimate_id="e1")
         assert ids == ["v1"]
         row = insert.call_args[0][0][0]
@@ -1687,10 +1699,15 @@ class TestEvidenceRowsAreJsonObjects:
     @pytest.mark.asyncio
     async def test_save_single_test_writes_objects_not_strings(self, repo, mock_client):
         insert = mock_client.table.return_value.insert
-        insert.return_value.execute = AsyncMock(return_value=MagicMock(data=[{"validation_id": "v2"}]))
+        insert.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=[{"validation_id": "v2"}])
+        )
         suite = self._suite()
         vid = await repo.save_single_test(
-            suite.tests[0], estimate_id="e1", gate_decision=GateDecision.PROCEED, confidence_score=0.9
+            suite.tests[0],
+            estimate_id="e1",
+            gate_decision=GateDecision.PROCEED,
+            confidence_score=0.9,
         )
         assert vid == "v2"
         row = insert.call_args[0][0]
@@ -2625,6 +2642,9 @@ Replace `_FakePathRepo.set_validation_status` with:
                 "allowed_current": allowed_current,
                 "dag_version_hash": kwargs.get("dag_version_hash"),
                 "brand": kwargs.get("brand"),
+                # Raw keywords: ``kwargs.get`` cannot tell "omitted" from "None";
+                # the no-hash test pins that the keyword was explicitly forwarded.
+                "kwargs": dict(kwargs),
             }
         )
         return True
@@ -2659,7 +2679,52 @@ Append to `class TestLinkedPromotion`:
         await node._persist_suite_and_promote(
             state, _suite(GateDecision.PROCEED), structure_verdict="clear"
         )
-        assert path_repo.status_calls[0]["dag_version_hash"] is None
+        call = path_repo.status_calls[0]
+        assert call["dag_version_hash"] is None
+        # Explicitly forwarded as None (not merely omitted): the repository's
+        # keyword-only parameter must receive it on every promote.
+        assert "dag_version_hash" in call["kwargs"]
+        assert call["kwargs"]["dag_version_hash"] is None
+
+    @pytest.mark.asyncio
+    async def test_promote_reaches_the_guarded_rpc_through_the_real_repository(self) -> None:
+        """SEAM: the real node drives the real ``CausalPathRepository`` (stubbed
+        client) so the node→repo keyword contract is pinned by executing code,
+        not by two test files agreeing on a fake's signature. A drifted keyword
+        at the call site raises TypeError inside the promoter's swallow and the
+        RPC is never reached — this test then fails on ``call_args``."""
+        client = MagicMock()
+        # get_path_row → base get_many: select → eq → limit → offset → execute.
+        query = MagicMock()
+        query.eq.return_value = query
+        query.limit.return_value = query
+        query.offset.return_value = query
+        query.execute = AsyncMock(return_value=MagicMock(data=[_real_row()]))
+        client.table.return_value.select.return_value = query
+        client.rpc.return_value.execute = AsyncMock(
+            return_value=MagicMock(data={"moved": 1, "rejected": False})
+        )
+        real_repo = CausalPathRepository(supabase_client=client)
+
+        node = RefutationNode(validation_repo=_validation_repo(), causal_path_repo=real_repo)
+        _ids, promotion = await node._persist_suite_and_promote(
+            _state(causal_path_id="cp_real_000000001", dag_version_hash="h" * 64, brand="Kisqali"),
+            _suite(GateDecision.PROCEED),
+            structure_verdict="clear",
+        )
+        # _GATE_STATUS_TRANSITIONS[PROCEED] == ("validated", ("pending", "needs_review")).
+        assert client.rpc.call_args.args == (
+            "promote_causal_path_guarded",
+            {
+                "p_path_id": "cp_real_000000001",
+                "p_new_status": "validated",
+                "p_allowed_current": ["pending", "needs_review"],
+                "p_dag_version_hash": "h" * 64,
+                "p_brand": "Kisqali",
+            },
+        )
+        assert promotion["path_id"] == "cp_real_000000001"
+        assert promotion["new_status"] == "validated"
 ```
 
 (`_state(**overrides)` in that file merges overrides into the base state dict; if it does not accept `dag_version_hash`/`brand`, set them on the returned dict instead: `s = _state(...); s["dag_version_hash"] = "h" * 64; s["brand"] = "Kisqali"`.)
@@ -3962,7 +4027,7 @@ In `AgentCausalAnalysisResponse` add after `dag_source?: string;`:
 Create `frontend/src/components/causal/ReviewStatusPanel.test.tsx`. Every case renders through `renderWithAllProviders` (frontend/src/test/utils.tsx): the panel's "Open review" deep link is a react-router `<Link>`, and `renderWithProviders` wraps only a `QueryClientProvider` — measured, the two link-rendering cases threw `TypeError: Cannot destructure property 'basename' of 'React10.useContext(...)' as it is null.` under it. The router wrapper renders no DOM of its own, so `toBeEmptyDOMElement` still holds for the null render:
 
 ```tsx
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 // The "Open review" deep link is a router <Link>: render under the router-wrapped helper.
 import { fireEvent, renderWithAllProviders, screen, waitFor } from '@/test/utils';
 import { ReviewStatusPanel } from './ReviewStatusPanel';
@@ -3972,6 +4037,12 @@ const SWITCH_HALT =
 const GATE_BLOCKED = 'Refutation gate BLOCKED — the estimate did not survive robustness checks.';
 
 describe('ReviewStatusPanel', () => {
+  // The copy-affordance test stubs `navigator` (jsdom has no clipboard); drop
+  // the stub after every test so no later case inherits it.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('renders nothing when the run carried no review state and no DAG record', () => {
     const { container } = renderWithAllProviders(<ReviewStatusPanel />);
     expect(container).toBeEmptyDOMElement();
@@ -4044,7 +4115,7 @@ describe('ReviewStatusPanel', () => {
 
   it('copies the full discovery record id to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     renderWithAllProviders(
       <ReviewStatusPanel discoveredDagId="8a61b3db-6aad-4b01-96e4-bbea0af861b4" />
     );
@@ -4055,6 +4126,12 @@ describe('ReviewStatusPanel', () => {
     await waitFor(() => expect(button).toHaveTextContent('Copied'));
     // The full id stays visible beside the affordance.
     expect(screen.getByText('8a61b3db-6aad-4b01-96e4-bbea0af861b4')).toBeInTheDocument();
+  });
+
+  // Positive control for the afterEach restore: runs after the copy test (file
+  // order) and would inherit the stub if it leaked.
+  it('does not leak the clipboard stub past the copy test', () => {
+    expect(navigator.clipboard).toBeUndefined();
   });
 });
 ```
