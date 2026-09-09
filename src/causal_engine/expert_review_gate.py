@@ -333,10 +333,12 @@ class ExpertReviewGate:
         # created_at DESC, so if the most recent adjudication of this DAG is
         # 'rejected' a human already turned this structure down.
         # Auto-creating a fresh pending row on the next REVIEW/BLOCK band would
-        # silently undo that decision. A NEWER approval or pending row wins
-        # (handled above -- ``reopened`` covers the pending case); a reviewer
-        # who wants to re-open the structure does so from the review UI, not
-        # by re-running. #1971 gives the verdict its own decision value
+        # silently undo that decision. A NEWER approval or pending row wins:
+        # ``reopened`` comes from the ``_latest_adjudication`` call above; a
+        # genuinely newer pending row sets it and skips this block, reaching
+        # the pending branch below. A reviewer who wants to re-open the
+        # structure does so from the review UI, not by re-running. #1971
+        # gives the verdict its own decision value
         # (REJECTED, not BLOCKED) so consumers can tell "a human said no" from
         # "nobody has looked yet and no row could be queued".
         if superseded_by_rejection and not reopened:

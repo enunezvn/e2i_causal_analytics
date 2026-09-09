@@ -978,6 +978,10 @@ class TestCheckRejection:
         ]
         mock_repo.get_reviews_for_dag = AsyncMock(return_value=newer)
         assert await ExpertReviewGate(repository=mock_repo).check_rejection("abc123") is None
+        # The moved durable-rejection block must not swallow a genuinely newer
+        # pending row: ``reopened`` skips it and the pending branch answers.
+        approval = await ExpertReviewGate(repository=mock_repo).check_approval("abc123")
+        assert approval.decision == ReviewGateDecision.PENDING_REVIEW
 
     @pytest.mark.asyncio
     async def test_no_rows_is_not_a_rejection(self, mock_repo):
