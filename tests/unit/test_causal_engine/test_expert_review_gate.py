@@ -948,6 +948,38 @@ class TestCheckRejection:
         assert await ExpertReviewGate(repository=mock_repo).check_rejection("abc123") is None
 
     @pytest.mark.asyncio
+    async def test_pending_row_tied_with_the_rejection_is_not_a_reopen(self, mock_repo):
+        """Migration 134 reads a pending row with the SAME created_at as the
+        rejection as NOT newer (strict >). The probe must read the tie the same
+        way whatever order the repository returns it in (lane 1, Task 3b); a
+        genuinely newer pending row still reopens."""
+        ts = "2026-09-08T12:00:00+00:00"
+        rejected = self._rejected(created_at=ts)
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        for rows in (
+            [{"review_id": "rev-tie", "approval_status": "pending", "created_at": ts}, rejected],
+            [rejected, {"review_id": "rev-tie", "approval_status": "pending", "created_at": ts}],
+        ):
+            mock_repo.get_reviews_for_dag = AsyncMock(return_value=rows)
+            result = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
+            assert result is not None and result.decision == ReviewGateDecision.REJECTED
+            # Both readers, one rule: check_approval must not read the tied
+            # pending row as PENDING_REVIEW while check_rejection says REJECTED.
+            approval = await ExpertReviewGate(repository=mock_repo).check_approval("abc123")
+            assert approval.decision == ReviewGateDecision.REJECTED
+
+        newer = [
+            {
+                "review_id": "rev-new",
+                "approval_status": "pending",
+                "created_at": "2026-09-09T00:00:00+00:00",
+            },
+            rejected,
+        ]
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=newer)
+        assert await ExpertReviewGate(repository=mock_repo).check_rejection("abc123") is None
+
+    @pytest.mark.asyncio
     async def test_no_rows_is_not_a_rejection(self, mock_repo):
         mock_repo.get_dag_approval = AsyncMock(return_value=None)
         mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
