@@ -215,7 +215,9 @@ Replace `test_run_bootstrap_test_passed` (lines 798–832) with:
         )
 
         assert result.status == RefutationStatus.PASSED
-        assert len(result.details["bootstrap_effects"]) == runner.config["bootstrap"]["num_bootstraps"]
+        assert (
+            len(result.details["bootstrap_effects"]) == runner.config["bootstrap"]["num_bootstraps"]
+        )
         assert result.details["ci_ratio"] <= 1.5
 ```
 
@@ -373,11 +375,18 @@ class TestDataSubsetRealEvidence:
 
 class TestBootstrapRealEvidence:
     def test_thresholds_are_the_intended_values(self):
-        assert RefutationRunner.PASS_THRESHOLDS["bootstrap_ci_ratio"] == {"pass": 1.50, "warning": 1.75}
+        assert RefutationRunner.PASS_THRESHOLDS["bootstrap_ci_ratio"] == {
+            "pass": 1.50,
+            "warning": 1.75,
+        }
 
     @pytest.mark.parametrize(
         "width,expected",
-        [(0.149, RefutationStatus.PASSED), (0.160, RefutationStatus.WARNING), (0.180, RefutationStatus.FAILED)],
+        [
+            (0.149, RefutationStatus.PASSED),
+            (0.160, RefutationStatus.WARNING),
+            (0.180, RefutationStatus.FAILED),
+        ],
     )
     def test_width_ratio_thresholds_mean_what_the_comment_says(self, width, expected):
         runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 40}})
@@ -444,7 +453,9 @@ class TestReviewBandArithmetic:
 
     @staticmethod
     def _r(name: RefutationTestType, status: RefutationStatus) -> RefutationResult:
-        return RefutationResult(test_name=name, status=status, original_effect=0.15, refuted_effect=0.15)
+        return RefutationResult(
+            test_name=name, status=status, original_effect=0.15, refuted_effect=0.15
+        )
 
     def test_sensitivity_warning_with_both_noncritical_failed_is_review(self):
         runner = RefutationRunner()
@@ -485,6 +496,333 @@ class TestReviewBandArithmetic:
         conf = runner._calculate_confidence_score(tests)
         assert conf == pytest.approx(0.8667, abs=1e-3)
         assert runner._determine_gate_decision(tests, conf) == GateDecision.PROCEED
+
+
+class TestNonFiniteRefitFailsClosed:
+    """Quality review A (spec §5): a NaN/inf re-fit is an anomaly inside the loop
+    and must be fail-closed like an exception -- never scored (a NaN counts as
+    "below the estimate" in DoWhy's percentile test and poisons np.percentile)."""
+
+    def test_subset_nan_refit_raises(self):
+        runner = RefutationRunner()
+        with pytest.raises(RefutationError) as ei:
+            _subset(runner, _sequence_estimate([0.15, 0.16, float("nan"), 0.14, 0.15]))
+        assert ei.value.details["reason"] == "non_finite_resample_effect"
+        assert ei.value.details["test_name"] == "data_subset"
+        assert ei.value.details["first_non_finite_index"] == 2
+        assert ei.value.details["resamples_completed"] == 5
+
+    def test_bootstrap_inf_refit_raises(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 12}})
+        values = [0.15 + 0.001 * i for i in range(12)]
+        values[7] = float("inf")
+        with pytest.raises(RefutationError) as ei:
+            _bootstrap(runner, _sequence_estimate(values))
+        assert ei.value.details["reason"] == "non_finite_resample_effect"
+        assert ei.value.details["test_name"] == "bootstrap"
+        assert ei.value.details["first_non_finite_index"] == 7
+
+
+class TestBelowMinimumConfigIsNotABudgetSkip:
+    """Quality review B: with no deadline and a requested count below the
+    minimum the loop COMPLETES; the skip must say so, not blame the budget."""
+
+    def test_subset_config_below_minimum(self):
+        runner = RefutationRunner(config={"data_subset": {"num_subsets": 2}})
+        result = _subset(runner, _stub_estimate())
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("config_below_minimum")
+        assert result.details["stopped_for_budget"] is False
+        assert result.details["resamples_completed"] == 2
+        assert result.details["resamples_requested"] == 2
+        assert "message" in result.details
+        assert result.execution_time_ms >= 0.0
+
+    def test_bootstrap_config_below_minimum(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 4}})
+        result = _bootstrap(runner, _stub_estimate())
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("config_below_minimum")
+        assert result.details["stopped_for_budget"] is False
+        assert result.details["resamples_completed"] == 4
+
+
+class TestResampleSeedIs31Bit:
+    """Quality review C: the docstring promises a 31-bit seed."""
+
+    def test_seed_is_31_bit_stable_and_distinct(self):
+        from src.causal_engine.refutation_runner import _resample_seed_for
+
+        for est_id in ("est-1", "est-2", "3f1c2a9e-0000-4000-8000-000000000000", "x" * 64):
+            seed = _resample_seed_for(est_id)
+            assert seed is not None and 0 <= seed < 2**31
+            assert _resample_seed_for(est_id) == seed
+        assert _resample_seed_for("est-1") != _resample_seed_for("est-2")
+        assert _resample_seed_for(None) is None
+        assert _resample_seed_for("") is None
+
+    def test_a_known_id_would_exceed_31_bits_unmasked(self):
+        """Positive control: the mask matters (an unmasked 8-hex-digit prefix is
+        32-bit; the reviewer measured a max of 4294943764)."""
+        import hashlib
+
+        from src.causal_engine.refutation_runner import _resample_seed_for
+
+        hits = 0
+        for i in range(64):
+            est_id = f"est-{i}"
+            raw = int(hashlib.sha256(est_id.encode("utf-8")).hexdigest()[:8], 16)
+            if raw >= 2**31:
+                hits += 1
+                assert _resample_seed_for(est_id) == raw & 0x7FFFFFFF
+        assert hits > 0, "no id in the sample exercised the mask"
+
+
+class TestDegenerateOriginalCiSkipsBeforeCompute:
+    """Quality review D: a widthless reported interval cannot score coverage or a
+    width ratio; skip honestly BEFORE any re-fit, never blame the estimate."""
+
+    @staticmethod
+    def _never_called(_df):
+        raise AssertionError("re-fit must not run for a widthless original_ci")
+
+    def test_subset_widthless_ci(self):
+        runner = RefutationRunner()
+        result = runner._run_data_subset_test(
+            original_effect=0.15,
+            original_ci=(0.15, 0.15),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_stub_estimate(effect_fn=self._never_called),
+            use_dowhy=True,
+        )
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("original_ci_degenerate")
+        assert result.details["original_ci"] == (0.15, 0.15)
+        assert "message" in result.details
+        assert result.details["num_subsets"] == runner.config["data_subset"]["num_subsets"]
+        assert result.p_value is None
+        assert result.execution_time_ms >= 0.0
+
+    def test_bootstrap_inverted_ci(self):
+        runner = RefutationRunner()
+        result = runner._run_bootstrap_test(
+            original_effect=0.15,
+            original_ci=(0.20, 0.10),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_stub_estimate(effect_fn=self._never_called),
+            use_dowhy=True,
+        )
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("original_ci_degenerate")
+        assert result.details["num_bootstraps"] == runner.config["bootstrap"]["num_bootstraps"]
+        assert result.p_value is None
+
+
+class TestSkipResultsCarryExecutionTime:
+    """Quality review E: every skip result records execution_time_ms."""
+
+    def test_budget_skip_has_execution_time(self, monkeypatch):
+        clock = {"now": 0.0}
+        monkeypatch.setattr(_t, "monotonic", lambda: clock["now"])
+
+        def effect(_df):
+            clock["now"] += 10.0
+            return 0.15 + 0.001 * clock["now"]
+
+        result = _subset(RefutationRunner(), _stub_estimate(effect_fn=effect), deadline=15.0)
+        assert result.status == RefutationStatus.SKIPPED
+        assert "time_budget" in result.details["reason"]
+        assert result.execution_time_ms > 0.0
+
+    def test_degenerate_skip_has_execution_time(self):
+        result = _subset(RefutationRunner(), _sequence_estimate([0.15] * 5))
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.execution_time_ms > 0.0
+
+
+class TestRatioHasNoFloor:
+    """Codex iter-1 F1: ``max(width, 1e-10)`` understated the ratio for a tiny
+    but valid interval (width 1e-12, bootstrap width 2e-11 -> 0.2 PASSED where
+    the true ratio is 20). Once the width is validated finite and positive the
+    divisor is the ACTUAL width, so the verdict is invariant under rescaling."""
+
+    def test_failed_case_stays_failed_when_rescaled_by_1e_minus_12(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 40}})
+        reference = _bootstrap(runner, _sequence_estimate(_bootstrap_values(0.180)))
+        assert reference.status == RefutationStatus.FAILED
+
+        scaled_values = [v * 1e-12 for v in _bootstrap_values(0.180)]
+        result = runner._run_bootstrap_test(
+            original_effect=0.15e-12,
+            original_ci=(1e-13, 2e-13),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_sequence_estimate(scaled_values, value=0.15e-12),
+            use_dowhy=True,
+        )
+        assert result.details["ci_ratio"] == pytest.approx(1.8, rel=1e-6)
+        assert result.status == RefutationStatus.FAILED
+
+
+class TestNonFiniteReferenceIntervalFailsClosed:
+    """Codex iter-1 F2: a non-finite endpoint is not a value (same class as a
+    NaN re-fit -> fail-closed, spec §5; defense-in-depth behind the node's own
+    refusal), unlike a finite zero-width interval which is an honest SKIPPED."""
+
+    @staticmethod
+    def _never_called(_df):
+        raise AssertionError("re-fit must not run for a non-finite original_ci")
+
+    _CIS = [
+        (float("-inf"), float("inf")),
+        (float("nan"), 0.2),
+        (0.1, float("inf")),
+    ]
+
+    @pytest.mark.parametrize("ci", _CIS)
+    def test_subset_non_finite_ci_raises_before_any_refit(self, ci):
+        with pytest.raises(RefutationError) as ei:
+            RefutationRunner()._run_data_subset_test(
+                original_effect=0.15,
+                original_ci=ci,
+                causal_model=_make_stub_causal_model({}),
+                identified_estimand=object(),
+                estimate=_stub_estimate(effect_fn=self._never_called),
+                use_dowhy=True,
+            )
+        assert ei.value.details["reason"] == "original_ci_non_finite"
+        assert ei.value.details["test_name"] == "data_subset"
+        assert "original_ci" in ei.value.details
+
+    @pytest.mark.parametrize("ci", _CIS)
+    def test_bootstrap_non_finite_ci_raises_before_any_refit(self, ci):
+        with pytest.raises(RefutationError) as ei:
+            RefutationRunner()._run_bootstrap_test(
+                original_effect=0.15,
+                original_ci=ci,
+                causal_model=_make_stub_causal_model({}),
+                identified_estimand=object(),
+                estimate=_stub_estimate(effect_fn=self._never_called),
+                use_dowhy=True,
+            )
+        assert ei.value.details["reason"] == "original_ci_non_finite"
+        assert ei.value.details["test_name"] == "bootstrap"
+        assert "original_ci" in ei.value.details
+
+
+def _exact_percentile_values(upper: float) -> List[float]:
+    """41 sorted values whose 2.5th / 97.5th percentiles are EXACTLY the second
+    and fortieth (positions 0.025*40 = 1.0 and 0.975*40 = 39.0, no
+    interpolation): lower = 0.0, upper = ``upper``."""
+    x = [-0.01, 0.0] + [0.01 * k for k in range(2, 39)] + [upper, upper + 0.01]
+    assert len(x) == 41 and x == sorted(x)
+    return x
+
+
+class TestExactBoundaries:
+    """Spec §6: the thresholds at their exact boundaries (0.79 / 0.80 coverage,
+    1.50 / 1.51 and 1.75 / 1.76 width ratio) and bootstrap seed reproducibility."""
+
+    @pytest.mark.parametrize(
+        "inside,expected_cov,expected",
+        [(80, 0.80, RefutationStatus.PASSED), (79, 0.79, RefutationStatus.WARNING)],
+    )
+    def test_coverage_boundary_exact(self, inside, expected_cov, expected):
+        runner = RefutationRunner(config={"data_subset": {"num_subsets": 100}})
+        values = [0.15 + 0.0001 * i for i in range(inside)] + [
+            0.5 + 0.001 * i for i in range(100 - inside)
+        ]
+        result = _subset(runner, _sequence_estimate(values))
+        assert result.details["ci_coverage"] == pytest.approx(expected_cov)
+        assert result.details["ci_coverage"] == inside / 100
+        assert result.status == expected
+
+    @pytest.mark.parametrize(
+        "upper,expected_ratio,expected",
+        [
+            (0.75, 1.50, RefutationStatus.PASSED),
+            (0.755, 1.51, RefutationStatus.WARNING),
+            (0.875, 1.75, RefutationStatus.WARNING),
+            (0.88, 1.76, RefutationStatus.FAILED),
+        ],
+    )
+    def test_ratio_boundary_exact(self, upper, expected_ratio, expected):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 41}})
+        result = runner._run_bootstrap_test(
+            original_effect=0.25,
+            original_ci=(0.0, 0.5),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_sequence_estimate(_exact_percentile_values(upper), value=0.25),
+            use_dowhy=True,
+        )
+        assert result.details["bootstrap_ci"] == (0.0, upper)
+        assert result.details["ci_ratio"] == pytest.approx(expected_ratio)
+        assert result.status == expected
+
+    def test_bootstrap_seeded_runs_reproduce_their_evidence(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 12}})
+        a = _bootstrap(runner, _stub_estimate(), resample_seed=7)
+        b = _bootstrap(runner, _stub_estimate(), resample_seed=7)
+        c = _bootstrap(runner, _stub_estimate(), resample_seed=8)
+        assert a.details["bootstrap_effects"] == b.details["bootstrap_effects"]
+        assert a.details["bootstrap_effects"] != c.details["bootstrap_effects"]
+
+
+_ONLY_NONCRITICAL = {
+    "placebo_treatment": {"enabled": False},
+    "random_common_cause": {"enabled": False},
+    "sensitivity_e_value": {"enabled": False},
+}
+
+
+class TestRunAllTestsWiring:
+    def _kw(self):
+        return {
+            "original_effect": 0.15,
+            "original_ci": CI,
+            "causal_model": _make_stub_causal_model({}),
+            "identified_estimand": object(),
+        }
+
+    def test_estimate_id_seeds_the_resamples(self):
+        runner = RefutationRunner(config=_ONLY_NONCRITICAL)
+        a = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-1", **self._kw())
+        b = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-1", **self._kw())
+        c = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-2", **self._kw())
+
+        def effects(suite):
+            return {
+                t.test_name.value: t.details.get("subset_effects")
+                or t.details.get("bootstrap_effects")
+                for t in suite.tests
+            }
+
+        assert effects(a)["data_subset"] == effects(b)["data_subset"]
+        assert effects(a)["data_subset"] != effects(c)["data_subset"]
+        assert effects(a)["bootstrap"] == effects(b)["bootstrap"]
+        assert effects(a)["bootstrap"] != effects(c)["bootstrap"]
+
+    def test_deadline_and_seed_reach_the_loops(self, monkeypatch):
+        runner = RefutationRunner(config=_ONLY_NONCRITICAL)
+        seen: dict = {"_run_data_subset_test": {}, "_run_bootstrap_test": {}}
+
+        for method in seen:
+            real = getattr(runner, method)
+
+            def spy(*args, _real=real, _method=method, **kwargs):
+                seen[_method].update(kwargs)
+                return _real(*args, **kwargs)
+
+            monkeypatch.setattr(runner, method, spy)
+
+        far = _t.monotonic() + 3600.0
+        runner.run_all_tests(estimate=_stub_estimate(), deadline=far, **self._kw())
+        for method in ("_run_data_subset_test", "_run_bootstrap_test"):
+            assert seen[method]["deadline"] == far, method
+            assert seen[method]["resample_seed"] is None, method
 ```
 
 - [ ] **Step 5: Run the new file and confirm it fails for the right reason**
@@ -645,36 +983,78 @@ def _significance_p_value(
     return float(pv)
 
 
+def _require_finite_effects(effects: List[float], test_name: str, original_effect: float) -> None:
+    """Fail closed on a NaN / inf re-fit (spec §5: an anomaly inside the loop is
+    treated like an exception). A non-finite effect would otherwise be SCORED:
+    DoWhy's percentile test counts NaN as "below the estimate", np.percentile
+    poisons the bootstrap interval, and coverage silently drops one sample."""
+    for i, e in enumerate(effects):
+        if not np.isfinite(e):
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                f"{test_name} re-fit #{i} returned a non-finite effect ({e!r}); refusing "
+                "to score a distribution that contains it.",
+                details={
+                    "test_name": test_name,
+                    "original_effect": original_effect,
+                    "reason": "non_finite_resample_effect",
+                    "resamples_completed": len(effects),
+                    "first_non_finite_index": i,
+                },
+            )
+
+
 def _budget_skip_result(
     test_name: RefutationTestType,
     original_effect: float,
     completed: int,
     requested: int,
     minimum: int,
+    stopped: bool,
     config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
 ) -> RefutationResult:
-    """Honest SKIPPED result when the deadline stopped a loop below its minimum
-    (same ``reason`` / ``message`` contract as the #1419 pre-start skip)."""
+    """Honest SKIPPED when fewer than ``minimum`` re-fits completed.
+
+    ``stopped`` says WHY: the deadline stopped the loop (``time_budget``, same
+    ``reason`` / ``message`` contract as the #1419 pre-start skip) or the loop
+    ran to completion because the configured count is below the minimum
+    (``config_below_minimum``) -- a skip must not blame the budget when the
+    budget was never hit.
+    """
     name = test_name.value
+    if stopped:
+        reason = (
+            "time_budget — non-critical test stopped before its minimum resample "
+            "count; the critical gates decide the suite"
+        )
+        message = (
+            f"{name} skipped: {completed}/{requested} resamples completed before the "
+            f"compute deadline (minimum {minimum}); non-critical, degraded honestly"
+        )
+    else:
+        reason = (
+            "config_below_minimum — requested resample count is below the test's "
+            "minimum; the critical gates decide the suite"
+        )
+        message = (
+            f"{name} skipped: {completed}/{requested} resamples requested, below the "
+            f"minimum {minimum}; non-critical, degraded honestly"
+        )
     return RefutationResult(
         test_name=test_name,
         status=RefutationStatus.SKIPPED,
         original_effect=original_effect,
         refuted_effect=original_effect,
         details={
-            "reason": (
-                "time_budget — non-critical test stopped before its minimum resample "
-                "count; the critical gates decide the suite"
-            ),
-            "message": (
-                f"{name} skipped: {completed}/{requested} resamples completed before the "
-                f"compute deadline (minimum {minimum}); non-critical, degraded honestly"
-            ),
+            "reason": reason,
+            "message": message,
             "resamples_completed": completed,
             "resamples_requested": requested,
-            "stopped_for_budget": True,
+            "stopped_for_budget": stopped,
             **config_details,
         },
+        execution_time_ms=execution_time_ms,
     )
 
 
@@ -685,6 +1065,7 @@ def _degenerate_skip_result(
     requested: int,
     stopped: bool,
     config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
 ) -> RefutationResult:
     """Honest SKIPPED when every re-fit returned the SAME effect (owner decision
     2026-09-09). A zero-variance distribution cannot be scored (DoWhy's normal
@@ -714,16 +1095,88 @@ def _degenerate_skip_result(
             "stopped_for_budget": stopped,
             **config_details,
         },
+        execution_time_ms=execution_time_ms,
+    )
+
+
+def _require_finite_ci(
+    original_ci: Tuple[float, float], test_name: str, original_effect: float
+) -> None:
+    """Fail closed when either endpoint of the reported interval is not finite.
+
+    A non-finite endpoint is not a value: it is the same class as a NaN re-fit
+    (spec §5, fail-closed) and would otherwise be SCORED -- ``(-inf, inf)``
+    covers every subset effect (coverage 1.0) and makes the width ratio 0, a
+    PASSED verdict without a usable interval; a NaN endpoint fails from NaN
+    arithmetic and blames the estimate. The node already refuses such an
+    interval upstream (nodes/refutation.py), so this is defense-in-depth. A
+    FINITE zero-width interval is different: it is a real value that merely
+    cannot score a coverage / width test, the same class as a degenerate
+    resample distribution, and stays an honest SKIPPED
+    (``_degenerate_ci_skip_result``).
+    """
+    lo, hi = original_ci[0], original_ci[1]
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"{test_name} received a non-finite reference interval {tuple(original_ci)!r}; "
+            "refusing to score against it.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "original_ci_non_finite",
+                "original_ci": (float(lo), float(hi)),
+            },
+        )
+
+
+def _degenerate_ci_skip_result(
+    test_name: RefutationTestType,
+    original_effect: float,
+    original_ci: Tuple[float, float],
+    config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
+) -> RefutationResult:
+    """Honest SKIPPED, decided BEFORE any re-fit, when the reported interval has
+    no width: coverage of a point and a width ratio against ~0 cannot be scored
+    and would blame the estimate for an upstream degenerate interval."""
+    name = test_name.value
+    return RefutationResult(
+        test_name=test_name,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=original_effect,
+        details={
+            "reason": (
+                "original_ci_degenerate — the reported interval has no width, so "
+                "coverage / width ratio cannot be scored; the critical gates decide "
+                "the suite"
+            ),
+            "message": (
+                f"{name} skipped: original_ci={tuple(original_ci)!r} has width "
+                f"{float(original_ci[1] - original_ci[0]):.6g}; no re-fit was run; "
+                "non-critical, degraded honestly"
+            ),
+            "original_ci": (float(original_ci[0]), float(original_ci[1])),
+            "resamples_completed": 0,
+            "stopped_for_budget": False,
+            **config_details,
+        },
+        execution_time_ms=execution_time_ms,
     )
 
 
 def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
-    """Stable 31-bit seed from the estimate id (``None`` → unseeded, as before)."""
+    """Stable 31-bit seed from the estimate id (``None`` → unseeded, as before).
+
+    The first 8 hex digits of the digest are 32 bits (measured max 4294943764
+    over the live ids, 2026-09-09); the mask keeps the promise in this docstring.
+    """
     if not estimate_id:
         return None
     import hashlib
 
-    return int(hashlib.sha256(str(estimate_id).encode("utf-8")).hexdigest()[:8], 16)
+    return int(hashlib.sha256(str(estimate_id).encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
 ```
 
 - [ ] **Step 8: Replace `_run_data_subset_test`**
@@ -772,7 +1225,17 @@ Replace the whole method (from `def _run_data_subset_test(` through its `return 
         cfg = self.config["data_subset"]
         requested = int(cfg["num_subsets"])
         subset_fraction = float(cfg["subset_fraction"])
+        config_details = {"subset_fraction": subset_fraction, "num_subsets": requested}
         frame = _refutation_frame(causal_model, "data_subset", original_effect)
+        _require_finite_ci(original_ci, "data_subset", original_effect)
+        if original_ci[1] - original_ci[0] <= 0:
+            return _degenerate_ci_skip_result(
+                test_name,
+                original_effect,
+                original_ci,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
         rng = np.random.default_rng(resample_seed)
         try:
             subset_effects, stopped = _resample_effects(
@@ -796,16 +1259,32 @@ Replace the whole method (from `def _run_data_subset_test(` through its `return 
                 original_error=e,
             ) from e
 
-        config_details = {"subset_fraction": subset_fraction, "num_subsets": requested}
+        _require_finite_effects(subset_effects, "data_subset", original_effect)
         if len(subset_effects) < _MIN_SUBSET_RESAMPLES:
             return _budget_skip_result(
-                test_name, original_effect, len(subset_effects), requested,
-                _MIN_SUBSET_RESAMPLES, config_details,
+                test_name,
+                original_effect,
+                len(subset_effects),
+                requested,
+                _MIN_SUBSET_RESAMPLES,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
-        if float(np.std(subset_effects)) == 0.0:
+        # "Every re-fit returned the same effect" is tested EXACTLY (max == min):
+        # np.std of n identical floats is not 0.0 for most n (twelve 0.15s give
+        # 2.8e-17, measured 2026-09-09), which would let DoWhy's normal test
+        # score a constant series with a meaningless p-value.
+        if float(np.ptp(subset_effects)) == 0.0:
             return _degenerate_skip_result(
-                test_name, original_effect, subset_effects, requested, stopped, config_details
+                test_name,
+                original_effect,
+                subset_effects,
+                requested,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
         refuted_effect = float(np.mean(subset_effects))
@@ -890,7 +1369,17 @@ Replace the whole method with:
             )
 
         requested = int(self.config["bootstrap"]["num_bootstraps"])
+        config_details = {"num_bootstraps": requested}
         frame = _refutation_frame(causal_model, "bootstrap", original_effect)
+        _require_finite_ci(original_ci, "bootstrap", original_effect)
+        if original_ci[1] - original_ci[0] <= 0:
+            return _degenerate_ci_skip_result(
+                test_name,
+                original_effect,
+                original_ci,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
         rng = np.random.default_rng(resample_seed)
         try:
             bootstrap_effects, stopped = _resample_effects(
@@ -912,16 +1401,29 @@ Replace the whole method with:
                 original_error=e,
             ) from e
 
-        config_details = {"num_bootstraps": requested}
+        _require_finite_effects(bootstrap_effects, "bootstrap", original_effect)
         if len(bootstrap_effects) < _MIN_BOOTSTRAP_RESAMPLES:
             return _budget_skip_result(
-                test_name, original_effect, len(bootstrap_effects), requested,
-                _MIN_BOOTSTRAP_RESAMPLES, config_details,
+                test_name,
+                original_effect,
+                len(bootstrap_effects),
+                requested,
+                _MIN_BOOTSTRAP_RESAMPLES,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
-        if float(np.std(bootstrap_effects)) == 0.0:
+        # Exact degeneracy check (max == min); see _run_data_subset_test.
+        if float(np.ptp(bootstrap_effects)) == 0.0:
             return _degenerate_skip_result(
-                test_name, original_effect, bootstrap_effects, requested, stopped, config_details
+                test_name,
+                original_effect,
+                bootstrap_effects,
+                requested,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
         refuted_effect = float(np.mean(bootstrap_effects))
@@ -935,7 +1437,11 @@ Replace the whole method with:
         )
         original_ci_width = original_ci[1] - original_ci[0]
         bootstrap_ci_width = bootstrap_ci[1] - bootstrap_ci[0]
-        ci_ratio = bootstrap_ci_width / max(original_ci_width, 1e-10)
+        # The width is finite and > 0 here (_require_finite_ci + the widthless
+        # guard above), so divide by the ACTUAL width: a floor (formerly 1e-10)
+        # understated the ratio for a tiny but valid interval (codex iter-1 F1:
+        # width 1e-12, bootstrap width 2e-11 read 0.2 PASSED; true ratio 20).
+        ci_ratio = bootstrap_ci_width / original_ci_width
 
         if ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["pass"]:
             status = RefutationStatus.PASSED
@@ -2182,6 +2688,8 @@ Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
 - Modify: `src/api/schemas/expert_review.py` (add two models after `PendingReviewItem`)
 - Modify: `src/api/routes/expert_review.py` (import the models; add the route at the END of the file)
 - Create: `tests/unit/test_api/test_expert_review_detail_route.py`
+- Modify (Task 12 fold, Step 5): `src/repositories/expert_review.py`, `tests/unit/test_repositories/test_expert_review.py`, `tests/api/test_expert_review_routes.py`
+- Create (Task 12 fold, Step 5): `database/migrations/136_expert_reviews_resolved_at.sql`, `tests/unit/test_database/test_migration_136_resolved_at.py`
 
 - [ ] **Step 1: Write the failing route tests**
 
@@ -2193,17 +2701,28 @@ for pending, approved and rejected structures alike."""
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 import src.api.routes.expert_review as route_mod
+from src.api.errors import SAFE_503_DETAIL_PREFIX
+
+# Real UUID literals: ``expert_reviews.review_id`` is a uuid column, and the
+# route canonicalises the path id before the store read (review F1).
+RID = "1c8f3d6a-5b7e-4c21-9f0a-2d4e6b8a0c13"
+RID_OLDER = "7a2b9c40-3d1e-4f65-8a7b-0c9d2e1f3a58"
+RID_UNKNOWN = "9e8d7c6b-5a49-4382-b1c0-d9e8f7a6b5c4"
+DAG_HASH = "h" * 64
 
 ROW: Dict[str, Any] = {
-    "review_id": "rev-1",
+    "review_id": RID,
     "review_type": "dag_approval",
-    "dag_version_hash": "h" * 64,
+    "dag_version_hash": DAG_HASH,
     "brand": "Kisqali",
     "treatment_variable": "treatment_arm",
     "outcome_variable": "persistent_180d",
@@ -2211,26 +2730,45 @@ ROW: Dict[str, Any] = {
     "reviewer_name": "Dr. No",
     "concerns_raised": ["collider"],
     "created_at": "2026-07-13T10:00:00+00:00",
+    "valid_from": "2026-07-13",
+    "approved_at": "2026-07-14T09:30:00+00:00",
     "dag_structure_json": json.dumps({"nodes": ["t", "y"], "edges": [["t", "y"]]}),
     "comments_json": json.dumps({"note": "engagement is post-treatment"}),
 }
 
 
 class _Repo:
-    def __init__(self, row: Optional[Dict[str, Any]], history: Optional[List[Dict[str, Any]]] = None, fail: Optional[str] = None):
+    def __init__(
+        self,
+        row: Optional[Dict[str, Any]],
+        history: Optional[List[Dict[str, Any]]] = None,
+        fail: Optional[str] = None,
+    ):
         self.row, self.history, self.fail = row, history or [], fail
+        self.get_calls: List[str] = []
         self.history_calls: List[tuple] = []
 
     async def get_by_id(self, review_id: str):
+        self.get_calls.append(review_id)
         if self.fail == "row":
             raise RuntimeError("connection refused")
+        try:
+            uuid.UUID(review_id)
+        except ValueError:  # what the live uuid column does: PostgREST APIError 22P02
+            raise RuntimeError(f'invalid input syntax for type uuid: "{review_id}"') from None
+        # Matches on the CANONICAL id only, like the uuid column would.
         return self.row if self.row and self.row["review_id"] == review_id else None
 
-    async def get_reviews_for_dag(self, dag_hash: str, include_expired: bool = False, brand: Optional[str] = None):
+    async def get_reviews_for_dag(
+        self, dag_hash: str, include_expired: bool = False, brand: Optional[str] = None
+    ):
         self.history_calls.append((dag_hash, include_expired, brand))
         if self.fail == "history":
             raise RuntimeError("connection refused")
         return self.history
+
+    async def get_pending_reviews(self, brand=None, reviewer_id=None, limit=50):
+        return []
 
 
 def _install(monkeypatch, repo: _Repo) -> None:
@@ -2243,26 +2781,77 @@ def _install(monkeypatch, repo: _Repo) -> None:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_returns_the_row_and_its_same_structure_history(monkeypatch):
-    repo = _Repo(ROW, history=[ROW, {**ROW, "review_id": "rev-0", "approval_status": "pending"}])
+    repo = _Repo(ROW, history=[ROW, {**ROW, "review_id": RID_OLDER, "approval_status": "pending"}])
     _install(monkeypatch, repo)
-    resp = await route_mod.get_expert_review("rev-1", user={})
-    assert resp.review.review_id == "rev-1"
+    resp = await route_mod.get_expert_review(RID, user={})
+    assert resp.review.review_id == RID
     assert resp.review.approval_status == "rejected"
     assert resp.review.reviewer_name == "Dr. No"
     assert resp.review.dag_structure_json == {"nodes": ["t", "y"], "edges": [["t", "y"]]}
     assert resp.review.comments_json == {"note": "engagement is post-treatment"}
-    assert [r.review_id for r in resp.history] == ["rev-1", "rev-0"]
+    assert [r.review_id for r in resp.history] == [RID, RID_OLDER]
     # the same read the gate's rejection probe performs: expired included, brand-scoped
-    assert repo.history_calls == [("h" * 64, True, "Kisqali")]
+    assert repo.history_calls == [(DAG_HASH, True, "Kisqali")]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_resolution_provenance_columns_are_surfaced(monkeypatch):
+    """Codex whole-diff HIGH F1: ``reviewer_email`` and ``resolved_at`` (migration
+    136) reach the client so the card can render RECORDED provenance. Both are
+    None on a row resolved before the migration (positive/negative pair)."""
+    resolved = {
+        **ROW,
+        "reviewer_email": "no@example.com",
+        "resolved_at": "2026-07-14T09:31:00+00:00",
+    }
+    repo = _Repo(resolved, history=[resolved, {**ROW, "review_id": RID_OLDER}])
+    _install(monkeypatch, repo)
+    resp = await route_mod.get_expert_review(RID, user={})
+    assert resp.review.reviewer_email == "no@example.com"
+    assert resp.review.resolved_at == datetime(2026, 7, 14, 9, 31, tzinfo=timezone.utc)
+    assert resp.history[0].resolved_at == resp.review.resolved_at
+    # A pre-136 row carries neither; the reader reports None, not a stand-in.
+    assert resp.history[1].reviewer_email is None
+    assert resp.history[1].resolved_at is None
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_unknown_review_is_404(monkeypatch):
-    _install(monkeypatch, _Repo(None))
+    """A VALID but unknown uuid: the store answers None -> 404."""
+    repo = _Repo(None)
+    _install(monkeypatch, repo)
+    with pytest.raises(HTTPException) as ei:
+        await route_mod.get_expert_review(RID_UNKNOWN, user={})
+    assert ei.value.status_code == 404
+    assert repo.get_calls == [RID_UNKNOWN]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_malformed_id_is_404_without_touching_the_store(monkeypatch):
+    """A non-uuid id would make PostgREST raise 22P02 (a 503 through the
+    store-failure guard); the pre-check answers 404 and never reads the store."""
+
+    class _NeverRead(_Repo):
+        async def get_by_id(self, review_id: str):
+            raise AssertionError("store must not be read")
+
+    _install(monkeypatch, _NeverRead(ROW))
     with pytest.raises(HTTPException) as ei:
         await route_mod.get_expert_review("nope", user={})
     assert ei.value.status_code == 404
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_non_canonical_id_reaches_the_store_canonical(monkeypatch):
+    repo = _Repo(ROW, history=[ROW])
+    _install(monkeypatch, repo)
+    resp = await route_mod.get_expert_review(RID.upper(), user={})
+    assert resp.review.review_id == RID
+    assert repo.get_calls == [RID]
 
 
 @pytest.mark.unit
@@ -2271,7 +2860,7 @@ async def test_unknown_review_is_404(monkeypatch):
 async def test_store_failure_is_503_never_an_empty_200(monkeypatch, fail):
     _install(monkeypatch, _Repo(ROW, history=[ROW], fail=fail))
     with pytest.raises(HTTPException) as ei:
-        await route_mod.get_expert_review("rev-1", user={})
+        await route_mod.get_expert_review(RID, user={})
     assert ei.value.status_code == 503
 
 
@@ -2286,7 +2875,7 @@ async def test_client_factory_failure_is_503(monkeypatch):
 
     monkeypatch.setattr(route_mod, "_get_expert_review_repo", _boom)
     with pytest.raises(HTTPException) as ei:
-        await route_mod.get_expert_review("rev-1", user={})
+        await route_mod.get_expert_review(RID, user={})
     assert ei.value.status_code == 503
 
 
@@ -2295,9 +2884,20 @@ async def test_client_factory_failure_is_503(monkeypatch):
 async def test_row_without_a_hash_has_empty_history(monkeypatch):
     repo = _Repo({**ROW, "dag_version_hash": None})
     _install(monkeypatch, repo)
-    resp = await route_mod.get_expert_review("rev-1", user={})
+    resp = await route_mod.get_expert_review(RID, user={})
     assert resp.history == []
     assert repo.history_calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_row_without_a_brand_reads_an_unfiltered_history(monkeypatch):
+    """A brand-less row's history is cross-brand -- exactly the gate's read."""
+    repo = _Repo({**ROW, "brand": None}, history=[{**ROW, "brand": None}])
+    _install(monkeypatch, repo)
+    resp = await route_mod.get_expert_review(RID, user={})
+    assert [r.review_id for r in resp.history] == [RID]
+    assert repo.history_calls == [(DAG_HASH, True, None)]
 
 
 @pytest.mark.unit
@@ -2307,6 +2907,68 @@ def test_lookup_route_is_declared_after_pending_and_summary():
     paths = [r.path for r in route_mod.router.routes]
     assert paths.index("/expert-reviews/pending") < paths.index("/expert-reviews/{review_id}")
     assert paths.index("/expert-reviews/summary") < paths.index("/expert-reviews/{review_id}")
+
+
+# --- in-process client: Depends, HTTP serialisation, error bodies, routing ---
+# Minimal app (no ``src.api.main`` import, so no lifespan); precedent
+# tests/unit/test_api/test_executive_insights.py. E2I_TESTING_MODE=1 (conftest)
+# makes ``require_operator`` yield the mock user.
+
+
+def _client(monkeypatch, repo: _Repo) -> TestClient:
+    _install(monkeypatch, repo)
+    app = FastAPI()
+    app.include_router(route_mod.router, prefix="/api")
+    return TestClient(app)
+
+
+@pytest.mark.unit
+def test_http_200_serialises_dates_and_parsed_json(monkeypatch):
+    client = _client(monkeypatch, _Repo(ROW, history=[ROW, {**ROW, "review_id": RID_OLDER}]))
+    r = client.get(f"/api/expert-reviews/{RID}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["review"]["review_id"] == RID
+    assert body["review"]["valid_from"] == "2026-07-13"
+    assert datetime.fromisoformat(body["review"]["approved_at"]) == datetime(
+        2026, 7, 14, 9, 30, tzinfo=timezone.utc
+    )
+    assert body["review"]["comments_json"] == {"note": "engagement is post-treatment"}
+    assert len(body["history"]) == 2
+
+
+@pytest.mark.unit
+def test_http_unknown_valid_uuid_is_404_with_detail(monkeypatch):
+    r = _client(monkeypatch, _Repo(None)).get(f"/api/expert-reviews/{RID_UNKNOWN}")
+    assert r.status_code == 404
+    assert isinstance(r.json()["detail"], str) and RID_UNKNOWN in r.json()["detail"]
+
+
+@pytest.mark.unit
+def test_http_malformed_id_is_404(monkeypatch):
+    r = _client(monkeypatch, _Repo(ROW)).get("/api/expert-reviews/nope")
+    assert r.status_code == 404, r.text
+
+
+@pytest.mark.unit
+def test_http_store_failure_is_a_safe_503(monkeypatch):
+    r = _client(monkeypatch, _Repo(ROW, fail="row")).get(f"/api/expert-reviews/{RID}")
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    # The marker the app's global handler surfaces verbatim -- pin it.
+    assert detail.startswith(SAFE_503_DETAIL_PREFIX)
+    assert "Expert-review store unavailable" in detail
+
+
+@pytest.mark.unit
+def test_http_pending_is_not_shadowed_by_the_lookup(monkeypatch):
+    r = _client(monkeypatch, _Repo(ROW)).get("/api/expert-reviews/pending")
+    # The 200 + the pending body are the proof. A store-call count could not
+    # discriminate: were /{review_id} declared first, "pending" would fail the
+    # uuid pre-check and answer 404 BEFORE any store read (measured), which the
+    # status assertion catches.
+    assert r.status_code == 200, r.text
+    assert r.json() == {"reviews": [], "total": 0}
 ```
 
 Run: `$PY -m pytest tests/unit/test_api/test_expert_review_detail_route.py -q -p no:cacheprovider` → Expected: FAIL, `AttributeError: module ... has no attribute 'get_expert_review'`.
@@ -2321,12 +2983,21 @@ class ReviewRecord(PendingReviewItem):
 
     Extends ``PendingReviewItem`` with the resolution columns so the queue
     page's linked-review card can show who decided what, and until when.
+
+    Provenance (codex whole-diff HIGH F1): ``reviewer_id`` holds the REQUESTER
+    (the originating query id the gate wrote), never the resolver. The
+    resolver is ``reviewer_name`` / ``reviewer_email`` and the decision time is
+    ``resolved_at`` -- the resolution time for BOTH statuses since migration
+    136, NULL for rows resolved before it (``approved_at`` is approval-only).
     """
 
     approval_status: Optional[str] = None
     reviewer_id: Optional[str] = None
     reviewer_name: Optional[str] = None
+    reviewer_email: Optional[str] = None
     approved_at: Optional[datetime] = None
+    #: Resolution time for both statuses (migration 136); None before it.
+    resolved_at: Optional[datetime] = None
     valid_from: Optional[date] = None
     valid_until: Optional[date] = None
     concerns_raised: Optional[List[str]] = None
@@ -2338,13 +3009,7 @@ class ReviewRecord(PendingReviewItem):
     @field_validator("checklist_json", "comments_json", mode="before")
     @classmethod
     def _parse_resolution_json(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except (ValueError, TypeError):
-                return None
-            return parsed if isinstance(parsed, dict) else None
-        return value
+        return _json_string_to_dict(value)
 
 
 class ExpertReviewDetailResponse(BaseModel):
@@ -2401,12 +3066,26 @@ async def get_expert_review(
     ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
     so it cannot shadow ``/pending`` and ``/summary``.
     """
+    # A malformed id is 404, not 503 (review 2026-09-09, measured live):
+    # ``expert_reviews.review_id`` is a uuid column, so a non-UUID string makes
+    # PostgREST raise APIError 22P02 ("invalid input syntax for type uuid"),
+    # which the store-failure guard below would report as an outage with an
+    # ERROR traceback -- while the sibling ``POST /{review_id}/resolve``
+    # answers 404 for the same input. Pre-check for parity, and hand the store
+    # the CANONICAL form so any form Python accepts (uppercase, braces) can
+    # never trip the cast. The raw path value stays in the 404 messages.
+    try:
+        canonical_id = str(uuid.UUID(review_id))
+    except ValueError:
+        raise HTTPException(
+            status_code=404, detail=f"Review {review_id} was not found (not a valid review id)."
+        ) from None
     try:
         # The client factory raises ServiceConnectionError when Supabase is
         # unset/unreachable; inside the try so that is a 503 as well, not a
         # 500 (pre-execution review 2026-09-08, codex MED).
         repo = await _get_expert_review_repo()
-        row = await repo.get_by_id(review_id)
+        row = await repo.get_by_id(canonical_id)
     except Exception as e:  # store failure (R3): honest 503
         raise _store_unavailable("review read", e) from e
     if not row:
@@ -2438,6 +3117,400 @@ git commit -m "feat(api): GET /expert-reviews/{review_id} -- a review in any sta
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
 ```
+
+- [ ] **Step 5: Resolution provenance — migration 136; the writer and the route record the resolving operator (Task 12 whole-diff fold, codex HIGH F1)**
+
+The linked-review card rendered `reviewer_name ?? reviewer_id` and `approved_at ?? created_at`. `reviewer_id` holds the REQUESTER (`src/causal_engine/expert_review_gate.py` `create_review(reviewer_id=requester_id)`, the originating query id), no live row carried `reviewer_name` / `reviewer_email` (0 of 40 on 2026-09-09), and a rejection wrote no timestamp at all (`approved_at` is approval-only; `updated_at` is trigger-maintained and not a decision time). Red-first: the migration contract test, the repository payload pins for BOTH statuses, the route call-kwargs pin with an explicit operator override, and the detail-route field round-trip (Step 1's file above, regenerated). `reviewer_id` is deliberately never overwritten. Nothing is backfilled: unknown stays unknown.
+
+Create `database/migrations/136_expert_reviews_resolved_at.sql` (rehearse it `BEGIN … ROLLBACK` on the live database: the column is present inside the transaction and `select count(*) from information_schema.columns where table_name='expert_reviews' and column_name='resolved_at'` is 0 afterwards):
+
+```sql
+-- ============================================================================
+-- Migration 136: expert_reviews.resolved_at (lane 1, codex whole-diff HIGH F1)
+-- ============================================================================
+-- WHAT: one nullable column, public.expert_reviews.resolved_at TIMESTAMPTZ --
+--   the time an operator resolved the review, for BOTH statuses. Written by
+--   ExpertReviewRepository.submit_review (src/repositories/expert_review.py)
+--   as now() together with the resolver's reviewer_name / reviewer_email,
+--   which the resolve route derives from the authenticated operator
+--   (src/api/routes/expert_review.py resolve_review).
+-- WHY: the linked-review card showed Reviewer = reviewer_name ?? reviewer_id
+--   and Decided = approved_at ?? created_at. reviewer_id holds the REQUESTER
+--   (the originating query id: src/agents/causal_impact/nodes/refutation.py
+--   -> expert_review_gate.py create_review(reviewer_id=requester_id)), no
+--   live row carries reviewer_name / reviewer_email (0 of 40 on 2026-09-09),
+--   and a rejection wrote no timestamp at all (approved_at is set only on
+--   approval) -- so every resolved row would have named a query id as the
+--   reviewer and its creation date as the decision date. This column plus the
+--   writer change make the decision time recordable; the card renders only
+--   what was recorded.
+-- NO BACKFILL: rows resolved before this migration stay NULL. updated_at is
+--   trigger-maintained and is NOT a decision time (the one live rejected row
+--   had its cached agent assessment written after its rejection). Unknown
+--   stays unknown.
+-- SAFETY: additive, idempotent (ADD COLUMN IF NOT EXISTS), no default, no
+--   constraint; the old image's writer keeps working during the deploy window.
+--   No BEGIN/COMMIT of its own -- scripts/run_migrations.sh wraps the file in
+--   --single-transaction.
+-- ============================================================================
+
+ALTER TABLE public.expert_reviews ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+
+COMMENT ON COLUMN public.expert_reviews.resolved_at IS
+    'Lane 1 (migration 136): when an operator resolved this review, for BOTH '
+    'statuses (approved and rejected). Written as now() by '
+    'ExpertReviewRepository.submit_review together with the resolver''s '
+    'reviewer_name / reviewer_email. NULL for rows resolved before this '
+    'migration -- deliberately not backfilled, the trigger-maintained updated_at '
+    'is not a decision time.';
+```
+
+Create `tests/unit/test_database/test_migration_136_resolved_at.py`:
+
+```python
+"""Migration 136 adds ``expert_reviews.resolved_at`` (lane 1, codex whole-diff HIGH F1).
+
+The resolution time for BOTH statuses, written by ``submit_review`` together
+with the resolver's ``reviewer_name`` / ``reviewer_email``. Rows resolved before
+the migration keep NULL: ``updated_at`` is trigger-maintained and is NOT a
+decision time (the one live rejected row had its cached assessment written
+after its rejection), so there is nothing honest to backfill from.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[3]
+MIGRATION = REPO / "database" / "migrations" / "136_expert_reviews_resolved_at.sql"
+
+ADD_COLUMN = "ALTER TABLE public.expert_reviews ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;"
+
+
+@pytest.mark.unit
+def test_adds_the_column_idempotently():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    assert ADD_COLUMN in sql
+
+
+@pytest.mark.unit
+def test_column_comment_states_the_contract():
+    """The comment is the column's contract: both statuses, written by
+    ``submit_review`` with the resolver identity, NULL before the migration."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    comment = re.search(
+        r"COMMENT ON COLUMN public\.expert_reviews\.resolved_at IS\s*(.*?);", sql, re.S
+    )
+    assert comment is not None
+    text = comment.group(1)
+    assert "submit_review" in text
+    assert "reviewer_name" in text and "reviewer_email" in text
+    assert "approved" in text and "rejected" in text
+    assert "NULL" in text
+
+
+@pytest.mark.unit
+def test_no_backfill_unknown_stays_unknown():
+    """``updated_at`` is not a decision time; a backfill would fabricate one."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    statements = [s for s in sql.split("\n") if not s.lstrip().startswith("--")]
+    body = "\n".join(statements)
+    assert not re.search(r"\bUPDATE\b", body, re.I)
+    assert not re.search(r"\bSET\s+resolved_at\b", body, re.I)
+    # No DEFAULT either: a default would stamp future rows at INSERT time.
+    assert not re.search(r"\bDEFAULT\b", body, re.I)
+
+
+@pytest.mark.unit
+def test_runner_wraps_it_no_own_transaction():
+    """scripts/run_migrations.sh wraps a file in --single-transaction unless it
+    manages its own; a COMMIT here would end the wrapper's transaction."""
+    sql = MIGRATION.read_text(encoding="utf-8")
+    body = "\n".join(s for s in sql.split("\n") if not s.lstrip().startswith("--"))
+    assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", body, re.I | re.M)
+```
+
+In `src/repositories/expert_review.py`, replace `submit_review` with:
+
+```python
+    async def submit_review(
+        self,
+        review_id: str,
+        approval_status: str,
+        checklist: Dict[str, Any],
+        comments: Optional[Dict[str, Any]] = None,
+        concerns_raised: Optional[List[str]] = None,
+        conditions: Optional[str] = None,
+        validity_days: int = DEFAULT_VALIDITY_DAYS,
+        reviewer_name: Optional[str] = None,
+        reviewer_email: Optional[str] = None,
+    ) -> bool:
+        """
+        Submit a completed expert review.
+
+        Only a PENDING row can be resolved (R2, lane-1971 audit): the UPDATE
+        itself carries ``approval_status = 'pending'``, so an already-resolved
+        row -- including an OLDER approval while a NEWER one exists -- matches
+        zero rows and returns False (the route surfaces that as 404). Before
+        this the filter was ``review_id`` alone and the pending-only claim was
+        documentation, not enforcement.
+
+        Resolution provenance (lane 1, codex whole-diff HIGH F1): BOTH statuses
+        stamp ``resolved_at = now()`` (migration 136; ``approved_at`` stays
+        approval-only) and record the RESOLVER's ``reviewer_name`` /
+        ``reviewer_email`` when the caller knows them. ``reviewer_id`` is
+        deliberately NOT written here: the gate stores the REQUESTER in it --
+        the originating query id (src/causal_engine/expert_review_gate.py
+        create_review(reviewer_id=requester_id), ~:392) -- and that breadcrumb
+        must survive the resolution. An absent identity is left absent (the
+        None-strip below drops it): unknown stays unknown, never a placeholder.
+
+        Args:
+            review_id: UUID of the review to complete
+            approval_status: 'approved' or 'rejected'
+            checklist: Completed checklist with responses
+            comments: Reviewer notes and feedback
+            concerns_raised: List of specific concerns
+            conditions: Any conditions on approval
+            validity_days: Days until review expires (default 90)
+            reviewer_name: Display name of the resolving operator, if known
+            reviewer_email: Email of the resolving operator, if known
+
+        Returns:
+            True if exactly this pending row was resolved, False otherwise
+            (nonexistent, already resolved, or persistence error)
+        """
+        if not self.client:
+            return False
+
+        if approval_status not in ("approved", "rejected"):
+            logger.error(f"Invalid approval_status: {approval_status}")
+            return False
+
+        update_data = {
+            "approval_status": approval_status,
+            "checklist_json": json.dumps(checklist),
+            "comments_json": json.dumps(comments) if comments else None,
+            "concerns_raised": concerns_raised,
+            "conditions": conditions,
+            # Decision time for BOTH statuses (migration 136).
+            "resolved_at": "now()",
+            "reviewer_name": reviewer_name,
+            "reviewer_email": reviewer_email,
+        }
+
+        if approval_status == "approved":
+            valid_until = date.today() + timedelta(days=validity_days)
+            update_data["valid_from"] = date.today().isoformat()
+            update_data["valid_until"] = valid_until.isoformat()
+            update_data["approved_at"] = "now()"
+
+        # Remove None values
+        update_data = {k: v for k, v in update_data.items() if v is not None}
+
+        try:
+            result = await (
+                self.client.table(self.table_name)
+                .update(update_data)
+                .eq("review_id", review_id)
+                .eq("approval_status", "pending")
+                .execute()
+            )
+            # FIX B (codex HIGH): a zero-row update (nonexistent or already-resolved
+            # review_id) matches nothing — supabase-py returns the updated rows in
+            # ``result.data`` (same convention as base.py:131), so empty data means
+            # nothing was touched. Returning True there is a fabricated success that
+            # would make the route 200 a record it never changed.
+            if not result.data:
+                logger.warning(
+                    f"submit_review matched no rows for {review_id} "
+                    "(nonexistent or already-resolved); returning False"
+                )
+                return False
+            logger.info(f"Submitted review {review_id} with status {approval_status}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to submit review {review_id}: {e}")
+            return False
+```
+
+In `src/api/routes/expert_review.py`, replace `resolve_review` with (its docstring is OpenAPI text -- `api.ts` is regenerated once at the end, Task 7):
+
+```python
+@router.post(
+    "/{review_id}/resolve",
+    response_model=ResolveReviewResponse,
+    summary="Resolve (approve/reject) an expert review",
+    operation_id="resolve_expert_review",
+)
+async def resolve_review(
+    review_id: str,
+    request: ResolveReviewRequest,
+    user: Dict[str, Any] = Depends(require_operator),
+) -> ResolveReviewResponse:
+    """Approve or reject a pending review; the resolution persists.
+
+    The authenticated operator is recorded as the resolver: ``reviewer_name``
+    (their profile name, else their email, else their id) and
+    ``reviewer_email`` are written with the resolution, and ``resolved_at`` is
+    stamped for BOTH statuses (migration 136). ``reviewer_id`` is left as the
+    requester breadcrumb the gate wrote. An identity the token does not carry
+    stays unrecorded.
+
+    An ``approved`` resolution sets ``valid_from``/``valid_until``/``approved_at``
+    inside ``submit_review`` (repo :169-173). A repo ``False`` is fail-closed —
+    never a fabricated success. FIX B (codex HIGH): ``submit_review`` now returns
+    False on a ZERO-ROW update (nonexistent / already-resolved review_id), so we
+    surface that as 404 (the honest 'not found / not resolvable' code), not a
+    fabricated 200. A genuine persistence error also returns False -> 404, which
+    is still a correct non-200 (never a fake success); the repo logs the
+    distinction (zero-row WARNING vs exception ERROR).
+    """
+    # The resolver's identity, from the verified token (dependencies/auth.py
+    # builds ``id`` / ``email`` / ``user_metadata`` from the Supabase user).
+    # Unknown stays unknown: when the token carries none of them, pass None.
+    reviewer_name = (
+        (user.get("user_metadata") or {}).get("name") or user.get("email") or user.get("id")
+    )
+    reviewer_email = user.get("email")
+    repo = await _get_expert_review_repo()
+    success = await repo.submit_review(
+        review_id=review_id,
+        approval_status=request.approval_status,
+        checklist=request.checklist,
+        comments=request.comments,
+        concerns_raised=request.concerns_raised,
+        conditions=request.conditions,
+        validity_days=request.validity_days,
+        reviewer_name=reviewer_name or None,
+        reviewer_email=reviewer_email or None,
+    )
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Review {review_id} was not found or is not resolvable "
+                "(it may not exist or has already been resolved)."
+            ),
+        )
+    return ResolveReviewResponse(
+        review_id=review_id,
+        approval_status=request.approval_status,
+        success=True,
+    )
+```
+
+Append to `TestExpertReviewRepository` in `tests/unit/test_repositories/test_expert_review.py`:
+
+```python
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("approval_status", ["rejected", "approved"])
+    async def test_submit_review_records_resolution_provenance(
+        self, repo, mock_client, approval_status
+    ):
+        """Codex whole-diff HIGH F1: BOTH statuses stamp ``resolved_at`` and carry
+        the resolver's identity; ``reviewer_id`` is never overwritten (it holds
+        the REQUESTER -- the originating query id, gate :392)."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+
+        result = await repo.submit_review(
+            review_id="rev-123",
+            approval_status=approval_status,
+            checklist={"confounder_check": True},
+            reviewer_name="Dr. Operator",
+            reviewer_email="operator@example.com",
+        )
+
+        assert result is True
+        payload = mock_client.table.return_value.update.call_args[0][0]
+        assert payload["resolved_at"] == "now()"
+        assert payload["reviewer_name"] == "Dr. Operator"
+        assert payload["reviewer_email"] == "operator@example.com"
+        assert "reviewer_id" not in payload
+        # approved_at stays approval-only; a rejection records resolved_at alone.
+        assert ("approved_at" in payload) is (approval_status == "approved")
+
+    @pytest.mark.asyncio
+    async def test_submit_review_without_identity_leaves_the_columns_untouched(
+        self, repo, mock_client
+    ):
+        """Unknown stays unknown: no identity -> no identity keys in the UPDATE
+        (the None-strip drops them), but ``resolved_at`` is still stamped."""
+        mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+
+        result = await repo.submit_review(
+            review_id="rev-123", approval_status="rejected", checklist={}
+        )
+
+        assert result is True
+        payload = mock_client.table.return_value.update.call_args[0][0]
+        assert payload["resolved_at"] == "now()"
+        assert "reviewer_name" not in payload
+        assert "reviewer_email" not in payload
+        assert "reviewer_id" not in payload
+```
+
+Append to `TestResolveReview` in `tests/api/test_expert_review_routes.py` (its fake `submit_review` gains the `reviewer_name` / `reviewer_email` kwargs; the file is not in `backend-tests.yml`'s allowlist, so run it locally):
+
+```python
+    def test_resolve_records_the_authenticated_operator(self, client, fake_repo):
+        """Codex whole-diff HIGH F1: the operator the route authenticated is the
+        resolver, so their identity must reach ``submit_review`` (call-kwargs
+        pin). The override carries BOTH a metadata name and an email so the
+        assertion cannot pass vacuously on the testing-mode default user."""
+        app.dependency_overrides[require_operator] = lambda: {
+            "id": "op-1",
+            "email": "operator@example.com",
+            "app_metadata": {"role": "admin"},
+            "user_metadata": {"name": "Dr. Operator"},
+        }
+        resp = client.post(
+            "/api/expert-reviews/66666666-6666-6666-6666-666666666666/resolve",
+            json={"approval_status": "rejected", "checklist": {}},
+        )
+        assert resp.status_code == 200, resp.text
+        call = fake_repo.submit_calls[0]
+        assert call["reviewer_name"] == "Dr. Operator"
+        assert call["reviewer_email"] == "operator@example.com"
+
+    @pytest.mark.parametrize(
+        ("user", "expected_name", "expected_email"),
+        [
+            # No metadata name -> the email stands in as the display name.
+            (
+                {"id": "op-2", "email": "op2@example.com", "user_metadata": {}},
+                "op2@example.com",
+                "op2@example.com",
+            ),
+            # No name, no email -> the id; email stays unknown.
+            ({"id": "op-3", "user_metadata": {}}, "op-3", None),
+            # Nothing usable -> unknown stays unknown (None, never a placeholder).
+            ({"user_metadata": {}}, None, None),
+        ],
+    )
+    def test_resolve_operator_identity_fallbacks(
+        self, client, fake_repo, user, expected_name, expected_email
+    ):
+        app.dependency_overrides[require_operator] = lambda: {
+            "app_metadata": {"role": "admin"},
+            **user,
+        }
+        resp = client.post(
+            "/api/expert-reviews/77777777-7777-7777-7777-777777777777/resolve",
+            json={"approval_status": "approved", "checklist": {}},
+        )
+        assert resp.status_code == 200, resp.text
+        call = fake_repo.submit_calls[0]
+        assert call["reviewer_name"] == expected_name
+        assert call["reviewer_email"] == expected_email
+```
+
+Run: `$PY -m pytest tests/unit/test_database/test_migration_136_resolved_at.py tests/unit/test_repositories/test_expert_review.py tests/api/test_expert_review_routes.py tests/unit/test_api/test_expert_review_detail_route.py tests/unit/test_database/test_migration_134_guarded_promote.py -q -p no:cacheprovider -n 0` → 82 passed; `$PY -m ruff check` + `ruff format --check` on the touched files; `$PY -m mypy --config-file pyproject.toml src/repositories/expert_review.py src/api/routes/expert_review.py src/api/schemas/expert_review.py` → 0 errors in those three files.
 
 ---
 
@@ -2553,9 +3626,23 @@ Append to `frontend/src/types/expert-review.ts`:
 export interface ReviewRecord extends PendingReviewItem {
   /** pending / approved / rejected (expired is derived at read time from valid_until) */
   approval_status?: string | null;
+  /**
+   * The REQUESTER, not the resolver: the gate stores the originating query id
+   * here (expert_review_gate.py create_review(reviewer_id=requester_id)).
+   * Never render it as the reviewer.
+   */
   reviewer_id?: string | null;
+  /** The resolving operator's name, written on resolve; null when not recorded. */
   reviewer_name?: string | null;
+  /** The resolving operator's email, written on resolve; null when not recorded. */
+  reviewer_email?: string | null;
+  /** Approval-only timestamp; a rejection never sets it. */
   approved_at?: string | null;
+  /**
+   * When the review was resolved, for BOTH statuses (migration 136). Null for
+   * rows resolved before the migration — unknown stays unknown.
+   */
+  resolved_at?: string | null;
   valid_from?: string | null;
   valid_until?: string | null;
   concerns_raised?: string[] | null;
@@ -3342,6 +4429,35 @@ function fmtDate(value?: string | null): string {
 }
 
 /**
+ * Provenance rule (codex whole-diff HIGH F1): render only RECORDED provenance.
+ * `reviewer_id` holds the REQUESTER (the originating query id the gate wrote,
+ * expert_review_gate.py create_review(reviewer_id=requester_id)) and
+ * `created_at` is not a decision time, so neither may stand in for the
+ * reviewer or the decision. Unknown stays "not recorded".
+ */
+const NOT_RECORDED = 'not recorded';
+
+function reviewerLabel(row: { reviewer_name?: string | null; reviewer_email?: string | null }): string | null {
+  return row.reviewer_name ?? row.reviewer_email ?? null;
+}
+
+function decidedLabel(row: { resolved_at?: string | null; approved_at?: string | null }): string {
+  const when = row.resolved_at ?? row.approved_at;
+  return when ? fmtDate(when) : NOT_RECORDED;
+}
+
+/**
+ * The reviewer's reason, faithfully: the resolve form sends `{ note }`, so a
+ * string note is shown as written; any other non-empty object is shown as its
+ * JSON, never paraphrased (codex F2).
+ */
+function commentsLabel(comments?: Record<string, unknown> | null): string {
+  if (!comments) return '—';
+  if (typeof comments.note === 'string') return comments.note;
+  return Object.keys(comments).length > 0 ? JSON.stringify(comments) : '—';
+}
+
+/**
  * Status-specific resolved copy matching the gate's precedence
  * (src/causal_engine/expert_review_gate.py check_approval, ~:272-350): the
  * ACTIVE approval governs unless a NEWER rejection supersedes it; a newer
@@ -3411,15 +4527,17 @@ export function LinkedReviewCard({
             {q.data.review.approval_status !== 'pending' && (
               <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
                 <dt className="text-[var(--color-muted-foreground)]">Reviewer</dt>
-                <dd>{q.data.review.reviewer_name ?? q.data.review.reviewer_id ?? '—'}</dd>
+                <dd>{reviewerLabel(q.data.review) ?? NOT_RECORDED}</dd>
                 <dt className="text-[var(--color-muted-foreground)]">Decided</dt>
-                <dd>{fmtDate(q.data.review.approved_at ?? q.data.review.created_at)}</dd>
+                <dd>{decidedLabel(q.data.review)}</dd>
                 <dt className="text-[var(--color-muted-foreground)]">Valid until</dt>
                 <dd>{q.data.review.valid_until ? fmtDate(q.data.review.valid_until) : 'no expiry recorded'}</dd>
                 <dt className="text-[var(--color-muted-foreground)]">Concerns</dt>
                 <dd>{q.data.review.concerns_raised?.length ? q.data.review.concerns_raised.join('; ') : '—'}</dd>
                 <dt className="text-[var(--color-muted-foreground)]">Conditions</dt>
                 <dd>{q.data.review.conditions ?? '—'}</dd>
+                <dt className="text-[var(--color-muted-foreground)]">Comments</dt>
+                <dd className="whitespace-pre-wrap">{commentsLabel(q.data.review.comments_json)}</dd>
               </dl>
             )}
             <div className="grid gap-4 xl:grid-cols-2">
@@ -3465,7 +4583,7 @@ export function LinkedReviewCard({
                             <Badge variant={statusVariant(h.approval_status)}>{h.approval_status ?? '—'}</Badge>
                           </TableCell>
                           <TableCell>{fmtDate(h.created_at)}</TableCell>
-                          <TableCell>{h.reviewer_name ?? '—'}</TableCell>
+                          <TableCell>{reviewerLabel(h) ?? '—'}</TableCell>
                         </TableRow>
                       );
                     })}
@@ -3480,6 +4598,8 @@ export function LinkedReviewCard({
   );
 }
 ```
+
+Why (Task 12 whole-diff fold, codex 1 HIGH + 3 MED + 1 LOW): the linked-review card renders ONLY RECORDED provenance -- Reviewer is `reviewer_name`, else `reviewer_email`, else `not recorded`; Decided is `resolved_at`, else `approved_at`, else `not recorded`; the history table's Reviewer cell follows the same rule -- because `reviewer_id` holds the REQUESTER (the originating query id the gate writes, `expert_review_gate.py` ~:392) and `created_at` is not a decision time, so the previous fallbacks (`reviewer_name ?? reviewer_id`, `approved_at ?? created_at`) would have named a query id as the reviewer and the creation date as the decision on every resolved row (0 of 40 live rows carry `reviewer_name`; a rejection wrote no timestamp). Unknown stays `not recorded`: the backend now records the resolver and `resolved_at` (Task 6 Step 5, migration 136) and the card shows what was recorded, never a stand-in. The card also shows the reviewer's `comments_json.note` (what `ResolveForm` sends) or a non-empty object's JSON verbatim (F2). Bulk Prepare reads the response: on `persisted: false` (HTTP 200, the store rejected the cache write) it releases the guard for that id, stops the walk and names the review that was generated but not saved -- before, the id stayed guarded and every later Prepare skipped the uncached row (F3); and it invalidates the detail prefix as well as the pending prefix on both the success and the error path, mirroring `useReviewAssessment`, so the linked card refreshes (F4; the test pins `toHaveBeenCalledWith` the prefix, not a count). Task 1's Step 4/6/7/8/9 blocks are regenerated from the shipped runner (`np.ptp` zero-spread guards and finite-CI guards; no `np.std` / `1e-10` floor) so the plan describes the code that shipped (F5).
 
 - [ ] **Step 5: `PrepareAssessmentsButton`**
 
@@ -3500,6 +4620,7 @@ import { WarningBanner } from '@/components/ui/WarningBanner';
 import { generateReviewAssessment } from '@/api/expert-review';
 import { queryKeys } from '@/lib/query-client';
 import type { PendingReviewItem } from '@/types/expert-review';
+import { shortHash } from './checklist';
 
 interface RunState {
   running: boolean;
@@ -3522,8 +4643,12 @@ export function PrepareAssessmentsButton({
   const [state, setState] = useState<RunState>({ running: false, done: 0, total: 0, error: null });
   const missing = reviews.filter((r) => !r.agent_assessment_json);
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: [...queryKeys.expertReviews.all(), 'pending'] });
+  // Mirrors useReviewAssessment (use-expert-review.ts): a fresh assessment
+  // changes the pending queue AND the linked card's detail query (F4).
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: [...queryKeys.expertReviews.all(), 'pending'] });
+    await queryClient.invalidateQueries({ queryKey: [...queryKeys.expertReviews.all(), 'detail'] });
+  };
 
   const run = async () => {
     cancelRef.current = false;
@@ -3541,7 +4666,20 @@ export function PrepareAssessmentsButton({
       }
       try {
         autoAssessGuard?.current.add(review.review_id);
-        await generateReviewAssessment(review.review_id);
+        const result = await generateReviewAssessment(review.review_id);
+        if (result.persisted === false) {
+          // HTTP 200 with a valid assessment the store did not keep (F3). The
+          // row still lacks a cache, so treat it like an error: release the id
+          // (a guarded id would be skipped by every later Prepare) and stop.
+          autoAssessGuard?.current.delete(review.review_id);
+          setState((s) => ({
+            ...s,
+            running: false,
+            error: `Assessment for review ${shortHash(review.review_id)} was generated but not saved (the store rejected the write). Retry from the row's Generate button or run Prepare again.`,
+          }));
+          await invalidate();
+          return;
+        }
         setState((s) => ({ ...s, done: s.done + 1 }));
       } catch (e) {
         // Release the id so a later "Prepare" (or the form's button) can retry it.
@@ -3814,7 +4952,7 @@ Replace the full contents of `frontend/src/pages/ExpertReviews.test.tsx` with:
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -4285,6 +5423,79 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(card).toHaveTextContent('2027-01-01');
   });
 
+  // Provenance rule (codex whole-diff HIGH F1): render only RECORDED provenance.
+  // `reviewer_id` holds the REQUESTER (the originating query id the gate wrote)
+  // and `created_at` is not a decision time; both are "not recorded" on the card.
+  function renderLinked(review: Record<string, unknown>, history: Record<string, unknown>[] = []) {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: { review: { ...DETAIL.review, ...review }, history },
+      isLoading: false,
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=rev-rejected') });
+    const card = screen.getByTestId('linked-review');
+    const facts = within(card.querySelector('dl') as HTMLElement);
+    const cell = (label: string) => facts.getByText(label).nextElementSibling as HTMLElement;
+    return { card, cell };
+  }
+
+  it('says "not recorded" instead of the requester id and the creation date on a row with no recorded resolver', () => {
+    const { card, cell } = renderLinked({
+      reviewer_id: 'q-7d3f9a2c-1b4e-4c8a-9f0e-2a6b8c4d1e3f',
+      reviewer_name: null,
+      reviewer_email: null,
+      resolved_at: null,
+      approved_at: null,
+      created_at: '2026-07-13T10:00:00Z',
+    });
+    expect(cell('Reviewer')).toHaveTextContent('not recorded');
+    expect(cell('Decided')).toHaveTextContent('not recorded');
+    expect(cell('Decided')).not.toHaveTextContent('2026-07-13');
+    expect(card).not.toHaveTextContent('q-7d3f9a2c');
+    // The honestly labelled creation chip stays.
+    expect(card).toHaveTextContent('created 2026-07-13');
+    expect(cell('Comments')).toHaveTextContent('—');
+  });
+
+  it('renders the recorded reviewer and decision time when they exist (positive control)', () => {
+    const { cell } = renderLinked({
+      reviewer_name: 'Dr. No',
+      reviewer_email: 'no@example.com',
+      resolved_at: '2026-09-09T10:00:00Z',
+      approved_at: null,
+      created_at: '2026-07-13T10:00:00Z',
+    });
+    expect(cell('Reviewer')).toHaveTextContent('Dr. No');
+    expect(cell('Decided')).toHaveTextContent('2026-09-09');
+    expect(cell('Decided')).not.toHaveTextContent('2026-07-13');
+  });
+
+  it('falls back to the recorded email when no name was recorded, in the card and in the history', () => {
+    const { card, cell } = renderLinked(
+      { reviewer_name: null, reviewer_email: 'no@example.com' },
+      [
+        { review_id: 'rev-rejected', approval_status: 'rejected', created_at: '2026-07-13T10:00:00Z', reviewer_email: 'no@example.com' },
+        { review_id: 'rev-older', approval_status: 'pending', created_at: '2026-07-01T10:00:00Z', reviewer_id: 'q-older-query' },
+      ]
+    );
+    expect(cell('Reviewer')).toHaveTextContent('no@example.com');
+    const rows = card.querySelectorAll('tbody tr');
+    expect(rows[0]).toHaveTextContent('no@example.com');
+    expect(rows[1]).toHaveTextContent('—');
+    expect(card).not.toHaveTextContent('q-older-query');
+  });
+
+  it("shows the reviewer's comment note on a resolved review (codex F2)", () => {
+    const { cell } = renderLinked({ comments_json: { note: 'DAG omits the payer confounder' } });
+    expect(cell('Comments')).toHaveTextContent('DAG omits the payer confounder');
+  });
+
+  it('shows a structured comments object faithfully, never a paraphrase', () => {
+    const { cell } = renderLinked({ comments_json: { reason: 'collider', severity: 2 } });
+    expect(cell('Comments')).toHaveTextContent('{"reason":"collider","severity":2}');
+  });
+
   it('resolves a pending linked review in place', async () => {
     const mutate = vi.fn();
     vi.mocked(useResolveReview).mockReturnValue(mockResolveReturn({ mutate }) as never);
@@ -4547,7 +5758,10 @@ import { generateReviewAssessment } from '@/api/expert-review';
 const api = vi.mocked(generateReviewAssessment);
 
 const ROWS: PendingReviewItem[] = [{ review_id: 'rev-1' }, { review_id: 'rev-2' }];
+const THREE_ROWS: PendingReviewItem[] = [...ROWS, { review_id: 'rev-3' }];
 const PENDING_PREFIX = [...queryKeys.expertReviews.all(), 'pending'];
+// The linked card reads the detail query; the form's hook invalidates it too (F4).
+const DETAIL_PREFIX = [...queryKeys.expertReviews.all(), 'detail'];
 
 function response(id: string): AgentAssessmentResponse {
   return { review_id: id, assessment: { items: [], is_fallback: true }, cached: false, persisted: true };
@@ -4564,14 +5778,14 @@ function deferred<T>() {
 }
 
 // Deferred promises and `waitFor` rely on REAL timers here; do not add vi.useFakeTimers to this file.
-function renderButton() {
+function renderButton(rows: PendingReviewItem[] = ROWS) {
   const guard = { current: new Set<string>() };
   const queryClient = new QueryClient();
   const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
-  render(<PrepareAssessmentsButton reviews={ROWS} autoAssessGuard={guard} />, { wrapper });
+  render(<PrepareAssessmentsButton reviews={rows} autoAssessGuard={guard} />, { wrapper });
   return { guard, invalidate, button: screen.getByRole('button', { name: /prepare assessments/i }) };
 }
 
@@ -4607,8 +5821,11 @@ describe('PrepareAssessmentsButton', () => {
     second.resolve(response('rev-2'));
     await waitFor(() => expect(button).toHaveTextContent('Prepare assessments (2 missing)'));
     expect(button).toBeEnabled();
-    expect(invalidate).toHaveBeenCalledTimes(1);
+    // Once per prefix, after the walk: the queue AND the linked card's detail
+    // query (F4 -- the form's hook invalidates both; a count alone is vacuous).
+    expect(invalidate).toHaveBeenCalledTimes(2);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_PREFIX });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: DETAIL_PREFIX });
   });
 
   it('stops on the first error, says how far it got, and releases the failed id from the guard', async () => {
@@ -4621,8 +5838,46 @@ describe('PrepareAssessmentsButton', () => {
     expect(api).not.toHaveBeenCalledWith('rev-2');
     expect(guard.current.has('rev-1')).toBe(false);
     expect(guard.current.has('rev-2')).toBe(false);
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(2));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_PREFIX });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: DETAIL_PREFIX });
     expect(button).toBeEnabled();
+  });
+
+  it('stops on persisted:false (HTTP 200, the store rejected the write), releases that id so it can be retried, and never requests the next row', async () => {
+    // F3: the endpoint returns the (valid) assessment with persisted:false when the
+    // cache write failed. Ignoring it left the id guarded and the row uncached, so
+    // every later Prepare skipped it forever.
+    api
+      .mockResolvedValueOnce(response('rev-1'))
+      .mockResolvedValueOnce({ ...response('rev-2'), persisted: false })
+      .mockResolvedValueOnce(response('rev-3'));
+    const { guard, invalidate, button } = renderButton(THREE_ROWS);
+    await userEvent.setup().click(button);
+    expect(await screen.findByText('Stopped after 1 of 3')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Assessment for review rev-2 was generated but not saved (the store rejected the write). Retry from the row's Generate button or run Prepare again."
+      )
+    ).toBeInTheDocument();
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(api).not.toHaveBeenCalledWith('rev-3');
+    expect(guard.current.has('rev-1')).toBe(true); // the saved one stays guarded (positive control)
+    expect(guard.current.has('rev-2')).toBe(false);
+    expect(guard.current.has('rev-3')).toBe(false);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_PREFIX }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: DETAIL_PREFIX });
+    expect(button).toBeEnabled();
+  });
+
+  it('completes 3 of 3 when every write persisted (control for the persisted:false stop)', async () => {
+    api.mockImplementation(async (id: string) => response(id));
+    const { guard, button } = renderButton(THREE_ROWS);
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText(/Stopped after/)).not.toBeInTheDocument();
+    expect(['rev-1', 'rev-2', 'rev-3'].every((id) => guard.current.has(id))).toBe(true);
   });
 
   it('Stop ends the walk after the in-flight request; the next row is never requested', async () => {

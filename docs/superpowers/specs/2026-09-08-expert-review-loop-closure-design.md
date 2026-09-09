@@ -154,11 +154,16 @@ both non-critical tests fail.
 FastAPI's first-match routing cannot shadow them):
 
 - Response `ExpertReviewDetailResponse`: `review` (a new `ReviewRecord` schema: every
-  `PendingReviewItem` field plus `approval_status`, `reviewer_name`, `approved_at`,
-  `valid_from`, `valid_until`, `concerns_raised`, `conditions`, `comments_json`,
-  `supersedes_review_id`) and `history: List[ReviewRecord]` — every row sharing the DAG hash
-  and brand, newest first, expired included (`get_reviews_for_dag(include_expired=True)`),
-  which is the same read the gate's rejection probe performs.
+  `PendingReviewItem` field plus `approval_status`, `reviewer_name`, `reviewer_email`,
+  `approved_at`, `resolved_at`, `valid_from`, `valid_until`, `concerns_raised`, `conditions`,
+  `comments_json`, `supersedes_review_id`) and `history: List[ReviewRecord]` — every row
+  sharing the DAG hash and brand, newest first, expired included
+  (`get_reviews_for_dag(include_expired=True)`), which is the same read the gate's rejection
+  probe performs.
+- Resolution provenance (Task 12 whole-diff fold, codex HIGH F1): the resolve route records the
+  authenticated operator as the resolver (`reviewer_name` from the profile name, else email,
+  else id; `reviewer_email`) and `submit_review` stamps `resolved_at` for both statuses
+  (migration 136, no backfill); `reviewer_id` stays the requester breadcrumb the gate wrote.
 - 404 when the id does not exist; 503 through `_store_unavailable` on a store failure.
 - Any docstring or schema change here regenerates `frontend/src/types/generated/api.ts`
   (`make generate-types`); the union of this lane's changes is regenerated once, at the end.
@@ -222,8 +227,11 @@ defence for `validated`.
 
 - `?review=<id>` opens a "Linked review" card above the queue using a new
   `useExpertReview(id)` hook over the new route: status, brand, treatment → outcome, DAG
-  snapshot, reviewer / reason / validity, and the same-hash history table. A pending linked
-  review offers the existing resolve form in place.
+  snapshot, the recorded reviewer, decision time and comments, validity, and the same-hash
+  history table. Only RECORDED provenance is rendered: the reviewer is `reviewer_name`, else
+  `reviewer_email`; the decision time is `resolved_at`, else `approved_at`; each reads
+  `not recorded` when absent (never `reviewer_id`, which holds the requester, and never
+  `created_at`). A pending linked review offers the existing resolve form in place.
 - Brand filter: the page reads the global brand filter (`useE2IFilters`, the same SSOT the
   Causal Analysis page uses, #1752) and passes it to `usePendingReviews` and
   `useReviewSummary`. "All" sends no brand, which is the only way the four brand-less rows
