@@ -572,6 +572,17 @@ describe('ExpertReviews linked review (lane 1)', () => {
     expect(cell('Comments')).toHaveTextContent('{"reason":"collider","severity":2}');
   });
 
+  it('treats a whitespace-only note as absent (review minor)', () => {
+    const { cell } = renderLinked({ comments_json: { note: '   ' } });
+    expect(cell('Comments')).toHaveTextContent('—');
+    expect(cell('Comments').textContent).toBe('—');
+  });
+
+  it('drops a blank note but keeps the other recorded keys', () => {
+    const { cell } = renderLinked({ comments_json: { note: '  ', reason: 'collider' } });
+    expect(cell('Comments')).toHaveTextContent('{"reason":"collider"}');
+  });
+
   it('resolves a pending linked review in place', async () => {
     const mutate = vi.fn();
     vi.mocked(useResolveReview).mockReturnValue(mockResolveReturn({ mutate }) as never);

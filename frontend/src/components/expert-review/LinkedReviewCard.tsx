@@ -47,12 +47,16 @@ function decidedLabel(row: { resolved_at?: string | null; approved_at?: string |
 /**
  * The reviewer's reason, faithfully: the resolve form sends `{ note }`, so a
  * string note is shown as written; any other non-empty object is shown as its
- * JSON, never paraphrased (codex F2).
+ * JSON, never paraphrased (codex F2). A note that is blank after trimming is
+ * treated as absent (review minor): it neither renders as an empty cell nor
+ * masquerades as a recorded key in the JSON fallback.
  */
 function commentsLabel(comments?: Record<string, unknown> | null): string {
   if (!comments) return '—';
-  if (typeof comments.note === 'string') return comments.note;
-  return Object.keys(comments).length > 0 ? JSON.stringify(comments) : '—';
+  const note = typeof comments.note === 'string' ? comments.note.trim() : null;
+  if (note) return note;
+  const rest = note === null ? comments : Object.fromEntries(Object.entries(comments).filter(([k]) => k !== 'note'));
+  return Object.keys(rest).length > 0 ? JSON.stringify(rest) : '—';
 }
 
 /**
