@@ -6377,6 +6377,29 @@ rep(
     "Since issue #1974 the shipped DAG is also written, with its edges and gate evaluation, to <code>public.discovered_dags</code> (see 3.3); the response carries that record's <code>discovered_dag_id</code>.",
 )
 
+# §4.2 / §4.8 / index (codex iter-4c): the placebo WARNING band is unreachable as coded;
+# REVIEW needs ANY critical WARNING; can_use_estimate is retired (migration 133).
+rep(
+    '<td>placebo p &gt; 0.05</td><td>0.05–0.10</td>',
+    '<td>placebo p &gt; 0.05</td><td>none reachable — the code tests pass (p ≥ 0.05) before warning (p ≥ 0.10), so the 0.05–0.10 band its comment names never scores</td>',
+)
+rep(
+    'REVIEW needs a sensitivity WARNING <em>and</em> both non-critical tests FAILED (0.65)',
+    'REVIEW needs one critical test in WARNING <em>and</em> both non-critical tests FAILED (0.65) — only sensitivity or random_common_cause can warn as coded (the placebo WARNING band is unreachable), and in the 96-run sample the warning was always sensitivity',
+)
+rep(
+    'The band needs a sensitivity WARNING plus both non-critical tests FAILED',
+    'The band needs one critical test in WARNING (in every live run so far, sensitivity) plus both non-critical tests FAILED',
+)
+rep(
+    'Infrastructure-absent paths resolve to <code>unavailable</code>, never to a claimed approval (issue #1969).</li>',
+    "Infrastructure-absent paths resolve to <code>unavailable</code>, never to a claimed approval (issue #1969).</li>\n    <li><b>The placebo WARNING band is unreachable.</b> <code>refutation_runner.py</code> tests the pass threshold (p ≥ 0.05) before the warning threshold (p ≥ 0.10), so no placebo result can be WARNING — the same threshold-order class lane 1 fixed for bootstrap, on a critical test. Left unchanged by lane 1 because the band impact is an owner decision; raised at the lane's close-out.</li>",
+)
+rep(
+    'review schema; can_use_estimate() at :393</td>',
+    'review schema; can_use_estimate() at :393 (retired by migration 133 — historical reference)</td>',
+)
+
 for old, new in EDITS:
     n = s.count(old)
     assert n == 1, f"expected exactly one occurrence, found {n}: {old[:80]!r}"
@@ -6385,9 +6408,11 @@ DOC.write_text(s, encoding="utf-8")
 print(f"applied {len(EDITS)} edits")
 ```
 
-Expected output: `applied 18 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
+Expected output: `applied 23 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
 
 Why (codex iter-4 docs audit): the §4.3 "Gate state machine" list still described the pre-#1969 no-repository PROCEED bypass and a rejected-row BLOCKED branch, contradicting the Finding callout above it and the shipped gate — `check_approval` answers UNAVAILABLE (`is_approved=False`) without a store, and the every-band `check_rejection` probe (node `_consult_review_gate`) halts a rejected structure — so the list, its summary chips, its anchors and the index rows were rewritten by the same exact-match script (six more `rep` entries). Iter-4b: the §3 stage intro still ended "It is not written to a DAG table", stale since the §3.3 row described the durable `public.discovered_dags` record (#1974); one more `rep` entry replaces that sentence.
+
+Why (codex iter-4c): `PASS_THRESHOLDS["placebo_p_value"]` is pass 0.05 / warning 0.10 and `_run_placebo_test` tests `p >= pass` before `p >= warning`, so the placebo WARNING band has been unreachable since the runner's first commit (0742b81f6); the confidence score is symmetric across the three critical tests, so REVIEW needs ANY critical WARNING plus both non-critical FAILED (0.65), and in the 96-run sample that warning was always sensitivity. Lane 1 does not change the placebo code (band impact on a critical test is an owner decision, filed at close-out): the page's §4.2 band table, Measured callout and §4.8 gaps register describe the shipped behaviour, and the `can_use_estimate` index row is marked retired (migration 133). The spec is untouched.
 
 - [ ] **Step 2: Add the map's discovery box label**
 
