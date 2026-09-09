@@ -7,7 +7,6 @@ Version: 4.3
 Database: causal_validations table (010_causal_validation_tables.sql)
 """
 
-import json
 import logging
 import uuid
 from typing import Any, Dict, List, Optional
@@ -18,6 +17,7 @@ from src.causal_engine.refutation_runner import (
     RefutationSuite,
 )
 from src.repositories.base import BaseRepository
+from src.repositories.json_utils import to_plain_json
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +196,11 @@ class CausalValidationRepository(BaseRepository):
             "delta_percent": test.delta_percent,
             "confidence_score": confidence_score,
             "gate_decision": gate_decision.value,
-            "test_config": json.dumps(test.details.get("config", {})),
-            "details_json": json.dumps(test.details),
+            # Lane 1 (owner decision 2026-09-09): JSON OBJECTS, not JSON strings,
+            # so evidence is queryable (jsonb_array_length(details_json->'subset_effects'))
+            # and testable in one shape; non-finite floats -> null (allow_nan=False transport).
+            "test_config": to_plain_json(test.details.get("config", {})),
+            "details_json": to_plain_json(test.details),
             "agent_activity_id": agent_activity_id,
             "brand": brand,
             "treatment_variable": treatment,
@@ -494,12 +497,8 @@ class CausalValidationRepository(BaseRepository):
             "delta_percent": test.delta_percent,
             "confidence_score": suite.confidence_score,
             "gate_decision": suite.gate_decision.value,
-            "test_config": json.dumps(
-                {
-                    "execution_time_ms": test.execution_time_ms,
-                }
-            ),
-            "details_json": json.dumps(test.details),
+            "test_config": to_plain_json({"execution_time_ms": test.execution_time_ms}),
+            "details_json": to_plain_json(test.details),
             "agent_activity_id": agent_activity_id,
             "brand": suite.brand,
             "treatment_variable": suite.treatment_variable,
