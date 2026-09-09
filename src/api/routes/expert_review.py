@@ -11,6 +11,7 @@ Endpoints (all ``require_operator`` — OD-1):
 - GET  /expert-reviews/pending            -> oldest-first pending queue
 - POST /expert-reviews/{review_id}/resolve -> approve/reject + checklist/comments
 - GET  /expert-reviews/summary            -> status counts
+- GET  /expert-reviews/{review_id}        -> one review (any status) + same-structure history
 
 Persistence: ``ExpertReviewRepository`` over an ASYNC Supabase (service-role)
 client. The repo methods are ``await self.client.table(...).execute()`` so the
@@ -34,10 +35,12 @@ from src.api.errors import user_safe_503_detail
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.expert_review import (
     AgentAssessmentResponse,
+    ExpertReviewDetailResponse,
     PendingReviewItem,
     PendingReviewsResponse,
     ResolveReviewRequest,
     ResolveReviewResponse,
+    ReviewRecord,
     ReviewSummaryResponse,
 )
 
@@ -272,4 +275,52 @@ async def get_summary(
         rejected=summary.get("rejected", 0),
         expired=summary.get("expired", 0),
         expiring_soon=summary.get("expiring_soon", 0),
+    )
+
+
+@router.get(
+    "/{review_id}",
+    response_model=ExpertReviewDetailResponse,
+    summary="One expert review (any status) with its same-structure history",
+    operation_id="get_expert_review",
+    responses={
+        404: {"model": ErrorResponse, "description": "Review not found"},
+        503: {"model": ErrorResponse, "description": "Expert-review store unavailable"},
+    },
+)
+async def get_expert_review(
+    review_id: str,
+    user: Dict[str, Any] = Depends(require_operator),
+) -> ExpertReviewDetailResponse:
+    """Return one review row in any status plus every review of the same DAG structure.
+
+    Powers the linked-review card the causal drill-down deep-links to
+    (``/expert-reviews?review=<id>``), so a run whose structure is pending,
+    approved or rejected always resolves to its record. ``history`` is the full
+    same-hash (and same-brand) list, newest first, expired included -- the read
+    ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
+    so it cannot shadow ``/pending`` and ``/summary``.
+    """
+    try:
+        # The client factory raises ServiceConnectionError when Supabase is
+        # unset/unreachable; inside the try so that is a 503 as well, not a
+        # 500 (pre-execution review 2026-09-08, codex MED).
+        repo = await _get_expert_review_repo()
+        row = await repo.get_by_id(review_id)
+    except Exception as e:  # store failure (R3): honest 503
+        raise _store_unavailable("review read", e) from e
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Review {review_id} was not found.")
+    dag_hash = row.get("dag_version_hash")
+    history_rows: List[Dict[str, Any]] = []
+    if dag_hash:
+        try:
+            history_rows = await repo.get_reviews_for_dag(
+                dag_hash, include_expired=True, brand=row.get("brand")
+            )
+        except Exception as e:
+            raise _store_unavailable("review history read", e) from e
+    return ExpertReviewDetailResponse(
+        review=ReviewRecord.model_validate(row),
+        history=[ReviewRecord.model_validate(r) for r in history_rows],
     )
