@@ -24,7 +24,10 @@ import { generateReviewAssessment } from '@/api/expert-review';
 const api = vi.mocked(generateReviewAssessment);
 
 const ROWS: PendingReviewItem[] = [{ review_id: 'rev-1' }, { review_id: 'rev-2' }];
+const THREE_ROWS: PendingReviewItem[] = [...ROWS, { review_id: 'rev-3' }];
 const PENDING_PREFIX = [...queryKeys.expertReviews.all(), 'pending'];
+// The linked card reads the detail query; the form's hook invalidates it too (F4).
+const DETAIL_PREFIX = [...queryKeys.expertReviews.all(), 'detail'];
 
 function response(id: string): AgentAssessmentResponse {
   return { review_id: id, assessment: { items: [], is_fallback: true }, cached: false, persisted: true };
@@ -41,14 +44,14 @@ function deferred<T>() {
 }
 
 // Deferred promises and `waitFor` rely on REAL timers here; do not add vi.useFakeTimers to this file.
-function renderButton() {
+function renderButton(rows: PendingReviewItem[] = ROWS) {
   const guard = { current: new Set<string>() };
   const queryClient = new QueryClient();
   const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
-  render(<PrepareAssessmentsButton reviews={ROWS} autoAssessGuard={guard} />, { wrapper });
+  render(<PrepareAssessmentsButton reviews={rows} autoAssessGuard={guard} />, { wrapper });
   return { guard, invalidate, button: screen.getByRole('button', { name: /prepare assessments/i }) };
 }
 
@@ -84,8 +87,11 @@ describe('PrepareAssessmentsButton', () => {
     second.resolve(response('rev-2'));
     await waitFor(() => expect(button).toHaveTextContent('Prepare assessments (2 missing)'));
     expect(button).toBeEnabled();
-    expect(invalidate).toHaveBeenCalledTimes(1);
+    // Once per prefix, after the walk: the queue AND the linked card's detail
+    // query (F4 -- the form's hook invalidates both; a count alone is vacuous).
+    expect(invalidate).toHaveBeenCalledTimes(2);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_PREFIX });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: DETAIL_PREFIX });
   });
 
   it('stops on the first error, says how far it got, and releases the failed id from the guard', async () => {
@@ -98,8 +104,46 @@ describe('PrepareAssessmentsButton', () => {
     expect(api).not.toHaveBeenCalledWith('rev-2');
     expect(guard.current.has('rev-1')).toBe(false);
     expect(guard.current.has('rev-2')).toBe(false);
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(2));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_PREFIX });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: DETAIL_PREFIX });
     expect(button).toBeEnabled();
+  });
+
+  it('stops on persisted:false (HTTP 200, the store rejected the write), releases that id so it can be retried, and never requests the next row', async () => {
+    // F3: the endpoint returns the (valid) assessment with persisted:false when the
+    // cache write failed. Ignoring it left the id guarded and the row uncached, so
+    // every later Prepare skipped it forever.
+    api
+      .mockResolvedValueOnce(response('rev-1'))
+      .mockResolvedValueOnce({ ...response('rev-2'), persisted: false })
+      .mockResolvedValueOnce(response('rev-3'));
+    const { guard, invalidate, button } = renderButton(THREE_ROWS);
+    await userEvent.setup().click(button);
+    expect(await screen.findByText('Stopped after 1 of 3')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Assessment for review rev-2 was generated but not saved (the store rejected the write). Retry from the row's Generate button or run Prepare again."
+      )
+    ).toBeInTheDocument();
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(api).not.toHaveBeenCalledWith('rev-3');
+    expect(guard.current.has('rev-1')).toBe(true); // the saved one stays guarded (positive control)
+    expect(guard.current.has('rev-2')).toBe(false);
+    expect(guard.current.has('rev-3')).toBe(false);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_PREFIX }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: DETAIL_PREFIX });
+    expect(button).toBeEnabled();
+  });
+
+  it('completes 3 of 3 when every write persisted (control for the persisted:false stop)', async () => {
+    api.mockImplementation(async (id: string) => response(id));
+    const { guard, button } = renderButton(THREE_ROWS);
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByText(/Stopped after/)).not.toBeInTheDocument();
+    expect(['rev-1', 'rev-2', 'rev-3'].every((id) => guard.current.has(id))).toBe(true);
   });
 
   it('Stop ends the walk after the in-flight request; the next row is never requested', async () => {

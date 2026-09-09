@@ -20,6 +20,35 @@ function fmtDate(value?: string | null): string {
 }
 
 /**
+ * Provenance rule (codex whole-diff HIGH F1): render only RECORDED provenance.
+ * `reviewer_id` holds the REQUESTER (the originating query id the gate wrote,
+ * expert_review_gate.py create_review(reviewer_id=requester_id)) and
+ * `created_at` is not a decision time, so neither may stand in for the
+ * reviewer or the decision. Unknown stays "not recorded".
+ */
+const NOT_RECORDED = 'not recorded';
+
+function reviewerLabel(row: { reviewer_name?: string | null; reviewer_email?: string | null }): string | null {
+  return row.reviewer_name ?? row.reviewer_email ?? null;
+}
+
+function decidedLabel(row: { resolved_at?: string | null; approved_at?: string | null }): string {
+  const when = row.resolved_at ?? row.approved_at;
+  return when ? fmtDate(when) : NOT_RECORDED;
+}
+
+/**
+ * The reviewer's reason, faithfully: the resolve form sends `{ note }`, so a
+ * string note is shown as written; any other non-empty object is shown as its
+ * JSON, never paraphrased (codex F2).
+ */
+function commentsLabel(comments?: Record<string, unknown> | null): string {
+  if (!comments) return '—';
+  if (typeof comments.note === 'string') return comments.note;
+  return Object.keys(comments).length > 0 ? JSON.stringify(comments) : '—';
+}
+
+/**
  * Status-specific resolved copy matching the gate's precedence
  * (src/causal_engine/expert_review_gate.py check_approval, ~:272-350): the
  * ACTIVE approval governs unless a NEWER rejection supersedes it; a newer
@@ -89,15 +118,17 @@ export function LinkedReviewCard({
             {q.data.review.approval_status !== 'pending' && (
               <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
                 <dt className="text-[var(--color-muted-foreground)]">Reviewer</dt>
-                <dd>{q.data.review.reviewer_name ?? q.data.review.reviewer_id ?? '—'}</dd>
+                <dd>{reviewerLabel(q.data.review) ?? NOT_RECORDED}</dd>
                 <dt className="text-[var(--color-muted-foreground)]">Decided</dt>
-                <dd>{fmtDate(q.data.review.approved_at ?? q.data.review.created_at)}</dd>
+                <dd>{decidedLabel(q.data.review)}</dd>
                 <dt className="text-[var(--color-muted-foreground)]">Valid until</dt>
                 <dd>{q.data.review.valid_until ? fmtDate(q.data.review.valid_until) : 'no expiry recorded'}</dd>
                 <dt className="text-[var(--color-muted-foreground)]">Concerns</dt>
                 <dd>{q.data.review.concerns_raised?.length ? q.data.review.concerns_raised.join('; ') : '—'}</dd>
                 <dt className="text-[var(--color-muted-foreground)]">Conditions</dt>
                 <dd>{q.data.review.conditions ?? '—'}</dd>
+                <dt className="text-[var(--color-muted-foreground)]">Comments</dt>
+                <dd className="whitespace-pre-wrap">{commentsLabel(q.data.review.comments_json)}</dd>
               </dl>
             )}
             <div className="grid gap-4 xl:grid-cols-2">
@@ -143,7 +174,7 @@ export function LinkedReviewCard({
                             <Badge variant={statusVariant(h.approval_status)}>{h.approval_status ?? '—'}</Badge>
                           </TableCell>
                           <TableCell>{fmtDate(h.created_at)}</TableCell>
-                          <TableCell>{h.reviewer_name ?? '—'}</TableCell>
+                          <TableCell>{reviewerLabel(h) ?? '—'}</TableCell>
                         </TableRow>
                       );
                     })}

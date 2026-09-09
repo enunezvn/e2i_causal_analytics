@@ -138,9 +138,23 @@ export interface AgentAssessmentResponse {
 export interface ReviewRecord extends PendingReviewItem {
   /** pending / approved / rejected (expired is derived at read time from valid_until) */
   approval_status?: string | null;
+  /**
+   * The REQUESTER, not the resolver: the gate stores the originating query id
+   * here (expert_review_gate.py create_review(reviewer_id=requester_id)).
+   * Never render it as the reviewer.
+   */
   reviewer_id?: string | null;
+  /** The resolving operator's name, written on resolve; null when not recorded. */
   reviewer_name?: string | null;
+  /** The resolving operator's email, written on resolve; null when not recorded. */
+  reviewer_email?: string | null;
+  /** Approval-only timestamp; a rejection never sets it. */
   approved_at?: string | null;
+  /**
+   * When the review was resolved, for BOTH statuses (migration 136). Null for
+   * rows resolved before the migration — unknown stays unknown.
+   */
+  resolved_at?: string | null;
   valid_from?: string | null;
   valid_until?: string | null;
   concerns_raised?: string[] | null;

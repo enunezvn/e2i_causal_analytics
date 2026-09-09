@@ -12,6 +12,7 @@ import { WarningBanner } from '@/components/ui/WarningBanner';
 import { generateReviewAssessment } from '@/api/expert-review';
 import { queryKeys } from '@/lib/query-client';
 import type { PendingReviewItem } from '@/types/expert-review';
+import { shortHash } from './checklist';
 
 interface RunState {
   running: boolean;
@@ -34,8 +35,12 @@ export function PrepareAssessmentsButton({
   const [state, setState] = useState<RunState>({ running: false, done: 0, total: 0, error: null });
   const missing = reviews.filter((r) => !r.agent_assessment_json);
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: [...queryKeys.expertReviews.all(), 'pending'] });
+  // Mirrors useReviewAssessment (use-expert-review.ts): a fresh assessment
+  // changes the pending queue AND the linked card's detail query (F4).
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: [...queryKeys.expertReviews.all(), 'pending'] });
+    await queryClient.invalidateQueries({ queryKey: [...queryKeys.expertReviews.all(), 'detail'] });
+  };
 
   const run = async () => {
     cancelRef.current = false;
@@ -53,7 +58,20 @@ export function PrepareAssessmentsButton({
       }
       try {
         autoAssessGuard?.current.add(review.review_id);
-        await generateReviewAssessment(review.review_id);
+        const result = await generateReviewAssessment(review.review_id);
+        if (result.persisted === false) {
+          // HTTP 200 with a valid assessment the store did not keep (F3). The
+          // row still lacks a cache, so treat it like an error: release the id
+          // (a guarded id would be skipped by every later Prepare) and stop.
+          autoAssessGuard?.current.delete(review.review_id);
+          setState((s) => ({
+            ...s,
+            running: false,
+            error: `Assessment for review ${shortHash(review.review_id)} was generated but not saved (the store rejected the write). Retry from the row's Generate button or run Prepare again.`,
+          }));
+          await invalidate();
+          return;
+        }
         setState((s) => ({ ...s, done: s.done + 1 }));
       } catch (e) {
         // Release the id so a later "Prepare" (or the form's button) can retry it.

@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -479,6 +479,79 @@ describe('ExpertReviews linked review (lane 1)', () => {
     );
     expect(card).not.toHaveTextContent('The rejection holds');
     expect(card).toHaveTextContent('2027-01-01');
+  });
+
+  // Provenance rule (codex whole-diff HIGH F1): render only RECORDED provenance.
+  // `reviewer_id` holds the REQUESTER (the originating query id the gate wrote)
+  // and `created_at` is not a decision time; both are "not recorded" on the card.
+  function renderLinked(review: Record<string, unknown>, history: Record<string, unknown>[] = []) {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: { review: { ...DETAIL.review, ...review }, history },
+      isLoading: false,
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=rev-rejected') });
+    const card = screen.getByTestId('linked-review');
+    const facts = within(card.querySelector('dl') as HTMLElement);
+    const cell = (label: string) => facts.getByText(label).nextElementSibling as HTMLElement;
+    return { card, cell };
+  }
+
+  it('says "not recorded" instead of the requester id and the creation date on a row with no recorded resolver', () => {
+    const { card, cell } = renderLinked({
+      reviewer_id: 'q-7d3f9a2c-1b4e-4c8a-9f0e-2a6b8c4d1e3f',
+      reviewer_name: null,
+      reviewer_email: null,
+      resolved_at: null,
+      approved_at: null,
+      created_at: '2026-07-13T10:00:00Z',
+    });
+    expect(cell('Reviewer')).toHaveTextContent('not recorded');
+    expect(cell('Decided')).toHaveTextContent('not recorded');
+    expect(cell('Decided')).not.toHaveTextContent('2026-07-13');
+    expect(card).not.toHaveTextContent('q-7d3f9a2c');
+    // The honestly labelled creation chip stays.
+    expect(card).toHaveTextContent('created 2026-07-13');
+    expect(cell('Comments')).toHaveTextContent('—');
+  });
+
+  it('renders the recorded reviewer and decision time when they exist (positive control)', () => {
+    const { cell } = renderLinked({
+      reviewer_name: 'Dr. No',
+      reviewer_email: 'no@example.com',
+      resolved_at: '2026-09-09T10:00:00Z',
+      approved_at: null,
+      created_at: '2026-07-13T10:00:00Z',
+    });
+    expect(cell('Reviewer')).toHaveTextContent('Dr. No');
+    expect(cell('Decided')).toHaveTextContent('2026-09-09');
+    expect(cell('Decided')).not.toHaveTextContent('2026-07-13');
+  });
+
+  it('falls back to the recorded email when no name was recorded, in the card and in the history', () => {
+    const { card, cell } = renderLinked(
+      { reviewer_name: null, reviewer_email: 'no@example.com' },
+      [
+        { review_id: 'rev-rejected', approval_status: 'rejected', created_at: '2026-07-13T10:00:00Z', reviewer_email: 'no@example.com' },
+        { review_id: 'rev-older', approval_status: 'pending', created_at: '2026-07-01T10:00:00Z', reviewer_id: 'q-older-query' },
+      ]
+    );
+    expect(cell('Reviewer')).toHaveTextContent('no@example.com');
+    const rows = card.querySelectorAll('tbody tr');
+    expect(rows[0]).toHaveTextContent('no@example.com');
+    expect(rows[1]).toHaveTextContent('—');
+    expect(card).not.toHaveTextContent('q-older-query');
+  });
+
+  it("shows the reviewer's comment note on a resolved review (codex F2)", () => {
+    const { cell } = renderLinked({ comments_json: { note: 'DAG omits the payer confounder' } });
+    expect(cell('Comments')).toHaveTextContent('DAG omits the payer confounder');
+  });
+
+  it('shows a structured comments object faithfully, never a paraphrase', () => {
+    const { cell } = renderLinked({ comments_json: { reason: 'collider', severity: 2 } });
+    expect(cell('Comments')).toHaveTextContent('{"reason":"collider","severity":2}');
   });
 
   it('resolves a pending linked review in place', async () => {
