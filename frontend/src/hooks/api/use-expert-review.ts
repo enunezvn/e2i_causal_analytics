@@ -102,8 +102,8 @@ export interface ResolveReviewVariables {
 /**
  * Hook to resolve (approve/reject) an expert review.
  *
- * On success, invalidates BOTH the pending queue and the summary so the UI
- * reflects the resolution immediately.
+ * On success, invalidates the pending queue, the summary and any open review
+ * detail so the UI reflects the resolution immediately.
  *
  * @param options - Additional TanStack mutation options
  */
@@ -146,8 +146,8 @@ export interface ReviewAssessmentVariables {
 /**
  * Hook to generate (or fetch cached) the advisory agent assessment.
  *
- * On success, invalidates the pending queue so the row's cached
- * `agent_assessment_json` stays in sync on the next refetch.
+ * On success, invalidates the pending queue and any open review detail so the
+ * row's cached `agent_assessment_json` stays in sync on the next refetch.
  *
  * @param options - Additional TanStack mutation options
  */

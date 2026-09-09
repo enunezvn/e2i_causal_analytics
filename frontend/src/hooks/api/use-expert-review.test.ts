@@ -201,6 +201,7 @@ describe('useResolveReview', () => {
     );
     // invalidate the pending queue, the summary AND any open linked-review detail
     expect(invalidateSpy).toHaveBeenCalledTimes(3);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'detail'] });
   });
 
   it('handles a resolve error', async () => {
@@ -280,6 +281,7 @@ describe('useReviewAssessment', () => {
     );
     // invalidate the pending queue AND any open linked-review detail
     expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['e2i', 'expert-reviews', 'detail'] });
   });
 
   it('handles an assessment error', async () => {
