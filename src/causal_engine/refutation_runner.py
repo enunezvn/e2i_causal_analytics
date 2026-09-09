@@ -217,36 +217,78 @@ def _significance_p_value(
     return float(pv)
 
 
+def _require_finite_effects(effects: List[float], test_name: str, original_effect: float) -> None:
+    """Fail closed on a NaN / inf re-fit (spec §5: an anomaly inside the loop is
+    treated like an exception). A non-finite effect would otherwise be SCORED:
+    DoWhy's percentile test counts NaN as "below the estimate", np.percentile
+    poisons the bootstrap interval, and coverage silently drops one sample."""
+    for i, e in enumerate(effects):
+        if not np.isfinite(e):
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                f"{test_name} re-fit #{i} returned a non-finite effect ({e!r}); refusing "
+                "to score a distribution that contains it.",
+                details={
+                    "test_name": test_name,
+                    "original_effect": original_effect,
+                    "reason": "non_finite_resample_effect",
+                    "resamples_completed": len(effects),
+                    "first_non_finite_index": i,
+                },
+            )
+
+
 def _budget_skip_result(
     test_name: RefutationTestType,
     original_effect: float,
     completed: int,
     requested: int,
     minimum: int,
+    stopped: bool,
     config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
 ) -> RefutationResult:
-    """Honest SKIPPED result when the deadline stopped a loop below its minimum
-    (same ``reason`` / ``message`` contract as the #1419 pre-start skip)."""
+    """Honest SKIPPED when fewer than ``minimum`` re-fits completed.
+
+    ``stopped`` says WHY: the deadline stopped the loop (``time_budget``, same
+    ``reason`` / ``message`` contract as the #1419 pre-start skip) or the loop
+    ran to completion because the configured count is below the minimum
+    (``config_below_minimum``) -- a skip must not blame the budget when the
+    budget was never hit.
+    """
     name = test_name.value
+    if stopped:
+        reason = (
+            "time_budget — non-critical test stopped before its minimum resample "
+            "count; the critical gates decide the suite"
+        )
+        message = (
+            f"{name} skipped: {completed}/{requested} resamples completed before the "
+            f"compute deadline (minimum {minimum}); non-critical, degraded honestly"
+        )
+    else:
+        reason = (
+            "config_below_minimum — requested resample count is below the test's "
+            "minimum; the critical gates decide the suite"
+        )
+        message = (
+            f"{name} skipped: {completed}/{requested} resamples requested, below the "
+            f"minimum {minimum}; non-critical, degraded honestly"
+        )
     return RefutationResult(
         test_name=test_name,
         status=RefutationStatus.SKIPPED,
         original_effect=original_effect,
         refuted_effect=original_effect,
         details={
-            "reason": (
-                "time_budget — non-critical test stopped before its minimum resample "
-                "count; the critical gates decide the suite"
-            ),
-            "message": (
-                f"{name} skipped: {completed}/{requested} resamples completed before the "
-                f"compute deadline (minimum {minimum}); non-critical, degraded honestly"
-            ),
+            "reason": reason,
+            "message": message,
             "resamples_completed": completed,
             "resamples_requested": requested,
-            "stopped_for_budget": True,
+            "stopped_for_budget": stopped,
             **config_details,
         },
+        execution_time_ms=execution_time_ms,
     )
 
 
@@ -257,6 +299,7 @@ def _degenerate_skip_result(
     requested: int,
     stopped: bool,
     config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
 ) -> RefutationResult:
     """Honest SKIPPED when every re-fit returned the SAME effect (owner decision
     2026-09-09). A zero-variance distribution cannot be scored (DoWhy's normal
@@ -286,16 +329,57 @@ def _degenerate_skip_result(
             "stopped_for_budget": stopped,
             **config_details,
         },
+        execution_time_ms=execution_time_ms,
+    )
+
+
+def _degenerate_ci_skip_result(
+    test_name: RefutationTestType,
+    original_effect: float,
+    original_ci: Tuple[float, float],
+    config_details: Dict[str, Any],
+    execution_time_ms: float = 0.0,
+) -> RefutationResult:
+    """Honest SKIPPED, decided BEFORE any re-fit, when the reported interval has
+    no width: coverage of a point and a width ratio against ~0 cannot be scored
+    and would blame the estimate for an upstream degenerate interval."""
+    name = test_name.value
+    return RefutationResult(
+        test_name=test_name,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=original_effect,
+        details={
+            "reason": (
+                "original_ci_degenerate — the reported interval has no width, so "
+                "coverage / width ratio cannot be scored; the critical gates decide "
+                "the suite"
+            ),
+            "message": (
+                f"{name} skipped: original_ci={tuple(original_ci)!r} has width "
+                f"{float(original_ci[1] - original_ci[0]):.6g}; no re-fit was run; "
+                "non-critical, degraded honestly"
+            ),
+            "original_ci": (float(original_ci[0]), float(original_ci[1])),
+            "resamples_completed": 0,
+            "stopped_for_budget": False,
+            **config_details,
+        },
+        execution_time_ms=execution_time_ms,
     )
 
 
 def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
-    """Stable 31-bit seed from the estimate id (``None`` → unseeded, as before)."""
+    """Stable 31-bit seed from the estimate id (``None`` → unseeded, as before).
+
+    The first 8 hex digits of the digest are 32 bits (measured max 4294943764
+    over the live ids, 2026-09-09); the mask keeps the promise in this docstring.
+    """
     if not estimate_id:
         return None
     import hashlib
 
-    return int(hashlib.sha256(str(estimate_id).encode("utf-8")).hexdigest()[:8], 16)
+    return int(hashlib.sha256(str(estimate_id).encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
 
 
 # ============================================================================
@@ -1431,7 +1515,16 @@ class RefutationRunner:
         cfg = self.config["data_subset"]
         requested = int(cfg["num_subsets"])
         subset_fraction = float(cfg["subset_fraction"])
+        config_details = {"subset_fraction": subset_fraction, "num_subsets": requested}
         frame = _refutation_frame(causal_model, "data_subset", original_effect)
+        if original_ci[1] - original_ci[0] <= 0:
+            return _degenerate_ci_skip_result(
+                test_name,
+                original_effect,
+                original_ci,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
         rng = np.random.default_rng(resample_seed)
         try:
             subset_effects, stopped = _resample_effects(
@@ -1455,7 +1548,7 @@ class RefutationRunner:
                 original_error=e,
             ) from e
 
-        config_details = {"subset_fraction": subset_fraction, "num_subsets": requested}
+        _require_finite_effects(subset_effects, "data_subset", original_effect)
         if len(subset_effects) < _MIN_SUBSET_RESAMPLES:
             return _budget_skip_result(
                 test_name,
@@ -1463,7 +1556,9 @@ class RefutationRunner:
                 len(subset_effects),
                 requested,
                 _MIN_SUBSET_RESAMPLES,
+                stopped,
                 config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
         # "Every re-fit returned the same effect" is tested EXACTLY (max == min):
@@ -1472,7 +1567,13 @@ class RefutationRunner:
         # score a constant series with a meaningless p-value.
         if float(np.ptp(subset_effects)) == 0.0:
             return _degenerate_skip_result(
-                test_name, original_effect, subset_effects, requested, stopped, config_details
+                test_name,
+                original_effect,
+                subset_effects,
+                requested,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
         refuted_effect = float(np.mean(subset_effects))
@@ -1551,7 +1652,16 @@ class RefutationRunner:
             )
 
         requested = int(self.config["bootstrap"]["num_bootstraps"])
+        config_details = {"num_bootstraps": requested}
         frame = _refutation_frame(causal_model, "bootstrap", original_effect)
+        if original_ci[1] - original_ci[0] <= 0:
+            return _degenerate_ci_skip_result(
+                test_name,
+                original_effect,
+                original_ci,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
         rng = np.random.default_rng(resample_seed)
         try:
             bootstrap_effects, stopped = _resample_effects(
@@ -1573,7 +1683,7 @@ class RefutationRunner:
                 original_error=e,
             ) from e
 
-        config_details = {"num_bootstraps": requested}
+        _require_finite_effects(bootstrap_effects, "bootstrap", original_effect)
         if len(bootstrap_effects) < _MIN_BOOTSTRAP_RESAMPLES:
             return _budget_skip_result(
                 test_name,
@@ -1581,13 +1691,21 @@ class RefutationRunner:
                 len(bootstrap_effects),
                 requested,
                 _MIN_BOOTSTRAP_RESAMPLES,
+                stopped,
                 config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
         # Exact degeneracy check (max == min); see _run_data_subset_test.
         if float(np.ptp(bootstrap_effects)) == 0.0:
             return _degenerate_skip_result(
-                test_name, original_effect, bootstrap_effects, requested, stopped, config_details
+                test_name,
+                original_effect,
+                bootstrap_effects,
+                requested,
+                stopped,
+                config_details,
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
         refuted_effect = float(np.mean(bootstrap_effects))

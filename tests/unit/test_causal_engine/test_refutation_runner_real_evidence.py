@@ -268,3 +268,147 @@ class TestReviewBandArithmetic:
         conf = runner._calculate_confidence_score(tests)
         assert conf == pytest.approx(0.8667, abs=1e-3)
         assert runner._determine_gate_decision(tests, conf) == GateDecision.PROCEED
+
+
+class TestNonFiniteRefitFailsClosed:
+    """Quality review A (spec §5): a NaN/inf re-fit is an anomaly inside the loop
+    and must be fail-closed like an exception -- never scored (a NaN counts as
+    "below the estimate" in DoWhy's percentile test and poisons np.percentile)."""
+
+    def test_subset_nan_refit_raises(self):
+        runner = RefutationRunner()
+        with pytest.raises(RefutationError) as ei:
+            _subset(runner, _sequence_estimate([0.15, 0.16, float("nan"), 0.14, 0.15]))
+        assert ei.value.details["reason"] == "non_finite_resample_effect"
+        assert ei.value.details["test_name"] == "data_subset"
+        assert ei.value.details["first_non_finite_index"] == 2
+        assert ei.value.details["resamples_completed"] == 5
+
+    def test_bootstrap_inf_refit_raises(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 12}})
+        values = [0.15 + 0.001 * i for i in range(12)]
+        values[7] = float("inf")
+        with pytest.raises(RefutationError) as ei:
+            _bootstrap(runner, _sequence_estimate(values))
+        assert ei.value.details["reason"] == "non_finite_resample_effect"
+        assert ei.value.details["test_name"] == "bootstrap"
+        assert ei.value.details["first_non_finite_index"] == 7
+
+
+class TestBelowMinimumConfigIsNotABudgetSkip:
+    """Quality review B: with no deadline and a requested count below the
+    minimum the loop COMPLETES; the skip must say so, not blame the budget."""
+
+    def test_subset_config_below_minimum(self):
+        runner = RefutationRunner(config={"data_subset": {"num_subsets": 2}})
+        result = _subset(runner, _stub_estimate())
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("config_below_minimum")
+        assert result.details["stopped_for_budget"] is False
+        assert result.details["resamples_completed"] == 2
+        assert result.details["resamples_requested"] == 2
+        assert "message" in result.details
+        assert result.execution_time_ms >= 0.0
+
+    def test_bootstrap_config_below_minimum(self):
+        runner = RefutationRunner(config={"bootstrap": {"num_bootstraps": 4}})
+        result = _bootstrap(runner, _stub_estimate())
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("config_below_minimum")
+        assert result.details["stopped_for_budget"] is False
+        assert result.details["resamples_completed"] == 4
+
+
+class TestResampleSeedIs31Bit:
+    """Quality review C: the docstring promises a 31-bit seed."""
+
+    def test_seed_is_31_bit_stable_and_distinct(self):
+        from src.causal_engine.refutation_runner import _resample_seed_for
+
+        for est_id in ("est-1", "est-2", "3f1c2a9e-0000-4000-8000-000000000000", "x" * 64):
+            seed = _resample_seed_for(est_id)
+            assert seed is not None and 0 <= seed < 2**31
+            assert _resample_seed_for(est_id) == seed
+        assert _resample_seed_for("est-1") != _resample_seed_for("est-2")
+        assert _resample_seed_for(None) is None
+        assert _resample_seed_for("") is None
+
+    def test_a_known_id_would_exceed_31_bits_unmasked(self):
+        """Positive control: the mask matters (an unmasked 8-hex-digit prefix is
+        32-bit; the reviewer measured a max of 4294943764)."""
+        import hashlib
+
+        from src.causal_engine.refutation_runner import _resample_seed_for
+
+        hits = 0
+        for i in range(64):
+            est_id = f"est-{i}"
+            raw = int(hashlib.sha256(est_id.encode("utf-8")).hexdigest()[:8], 16)
+            if raw >= 2**31:
+                hits += 1
+                assert _resample_seed_for(est_id) == raw & 0x7FFFFFFF
+        assert hits > 0, "no id in the sample exercised the mask"
+
+
+class TestDegenerateOriginalCiSkipsBeforeCompute:
+    """Quality review D: a widthless reported interval cannot score coverage or a
+    width ratio; skip honestly BEFORE any re-fit, never blame the estimate."""
+
+    @staticmethod
+    def _never_called(_df):
+        raise AssertionError("re-fit must not run for a widthless original_ci")
+
+    def test_subset_widthless_ci(self):
+        runner = RefutationRunner()
+        result = runner._run_data_subset_test(
+            original_effect=0.15,
+            original_ci=(0.15, 0.15),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_stub_estimate(effect_fn=self._never_called),
+            use_dowhy=True,
+        )
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("original_ci_degenerate")
+        assert result.details["original_ci"] == (0.15, 0.15)
+        assert "message" in result.details
+        assert result.details["num_subsets"] == runner.config["data_subset"]["num_subsets"]
+        assert result.p_value is None
+        assert result.execution_time_ms >= 0.0
+
+    def test_bootstrap_inverted_ci(self):
+        runner = RefutationRunner()
+        result = runner._run_bootstrap_test(
+            original_effect=0.15,
+            original_ci=(0.20, 0.10),
+            causal_model=_make_stub_causal_model({}),
+            identified_estimand=object(),
+            estimate=_stub_estimate(effect_fn=self._never_called),
+            use_dowhy=True,
+        )
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.details["reason"].startswith("original_ci_degenerate")
+        assert result.details["num_bootstraps"] == runner.config["bootstrap"]["num_bootstraps"]
+        assert result.p_value is None
+
+
+class TestSkipResultsCarryExecutionTime:
+    """Quality review E: every skip result records execution_time_ms."""
+
+    def test_budget_skip_has_execution_time(self, monkeypatch):
+        clock = {"now": 0.0}
+        monkeypatch.setattr(_t, "monotonic", lambda: clock["now"])
+
+        def effect(_df):
+            clock["now"] += 10.0
+            return 0.15 + 0.001 * clock["now"]
+
+        result = _subset(RefutationRunner(), _stub_estimate(effect_fn=effect), deadline=15.0)
+        assert result.status == RefutationStatus.SKIPPED
+        assert "time_budget" in result.details["reason"]
+        assert result.execution_time_ms > 0.0
+
+    def test_degenerate_skip_has_execution_time(self):
+        result = _subset(RefutationRunner(), _sequence_estimate([0.15] * 5))
+        assert result.status == RefutationStatus.SKIPPED
+        assert result.execution_time_ms > 0.0
