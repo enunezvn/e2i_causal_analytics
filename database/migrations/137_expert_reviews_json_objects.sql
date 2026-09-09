@@ -5,8 +5,9 @@
 --   agent_assessment_json / dag_structure_json is a JSON *string* into the
 --   object it encodes. src/repositories/expert_review.py's writers
 --   json.dumps'ed into each jsonb column, so PostgREST stored a JSON string
---   scalar instead of an object (measured live 2026-09-09 at 989eec83d:
---   agent_assessment_json 4 string rows, checklist_json 1, of 40 total rows).
+--   scalar instead of an object (measured live 2026-09-09, rehearsed
+--   BEGIN/ROLLBACK: checklist_json 3, comments_json 2, agent_assessment_json
+--   6, dag_structure_json 40, of 40 total rows).
 --   Idempotent: a re-run finds nothing to decode.
 -- WHY: mirrors migration 135 (causal_validations) for the same defect class
 --   (#1992) -- the evidence must be queryable and testable in ONE shape.
