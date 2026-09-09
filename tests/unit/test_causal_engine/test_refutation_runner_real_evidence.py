@@ -566,22 +566,32 @@ class TestRunAllTestsWiring:
         c = runner.run_all_tests(estimate=_stub_estimate(), estimate_id="est-2", **self._kw())
 
         def effects(suite):
-            return {t.test_name.value: t.details.get("subset_effects") for t in suite.tests}
+            return {
+                t.test_name.value: t.details.get("subset_effects")
+                or t.details.get("bootstrap_effects")
+                for t in suite.tests
+            }
 
         assert effects(a)["data_subset"] == effects(b)["data_subset"]
         assert effects(a)["data_subset"] != effects(c)["data_subset"]
+        assert effects(a)["bootstrap"] == effects(b)["bootstrap"]
+        assert effects(a)["bootstrap"] != effects(c)["bootstrap"]
 
     def test_deadline_and_seed_reach_the_loops(self, monkeypatch):
         runner = RefutationRunner(config=_ONLY_NONCRITICAL)
-        seen: dict = {}
-        real = runner._run_data_subset_test
+        seen: dict = {"_run_data_subset_test": {}, "_run_bootstrap_test": {}}
 
-        def spy(*args, **kwargs):
-            seen.update(kwargs)
-            return real(*args, **kwargs)
+        for method in seen:
+            real = getattr(runner, method)
 
-        monkeypatch.setattr(runner, "_run_data_subset_test", spy)
+            def spy(*args, _real=real, _method=method, **kwargs):
+                seen[_method].update(kwargs)
+                return _real(*args, **kwargs)
+
+            monkeypatch.setattr(runner, method, spy)
+
         far = _t.monotonic() + 3600.0
         runner.run_all_tests(estimate=_stub_estimate(), deadline=far, **self._kw())
-        assert seen["deadline"] == far
-        assert seen["resample_seed"] is None
+        for method in ("_run_data_subset_test", "_run_bootstrap_test"):
+            assert seen[method]["deadline"] == far, method
+            assert seen[method]["resample_seed"] is None, method
