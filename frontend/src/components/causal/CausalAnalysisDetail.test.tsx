@@ -1,7 +1,7 @@
 // frontend/src/components/causal/CausalAnalysisDetail.test.tsx
 import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderWithProviders, screen } from '@/test/utils';
+import { renderWithAllProviders, renderWithProviders, screen } from '@/test/utils';
 import { CausalAnalysisDetail } from './CausalAnalysisDetail';
 import { useClinicalContext, useClinicalNarrativeInsight } from '@/hooks/api';
 import type { AgentCausalAnalysisResponse, ClinicalContext } from '@/types/causal';
@@ -303,6 +303,34 @@ describe('CausalAnalysisDetail', () => {
   it('badges OLS as the unbiased anchor in the estimator comparison', () => {
     renderWithProviders(<CausalAnalysisDetail result={EFFICIENCY_RESULT} />);
     expect(screen.getByText('Unbiased anchor')).toBeInTheDocument();
+  });
+
+  it('surfaces the review state and the discovered-DAG record when the run carries them', () => {
+    // The panel's "Open review" deep link is a router <Link>; render under the router.
+    renderWithAllProviders(
+      <CausalAnalysisDetail
+        result={{
+          ...RESULT,
+          discovered_dag_id: 'dag-123',
+          refutation: {
+            ...RESULT.refutation,
+            expert_review_decision: 'pending_review',
+            expert_review_id: 'rev-9',
+          },
+        }}
+      />
+    );
+    expect(screen.getByText('Pending expert review')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /open review/i })).toHaveAttribute(
+      'href',
+      '/expert-reviews?review=rev-9'
+    );
+    expect(screen.getByText('dag-123')).toBeInTheDocument();
+  });
+
+  it('renders no review block for a run that touched no review and persisted no DAG', () => {
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
+    expect(screen.queryByTestId('review-status')).not.toBeInTheDocument();
   });
 });
 

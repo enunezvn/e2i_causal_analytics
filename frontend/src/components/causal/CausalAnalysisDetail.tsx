@@ -30,6 +30,7 @@ import type {
 } from '@/types/causal';
 import { useClinicalContext, useClinicalNarrativeInsight } from '@/hooks/api';
 import { ClinicalContextPanel } from './ClinicalContextPanel';
+import { ReviewStatusPanel } from './ReviewStatusPanel';
 
 // The dataset each grain estimates over (mirrors the page's GRAINS list); the
 // narrative endpoint wants the grain word, the result carries the dataset.
@@ -408,6 +409,13 @@ export function CausalAnalysisDetail({
           <span className="font-medium">{result.discovered_confounders.join(', ')}</span>
         </p>
       )}
+
+      <ReviewStatusPanel
+        decision={result.refutation.expert_review_decision}
+        reviewId={result.refutation.expert_review_id}
+        discoveredDagId={result.discovered_dag_id}
+        warnings={result.warnings}
+      />
 
       <ConfoundingAdjustmentPanel result={result} />
 
