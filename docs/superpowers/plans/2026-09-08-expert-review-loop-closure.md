@@ -6344,6 +6344,33 @@ rep(
     '<text class="s" x="910" y="263">expert_reviews by dag_version_hash · probe every band</text><text class="s" x="910" y="275">rejection halts · approval structural · switch default off</text>',
 )
 
+# §4.3 — gate state machine (codex iter-4 docs audit): UNAVAILABLE replaces the
+# PROCEED bypass; the every-band rejection probe halts; index rows.
+rep(
+    'only on REVIEW or BLOCK bands, and never to stop the run',
+    'check_approval on REVIEW or BLOCK bands; the rejection probe on every band — a rejection halts the run',
+)
+rep(
+    '<summary>Gate state machine <span class="sub">ExpertReviewGate.check_approval</span></summary>',
+    '<summary>Gate state machine <span class="sub">ExpertReviewGate.check_rejection · check_approval</span></summary>',
+)
+rep(
+    '    <ol>\n      <li>No repository → <span class="pill ok">PROCEED</span>, <code>is_approved=True</code>, "bypassed (no repository)". This is the dev/test path and fires whenever Supabase is absent.</li>',
+    '    <ol>\n      <li>On every band, before anything is persisted, the node runs <code>check_rejection</code> (read-only): the newest adjudication of this hash and brand is <code>rejected</code> and no pending row is newer → <span class="pill crit">REJECTED</span> with the rejecting review id and reviewer; the run halts (<code>status failed</code>, the estimate stays on the record behind the <code>Estimate withheld</code> warning), and no new row is created. A pending row newer than the rejection re-opens the structure (issues #1970, #1971).</li>\n      <li>No repository, or the review store unreachable → <span class="pill warn">UNAVAILABLE</span>, <code>is_approved=False</code>: nothing checked, nothing queued (replaced the PROCEED bypass that told the node an unreachable Supabase had cleared the DAG, issue #1969).</li>',
+)
+rep(
+    '      <li>The most recent row is <code>rejected</code> → <span class="pill crit">BLOCKED</span> with the rejecting review id, and no new row is created. A rejection is durable; before this branch existed the next REVIEW-band run re-queued the same structure as a fresh pending review (issue #1970).</li>\n',
+    '',
+)
+rep(
+    '<p><span class="anchor">src/causal_engine/expert_review_gate.py:215</span> <span class="anchor">nodes/refutation.py:1829</span></p>',
+    '<p><span class="anchor">src/causal_engine/expert_review_gate.py:215</span> <span class="anchor">src/causal_engine/expert_review_gate.py:487</span> <span class="anchor">nodes/refutation.py:1223</span> <span class="anchor">nodes/refutation.py:1829</span></p>',
+)
+rep(
+    '<td>ExpertReviewGate.check_approval</td><td>src/causal_engine/expert_review_gate.py:215</td><td>PROCEED / RENEWAL_REQUIRED / PENDING_REVIEW / BLOCKED</td></tr>',
+    '<td>ExpertReviewGate.check_approval</td><td>src/causal_engine/expert_review_gate.py:215</td><td>PROCEED / RENEWAL_REQUIRED / PENDING_REVIEW / BLOCKED / UNAVAILABLE</td></tr>\n      <tr><td><span class="pill gov">gov</span></td><td>ExpertReviewGate.check_rejection</td><td>src/causal_engine/expert_review_gate.py:487</td><td>every-band rejection probe: newest adjudication wins, a newer pending row re-opens, REJECTED halts</td></tr>',
+)
+
 for old, new in EDITS:
     n = s.count(old)
     assert n == 1, f"expected exactly one occurrence, found {n}: {old[:80]!r}"
@@ -6352,7 +6379,9 @@ DOC.write_text(s, encoding="utf-8")
 print(f"applied {len(EDITS)} edits")
 ```
 
-Expected output: `applied 11 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
+Expected output: `applied 17 edits`. If an assertion fires, the fragment drifted: open the file at that section, adjust `old` to the exact current text, re-run.
+
+Why (codex iter-4 docs audit): the §4.3 "Gate state machine" list still described the pre-#1969 no-repository PROCEED bypass and a rejected-row BLOCKED branch, contradicting the Finding callout above it and the shipped gate — `check_approval` answers UNAVAILABLE (`is_approved=False`) without a store, and the every-band `check_rejection` probe (node `_consult_review_gate`) halts a rejected structure — so the list, its summary chips, its anchors and the index rows were rewritten by the same exact-match script (six more `rep` entries).
 
 - [ ] **Step 2: Add the map's discovery box label**
 
