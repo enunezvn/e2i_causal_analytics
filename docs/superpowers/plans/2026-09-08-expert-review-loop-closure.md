@@ -1060,14 +1060,16 @@ def test_rejection_is_evaluated_inside_the_update_statement():
 
 
 @pytest.mark.unit
-def test_promote_share_locks_the_structure_rows_before_the_update():
+def test_promote_takes_a_table_share_lock_before_the_update():
     """A rejection racing the promote must either be seen by the UPDATE or wait
-    for it; the STABLE predicate alone leaves a statement-sized window
-    (pre-execution review iter-2, codex HIGH)."""
+    for it; the STABLE predicate alone leaves a statement-sized window and a
+    row lock cannot cover a review row inserted meanwhile (pre-execution review
+    iter-2 + iter-3, codex HIGH)."""
     sql = MIGRATION.read_text(encoding="utf-8")
     fn = sql[sql.index("CREATE OR REPLACE FUNCTION public.promote_causal_path_guarded("):]
-    assert "FOR SHARE" in fn
-    assert fn.index("FOR SHARE") < fn.index("UPDATE public.causal_paths")
+    lock = "LOCK TABLE public.expert_reviews IN SHARE MODE;"
+    assert lock in fn
+    assert fn.index(lock) < fn.index("UPDATE public.causal_paths")
 
 
 @pytest.mark.unit
@@ -1114,14 +1116,16 @@ Create `database/migrations/134_guarded_causal_path_promote.sql`:
 --     created_at as the rejection does NOT reopen it (strict >); Task 3b gives
 --     ExpertReviewGate._latest_adjudication the same tie rule, so the probe
 --     and the promote read a tie identically.
---   CONCURRENCY: promote_causal_path_guarded share-locks this structure's
---     review rows BEFORE its UPDATE. A resolve (an in-place UPDATE of the
---     pending expert_reviews row) racing it either committed first -- READ
---     COMMITTED gives the UPDATE below a fresh snapshot that sees it -- or
---     waits for this transaction and lands strictly after the promote. Without
---     the lock a rejection committed between the UPDATE's snapshot and its
---     write was invisible to the STABLE predicate (pre-execution review
---     iter-2, codex HIGH; blocking measured live 2026-09-08, Step 4c).
+--   CONCURRENCY: promote_causal_path_guarded takes LOCK TABLE expert_reviews
+--     IN SHARE MODE before its UPDATE (released with the RPC's transaction, a
+--     few ms). SHARE conflicts with ROW EXCLUSIVE, so a resolve (UPDATE of the
+--     pending row) or a renew (INSERT of a new pending row that could then be
+--     rejected) racing the promote either committed first -- READ COMMITTED
+--     gives the UPDATE below a fresh snapshot that sees it -- or waits and lands
+--     strictly after the promote; plain reads are not blocked. A row-level FOR
+--     SHARE was not enough: it cannot cover a row that does not exist yet
+--     (pre-execution review iter-2 + iter-3, codex HIGH x2; row lock and table
+--     lock both measured live 2026-09-08, Step 4c).
 --   public.promote_causal_path_guarded(p_path_id, p_new_status,
 --     p_allowed_current text[], p_dag_version_hash, p_brand) → jsonb
 --     One UPDATE that moves causal_paths.validation_status only when the
@@ -1196,12 +1200,9 @@ BEGIN
     END IF;
 
     IF p_dag_version_hash IS NOT NULL THEN
-        -- Pin the chronology for the rest of this transaction (see header).
-        PERFORM 1
-           FROM public.expert_reviews r
-          WHERE r.dag_version_hash = p_dag_version_hash
-            AND (NULLIF(p_brand, '') IS NULL OR r.brand = p_brand)
-            FOR SHARE;
+        -- Pin the review chronology for the rest of this transaction (see
+        -- header): blocks concurrent review INSERT/UPDATE/DELETE, never reads.
+        LOCK TABLE public.expert_reviews IN SHARE MODE;
     END IF;
 
     UPDATE public.causal_paths
@@ -1363,31 +1364,40 @@ Expected (measured 2026-09-08; the Python rule agrees on every row except the ti
 
 Then `ROLLBACK`; confirm `select count(*) from public.expert_reviews where reviewer_id='equiv'` is `0`.
 
-- [ ] **Step 4c: Concurrency rehearsal — the share lock blocks a racing resolve (no writes)**
+- [ ] **Step 4c: Concurrency rehearsal — the table SHARE lock blocks a racing resolve AND a racing renew, not reads (no writes)**
 
-Two sessions on the live probe row `4eab7033-…` (its structure has one review row). Session A takes the
-same `FOR SHARE` the function takes and holds it 20 s inside a transaction it rolls back; session B runs a
-resolve-shaped UPDATE with a 3 s `statement_timeout` and rolls back too. Nothing is written by either.
-The monitor loop must exclude its own backend (`pid <> pg_backend_pid()`) — its query text also contains
-`pg_sleep`, and the first attempt at this rehearsal waited on itself until A had finished (a false "no block").
+Session A takes the lock the function takes and holds it 20 s inside a transaction it rolls back. Session B
+runs a resolve-shaped UPDATE on the live probe row `4eab7033-…`, session B' a renew-shaped INSERT of a scratch
+pending row, both with a 3 s `statement_timeout` and both rolled back; session R is a plain read. Nothing is
+written by any of them. The monitor loop must exclude its own backend (`pid <> pg_backend_pid()`) — its query
+text also contains `pg_sleep`, and the first attempt waited on itself until A had finished (a false "no block").
 
 ```bash
 RID=4eab7033-7422-422d-83f6-659c9c3b9987
-HASH=$(docker exec supabase-db psql -U postgres -d postgres -tA -c "select dag_version_hash from public.expert_reviews where review_id='$RID'")
-docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "BEGIN; SELECT 'A-locked '||clock_timestamp()::time FROM public.expert_reviews WHERE dag_version_hash='$HASH' FOR SHARE; SELECT pg_sleep(20); SELECT 'A-release '||clock_timestamp()::time; ROLLBACK;" > /tmp/sessA.log 2>&1 &
+docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "BEGIN; LOCK TABLE public.expert_reviews IN SHARE MODE; SELECT 'A-locked '||clock_timestamp()::time; SELECT pg_sleep(20); SELECT 'A-release '||clock_timestamp()::time; ROLLBACK;" > /tmp/sessA.log 2>&1 &
 until docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and query ilike '%pg_sleep(20)%' and state='active'" | grep -q '^1'; do :; done
 docker exec supabase-db psql -U postgres -d postgres -tA -F' ' -c "select l.locktype, l.mode, l.granted from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.relation='public.expert_reviews'::regclass and a.pid <> pg_backend_pid()"
 docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
+docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id) VALUES ('dag_approval','lane1-lock-probe','pending','lockprobe'); SELECT 'B2-inserted'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
+docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; SELECT 'R-read '||count(*) FROM public.expert_reviews;" 2>&1 | tr '\n' ' '; echo
 wait; tr '\n' ' ' < /tmp/sessA.log; echo
-docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B2-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
-docker exec supabase-db psql -U postgres -d postgres -tA -c "select approval_status, updated_at::date from public.expert_reviews where review_id='$RID'"
+docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; UPDATE public.expert_reviews SET updated_at = updated_at WHERE review_id='$RID'; SELECT 'B-updated'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
+docker exec supabase-db psql -U postgres -d postgres -tA -c "SET statement_timeout='3s'; BEGIN; INSERT INTO public.expert_reviews (review_type, dag_version_hash, approval_status, reviewer_id) VALUES ('dag_approval','lane1-lock-probe','pending','lockprobe'); SELECT 'B2-inserted'; ROLLBACK;" 2>&1 | tr '\n' ' '; echo
+docker exec supabase-db psql -U postgres -d postgres -tA -c "select count(*) from public.expert_reviews where reviewer_id='lockprobe'; select approval_status, count(*) from public.expert_reviews group by 1"
 ```
 
-Measured 2026-09-08 (pre-execution review): lock row `relation RowShareLock t`; B → `ERROR:  canceling statement
-due to statement timeout CONTEXT:  while locking tuple (5,6) in relation "expert_reviews"` (blocked for the
-full 3 s while A held the lock); A → `A-locked … A-release … ROLLBACK`; positive control B2 after A ended →
-`UPDATE 1 B2-updated ROLLBACK`; the probe row still `pending`. A B that returns `UPDATE 1` while A holds the
-lock means the function's lock does not cover the resolve path — stop and investigate before committing.
+Measured 2026-09-08 (pre-execution review): lock row `relation ShareLock t`; B → `ERROR:  canceling statement due
+to statement timeout`; B' → the same error (the INSERT waited too — the row-level FOR SHARE of an earlier draft
+could not block it); R → `R-read 40` immediately; A → `LOCK TABLE A-locked … A-release … ROLLBACK`; positive
+controls after A ended → `UPDATE 1 B-updated ROLLBACK` and `INSERT 0 1 B2-inserted ROLLBACK`; `lockprobe` count
+`0`, tallies unchanged (`rejected 1`, `pending 39`). A B or B' that completes while A holds the lock means the
+function's lock does not cover that write path — stop and investigate before committing.
+
+The amended migration itself was also rehearsed on the live DB in BEGIN … ROLLBACK (applied twice, its DO-block
+grant/smoke assertions passing): `promote_causal_path_guarded('no-such-path','validated',ARRAY['pending'],<hash>,<brand>)`
+returned `{"moved": 0, "rejected": false}` for the probe's pending structure, `{"moved": 0, "rejected": true}` for the
+live rejected structure with brand NULL and with brand `''`, `{"moved": 0, "rejected": false}` for a NULL hash, and
+`pg_locks` showed the lock held by the calling backend until ROLLBACK.
 
 - [ ] **Step 5: Commit**
 
@@ -1401,10 +1411,10 @@ Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
 
 ---
 
-### Task 3b: Gate — `_latest_adjudication` reads a timestamp tie the way migration 134 does
+### Task 3b: Gate — both readers treat a timestamp tie the way migration 134 does
 
 **Files:**
-- Modify: `src/causal_engine/expert_review_gate.py` (`_latest_adjudication`, ~line 428)
+- Modify: `src/causal_engine/expert_review_gate.py` (`_latest_adjudication` ~line 428; in `check_approval` the existing "REJECTED verdict is durable" block ~line 365 MOVES above the pending check ~line 332)
 - Modify: `tests/unit/test_causal_engine/test_expert_review_gate.py` (`TestCheckRejection`, after `test_pending_row_means_reopened_not_rejected` ~line 939)
 
 Why: the SQL rule treats a pending row with the SAME `created_at` as the rejection as NOT newer (strict `>`);
@@ -1432,6 +1442,10 @@ the change is tie-only: the repository's order is kept except for an exact tie.
             mock_repo.get_reviews_for_dag = AsyncMock(return_value=rows)
             result = await ExpertReviewGate(repository=mock_repo).check_rejection("abc123")
             assert result is not None and result.decision == ReviewGateDecision.REJECTED
+            # Both readers, one rule: check_approval must not read the tied
+            # pending row as PENDING_REVIEW while check_rejection says REJECTED.
+            approval = await ExpertReviewGate(repository=mock_repo).check_approval("abc123")
+            assert approval.decision == ReviewGateDecision.REJECTED
 
         newer = [
             {"review_id": "rev-new", "approval_status": "pending", "created_at": "2026-09-09T00:00:00+00:00"},
@@ -1484,11 +1498,19 @@ with
 
 and extend the docstring's ordering sentence with: "An exact `created_at` tie between a pending row and the adjudication after it is not a reopen (migration 134 reads it the same way)."
 
+Then, in `check_approval`, MOVE (do not copy) the existing block that starts with the comment
+`# A REJECTED verdict is durable (#1970).` and ends with `return self._rejection_result(latest_verdict, dag_hash)`
+so that it sits immediately BEFORE the comment `# No usable approval - check for pending review (a pending row NEWER`.
+Today that block runs AFTER the pending check, so a pending row that is tied with (or older than) the newest
+rejection makes `check_approval` answer PENDING_REVIEW while `check_rejection` answers REJECTED (codex iter-3,
+MED). With the block first, a rejection nobody re-opened wins in both readers; a genuinely newer pending row still
+sets `reopened` and reaches the pending branch unchanged.
+
 - [ ] **Step 3: Run, lint, commit**
 
 ```bash
 $PY -m pytest tests/unit/test_causal_engine/test_expert_review_gate.py tests/unit/test_agents/test_causal_impact/test_refutation_expert_review_enforcement_1971.py -q -p no:cacheprovider 2>&1 | tail -2
-$PY -m ruff check src/causal_engine/expert_review_gate.py tests/unit/test_causal_engine/test_expert_review_gate.py && $PY -m ruff format --check src/causal_engine/expert_review_gate.py
+$PY -m ruff format src/causal_engine/expert_review_gate.py && $PY -m ruff check src/causal_engine/expert_review_gate.py tests/unit/test_causal_engine/test_expert_review_gate.py
 git add src/causal_engine/expert_review_gate.py tests/unit/test_causal_engine/test_expert_review_gate.py
 git commit -m "fix(expert-review): a created_at tie between a pending row and the adjudication after it is not a reopen (matches migration 134)
 
@@ -1496,7 +1518,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv"
 ```
 
-Expected: 93 passed (measured 2026-09-08 with this exact change applied in scratch: 92 passed before the new test; the earlier global re-sort variant broke `test_reopened_after_rejection_is_not_cleared_by_an_older_approval` and `test_pending_row_means_reopened_not_rejected`, which is why the rule is tie-only).
+Expected: 93 passed. Measured 2026-09-08 with exactly these two changes applied in scratch (before the new test): 109 passed across these two files plus `test_refutation_promoter_1352.py`; both readers answered REJECTED on the tie in either row order, PENDING_REVIEW / None on a genuinely newer pending row and on rows without timestamps. An earlier global re-sort by `created_at` broke `test_reopened_after_rejection_is_not_cleared_by_an_older_approval` and `test_pending_row_means_reopened_not_rejected` (their rows carry no timestamps), which is why the rule is tie-only. The moved block needs `ruff format` (blank-line placement), hence the format step above.
 
 ---
 
@@ -2986,8 +3008,11 @@ export function PrepareAssessmentsButton({
 
   const run = async () => {
     cancelRef.current = false;
-    setState({ running: true, done: 0, total: missing.length, error: null });
-    for (const review of missing) {
+    // Skip reviews whose generation a form already started (shared guard); a
+    // second request for the same id would only race the first.
+    const todo = missing.filter((r) => !autoAssessGuard?.current.has(r.review_id));
+    setState({ running: true, done: 0, total: todo.length, error: null });
+    for (const review of todo) {
       if (cancelRef.current) break;
       try {
         autoAssessGuard?.current.add(review.review_id);
@@ -3552,6 +3577,28 @@ describe('ExpertReviews agent assessment (advisory)', () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
+  it('skips a review whose generation an expanded form already started', async () => {
+    const mutate = vi.fn();
+    vi.mocked(useReviewAssessment).mockReturnValue(mockAssessmentReturn({ mutate }) as never);
+    vi.mocked(generateReviewAssessment).mockResolvedValue({
+      review_id: 'x', assessment: ASSESSMENT, cached: false, persisted: true,
+    } as never);
+    mockQueue({
+      reviews: [
+        { ...mockPending.reviews[0], review_id: 'rev-1' },
+        { ...mockPending.reviews[0], review_id: 'rev-3' },
+      ],
+      total: 2,
+    });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole('button', { name: /^review$/i })[0]); // rev-1's form fires once
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: /prepare assessments/i }));
+    await waitFor(() => expect(generateReviewAssessment).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(generateReviewAssessment).mock.calls[0][0]).toBe('rev-3');
+  });
+
   it('stops the prefetch on the first error and says how far it got', async () => {
     vi.mocked(generateReviewAssessment)
       .mockResolvedValueOnce({ review_id: 'rev-1', assessment: ASSESSMENT, cached: false, persisted: true } as never)
@@ -4007,6 +4054,8 @@ def _psql_rows(where: str) -> dict:
            "from d order by created_at desc")
     proc = subprocess.run(["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tA", "-F", "|", "-c", sql],
                           capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:  # never let a failed read masquerade as "no evidence"
+        raise RuntimeError(f"causal_validations read failed: {proc.stderr.strip()}")
     found = {}
     for ln in proc.stdout.splitlines():
         p = ln.split("|")
@@ -4028,11 +4077,17 @@ def db_tests(analysis_id, treatment: str, outcome: str, since_iso: str) -> dict:
         if found:
             return found
     # Linked suites are written with estimate_source='causal_paths' (545 live rows),
-    # so no source filter; the pair + brand + this job's time window pin the run.
-    return _psql_rows(
-        f"treatment_variable = '{treatment}' and outcome_variable = '{outcome}' "
-        f"and (brand = '{BRAND}' or brand is null) and created_at >= '{since_iso}'"
-    )
+    # so no source filter. Pin ONE suite -- the newest estimate_id for this pair,
+    # brand and job window -- never the newest row per test across suites.
+    pick = ("select estimate_id from public.causal_validations "
+            f"where treatment_variable = '{treatment}' and outcome_variable = '{outcome}' "
+            f"and brand = '{BRAND}' and created_at >= '{since_iso}' order by created_at desc limit 1")
+    proc = subprocess.run(["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tA", "-c", pick],
+                          capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(f"causal_validations lookup failed: {proc.stderr.strip()}")
+    suite_id = proc.stdout.strip()
+    return _psql_rows(f"estimate_id = '{suite_id}'") if suite_id else {}
 
 def main(label: str, out_dir: str) -> None:
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
@@ -4113,7 +4168,7 @@ Closes the expert-review loop (spec docs/superpowers/specs/2026-09-08-expert-rev
 - Lineage page rewritten to the shipped state; anchors re-resolved.
 
 ## Measured before building
-0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have. The plan's own assumptions were attacked before Task 1 (section "Adversarial review before Task 1" at the end of this file): three Task-1 stub assumptions measured true, the SQL rule measured against the Python rule on 13 scenarios (one real divergence, fixed), the lineage edit fragments and anchor script measured, the live scripts' field names and the operator's role checked. Codex iter-1 returned REJECT with 1 HIGH + 5 MED and iter-2 REJECT with 2 HIGH + 4 MED + 1 LOW; all thirteen were verified and folded in (two of them by live measurement: the share lock blocks a racing resolve; the tie-only Python rule keeps every gate test green).
+0 REVIEW in 96 live runs by construction (arithmetic in the spec §2); the two non-critical tests were computed and discarded at the same cost the new loops have. The plan's own assumptions were attacked before Task 1 (section "Adversarial review before Task 1" at the end of this file): three Task-1 stub assumptions measured true, the SQL rule measured against the Python rule on 13 scenarios (one real divergence, fixed), the lineage edit fragments and anchor script measured, the live scripts' field names and the operator's role checked. Codex iter-1 returned REJECT with 1 HIGH + 5 MED, iter-2 REJECT with 2 HIGH + 4 MED + 1 LOW, iter-3 REJECT with 1 HIGH + 4 MED; all eighteen were verified and folded in, four of them by live measurement (row FOR SHARE blocks a racing resolve but not a racing INSERT; LOCK TABLE IN SHARE MODE blocks both and not reads; the tie-only Python rule plus the moved rejection block keep every gate test green with both readers agreeing; the amended migration applies twice and returns the expected verdicts).
 
 ## Verification
 Baseline discovery run on the pre-lane image: docs/demos/results/<date>_expert_review_loop/baseline.md. Post-deploy impact run, approve/reject re-runs and the switch step follow the spec §7 and are recorded in the same directory.
@@ -4315,3 +4370,13 @@ refuters; softening it would substitute a placeholder p-value. Flag for the owne
 5. MED — duplicate element ids when the linked card and the queue row render the same review. CONFIRMED (`${review.review_id}-${item.id}`) → `useId()` per form instance + an id-uniqueness assertion.
 6. MED — "Prepare assessments" bypassed the shared guard. CONFIRMED → the button marks each id in the guard before its request; test expands a prepared row and asserts no second generation.
 7. LOW — the anchor regex skipped the 18 `:NNN` shorthand anchors. CONFIRMED → `[^<:]*`; re-measured 42 changed / 5 unresolved, third hand-fix (`:1387` → the `_consult_review_gate` call, 1086 at f30e9e9df).
+
+### Codex iter-3 findings → dispositions (after the iter-2 fold)
+
+1. HIGH — a row-level FOR SHARE cannot cover a review row that does not exist yet (renew INSERTs a new pending row, which can then be rejected). CONFIRMED by reasoning and **measured**: with FOR SHARE held, a scratch INSERT was NOT blocked in principle (row locks cover retrieved rows only); with `LOCK TABLE public.expert_reviews IN SHARE MODE` held, the resolve-shaped UPDATE and the renew-shaped INSERT both waited (cancelled at their 3 s `statement_timeout`), a plain read went through, positive controls succeeded after release, nothing persisted → the function takes the table SHARE lock (Step 4c rewritten).
+2. MED — "Prepare assessments" could re-request an id whose generation an expanded form already started. CONFIRMED → the button filters `missing` through the shared guard before running; new test.
+3. MED — the evidence fallback could assemble rows from different suites or a brandless concurrent run. CONFIRMED → it now pins the newest `estimate_id` for the pair + brand + job window and reads that one suite.
+4. MED — a failed `psql` read silently became `{}`. CONFIRMED → non-zero exit raises with stderr.
+5. MED — `check_approval` still read a tied pending row as PENDING_REVIEW while `check_rejection` said REJECTED. CONFIRMED (the existing "REJECTED verdict is durable" block runs after the pending check) → Task 3b MOVES that block above the pending check; **measured in scratch**: both readers agree on the tie in either row order, newer pending rows and timestamp-less rows behave as before, 109 tests green across the gate, enforcement and promoter files.
+
+Codex could not run the gate tests itself (its sandbox lacks a writable cache directory); the 109-green figure is this session's measurement, recorded in Task 3b.
