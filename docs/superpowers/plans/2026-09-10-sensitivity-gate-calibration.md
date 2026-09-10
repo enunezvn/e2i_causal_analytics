@@ -2025,9 +2025,14 @@ cap), compute the benchmark inputs on it, classify, and recompute the band with 
 runner's own ``_calculate_confidence_score`` / ``_determine_gate_decision``.
 Writes a markdown table of today's band vs the new band per pair.
 
-Caveats printed into the output: a ``limit N`` pull has no guaranteed row order, so
-population quantities can differ slightly from the original run's frame; pairs
-without a current dataset mapping are listed as unmapped, never guessed.
+The CI bound is recovered EXACTLY from the stored ``e_value_ci`` and the stored
+``outcome_std`` (algebraic inverse of the old runner's formula); the reading needs
+only that bound and whether the CI includes zero (stored as ``e_value_ci == 1.0``).
+Baseline risk, naive contrast and covariate factors are not persisted, so they come
+from a re-pulled frame; a ``limit N`` pull has no guaranteed row order, so every run
+is classified TWICE — on the capped pull and on the full brand table — and the output
+flags any pair whose reading flips (``frame_sensitive``). Pairs without a current
+dataset mapping are listed as unmapped, never guessed.
 
 Run (from the repo root, venv active, the live stack reachable):
 
@@ -2103,6 +2108,27 @@ async def _frame(dataset: str, treatment: str, outcome: str, brand: Optional[str
     return df, covs
 
 
+FULL_TABLE_LIMIT = 20000  # the route's own ceiling for a whole-table read (routes/causal.py ``limit(20000)``)
+
+
+async def _cached_frame(cache: Dict[Any, Any], dataset: str, t: str, o: str, brand: str, limit: int):
+    key = (dataset, brand, t, o, limit)
+    if key not in cache:
+        try:
+            cache[key] = await _frame(dataset, t, o, brand, limit)
+        except Exception as exc:  # noqa: BLE001 - report, never guess
+            cache[key] = exc
+    return cache[key]
+
+
+def _classify_on(got, t: str, o: str, ate: float, ci: Tuple[float, float], sd: float):
+    df, covs = got
+    inputs = evalue.benchmark_inputs_from_frame(df, t, o, covs)
+    return evalue.classify(ate, ci, randomized=False, baseline_risk=inputs.baseline_risk,
+                           outcome_std=sd, naive_effect=inputs.naive_effect,
+                           covariate_factors=inputs.covariate_bias_factors, n_rows=len(df))
+
+
 def _recover_ci(ate: float, e_value_ci: float, outcome_sd: float) -> Tuple[float, float]:
     """The stored row keeps ``e_value_ci`` (old SMD formula on the bound nearest the
     null), not the CI. Invert it exactly: ``RR = (E^2 + 1) / (2E)``, ``d = ln(RR) / 0.91``,
@@ -2144,6 +2170,7 @@ async def main(out: Path) -> int:
         if r["test_type"] == "sensitivity_e_value":
             d = r.get("details_json") or {}
             e.update(ate=float(r["original_effect"]), e_ci=float(d.get("e_value_ci") or 1.0),
+                     sd_stored=(float(d["outcome_std"]) if d.get("outcome_std") else None),
                      randomized=(r["status"] == "skipped"), n=int(d.get("refutation_n_rows_total") or 1500))
 
     readings: Counter = Counter()
@@ -2159,28 +2186,24 @@ async def main(out: Path) -> int:
         elif dataset is None:
             reading, new_sens = "unmapped", None
         else:
-            ck = (dataset, e["brand"], e["t"], e["o"], e["n"])
-            if ck not in frame_cache:
-                try:
-                    frame_cache[ck] = await _frame(dataset, e["t"], e["o"], e["brand"], e["n"])
-                except Exception as exc:  # noqa: BLE001 - report, never guess
-                    frame_cache[ck] = exc
-            got = frame_cache[ck]
-            if isinstance(got, Exception):
-                reading, new_sens = f"frame_error: {type(got).__name__}", None
+            got_capped = await _cached_frame(frame_cache, dataset, e["t"], e["o"], e["brand"], e["n"])
+            got_full = await _cached_frame(frame_cache, dataset, e["t"], e["o"], e["brand"], FULL_TABLE_LIMIT)
+            if isinstance(got_capped, Exception):
+                reading, new_sens = f"frame_error: {type(got_capped).__name__}", None
             else:
-                df, covs = got
-                inputs = evalue.benchmark_inputs_from_frame(df, e["t"], e["o"], covs)
-                # The stored CI is not persisted; recover the bound from e_value_ci on the
-                # SMD path: RR = (E^2 + 1) / (2E), d = ln(RR)/0.91, bound = d * sd.
-                sd = float(df[e["o"]].std())
+                # Exact inversion of the stored E-value with the STORED outcome SD (the one
+                # the old runner used); the re-pulled frame's SD is only a fallback.
                 ate = e["ate"]
+                sd = e["sd_stored"] or float(got_capped[0][e["o"]].std())
                 ci = _recover_ci(ate, e["e_ci"], sd)
-                rd = evalue.classify(ate, ci, randomized=False, baseline_risk=inputs.baseline_risk,
-                                     outcome_std=sd, naive_effect=inputs.naive_effect,
-                                     covariate_factors=inputs.covariate_bias_factors, n_rows=len(df))
+                rd = _classify_on(got_capped, e["t"], e["o"], ate, ci, sd)
                 reading, new_sens = rd.reading, rd.status
                 e.update(rr_point=rd.rr_point, benchmark=rd.benchmark, basis=rd.benchmark_basis)
+                # Perturbation check: same run, full brand table instead of the capped pull.
+                if not isinstance(got_full, Exception):
+                    rd_full = _classify_on(got_full, e["t"], e["o"], ate, ci, sd)
+                    e["frame_sensitive"] = rd_full.reading != rd.reading
+                    e["reading_full_table"] = rd_full.reading
         readings[reading] += 1
         e["reading"] = reading
         if new_sens is None:
@@ -2197,15 +2220,20 @@ async def main(out: Path) -> int:
     lines += [f"| {k} | {v} |" for k, v in readings.most_common()]
     lines += ["", "## Gate moves (today → new)", "", "| move | runs |", "|---|---|"]
     lines += [f"| {a} → {b} | {n} |" for (a, b), n in sorted(moves.items())]
-    lines += ["", "## Per pair", "", "| brand | treatment → outcome | runs | today | new | readings | median rr_point | median benchmark |", "|---|---|---|---|---|---|---|---|"]
+    flips = [(k, x) for k, es in per_pair.items() for x in es if x.get("frame_sensitive")]
+    lines += ["", "## Frame perturbation check", "",
+              f"Runs whose reading differs between the capped pull and the full brand table: **{len(flips)}**"
+              + (" — re-run these live in Task 12 step 5: " + ", ".join(f"{k[0]} {k[1]}→{k[2]}" for k, _ in flips) if flips else " — the row-order caveat is retired by measurement.")]
+    lines += ["", "## Per pair", "", "| brand | treatment → outcome | runs | today | new | readings | frame-sensitive | median rr_point | median benchmark |", "|---|---|---|---|---|---|---|---|---|"]
     for key in sorted(per_pair):
         es = per_pair[key]
         med = lambda k: (f"{statistics.median([x[k] for x in es if k in x and x[k] is not None]):.2f}" if any(k in x and x[k] is not None for x in es) else "-")  # noqa: E731
         lines.append(f"| {key[0]} | {key[1]} → {key[2]} | {len(es)} | {dict(Counter(x['old_gate'] for x in es))} | "
-                     f"{dict(Counter(x['new_gate'] for x in es))} | {dict(Counter(x['reading'] for x in es))} | {med('rr_point')} | {med('benchmark')} |")
+                     f"{dict(Counter(x['new_gate'] for x in es))} | {dict(Counter(x['reading'] for x in es))} | "
+                     f"{sum(1 for x in es if x.get('frame_sensitive'))} | {med('rr_point')} | {med('benchmark')} |")
     lines += ["", "## Caveats", "",
-              "- A `limit N` frame pull has no guaranteed row order; population quantities may differ slightly from the original run's frame.",
-              "- The stored row carries `e_value_ci`, not the CI; the CI bound is recovered from it on the SMD path (exact inverse of the runner's old formula).",
+              "- The CI bound is recovered EXACTLY from the stored `e_value_ci` and the stored `outcome_std` (algebraic inverse of the old formula); the reading needs only that bound and whether the CI includes zero.",
+              "- Baseline risk, naive contrast and covariate factors come from a re-pulled frame (not persisted). A `limit N` pull has no guaranteed row order, so each run was classified on the capped pull AND on the full brand table; the frame-sensitive column counts runs whose reading differs.",
               "- Pairs listed as `unmapped` have no current dataset mapping and were not guessed.",
               "- Runs whose sensitivity row was SKIPPED (randomized design) keep SKIPPED."]
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -2226,7 +2254,7 @@ Before running: read `src/memory/services/factories.py` for the exact name of th
 - [ ] **Step 3: Run it against the live stack**
 
 Run: `(cd $W && $PY scripts/calibration/reband_sensitivity_readings.py --out docs/demos/results/$(date +%F)_sensitivity_calibration/reband.md 2>&1 | tail -30)`
-Expected: the readings table (beyond ≈ 91, within ≈ 6, null_finding ≈ 5, not_applicable_randomized 6, the 13 continuous-treatment runs now benchmarked by covariate factors, unmapped 3) and the moves table (BLOCK → PROCEED ≈ 56, BLOCK → BLOCK 6 on random-common-cause failures). If any pair reads `frame_error`, print the exception and fix the loader call, never the mapping by guess.
+Expected: the readings table (beyond ≈ 91, within ≈ 6, null_finding ≈ 5, not_applicable_randomized 6, the 13 continuous-treatment runs now benchmarked by covariate factors, unmapped 3) and the moves table (BLOCK → PROCEED ≈ 56, BLOCK → BLOCK 6 on random-common-cause failures), plus the frame perturbation line (expected 0 frame-sensitive runs; any listed pair is re-run live in Task 12). If any pair reads `frame_error`, print the exception and fix the loader call, never the mapping by guess.
 
 - [ ] **Step 4: Lint, commit the script and the table**
 
@@ -2523,6 +2551,7 @@ docker exec supabase-db psql -U postgres -d postgres -At -F' | ' -c "select trea
 2. Null finding: run the brand-less `treatment_arm → persistent_180d` probe pair through the causal analyze endpoint (same method as lane 1's `rerun_*.json`); expected `gate_decision = proceed` when placebo and random common cause pass, `warnings` containing "No detectable effect at this sample size", the drill-down showing the sensitivity row as WARNING with that message, and no new `expert_reviews` row for the run (`select count(*) from expert_reviews where created_at > <job start>`).
 3. Narrative: the API record's interpretation for a `beyond` run contains "Robust to confounding at measured strength" and the benchmark number; for the null run it does not contain "robust to unmeasured confounding".
 4. Record the counts of `expert_reviews` pending rows before and after the job (expected unchanged for PROCEED runs).
+5. Frame-sensitive pairs: every pair the Task 9 table flagged as frame-sensitive is run through the live analyze endpoint (same method as step 2) and its live `reading` recorded next to the two offline readings; the live one is the truth for that pair.
 
 Write `cert.md` in the results dir with every command and its output; commit it on a docs branch or as an untracked results dir per the repo's habit (results dirs are untracked today; the re-band table from Task 9 is the one committed artefact).
 
