@@ -189,14 +189,17 @@ def measured_confounding_benchmark(
     A non-finite ``joint``, or any ``None``/non-finite covariate factor, raises
     ``ValueError`` rather than being silently dropped — a drop can turn a benchmarked
     run into an ``unbenchmarked`` one and understate what confounding was measured.
+    Every supplied factor is validated FIRST, regardless of whether ``joint`` is
+    given — a bad factor must not slip through just because the joint benchmark
+    happened to make it unused.
     """
-    if joint is not None:
-        return _finite("joint", joint), "joint_naive_vs_adjusted"
     values: Dict[str, float] = {}
     for name, factor in covariate_factors.items():
         if factor is None:
             raise ValueError(f"covariate factor {name!r} is None; omit it instead of passing None")
         values[name] = _finite(f"covariate factor {name!r}", factor)
+    if joint is not None:
+        return _finite("joint", joint), "joint_naive_vs_adjusted"
     if values:
         return max(values.values()), "strongest_covariate"
     return None, "none_measured"
@@ -254,10 +257,16 @@ def covariate_bias_factors(
     A covariate is skipped only when genuinely undefined and carrying no
     information: covariate absent from the frame; no complete-case rows; no treated
     or no control units; no high- or low-covariate stratum among controls (RR_UD has
-    nothing to compare); zero events in BOTH control strata (0/0, binary outcome);
-    zero outcome variance (continuous outcome, no SMD denominator); or RR_EU and
-    RR_UD are simultaneously at their one-sided-zero limit (an indeterminate double
-    limit).
+    nothing to compare); zero events in BOTH control strata (0/0, binary outcome); or
+    zero outcome variance (continuous outcome, no SMD denominator).
+
+    When RR_EU and RR_UD are SIMULTANEOUSLY at their one-sided-zero limit, the bias
+    factor B = RR_EU*RR_UD/(RR_EU+RR_UD-1) DIVERGES rather than settling on either
+    limit: the covariate perfectly separates BOTH treatment and outcome in this
+    frame, a positivity violation the estimator cannot have adjusted for. This is
+    not skipped or fabricated as a finite number (an infinite bias factor must never
+    reach ``details_json`` — Postgres JSONB rejects ``Infinity``); ``ValueError`` is
+    raised naming the covariate instead.
     """
     out: Dict[str, float] = {}
     if not covariates or frame is None:
@@ -297,7 +306,10 @@ def covariate_bias_factors(
             ud_limit = False  # the SMD path is always finite for a positive y_sd
 
         if eu_limit and ud_limit:
-            continue  # both ratios at their one-sided-zero limit: indeterminate
+            raise ValueError(
+                f"covariate {cov!r} perfectly separates treatment and outcome in this "
+                "frame (positivity violation); its bias factor is unbounded"
+            )
         if eu_limit:
             assert rr_ud is not None  # eu_limit True implies ud_limit False (checked above)
             out[cov] = _orient(rr_ud)  # RR_EU -> infinity: B -> RR_UD
@@ -405,6 +417,10 @@ def classify(
     lo, hi = _finite("ci_lower", ci[0]), _finite("ci_upper", ci[1])
     if lo > hi:
         lo, hi = hi, lo
+    if eff < lo - 1e-12 or eff > hi + 1e-12:
+        raise ValueError(
+            f"ci must contain the point estimate (effect={eff!r}, ci=({lo!r}, {hi!r}))"
+        )
     includes_null = lo <= 0.0 <= hi
     bound = min(abs(lo), abs(hi))
 
@@ -412,8 +428,10 @@ def classify(
     # risk-ratio path applies only when the point effect AND the naive effect (if
     # any) both land inside the risk-difference domain — never RD for one and SMD
     # for the other within a single reading. The CI bound nearest the null sits
-    # strictly between 0 and the point effect in magnitude, so if the point effect's
-    # baseline_risk + effect is inside (0, 1) the bound's baseline_risk + bound is
+    # strictly between 0 and the point effect in magnitude (the CI-contains-estimate
+    # check above guarantees the bound lies between 0 and the effect), so if the
+    # point effect's baseline_risk + effect is inside (0, 1) the bound's
+    # baseline_risk + bound is
     # too (a convex combination of two in-domain points); no separate check needed.
     use_rr = _use_risk_ratio_path(eff, naive_effect, baseline_risk)
     if use_rr:
@@ -425,7 +443,9 @@ def classify(
             rr_ci = 1.0
         else:
             rr_ci_rd = rr_from_risk_difference(math.copysign(bound, eff), baseline_risk)
-            assert rr_ci_rd is not None  # guaranteed: the CI bound is closer to null than effect
+            # guaranteed by the ci-contains-estimate check above: the bound is
+            # between 0 and effect in magnitude, so it is in-domain whenever effect is
+            assert rr_ci_rd is not None
             rr_ci = rr_ci_rd
     else:
         conversion = "standardized_difference"

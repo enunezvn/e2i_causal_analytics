@@ -83,6 +83,14 @@ class TestMath:
         with pytest.raises(ValueError):
             ev.measured_confounding_benchmark(None, {"a": None})
 
+    def test_measured_confounding_benchmark_validates_factors_even_with_a_joint_present(self):
+        # a finite joint must not short-circuit validation of the covariate factors
+        # that were supplied alongside it.
+        with pytest.raises(ValueError):
+            ev.measured_confounding_benchmark(1.2, {"c": None})
+        with pytest.raises(ValueError):
+            ev.measured_confounding_benchmark(1.2, {"c": float("nan")})
+
 
 class TestCovariateBiasFactors:
     def _frame(self, seed: int = 0, n: int = 4000) -> pd.DataFrame:
@@ -133,6 +141,7 @@ class TestCovariateBiasFactors:
         # control (t=0): c=1 for 2/6, c=0 for 4/6 -> p_hi_c = 1/3 -> RR_EU = 0.5/(1/3) = 1.5
         # control c=1 (hi):  y = [1, 1]          -> m_hi = 1.0
         # control c=0 (lo):  y = [0, 0, 0, 1]     -> m_lo = 0.25 -> RR_UD = 1.0/0.25 = 4.0
+        # B = RR_EU*RR_UD / (RR_EU+RR_UD-1) = 1.5*4.0 / (1.5+4.0-1) = 6.0/4.5 = 4/3
         df = pd.DataFrame(
             {
                 "t": [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
@@ -141,7 +150,7 @@ class TestCovariateBiasFactors:
             }
         )
         f = ev.covariate_bias_factors(df, "t", "y", ["c"])
-        assert f["c"] == pytest.approx(ev.bias_factor(1.5, 4.0))
+        assert f["c"] == pytest.approx(4 / 3)
 
     def test_one_sided_zero_outcome_rate_reads_as_the_oriented_rr_eu_limit(self):
         # RR_EU: treated p_hi_t = 3/4 = 0.75, control p_hi_c = 2/4 = 0.5 -> RR_EU = 1.5
@@ -171,18 +180,36 @@ class TestCovariateBiasFactors:
         f = ev.covariate_bias_factors(df, "t", "y", ["c"])
         assert "c" not in f
 
+    def test_perfect_separation_raises_instead_of_dropping_the_confounder(self):
+        # treated c = [0, 0] -> p_hi_t = 0; control c = [1, 0] -> p_hi_c = 0.5
+        # (RR_EU one-sided-zero limit). control y = [1, 0], matching c -> hi (c=1)
+        # y = [1] -> m_hi = 1.0; lo (c=0) y = [0] -> m_lo = 0.0 (RR_UD limit too):
+        # both ratios diverge simultaneously -- a positivity violation, not a skip.
+        df = pd.DataFrame({"t": [1, 1, 0, 0], "c": [0, 0, 1, 0], "y": [0, 0, 1, 0]})
+        with pytest.raises(ValueError, match="'c'"):
+            ev.covariate_bias_factors(df, "t", "y", ["c"])
+
     def test_continuous_outcome_uses_the_smd_path_on_the_control_arm_difference(self):
+        # UNEQUAL high-covariate shares (RR_EU != 1) so bias_factor's combination of
+        # RR_EU and RR_UD is actually exercised, not just passed through as RR_UD:
+        # treated c = [1,1,1,0,0] -> p_hi_t = 3/5 = 0.6
+        # control c = [1,0,0,0,0] -> p_hi_c = 1/5 = 0.2 -> rr_eu = 0.6/0.2 = 3.0
+        # control y: hi (c=1) = [20.0] -> mean 20.0; lo (c=0) = [2,4,6,8] -> mean 5.0
+        all_y = [10.0, 12.0, 14.0, 1.0, 3.0, 20.0, 2.0, 4.0, 6.0, 8.0]
         df = pd.DataFrame(
             {
-                "t": [1, 1, 1, 1, 0, 0, 0, 0],
-                "c": [1, 1, 0, 0, 1, 1, 0, 0],
-                "y": [5.0, 6.0, 1.0, 2.0, 10.0, 12.0, 2.0, 4.0],
+                "t": [1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
+                "c": [1, 1, 1, 0, 0, 1, 0, 0, 0, 0],
+                "y": all_y,
             }
         )
         f = ev.covariate_bias_factors(df, "t", "y", ["c"])
-        y_sd = float(np.std(df["y"].to_numpy()))  # matches the implementation's np.nanstd
-        rr_ud = ev.rr_from_smd((11.0 - 3.0) / y_sd)  # control hi mean 11.0, lo mean 3.0
-        assert f["c"] == pytest.approx(ev.bias_factor(1.0, rr_ud))  # rr_eu = 0.5 / 0.5 = 1.0
+        sd = float(np.std(all_y))  # population SD, matching the implementation's np.nanstd
+        rr_eu = 0.6 / 0.2
+        d = (20.0 - 5.0) / sd
+        rr_ud = math.exp(0.91 * abs(d))
+        expected = rr_eu * rr_ud / (rr_eu + rr_ud - 1)
+        assert f["c"] == pytest.approx(expected)
 
 
 class TestClassify:
@@ -291,3 +318,13 @@ class TestClassify:
         json.dumps(d)  # must not raise TypeError on a numpy scalar
         assert d["n_rows"] == 1500
         assert type(d["n_rows"]) is int
+
+    def test_ci_must_contain_the_point_estimate(self):
+        # effect 0.1 outside ci (0.8, 0.9): the RD path's CI-bound conversion would
+        # otherwise leave the risk-difference domain (p1 = 0.3+0.8 = 1.1) and hit an
+        # unreachable internal assert instead of a clean domain error.
+        with pytest.raises(ValueError):
+            self._c(0.1, (0.8, 0.9), baseline_risk=0.3, naive_effect=0.2)
+        # a degenerate CI exactly at the estimate is fine (bound == effect).
+        r = self._c(0.1, (0.1, 0.1), baseline_risk=0.3, naive_effect=0.2)
+        assert r.rr_point > 1.0
