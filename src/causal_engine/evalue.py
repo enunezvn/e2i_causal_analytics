@@ -479,8 +479,16 @@ def classify(
         rr_ci = 1.0 if includes_null else _rr_smd_path(signed_bound, outcome_std)
 
     e_point, e_ci = e_value_from_rr(rr_point), e_value_from_rr(rr_ci)
+    # the joint benchmark must use the SAME conversion classify just chose (spec §5):
+    # passing baseline_risk unconditionally let the joint's own (bound-unaware) check
+    # pick RD when effect and naive both happened to be RD-valid even though classify
+    # fell back to SMD over the CI bound, mixing an RD-derived rr_point against an
+    # RD-derived benchmark that used a different domain test than the CI bound did.
     joint = joint_confounding_benchmark(
-        naive_effect, eff, baseline_risk=baseline_risk, outcome_std=outcome_std
+        naive_effect,
+        eff,
+        baseline_risk=(baseline_risk if use_rr else None),
+        outcome_std=outcome_std,
     )
     benchmark, basis = measured_confounding_benchmark(joint, covariate_factors)
 

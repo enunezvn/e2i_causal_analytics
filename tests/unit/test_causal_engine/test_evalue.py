@@ -22,11 +22,12 @@ class TestMath:
         assert ev.e_value_from_rr(0.5) == pytest.approx(ev.e_value_from_rr(2.0))
 
     def test_e_value_from_rr_does_not_overflow_for_a_huge_finite_rr(self):
-        # RR*(RR-1) overflows to inf around RR ~ 1.3e154 before the sqrt ever runs;
-        # sqrt(RR)*sqrt(RR-1) stays finite the whole way through.
-        e = ev.e_value_from_rr(1e150)
+        # RR*(RR-1) overflows to inf around RR ~ 1.3e154 before the sqrt ever runs
+        # (1e150 alone does not reach it: 1e150*(1e150-1) ~ 1e300, still finite);
+        # sqrt(RR)*sqrt(RR-1) stays finite well past that point.
+        e = ev.e_value_from_rr(1e158)
         assert math.isfinite(e)
-        assert e == pytest.approx(2e150, rel=1e-12)
+        assert e == pytest.approx(2e158, rel=1e-12)
 
     def test_rr_from_smd_uses_the_chinn_factor(self):
         assert ev.rr_from_smd(1.0) == pytest.approx(math.exp(0.91))
@@ -344,6 +345,28 @@ class TestClassify:
         # the SMD path, not hit an assert on the bound's conversion.
         r = self._c(0.5 - 5e-13, (0.5, 0.6), baseline_risk=0.5, naive_effect=None)
         assert r.conversion == "standardized_difference"
+
+    def test_joint_benchmark_follows_classifys_own_conversion(self):
+        # same CI-bound domain failure as above, but WITH a naive_effect: effect
+        # (p1 = 0.9999999999995) and naive (p1 = 0.4) are each individually RD-valid
+        # at baseline_risk 0.5, so a joint benchmark computed on its own would pick
+        # RD -- but classify already fell back to SMD for the whole reading (the CI
+        # bound is not RD-valid), and the joint benchmark must follow that choice,
+        # not re-derive its own without the bound.
+        r = self._c(
+            0.5 - 5e-13,
+            (0.5, 0.6),
+            baseline_risk=0.5,
+            outcome_std=None,
+            naive_effect=-0.1,
+            covariate_factors={},
+            n_rows=100,
+        )
+        assert r.conversion == "standardized_difference"
+        # exp(0.91*|eff|) / exp(0.91*|naive|), oriented >= 1 (already is: eff > naive)
+        expected_benchmark = math.exp(0.91 * (0.5 - 5e-13 - 0.1))
+        assert r.benchmark == pytest.approx(expected_benchmark)
+        assert r.reading == "beyond_measured_confounding"
 
     def test_e_value_stays_finite_for_a_huge_effect(self):
         r = self._c(400, (399, 401), baseline_risk=None, outcome_std=None, naive_effect=None)
