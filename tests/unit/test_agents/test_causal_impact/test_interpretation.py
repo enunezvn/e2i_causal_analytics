@@ -517,12 +517,22 @@ class TestInterpretationNarrativeQuality:
             "confidence_adjustment": 0.75,
         }
 
+        # Post-2026-09-10 shape: the sensitivity node writes the reading, its
+        # headline and a one-sentence message; the narrative is built from these.
         sensitivity_analysis: SensitivityAnalysis = {
             "e_value": 2.5,
             "e_value_ci": 2.2,
-            "interpretation": "...",
+            "interpretation": (
+                "Explaining this effect away would need an unmeasured confounder with "
+                "a risk ratio of at least 2.50 with both treatment and outcome (2.20 at "
+                "the CI bound), stronger than all measured confounding combined (1.30)."
+            ),
             "robust_to_confounding": True,
-            "unmeasured_confounder_strength": "moderate",
+            "unmeasured_confounder_strength": "beyond_measured_confounding",
+            "reading": "beyond_measured_confounding",
+            "headline": "Robust to confounding at measured strength",
+            "benchmark": 1.3,
+            "benchmark_basis": "joint_naive_vs_adjusted",
         }
 
         return {
@@ -615,12 +625,22 @@ class TestKeyFindingsGeneration:
                 "individual_tests": {},
                 "confidence_adjustment": 0.75,
             },
+            # Post-2026-09-10 shape: the sensitivity node writes the reading, its
+            # headline and a one-sentence message; the narrative is built from these.
             "sensitivity_analysis": {
                 "e_value": 2.5,
                 "e_value_ci": 2.2,
-                "interpretation": "...",
+                "interpretation": (
+                    "Explaining this effect away would need an unmeasured confounder with "
+                    "a risk ratio of at least 2.50 with both treatment and outcome (2.20 at "
+                    "the CI bound), stronger than all measured confounding combined (1.30)."
+                ),
                 "robust_to_confounding": True,
-                "unmeasured_confounder_strength": "moderate",
+                "unmeasured_confounder_strength": "beyond_measured_confounding",
+                "reading": "beyond_measured_confounding",
+                "headline": "Robust to confounding at measured strength",
+                "benchmark": 1.3,
+                "benchmark_basis": "joint_naive_vs_adjusted",
             },
             "interpretation_depth": "standard",
             "user_context": {"expertise": "analyst"},
@@ -628,3 +648,163 @@ class TestKeyFindingsGeneration:
             "errors": [],
             "warnings": [],
         }
+
+
+class TestReadingNarrative:
+    """Spec 2026-09-10 §4.6: the robustness sentence comes from the reading."""
+
+    def _create_full_state(self) -> CausalImpactState:
+        """Create complete state with all analysis results."""
+        causal_graph: CausalGraph = {
+            "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
+            "edges": [
+                ("geographic_region", "hcp_engagement_level"),
+                ("hcp_engagement_level", "patient_conversion_rate"),
+            ],
+            "treatment_nodes": ["hcp_engagement_level"],
+            "outcome_nodes": ["patient_conversion_rate"],
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "digraph { ... }",
+            "confidence": 0.85,
+        }
+
+        estimation_result: EstimationResult = {
+            "method": "CausalForestDML",
+            "ate": 0.5,
+            "ate_ci_lower": 0.4,
+            "ate_ci_upper": 0.6,
+            "standard_error": 0.05,
+            "effect_size": "medium",
+            "statistical_significance": True,
+            "p_value": 0.01,
+            "sample_size": 1000,
+            "covariates_adjusted": ["geographic_region"],
+            "heterogeneity_detected": True,
+        }
+
+        # Contract: individual_tests is Dict with test names as keys
+        refutation_results: RefutationResults = {
+            "tests_passed": 3,
+            "tests_failed": 1,
+            "total_tests": 4,
+            "overall_robust": True,
+            "individual_tests": {
+                "placebo_treatment": {
+                    "test_name": "placebo_treatment",
+                    "passed": True,
+                    "new_effect": 0.02,
+                    "original_effect": 0.5,
+                    "p_value": 0.85,
+                    "details": "Placebo effect near zero",
+                },
+                "random_common_cause": {
+                    "test_name": "random_common_cause",
+                    "passed": True,
+                    "new_effect": 0.48,
+                    "original_effect": 0.5,
+                    "p_value": 0.02,
+                    "details": "Effect stable with random cause",
+                },
+                "data_subset": {
+                    "test_name": "data_subset",
+                    "passed": True,
+                    "new_effect": 0.52,
+                    "original_effect": 0.5,
+                    "p_value": 0.03,
+                    "details": "Effect stable across subsets",
+                },
+                "unobserved_common_cause": {
+                    "test_name": "unobserved_common_cause",
+                    "passed": False,
+                    "new_effect": 0.3,
+                    "original_effect": 0.5,
+                    "p_value": 0.08,
+                    "details": "E-value indicates moderate sensitivity",
+                },
+            },
+            "confidence_adjustment": 0.75,
+        }
+
+        sensitivity_analysis: SensitivityAnalysis = {
+            "e_value": 2.5,
+            "e_value_ci": 2.2,
+            "interpretation": "Effect is robust to moderate confounding",
+            "robust_to_confounding": True,
+            "unmeasured_confounder_strength": "moderate",
+        }
+
+        state: CausalImpactState = {
+            "query": "what is the impact of hcp engagement on conversions?",
+            "query_id": "test-1",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+            "causal_graph": causal_graph,
+            "estimation_result": estimation_result,
+            "refutation_results": refutation_results,
+            "sensitivity_analysis": sensitivity_analysis,
+            "interpretation_depth": "standard",
+            "user_context": {"expertise": "analyst"},
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+
+        return state
+
+    @pytest.mark.asyncio
+    async def test_beyond_reading_leads_with_the_headline_and_benchmark(self):
+        state = self._create_full_state()
+        state["sensitivity_analysis"] = {
+            "e_value": 2.4,
+            "e_value_ci": 1.9,
+            "robust_to_confounding": True,
+            "unmeasured_confounder_strength": "beyond_measured_confounding",
+            "reading": "beyond_measured_confounding",
+            "headline": "Robust to confounding at measured strength",
+            "interpretation": (
+                "Explaining this effect away would need an unmeasured confounder with a "
+                "risk ratio of at least 2.40 with both treatment and outcome (1.90 at the "
+                "CI bound), stronger than all measured confounding combined (1.21, the "
+                "confounding the adjustment removed, naive vs adjusted)."
+            ),
+            "benchmark": 1.21,
+            "benchmark_basis": "joint_naive_vs_adjusted",
+        }
+        result = await InterpretationNode().execute(state)
+        narrative = result["interpretation"]["narrative"]
+        assert "Robust to confounding at measured strength" in narrative
+        assert "1.21" in narrative
+        assert "moderate robustness" not in narrative and "weak robustness" not in narrative
+        assert "strong robustness" not in narrative
+        assert any(
+            "Robust to confounding at measured strength" in k
+            for k in result["interpretation"]["key_findings"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_null_finding_is_not_called_robust(self):
+        state = self._create_full_state()
+        state["estimation_result"]["statistical_significance"] = False
+        state["sensitivity_analysis"] = {
+            "e_value": 1.3,
+            "e_value_ci": 1.0,
+            "robust_to_confounding": False,
+            "unmeasured_confounder_strength": "null_finding",
+            "reading": "null_finding",
+            "headline": "No detectable effect at this sample size",
+            "interpretation": (
+                "The 95 % CI [-0.020, 0.120] includes zero at n = 1500. The estimate is "
+                "reported as a null finding; no unmeasured confounder is needed to explain it."
+            ),
+            "benchmark": 1.1,
+            "benchmark_basis": "joint_naive_vs_adjusted",
+        }
+        result = await InterpretationNode().execute(state)
+        narrative = result["interpretation"]["narrative"]
+        assert "No detectable effect at this sample size" in narrative
+        assert "robust to unmeasured confounding" not in narrative.lower()
+        assert "robustness to unmeasured confounding" not in narrative.lower()
+        # The node's return key is ``causal_confidence`` (NaturalLanguageInterpretation).
+        assert result["interpretation"]["causal_confidence"] == "low"
