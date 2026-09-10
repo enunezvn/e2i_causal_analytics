@@ -962,6 +962,58 @@ class TestSensitivityTest:
         assert conf == pytest.approx(0.90)
         assert runner._determine_gate_decision(tests, conf) == GateDecision.PROCEED
 
+    def test_n_rows_reports_the_full_frame_when_the_caller_overrides(self):
+        """#1419: ``data`` may be the refutation SUBSAMPLE while the effect and CI
+        are the FULL-frame estimate, so ``len(data)`` would name the wrong n in the
+        null-finding sentence a leader reads. ``n_rows`` lets the caller say so."""
+        r = RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+        subsample = pd.DataFrame({"t": [0, 1] * 20, "y": [0.0, 1.0] * 20})
+        suite = r.run_all_tests(
+            original_effect=0.05,
+            original_ci=(-0.02, 0.12),
+            data=subsample,
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            n_rows=1500,
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["reading"] == "null_finding"
+        assert sens.details["n_rows"] == 1500
+        assert "n = 1500" in sens.details["message"]
+
+    def test_n_rows_falls_back_to_the_passthrough_frame_length(self):
+        """Without the override the reading names ``len(data)`` — correct for a
+        caller that passed the full frame, and the reason the override exists for
+        one that passed a subsample."""
+        r = RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+        frame = pd.DataFrame({"t": [0, 1] * 20, "y": [0.0, 1.0] * 20})
+        suite = r.run_all_tests(
+            original_effect=0.05,
+            original_ci=(-0.02, 0.12),
+            data=frame,
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["n_rows"] == 40
+        assert "n = 40" in sens.details["message"]
+
     def test_critical_set_comes_from_config(self):
         r = RefutationRunner(config={"random_common_cause": {"critical": False}})
         tests = [

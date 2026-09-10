@@ -846,6 +846,7 @@ class RefutationRunner:
         baseline_risk: Optional[float] = None,
         naive_effect: Optional[float] = None,
         covariate_bias_factors: Optional[Dict[str, float]] = None,
+        n_rows: Optional[int] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -923,6 +924,11 @@ class RefutationRunner:
                 When all three are ``None`` and ``data``/``treatment``/``outcome``
                 are present, the runner computes them from ``data`` (which may be
                 the refutation subsample); caller-supplied values win.
+            n_rows: Row count of the FULL estimation frame the reported effect
+                came from, named in the sensitivity reading's null-finding
+                sentence. When ``None``, ``len(data)`` is used — which may be the
+                refutation SUBSAMPLE (#1419) and would then understate the sample
+                size a leader reads.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -1086,7 +1092,9 @@ class RefutationRunner:
                     baseline_risk=_baseline_risk,
                     naive_effect=_naive,
                     covariate_bias_factors=_factors,
-                    n_rows=(len(data) if data is not None else None),
+                    n_rows=(
+                        n_rows if n_rows is not None else (len(data) if data is not None else None)
+                    ),
                 )
                 tests.append(test_result)
             else:

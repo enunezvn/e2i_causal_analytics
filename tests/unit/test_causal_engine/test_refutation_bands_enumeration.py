@@ -1,9 +1,20 @@
 """Every reachable refutation band under the 2026-09-10 rule (spec §6).
 
-Sensitivity is non-critical with statuses {PASSED, WARNING, SKIPPED}; the other four
-keep {PASSED, WARNING, FAILED, SKIPPED}. The enumerated table below is copied into
-the lineage page's REVIEW-band callout (Task 10); if the arithmetic changes, both
-this test and that callout must change together.
+Two spaces are enumerated here and they answer different questions.
+
+The ARITHMETIC space is every status combination the scoring code accepts, and the
+tests over it document the band math: which weights produce which confidence, and
+where the PROCEED/REVIEW/BLOCK cuts fall. Sensitivity is non-critical with statuses
+{PASSED, WARNING, SKIPPED}; the other four are given {PASSED, WARNING, FAILED,
+SKIPPED} minus what the criticals cannot carry (below).
+
+The OPERATIONAL space is what the five refuters can actually EMIT, declared in
+``EMITTABLE`` with the function and branch behind every status. It is strictly
+smaller, and it is the space a leader's statement must be true in: with it, BLOCK
+is reachable ONLY through a FAILED placebo or random_common_cause, never by
+confidence alone. That sentence is what the lineage page's callout prints (Task
+10), so it is pinned from the code here rather than from the arithmetic. If either
+enumeration changes, this test and that callout must change together.
 
 The two CRITICAL tests never carry SKIPPED, so the enumeration below gives them
 only {PASSED, WARNING, FAILED}: a budget skip of a critical test raises
@@ -45,6 +56,32 @@ SENS = RefutationTestType.SENSITIVITY_E_VALUE
 CRITICAL_STATUSES = [P, W, F]
 SENS_STATUSES = [P, W, S]
 NONCRIT_STATUSES = [P, W, F, S]
+
+# What each refuter can actually EMIT, read off the runner source 2026-09-10. This
+# is NARROWER than the arithmetic space above; see the operational test below.
+EMITTABLE = {
+    # ``_run_placebo_test``: PASSED at ``p_value >= thresholds["placebo_p_value"]
+    # ["pass"]`` (0.05), FAILED otherwise. The ``elif p_value >= ...["warning"]``
+    # (0.10) WARNING branch is UNREACHABLE as coded — any p reaching the elif is
+    # already below 0.05, so it can never be >= 0.10 (#1994 option 1: documented,
+    # behaviour unchanged). No SKIPPED: the failure paths raise RefutationError.
+    RefutationTestType.PLACEBO_TREATMENT: (P, F),
+    # ``_run_random_common_cause_test``: delta_percent <= 20% PASSED, <= 30%
+    # WARNING, else FAILED. All three reachable. No SKIPPED (failures raise).
+    RefutationTestType.RANDOM_COMMON_CAUSE: (P, W, F),
+    # ``_run_sensitivity_test`` via ``evalue.STATUS_BY_READING``: PASSED for
+    # ``beyond_measured_confounding``; WARNING for ``within_measured_confounding``,
+    # ``null_finding`` and ``unbenchmarked``; SKIPPED for the randomized design.
+    # There is no FAILED outcome at all (spec §4.4).
+    RefutationTestType.SENSITIVITY_E_VALUE: (P, W, S),
+    # ``_run_data_subset_test``: ci_coverage >= 0.80 PASSED, >= 0.70 WARNING, else
+    # FAILED; SKIPPED from the degenerate-CI, below-minimum-resamples and
+    # degenerate-distribution helpers, and from the #1419 non-critical budget skip.
+    RefutationTestType.DATA_SUBSET: (P, W, F, S),
+    # ``_run_bootstrap_test``: ci_ratio <= 1.50 PASSED, <= 1.75 WARNING, else
+    # FAILED; same four SKIPPED sources as data_subset.
+    RefutationTestType.BOOTSTRAP: (P, W, F, S),
+}
 
 
 def _suite(pl, rcc, sens, sub, boot):
@@ -118,3 +155,46 @@ def test_null_finding_run_proceeds_when_everything_else_passes():
     conf = r._calculate_confidence_score(tests)
     assert conf == pytest.approx(0.90)
     assert r._determine_gate_decision(tests, conf) == GateDecision.PROCEED
+
+
+def test_block_is_only_reachable_through_a_critical_failed_with_emittable_statuses():
+    """The statement the lineage callout prints: with the statuses the refuters can
+    actually emit, BLOCK means a FAILED placebo or random_common_cause. Confidence
+    alone never blocks — the floor without a critical FAILED is REVIEW.
+
+    Hand arithmetic for that floor: placebo can only be PASSED here (it emits no
+    WARNING), random_common_cause WARNING, sensitivity SKIPPED (excluded from the
+    average), and both non-criticals FAILED:
+    (0.25*1.0 + 0.25*0.6) / (0.25 + 0.25 + 0.125 + 0.125) = 0.40 / 0.75 = 0.5333.
+    """
+    r = RefutationRunner()
+    names = list(EMITTABLE)
+    review = set()
+    floor = None
+    for combo in itertools.product(*EMITTABLE.values()):
+        tests = [RefutationResult(n, st, 0.1, 0.1) for n, st in zip(names, combo, strict=True)]
+        # An all-SKIPPED suite cannot occur here: placebo emits only PASSED/FAILED.
+        assert not all(t.status == S for t in tests)
+        conf = round(r._calculate_confidence_score(tests), 4)
+        gate = r._determine_gate_decision(tests, conf)
+        critical_failed = combo[0] == F or combo[1] == F
+        if gate == GateDecision.BLOCK:
+            assert critical_failed, f"confidence-only BLOCK at {conf} from {combo}"
+        if not critical_failed:
+            floor = conf if floor is None else min(floor, conf)
+            if 0.50 <= conf < 0.70:
+                review.add(conf)
+    assert floor == pytest.approx(0.5333, abs=1e-3)
+    assert 0.50 <= floor < 0.70, "the floor without a critical failure is REVIEW"
+    # Operationally reachable REVIEW values, computed then pinned.
+    assert sorted(review) == [
+        0.5333,
+        0.55,
+        0.625,
+        0.6286,
+        0.6333,
+        0.64,
+        0.65,
+        0.6667,
+        0.675,
+    ], sorted(review)
