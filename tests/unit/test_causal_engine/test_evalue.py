@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 import numpy as np
@@ -61,6 +62,27 @@ class TestMath:
         )
         assert ev.measured_confounding_benchmark(None, {}) == (None, "none_measured")
 
+    def test_joint_confounding_benchmark_never_mixes_conversions(self):
+        # adjusted 0.8 leaves the RD domain at p0 0.3 (p1 = 1.1 >= 1) even though naive
+        # 0.2 alone would be RD-valid (p1 = 0.5); the pair must fall back to the SMD
+        # path TOGETHER, never RD-for-naive divided by SMD-for-adjusted.
+        b = ev.joint_confounding_benchmark(0.2, 0.8, baseline_risk=0.3, outcome_std=1.0)
+        assert b == pytest.approx(math.exp(0.91 * 0.6))
+
+    def test_measured_confounding_benchmark_rejects_non_finite_joint(self):
+        with pytest.raises(ValueError):
+            ev.measured_confounding_benchmark(float("nan"), {})
+        with pytest.raises(ValueError):
+            ev.measured_confounding_benchmark(float("inf"), {"a": 1.5})
+
+    def test_measured_confounding_benchmark_rejects_bad_covariate_factors(self):
+        # a dropped None/non-finite factor can silently turn a benchmarked run into
+        # "unbenchmarked" instead of surfacing the bad input.
+        with pytest.raises(ValueError):
+            ev.measured_confounding_benchmark(None, {"a": float("nan")})
+        with pytest.raises(ValueError):
+            ev.measured_confounding_benchmark(None, {"a": None})
+
 
 class TestCovariateBiasFactors:
     def _frame(self, seed: int = 0, n: int = 4000) -> pd.DataFrame:
@@ -95,6 +117,62 @@ class TestCovariateBiasFactors:
         assert inp.naive_effect is None and inp.baseline_risk is None
         assert not inp.treatment_is_binary
         assert "b" in inp.covariate_bias_factors  # median split on T still works
+
+    def test_bias_factor_matches_a_hand_computed_tiny_frame(self):
+        # treated (t=1): c=1 for 3/6, c=0 for 3/6 -> p_hi_t = 0.5
+        # control (t=0): c=1 for 2/6, c=0 for 4/6 -> p_hi_c = 1/3 -> RR_EU = 0.5/(1/3) = 1.5
+        # control c=1 (hi):  y = [1, 1]          -> m_hi = 1.0
+        # control c=0 (lo):  y = [0, 0, 0, 1]     -> m_lo = 0.25 -> RR_UD = 1.0/0.25 = 4.0
+        df = pd.DataFrame(
+            {
+                "t": [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+                "c": [1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+                "y": [1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1],
+            }
+        )
+        f = ev.covariate_bias_factors(df, "t", "y", ["c"])
+        assert f["c"] == pytest.approx(ev.bias_factor(1.5, 4.0))
+
+    def test_one_sided_zero_outcome_rate_reads_as_the_oriented_rr_eu_limit(self):
+        # RR_EU: treated p_hi_t = 3/4 = 0.75, control p_hi_c = 2/4 = 0.5 -> RR_EU = 1.5
+        # control c=1 (hi): y = [1, 1] -> m_hi = 1.0 (some events)
+        # control c=0 (lo): y = [0, 0] -> m_lo = 0.0 (zero events: RR_UD -> infinity)
+        # Ding-VanderWeele limit as RR_UD -> infinity: B -> RR_EU (oriented).
+        df = pd.DataFrame(
+            {
+                "t": [1, 1, 1, 1, 0, 0, 0, 0],
+                "c": [1, 1, 1, 0, 1, 1, 0, 0],
+                "y": [1, 0, 1, 0, 1, 1, 0, 0],
+            }
+        )
+        f = ev.covariate_bias_factors(df, "t", "y", ["c"])
+        assert f["c"] == pytest.approx(1.5)
+
+    def test_covariate_with_no_variation_among_controls_is_skipped(self):
+        # every control row has c=0: RR_UD has no high-covariate control stratum to
+        # compare against, so this is genuinely undefined, not a Ding-VanderWeele limit.
+        df = pd.DataFrame(
+            {
+                "t": [1, 1, 1, 1, 0, 0, 0, 0],
+                "c": [1, 1, 0, 0, 0, 0, 0, 0],
+                "y": [1, 0, 1, 0, 1, 0, 1, 0],
+            }
+        )
+        f = ev.covariate_bias_factors(df, "t", "y", ["c"])
+        assert "c" not in f
+
+    def test_continuous_outcome_uses_the_smd_path_on_the_control_arm_difference(self):
+        df = pd.DataFrame(
+            {
+                "t": [1, 1, 1, 1, 0, 0, 0, 0],
+                "c": [1, 1, 0, 0, 1, 1, 0, 0],
+                "y": [5.0, 6.0, 1.0, 2.0, 10.0, 12.0, 2.0, 4.0],
+            }
+        )
+        f = ev.covariate_bias_factors(df, "t", "y", ["c"])
+        y_sd = float(np.std(df["y"].to_numpy()))  # matches the implementation's np.nanstd
+        rr_ud = ev.rr_from_smd((11.0 - 3.0) / y_sd)  # control hi mean 11.0, lo mean 3.0
+        assert f["c"] == pytest.approx(ev.bias_factor(1.0, rr_ud))  # rr_eu = 0.5 / 0.5 = 1.0
 
 
 class TestClassify:
@@ -139,10 +217,14 @@ class TestClassify:
         assert "could account for the whole effect" in r.message
 
     def test_tie_reads_within(self):
-        # naive == adjusted -> B_obs == 1.0; force rr_point == 1.0 is impossible with CI>0,
-        # so pin the rule on an exact equality via covariate factor instead.
-        r = self._c(0.15, (0.08, 0.22), naive_effect=None, covariate_factors={"c": 1.5})
-        assert r.benchmark == pytest.approx(1.5) and r.rr_point == pytest.approx(1.5)
+        # p0 = 0.25, effect = 0.25 -> p1 = 0.50 -> RR = 0.50/0.25 = 2.0 EXACTLY (both
+        # exactly representable binary fractions, unlike 0.45/0.30's
+        # 1.4999999999999998): a `>=` typo in the code would flip this to "beyond",
+        # so the exact equality pins the strict `>` boundary precisely.
+        r = self._c(
+            0.25, (0.15, 0.35), baseline_risk=0.25, naive_effect=None, covariate_factors={"c": 2.0}
+        )
+        assert r.rr_point == 2.0 and r.benchmark == 2.0
         assert r.reading == "within_measured_confounding"
 
     def test_unbenchmarked_without_any_measured_confounding(self):
@@ -172,3 +254,30 @@ class TestClassify:
             self._c(float("nan"), (0.08, 0.22))
         with pytest.raises(ValueError):
             self._c(0.15, (0.08, float("inf")))
+
+    def test_outcome_std_must_be_finite_and_positive(self):
+        # a NaN/zero SD must never silently fall back to an unstandardized RR
+        # (spec §5): for a binary outcome at effect 0.15 that would read 1.146
+        # (exp(0.91*0.15)) instead of the correctly standardized 1.345.
+        with pytest.raises(ValueError):
+            self._c(0.15, (0.08, 0.22), outcome_std=float("nan"))
+        with pytest.raises(ValueError):
+            self._c(0.15, (0.08, 0.22), outcome_std=0.0)
+        # None alone still means "no SD available" and works fine.
+        r = self._c(0.15, (0.08, 0.22), outcome_std=None, naive_effect=0.20)
+        assert r.rr_point > 1.0
+
+    def test_classify_falls_back_to_smd_when_naive_leaves_the_rd_domain(self):
+        # effect 0.15 is RD-valid at p0 0.3, but naive 0.8 is not (p1 = 1.1): the
+        # WHOLE reading -- point RR included -- must fall back to the SMD path, not
+        # just the naive/adjusted pair used for the benchmark.
+        r = self._c(0.15, (0.08, 0.22), baseline_risk=0.3, naive_effect=0.8)
+        assert r.conversion == "standardized_difference"
+        assert r.rr_point == pytest.approx(math.exp(0.91 * 0.15 / 0.46))
+
+    def test_n_rows_is_coerced_to_a_json_plain_int(self):
+        r = self._c(0.15, (0.08, 0.22), naive_effect=0.20, n_rows=np.int64(1500))
+        d = r.as_details()
+        json.dumps(d)  # must not raise TypeError on a numpy scalar
+        assert d["n_rows"] == 1500
+        assert type(d["n_rows"]) is int
