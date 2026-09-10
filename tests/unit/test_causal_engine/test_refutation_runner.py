@@ -895,6 +895,8 @@ class TestSensitivityTest:
         assert d["headline"] == "Robust to confounding at measured strength"
         assert "stronger than all measured confounding" in d["message"]
         assert d["e_value"] == pytest.approx(d["e_value_point"])  # legacy key kept
+        # the SERVED path must be persistable too, not only the error paths
+        json.dumps(d, allow_nan=False)
 
     def test_within_reads_warning(self, runner):
         result = runner._run_sensitivity_test(
@@ -947,6 +949,16 @@ class TestSensitivityTest:
         assert ei.value.details["reason"] == "sensitivity_outcome_std_unusable"
         assert ei.value.details["outcome_std"] == repr(bad_sd)
         json.dumps(ei.value.details, allow_nan=False)
+
+    def test_a_numpy_sd_is_served_as_a_native_float(self, runner):
+        """``np.float64`` subclasses ``float`` but ``np.float32`` does not, so a
+        finite positive numpy SD passes validation and then makes the whole served
+        details dict unserializable. Normalize once, at the boundary."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=np.float32(1.0)
+        )
+        assert type(result.details["outcome_std"]) is float
+        json.dumps(result.details, allow_nan=False)
 
     def test_an_absent_sd_is_still_a_served_unstandardized_reading(self, runner):
         """``None`` means no SD was available; the reading is served on the raw

@@ -1947,7 +1947,11 @@ class RefutationRunner:
                     "outcome_std": repr(outcome_std),
                 },
             )
-        sd = outcome_std  # validated above: None, or finite and positive
+        # Validated above: None, or finite and positive. Normalized to a NATIVE
+        # float because ``np.float64`` subclasses ``float`` but ``np.float32`` does
+        # not — an un-normalized numpy SD passes every check here and then makes
+        # the whole served details dict unserializable at the JSONB writer.
+        sd = None if outcome_std is None else float(outcome_std)
         # ``classify`` refuses an out-of-domain input (a CI that does not contain
         # the estimate, a non-finite value that slipped past the caller) with
         # ValueError. Surface it as the structured, fail-closed error every refit
