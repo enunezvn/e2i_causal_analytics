@@ -203,8 +203,13 @@ def measured_confounding_benchmark(
 
 
 def _is_binary(values: np.ndarray) -> bool:
+    """Binary means BOTH 0 and 1 are present (spec §4.2): exact equality with
+    ``{0.0, 1.0}`` after dropping NaNs, mirroring the estimation node's
+    ``_compute_naive_contrast``. A constant all-0 or all-1 column is NOT binary —
+    there is no contrast to form from a single observed level.
+    """
     u = np.unique(values[~np.isnan(values)])
-    return len(u) <= 2 and set(u.tolist()) <= {0.0, 1.0}
+    return set(u.tolist()) == {0.0, 1.0}
 
 
 def _high_mask(values: np.ndarray) -> np.ndarray:

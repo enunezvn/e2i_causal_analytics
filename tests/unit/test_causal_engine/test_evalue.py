@@ -118,6 +118,16 @@ class TestCovariateBiasFactors:
         assert not inp.treatment_is_binary
         assert "b" in inp.covariate_bias_factors  # median split on T still works
 
+    def test_constant_treatment_is_not_binary(self):
+        # a subset test (set(u) <= {0, 1}) would wrongly call an all-ones column
+        # binary; spec §4.2 requires BOTH levels present, mirroring
+        # `_compute_naive_contrast` -- there is no contrast to form from one level.
+        frame = self._frame().assign(t=1)
+        inp = ev.benchmark_inputs_from_frame(frame, "t", "y", ["b"])
+        assert inp.treatment_is_binary is False
+        assert inp.baseline_risk is None
+        assert inp.naive_effect is None
+
     def test_bias_factor_matches_a_hand_computed_tiny_frame(self):
         # treated (t=1): c=1 for 3/6, c=0 for 3/6 -> p_hi_t = 0.5
         # control (t=0): c=1 for 2/6, c=0 for 4/6 -> p_hi_c = 1/3 -> RR_EU = 0.5/(1/3) = 1.5
