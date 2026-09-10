@@ -24,6 +24,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
+import pandas as pd
 
 from src.agents.causal_impact.nodes._compute_budget import (
     ComputeBudgetExpired,
@@ -40,10 +41,12 @@ from src.causal_engine import (
     RefutationError,
     RefutationRunner,
     RefutationSuite,
+    RefutationTestType,
     ReviewGateDecision,
     ValidationOutcome,
     # Phase 4: ValidationOutcome for Feedback Learner integration
     create_validation_outcome,
+    evalue,
     log_validation_outcome_with_status,
 )
 from src.repositories.causal_validation import (
@@ -214,6 +217,105 @@ def _effective_reconstruction_common_causes(
     if method in ("backdoor.linear_regression", "backdoor.propensity_score_weighting"):
         return common_causes
     return baselines
+
+
+def _is_numeric_column(frame: Any, column: str) -> bool:
+    """Does ``column`` carry a numeric contrast ``evalue`` can benchmark?
+
+    A raw categorical/string column does not: there is no median to split it at and
+    no treated/control share to form. Treated as a MISSING input rather than a
+    failure — see ``_sensitivity_benchmark_inputs``.
+    """
+    try:
+        return bool(pd.api.types.is_numeric_dtype(frame[column]))
+    except Exception:  # noqa: BLE001 - an unreadable column is a missing input
+        return False
+
+
+def _sensitivity_benchmark_inputs(
+    *,
+    estimation_data: Any,
+    treatment: str,
+    outcome: str,
+    estimation_result: Dict[str, Any],
+) -> evalue.BenchmarkInputs:
+    """FULL-frame inputs for the sensitivity reading (spec 2026-09-10 §4.3).
+
+    Baseline risk, naive contrast and the backdoor set's covariate bias factors are
+    computed on ``estimation_data`` (the full frame), never on the refutation
+    subsample, so the benchmark describes the frame the reported effect came from.
+    ``naive_ate`` from the estimation node wins; ``baseline_covariates_adjusted``
+    (efficiency controls, #1188) are excluded from the factors.
+
+    MISSING inputs are a legitimate fallback: empty inputs, and the runner reads
+    ``unbenchmarked``. Missing means no frame; the treatment/outcome column absent;
+    or a column carrying NO NUMERIC CONTRAST to benchmark. A raw string column is
+    the same kind of absence as a column that is not there at all: ``evalue`` splits
+    a covariate at its median and forms treated/control shares, and a raw
+    ``trigger_type`` has neither. The estimator never saw that column either — the
+    estimation node one-hot encodes categoricals before fitting (#1417), and the
+    live #1351 resolver binds string driver columns into the adjustment set, so
+    raising here would fail EVERY categorical-confounder run closed. Non-numeric
+    covariates are dropped from the factors (the reading's ``covariate_bias_factors``
+    lists what was used, and ``benchmark_basis`` names the basis); a non-numeric
+    treatment or outcome yields empty inputs. The preferred basis,
+    ``joint_naive_vs_adjusted``, is built from ``naive_ate`` and the baseline risk
+    and is unaffected by the drop.
+
+    A computation that RAISES inside ``evalue`` on NUMERIC inputs (e.g. a covariate
+    that perfectly separates treatment and outcome — a positivity violation whose
+    bias factor diverges) is a real failure and surfaces as ``RefutationError`` with
+    reason ``sensitivity_benchmark_failed``, never as a fabricated reading (spec §5;
+    the runner applies the same rule to its own fallback).
+    """
+    empty = evalue.BenchmarkInputs(baseline_risk=None, naive_effect=None)
+    if estimation_data is None or not hasattr(estimation_data, "columns"):
+        return empty
+    if treatment not in estimation_data.columns or outcome not in estimation_data.columns:
+        return empty
+    if not _is_numeric_column(estimation_data, treatment) or not _is_numeric_column(
+        estimation_data, outcome
+    ):
+        return empty
+    covariates = [
+        str(c)
+        for c in (estimation_result.get("covariates_adjusted") or [])
+        if c in estimation_data.columns and _is_numeric_column(estimation_data, c)
+    ]
+    try:
+        return evalue.benchmark_inputs_from_frame(
+            estimation_data,
+            treatment,
+            outcome,
+            covariates,
+            naive_effect=estimation_result.get("naive_ate"),
+        )
+    except Exception as exc:  # noqa: BLE001 - re-raised with a reason code, never swallowed
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without "
+            "refutation. Sensitivity benchmark inputs could not be computed on the "
+            f"estimation frame: {exc}",
+            details={
+                "reason": "sensitivity_benchmark_failed",
+                "treatment": treatment,
+                "outcome": outcome,
+                "covariates": covariates,
+            },
+            original_error=exc,
+        ) from exc
+
+
+_NULL_CAVEAT_PREFIX = "No detectable effect at this sample size: "
+
+
+def _sensitivity_caveat_warnings(suite: RefutationSuite) -> List[str]:
+    """The null-finding caveat, once, for the ``warnings`` accumulator (spec §4.6)."""
+    for test in suite.tests:
+        if test.test_name != RefutationTestType.SENSITIVITY_E_VALUE:
+            continue
+        if test.details.get("reading") == evalue.READING_NULL:
+            return [_NULL_CAVEAT_PREFIX + str(test.details.get("message", "")).strip()]
+    return []
 
 
 def _resolve_dowhy_method(estimation_result: Dict[str, Any]) -> str:
@@ -1508,6 +1610,12 @@ class RefutationNode:
                     outcome_std_full = float(np.std(estimation_data[outcome].to_numpy(dtype=float)))
             except Exception:  # noqa: BLE001 - non-numeric outcome → runner fallback
                 outcome_std_full = None
+            benchmark_inputs = _sensitivity_benchmark_inputs(
+                estimation_data=estimation_data,
+                treatment=treatment,
+                outcome=outcome,
+                estimation_result=cast(Dict[str, Any], estimation_result),
+            )
             if data_disclosure["refutation_subsampled"]:
                 logger.info(
                     "Refutation subsampled estimation data %s -> %s rows (#1419); "
@@ -1621,9 +1729,15 @@ class RefutationNode:
                     per_refit_hint=per_refit_hint,
                     per_refit_hint_heavy=per_refit_hint_heavy,
                     outcome_std=outcome_std_full,
+                    baseline_risk=benchmark_inputs.baseline_risk,
+                    naive_effect=benchmark_inputs.naive_effect,
+                    covariate_bias_factors=benchmark_inputs.covariate_bias_factors,
+                    # FULL-frame row count for the reading's "n = …" (the runner's
+                    # fallback is len(data), which is the refutation subsample).
+                    n_rows=(benchmark_inputs.n_rows or None),
                     # DESIGN declaration from the API layer (dataset spec): a
                     # genuinely randomized treatment reports the E-value as
-                    # information instead of an unmeasured-confounding BLOCK gate.
+                    # information (SKIPPED) instead of a benchmarked reading.
                     # Fail-closed: absent/False keeps the full observational gate.
                     randomized_design=bool(state.get("randomized_design")),
                 )
@@ -1755,6 +1869,10 @@ class RefutationNode:
                 "refutation_confidence": suite.confidence_score,
                 # H2: distinct REVIEW signal (default False for PROCEED/BLOCK)
                 "needs_review": suite.needs_review,
+                # 2026-09-10: a CI including zero is served as a null finding; the
+                # caveat rides the warnings accumulator so the API record and the
+                # drill-down show it (new entries only — the channel is additive).
+                "warnings": _sensitivity_caveat_warnings(suite),
                 # Persistence tracking
                 "validation_ids": validation_ids,
                 # #1352 item 3: the sole-promoter transition applied to a

@@ -343,12 +343,12 @@ class TestRefutationNode:
 
     @pytest.mark.asyncio
     async def test_blocked_estimate_fails_workflow(self):
-        """Test that blocked estimates set workflow status to failed."""
+        """A critical FAILED (placebo, forced by an impossible threshold) sets status failed."""
         # Create a node with very strict thresholds to force blocking
         node = RefutationNode(
             thresholds={
-                "e_value_min": {"pass": 100.0, "warning": 50.0},  # Impossible threshold
-            }
+                "placebo_p_value": {"pass": 1.01, "warning": 1.01}
+            },  # p >= 1.01 impossible → FAILED → BLOCK
         )
 
         state = self._make_state(query_id="test-block")
@@ -375,11 +375,11 @@ class TestRefutationNode:
     async def test_custom_thresholds_passed_to_runner(self):
         """Test that custom thresholds are passed to RefutationRunner."""
         custom_thresholds = {
-            "e_value_min": {"pass": 3.0},
+            "placebo_p_value": {"pass": 0.10},
         }
         node = RefutationNode(thresholds=custom_thresholds)
 
-        assert node.runner.thresholds["e_value_min"]["pass"] == 3.0
+        assert node.runner.thresholds["placebo_p_value"]["pass"] == 0.10
 
 
 class TestRefutationNodeWithRepository:
