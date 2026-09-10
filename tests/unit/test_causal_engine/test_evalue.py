@@ -254,17 +254,101 @@ class TestCategoricalCovariateBiasFactors:
         df = self._frame().assign(g="only_one")
         assert "g" not in ev.covariate_bias_factors(df, "t", "y", ["g"])
 
-    def test_a_level_that_perfectly_separates_raises_naming_the_covariate(self):
+    def test_a_separating_level_does_not_take_the_whole_covariate_down(self):
         # the "z" indicator is [0, 0, 1, 0]: treated share 0 (RR_EU limit) and the
-        # control high/low outcome rates are 1.0 / 0.0 (RR_UD limit) at once.
+        # control high/low outcome rates are 1.0 / 0.0 (RR_UD limit) at once. That is
+        # one sparse cell, not a declared variable -- "z" is skipped and "x" still
+        # scores. The numeric route keeps refusing the same shape (see
+        # TestCovariateBiasFactors::test_perfect_separation_raises_...).
         df = pd.DataFrame({"t": [1, 1, 0, 0], "g": ["x", "x", "z", "x"], "y": [0, 0, 1, 0]})
-        with pytest.raises(ValueError, match="'g'"):
-            ev.covariate_bias_factors(df, "t", "y", ["g"])
+        factors = ev.covariate_bias_factors(df, "t", "y", ["g"])
+        x_only = ev.covariate_bias_factors(
+            df.assign(ind=(df.g == "x").astype(float)), "t", "y", ["ind"]
+        )["ind"]
+        assert factors["g"] == pytest.approx(x_only)
 
     def test_benchmark_inputs_carries_both_numeric_and_categorical_factors(self):
         inp = ev.benchmark_inputs_from_frame(self._frame(), "t", "y", ["c", "g"])
         assert set(inp.covariate_bias_factors) == {"c", "g"}
         assert inp.covariate_bias_factors["g"] > 1.0
+
+    def _long_tail(self, seed: int, n: int = 200, k: int = 30, rate: float = 0.10):
+        """A sparse long-tail categorical: rare levels with a handful of non-event
+        controls and no treated rows. Measured before this rule: 295 of 300 seeds
+        tripped the both-limits refusal on SPARSITY, not on a real positivity
+        violation. The live shape stays clear (0 of 200 raises at k=4 and k=12,
+        n=1500), so this was latent -- but a sparse cell must never fail a run."""
+        rng = np.random.default_rng(seed)
+        w = 1.0 / np.arange(1, k + 1)
+        w = w / w.sum()
+        g = rng.choice([f"L{i:02d}" for i in range(k)], size=n, p=w)
+        return pd.DataFrame(
+            {"t": rng.integers(0, 2, n), "y": (rng.random(n) < rate).astype(int), "g": g}
+        )
+
+    @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+    def test_a_sparse_long_tail_covariate_scores_instead_of_raising(self, seed: int):
+        factors = ev.covariate_bias_factors(self._long_tail(seed), "t", "y", ["g"])
+        assert math.isfinite(factors["g"]) and factors["g"] >= 1.0
+
+    def test_an_unscoreable_level_is_skipped_and_the_others_still_score(self):
+        # "sep" sits only among controls (RR_EU limit) and its controls are the only
+        # ones with events (RR_UD limit) -- unscoreable at this sample size. "x" and
+        # "z" each reduce to their oriented RR_EU = (3/6)/(2/6) = 1.5.
+        df = pd.DataFrame(
+            {
+                "t": [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+                "g": ["x", "x", "x", "z", "z", "z", "sep", "sep", "x", "x", "z", "z"],
+                "y": [1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0],
+            }
+        )
+        # the unscoreable level, handed over as a NUMERIC covariate, still refuses:
+        # a declared numeric confounder that separates both is a real data problem.
+        with pytest.raises(ValueError, match="'sep_ind'"):
+            ev.covariate_bias_factors(
+                df.assign(sep_ind=(df.g == "sep").astype(float)), "t", "y", ["sep_ind"]
+            )
+        scorable = {
+            level: ev.covariate_bias_factors(
+                df.assign(ind=(df.g == level).astype(float)), "t", "y", ["ind"]
+            )["ind"]
+            for level in ("x", "z")
+        }
+        factors = ev.covariate_bias_factors(df, "t", "y", ["g"])
+        assert factors["g"] == pytest.approx(max(scorable.values()))
+        assert factors["g"] == pytest.approx(1.5)
+
+    def test_a_covariate_whose_every_level_is_unscoreable_is_skipped_not_fatal(self):
+        # level "A" only above the treatment median, "B" only below: the covariate is
+        # perfectly aligned with treatment, so neither level has a control stratum to
+        # compare. A numeric covariate aligned the same way is already a skip; this
+        # matches it rather than opening a new fail-closed path.
+        rng = np.random.default_rng(3)
+        t = np.arange(200, dtype=float)
+        df = pd.DataFrame(
+            {
+                "t": t,
+                "y": (rng.random(200) < 0.3).astype(int),
+                "g": np.where(t > np.median(t), "A", "B"),
+            }
+        )
+        inp = ev.benchmark_inputs_from_frame(df, "t", "y", ["g"])
+        assert inp.covariate_bias_factors == {}
+        assert ev.measured_confounding_benchmark(None, inp.covariate_bias_factors) == (
+            None,
+            "none_measured",
+        )
+        reading = ev.classify(
+            0.2,
+            (0.1, 0.3),
+            randomized=False,
+            baseline_risk=None,
+            outcome_std=0.46,
+            naive_effect=None,
+            covariate_factors=inp.covariate_bias_factors,
+            n_rows=inp.n_rows,
+        )
+        assert reading.reading == ev.READING_UNBENCHMARKED
 
     @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
     def test_a_bool_covariate_scores_exactly_like_its_integer_twin(self, seed: int):

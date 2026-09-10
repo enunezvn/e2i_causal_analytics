@@ -59,6 +59,16 @@ BASIS_IN_WORDS: Dict[str, str] = {
 }
 
 
+class _LevelNotScoreable(ValueError):
+    """A covariate column cannot be scored on THIS frame: RR_EU and RR_UD are at
+    their one-sided-zero limits at once, so the bias factor diverges.
+
+    A ``ValueError`` subclass, so the public contract of ``covariate_bias_factors``
+    is unchanged for numeric covariates. It exists so the categorical route can tell
+    this one refusal apart from a genuine domain error and skip just that level.
+    """
+
+
 def _finite(name: str, value: float) -> float:
     v = float(value)
     if not math.isfinite(v):
@@ -357,7 +367,7 @@ def _factor_from_numeric_covariate(
         ud_limit = False  # the SMD path is always finite for a positive y_sd
 
     if eu_limit and ud_limit:
-        raise ValueError(
+        raise _LevelNotScoreable(
             f"covariate {cov!r} perfectly separates treatment and outcome in this "
             f"frame{level_note} (positivity violation); its bias factor is unbounded"
         )
@@ -395,23 +405,45 @@ def _factor_from_categorical_covariate(
     column, and the covariate keeps ONE entry under its own name (consumers key by
     covariate, not by level) holding the MAX: the strongest confounding this column
     could carry.
+
+    A LEVEL that hits the both-limits case is SKIPPED, not fatal — the asymmetry with
+    the numeric route is deliberate. A numeric covariate that separates both is a
+    whole DECLARED confounder the estimator cannot have adjusted for: a real data
+    problem, and it still refuses. A categorical LEVEL is a single sparse cell of a
+    declared variable, and at small n a rare level routinely has a few non-event
+    controls and no treated rows: measured on synthetic long-tail frames (30–80
+    levels, n = 200, 10 % events), the refusal fired in 289–300 of 300 seeded runs on
+    SPARSITY alone, which would have failed the whole refutation node. Live driver
+    columns are single-digit cardinality (0 of 200 raises at 4 and 12 levels,
+    n = 1500) and ``_MAX_CATEGORICAL_CARDINALITY = 50`` in
+    ``src/agents/causal_impact/nodes/estimation.py`` (enforced by
+    ``_encode_categorical_covariates``) bounds what can reach here at all, so this
+    was latent — but a sparse cell must never fail a run.
+
+    When NO level is scorable the covariate simply yields no factor, exactly like the
+    other no-variation skips. A covariate perfectly aligned with treatment is already
+    a skip on the numeric route, so refusing here would open a new fail-closed path
+    for a contrived case rather than reporting a real one.
     """
     levels = _distinct_levels(column)
     if len(levels) < 2:
         return None  # a single level has no variation to benchmark
     factors: List[float] = []
     for level in levels:
-        factor = _factor_from_numeric_covariate(
-            _level_indicator(column, level),
-            t,
-            y,
-            treated,
-            control,
-            y_binary=y_binary,
-            y_sd=y_sd,
-            cov=cov,
-            level_note=f" at level {level!r}",
-        )
+        try:
+            factor = _factor_from_numeric_covariate(
+                _level_indicator(column, level),
+                t,
+                y,
+                treated,
+                control,
+                y_binary=y_binary,
+                y_sd=y_sd,
+                cov=cov,
+                level_note=f" at level {level!r}",
+            )
+        except _LevelNotScoreable:
+            continue  # a sparse cell, not a declared variable — see the docstring
         if factor is not None:
             factors.append(factor)
     return max(factors) if factors else None
@@ -445,16 +477,23 @@ def covariate_bias_factors(
     or no control units; no high- or low-covariate stratum among controls (RR_UD has
     nothing to compare); zero events in BOTH control strata (0/0, binary outcome);
     zero outcome variance (continuous outcome, no SMD denominator); a categorical
-    covariate with fewer than two non-null levels (no variation to benchmark); or a
-    categorical covariate whose every level was skipped for one of those reasons.
+    covariate with fewer than two non-null levels (no variation to benchmark); a
+    categorical LEVEL that is unscoreable at this sample size (see
+    ``_factor_from_categorical_covariate``); or a categorical covariate whose EVERY
+    level was skipped for one of those reasons — including the both-unscoreable case
+    of a covariate perfectly aligned with treatment, which the numeric route also
+    skips.
 
     When RR_EU and RR_UD are SIMULTANEOUSLY at their one-sided-zero limit, the bias
     factor B = RR_EU*RR_UD/(RR_EU+RR_UD-1) DIVERGES rather than settling on either
-    limit: the covariate perfectly separates BOTH treatment and outcome in this
-    frame, a positivity violation the estimator cannot have adjusted for. This is
-    not skipped or fabricated as a finite number (an infinite bias factor must never
-    reach ``details_json`` — Postgres JSONB rejects ``Infinity``); ``ValueError`` is
-    raised naming the covariate (and the level, for a categorical one) instead.
+    limit. For a NUMERIC covariate that is a positivity violation the estimator
+    cannot have adjusted for — a whole declared confounder separating both — and it
+    is neither skipped nor fabricated as a finite number (an infinite bias factor
+    must never reach ``details_json``; Postgres JSONB rejects ``Infinity``):
+    ``ValueError`` is raised naming the covariate. For a CATEGORICAL covariate the
+    same arithmetic on ONE level means only that this sparse cell cannot be scored at
+    this sample size, so the level is skipped and the covariate keeps the strongest
+    of the rest; the categorical route never raises it.
     """
     out: Dict[str, float] = {}
     if not covariates or frame is None:
