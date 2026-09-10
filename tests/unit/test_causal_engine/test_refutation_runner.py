@@ -1011,6 +1011,57 @@ class TestSensitivityTest:
         assert ei.value.details["outcome"] == "y"
         assert ei.value.details["covariates"] == ["c"]
 
+    def _sensitivity_only_runner(self):
+        return RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+
+    def test_an_unusable_outcome_column_fails_closed_not_unstandardized(self):
+        """H3: a non-numeric outcome column makes the SD computation raise. Degrading
+        that to ``None`` would send the classifier down the SMD path on the
+        UNSTANDARDIZED effect — a scale-dependent, plausible-wrong number served as a
+        reading. Same rule as the benchmark block: a real failure fails closed."""
+        r = self._sensitivity_only_runner()
+        # ``treatment`` is left None so only the SD guard is under test; the
+        # benchmark block needs data AND treatment AND outcome to run at all.
+        frame = pd.DataFrame({"y": ["low", "high", "low", "high"]})
+        with pytest.raises(RefutationError) as ei:
+            r.run_all_tests(
+                original_effect=0.15,
+                original_ci=(0.08, 0.22),
+                data=frame,
+                outcome="y",
+                causal_model=_full_stub_causal_model(),
+                identified_estimand=object(),
+                estimate=_stub_estimate(),
+            )
+        assert ei.value.details["reason"] == "sensitivity_outcome_std_failed"
+        assert ei.value.details["outcome"] == "y"
+
+    def test_an_absent_outcome_column_is_still_a_served_reading(self):
+        """A MISSING column is not a failure: there is simply no SD to compute, so
+        the reading is served unstandardized with ``outcome_std`` reported None."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame({"something_else": [1.0, 2.0, 3.0, 4.0]})
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["outcome_std"] is None
+        assert sens.details["standardized"] is False
+        assert sens.details["reading"] == "unbenchmarked"
+
     def test_a_missing_frame_is_still_a_legitimate_unbenchmarked_fallback(self):
         """The MISSING-input path is not a failure: with no data/treatment/outcome
         there is nothing to benchmark against and ``unbenchmarked`` is honest."""

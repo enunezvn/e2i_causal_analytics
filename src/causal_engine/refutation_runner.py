@@ -1043,12 +1043,31 @@ class RefutationRunner:
                 # SUBSAMPLE while the gated effect is the FULL-frame estimate);
                 # otherwise compute the SD from the passthrough data.
                 evalue_outcome_std: Optional[float] = outcome_std
-                if evalue_outcome_std is None and data is not None and outcome is not None:
+                if (
+                    evalue_outcome_std is None
+                    and data is not None
+                    and outcome is not None
+                    and outcome in getattr(data, "columns", [])
+                ):
+                    # Same rule as the benchmark block below (spec §5). An ABSENT
+                    # column (guarded above) is a legitimate 'no SD available' and
+                    # the reading is served unstandardized. A FAILURE while computing
+                    # the SD is not: degrading it to None sends the classifier down
+                    # the SMD path on the UNSTANDARDIZED effect, serving a
+                    # scale-dependent, plausible-wrong number as a reading.
                     try:
-                        if outcome in getattr(data, "columns", []):
-                            evalue_outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
-                    except Exception:  # noqa: BLE001 - missing/non-numeric outcome → no standardization
-                        evalue_outcome_std = None
+                        evalue_outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
+                    except Exception as exc:
+                        raise RefutationError(
+                            "Refutation analysis unavailable for this query, retry "
+                            "without refutation. Sensitivity outcome SD could not be "
+                            f"computed from the refutation frame: {exc}",
+                            details={
+                                "reason": "sensitivity_outcome_std_failed",
+                                "outcome": outcome,
+                            },
+                            original_error=exc,
+                        ) from exc
                 # Benchmark inputs: caller-supplied (full frame) win; otherwise derive
                 # from the passthrough frame with the model's common causes.
                 _baseline_risk, _naive, _factors = (
