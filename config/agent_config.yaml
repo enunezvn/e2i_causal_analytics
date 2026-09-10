@@ -653,18 +653,23 @@ agents:
       confidence_level: 0.95
       
     # DOCUMENTATION-ONLY (#1975). Nothing reads this block: the live values are
-    # class constants on RefutationRunner (src/causal_engine/refutation_runner.py).
-    # `grep -rn "e_value_threshold" src/` finds only the hardcoded 2.0 in
-    # RefutationRunner.DEFAULT_CONFIG["sensitivity_e_value"];
+    # class constants on RefutationRunner (src/causal_engine/refutation_runner.py)
+    # and the reading rules live in src/causal_engine/evalue.py. Since 2026-09-10
+    # the sensitivity test carries NO cutoff:
+    # RefutationRunner.DEFAULT_CONFIG["sensitivity_e_value"] is
+    # {enabled, critical: false}; the E-value is read against the confounding
+    # the run measured (spec
+    # docs/superpowers/specs/2026-09-10-sensitivity-gate-calibration-design.md §4.4).
     # min_refutation_pass_rate's only src/ hits are in src/ml/synthetic/, an
     # unrelated validator with its own Python default -- a name collision, not a
     # consumer of this key. The gate is confidence-weighted, not pass-rate based.
     validation:  # V4.1: Validation settings
       min_refutation_pass_rate: 0.6   # not consumed; the gate weights confidence
       require_sensitivity_analysis: true  # not consumed
-      # PASS_THRESHOLDS["e_value_min"]: pass 2.0, warning 1.5. This said 1.5 --
-      # the WARNING band read as the pass bar, off by a full band (#1975).
-      e_value_threshold: 2.0
+      # not consumed; names the rule so a reader does not look for a number:
+      # PASSED = point risk ratio above the measured-confounding benchmark,
+      # WARNING = within it / null finding / unbenchmarked, SKIPPED = randomized.
+      sensitivity_rule: measured_confounding_benchmark
       persist_to_causal_validations: true  # not consumed
       
     capabilities:

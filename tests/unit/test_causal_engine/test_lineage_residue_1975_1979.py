@@ -8,10 +8,11 @@ why they are pinned rather than just corrected:
   also does not exist -- the file lives under `docs/Archive/`. A citation fix
   that lands on another broken path is the original bug again.
 - #1975 corrected the `causal_validation.gate_decisions` numbers to the live
-  constants but did not touch `agents.causal_impact.validation`, where
-  `e_value_threshold: 1.5` still contradicts
-  `RefutationRunner.PASS_THRESHOLDS["e_value_min"]["pass"] = 2.0`. 1.5 is the
-  *warning* band, so the YAML reads as the pass bar and is off by a full band.
+  constants but did not touch `agents.causal_impact.validation`, which carried
+  its own E-value cutoff. On 2026-09-10 the cutoff was removed outright: the
+  sensitivity test is a benchmarked reading, not a gate, so there is no number
+  for the YAML to mirror. The pin is now the *absence* of the cutoff on both
+  sides -- a re-added `e_value_threshold` / `e_value_min` is the bug again.
 
 These assert against the live constants and the real filesystem, so they fail
 if either drifts again.
@@ -135,20 +136,18 @@ class TestConfigMirrorsLiveConstants:
                             return ast.literal_eval(stmt.value)
         raise AssertionError(f"RefutationRunner.{name} not found in source")
 
-    def test_e_value_threshold_matches_the_pass_bar_not_the_warning_band(self):
+    def test_the_e_value_cutoff_is_gone_from_runner_and_yaml(self):
+        """2026-09-10 (spec sensitivity-gate-calibration §4.5): the sensitivity test
+        is a benchmarked reading with no cutoff. Neither the runner nor the YAML may
+        carry an ``e_value_threshold`` / ``e_value_min`` again."""
         pass_thresholds = self._runner_constant("PASS_THRESHOLDS")
-        live_pass = pass_thresholds["e_value_min"]["pass"]
-        live_warning = pass_thresholds["e_value_min"]["warning"]
-        yaml_value = self._validation_block(self._cfg())["e_value_threshold"]
-
-        assert yaml_value != live_warning or live_warning == live_pass, (
-            f"agent_config e_value_threshold={yaml_value} is the WARNING band "
-            f"({live_warning}), not the pass bar ({live_pass}) -- off by a full band"
-        )
-        assert yaml_value == live_pass, (
-            f"agent_config e_value_threshold={yaml_value} contradicts the live "
-            f"RefutationRunner.PASS_THRESHOLDS['e_value_min']['pass']={live_pass}"
-        )
+        assert "e_value_min" not in pass_thresholds
+        default_config = self._runner_constant("DEFAULT_CONFIG")
+        assert default_config["sensitivity_e_value"]["critical"] is False
+        assert "e_value_threshold" not in default_config["sensitivity_e_value"]
+        block = self._validation_block(self._cfg())
+        assert "e_value_threshold" not in block
+        assert block["sensitivity_rule"] == "measured_confounding_benchmark"
 
     def test_gate_decision_numbers_still_mirror_the_runner(self):
         """Guards the part #1966 DID fix, so it cannot silently regress."""
@@ -160,15 +159,14 @@ class TestConfigMirrorsLiveConstants:
     def test_documentation_only_block_says_so(self):
         """The block is unconsumed; a reader must not take it for live config.
 
-        `grep -rn "e_value_threshold" src/` finds only the hardcoded 2.0 in
-        refutation_runner. `min_refutation_pass_rate`'s only src/ hits are in
-        src/ml/synthetic/, an unrelated validator with its own Python default --
-        a name collision, not a consumer of this key.
+        `grep -rn "e_value_threshold" src/` finds nothing since 2026-09-10 -- the
+        cutoff is gone and the block names the rule instead.
+        `min_refutation_pass_rate`'s only src/ hits are in src/ml/synthetic/, an
+        unrelated validator with its own Python default -- a name collision, not a
+        consumer of this key.
         """
         text = AGENT_CONFIG.read_text(encoding="utf-8").splitlines()
-        idx = next(
-            i for i, line in enumerate(text) if line.strip().startswith("e_value_threshold:")
-        )
+        idx = next(i for i, line in enumerate(text) if line.strip().startswith("sensitivity_rule:"))
         preceding = "\n".join(text[max(0, idx - 12) : idx]).lower()
         assert "documentation-only" in preceding or "not consumed" in preceding, (
             "the causal_impact.validation block carries live-looking numbers but is "
@@ -191,14 +189,15 @@ class TestOurOwnCitationsResolve:
     def test_the_yaml_anchor_names_a_real_constant(self):
         cfg = AGENT_CONFIG.read_text(encoding="utf-8")
         assert 'RefutationRunner.DEFAULT_CONFIG["sensitivity_e_value"]' in cfg
+        assert "src/causal_engine/evalue.py" in cfg
         runner = (REPO_ROOT / "src" / "causal_engine" / "refutation_runner.py").read_text(
             encoding="utf-8"
         )
-        assert "DEFAULT_CONFIG" in runner
-        assert '"sensitivity_e_value"' in runner
-        assert '"e_value_threshold": 2.0' in runner, (
-            "the YAML says the live value is a hardcoded 2.0 in that constant"
+        assert "DEFAULT_CONFIG" in runner and '"sensitivity_e_value"' in runner
+        assert '"e_value_threshold"' not in runner, (
+            "the cutoff was removed on 2026-09-10; do not re-add it"
         )
+        assert (REPO_ROOT / "src" / "causal_engine" / "evalue.py").is_file()
 
     def test_the_migration_anchor_names_a_real_sql_function(self):
         """#1971 retired the Python ``can_use_estimate`` (and its docstring), so
