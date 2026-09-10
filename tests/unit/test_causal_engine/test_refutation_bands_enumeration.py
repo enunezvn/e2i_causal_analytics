@@ -5,20 +5,15 @@ keep {PASSED, WARNING, FAILED, SKIPPED}. The enumerated table below is copied in
 the lineage page's REVIEW-band callout (Task 10); if the arithmetic changes, both
 this test and that callout must change together.
 
-One correction to the plan's enumeration, measured 2026-09-10 before this file was
-written: the two CRITICAL tests can never carry SKIPPED. ``_run_placebo_test`` and
-``_run_random_common_cause_test`` have no SKIPPED return at all, and the #1419
-budget-skip policy RAISES ``RefutationError`` for a critical skip rather than
-appending a SKIPPED result (``refutation_runner.py``, "A budget-skipped CRITICAL
-gate still fails the suite closed"); the three SKIPPED helpers are reachable only
-from the non-critical ``data_subset`` and ``bootstrap``. Enumerating a SKIPPED
-critical would add two confidence values (0.0 from all-critical-SKIPPED plus both
-non-criticals FAILED, and 0.30 from one critical WARNING with the rest SKIPPED)
-that no run can produce. The runner's weights and status scores are exactly what
-the plan assumed — placebo/random_common_cause/sensitivity 0.25, data_subset/
-bootstrap 0.125, PASSED 1.0 / WARNING 0.6 / FAILED 0.0, SKIPPED excluded from the
-average — and restricting the criticals to {PASSED, WARNING, FAILED} reproduces the
-plan's hand-derived BLOCK set exactly.
+The two CRITICAL tests never carry SKIPPED, so the enumeration below gives them
+only {PASSED, WARNING, FAILED}: a budget skip of a critical test raises
+``RefutationError`` instead of appending a result (pinned by
+``test_refutation_runner_1419.py::TestNonCriticalBudgetSkipDegrades::
+test_critical_budget_skip_still_fails_closed``), and neither
+``RefutationRunner._run_placebo_test`` nor ``_run_random_common_cause_test``
+has a SKIPPED return; only ``_run_data_subset_test`` and ``_run_bootstrap_test``
+reach the SKIPPED helpers. Enumerating a SKIPPED critical would add two
+confidence values (0.0 and 0.30) that no run can produce.
 """
 
 from __future__ import annotations
