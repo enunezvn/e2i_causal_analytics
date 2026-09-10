@@ -265,12 +265,17 @@ class TestCategoricalCovariateBiasFactors:
         assert "g" not in ev.covariate_bias_factors(df, "t", "y", ["g"])
 
     def test_a_separating_level_does_not_take_the_whole_covariate_down(self):
-        # the "z" indicator is [0, 0, 1, 0]: treated share 0 (RR_EU limit) and the
-        # control high/low outcome rates are 1.0 / 0.0 (RR_UD limit) at once. That is
-        # one sparse cell, not a declared variable -- "z" is skipped and "x" still
-        # scores. The numeric route keeps refusing the same shape (see
-        # TestCovariateBiasFactors::test_perfect_separation_raises_...).
-        df = pd.DataFrame({"t": [1, 1, 0, 0], "g": ["x", "x", "z", "x"], "y": [0, 0, 1, 0]})
+        # the "z" indicator is [0, 0, 1, 0] (x5): treated share 0 (RR_EU limit) and
+        # the control high/low outcome rates are 1.0 / 0.0 (RR_UD limit) at once. That
+        # is one sparse cell, not a declared variable -- "z" is skipped (it has no
+        # treated rows, so the MIN_CELL_SIZE rule catches it before the both-limits
+        # refusal could) and "x" still scores. The numeric route keeps refusing the
+        # same shape (see TestCovariateBiasFactors::test_perfect_separation_raises_...).
+        # Rows are replicated x5 so the "x" cell reaches MIN_CELL_SIZE in both arms
+        # (10 treated, 5 controls); every share is unchanged by replication.
+        df = pd.DataFrame(
+            {"t": [1, 1, 0, 0] * 5, "g": ["x", "x", "z", "x"] * 5, "y": [0, 0, 1, 0] * 5}
+        )
         factors = ev.covariate_bias_factors(df, "t", "y", ["g"])
         x_only = ev.covariate_bias_factors(
             df.assign(ind=(df.g == "x").astype(float)), "t", "y", ["ind"]
@@ -303,13 +308,16 @@ class TestCategoricalCovariateBiasFactors:
 
     def test_an_unscoreable_level_is_skipped_and_the_others_still_score(self):
         # "sep" sits only among controls (RR_EU limit) and its controls are the only
-        # ones with events (RR_UD limit) -- unscoreable at this sample size. "x" and
-        # "z" each reduce to their oriented RR_EU = (3/6)/(2/6) = 1.5.
+        # ones with events (RR_UD limit) -- unscoreable at this sample size, and with
+        # 0 treated rows it is a sparse cell under MIN_CELL_SIZE first. "x" and "z"
+        # each reduce to their oriented RR_EU = (9/18)/(6/18) = 1.5. Rows are
+        # replicated x3 so "x" and "z" reach MIN_CELL_SIZE in both arms (9 treated,
+        # 6 controls); every share, and so the 1.5, is unchanged by replication.
         df = pd.DataFrame(
             {
-                "t": [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
-                "g": ["x", "x", "x", "z", "z", "z", "sep", "sep", "x", "x", "z", "z"],
-                "y": [1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0],
+                "t": [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0] * 3,
+                "g": ["x", "x", "x", "z", "z", "z", "sep", "sep", "x", "x", "z", "z"] * 3,
+                "y": [1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0] * 3,
             }
         )
         # the unscoreable level, handed over as a NUMERIC covariate, still refuses:
@@ -365,9 +373,14 @@ class TestCategoricalCovariateBiasFactors:
         object array containing it against a level raises "boolean value of NA is
         ambiguous" -- a TypeError that would surface as a suite-killing
         RefutationError. Nulls must be masked out BEFORE the comparison."""
-        levels = ["A", "B", "C", None, "A", "B", "C", "A", None, "B"]
+        # replicated x5 so every level reaches MIN_CELL_SIZE in both arms (A and B:
+        # 5 treated / 10 controls; C: 5 / 5); the masked indicators stay identical.
+        levels = ["A", "B", "C", None, "A", "B", "C", "A", None, "B"] * 5
         df = pd.DataFrame(
-            {"t": [1, 1, 1, 1, 0, 0, 0, 0, 1, 0], "y": [1, 0, 1, 0, 1, 1, 0, 0, 1, 0]}
+            {
+                "t": [1, 1, 1, 1, 0, 0, 0, 0, 1, 0] * 5,
+                "y": [1, 0, 1, 0, 1, 1, 0, 0, 1, 0] * 5,
+            }
         )
         df["g_obj"] = pd.Series(levels, dtype=object)
         df["g_str"] = pd.array(levels, dtype="string")
@@ -388,6 +401,78 @@ class TestCategoricalCovariateBiasFactors:
         df = pd.DataFrame({"t": t, "y": y, "num": b, "flag": b.astype(bool)})
         factors = ev.covariate_bias_factors(df, "t", "y", ["num", "flag"])
         assert factors["flag"] == factors["num"]  # exact, same code path
+
+    def test_sparse_high_cardinality_categorical_does_not_inflate_the_benchmark(self):
+        """A 30-level categorical at n=200 with NO relation to T or Y. Measured
+        over seeds 0..49 -- BEFORE the minimum cell size: median 5.71, max 12.75
+        (a factor on 50/50 seeds); AFTER (``MIN_CELL_SIZE = 5``): median 1.81,
+        max 3.00 (a factor on 28/50 seeds; the rest have no level with 5 rows in
+        both arms). Tiny cells (a level with 1 treated and 3 control rows, or 0
+        treated rows and a handful of controls) produce ratios of the order of the
+        arm ratio, and the covariate keeps the max -- a benchmark manufactured from
+        sparsity on a column that carries no confounding at all. The residual 1.81
+        is a selection artefact of the 30 % arm at this sparsity: a level needs
+        5 treated rows out of ~6.7, so the survivors are treated-heavy (the same
+        rule at a 50 % arm measures median 1.20); the live shape (4 and 12 levels,
+        n=1500) measures 1.016 and 1.091."""
+        collected = []
+        for seed in range(50):
+            rng = np.random.default_rng(seed)
+            n = 200
+            df = pd.DataFrame(
+                {
+                    "t": (rng.random(n) < 0.3).astype(int),
+                    "y": (rng.random(n) < 0.10).astype(int),
+                    "cat": rng.integers(0, 30, n).astype(str),
+                }
+            )
+            factors = ev.covariate_bias_factors(df, "t", "y", ["cat"])
+            if "cat" in factors:
+                collected.append(factors["cat"])
+        assert collected  # the rule must not silence the column on every seed
+        assert float(np.median(collected)) < 2.0  # measured 1.81; was 5.71
+        assert max(collected) <= 5.0  # measured 3.00; was 12.75
+
+    def test_categorical_level_below_min_cell_size_is_skipped(self):
+        # "sparse" has 3 treated rows and 40 controls with an extreme outcome rate;
+        # "big" and "other" have 40 treated and 40 controls each. The sparse cell's
+        # own indicator would score far above the well-populated levels; the rule
+        # skips it and the covariate keeps the max over the populated levels only.
+        assert ev.MIN_CELL_SIZE == 5
+        rows = []
+        rows += [("sparse", 1, 1)] * 3
+        rows += [("sparse", 0, 1)] * 30 + [("sparse", 0, 0)] * 10
+        rows += [("big", 1, 1)] * 8 + [("big", 1, 0)] * 32
+        rows += [("big", 0, 1)] * 4 + [("big", 0, 0)] * 36
+        rows += [("other", 1, 1)] * 8 + [("other", 1, 0)] * 32
+        rows += [("other", 0, 1)] * 8 + [("other", 0, 0)] * 32
+        df = pd.DataFrame(rows, columns=["g", "t", "y"])
+        per_level = {
+            level: ev.covariate_bias_factors(
+                df.assign(ind=(df.g == level).astype(float)), "t", "y", ["ind"]
+            )["ind"]
+            for level in ("sparse", "big", "other")
+        }
+        assert per_level["sparse"] > max(per_level["big"], per_level["other"])
+        factors = ev.covariate_bias_factors(df, "t", "y", ["g"])
+        assert factors["g"] == pytest.approx(max(per_level["big"], per_level["other"]))
+
+    def test_min_cell_size_leaves_live_cardinality_unchanged(self, monkeypatch):
+        # live driver columns: single-digit cardinality at n=1500, every cell large,
+        # mild real confounding (T depends on the level). The rule must not bite.
+        rng = np.random.default_rng(7)
+        n = 1500
+        g = rng.choice(["A", "B", "C", "D"], size=n)
+        lift = {"A": -0.6, "B": -0.2, "C": 0.2, "D": 0.6}
+        logit = np.array([lift[v] for v in g])
+        t = (rng.random(n) < 1 / (1 + np.exp(-logit))).astype(int)
+        y = (rng.random(n) < 1 / (1 + np.exp(-(0.5 * logit + 0.3 * t - 0.8)))).astype(int)
+        df = pd.DataFrame({"t": t, "y": y, "g": g})
+        with_rule = ev.covariate_bias_factors(df, "t", "y", ["g"])["g"]
+        monkeypatch.setattr(ev, "MIN_CELL_SIZE", 1)
+        without_rule = ev.covariate_bias_factors(df, "t", "y", ["g"])["g"]
+        assert with_rule == without_rule  # exact: the same levels are scored
+        assert with_rule > 1.0
 
 
 class TestClassify:

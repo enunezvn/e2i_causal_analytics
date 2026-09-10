@@ -29,6 +29,11 @@ import numpy as np
 # odds ratio of exp(pi*d/sqrt(3)) ~ exp(1.81 d); the square-root transformation for
 # a common outcome gives RR ~ exp(0.91 d). Continuous outcomes only.
 SMD_TO_LOG_RR = 0.91
+# Minimum rows a categorical LEVEL must have in EACH arm (treated, control) on the
+# complete-case rows before it is scored — the classical chi-square rule of thumb: an
+# expected count under 5 makes a cell's ratio unreliable. See
+# ``_factor_from_categorical_covariate``. Numeric covariates are not subject to it.
+MIN_CELL_SIZE = 5
 
 READING_BEYOND = "beyond_measured_confounding"
 READING_WITHIN = "within_measured_confounding"
@@ -435,15 +440,43 @@ def _factor_from_categorical_covariate(
     other no-variation skips. A covariate perfectly aligned with treatment is already
     a skip on the numeric route, so refusing here would open a new fail-closed path
     for a contrived case rather than reporting a real one.
+
+    MINIMUM CELL SIZE (``MIN_CELL_SIZE = 5``). Skipping the both-limits level is not
+    enough on its own: a level that survives with a tiny cell still produces an
+    extreme ratio (1 treated row against 3 controls gives an RR_EU of the order of
+    the arm ratio; 0 treated rows hits the one-sided limit and returns RR_UD alone,
+    which on a handful of controls is just as extreme), and the covariate keeps the
+    max. Measured on frames with NO planted confounding (30 levels, n = 200, 10 %
+    events): median covariate factor 4.70, max 27.0; at 80 levels median 8.70, max
+    91.0 — a benchmark manufactured from sparsity. The direction is safe (a larger
+    benchmark can never manufacture false robustness) but it can push a run to
+    ``within_measured_confounding`` on a column carrying none. So a level is scored
+    only when it has at least ``MIN_CELL_SIZE`` rows among the treated AND at least
+    ``MIN_CELL_SIZE`` among the controls, counted on the same complete-case rows the
+    numeric path scores (non-null indicator, outcome and treatment); a sparser level
+    is skipped exactly like a ``_LevelNotScoreable`` one — a sparse cell, not a
+    declared variable. Five is the classical chi-square rule of thumb (an expected
+    count under 5 makes a cell's ratio unreliable). Live cardinality is unaffected:
+    every cell of a 4- or 12-level column at n = 1500 is far above it. The numeric
+    route is deliberately NOT subject to it: a whole declared confounder that
+    separates both still refuses.
     """
     levels = _distinct_levels(column)
     if len(levels) < 2:
         return None  # a single level has no variation to benchmark
     factors: List[float] = []
     for level in levels:
+        indicator = _level_indicator(column, level)
+        ok = ~np.isnan(indicator) & ~np.isnan(y) & ~np.isnan(t)
+        in_level = ok & (indicator == 1.0)
+        if (
+            int((in_level & treated).sum()) < MIN_CELL_SIZE
+            or int((in_level & control).sum()) < MIN_CELL_SIZE
+        ):
+            continue  # a sparse cell, not a declared variable — see the docstring
         try:
             factor = _factor_from_numeric_covariate(
-                _level_indicator(column, level),
+                indicator,
                 t,
                 y,
                 treated,
