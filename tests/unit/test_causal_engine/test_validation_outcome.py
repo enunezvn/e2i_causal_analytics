@@ -352,6 +352,25 @@ class TestExtractFailurePatterns:
             assert pattern.severity == severity, reading
             assert phrase in pattern.recommendation.lower(), reading
 
+        by_reading = {p.test_name and r: p for r, p in zip(readings, patterns, strict=True)}
+
+        # Review round 1 (2026-09-10): for the `within` reading the E-value bound
+        # leaves the DIRECTION unestablished too, so the advice may not present it
+        # as the reliable half. And a null finding is not fixed only by more rows.
+        within = by_reading["within_measured_confounding"].recommendation
+        assert "more reliable than the size" not in within
+        assert (
+            "Do not act on the size of this effect, and treat its direction as "
+            "unconfirmed against confounding of that strength" in within
+        )
+
+        null = by_reading["null_finding"].recommendation
+        assert "the only way" not in null
+        assert (
+            "a larger sample, a longer window, or a more precise outcome measure "
+            "is needed to detect a smaller effect." in null
+        )
+
     def test_legacy_sensitivity_row_without_a_reading_is_never_critical(self):
         """Rows persisted before 2026-09-10 carry an e_value and no ``reading``.
 

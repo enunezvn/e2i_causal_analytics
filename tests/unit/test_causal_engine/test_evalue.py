@@ -260,6 +260,16 @@ class TestClassify:
         assert r.reading == "within_measured_confounding" and r.status == "warning"
         assert r.headline == "Sensitive to confounding"
         assert "could account for the whole effect" in r.message
+        # Review round 1 (2026-09-10): the message used to close "Treat the
+        # direction as more reliable than the size." For this reading the
+        # benchmark B >= the observed risk ratio, so the Ding-VanderWeele bound
+        # gives true RR >= RR_obs / B <= 1 -- a confounder of that strength could
+        # null the effect out entirely, so the DIRECTION is not established either.
+        assert "more reliable than the size" not in r.message
+        assert (
+            "Do not act on the size of this effect, and treat its direction as "
+            "unconfirmed against confounding of that strength." in r.message
+        )
 
     def test_tie_reads_within(self):
         # p0 = 0.25, effect = 0.25 -> p1 = 0.50 -> RR = 0.50/0.25 = 2.0 EXACTLY (both

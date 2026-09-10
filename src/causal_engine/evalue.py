@@ -532,7 +532,8 @@ def classify(
         message = (
             f"A confounder no stronger than the measured set ({benchmark:.2f}, {basis_words}) "
             f"could account for the whole effect (risk ratio at the estimate {rr_point:.2f}; "
-            f"E-value {e_point:.2f}). Treat the direction as more reliable than the size."
+            f"E-value {e_point:.2f}). Do not act on the size of this effect, and treat "
+            "its direction as unconfirmed against confounding of that strength."
         )
     return SensitivityReading(
         reading=reading,

@@ -279,16 +279,17 @@ def _categorize_failure(test) -> tuple:
                 "low",
                 "Reported as a null finding: the 95 % CI includes zero at this "
                 "sample size. No unmeasured confounder is needed to explain it; a "
-                "larger sample or a longer window is the only way to detect a "
-                "smaller effect.",
+                "larger sample, a longer window, or a more precise outcome measure "
+                "is needed to detect a smaller effect.",
             )
         if reading == "within_measured_confounding":
             return (
                 FailureCategory.UNOBSERVED_CONFOUNDING,
                 "high",
                 "A confounder no stronger than the measured confounding could "
-                "account for the whole effect. Treat the direction as more reliable "
-                "than the size; add covariates or use a design that removes the "
+                "account for the whole effect. Do not act on the size of this "
+                "effect, and treat its direction as unconfirmed against confounding "
+                "of that strength; add covariates or use a design that removes the "
                 "measured confounding.",
             )
         if reading == "unbenchmarked":
