@@ -261,13 +261,19 @@ def _ratio_or_limit(numerator: float, denominator: float) -> Tuple[Optional[floa
 
 
 def _is_categorical_column(column: Any) -> bool:
-    """Object / string / categorical / bool dtype: no median to split the column at."""
+    """Object / string / categorical dtype: no median to split the column at.
+
+    ``bool`` is NOT here. A bool column IS binary, and spec §4.1 takes a binary
+    covariate as-is; ``np.asarray(col, dtype=float)`` maps True/False to 1/0, so it
+    belongs on the numeric path and scores identically to its 0/1 integer twin.
+    Routing it through the max-over-levels rule instead made the two disagree.
+    """
     kind = getattr(getattr(column, "dtype", None), "kind", None)
-    return kind in ("O", "U", "S", "b")
+    return kind in ("O", "U", "S")
 
 
 def _missing_mask(column: Any) -> np.ndarray:
-    """Null mask for a non-numeric column, via pandas when the object offers it."""
+    """Null mask for a categorical column, via pandas when the object offers it."""
     isna = getattr(column, "isna", None)
     if callable(isna):
         return np.asarray(isna(), dtype=bool)
@@ -421,12 +427,12 @@ def covariate_bias_factors(
     among high-covariate CONTROLS / low-covariate controls (binary outcome), or the
     SMD path on the control-arm mean difference (continuous outcome).
 
-    A NUMERIC covariate is split at its median (binary as-is). A CATEGORICAL one
-    (object / string / categorical / bool dtype, or a column no float conversion
-    accepts) has no median: every level becomes a 0/1 indicator scored by the same
-    path, and the covariate's factor is the strongest of them, under the covariate's
-    own name. See ``_factor_from_categorical_covariate`` for why they are scored
-    rather than dropped.
+    A NUMERIC covariate is split at its median (binary — ``bool`` included — as-is).
+    A CATEGORICAL one (object / string / categorical dtype, or a column no float
+    conversion accepts) has no median: every level becomes a 0/1 indicator scored by
+    the same path, and the covariate's factor is the strongest of them, under the
+    covariate's own name. See ``_factor_from_categorical_covariate`` for why they are
+    scored rather than dropped.
 
     A one-sided zero share or zero event count is a REAL Ding-VanderWeele limit, not
     an undefined value: as RR_UD -> infinity, B -> RR_EU, and as RR_EU -> infinity,

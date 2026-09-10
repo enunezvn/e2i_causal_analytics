@@ -266,6 +266,21 @@ class TestCategoricalCovariateBiasFactors:
         assert set(inp.covariate_bias_factors) == {"c", "g"}
         assert inp.covariate_bias_factors["g"] > 1.0
 
+    @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
+    def test_a_bool_covariate_scores_exactly_like_its_integer_twin(self, seed: int):
+        """A bool column IS binary, and spec §4.1 takes a binary covariate AS-IS —
+        so it belongs on the numeric path, not the categorical max-over-levels one.
+        Routing it as categorical made it disagree with its own 0/1 twin (measured
+        1.091243 vs 1.092459 on seed 1, 1.133207 vs 1.142987 on seed 4)."""
+        rng = np.random.default_rng(seed)
+        n = 600
+        b = rng.integers(0, 2, n)
+        t = (rng.random(n) < 1 / (1 + np.exp(-(0.9 * b - 0.4)))).astype(int)
+        y = (rng.random(n) < 1 / (1 + np.exp(-(0.8 * b + 0.3 * t - 0.5)))).astype(int)
+        df = pd.DataFrame({"t": t, "y": y, "num": b, "flag": b.astype(bool)})
+        factors = ev.covariate_bias_factors(df, "t", "y", ["num", "flag"])
+        assert factors["flag"] == factors["num"]  # exact, same code path
+
 
 class TestClassify:
     def _c(self, effect, ci, **kw):
