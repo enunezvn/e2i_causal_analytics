@@ -30,7 +30,9 @@ class ValidationOutcomeType(str, Enum):
     """Type of validation outcome for pattern classification."""
 
     PASSED = "passed"  # All tests passed, proceed
-    FAILED_CRITICAL = "failed_critical"  # Critical test failed (placebo/sensitivity)
+    # Critical test failed (placebo / random_common_cause; derived from the runner
+    # config's ``critical`` flags -- see _critical_test_names)
+    FAILED_CRITICAL = "failed_critical"
     FAILED_MULTIPLE = "failed_multiple"  # Multiple tests failed
     NEEDS_REVIEW = "needs_review"  # Borderline results, expert review needed
     BLOCKED = "blocked"  # Blocked by gate decision
@@ -40,7 +42,8 @@ class FailureCategory(str, Enum):
     """Category of validation failure for learning."""
 
     INSUFFICIENT_SAMPLE = "insufficient_sample"  # Data subset/bootstrap failed
-    UNOBSERVED_CONFOUNDING = "unobserved_confounding"  # Sensitivity analysis failed
+    # Sensitivity reading within the measured confounding / unbenchmarked
+    UNOBSERVED_CONFOUNDING = "unobserved_confounding"
     SPURIOUS_CORRELATION = "spurious_correlation"  # Placebo treatment detected effect
     MODEL_MISSPECIFICATION = "model_misspecification"  # Random common cause failed
     EFFECT_INSTABILITY = "effect_instability"  # Bootstrap variance too high
@@ -265,9 +268,42 @@ def _categorize_failure(test) -> tuple:
         )
 
     elif test_name == RefutationTestType.SENSITIVITY_E_VALUE:
+        # 2026-09-10: the pattern follows the READING, never an E-value cutoff. The
+        # retired rule called any row with e_value < 1.5 critical unobserved
+        # confounding, which mislabels a null finding -- a precision result whose
+        # E-value is small by construction -- as a confounding result.
+        reading = test.details.get("reading")
+        if reading == "null_finding":
+            return (
+                FailureCategory.INSUFFICIENT_SAMPLE,
+                "low",
+                "Reported as a null finding: the 95 % CI includes zero at this "
+                "sample size. No unmeasured confounder is needed to explain it; a "
+                "larger sample or a longer window is the only way to detect a "
+                "smaller effect.",
+            )
+        if reading == "within_measured_confounding":
+            return (
+                FailureCategory.UNOBSERVED_CONFOUNDING,
+                "high",
+                "A confounder no stronger than the measured confounding could "
+                "account for the whole effect. Treat the direction as more reliable "
+                "than the size; add covariates or use a design that removes the "
+                "measured confounding.",
+            )
+        if reading == "unbenchmarked":
+            return (
+                FailureCategory.UNOBSERVED_CONFOUNDING,
+                "medium",
+                "Robustness to confounding could not be benchmarked: no measured "
+                "confounders exist for this design. Add covariates so the E-value "
+                "has a benchmark.",
+            )
+        # Legacy rows persisted before the reading existed; ``beyond_measured_
+        # confounding`` never reaches here (it is PASSED).
         return (
             FailureCategory.UNOBSERVED_CONFOUNDING,
-            "critical" if test.details.get("e_value", 0) < 1.5 else "high",
+            "high",
             "Effect is sensitive to unobserved confounding. Consider collecting "
             "additional covariates or using instrumental variables.",
         )
@@ -329,6 +365,23 @@ def _describe_failure(test) -> str:
     return f"Test {test_name.value} failed with {abs(delta):.1f}% change"
 
 
+def _critical_test_names() -> set[str]:
+    """The refutation tests whose FAILURE alone blocks an estimate.
+
+    Derived from the single source of truth -- ``RefutationRunner.DEFAULT_CONFIG``'s
+    ``critical`` flags -- rather than copied here, because a copy drifts silently:
+    the retired literal named ``sensitivity_e_value`` (which can no longer FAIL,
+    2026-09-10) and omitted ``random_common_cause`` (which is critical).
+    """
+    from .refutation_runner import RefutationRunner
+
+    return {
+        name
+        for name, cfg in RefutationRunner.DEFAULT_CONFIG.items()
+        if isinstance(cfg, dict) and cfg.get("critical")
+    }
+
+
 def create_validation_outcome(
     suite: "RefutationSuite",
     agent_context: Optional[Dict[str, Any]] = None,
@@ -358,10 +411,9 @@ def create_validation_outcome(
         outcome_type = ValidationOutcomeType.PASSED
     elif suite.gate_decision == GateDecision.BLOCK:
         # Check if critical test failed
+        critical = _critical_test_names()
         critical_failed = any(
-            t.test_name.value in ("placebo_treatment", "sensitivity_e_value")
-            and t.status.value == "failed"
-            for t in suite.tests
+            t.test_name.value in critical and t.status.value == "failed" for t in suite.tests
         )
         if critical_failed:
             outcome_type = ValidationOutcomeType.FAILED_CRITICAL

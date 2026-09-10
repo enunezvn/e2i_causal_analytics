@@ -300,6 +300,85 @@ class TestExtractFailurePatterns:
         rcc_pattern = next(p for p in patterns if p.test_name == "random_common_cause")
         assert rcc_pattern.category == FailureCategory.MODEL_MISSPECIFICATION
 
+    def test_sensitivity_readings_are_categorized_by_reading_not_by_a_cutoff(self):
+        """2026-09-10: the sensitivity pattern follows the READING, not an E-value.
+
+        The retired rule labelled any sensitivity row with ``e_value < 1.5`` a
+        CRITICAL unobserved-confounding pattern. Under the benchmarked reading a
+        null finding typically carries a small E-value and is a PRECISION finding,
+        not a confounding one -- storing it as critical confounding teaches the
+        Experiment Designer something false. Every row below carries the same
+        e_value=1.2 so only the reading can be doing the work.
+        """
+        readings = {
+            "null_finding": (FailureCategory.INSUFFICIENT_SAMPLE, "low", "null finding"),
+            "within_measured_confounding": (
+                FailureCategory.UNOBSERVED_CONFOUNDING,
+                "high",
+                "measured confounding",
+            ),
+            "unbenchmarked": (
+                FailureCategory.UNOBSERVED_CONFOUNDING,
+                "medium",
+                "no measured confounders",
+            ),
+        }
+
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                status=RefutationStatus.WARNING,
+                original_effect=0.50,
+                refuted_effect=0.50,
+                delta_percent=0.0,
+                details={"reading": reading, "e_value": 1.2, "message": "m"},
+            )
+            for reading in readings
+        ]
+
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=tests,
+        )
+
+        patterns = extract_failure_patterns(suite)
+
+        assert len(patterns) == len(readings)
+        for pattern, reading in zip(patterns, readings, strict=True):
+            category, severity, phrase = readings[reading]
+            assert pattern.category == category, reading
+            assert pattern.severity == severity, reading
+            assert phrase in pattern.recommendation.lower(), reading
+
+    def test_legacy_sensitivity_row_without_a_reading_is_never_critical(self):
+        """Rows persisted before 2026-09-10 carry an e_value and no ``reading``.
+
+        They must degrade to the generic confounding pattern -- the 1.5 cutoff that
+        used to make this row "critical" no longer exists anywhere.
+        """
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.50,
+                    refuted_effect=0.50,
+                    delta_percent=0.0,
+                    details={"e_value": 1.2},
+                )
+            ],
+        )
+
+        (pattern,) = extract_failure_patterns(suite)
+
+        assert pattern.category == FailureCategory.UNOBSERVED_CONFOUNDING
+        assert pattern.severity == "high"
+
     def test_extract_patterns_all_passed(self):
         """Test that no patterns are extracted when all tests pass."""
         tests = [
@@ -400,6 +479,67 @@ class TestCreateValidationOutcome:
         assert outcome.agent_context["agent"] == "test"
         assert outcome.dag_hash == "abc123"
         assert outcome.sample_size == 1000
+
+    def test_random_common_cause_failed_block_is_failed_critical(self):
+        """random_common_cause IS a critical test; a BLOCK on it is FAILED_CRITICAL.
+
+        The retired hardcoded set was ``("placebo_treatment", "sensitivity_e_value")``:
+        it omitted random_common_cause, so this suite was stored as FAILED_MULTIPLE,
+        and it named sensitivity_e_value, which can no longer FAIL at all.
+        """
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.50,
+                refuted_effect=0.02,
+                delta_percent=4.0,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                status=RefutationStatus.FAILED,
+                original_effect=0.50,
+                refuted_effect=0.15,
+                delta_percent=70.0,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.BOOTSTRAP,
+                status=RefutationStatus.PASSED,
+                original_effect=0.50,
+                refuted_effect=0.48,
+                delta_percent=4.0,
+            ),
+        ]
+
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.35,
+            gate_decision=GateDecision.BLOCK,
+            tests=tests,
+        )
+
+        outcome = create_validation_outcome(suite)
+
+        assert outcome.outcome_type == ValidationOutcomeType.FAILED_CRITICAL
+
+    def test_critical_set_matches_the_runner_config(self):
+        """One source of truth: the runner config's ``critical`` flags.
+
+        A hardcoded copy in this module drifts the moment a test's criticality
+        changes -- which is exactly what happened to sensitivity_e_value on
+        2026-09-10.
+        """
+        from src.causal_engine.refutation_runner import RefutationRunner
+        from src.causal_engine.validation_outcome import _critical_test_names
+
+        expected = {
+            name
+            for name, cfg in RefutationRunner.DEFAULT_CONFIG.items()
+            if isinstance(cfg, dict) and cfg.get("critical")
+        }
+
+        assert _critical_test_names() == expected
+        assert expected == {"placebo_treatment", "random_common_cause"}
 
     def test_generated_outcome_id_is_a_bare_uuid(self):
         """The minted outcome_id must be UUID-coercible (#1611).
