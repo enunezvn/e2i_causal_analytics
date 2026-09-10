@@ -74,11 +74,18 @@ def _orient(rr: float) -> float:
 
 
 def e_value_from_rr(rr: float) -> float:
-    """``E = RR + sqrt(RR*(RR-1))`` for RR >= 1; a protective RR is inverted first."""
+    """``E = RR + sqrt(RR*(RR-1))`` for RR >= 1; a protective RR is inverted first.
+
+    Computed as ``RR + sqrt(RR)*sqrt(RR-1)`` rather than ``RR + sqrt(RR*(RR-1))``:
+    the product ``RR*(RR-1)`` overflows to ``inf`` for a very large but still finite
+    RR (~1e158) before the sqrt ever runs, silently reporting an infinite E-value —
+    and Postgres JSONB rejects ``Infinity`` outright. Any residual non-finite result
+    still raises ``ValueError`` rather than escaping as ``inf``.
+    """
     r = _orient(_finite("rr", rr))
     if r <= 1.0:
         return 1.0
-    return float(r + math.sqrt(r * (r - 1.0)))
+    return _finite("e_value", r + math.sqrt(r) * math.sqrt(r - 1.0))
 
 
 def rr_from_smd(d: float) -> float:
@@ -131,15 +138,28 @@ def _rr_smd_path(effect: float, outcome_std: Optional[float]) -> float:
 
 
 def _use_risk_ratio_path(
-    effect: float, naive_effect: Optional[float], baseline_risk: Optional[float]
+    effect: float,
+    naive_effect: Optional[float],
+    baseline_risk: Optional[float],
+    *,
+    bound: Optional[float] = None,
 ) -> bool:
     """Whether the risk-difference/risk-ratio conversion applies to the WHOLE reading.
 
     Spec §5 (conversion defect): never mix a risk ratio (from a risk difference) with
-    an SMD-derived ratio inside one comparison. The RD path applies only when BOTH the
-    point/adjusted effect and the naive effect (when given) land inside the
-    risk-difference domain (``0 < baseline_risk + effect < 1``); otherwise
-    EVERYTHING — point, CI bound, naive and adjusted alike — uses the SMD path.
+    an SMD-derived ratio inside one comparison. The RD path applies only when
+    ``baseline_risk`` is given AND ``effect``, ``naive_effect`` (when given) and
+    ``bound`` (when given) ALL land inside the risk-difference domain
+    (``0 < baseline_risk + x < 1``); otherwise EVERYTHING — point, CI bound, naive
+    and adjusted alike — uses the SMD path.
+
+    ``bound`` is the already-signed CI bound nearest the null. Effect alone landing
+    in-domain is NOT sufficient to guarantee the bound does too — the domain's upper
+    edge can sit strictly between them (``baseline_risk + effect`` a hair below 1,
+    ``baseline_risk + bound`` exactly 1) — so the caller must check the bound
+    explicitly rather than relying on a "bound is closer to null" argument. Pass
+    ``None`` when there is no bound to check: a null-including CI (``rr_ci`` is 1.0
+    regardless of conversion) or a caller with no CI at all (``joint_confounding_benchmark``).
     """
     if baseline_risk is None:
         return False
@@ -149,6 +169,8 @@ def _use_risk_ratio_path(
         naive = _finite("naive_effect", naive_effect)
         if rr_from_risk_difference(naive, baseline_risk) is None:
             return False
+    if bound is not None and rr_from_risk_difference(bound, baseline_risk) is None:
+        return False
     return True
 
 
@@ -423,17 +445,21 @@ def classify(
         )
     includes_null = lo <= 0.0 <= hi
     bound = min(abs(lo), abs(hi))
+    # always a definite float; only meaningful (as the CI-bound conversion input)
+    # when the CI excludes zero — guarded explicitly at each use below
+    signed_bound = math.copysign(bound, eff)
 
-    # One conversion governs point, CI bound, naive and adjusted alike (spec §5): the
-    # risk-ratio path applies only when the point effect AND the naive effect (if
-    # any) both land inside the risk-difference domain — never RD for one and SMD
-    # for the other within a single reading. The CI bound nearest the null sits
-    # strictly between 0 and the point effect in magnitude (the CI-contains-estimate
-    # check above guarantees the bound lies between 0 and the effect), so if the
-    # point effect's baseline_risk + effect is inside (0, 1) the bound's
-    # baseline_risk + bound is
-    # too (a convex combination of two in-domain points); no separate check needed.
-    use_rr = _use_risk_ratio_path(eff, naive_effect, baseline_risk)
+    # One conversion governs point, CI bound, naive and adjusted alike (spec §5):
+    # never RD for some of them and SMD for others within one reading. The point
+    # effect landing in the risk-difference domain does NOT guarantee the bound does
+    # too — the domain's edge can sit strictly between them (baseline_risk + effect a
+    # hair below 1, baseline_risk + bound exactly 1) — so the bound is part of the
+    # single decision, not assumed safe by a "closer to null" argument. None is
+    # passed for the bound check when the CI includes zero, since rr_ci is 1.0
+    # regardless of conversion and there is nothing to check.
+    use_rr = _use_risk_ratio_path(
+        eff, naive_effect, baseline_risk, bound=None if includes_null else signed_bound
+    )
     if use_rr:
         assert baseline_risk is not None  # guaranteed by _use_risk_ratio_path
         conversion = "risk_ratio"
@@ -442,15 +468,15 @@ def classify(
         if includes_null:
             rr_ci = 1.0
         else:
-            rr_ci_rd = rr_from_risk_difference(math.copysign(bound, eff), baseline_risk)
-            # guaranteed by the ci-contains-estimate check above: the bound is
-            # between 0 and effect in magnitude, so it is in-domain whenever effect is
+            rr_ci_rd = rr_from_risk_difference(signed_bound, baseline_risk)
+            # guaranteed by _use_risk_ratio_path's own bound check just above: it
+            # already confirmed signed_bound converts before returning True
             assert rr_ci_rd is not None
             rr_ci = rr_ci_rd
     else:
         conversion = "standardized_difference"
         rr_point = _rr_smd_path(eff, outcome_std)
-        rr_ci = 1.0 if includes_null else _rr_smd_path(math.copysign(bound, eff), outcome_std)
+        rr_ci = 1.0 if includes_null else _rr_smd_path(signed_bound, outcome_std)
 
     e_point, e_ci = e_value_from_rr(rr_point), e_value_from_rr(rr_ci)
     joint = joint_confounding_benchmark(

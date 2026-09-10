@@ -21,6 +21,13 @@ class TestMath:
     def test_protective_rr_is_inverted(self):
         assert ev.e_value_from_rr(0.5) == pytest.approx(ev.e_value_from_rr(2.0))
 
+    def test_e_value_from_rr_does_not_overflow_for_a_huge_finite_rr(self):
+        # RR*(RR-1) overflows to inf around RR ~ 1.3e154 before the sqrt ever runs;
+        # sqrt(RR)*sqrt(RR-1) stays finite the whole way through.
+        e = ev.e_value_from_rr(1e150)
+        assert math.isfinite(e)
+        assert e == pytest.approx(2e150, rel=1e-12)
+
     def test_rr_from_smd_uses_the_chinn_factor(self):
         assert ev.rr_from_smd(1.0) == pytest.approx(math.exp(0.91))
         assert ev.rr_from_smd(-1.0) == pytest.approx(math.exp(0.91))
@@ -328,3 +335,16 @@ class TestClassify:
         # a degenerate CI exactly at the estimate is fine (bound == effect).
         r = self._c(0.1, (0.1, 0.1), baseline_risk=0.3, naive_effect=0.2)
         assert r.rr_point > 1.0
+
+    def test_ci_bound_domain_failure_falls_back_to_smd_not_an_unreachable_assert(self):
+        # effect is just inside the CI (containment passes within the 1e-12
+        # tolerance: p1 = 0.5 + (0.5 - 5e-13) = 0.9999999999995, barely in-domain),
+        # but the bound itself (0.5) pushes p1 to exactly 1.0 -- out of the RD
+        # domain even though the point is fine. The whole reading must fall back to
+        # the SMD path, not hit an assert on the bound's conversion.
+        r = self._c(0.5 - 5e-13, (0.5, 0.6), baseline_risk=0.5, naive_effect=None)
+        assert r.conversion == "standardized_difference"
+
+    def test_e_value_stays_finite_for_a_huge_effect(self):
+        r = self._c(400, (399, 401), baseline_risk=None, outcome_std=None, naive_effect=None)
+        assert math.isfinite(r.e_value_point)
