@@ -1331,7 +1331,11 @@ def sensitivity_analyzer(
     reading is ``unbenchmarked``: the E-value is reported with the statement that no
     universal threshold exists. Refuses non-finite inputs (anti-mocking: never a
     fabricated E-value). A ``ValueError`` from the classifier (a point estimate
-    outside its own CI) is surfaced as a structured ``ToolRefusalError``.
+    outside its own CI) is surfaced as a structured ``ToolRefusalError``. A supplied
+    ``baseline_risk`` that cannot form risks in (0, 1) with the effect and CI is
+    refused rather than silently read on the standardized-difference scale. A CI
+    that includes zero is reported as a null finding regardless of the benchmark
+    (spec §4.4 precedence).
     """
     for name, value in (
         ("ate", ate),
@@ -1360,6 +1364,13 @@ def sensitivity_analyzer(
         )
     except ValueError as exc:
         raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}") from exc
+    if baseline_risk is not None and reading.conversion != "risk_ratio":
+        raise ToolRefusalError(
+            f"sensitivity_analyzer: baseline_risk={baseline_risk!r} with ate={ate!r} and "
+            f"CI=({ci_lower!r}, {hi!r}) does not form valid risks in (0, 1), so no "
+            "risk-ratio E-value exists. Refusing to substitute a standardized-difference "
+            "scale for a caller who asked for the risk-ratio path."
+        )
     interpretation = reading.message
     if reading.reading == evalue.READING_UNBENCHMARKED:
         interpretation = (
@@ -1376,6 +1387,7 @@ def sensitivity_analyzer(
         "headline": reading.headline,
         "benchmark": reading.benchmark,
         "benchmark_basis": reading.benchmark_basis,
+        "conversion": reading.conversion,
         "interpretation": interpretation,
     }
 

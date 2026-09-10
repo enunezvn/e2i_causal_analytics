@@ -79,6 +79,28 @@ def test_sensitivity_analyzer_refuses_a_point_estimate_outside_its_own_ci():
         tr.sensitivity_analyzer(ate=0.5, ci_lower=0.6, ci_upper=0.9)
 
 
+def test_sensitivity_analyzer_refuses_a_supplied_baseline_risk_the_risk_ratio_path_cannot_use():
+    # A supplied baseline_risk is a contract: the caller asked for risk-ratio E-values.
+    # When effect/CI/baseline do not form risks in (0, 1) the tool must REFUSE rather
+    # than silently substitute the standardized-difference scale (codex round 1).
+    with pytest.raises(RuntimeError, match="risk-ratio"):
+        tr.sensitivity_analyzer(ate=-0.4, ci_lower=-0.5, ci_upper=-0.3, baseline_risk=0.3)
+    with pytest.raises(RuntimeError, match="risk-ratio"):
+        tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, baseline_risk=1.5)
+    valid = tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, baseline_risk=0.30)
+    assert valid["conversion"] == "risk_ratio"
+    no_baseline = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
+    assert no_baseline["conversion"] == "standardized_difference"
+
+
+def test_sensitivity_analyzer_null_finding_takes_precedence_over_unbenchmarked():
+    # Spec §4.4 precedence: a CI that includes zero IS a null finding whether or not a
+    # benchmark exists (the CI-bound E-value is 1.0); "unbenchmarked" would hide the null.
+    out = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.0)
+    assert out["reading"] == "null_finding"
+    assert "includes zero" in out["interpretation"]
+
+
 # ---------------------------------------------------------------------------
 # Task 2 — psi_calculator: real PSI from a DataFrame or fail-close (F3)
 # ---------------------------------------------------------------------------
