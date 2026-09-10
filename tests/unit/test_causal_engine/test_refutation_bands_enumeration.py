@@ -186,7 +186,21 @@ def test_block_is_only_reachable_through_a_critical_failed_with_emittable_status
                 review.add(conf)
     assert floor == pytest.approx(0.5333, abs=1e-3)
     assert 0.50 <= floor < 0.70, "the floor without a critical failure is REVIEW"
-    # Operationally reachable REVIEW values, computed then pinned.
+    # Operationally reachable REVIEW values. Each is derived by hand below from one
+    # witness combination, so the pin has an arithmetic independent of this loop.
+    # Weights: placebo/rcc/sensitivity 0.25, subset/bootstrap 0.125; PASSED 1.0,
+    # WARNING 0.6, FAILED 0.0; SKIPPED drops out of BOTH numerator and denominator.
+    # Placebo is PASSED in every witness — it emits no WARNING, and FAILED would
+    # block. Columns are placebo / rcc / sensitivity / subset / bootstrap.
+    #   0.5333  P W S F F  (0.25 + 0.15)          / 0.75  = 0.40  / 0.75
+    #   0.55    P W W F F  (0.25 + 0.15 + 0.15)   / 1.0   = 0.55  / 1.0
+    #   0.625   P W W W F  (0.25 + 0.15 + 0.15 + 0.075) / 1.0 = 0.625 / 1.0
+    #   0.6286  P W W F S  (0.25 + 0.15 + 0.15)   / 0.875 = 0.55  / 0.875
+    #   0.6333  P W S W F  (0.25 + 0.15 + 0.075)  / 0.75  = 0.475 / 0.75
+    #   0.64    P W S F S  (0.25 + 0.15)          / 0.625 = 0.40  / 0.625
+    #   0.65    P P W F F  (0.25 + 0.25 + 0.15)   / 1.0   = 0.65  / 1.0
+    #   0.6667  P P S F F  (0.25 + 0.25)          / 0.75  = 0.50  / 0.75
+    #   0.675   P W W P F  (0.25 + 0.15 + 0.15 + 0.125) / 1.0 = 0.675 / 1.0
     assert sorted(review) == [
         0.5333,
         0.55,

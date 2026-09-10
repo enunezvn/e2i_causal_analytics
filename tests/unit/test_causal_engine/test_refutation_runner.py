@@ -956,6 +956,82 @@ class TestSensitivityTest:
         assert result.status == RefutationStatus.WARNING
         assert result.details["reading"] == "unbenchmarked"
 
+    def test_a_ci_that_excludes_the_estimate_raises_refutation_error(self, runner):
+        """``evalue.classify`` refuses an out-of-domain input with ValueError. The
+        runner must surface it the way every refit test does — as a structured
+        RefutationError — not leak a raw ValueError past ``_run_test_with_tracing``
+        (spec §5: a failed sensitivity computation fails closed, it is never served
+        as a reading)."""
+        with pytest.raises(RefutationError) as ei:
+            runner._run_sensitivity_test(
+                original_effect=0.1, original_ci=(0.8, 0.9), baseline_risk=0.3
+            )
+        assert ei.value.details["reason"] == "sensitivity_reading_failed"
+        assert ei.value.details["original_effect"] == 0.1
+        assert ei.value.details["original_ci"] == [0.8, 0.9]
+
+    def test_benchmark_computation_failure_fails_closed_not_unbenchmarked(self):
+        """A covariate that perfectly separates treatment AND outcome is a positivity
+        violation and ``benchmark_inputs_from_frame`` raises for it. Swallowing that
+        into ``unbenchmarked`` would print "no measured confounders exist for this
+        design" — a fabricated statement about the data. It must fail closed."""
+        r = RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+        # treated units all c=0 (so the treated share of high-c is 0) while controls
+        # split on c, and among controls every high-c unit has y=1 and every low-c
+        # unit y=0: both Ding-VanderWeele limits fire at once, so the bias factor
+        # diverges rather than settling.
+        frame = pd.DataFrame(
+            {
+                "t": [1, 1, 1, 1, 0, 0, 0, 0],
+                "c": [0, 0, 0, 0, 1, 1, 0, 0],
+                "y": [1, 0, 1, 0, 1, 1, 0, 0],
+            }
+        )
+        model = SimpleNamespace(get_common_causes=lambda: ["c"])
+        with pytest.raises(RefutationError) as ei:
+            r.run_all_tests(
+                original_effect=0.15,
+                original_ci=(0.08, 0.22),
+                data=frame,
+                treatment="t",
+                outcome="y",
+                causal_model=model,
+                identified_estimand=object(),
+                estimate=_stub_estimate(),
+            )
+        assert ei.value.details["reason"] == "sensitivity_benchmark_failed"
+        assert ei.value.details["treatment"] == "t"
+        assert ei.value.details["outcome"] == "y"
+        assert ei.value.details["covariates"] == ["c"]
+
+    def test_a_missing_frame_is_still_a_legitimate_unbenchmarked_fallback(self):
+        """The MISSING-input path is not a failure: with no data/treatment/outcome
+        there is nothing to benchmark against and ``unbenchmarked`` is honest."""
+        r = RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["reading"] == "unbenchmarked"
+
     def test_sensitivity_never_fails(self, runner):
         for effect, ci in [(0.001, (0.0005, 0.0015)), (0.5, (-0.3, 0.5)), (0.02, (0.01, 0.03))]:
             result = runner._run_sensitivity_test(

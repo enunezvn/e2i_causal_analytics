@@ -1064,8 +1064,15 @@ class RefutationRunner:
                     and treatment is not None
                     and outcome is not None
                 ):
+                    # A FAILURE here is not an absent benchmark. Swallowing it into
+                    # ``unbenchmarked`` would print "no measured confounders exist for
+                    # this design" — a fabricated statement about the data, when the
+                    # real cause was e.g. a positivity violation or a non-numeric
+                    # column. Fail closed like every refit test (spec §5). The MISSING
+                    # -input path above (no data/treatment/outcome) never reaches here
+                    # and stays a legitimate ``unbenchmarked`` reading.
+                    _covs: List[str] = []
                     try:
-                        _covs: List[str] = []
                         getter = getattr(causal_model, "get_common_causes", None)
                         if callable(getter):
                             _covs = [str(c) for c in (getter() or [])]
@@ -1077,8 +1084,19 @@ class RefutationRunner:
                             _inputs.naive_effect,
                             _inputs.covariate_bias_factors,
                         )
-                    except Exception:  # noqa: BLE001 - no benchmark → unbenchmarked reading
-                        _baseline_risk, _naive, _factors = None, None, None
+                    except Exception as exc:
+                        raise RefutationError(
+                            "Refutation analysis unavailable for this query, retry "
+                            "without refutation. Sensitivity benchmark inputs could "
+                            f"not be computed from the refutation frame: {exc}",
+                            details={
+                                "reason": "sensitivity_benchmark_failed",
+                                "treatment": treatment,
+                                "outcome": outcome,
+                                "covariates": _covs,
+                            },
+                            original_error=exc,
+                        ) from exc
                 test_result = self._run_test_with_tracing(
                     test_name="sensitivity_e_value",
                     test_func=self._run_sensitivity_test,
@@ -1893,16 +1911,32 @@ class RefutationRunner:
             if outcome_std is not None and np.isfinite(outcome_std) and outcome_std > 0
             else None
         )
-        reading = evalue.classify(
-            original_effect,
-            original_ci,
-            randomized=randomized_design,
-            baseline_risk=baseline_risk,
-            outcome_std=sd,
-            naive_effect=naive_effect,
-            covariate_factors=covariate_bias_factors or {},
-            n_rows=n_rows,
-        )
+        # ``classify`` refuses an out-of-domain input (a CI that does not contain
+        # the estimate, a non-finite value that slipped past the caller) with
+        # ValueError. Surface it as the structured, fail-closed error every refit
+        # test raises rather than leaking a raw ValueError to the caller.
+        try:
+            reading = evalue.classify(
+                original_effect,
+                original_ci,
+                randomized=randomized_design,
+                baseline_risk=baseline_risk,
+                outcome_std=sd,
+                naive_effect=naive_effect,
+                covariate_factors=covariate_bias_factors or {},
+                n_rows=n_rows,
+            )
+        except ValueError as exc:
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without "
+                f"refutation. Sensitivity reading failed: {exc}",
+                details={
+                    "reason": "sensitivity_reading_failed",
+                    "original_effect": original_effect,
+                    "original_ci": list(original_ci),
+                },
+                original_error=exc,
+            ) from exc
         status = RefutationStatus(reading.status)
         details = reading.as_details()
         details.update(
