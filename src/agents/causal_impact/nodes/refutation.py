@@ -24,11 +24,13 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
-import pandas as pd
 
 from src.agents.causal_impact.nodes._compute_budget import (
     ComputeBudgetExpired,
     run_bounded_with_budget,
+)
+from src.agents.causal_impact.nodes.sensitivity_inputs import (
+    sensitivity_benchmark_inputs as _sensitivity_benchmark_inputs,
 )
 from src.agents.causal_impact.state import (
     CausalImpactState,
@@ -217,92 +219,6 @@ def _effective_reconstruction_common_causes(
     if method in ("backdoor.linear_regression", "backdoor.propensity_score_weighting"):
         return common_causes
     return baselines
-
-
-def _is_numeric_column(frame: Any, column: str) -> bool:
-    """Is ``column`` a numeric column? Asked only of the TREATMENT and the OUTCOME.
-
-    Covariates are NOT screened this way: ``evalue`` scores a categorical covariate
-    level by level, and dropping one would understate the measured-confounding
-    benchmark (see ``_sensitivity_benchmark_inputs``).
-    """
-    try:
-        return bool(pd.api.types.is_numeric_dtype(frame[column]))
-    except Exception:  # noqa: BLE001 - an unreadable column is a missing input
-        return False
-
-
-def _sensitivity_benchmark_inputs(
-    *,
-    estimation_data: Any,
-    treatment: str,
-    outcome: str,
-    estimation_result: Dict[str, Any],
-) -> evalue.BenchmarkInputs:
-    """FULL-frame inputs for the sensitivity reading (spec 2026-09-10 §4.3).
-
-    Baseline risk, naive contrast and the backdoor set's covariate bias factors are
-    computed on ``estimation_data`` (the full frame), never on the refutation
-    subsample, so the benchmark describes the frame the reported effect came from.
-    ``naive_ate`` from the estimation node wins; ``baseline_covariates_adjusted``
-    (efficiency controls, #1188) are excluded from the factors.
-
-    CATEGORICAL covariates are passed through, not screened out. The live #1351
-    resolver binds string driver columns (``trigger_type``, ``delivery_channel``, …)
-    into the adjustment set and the estimation node fits their one-hot encoding
-    (#1417), so they are measured confounding; ``evalue`` scores them level by level.
-    Dropping them would understate the fallback benchmark and let a run read
-    ``beyond_measured_confounding`` on confounding this run actually measured.
-
-    MISSING inputs are a legitimate fallback: empty inputs, and the runner reads
-    ``unbenchmarked``. Missing means no frame, an absent treatment/outcome column, or
-    a NON-NUMERIC treatment or outcome. The last is not a screening choice but a
-    statement about the frame: the estimator cannot have fit a string T or Y, so a
-    frame carrying one is not the frame the reported effect came from, and there is
-    no contrast to benchmark.
-
-    A computation that RAISES inside ``evalue`` (e.g. a covariate — or one level of a
-    categorical covariate — that perfectly separates treatment and outcome, a
-    positivity violation whose bias factor diverges) is a real failure and surfaces
-    as ``RefutationError`` with reason ``sensitivity_benchmark_failed``, never as a
-    fabricated reading (spec §5; the runner applies the same rule to its own
-    fallback).
-    """
-    empty = evalue.BenchmarkInputs(baseline_risk=None, naive_effect=None)
-    if estimation_data is None or not hasattr(estimation_data, "columns"):
-        return empty
-    if treatment not in estimation_data.columns or outcome not in estimation_data.columns:
-        return empty
-    if not _is_numeric_column(estimation_data, treatment) or not _is_numeric_column(
-        estimation_data, outcome
-    ):
-        return empty
-    covariates = [
-        str(c)
-        for c in (estimation_result.get("covariates_adjusted") or [])
-        if c in estimation_data.columns
-    ]
-    try:
-        return evalue.benchmark_inputs_from_frame(
-            estimation_data,
-            treatment,
-            outcome,
-            covariates,
-            naive_effect=estimation_result.get("naive_ate"),
-        )
-    except Exception as exc:  # noqa: BLE001 - re-raised with a reason code, never swallowed
-        raise RefutationError(
-            "Refutation analysis unavailable for this query, retry without "
-            "refutation. Sensitivity benchmark inputs could not be computed on the "
-            f"estimation frame: {exc}",
-            details={
-                "reason": "sensitivity_benchmark_failed",
-                "treatment": treatment,
-                "outcome": outcome,
-                "covariates": covariates,
-            },
-            original_error=exc,
-        ) from exc
 
 
 _NULL_CAVEAT_PREFIX = "No detectable effect at this sample size: "

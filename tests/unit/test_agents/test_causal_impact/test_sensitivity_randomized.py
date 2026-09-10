@@ -14,8 +14,9 @@ import pytest
 from src.agents.causal_impact.nodes.sensitivity import SensitivityNode
 from src.agents.causal_impact.state import CausalImpactState, EstimationResult
 
-# Weak standardized effect: e_value_ci < 1.5 → "weak" / robust=False on the
-# observational path. Exactly the profile of the live nba_triggers RCT run.
+# Small standardized effect, no frame and no naive contrast: the observational path
+# reads "unbenchmarked" / robust=False. Exactly the profile of the live nba_triggers
+# RCT run.
 _WEAK_ESTIMATION: EstimationResult = {
     "method": "linear_regression",
     "ate": 0.05,
@@ -62,10 +63,11 @@ class TestRandomizedDesignSensitivity:
 
     @pytest.mark.asyncio
     async def test_observational_default_unchanged(self):
-        """Guard: without the flag the weak-effect classification is untouched."""
+        """Guard: without the flag the run takes the observational reading — here
+        "unbenchmarked", since this state carries no frame and no naive contrast."""
         node = SensitivityNode()
         result = await node.execute(_state())
         sens = result["sensitivity_analysis"]
         assert sens["robust_to_confounding"] is False
-        assert sens["unmeasured_confounder_strength"] == "weak"
+        assert sens["unmeasured_confounder_strength"] == "unbenchmarked"
         assert "randomized" not in sens["interpretation"].lower()

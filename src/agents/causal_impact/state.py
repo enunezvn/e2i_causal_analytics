@@ -164,13 +164,21 @@ class RefutationResults(TypedDict, total=False):
 
 
 class SensitivityAnalysis(TypedDict, total=False):
-    """Sensitivity to unmeasured confounding."""
+    """Sensitivity to unmeasured confounding as a benchmarked READING (spec 2026-09-10 §4.4)."""
 
-    e_value: float  # E-value for point estimate
-    e_value_ci: float  # E-value for CI bound
-    interpretation: str  # What E-value means in context
-    robust_to_confounding: bool  # Whether effect is robust
-    unmeasured_confounder_strength: str  # "weak", "moderate", "strong" threshold
+    e_value: float  # E-value for the point estimate
+    e_value_ci: float  # E-value at the CI bound (1.0 when the CI includes zero)
+    interpretation: str  # the leader-facing sentence (= reading message)
+    robust_to_confounding: bool  # True only for reading == beyond_measured_confounding (or a randomized design)
+    # Kept for consumers; since 2026-09-10 its value IS the reading name below.
+    unmeasured_confounder_strength: str
+    reading: str  # beyond_measured_confounding / within_measured_confounding / null_finding / unbenchmarked / not_applicable_randomized
+    headline: str
+    rr_point: float
+    rr_ci: float
+    benchmark: Optional[float]
+    benchmark_basis: str  # joint_naive_vs_adjusted / strongest_covariate / none_measured
+    conversion: str  # risk_ratio / standardized_difference
 
 
 class EnergyScoreData(TypedDict, total=False):

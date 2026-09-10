@@ -1,7 +1,8 @@
 """P4 / H3 — E-value must standardize the effect before the RR approximation.
 
-The Chinn(2000)/VanderWeele-Ding ``RR ≈ exp(0.91·d)`` (runner) / ``exp(d)`` (agent)
-approximation requires a STANDARDIZED mean difference d. Feeding the raw ATE in
+The Chinn(2000)/VanderWeele-Ding ``RR ≈ exp(0.91·d)`` approximation requires a
+STANDARDIZED mean difference d (since 2026-09-10 the runner and the agent node share
+it through ``src.causal_engine.evalue``). Feeding the raw ATE in
 native outcome units makes the E-value scale-dependent — near 1 on a 0–1 outcome,
 exploding on a dollar/count outcome — and ``sensitivity_e_value`` is a CRITICAL
 gate, so the same finding can hard-BLOCK or wave through depending only on units.
@@ -37,14 +38,12 @@ class TestRunnerEngineStandardization:
 
 
 class TestAgentEngineStandardization:
-    def test_evalue_scale_invariant_when_standardized(self):
-        node = SensitivityNode()
-        e1 = node._calculate_e_value(2.0, outcome_std=1.0)
-        e2 = node._calculate_e_value(2000.0, outcome_std=1000.0)
-        assert e1 == pytest.approx(e2, rel=1e-6)
+    def test_node_delegates_to_the_shared_module(self):
+        """Since 2026-09-10 the node has no private E-value; the runner and the node
+        share ``evalue`` so the same run reports the same number (0.91 factor)."""
+        from src.causal_engine import evalue
 
-    def test_unstandardized_is_scale_dependent(self):
-        node = SensitivityNode()
-        e1 = node._calculate_e_value(2.0)
-        e2 = node._calculate_e_value(5.0)
-        assert e2 > e1 * 5
+        assert not hasattr(SensitivityNode, "_calculate_e_value")
+        e1 = evalue.e_value_from_rr(evalue.rr_from_smd(2.0 / 1.0))
+        e2 = evalue.e_value_from_rr(evalue.rr_from_smd(2000.0 / 1000.0))
+        assert e1 == pytest.approx(e2, rel=1e-6)
