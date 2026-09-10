@@ -390,7 +390,10 @@ def create_default_tools() -> list[ToolSchema]:
         ),
         ToolSchema(
             name="sensitivity_analyzer",
-            description="Performs sensitivity analysis on causal estimates",
+            description=(
+                "Computes E-values and the measured-confounding sensitivity reading for "
+                "causal estimates"
+            ),
             category=ToolCategory.CAUSAL,
             source_agent="causal_impact",
             input_schema={
