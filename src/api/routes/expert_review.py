@@ -26,12 +26,15 @@ Version: 4.3.0
 import asyncio
 import json
 import logging
+import time
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_operator
+from src.api.dependencies.inflight_lock import InflightLock
 from src.api.errors import user_safe_503_detail
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.expert_review import (
@@ -62,6 +65,40 @@ logger = logging.getLogger(__name__)
 # builds its own JSONResponse, so an HTTPException ``Retry-After`` header
 # would be dropped -- its body already says "try again in 30 seconds".)
 _STORE_UNAVAILABLE_DETAIL = "Expert-review store unavailable. Retry shortly."
+
+# #1993: one LLM build per review id across BOTH gunicorn workers. Redis
+# ``SET NX PX`` with a process-local fallback. The TTL (120 s) tracks nginx's
+# ``proxy_read_timeout 120s`` for /api/ (docker/nginx/nginx.secure.conf:227),
+# the longest a caller waits on a build; see dependencies/inflight_lock.py for
+# the degradation and wait bounds and what happens when a build outlives it.
+_ASSESSMENT_LOCK = InflightLock("expert_review:assessment:inflight")
+
+# Strong references to in-flight build tasks: asyncio keeps only weak references
+# to tasks, and a build whose request was cancelled is awaited by nobody
+# (precedent: middleware/activity_tracking.py flush tasks).
+_INFLIGHT_BUILDS: "set[asyncio.Task[Any]]" = set()
+
+_BUILD_IN_PROGRESS_DETAIL = (
+    "An assessment build for this review is still in progress; retry shortly."
+)
+
+# Codex round-3 MED-B: the replay signal is a per-build generation id stamped
+# INTO the persisted payload (assessment-specific, cross-worker, survives a
+# byte-identical regeneration). ``updated_at`` was rejected as the signal:
+# unrelated writes (submit_review/resolve, update_dag_structure) move it, so a
+# forced request that snapshotted the OLD assessment, lost the race to such a
+# write and then took an idle lock would replay the OLD value and the requested
+# regeneration would never run. Extra keys are tolerated end to end:
+# ``AgentAssessmentResponse.assessment`` and ``agent_assessment_json`` are open
+# dicts, and the frontend reads only items/is_fallback/evidence (ResolveForm.tsx,
+# PrepareAssessmentsButton.tsx; no Zod parse on this response).
+_GENERATION_ID_KEY = "generation_id"
+_GENERATED_AT_KEY = "generated_at"
+
+# Codex round-3 MED-A: bounded re-read retry before the honest 503 (never build
+# from the stale snapshot over a result persisted meanwhile).
+_REREAD_ATTEMPTS = 2
+_REREAD_BACKOFF_SECONDS = 0.2
 
 
 def _store_unavailable(operation: str, exc: Exception) -> HTTPException:
@@ -242,6 +279,13 @@ async def generate_review_assessment(
     in ``agent_assessment_json`` — kept separate from ``checklist_json``, which
     remains the human reviewer's own record. ``persisted`` is honest about the
     cache write; a failed write still returns the (valid) assessment.
+
+    Concurrency (#1993): one build per review id across workers (Redis in-flight
+    lock, ``dependencies/inflight_lock.py``). A request that waited replays the
+    winner's stored result as ``cached=True``; a request whose bounded wait (the
+    TTL) is exhausted answers 409 with ``Retry-After`` instead of building
+    unlocked. The build runs in its own shielded task, so a cancelled request
+    (client gone, nginx 504) still persists and releases the lock in order.
     """
     repo = await _get_expert_review_repo()
     review = await repo.get_by_id(review_id)
@@ -257,14 +301,157 @@ async def generate_review_assessment(
             review_id=review_id, assessment=cached, cached=True, persisted=True
         )
 
-    validation_ids = review.get("related_validation_ids") or []
-    validations = await _get_validation_rows(validation_ids)
-    # run_signature is a BLOCKING LM call; keep the event loop free.
-    assessment = await asyncio.to_thread(_build_assessment, review, validations)
-    persisted = await repo.update_agent_assessment(review_id, assessment)
+    # Codex HIGH 1: the build runs in its OWN task and the request only shields
+    # it. Cancelling ``await asyncio.to_thread(...)`` does not stop the builder
+    # thread, so an unshielded request that lost its client (disconnect, nginx
+    # 504) would release the lock while the thread kept building, and a second
+    # caller would build concurrently. Shielded, the task finishes the persist
+    # and releases at the right moment; waiters then replay its result.
+    task = asyncio.create_task(
+        _build_under_lock(repo, review_id, review, cached, force),
+        name=f"expert-review-assessment:{review_id}",
+    )
+    _INFLIGHT_BUILDS.add(task)
+    task.add_done_callback(_INFLIGHT_BUILDS.discard)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if not task.done():
+            logger.info(
+                f"Expert-review {review_id}: request cancelled mid-build; the build "
+                "continues so its result is persisted and the lock released in order"
+            )
+            task.add_done_callback(_log_orphaned_build)
+        raise
+
+
+async def _build_under_lock(
+    repo: "ExpertReviewRepository",
+    review_id: str,
+    review: Dict[str, Any],
+    cached: Optional[Dict[str, Any]],
+    force: bool,
+) -> AgentAssessmentResponse:
+    """The lock-guarded half of ``generate_review_assessment`` (its own task; see there).
+
+    ``review``/``cached`` are the request's INITIAL snapshot, read outside the
+    lock. After EVERY acquisition the row is re-read under the lock and judged
+    against that snapshot (codex round-2 HIGH: a request that snapshotted
+    before another's acquire and acquired only after its release would see
+    ``waited=False`` and build again). A stored assessment whose
+    ``generation_id`` differs from the snapshot's (or any stored assessment when
+    the snapshot had none) is another request's finished build and is replayed
+    as ``cached=True`` regardless of ``force``. Every build stamps the payload
+    with a fresh ``generation_id``/``generated_at`` before persisting, so a
+    byte-identical forced regeneration (deterministic fallbacks exist) is still
+    recognised, while two legacy payloads without the key compare as NOT new
+    and a forced request on a pre-stamp row builds.
+
+    A failed re-read after the acquire is retried once and then answered with
+    the SAFE 503 (``_reread_row``): building from the stale snapshot could
+    overwrite a result persisted meanwhile.
+
+    Worker shutdown (bounded limitation): the shielded build is still cancelled
+    when the worker's loop shuts down (recycle, deploy) before its persist, the
+    same loss as any in-flight request; the key clears at its TTL and nothing
+    is corrupted. Draining belongs to main.py's lifespan (follow-up).
+    """
+    async with _ASSESSMENT_LOCK.hold(review_id) as lease:
+        if lease.mode == "none":
+            # Codex HIGH 2: the bounded wait (the TTL) is exhausted. An unlocked
+            # build could overlap a legitimate holder, and a client that waited
+            # the full TTL has already received nginx's 504, so it would serve
+            # nobody. Holds in EITHER mode (a local holder exceeding the bound
+            # is the same case); Redis being DOWN never lands here, ``hold``
+            # degrades that to the process-local lock and yields normally.
+            logger.warning(f"Expert-review {review_id}: in-flight lock wait exhausted; 409")
+            raise HTTPException(
+                status_code=409,
+                detail=_BUILD_IN_PROGRESS_DETAIL,
+                headers={"Retry-After": "5"},
+            )
+        row = await _reread_row(repo, review_id)  # SAFE 503 on failure; lease released
+        stored = _as_json_object(row.get("agent_assessment_json"))
+        if stored is not None and (
+            cached is None or stored.get(_GENERATION_ID_KEY) != cached.get(_GENERATION_ID_KEY)
+        ):
+            logger.info(
+                f"Expert-review {review_id}: a build finished between this request's read "
+                f"and its lock (waited={lease.waited}, lock mode={lease.mode}); replaying "
+                "the stored result"
+            )
+            return AgentAssessmentResponse(
+                review_id=review_id, assessment=stored, cached=True, persisted=True
+            )
+        if lease.waited:
+            logger.info(
+                f"Expert-review {review_id}: assessment waited on an in-flight build "
+                f"(lock mode={lease.mode}) but no new stored result appeared (the winner "
+                "failed to persist or died); building"
+            )
+        # Build from the row as it is NOW (the snapshot can be up to a full wait old).
+        source = row or review
+        validation_ids = source.get("related_validation_ids") or []
+        validations = await _get_validation_rows(validation_ids)
+        # run_signature is a BLOCKING LM call; keep the event loop free.
+        started = time.monotonic()
+        assessment = await asyncio.to_thread(_build_assessment, source, validations)
+        elapsed = time.monotonic() - started
+        assessment = {
+            **assessment,
+            _GENERATION_ID_KEY: uuid.uuid4().hex,
+            _GENERATED_AT_KEY: datetime.now(timezone.utc).isoformat(),
+        }
+        persisted = await repo.update_agent_assessment(review_id, assessment)
+        # No p99 exists for this build anywhere; record the elapsed seconds so the
+        # lock TTL (120 s, nginx proxy_read_timeout) can be revisited on data.
+        logger.info(
+            f"Expert-review {review_id}: assessment built in {elapsed:.1f}s "
+            f"(lock mode={lease.mode}, force={force}, persisted={persisted})"
+        )
     return AgentAssessmentResponse(
         review_id=review_id, assessment=assessment, cached=False, persisted=persisted
     )
+
+
+async def _reread_row(repo: "ExpertReviewRepository", review_id: str) -> Dict[str, Any]:
+    """The review row as it is NOW, read under the lock (a vanished row reads as ``{}``).
+
+    Codex round-3 MED-A: a failed re-read must NOT fall back to building from
+    the initial snapshot, which could overwrite a result persisted meanwhile.
+    Retry once after a short backoff; if the store still fails, raise the same
+    SAFE 503 the detail route uses for a failed row read -- the caller's
+    ``async with`` releases the lease, and nothing is built.
+    """
+    failure: Exception = RuntimeError("re-read not attempted")
+    for attempt in range(1, _REREAD_ATTEMPTS + 1):
+        try:
+            return await repo.get_by_id(review_id) or {}
+        except Exception as e:
+            failure = e
+            logger.warning(
+                f"Expert-review {review_id}: post-acquire re-read failed "
+                f"(attempt {attempt}/{_REREAD_ATTEMPTS}): {e}"
+            )
+            if attempt < _REREAD_ATTEMPTS:
+                await asyncio.sleep(_REREAD_BACKOFF_SECONDS)
+    raise _store_unavailable("assessment re-read", failure)
+
+
+def _log_orphaned_build(task: "asyncio.Task[Any]") -> None:
+    """Done-callback for a build whose request was cancelled (nobody awaits the
+    task any more, so its outcome would otherwise be silent)."""
+    if task.cancelled():
+        logger.warning(f"{task.get_name()}: orphaned build was cancelled; nothing persisted")
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(f"{task.get_name()}: orphaned build failed: {exc!r}")
+    else:
+        logger.info(
+            f"{task.get_name()}: orphaned build completed after its client left; the "
+            "result is persisted for the next caller"
+        )
 
 
 @router.get(

@@ -4334,6 +4334,13 @@ export interface paths {
          *     in ``agent_assessment_json`` — kept separate from ``checklist_json``, which
          *     remains the human reviewer's own record. ``persisted`` is honest about the
          *     cache write; a failed write still returns the (valid) assessment.
+         *
+         *     Concurrency (#1993): one build per review id across workers (Redis in-flight
+         *     lock, ``dependencies/inflight_lock.py``). A request that waited replays the
+         *     winner's stored result as ``cached=True``; a request whose bounded wait (the
+         *     TTL) is exhausted answers 409 with ``Retry-After`` instead of building
+         *     unlocked. The build runs in its own shielded task, so a cancelled request
+         *     (client gone, nginx 504) still persists and releases the lock in order.
          */
         post: operations["generate_expert_review_assessment"];
         delete?: never;
