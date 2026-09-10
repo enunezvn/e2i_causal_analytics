@@ -295,7 +295,9 @@ def _missing_mask(column: Any) -> np.ndarray:
 
 def _distinct_levels(column: Any) -> List[Any]:
     """Non-null levels in first-seen order — deterministic for a given frame, so the
-    positivity refusal below always names the same level for the same data."""
+    refusal below always names the same level for the same data. Nulls are dropped
+    before anything is compared, so a nullable dtype's ``pd.NA`` never becomes a
+    level and never reaches an ambiguous truth test."""
     values = np.asarray(column, dtype=object)
     missing = _missing_mask(column)
     return list(dict.fromkeys(v for v, m in zip(values, missing, strict=True) if not m))
@@ -304,12 +306,21 @@ def _distinct_levels(column: Any) -> List[Any]:
 def _level_indicator(column: Any, level: Any) -> np.ndarray:
     """``column == level`` as float 0/1, NaN where the source value is null.
 
-    The result is exactly the column a caller would hand-build and pass as a numeric
-    covariate, so both routes score identically.
+    The comparison runs over the NON-NULL positions only. pandas' nullable dtypes
+    (``string``, ``Int64``, …) hold ``pd.NA``, and ``pd.NA == level`` is itself
+    ``pd.NA``, so comparing the whole raw array first raises "boolean value of NA is
+    ambiguous" — a ``TypeError`` that would take a valid categorical column, and the
+    whole refutation node with it, down. Masking first also keeps the result exactly
+    the column a caller would hand-build and pass as a numeric covariate, so both
+    routes score identically.
     """
     values = np.asarray(column, dtype=object)
-    indicator = np.where(values == level, 1.0, 0.0)
-    return np.asarray(np.where(_missing_mask(column), np.nan, indicator), dtype=float)
+    missing = _missing_mask(column)
+    indicator = np.full(values.shape, np.nan, dtype=float)
+    present = ~missing
+    if present.any():
+        indicator[present] = np.asarray(values[present] == level, dtype=float)
+    return indicator
 
 
 def _as_numeric_or_none(column: Any) -> Optional[np.ndarray]:
@@ -531,7 +542,12 @@ class BenchmarkInputs:
     covariate_bias_factors: Dict[str, float] = field(default_factory=dict)
     treatment_is_binary: bool = False
     outcome_is_binary: bool = False
-    n_rows: int = 0
+    # ``None`` = no frame was looked at, so a consumer may fall back to its own count.
+    # ``benchmark_inputs_from_frame`` always sets an int, ZERO included: a frame with
+    # no usable rows has a computed count of zero, which is a measurement, not an
+    # absence. Collapsing the two lets the refutation runner substitute the
+    # SUBSAMPLE's length into a reading whose frame yielded nothing.
+    n_rows: Optional[int] = None
 
 
 def benchmark_inputs_from_frame(

@@ -127,6 +127,16 @@ class TestCovariateBiasFactors:
         assert inp.treatment_is_binary and inp.outcome_is_binary
         assert set(inp.covariate_bias_factors) == {"c", "b"}
 
+    def test_n_rows_tells_a_computed_zero_apart_from_a_missing_count(self):
+        """A frame present but unusable (every treatment value NaN) has a COMPUTED
+        count of zero; only a caller that never looked at a frame has none. Collapsing
+        the two lets the runner substitute the refutation SUBSAMPLE's length into the
+        reading's "n = ..." for a frame that yielded no rows at all."""
+        frame = self._frame().assign(t=np.nan)
+        inp = ev.benchmark_inputs_from_frame(frame, "t", "y", ["c"])
+        assert inp.n_rows == 0 and isinstance(inp.n_rows, int)
+        assert ev.BenchmarkInputs(baseline_risk=None, naive_effect=None).n_rows is None
+
     def test_continuous_treatment_has_no_naive_contrast(self):
         frame = self._frame().assign(t=lambda d: d.c)  # continuous treatment
         inp = ev.benchmark_inputs_from_frame(frame, "t", "y", ["b"])
@@ -349,6 +359,20 @@ class TestCategoricalCovariateBiasFactors:
             n_rows=inp.n_rows,
         )
         assert reading.reading == ev.READING_UNBENCHMARKED
+
+    def test_a_nullable_string_column_scores_like_its_object_twin(self):
+        """pandas' nullable ``string`` dtype holds ``pd.NA``, and comparing a raw
+        object array containing it against a level raises "boolean value of NA is
+        ambiguous" -- a TypeError that would surface as a suite-killing
+        RefutationError. Nulls must be masked out BEFORE the comparison."""
+        levels = ["A", "B", "C", None, "A", "B", "C", "A", None, "B"]
+        df = pd.DataFrame(
+            {"t": [1, 1, 1, 1, 0, 0, 0, 0, 1, 0], "y": [1, 0, 1, 0, 1, 1, 0, 0, 1, 0]}
+        )
+        df["g_obj"] = pd.Series(levels, dtype=object)
+        df["g_str"] = pd.array(levels, dtype="string")
+        factors = ev.covariate_bias_factors(df, "t", "y", ["g_obj", "g_str"])
+        assert factors["g_str"] == factors["g_obj"]  # exact: same masked indicator
 
     @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
     def test_a_bool_covariate_scores_exactly_like_its_integer_twin(self, seed: int):

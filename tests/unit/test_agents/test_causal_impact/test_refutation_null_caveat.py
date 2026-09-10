@@ -99,6 +99,24 @@ class TestBenchmarkInputs:
         assert inputs.baseline_risk is None and inputs.naive_effect is None
         assert inputs.covariate_bias_factors == {}
 
+    def test_n_rows_is_none_when_missing_and_zero_when_computed(self):
+        """The node hands ``n_rows`` to the runner verbatim. ``None`` means "no frame
+        was looked at" and lets the runner fall back to ``len(data)`` — the refutation
+        SUBSAMPLE. A frame that yielded no usable rows must report the computed 0
+        instead, or the reading prints the subsample's count for it."""
+        missing = node_mod._sensitivity_benchmark_inputs(
+            estimation_data=None, treatment="t", outcome="y", estimation_result={}
+        )
+        assert missing.n_rows is None
+        frame = _frame().assign(treatment_arm=np.nan)
+        computed = node_mod._sensitivity_benchmark_inputs(
+            estimation_data=frame,
+            treatment="treatment_arm",
+            outcome="treatment_initiated",
+            estimation_result={},
+        )
+        assert computed.n_rows == 0
+
     def test_a_computation_failure_raises_refutation_error_with_a_reason(self):
         """A covariate that perfectly separates treatment and outcome makes evalue raise
         ValueError (positivity violation); the node must not fail open to 'unbenchmarked'."""

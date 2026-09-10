@@ -1732,9 +1732,11 @@ class RefutationNode:
                     baseline_risk=benchmark_inputs.baseline_risk,
                     naive_effect=benchmark_inputs.naive_effect,
                     covariate_bias_factors=benchmark_inputs.covariate_bias_factors,
-                    # FULL-frame row count for the reading's "n = …" (the runner's
-                    # fallback is len(data), which is the refutation subsample).
-                    n_rows=(benchmark_inputs.n_rows or None),
+                    # FULL-frame row count for the reading's "n = …". Passed
+                    # VERBATIM: None only when no frame was read, which is what lets
+                    # the runner fall back to len(data) — the refutation subsample.
+                    # A computed 0 (frame present, no usable rows) must stay 0.
+                    n_rows=benchmark_inputs.n_rows,
                     # DESIGN declaration from the API layer (dataset spec): a
                     # genuinely randomized treatment reports the E-value as
                     # information (SKIPPED) instead of a benchmarked reading.
