@@ -153,7 +153,7 @@ numpy only. Every function is total on its documented domain and raises `ValueEr
 | `rr_from_risk_difference(rd, baseline_risk)` | `p1 = p0 + rd`; RR = `p1/p0` oriented ≥ 1 (a negative RD reverses the exposure coding, per the EValue package). Requires `0 < p0 < 1` and `0 < p1 < 1`; returns `None` otherwise. |
 | `bias_factor(rr_eu, rr_ud)` | Ding & VanderWeele 2016 joint bounding factor `B = RR_EU·RR_UD / (RR_EU + RR_UD − 1)`, inputs oriented ≥ 1. |
 | `joint_confounding_benchmark(naive, adjusted, baseline_risk, outcome_std)` | `B_obs = RR(naive) / RR(adjusted)` oriented ≥ 1, each RR via the risk-difference path when a baseline risk exists, else the SMD path. `None` when `naive` is `None`. |
-| `covariate_bias_factors(frame, treatment, outcome, covariates)` | Per covariate: binary covariates as-is, continuous ones split at the median; `RR_EU` = share of high-covariate units among treated ÷ among controls (treated = `T == 1`, or `T > median(T)` for a continuous treatment); `RR_UD` = outcome rate among high-covariate ÷ low-covariate **controls** (SMD path on the mean difference for a continuous outcome). Each turned into a bias factor. Empty dict for an empty covariate list. |
+| `covariate_bias_factors(frame, treatment, outcome, covariates)` | Per covariate: binary covariates as-is, continuous ones split at the median; `RR_EU` = share of high-covariate units among treated ÷ among controls (treated = `T == 1`, or `T > median(T)` for a continuous treatment); `RR_UD` = outcome rate among high-covariate ÷ low-covariate **controls** (SMD path on the mean difference for a continuous outcome). Each turned into a bias factor. A categorical covariate is scored level by level (each level a 0/1 indicator) and keeps the max under its own name. A categorical level with fewer than 5 rows in either arm (`MIN_CELL_SIZE`) is skipped as a sparse cell. Empty dict for an empty covariate list. |
 | `measured_confounding_benchmark(joint, covariate_factors)` | Returns `(value, basis)`: the joint benchmark when available (`basis = joint_naive_vs_adjusted`), else the largest covariate factor (`strongest_covariate`), else `None` (`none_measured`). |
 | `classify(effect, ci, *, randomized, baseline_risk, outcome_std, naive_effect, covariate_factors, n_rows)` | Returns a `SensitivityReading` (§4.4). |
 
@@ -399,6 +399,18 @@ calibration test and the re-band script (measured peaks ~470 MiB); stop below 1.
 - Debt 2's second slice — continuous scores replacing PASSED/WARNING labels in the confidence mean — waits
   until the bootstrap distribution is also continuous; a single continuous term in a mean of labels has no
   calibration anchor.
+- Sparse high-cardinality categoricals inflate the fallback benchmark on a column that carries no
+  confounding: measured (30 levels, n = 200, 30 % treated, 10 % events, seeds 0..49, no relation between the
+  column and T or Y) the covariate factor had median 5.71 and max 12.75 before any cell rule (Task 4's
+  frames measured median 4.70 / max 27.0 at 30 levels and 8.70 / 91.0 at 80). Tiny cells give ratios of
+  the order of the arm ratio and the covariate keeps the max. The direction is safe (a larger benchmark
+  cannot manufacture false robustness) but it can push a run to `within_measured_confounding` on nothing.
+  `MIN_CELL_SIZE = 5` (the chi-square rule of thumb) skips a level with fewer than 5 rows in either arm:
+  the same frames measure median 1.81, max 3.00, with a factor on 28 of 50 seeds. The residual is a
+  selection artefact of the 30 % arm at that sparsity (a surviving level needs 5 treated rows out of ~6.7,
+  so survivors are treated-heavy; the same rule at a 50 % arm measures median 1.20). Live cardinality is
+  unaffected (4 levels: median 1.016; 12 levels: 1.091; n = 1500). A larger cell size (8 or 10) silences
+  the column on every n = 200 seed. The numeric route is not subject to the rule.
 
 ## 11. Issues
 
