@@ -932,6 +932,25 @@ class TestSensitivityTest:
             rr_ci + np.sqrt(rr_ci * (rr_ci - 1)), rel=1e-6
         )
 
+    def test_a_degenerate_sd_reports_unstandardized_not_standardized(self, runner):
+        """H3: ``classify`` gets the SANITIZED SD (None unless finite and > 0), so
+        the legacy ``standardized`` flag must be computed from that, not from the
+        raw parameter. A constant-outcome frame (SD 0.0) used no SD at all and the
+        retired code reported False here; reporting True would present a
+        scale-dependent E-value as a comparable one."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=0.0
+        )
+        assert result.details["standardized"] is False
+        assert result.details["outcome_std"] is None
+
+    def test_a_usable_sd_reports_standardized(self, runner):
+        result = runner._run_sensitivity_test(
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=1.0
+        )
+        assert result.details["standardized"] is True
+        assert result.details["outcome_std"] == 1.0
+
     def test_unbenchmarked_without_naive_or_covariates(self, runner):
         result = runner._run_sensitivity_test(original_effect=0.15, original_ci=(0.08, 0.22))
         assert result.status == RefutationStatus.WARNING

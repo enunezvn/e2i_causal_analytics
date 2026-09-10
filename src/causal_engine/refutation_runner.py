@@ -1883,16 +1883,22 @@ class RefutationRunner:
         not-applicable behaviour with the numbers kept for information.
         """
         start_time = time.time()
+        # The SD actually USED: ``classify`` refuses a non-finite or non-positive
+        # SD, so a constant-outcome frame (SD 0.0) standardizes by nothing and is
+        # reported as None — the legacy ``standardized`` flag below must read this
+        # sanitized value, not the raw parameter, or an unstandardized (and so
+        # scale-dependent) E-value would be presented as a comparable one (H3).
+        sd = (
+            outcome_std
+            if outcome_std is not None and np.isfinite(outcome_std) and outcome_std > 0
+            else None
+        )
         reading = evalue.classify(
             original_effect,
             original_ci,
             randomized=randomized_design,
             baseline_risk=baseline_risk,
-            outcome_std=(
-                outcome_std
-                if outcome_std is not None and np.isfinite(outcome_std) and outcome_std > 0
-                else None
-            ),
+            outcome_std=sd,
             naive_effect=naive_effect,
             covariate_factors=covariate_bias_factors or {},
             n_rows=n_rows,
@@ -1903,9 +1909,8 @@ class RefutationRunner:
             {
                 # legacy keys consumers already read
                 "e_value": reading.e_value_point,
-                "standardized": reading.conversion == "standardized_difference"
-                and outcome_std is not None,
-                "outcome_std": outcome_std,
+                "standardized": reading.conversion == "standardized_difference" and sd is not None,
+                "outcome_std": sd,
                 "gate_applicable": not randomized_design,
             }
         )
@@ -1977,8 +1982,10 @@ class RefutationRunner:
         """Calculate weighted confidence score from all tests.
 
         Weights:
-        - Critical tests (placebo, random_common_cause, sensitivity): 0.25 each
-        - Non-critical tests (data_subset, bootstrap): 0.125 each
+        - placebo_treatment, random_common_cause and sensitivity_e_value weigh
+          0.25 each (sensitivity is non-critical since 2026-09-10; its weight is
+          unchanged — it still carries evidence, it just cannot block)
+        - data_subset and bootstrap weigh 0.125 each
 
         Args:
             tests: List of test results
