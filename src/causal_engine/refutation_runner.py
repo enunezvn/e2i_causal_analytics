@@ -1080,6 +1080,13 @@ class RefutationRunner:
                     naive_effect,
                     covariate_bias_factors,
                 )
+                # Set from ``_inputs.n_rows`` below when the benchmark-inputs branch
+                # runs — the masked count the SD and benchmark describe, ZERO
+                # included (a computed zero is a measurement, not an absence; see
+                # ``BenchmarkInputs.n_rows`` in evalue.py). Stays ``None`` when the
+                # branch does not run, so the n_rows expression below falls through
+                # to ``len(data)`` instead of silently keeping a stale value.
+                _computed_n: Optional[int] = None
                 if (
                     _baseline_risk is None
                     and _naive is None
@@ -1115,6 +1122,7 @@ class RefutationRunner:
                             _inputs.naive_effect,
                             _inputs.covariate_bias_factors,
                         )
+                        _computed_n = _inputs.n_rows
                     except Exception as exc:
                         raise RefutationError(
                             "Refutation analysis unavailable for this query, retry "
@@ -1141,8 +1149,18 @@ class RefutationRunner:
                     baseline_risk=_baseline_risk,
                     naive_effect=_naive,
                     covariate_bias_factors=_factors,
+                    # Precedence: caller's explicit n_rows (full-frame count, #1419
+                    # — this runner's ``data`` may be a subsample) > the masked count
+                    # the benchmark-inputs branch computed (same rows as the SD and
+                    # the benchmark) > len(data) when that branch never ran > None.
                     n_rows=(
-                        n_rows if n_rows is not None else (len(data) if data is not None else None)
+                        n_rows
+                        if n_rows is not None
+                        else (
+                            _computed_n
+                            if _computed_n is not None
+                            else (len(data) if data is not None else None)
+                        )
                     ),
                 )
                 tests.append(test_result)

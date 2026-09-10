@@ -1837,3 +1837,34 @@ class TestSensitivityOutcomeStdMasking:
         sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
         assert sens.details["outcome_std"] == pytest.approx(float(np.std([1.0, 0.0, 1.0, 0.0])))
         assert np.isfinite(sens.details["e_value"])
+        # The benchmark-inputs branch ran on this frame (6 rows, 4 jointly usable
+        # after the treatment/outcome NaN mask) — the reading's n_rows must be the
+        # SAME 4 rows the SD and benchmark above describe, not the raw 6-row frame
+        # length. See ``BenchmarkInputs.n_rows`` (evalue.py) for why zero also
+        # counts as computed rather than falling back to ``len(data)``.
+        assert sens.details["n_rows"] == 4
+
+    def test_caller_n_rows_wins_over_the_computed_masked_count(self):
+        """#1419: the caller's explicit ``n_rows`` is the FULL estimation frame's
+        count (the runner's ``data`` may be a refutation subsample), so it must win
+        over the masked count this frame's own benchmark-inputs branch computes."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame(
+            {
+                "t": [1.0, 0.0, 1.0, 0.0, np.nan, 1.0],
+                "y": [1.0, 0.0, 1.0, np.nan, 0.0, 0.0],
+            }
+        )
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            n_rows=1500,
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["n_rows"] == 1500
