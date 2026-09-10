@@ -1082,6 +1082,13 @@ class RefutationRunner:
                     and data is not None
                     and treatment is not None
                     and outcome is not None
+                    # An ABSENT column is a MISSING input, not a failure: the block
+                    # below indexes both, so without this guard naming a column the
+                    # refutation frame does not carry would fail the suite closed
+                    # instead of reading ``unbenchmarked``. Same distinction the SD
+                    # guard above draws; a failure on PRESENT columns still raises.
+                    and treatment in getattr(data, "columns", [])
+                    and outcome in getattr(data, "columns", [])
                 ):
                     # A FAILURE here is not an absent benchmark. Swallowing it into
                     # ``unbenchmarked`` would print "no measured confounders exist for

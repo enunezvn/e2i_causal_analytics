@@ -1062,6 +1062,47 @@ class TestSensitivityTest:
         assert sens.details["standardized"] is False
         assert sens.details["reading"] == "unbenchmarked"
 
+    def test_an_absent_outcome_column_leaves_the_benchmark_unbenchmarked(self):
+        """An ABSENT column is a MISSING input, not a computation failure. The
+        benchmark block indexes ``data[outcome]``, so without this guard a caller
+        that names a column the refutation frame does not carry fails the whole
+        suite closed instead of reading ``unbenchmarked`` — the same distinction the
+        SD block above draws."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame({"t": [0, 1, 0, 1], "y": [0.0, 1.0, 0.0, 1.0]})
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="missing_col",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["reading"] == "unbenchmarked"
+        assert sens.details["benchmark"] is None
+
+    def test_an_absent_treatment_column_leaves_the_benchmark_unbenchmarked(self):
+        """Mirror of the above on the treatment side, where the outcome column IS
+        present and its SD is computed normally."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame({"t": [0, 1, 0, 1], "y": [0.0, 1.0, 0.0, 1.0]})
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="missing_col",
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["reading"] == "unbenchmarked"
+        assert sens.details["benchmark"] is None
+
     def test_a_missing_frame_is_still_a_legitimate_unbenchmarked_fallback(self):
         """The MISSING-input path is not a failure: with no data/treatment/outcome
         there is nothing to benchmark against and ``unbenchmarked`` is honest."""
