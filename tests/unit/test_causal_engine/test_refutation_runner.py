@@ -932,14 +932,25 @@ class TestSensitivityTest:
             rr_ci + np.sqrt(rr_ci * (rr_ci - 1)), rel=1e-6
         )
 
-    def test_a_degenerate_sd_reports_unstandardized_not_standardized(self, runner):
-        """H3: ``classify`` gets the SANITIZED SD (None unless finite and > 0), so
-        the legacy ``standardized`` flag must be computed from that, not from the
-        raw parameter. A constant-outcome frame (SD 0.0) used no SD at all and the
-        retired code reported False here; reporting True would present a
-        scale-dependent E-value as a comparable one."""
+    @pytest.mark.parametrize("bad_sd", [0.0, -1.0, float("nan"), float("inf")])
+    def test_an_unusable_sd_fails_closed_rather_than_standardizing_by_nothing(self, runner, bad_sd):
+        """H3: a PRESENT but unusable SD (constant outcome, negative, NaN, inf) is a
+        failure, not a missing input. Sanitizing it to None would send the classifier
+        down the SMD path on the UNSTANDARDIZED effect — that changes the NUMBER a
+        leader reads, not a label — so it fails closed like every other unusable
+        sensitivity input (spec §5). ``None`` remains the served missing-input case."""
+        with pytest.raises(RefutationError) as ei:
+            runner._run_sensitivity_test(
+                original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=bad_sd
+            )
+        assert ei.value.details["reason"] == "sensitivity_outcome_std_unusable"
+        assert ei.value.details["outcome_std"] == repr(bad_sd)
+
+    def test_an_absent_sd_is_still_a_served_unstandardized_reading(self, runner):
+        """``None`` means no SD was available; the reading is served on the raw
+        effect with the flag honestly False."""
         result = runner._run_sensitivity_test(
-            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=0.0
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=None
         )
         assert result.details["standardized"] is False
         assert result.details["outcome_std"] is None

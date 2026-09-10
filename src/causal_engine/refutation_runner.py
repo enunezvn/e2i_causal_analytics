@@ -1927,16 +1927,27 @@ class RefutationRunner:
         not-applicable behaviour with the numbers kept for information.
         """
         start_time = time.time()
-        # The SD actually USED: ``classify`` refuses a non-finite or non-positive
-        # SD, so a constant-outcome frame (SD 0.0) standardizes by nothing and is
-        # reported as None — the legacy ``standardized`` flag below must read this
-        # sanitized value, not the raw parameter, or an unstandardized (and so
-        # scale-dependent) E-value would be presented as a comparable one (H3).
-        sd = (
-            outcome_std
-            if outcome_std is not None and np.isfinite(outcome_std) and outcome_std > 0
-            else None
-        )
+        # H3, spec §5. ``None`` is a MISSING input: no SD was available and the
+        # reading is served on the raw effect. A PRESENT but unusable SD (0,
+        # negative, NaN, inf) is a FAILURE: sanitizing it to None would send the
+        # classifier down the SMD path on the UNSTANDARDIZED effect, which changes
+        # the NUMBER a leader reads rather than a label. The Task 4 sensitivity
+        # node passes the FULL-frame ``np.std``, so a constant or non-finite
+        # outcome there surfaces as this error instead of a silently
+        # unstandardized reading.
+        if outcome_std is not None and not (np.isfinite(outcome_std) and outcome_std > 0):
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without "
+                f"refutation. Sensitivity outcome SD is unusable ({outcome_std!r}): "
+                "a constant or non-finite outcome cannot carry a standardized effect",
+                details={
+                    "reason": "sensitivity_outcome_std_unusable",
+                    # repr, not the float: NaN and inf are not JSON-serializable
+                    # and Postgres JSONB rejects them outright.
+                    "outcome_std": repr(outcome_std),
+                },
+            )
+        sd = outcome_std  # validated above: None, or finite and positive
         # ``classify`` refuses an out-of-domain input (a CI that does not contain
         # the estimate, a non-finite value that slipped past the caller) with
         # ValueError. Surface it as the structured, fail-closed error every refit
