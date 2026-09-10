@@ -379,6 +379,91 @@ class TestExtractFailurePatterns:
         assert pattern.category == FailureCategory.UNOBSERVED_CONFOUNDING
         assert pattern.severity == "high"
 
+    def test_sensitivity_description_follows_the_reading(self):
+        """2026-09-10: the stored DESCRIPTION must match the stored category.
+
+        The retired sentence asserted "sensitivity to unmeasured confounding" for
+        every sensitivity row. On a ``null_finding`` -- categorized
+        insufficient_sample / low, with a recommendation saying no unmeasured
+        confounder is needed -- that made one record contradict itself.
+        """
+        headline = "No detectable effect at this sample size"
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.02,
+                    refuted_effect=0.02,
+                    delta_percent=0.0,
+                    details={
+                        "reading": "null_finding",
+                        "e_value": 1.2,
+                        "headline": headline,
+                        "message": "The 95 % CI includes zero at n=1500.",
+                    },
+                )
+            ],
+        )
+
+        (pattern,) = extract_failure_patterns(suite)
+
+        assert pattern.description.startswith(headline)
+        assert "unmeasured confounding" not in pattern.description
+        assert "The 95 % CI includes zero at n=1500." in pattern.description
+
+    def test_sensitivity_description_falls_back_to_the_canonical_headline(self):
+        """A row carrying a ``reading`` but no stored headline still reads right."""
+        from src.causal_engine import evalue
+
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.30,
+                    refuted_effect=0.30,
+                    delta_percent=0.0,
+                    details={"reading": "unbenchmarked", "e_value": 1.2, "message": "m"},
+                )
+            ],
+        )
+
+        (pattern,) = extract_failure_patterns(suite)
+
+        assert pattern.description.startswith(evalue.HEADLINES["unbenchmarked"])
+        assert "unmeasured confounding" not in pattern.description
+
+    def test_legacy_sensitivity_description_is_unchanged(self):
+        """Rows persisted before the reading existed keep today's sentence."""
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.30,
+                    refuted_effect=0.30,
+                    delta_percent=0.0,
+                    details={"e_value": 1.2},
+                )
+            ],
+        )
+
+        (pattern,) = extract_failure_patterns(suite)
+
+        assert pattern.description == (
+            "E-value of 1.2 indicates sensitivity to unmeasured confounding"
+        )
+
     def test_extract_patterns_all_passed(self):
         """Test that no patterns are extracted when all tests pass."""
         tests = [

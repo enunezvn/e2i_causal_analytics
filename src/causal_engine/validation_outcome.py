@@ -350,6 +350,19 @@ def _describe_failure(test) -> str:
         return f"Placebo treatment showed {abs(delta):.1f}% of original effect"
 
     elif test_name == RefutationTestType.SENSITIVITY_E_VALUE:
+        # 2026-09-10: the description follows the READING, so it cannot contradict
+        # the category stored beside it. The retired sentence asserted "sensitivity
+        # to unmeasured confounding" for every row, which is false for a null
+        # finding (a precision statement) and misleading for an unbenchmarked one.
+        reading = test.details.get("reading")
+        if reading:
+            from src.causal_engine import evalue
+
+            headline = test.details.get("headline") or evalue.HEADLINES.get(reading)
+            if headline:
+                message = test.details.get("message")
+                return f"{headline}: {message}" if message else str(headline)
+        # Legacy rows persisted before the reading existed.
         e_value = test.details.get("e_value", "N/A")
         return f"E-value of {e_value} indicates sensitivity to unmeasured confounding"
 
