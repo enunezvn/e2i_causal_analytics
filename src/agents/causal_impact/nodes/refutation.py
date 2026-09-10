@@ -221,6 +221,31 @@ def _effective_reconstruction_common_causes(
     return baselines
 
 
+def _outcome_std_full(estimation_data: Any, treatment: str, outcome: str) -> Optional[float]:
+    """FULL-frame outcome SD (σ_Y) for the sensitivity reading, or None when there is
+    no column to measure.
+
+    An ABSENT frame or outcome column is a legitimate "no SD available": the runner
+    falls back to its own data-derived SD. Anything else is left to
+    ``evalue.outcome_std_from_frame``, which drops the NaN treatment/outcome rows the
+    estimation node masked before it fit — the raw passthrough frame still carries
+    them, and an unmasked ``np.std`` returns NaN, which ``classify`` refuses.
+
+    A PRESENT but unusable column raises and the exception propagates to the node's
+    error mapping. That is the same verdict, reached earlier: handing the runner a
+    None for it would send the classifier down the SMD path on an UNSTANDARDIZED
+    effect, and the runner would itself raise ``sensitivity_outcome_std_unusable``
+    for the very same frame.
+    """
+    if (
+        estimation_data is None
+        or not hasattr(estimation_data, "columns")
+        or outcome not in estimation_data.columns
+    ):
+        return None
+    return evalue.outcome_std_from_frame(estimation_data, outcome, treatment=treatment)
+
+
 _NULL_CAVEAT_PREFIX = "No detectable effect at this sample size: "
 
 
@@ -1516,16 +1541,9 @@ class RefutationNode:
             # frame's outcome SD so the scale-sensitive critical gate is
             # standardized on the same frame as the effect it gates. ``None``
             # lets the runner fall back to its data-derived SD.
-            outcome_std_full: Optional[float] = None
-            try:
-                if (
-                    estimation_data is not None
-                    and hasattr(estimation_data, "columns")
-                    and outcome in estimation_data.columns
-                ):
-                    outcome_std_full = float(np.std(estimation_data[outcome].to_numpy(dtype=float)))
-            except Exception:  # noqa: BLE001 - non-numeric outcome → runner fallback
-                outcome_std_full = None
+            outcome_std_full: Optional[float] = _outcome_std_full(
+                estimation_data, treatment, outcome
+            )
             benchmark_inputs = _sensitivity_benchmark_inputs(
                 estimation_data=estimation_data,
                 treatment=treatment,

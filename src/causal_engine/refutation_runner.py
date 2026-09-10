@@ -1056,7 +1056,12 @@ class RefutationRunner:
                     # the SMD path on the UNSTANDARDIZED effect, serving a
                     # scale-dependent, plausible-wrong number as a reading.
                     try:
-                        evalue_outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
+                        # Drops the NaN treatment/outcome rows the estimation node
+                        # masked before it fit; an unmasked np.std over the raw frame
+                        # returns NaN, which classify then refuses as unusable.
+                        evalue_outcome_std = evalue.outcome_std_from_frame(
+                            data, outcome, treatment=treatment
+                        )
                     except Exception as exc:
                         raise RefutationError(
                             "Refutation analysis unavailable for this query, retry "

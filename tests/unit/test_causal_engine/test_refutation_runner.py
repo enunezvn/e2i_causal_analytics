@@ -1799,3 +1799,41 @@ class TestConvenienceFunctions:
         )
 
         assert is_estimate_valid(suite) is True
+
+
+class TestSensitivityOutcomeStdMasking:
+    """The refutation frame carries the NaN rows the estimation node masked before it
+    fit. ``np.std`` over the raw column is NaN, which ``classify`` refuses — so the
+    whole suite used to fail closed on a perfectly usable estimate."""
+
+    def _sensitivity_only_runner(self):
+        return RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+
+    def test_nan_outcome_rows_are_masked_out_of_the_sd(self):
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame(
+            {
+                "t": [1.0, 0.0, 1.0, 0.0, np.nan, 1.0],
+                "y": [1.0, 0.0, 1.0, np.nan, 0.0, 0.0],
+            }
+        )
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["outcome_std"] == pytest.approx(float(np.std([1.0, 0.0, 1.0, 0.0])))
+        assert np.isfinite(sens.details["e_value"])

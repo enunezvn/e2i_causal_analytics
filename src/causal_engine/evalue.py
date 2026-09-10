@@ -550,6 +550,37 @@ class BenchmarkInputs:
     n_rows: Optional[int] = None
 
 
+def outcome_std_from_frame(frame: Any, outcome: str, *, treatment: Optional[str] = None) -> float:
+    """The SD of the rows the estimate came from (NaN treatment/outcome rows dropped,
+    as the estimation node does before it fits).
+
+    ``estimation_data`` is the RAW passthrough frame, so it still carries the rows the
+    estimator masked out. ``np.std`` over the raw column returns NaN for any frame with
+    a missing outcome, and ``classify`` refuses a non-finite SD — turning a perfectly
+    usable estimate into a failed reading on real data. One function for all three call
+    sites (both agent nodes and the runner), so σ_Y cannot differ between the engines.
+
+    ``treatment`` applies the SAME joint mask ``benchmark_inputs_from_frame`` uses, so
+    the SD and ``n_rows`` describe the same rows. A treatment column that is absent —
+    or not numeric, in which case the callers already treat the frame as unbenchmarkable
+    — is simply not masked on: it is a row filter here, never the subject of the
+    measurement, so it must not fail a reading its own outcome column can support.
+
+    The OUTCOME is the subject, so a present-but-unusable one (a string column) RAISES
+    rather than being coerced into an invented SD. A constant outcome returns 0.0, a
+    measurement that ``classify`` then refuses under its own unusable-SD rule.
+    """
+    y = np.asarray(frame[outcome], dtype=float)
+    ok = ~np.isnan(y)
+    if treatment is not None and treatment in getattr(frame, "columns", []):
+        t = _as_numeric_or_none(frame[treatment])
+        if t is not None:
+            ok &= ~np.isnan(t)
+    if not ok.any():
+        raise ValueError(f"outcome {outcome!r} has no usable rows to measure a SD on")
+    return float(np.std(y[ok]))
+
+
 def benchmark_inputs_from_frame(
     frame: Any,
     treatment: str,

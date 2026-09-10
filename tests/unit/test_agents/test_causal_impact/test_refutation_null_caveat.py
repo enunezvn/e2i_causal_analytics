@@ -182,3 +182,24 @@ class TestNullCaveat:
             "not_applicable_randomized",
         ):
             assert node_mod._sensitivity_caveat_warnings(self._suite(reading)) == []
+
+
+class TestOutcomeStdFull:
+    """The node's σ_Y for the FULL frame. NaN treatment/outcome rows are dropped, as
+    the estimation node does before it fits — the raw passthrough frame carries them."""
+
+    def test_the_sd_is_measured_on_the_masked_rows(self):
+        frame = _frame()
+        frame.loc[[0, 5], "treatment_initiated"] = np.nan
+        frame.loc[[3], "treatment_arm"] = np.nan
+        y = frame["treatment_initiated"].to_numpy(dtype=float)
+        t = frame["treatment_arm"].to_numpy(dtype=float)
+        ok = ~np.isnan(y) & ~np.isnan(t)
+        assert node_mod._outcome_std_full(frame, "treatment_arm", "treatment_initiated") == (
+            pytest.approx(float(np.std(y[ok])))
+        )
+
+    def test_an_absent_column_is_none_not_a_failure(self):
+        frame = _frame()
+        assert node_mod._outcome_std_full(frame, "treatment_arm", "not_a_column") is None
+        assert node_mod._outcome_std_full(None, "treatment_arm", "treatment_initiated") is None

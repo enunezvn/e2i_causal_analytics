@@ -318,3 +318,46 @@ class TestSensitivityWithDifferentEffects:
         assert sens["reading"] == "beyond_measured_confounding"
         assert sens["robust_to_confounding"] is True
         assert sens["benchmark"] is not None
+
+
+class TestOutcomeStdOnRealFrames:
+    """``estimation_data`` is the RAW frame and the estimation node masks NaN rows
+    before it fits, so a NaN outcome is an EXPECTED input — not a reason to turn a
+    usable estimate into ``sensitivity_error``."""
+
+    @pytest.mark.asyncio
+    async def test_nan_rows_do_not_fail_the_node(self):
+        from src.causal_engine import evalue
+
+        frame = _frame()
+        frame.loc[[1, 4, 9], "treatment_initiated"] = np.nan
+        frame.loc[[2, 7], "treatment_arm"] = np.nan
+        state = _state_with_frame(0.15, 0.08, 0.22, naive=0.20)
+        state["estimation_data"] = frame
+
+        result = await SensitivityNode().execute(state)
+
+        assert "sensitivity_error" not in result
+        sens = result["sensitivity_analysis"]
+        masked_std = evalue.outcome_std_from_frame(
+            frame, "treatment_initiated", treatment="treatment_arm"
+        )
+        inputs = evalue.benchmark_inputs_from_frame(
+            frame,
+            "treatment_arm",
+            "treatment_initiated",
+            ["disease_severity"],
+            naive_effect=0.20,
+        )
+        expected = evalue.classify(
+            0.15,
+            (0.08, 0.22),
+            randomized=False,
+            baseline_risk=inputs.baseline_risk,
+            outcome_std=masked_std,
+            naive_effect=inputs.naive_effect,
+            covariate_factors=inputs.covariate_bias_factors,
+            n_rows=inputs.n_rows,
+        )
+        assert sens["e_value"] == pytest.approx(expected.e_value_point)
+        assert sens["reading"] == expected.reading

@@ -11,8 +11,6 @@ computation surfaces as ``sensitivity_error`` (status failed), never as a readin
 import time
 from typing import Dict, Optional
 
-import numpy as np
-
 from src.agents.causal_impact.nodes.sensitivity_inputs import sensitivity_benchmark_inputs
 from src.agents.causal_impact.state import CausalImpactState, SensitivityAnalysis, spread_safe
 from src.causal_engine import evalue
@@ -123,9 +121,14 @@ class SensitivityNode:
         """Outcome SD (σ_Y) from the estimation-data passthrough; None when unavailable.
 
         A MISSING frame/column yields None (the reading is served on the raw SMD
-        path). A present column whose SD is not finite and positive is left to
-        ``evalue.classify``, which raises — surfacing as ``sensitivity_error`` rather
-        than a reading standardized by nothing (spec §5, same rule as the runner).
+        path). Everything else goes through ``evalue.outcome_std_from_frame``, the
+        one function all three engines share: it drops the NaN treatment/outcome rows
+        the estimation node masked before it fit, so the raw passthrough frame's
+        missing values cannot turn a usable estimate into a failure.
+
+        No try/except: a PRESENT but unusable outcome column raises there, and that
+        surfaces as ``sensitivity_error`` rather than a reading standardized by
+        nothing (spec §5, same rule as the runner).
         """
         data = state.get("estimation_data")
         outcome_var = state.get("outcome_var")
@@ -133,7 +136,9 @@ class SensitivityNode:
             return None
         if not hasattr(data, "columns") or outcome_var not in data.columns:
             return None
-        return float(np.std(np.asarray(data[outcome_var], dtype=float)))
+        return evalue.outcome_std_from_frame(
+            data, outcome_var, treatment=state.get("treatment_var")
+        )
 
 
 # Standalone function for LangGraph integration

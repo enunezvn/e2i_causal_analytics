@@ -551,3 +551,64 @@ class TestClassify:
     def test_e_value_stays_finite_for_a_huge_effect(self):
         r = self._c(400, (399, 401), baseline_risk=None, outcome_std=None, naive_effect=None)
         assert math.isfinite(r.e_value_point)
+
+
+class TestOutcomeStdFromFrame:
+    """σ_Y for the reading, measured on the rows the estimate came from.
+
+    ``estimation_data`` is the RAW passthrough frame while the estimation node masks
+    NaN treatment/outcome rows before it fits, so NaN outcomes are an EXPECTED input.
+    ``np.std`` over the raw column returns NaN, which ``classify`` refuses — turning a
+    perfectly usable estimate into a failure. One function, three call sites.
+    """
+
+    def test_nan_outcomes_are_dropped_before_the_sd(self):
+        frame = pd.DataFrame({"y": [1.0, 0.0, np.nan, 1.0, 0.0, np.nan]})
+        assert ev.outcome_std_from_frame(frame, "y") == pytest.approx(
+            float(np.std([1.0, 0.0, 1.0, 0.0]))
+        )
+
+    def test_the_treatment_mask_is_joint_with_the_outcome_mask(self):
+        """The same joint mask ``benchmark_inputs_from_frame`` uses, so the SD and
+        ``n_rows`` describe the SAME rows."""
+        frame = pd.DataFrame({"t": [1.0, 0.0, np.nan, 1.0], "y": [10.0, 0.0, 100.0, 2.0]})
+        assert ev.outcome_std_from_frame(frame, "y", treatment="t") == pytest.approx(
+            float(np.std([10.0, 0.0, 2.0]))
+        )
+        # Without the treatment the row survives and moves the SD.
+        assert ev.outcome_std_from_frame(frame, "y") == pytest.approx(
+            float(np.std([10.0, 0.0, 100.0, 2.0]))
+        )
+
+    def test_a_missing_treatment_column_is_ignored_not_fatal(self):
+        frame = pd.DataFrame({"y": [1.0, 0.0, np.nan, 1.0]})
+        assert ev.outcome_std_from_frame(frame, "y", treatment="not_here") == pytest.approx(
+            float(np.std([1.0, 0.0, 1.0]))
+        )
+
+    def test_a_string_outcome_column_raises(self):
+        """PRESENT but unusable: coercing strings would invent a σ_Y."""
+        frame = pd.DataFrame({"y": ["low", "high", "low"]})
+        with pytest.raises(ValueError):
+            ev.outcome_std_from_frame(frame, "y")
+
+    def test_an_all_nan_outcome_column_raises(self):
+        frame = pd.DataFrame({"y": [np.nan, np.nan]})
+        with pytest.raises(ValueError, match="no usable rows"):
+            ev.outcome_std_from_frame(frame, "y")
+
+    def test_a_constant_outcome_returns_zero_for_classify_to_refuse(self):
+        """0.0 is a measurement, not an error; ``classify`` applies the unusable rule."""
+        frame = pd.DataFrame({"y": [2.0, 2.0, np.nan, 2.0]})
+        assert ev.outcome_std_from_frame(frame, "y") == 0.0
+        with pytest.raises(ValueError, match="outcome_std must be positive"):
+            ev.classify(
+                0.1,
+                (0.05, 0.15),
+                randomized=False,
+                baseline_risk=None,
+                outcome_std=0.0,
+                naive_effect=None,
+                covariate_factors={},
+                n_rows=3,
+            )
