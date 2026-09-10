@@ -1969,8 +1969,13 @@ class RefutationRunner:
                 f"refutation. Sensitivity reading failed: {exc}",
                 details={
                     "reason": "sensitivity_reading_failed",
-                    "original_effect": original_effect,
-                    "original_ci": list(original_ci),
+                    # repr, not the floats: the inputs ``classify`` rejects are
+                    # precisely the non-finite ones, and a NaN/inf (or a numpy
+                    # scalar) here would make the error record itself unpersistable
+                    # — Postgres JSONB rejects them — losing the diagnostic that
+                    # explains the failure.
+                    "original_effect": repr(original_effect),
+                    "original_ci": [repr(v) for v in original_ci],
                 },
                 original_error=exc,
             ) from exc

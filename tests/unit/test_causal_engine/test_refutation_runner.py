@@ -15,6 +15,7 @@ returns deterministic refutation results, or (b) assert that calling
 ``_run_*_test`` with ``causal_model=None`` raises ``RefutationError``.
 """
 
+import json
 from types import SimpleNamespace
 from typing import Callable, List, Optional
 
@@ -945,6 +946,7 @@ class TestSensitivityTest:
             )
         assert ei.value.details["reason"] == "sensitivity_outcome_std_unusable"
         assert ei.value.details["outcome_std"] == repr(bad_sd)
+        json.dumps(ei.value.details, allow_nan=False)
 
     def test_an_absent_sd_is_still_a_served_unstandardized_reading(self, runner):
         """``None`` means no SD was available; the reading is served on the raw
@@ -978,8 +980,21 @@ class TestSensitivityTest:
                 original_effect=0.1, original_ci=(0.8, 0.9), baseline_risk=0.3
             )
         assert ei.value.details["reason"] == "sensitivity_reading_failed"
-        assert ei.value.details["original_effect"] == 0.1
-        assert ei.value.details["original_ci"] == [0.8, 0.9]
+        assert ei.value.details["original_effect"] == repr(0.1)
+        assert ei.value.details["original_ci"] == [repr(0.8), repr(0.9)]
+        json.dumps(ei.value.details, allow_nan=False)
+
+    def test_reading_failure_details_stay_json_persistable(self, runner):
+        """The inputs ``classify`` rejects are precisely the non-finite ones, so raw
+        floats in ``details`` could be NaN/inf — which a JSONB writer rejects, losing
+        the very error record that explains the failure. Diagnostics go in as
+        strings."""
+        with pytest.raises(RefutationError) as ei:
+            runner._run_sensitivity_test(
+                original_effect=float("nan"), original_ci=(0.1, 0.2), baseline_risk=0.3
+            )
+        assert ei.value.details["reason"] == "sensitivity_reading_failed"
+        json.dumps(ei.value.details, allow_nan=False)
 
     def test_benchmark_computation_failure_fails_closed_not_unbenchmarked(self):
         """A covariate that perfectly separates treatment AND outcome is a positivity
@@ -1018,6 +1033,7 @@ class TestSensitivityTest:
                 estimate=_stub_estimate(),
             )
         assert ei.value.details["reason"] == "sensitivity_benchmark_failed"
+        json.dumps(ei.value.details, allow_nan=False)
         assert ei.value.details["treatment"] == "t"
         assert ei.value.details["outcome"] == "y"
         assert ei.value.details["covariates"] == ["c"]
