@@ -220,6 +220,53 @@ class TestCovariateBiasFactors:
         assert f["c"] == pytest.approx(expected)
 
 
+class TestCategoricalCovariateBiasFactors:
+    """A categorical confounder IS measured confounding (spec §4.1).
+
+    Dropping it would understate the fallback benchmark and let a run read
+    ``beyond_measured_confounding`` too easily -- the false robustness the
+    E-value reading exists to prevent. Each level becomes a 0/1 indicator run
+    through the SAME per-covariate path as a numeric column, and the covariate's
+    factor is the strongest of them.
+    """
+
+    def _frame(self, seed: int = 11, n: int = 3000) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        g = rng.choice(["A", "B", "C"], size=n)
+        is_c = (g == "C").astype(float)
+        t = (rng.random(n) < 1 / (1 + np.exp(-(1.4 * is_c - 0.7)))).astype(int)
+        y = (rng.random(n) < 1 / (1 + np.exp(-(1.2 * is_c + 0.3 * t - 0.5)))).astype(int)
+        return pd.DataFrame({"t": t, "y": y, "g": g, "c": rng.normal(size=n)})
+
+    def test_factor_is_the_max_over_per_level_indicators(self):
+        df = self._frame()
+        factors = ev.covariate_bias_factors(df, "t", "y", ["g"])
+        per_level = {
+            level: ev.covariate_bias_factors(
+                df.assign(ind=(df.g == level).astype(float)), "t", "y", ["ind"]
+            )["ind"]
+            for level in ("A", "B", "C")
+        }
+        assert factors["g"] == pytest.approx(max(per_level.values()))
+        assert factors["g"] > 1.05  # the C level confounds both T and Y
+
+    def test_a_single_level_covariate_is_skipped(self):
+        df = self._frame().assign(g="only_one")
+        assert "g" not in ev.covariate_bias_factors(df, "t", "y", ["g"])
+
+    def test_a_level_that_perfectly_separates_raises_naming_the_covariate(self):
+        # the "z" indicator is [0, 0, 1, 0]: treated share 0 (RR_EU limit) and the
+        # control high/low outcome rates are 1.0 / 0.0 (RR_UD limit) at once.
+        df = pd.DataFrame({"t": [1, 1, 0, 0], "g": ["x", "x", "z", "x"], "y": [0, 0, 1, 0]})
+        with pytest.raises(ValueError, match="'g'"):
+            ev.covariate_bias_factors(df, "t", "y", ["g"])
+
+    def test_benchmark_inputs_carries_both_numeric_and_categorical_factors(self):
+        inp = ev.benchmark_inputs_from_frame(self._frame(), "t", "y", ["c", "g"])
+        assert set(inp.covariate_bias_factors) == {"c", "g"}
+        assert inp.covariate_bias_factors["g"] > 1.0
+
+
 class TestClassify:
     def _c(self, effect, ci, **kw):
         base = {

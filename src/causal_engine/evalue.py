@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -260,6 +260,157 @@ def _ratio_or_limit(numerator: float, denominator: float) -> Tuple[Optional[floa
     return None, False
 
 
+def _is_categorical_column(column: Any) -> bool:
+    """Object / string / categorical / bool dtype: no median to split the column at."""
+    kind = getattr(getattr(column, "dtype", None), "kind", None)
+    return kind in ("O", "U", "S", "b")
+
+
+def _missing_mask(column: Any) -> np.ndarray:
+    """Null mask for a non-numeric column, via pandas when the object offers it."""
+    isna = getattr(column, "isna", None)
+    if callable(isna):
+        return np.asarray(isna(), dtype=bool)
+    values = np.asarray(column, dtype=object)
+    return np.array(
+        [v is None or (isinstance(v, float) and math.isnan(v)) for v in values], dtype=bool
+    )
+
+
+def _distinct_levels(column: Any) -> List[Any]:
+    """Non-null levels in first-seen order — deterministic for a given frame, so the
+    positivity refusal below always names the same level for the same data."""
+    values = np.asarray(column, dtype=object)
+    missing = _missing_mask(column)
+    return list(dict.fromkeys(v for v, m in zip(values, missing, strict=True) if not m))
+
+
+def _level_indicator(column: Any, level: Any) -> np.ndarray:
+    """``column == level`` as float 0/1, NaN where the source value is null.
+
+    The result is exactly the column a caller would hand-build and pass as a numeric
+    covariate, so both routes score identically.
+    """
+    values = np.asarray(column, dtype=object)
+    indicator = np.where(values == level, 1.0, 0.0)
+    return np.asarray(np.where(_missing_mask(column), np.nan, indicator), dtype=float)
+
+
+def _as_numeric_or_none(column: Any) -> Optional[np.ndarray]:
+    """The column as floats, or ``None`` when it is categorical rather than numeric."""
+    if _is_categorical_column(column):
+        return None
+    try:
+        return np.asarray(column, dtype=float)
+    except (TypeError, ValueError):
+        return None
+
+
+def _factor_from_numeric_covariate(
+    x: np.ndarray,
+    t: np.ndarray,
+    y: np.ndarray,
+    treated: np.ndarray,
+    control: np.ndarray,
+    *,
+    y_binary: bool,
+    y_sd: Optional[float],
+    cov: str,
+    level_note: str = "",
+) -> Optional[float]:
+    """One bias factor from an ALREADY-NUMERIC covariate column (spec §4.1).
+
+    The single home for the per-covariate math: the median/binary split, RR_EU from
+    the treated-vs-control high shares, RR_UD among controls, the Ding-VanderWeele
+    one-sided limits and the positivity refusal. A numeric column reaches it once; a
+    categorical column reaches it once per level indicator, so the two paths cannot
+    drift apart. ``None`` means skip (see ``covariate_bias_factors``' skip list).
+    """
+    ok = ~np.isnan(x) & ~np.isnan(y) & ~np.isnan(t)
+    if not ok.any():
+        return None
+    hi = _high_mask(x[ok])
+    tr, co = treated[ok], control[ok]
+    if not tr.any() or not co.any():
+        return None
+    hi_c, lo_c = hi & co, (~hi) & co
+    if not (hi_c.any() and lo_c.any()):
+        return None
+    p_hi_t, p_hi_c = float(hi[tr].mean()), float(hi[co].mean())
+    rr_eu, eu_limit = _ratio_or_limit(p_hi_t, p_hi_c)
+    yy = y[ok]
+    if y_binary:
+        m_hi, m_lo = float(yy[hi_c].mean()), float(yy[lo_c].mean())
+        rr_ud, ud_limit = _ratio_or_limit(m_hi, m_lo)
+        if rr_ud is None and not ud_limit:
+            return None  # 0/0: no events in either control stratum
+    else:
+        if not y_sd or y_sd <= 0:
+            return None  # no outcome variance to standardize against
+        rr_ud = rr_from_smd((yy[hi_c].mean() - yy[lo_c].mean()) / y_sd)
+        ud_limit = False  # the SMD path is always finite for a positive y_sd
+
+    if eu_limit and ud_limit:
+        raise ValueError(
+            f"covariate {cov!r} perfectly separates treatment and outcome in this "
+            f"frame{level_note} (positivity violation); its bias factor is unbounded"
+        )
+    if eu_limit:
+        assert rr_ud is not None  # eu_limit True implies ud_limit False (checked above)
+        return _orient(rr_ud)  # RR_EU -> infinity: B -> RR_UD
+    if ud_limit:
+        # p_hi_c > 0 always (hi_c.any() was checked above), so rr_eu is never None
+        # here — eu_limit False (this branch) means it is a real ratio.
+        assert rr_eu is not None
+        return _orient(rr_eu)  # RR_UD -> infinity: B -> RR_EU
+    assert rr_eu is not None and rr_ud is not None
+    return bias_factor(rr_eu, rr_ud)
+
+
+def _factor_from_categorical_covariate(
+    column: Any,
+    t: np.ndarray,
+    y: np.ndarray,
+    treated: np.ndarray,
+    control: np.ndarray,
+    *,
+    y_binary: bool,
+    y_sd: Optional[float],
+    cov: str,
+) -> Optional[float]:
+    """The strongest level's bias factor for a categorical covariate.
+
+    A categorical confounder IS measured confounding: the live #1351 resolver binds
+    string driver columns into the adjustment set and the estimation node fits their
+    one-hot encoding (#1417). Dropping them would understate the fallback benchmark
+    and let a run read ``beyond_measured_confounding`` on confounding that was in
+    fact measured — the false robustness this reading exists to prevent. Each level
+    becomes a 0/1 indicator scored by the SAME per-covariate path as a numeric
+    column, and the covariate keeps ONE entry under its own name (consumers key by
+    covariate, not by level) holding the MAX: the strongest confounding this column
+    could carry.
+    """
+    levels = _distinct_levels(column)
+    if len(levels) < 2:
+        return None  # a single level has no variation to benchmark
+    factors: List[float] = []
+    for level in levels:
+        factor = _factor_from_numeric_covariate(
+            _level_indicator(column, level),
+            t,
+            y,
+            treated,
+            control,
+            y_binary=y_binary,
+            y_sd=y_sd,
+            cov=cov,
+            level_note=f" at level {level!r}",
+        )
+        if factor is not None:
+            factors.append(factor)
+    return max(factors) if factors else None
+
+
 def covariate_bias_factors(
     frame: Any, treatment: str, outcome: str, covariates: Sequence[str]
 ) -> Dict[str, float]:
@@ -270,6 +421,13 @@ def covariate_bias_factors(
     among high-covariate CONTROLS / low-covariate controls (binary outcome), or the
     SMD path on the control-arm mean difference (continuous outcome).
 
+    A NUMERIC covariate is split at its median (binary as-is). A CATEGORICAL one
+    (object / string / categorical / bool dtype, or a column no float conversion
+    accepts) has no median: every level becomes a 0/1 indicator scored by the same
+    path, and the covariate's factor is the strongest of them, under the covariate's
+    own name. See ``_factor_from_categorical_covariate`` for why they are scored
+    rather than dropped.
+
     A one-sided zero share or zero event count is a REAL Ding-VanderWeele limit, not
     an undefined value: as RR_UD -> infinity, B -> RR_EU, and as RR_EU -> infinity,
     B -> RR_UD (``bias_factor``'s own formula, taken to its limit). Those limits are
@@ -279,8 +437,10 @@ def covariate_bias_factors(
     A covariate is skipped only when genuinely undefined and carrying no
     information: covariate absent from the frame; no complete-case rows; no treated
     or no control units; no high- or low-covariate stratum among controls (RR_UD has
-    nothing to compare); zero events in BOTH control strata (0/0, binary outcome); or
-    zero outcome variance (continuous outcome, no SMD denominator).
+    nothing to compare); zero events in BOTH control strata (0/0, binary outcome);
+    zero outcome variance (continuous outcome, no SMD denominator); a categorical
+    covariate with fewer than two non-null levels (no variation to benchmark); or a
+    categorical covariate whose every level was skipped for one of those reasons.
 
     When RR_EU and RR_UD are SIMULTANEOUSLY at their one-sided-zero limit, the bias
     factor B = RR_EU*RR_UD/(RR_EU+RR_UD-1) DIVERGES rather than settling on either
@@ -288,7 +448,7 @@ def covariate_bias_factors(
     frame, a positivity violation the estimator cannot have adjusted for. This is
     not skipped or fabricated as a finite number (an infinite bias factor must never
     reach ``details_json`` — Postgres JSONB rejects ``Infinity``); ``ValueError`` is
-    raised naming the covariate instead.
+    raised naming the covariate (and the level, for a categorical one) instead.
     """
     out: Dict[str, float] = {}
     if not covariates or frame is None:
@@ -302,47 +462,18 @@ def covariate_bias_factors(
     for cov in covariates:
         if cov not in getattr(frame, "columns", []):
             continue
-        x = np.asarray(frame[cov], dtype=float)
-        ok = ~np.isnan(x) & ~np.isnan(y) & ~np.isnan(t)
-        if not ok.any():
-            continue
-        hi = _high_mask(x[ok])
-        tr, co = treated[ok], control[ok]
-        if not tr.any() or not co.any():
-            continue
-        hi_c, lo_c = hi & co, (~hi) & co
-        if not (hi_c.any() and lo_c.any()):
-            continue
-        p_hi_t, p_hi_c = float(hi[tr].mean()), float(hi[co].mean())
-        rr_eu, eu_limit = _ratio_or_limit(p_hi_t, p_hi_c)
-        yy = y[ok]
-        if y_binary:
-            m_hi, m_lo = float(yy[hi_c].mean()), float(yy[lo_c].mean())
-            rr_ud, ud_limit = _ratio_or_limit(m_hi, m_lo)
-            if rr_ud is None and not ud_limit:
-                continue  # 0/0: no events in either control stratum
-        else:
-            if not y_sd or y_sd <= 0:
-                continue  # no outcome variance to standardize against
-            rr_ud = rr_from_smd((yy[hi_c].mean() - yy[lo_c].mean()) / y_sd)
-            ud_limit = False  # the SMD path is always finite for a positive y_sd
-
-        if eu_limit and ud_limit:
-            raise ValueError(
-                f"covariate {cov!r} perfectly separates treatment and outcome in this "
-                "frame (positivity violation); its bias factor is unbounded"
+        column = frame[cov]
+        numeric = _as_numeric_or_none(column)
+        if numeric is not None:
+            factor = _factor_from_numeric_covariate(
+                numeric, t, y, treated, control, y_binary=y_binary, y_sd=y_sd, cov=cov
             )
-        if eu_limit:
-            assert rr_ud is not None  # eu_limit True implies ud_limit False (checked above)
-            out[cov] = _orient(rr_ud)  # RR_EU -> infinity: B -> RR_UD
-        elif ud_limit:
-            # p_hi_c > 0 always (hi_c.any() was checked above), so rr_eu is never
-            # None here — eu_limit False (this branch) means it is a real ratio.
-            assert rr_eu is not None
-            out[cov] = _orient(rr_eu)  # RR_UD -> infinity: B -> RR_EU
         else:
-            assert rr_eu is not None and rr_ud is not None
-            out[cov] = bias_factor(rr_eu, rr_ud)
+            factor = _factor_from_categorical_covariate(
+                column, t, y, treated, control, y_binary=y_binary, y_sd=y_sd, cov=cov
+            )
+        if factor is not None:
+            out[cov] = factor
     return out
 
 

@@ -220,11 +220,11 @@ def _effective_reconstruction_common_causes(
 
 
 def _is_numeric_column(frame: Any, column: str) -> bool:
-    """Does ``column`` carry a numeric contrast ``evalue`` can benchmark?
+    """Is ``column`` a numeric column? Asked only of the TREATMENT and the OUTCOME.
 
-    A raw categorical/string column does not: there is no median to split it at and
-    no treated/control share to form. Treated as a MISSING input rather than a
-    failure — see ``_sensitivity_benchmark_inputs``.
+    Covariates are NOT screened this way: ``evalue`` scores a categorical covariate
+    level by level, and dropping one would understate the measured-confounding
+    benchmark (see ``_sensitivity_benchmark_inputs``).
     """
     try:
         return bool(pd.api.types.is_numeric_dtype(frame[column]))
@@ -247,26 +247,26 @@ def _sensitivity_benchmark_inputs(
     ``naive_ate`` from the estimation node wins; ``baseline_covariates_adjusted``
     (efficiency controls, #1188) are excluded from the factors.
 
-    MISSING inputs are a legitimate fallback: empty inputs, and the runner reads
-    ``unbenchmarked``. Missing means no frame; the treatment/outcome column absent;
-    or a column carrying NO NUMERIC CONTRAST to benchmark. A raw string column is
-    the same kind of absence as a column that is not there at all: ``evalue`` splits
-    a covariate at its median and forms treated/control shares, and a raw
-    ``trigger_type`` has neither. The estimator never saw that column either — the
-    estimation node one-hot encodes categoricals before fitting (#1417), and the
-    live #1351 resolver binds string driver columns into the adjustment set, so
-    raising here would fail EVERY categorical-confounder run closed. Non-numeric
-    covariates are dropped from the factors (the reading's ``covariate_bias_factors``
-    lists what was used, and ``benchmark_basis`` names the basis); a non-numeric
-    treatment or outcome yields empty inputs. The preferred basis,
-    ``joint_naive_vs_adjusted``, is built from ``naive_ate`` and the baseline risk
-    and is unaffected by the drop.
+    CATEGORICAL covariates are passed through, not screened out. The live #1351
+    resolver binds string driver columns (``trigger_type``, ``delivery_channel``, …)
+    into the adjustment set and the estimation node fits their one-hot encoding
+    (#1417), so they are measured confounding; ``evalue`` scores them level by level.
+    Dropping them would understate the fallback benchmark and let a run read
+    ``beyond_measured_confounding`` on confounding this run actually measured.
 
-    A computation that RAISES inside ``evalue`` on NUMERIC inputs (e.g. a covariate
-    that perfectly separates treatment and outcome — a positivity violation whose
-    bias factor diverges) is a real failure and surfaces as ``RefutationError`` with
-    reason ``sensitivity_benchmark_failed``, never as a fabricated reading (spec §5;
-    the runner applies the same rule to its own fallback).
+    MISSING inputs are a legitimate fallback: empty inputs, and the runner reads
+    ``unbenchmarked``. Missing means no frame, an absent treatment/outcome column, or
+    a NON-NUMERIC treatment or outcome. The last is not a screening choice but a
+    statement about the frame: the estimator cannot have fit a string T or Y, so a
+    frame carrying one is not the frame the reported effect came from, and there is
+    no contrast to benchmark.
+
+    A computation that RAISES inside ``evalue`` (e.g. a covariate — or one level of a
+    categorical covariate — that perfectly separates treatment and outcome, a
+    positivity violation whose bias factor diverges) is a real failure and surfaces
+    as ``RefutationError`` with reason ``sensitivity_benchmark_failed``, never as a
+    fabricated reading (spec §5; the runner applies the same rule to its own
+    fallback).
     """
     empty = evalue.BenchmarkInputs(baseline_risk=None, naive_effect=None)
     if estimation_data is None or not hasattr(estimation_data, "columns"):
@@ -280,7 +280,7 @@ def _sensitivity_benchmark_inputs(
     covariates = [
         str(c)
         for c in (estimation_result.get("covariates_adjusted") or [])
-        if c in estimation_data.columns and _is_numeric_column(estimation_data, c)
+        if c in estimation_data.columns
     ]
     try:
         return evalue.benchmark_inputs_from_frame(

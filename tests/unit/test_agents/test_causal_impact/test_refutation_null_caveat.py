@@ -62,13 +62,17 @@ class TestBenchmarkInputs:
         )
         assert inputs.baseline_risk is None and inputs.covariate_bias_factors == {}
 
-    def test_a_raw_categorical_covariate_is_dropped_not_raised(self):
-        """#1417: the live resolver binds string driver columns into the adjustment set
-        and the estimator fits their one-hot encoding. A raw string column carries no
-        numeric contrast to benchmark — the same absence as a column that is not there,
-        never a suite-killing failure."""
+    def test_a_raw_categorical_covariate_is_scored_not_dropped(self):
+        """#1417/#1351: the live resolver binds string driver columns into the
+        adjustment set and the estimator fits their one-hot encoding, so they ARE
+        measured confounding. Dropping them would understate the fallback benchmark
+        and let a run read 'beyond measured confounding' too easily."""
         frame = _frame()
-        frame["trigger_type"] = ["adherence_risk", "dosing_gap"] * (len(frame) // 2)
+        frame["trigger_type"] = np.where(
+            frame.disease_severity > frame.disease_severity.median(),
+            "dosing_gap",
+            "adherence_risk",
+        )
         inputs = node_mod._sensitivity_benchmark_inputs(
             estimation_data=frame,
             treatment="treatment_arm",
@@ -78,8 +82,8 @@ class TestBenchmarkInputs:
                 "covariates_adjusted": ["disease_severity", "trigger_type"],
             },
         )
-        assert set(inputs.covariate_bias_factors) == {"disease_severity"}
-        # the preferred joint basis is unaffected by the drop
+        assert set(inputs.covariate_bias_factors) == {"disease_severity", "trigger_type"}
+        assert inputs.covariate_bias_factors["trigger_type"] > 1.0
         assert inputs.naive_effect == 0.123
         assert inputs.baseline_risk is not None
 
