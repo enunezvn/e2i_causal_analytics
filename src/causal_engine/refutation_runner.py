@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 import numpy as np
 
 # Structured fail-closed error for refutation failures (F-014, #416)
+from src.causal_engine import evalue
 from src.causal_engine.errors import RefutationError
 
 # Opik tracing for causal validation observability
@@ -752,16 +753,22 @@ class RefutationRunner:
         },
         "sensitivity_e_value": {
             "enabled": True,
-            "e_value_threshold": 2.0,
-            "critical": True,
+            # A READING, never a gate (spec 2026-09-10 §4.4): measured 2026-09-10, the
+            # old 2.0/1.5 cutoffs BLOCKed 7 of 11 correctly recovered planted truths at
+            # the live row cap and could not distinguish an omitted-confounder fit from
+            # a correct one. The benchmark is the confounding this run measured.
+            "critical": False,
         },
     }
 
     # Thresholds for determining pass/fail/warning
     PASS_THRESHOLDS: Dict[str, Dict[str, float]] = {
         "placebo_p_value": {
-            "pass": 0.05,  # Placebo effect p-value must be > 0.05
-            "warning": 0.10,  # Warning if 0.05 < p < 0.10
+            # PASSED at p >= 0.05, FAILED below. The 0.05–0.10 "warning band" this
+            # comment used to name is unreachable as coded (pass is tested first,
+            # #1994 option 1: documented, behaviour unchanged).
+            "pass": 0.05,
+            "warning": 0.10,
         },
         "common_cause_delta": {
             "pass": 0.20,  # Effect change must be < 20%
@@ -780,10 +787,6 @@ class RefutationRunner:
             # real run; they never scored because the test was always SKIPPED.
             "pass": 1.50,  # bootstrap CI at most 50% wider than the original
             "warning": 1.75,
-        },
-        "e_value_min": {
-            "pass": 2.0,  # E-value must be >= 2.0
-            "warning": 1.5,
         },
     }
 
@@ -840,12 +843,21 @@ class RefutationRunner:
         per_refit_hint_heavy: Optional[float] = None,
         randomized_design: bool = False,
         outcome_std: Optional[float] = None,
+        baseline_risk: Optional[float] = None,
+        naive_effect: Optional[float] = None,
+        covariate_bias_factors: Optional[Dict[str, float]] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
         Args:
             original_effect: The ATE to validate
-            original_ci: Confidence interval (lower, upper)
+            original_ci: Confidence interval (lower, upper). This is the REPORTED
+                interval from the estimation node (``ate_inference(X).conf_int_mean()``)
+                and is the reference interval for every width comparison
+                (``bootstrap_ci_ratio``) and for the sensitivity reading. Never derive
+                a reference interval from the refutation node's RECONSTRUCTION of the
+                estimator: its own interval is unusable (SE 4.9 measured against 0.034
+                reported on the same pair, spec 2026-09-08 §2; issue #1989).
             data: DataFrame with treatment/outcome data (for DoWhy)
             causal_model: DoWhy CausalModel instance (optional)
             identified_estimand: DoWhy estimand (optional)
@@ -901,6 +913,16 @@ class RefutationRunner:
                 on the same frame as the effect it gates, so the node computes
                 this on the full frame BEFORE subsampling. ``None`` (default)
                 keeps the data-derived SD for existing callers.
+            baseline_risk: Control-arm outcome rate on the FULL estimation frame
+                (binary treatment and outcome), the risk-ratio path's anchor.
+            naive_effect: Unadjusted difference in means on the full frame; with
+                the adjusted effect it gives the joint measured-confounding
+                benchmark. ``None`` for a continuous treatment.
+            covariate_bias_factors: Per-covariate bias factors of the backdoor set
+                (``evalue.covariate_bias_factors``), the fallback benchmark.
+                When all three are ``None`` and ``data``/``treatment``/``outcome``
+                are present, the runner computes them from ``data`` (which may be
+                the refutation subsample); caller-supplied values win.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -1021,6 +1043,36 @@ class RefutationRunner:
                             evalue_outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
                     except Exception:  # noqa: BLE001 - missing/non-numeric outcome → no standardization
                         evalue_outcome_std = None
+                # Benchmark inputs: caller-supplied (full frame) win; otherwise derive
+                # from the passthrough frame with the model's common causes.
+                _baseline_risk, _naive, _factors = (
+                    baseline_risk,
+                    naive_effect,
+                    covariate_bias_factors,
+                )
+                if (
+                    _baseline_risk is None
+                    and _naive is None
+                    and _factors is None
+                    and data is not None
+                    and treatment is not None
+                    and outcome is not None
+                ):
+                    try:
+                        _covs: List[str] = []
+                        getter = getattr(causal_model, "get_common_causes", None)
+                        if callable(getter):
+                            _covs = [str(c) for c in (getter() or [])]
+                        _inputs = evalue.benchmark_inputs_from_frame(
+                            data, treatment, outcome, _covs
+                        )
+                        _baseline_risk, _naive, _factors = (
+                            _inputs.baseline_risk,
+                            _inputs.naive_effect,
+                            _inputs.covariate_bias_factors,
+                        )
+                    except Exception:  # noqa: BLE001 - no benchmark → unbenchmarked reading
+                        _baseline_risk, _naive, _factors = None, None, None
                 test_result = self._run_test_with_tracing(
                     test_name="sensitivity_e_value",
                     test_func=self._run_sensitivity_test,
@@ -1031,6 +1083,10 @@ class RefutationRunner:
                     original_ci=original_ci,
                     outcome_std=evalue_outcome_std,
                     randomized_design=randomized_design,
+                    baseline_risk=_baseline_risk,
+                    naive_effect=_naive,
+                    covariate_bias_factors=_factors,
+                    n_rows=(len(data) if data is not None else None),
                 )
                 tests.append(test_result)
             else:
@@ -1805,130 +1861,55 @@ class RefutationRunner:
         original_ci: Tuple[float, float],
         outcome_std: Optional[float] = None,
         randomized_design: bool = False,
+        baseline_risk: Optional[float] = None,
+        naive_effect: Optional[float] = None,
+        covariate_bias_factors: Optional[Dict[str, float]] = None,
+        n_rows: Optional[int] = None,
     ) -> RefutationResult:
-        """Run E-value sensitivity analysis.
+        """E-value sensitivity READING (spec 2026-09-10 §4.4).
 
-        Calculates the E-value to assess robustness to unmeasured confounding.
-        Based on VanderWeele & Ding (2017).
-
-        H3 fix: the Chinn(2000)/VanderWeele-Ding ``RR ≈ exp(0.91·d)`` approximation
-        requires a STANDARDIZED mean difference d. The effect/CI arrive in native
-        outcome units, so they MUST be divided by the outcome SD first — otherwise
-        the E-value is scale-dependent (near 1 on a 0–1 outcome, exploding on a
-        dollar/count outcome) and ``sensitivity_e_value`` is a critical gate, so a
-        meaningless number can hard-BLOCK or wave through depending only on units.
-
-        ``randomized_design=True`` (a DESIGN declaration threaded from the dataset
-        spec — never inferred from an empty discovered backdoor) marks the E-value
-        NOT APPLICABLE as a gate: unmeasured confounding of assignment is excluded
-        by randomization, so the test returns status=SKIPPED (no confidence weight,
-        never a critical failure) while still computing the numbers into details
-        for information. Verified live: the honest 8pp nba_triggers RCT effect has
-        E-value(CI) < 2.0 and was hard-BLOCKed by this gate (PR #1217 follow-up).
+        The E-value (VanderWeele & Ding 2017) is reported against the confounding
+        this run measured — ``evalue.classify`` — and is never a gate: the test is
+        non-critical and has no FAILED outcome. A CI that includes zero is a null
+        finding (WARNING). ``randomized_design=True`` keeps today's SKIPPED /
+        not-applicable behaviour with the numbers kept for information.
         """
-        import time
-
         start_time = time.time()
-
-        test_name = RefutationTestType.SENSITIVITY_E_VALUE
-
-        # Calculate E-value using VanderWeele formula
-        # E-value = RR + sqrt(RR * (RR - 1)) where RR is the relative risk
-        abs_effect = abs(original_effect)
-        # M-stat1 null-crossing guard: a CI that straddles (or touches) 0 is
-        # statistically indistinguishable from the null, so the conservative
-        # E-value-for-CI must collapse to 1.0 instead of min(|lo|,|hi|).
-        ci_straddles_null = original_ci[0] <= 0.0 <= original_ci[1]
-        ci_bound = min(abs(original_ci[0]), abs(original_ci[1]))
-
-        # H3: standardize the effect + CI bound by the outcome SD before the
-        # exp(0.91·d) step (d must be a standardized mean difference). Guard a
-        # non-positive / missing SD (constant outcome or no data passthrough) —
-        # in that degenerate case we cannot standardize and flag it in details.
-        standardized = False
-        if outcome_std is not None and np.isfinite(outcome_std) and outcome_std > 0:
-            abs_effect = abs_effect / outcome_std
-            ci_bound = ci_bound / outcome_std
-            standardized = True
-
-        # Approximate risk ratio from the (now standardized) effect.
-        rr = np.exp(0.91 * abs_effect)
-        e_value = rr + np.sqrt(rr * (rr - 1)) if rr > 1 else 1.0
-
-        # E-value for CI bound (more conservative). M-stat1: a null-crossing CI
-        # collapses this to the null.
-        if ci_straddles_null:
-            e_value_ci = 1.0
-        else:
-            rr_ci = np.exp(0.91 * ci_bound)
-            e_value_ci = rr_ci + np.sqrt(rr_ci * (rr_ci - 1)) if rr_ci > 1 else 1.0
-
-        threshold = self.thresholds["e_value_min"]["pass"]
-        warning_threshold = self.thresholds["e_value_min"]["warning"]
-
-        # M-stat2: the PASS/WARNING/FAILED decision uses the CONSERVATIVE CI
-        # E-value (e_value_ci), not the point estimate. A strong point effect
-        # with a wide / null-crossing CI must not wave the gate through.
-        if randomized_design:
-            # Randomized design: the E-value's threat model (unmeasured
-            # confounding of assignment) is excluded by construction, so the
-            # gate is NOT APPLICABLE — SKIPPED carries no confidence weight and
-            # never trips the critical-failure BLOCK. The computed numbers stay
-            # in details as information, not as evidence for/against validity.
-            status = RefutationStatus.SKIPPED
-            message = (
-                "not applicable: randomized design — treatment assignment is "
-                "exogenous by construction, so the unmeasured-confounding gate "
-                f"does not apply; E-value (CI bound) {e_value_ci:.2f} reported "
-                "for information only"
-            )
-            strength = "not_applicable_randomized"
-        elif e_value_ci >= threshold:
-            status = RefutationStatus.PASSED
-            message = (
-                f"E-value (CI bound) {e_value_ci:.2f} indicates robustness to "
-                "unmeasured confounding"
-            )
-            strength = "strong" if e_value_ci >= 3.0 else "moderate"
-        elif e_value_ci >= warning_threshold:
-            status = RefutationStatus.WARNING
-            message = (
-                f"E-value (CI bound) {e_value_ci:.2f} suggests moderate sensitivity to confounding"
-            )
-            strength = "weak"
-        else:
-            status = RefutationStatus.FAILED
-            message = (
-                f"WARNING: Low E-value (CI bound) {e_value_ci:.2f} indicates high "
-                "sensitivity to confounding"
-            )
-            strength = "very_weak"
-
-        execution_time = (time.time() - start_time) * 1000
-
+        reading = evalue.classify(
+            original_effect,
+            original_ci,
+            randomized=randomized_design,
+            baseline_risk=baseline_risk,
+            outcome_std=(
+                outcome_std
+                if outcome_std is not None and np.isfinite(outcome_std) and outcome_std > 0
+                else None
+            ),
+            naive_effect=naive_effect,
+            covariate_factors=covariate_bias_factors or {},
+            n_rows=n_rows,
+        )
+        status = RefutationStatus(reading.status)
+        details = reading.as_details()
+        details.update(
+            {
+                # legacy keys consumers already read
+                "e_value": reading.e_value_point,
+                "standardized": reading.conversion == "standardized_difference"
+                and outcome_std is not None,
+                "outcome_std": outcome_std,
+                "gate_applicable": not randomized_design,
+            }
+        )
         return RefutationResult(
-            test_name=test_name,
+            test_name=RefutationTestType.SENSITIVITY_E_VALUE,
             status=status,
             original_effect=original_effect,
-            refuted_effect=original_effect,  # E-value doesn't produce refuted effect
-            p_value=None,  # Not applicable for E-value
+            refuted_effect=original_effect,
+            p_value=None,
             delta_percent=0.0,
-            details={
-                "message": message,
-                "e_value": e_value,
-                "e_value_ci": e_value_ci,
-                "threshold": threshold,
-                "confounder_strength": strength,
-                # H3: surface whether the effect was standardized + the SD used,
-                # so a scale-dependent (unstandardized) E-value is not mistaken
-                # for a comparable one.
-                "standardized": standardized,
-                "outcome_std": outcome_std,
-                # Randomized designs report the E-value as information only —
-                # the unmeasured-confounding gate does not apply to them.
-                "gate_applicable": not randomized_design,
-            },
-            execution_time_ms=execution_time,
+            details=details,
+            execution_time_ms=(time.time() - start_time) * 1000,
         )
 
     # ========================================================================
@@ -2052,11 +2033,16 @@ class RefutationRunner:
         Returns:
             Gate decision (proceed, review, or block)
         """
-        # Check for critical test failures
+        # Check for critical test failures. The critical SET is derived from the
+        # merged config (spec 2026-09-10 §4.5) rather than hardcoded here, so a
+        # test's ``critical`` flag is the single place criticality is declared —
+        # the #1419 budget-skip policy already reads the same flag.
         critical_tests = {
-            RefutationTestType.PLACEBO_TREATMENT,
-            RefutationTestType.RANDOM_COMMON_CAUSE,
-            RefutationTestType.SENSITIVITY_E_VALUE,
+            RefutationTestType(name)
+            for name, cfg in self.config.items()
+            if isinstance(cfg, dict)
+            and cfg.get("critical")
+            and name in RefutationTestType._value2member_map_
         }
 
         for test in tests:

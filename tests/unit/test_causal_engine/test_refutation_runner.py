@@ -871,88 +871,114 @@ class TestBootstrapTest:
 
 
 class TestSensitivityTest:
-    """Tests for sensitivity E-value test."""
+    """The sensitivity test is a READING, never a gate (spec §4.4, §4.5)."""
 
-    def test_run_sensitivity_test(self, runner):
-        """Test running sensitivity E-value test."""
+    def test_sensitivity_is_not_critical_and_has_no_threshold(self, runner):
+        assert runner.config["sensitivity_e_value"]["critical"] is False
+        assert "e_value_threshold" not in runner.config["sensitivity_e_value"]
+        assert "e_value_min" not in runner.thresholds
+
+    def test_beyond_reads_passed_with_the_benchmark_in_details(self, runner):
         result = runner._run_sensitivity_test(
             original_effect=0.15,
-            original_ci=(0.10, 0.20),
+            original_ci=(0.08, 0.22),
+            baseline_risk=0.30,
+            naive_effect=0.20,
         )
-
         assert result.test_name == RefutationTestType.SENSITIVITY_E_VALUE
-        assert result.status in [
-            RefutationStatus.PASSED,
-            RefutationStatus.WARNING,
-            RefutationStatus.FAILED,
-        ]
-        assert "e_value" in result.details
-
-    def test_run_sensitivity_test_high_e_value(self, runner):
-        """Test sensitivity test with high E-value (passes)."""
-        result = runner._run_sensitivity_test(
-            original_effect=0.50,  # Large effect → high E-value
-            original_ci=(0.40, 0.60),
-        )
-
         assert result.status == RefutationStatus.PASSED
-        assert result.details["e_value"] >= runner.thresholds["e_value_min"]["pass"]
+        d = result.details
+        assert d["reading"] == "beyond_measured_confounding"
+        assert d["benchmark_basis"] == "joint_naive_vs_adjusted"
+        assert d["rr_point"] == pytest.approx(1.5)
+        assert d["headline"] == "Robust to confounding at measured strength"
+        assert "stronger than all measured confounding" in d["message"]
+        assert d["e_value"] == pytest.approx(d["e_value_point"])  # legacy key kept
 
-    def test_run_sensitivity_test_low_e_value(self, runner):
-        """Test sensitivity test with low E-value (fails)."""
+    def test_within_reads_warning(self, runner):
         result = runner._run_sensitivity_test(
-            original_effect=0.05,  # Small effect → low E-value
-            original_ci=(0.01, 0.09),
+            original_effect=0.03,
+            original_ci=(0.01, 0.05),
+            baseline_risk=0.30,
+            naive_effect=0.10,
         )
+        assert result.status == RefutationStatus.WARNING
+        assert result.details["reading"] == "within_measured_confounding"
 
-        # Small effects typically have low E-values
-        assert result.details["e_value"] > 0
-
-    def test_run_sensitivity_test_null_crossing_ci_collapses_e_value_ci(self, runner):
-        """M-stat1: a CI straddling 0 makes the conservative e_value_ci == 1.0
-        instead of min(|lo|,|hi|) (which falsely reports > 1)."""
+    def test_null_crossing_ci_is_a_null_finding_not_a_failure(self, runner):
+        """Replaces M-stat2: a strong point effect with a null-crossing CI is served
+        as a null finding (WARNING), never FAILED, and e_value_ci collapses to 1.0."""
         result = runner._run_sensitivity_test(
             original_effect=0.5,
-            original_ci=(-0.3, 0.5),  # straddles 0
+            original_ci=(-0.3, 0.5),
+            baseline_risk=0.30,
+            naive_effect=0.6,
         )
+        assert result.status == RefutationStatus.WARNING
+        assert result.details["reading"] == "null_finding"
         assert result.details["e_value_ci"] == 1.0
+        assert result.details["e_value"] > 1.0  # point value still surfaced
+        assert "includes zero" in result.details["message"]
 
-    def test_run_sensitivity_test_one_sided_ci_e_value_ci_unchanged(self, runner):
-        """Guard must not affect a one-sided CI: ci_bound = min(|lo|,|hi|)."""
+    def test_smd_path_when_no_baseline_risk(self, runner):
         import numpy as np
 
         result = runner._run_sensitivity_test(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),  # entirely positive, ci_bound=0.4
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=1.0, naive_effect=0.55
         )
         rr_ci = np.exp(0.91 * 0.4)
-        expected = rr_ci + np.sqrt(rr_ci * (rr_ci - 1))
-        assert result.details["e_value_ci"] == pytest.approx(expected, rel=1e-6)
-        assert result.details["e_value_ci"] > 1.0
-
-    def test_run_sensitivity_status_uses_conservative_ci_bound(self, runner):
-        """M-stat2: a strong point effect with a null-crossing CI must FAIL the
-        sensitivity gate, because the conservative e_value_ci collapses to 1.0
-        (< warning threshold 1.5). Previously status keyed off the point
-        e_value (~2.53 >= pass 2.0 -> spurious PASSED)."""
-        result = runner._run_sensitivity_test(
-            original_effect=0.5,  # point e_value ~ 2.53 -> would PASS on point
-            original_ci=(-0.3, 0.5),  # straddles 0 -> e_value_ci == 1.0
+        assert result.details["conversion"] == "standardized_difference"
+        assert result.details["e_value_ci"] == pytest.approx(
+            rr_ci + np.sqrt(rr_ci * (rr_ci - 1)), rel=1e-6
         )
-        # Conservative bound drives the status.
-        assert result.details["e_value_ci"] == 1.0
-        assert result.status == RefutationStatus.FAILED
-        # Point e_value is still surfaced for transparency.
-        assert result.details["e_value"] > runner.thresholds["e_value_min"]["pass"]
 
-    def test_run_sensitivity_status_pass_on_strong_one_sided_ci(self, runner):
-        """A one-sided CI with a strong conservative bound still PASSES."""
-        result = runner._run_sensitivity_test(
-            original_effect=0.50,
-            original_ci=(0.40, 0.60),  # ci_bound=0.4 -> e_value_ci ~ 2.234 >= 2.0
-        )
-        assert result.status == RefutationStatus.PASSED
-        assert result.details["e_value_ci"] >= runner.thresholds["e_value_min"]["pass"]
+    def test_unbenchmarked_without_naive_or_covariates(self, runner):
+        result = runner._run_sensitivity_test(original_effect=0.15, original_ci=(0.08, 0.22))
+        assert result.status == RefutationStatus.WARNING
+        assert result.details["reading"] == "unbenchmarked"
+
+    def test_sensitivity_never_fails(self, runner):
+        for effect, ci in [(0.001, (0.0005, 0.0015)), (0.5, (-0.3, 0.5)), (0.02, (0.01, 0.03))]:
+            result = runner._run_sensitivity_test(
+                original_effect=effect, original_ci=ci, baseline_risk=0.3
+            )
+            assert result.status != RefutationStatus.FAILED
+
+    def test_sensitivity_never_blocks_the_gate(self, runner):
+        tests = [
+            RefutationResult(
+                RefutationTestType.PLACEBO_TREATMENT, RefutationStatus.PASSED, 0.1, 0.1
+            ),
+            RefutationResult(
+                RefutationTestType.RANDOM_COMMON_CAUSE, RefutationStatus.PASSED, 0.1, 0.1
+            ),
+            RefutationResult(
+                RefutationTestType.SENSITIVITY_E_VALUE, RefutationStatus.WARNING, 0.1, 0.1
+            ),
+            RefutationResult(RefutationTestType.DATA_SUBSET, RefutationStatus.PASSED, 0.1, 0.1),
+            RefutationResult(RefutationTestType.BOOTSTRAP, RefutationStatus.PASSED, 0.1, 0.1),
+        ]
+        conf = runner._calculate_confidence_score(tests)
+        assert conf == pytest.approx(0.90)
+        assert runner._determine_gate_decision(tests, conf) == GateDecision.PROCEED
+
+    def test_critical_set_comes_from_config(self):
+        r = RefutationRunner(config={"random_common_cause": {"critical": False}})
+        tests = [
+            RefutationResult(
+                RefutationTestType.PLACEBO_TREATMENT, RefutationStatus.PASSED, 0.1, 0.1
+            ),
+            RefutationResult(
+                RefutationTestType.RANDOM_COMMON_CAUSE, RefutationStatus.FAILED, 0.1, 0.1
+            ),
+            RefutationResult(
+                RefutationTestType.SENSITIVITY_E_VALUE, RefutationStatus.PASSED, 0.1, 0.1
+            ),
+        ]
+        conf = r._calculate_confidence_score(tests)
+        assert (
+            r._determine_gate_decision(tests, conf) == GateDecision.REVIEW
+        )  # 0.667, no critical failure
 
 
 # ============================================================================
