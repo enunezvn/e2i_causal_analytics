@@ -169,7 +169,8 @@ class SensitivityAnalysis(TypedDict, total=False):
     e_value: float  # E-value for the point estimate
     e_value_ci: float  # E-value at the CI bound (1.0 when the CI includes zero)
     interpretation: str  # the leader-facing sentence (= reading message)
-    robust_to_confounding: bool  # True only for reading == beyond_measured_confounding (or a randomized design)
+    # True only for reading == beyond_measured_confounding (or a randomized design).
+    robust_to_confounding: bool
     # Kept for consumers; since 2026-09-10 its value IS the reading name below.
     unmeasured_confounder_strength: str
     reading: str  # beyond_measured_confounding / within_measured_confounding / null_finding / unbenchmarked / not_applicable_randomized

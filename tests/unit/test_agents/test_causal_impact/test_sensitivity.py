@@ -38,9 +38,7 @@ def _frame(n: int = 800, seed: int = 5) -> pd.DataFrame:
     sev = rng.normal(5, 1, n)
     t = (rng.random(n) < 1 / (1 + np.exp(-(0.4 * (sev - 5) - 0.3)))).astype(int)
     y = (rng.random(n) < 0.30 + 0.15 * t + 0.02 * (sev - 5)).astype(int)
-    return pd.DataFrame(
-        {"treatment_arm": t, "treatment_initiated": y, "disease_severity": sev}
-    )
+    return pd.DataFrame({"treatment_arm": t, "treatment_initiated": y, "disease_severity": sev})
 
 
 def _state_with_frame(ate, lo, hi, naive=None, **extra) -> CausalImpactState:
