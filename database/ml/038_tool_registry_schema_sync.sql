@@ -127,7 +127,7 @@ BEGIN
       ]
     },
     "output_schema": {
-      "description": "Output from causal effect estimation (#2014).\n\n``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` are real sampling\nquantities or all ``None``. ``uncertainty_method`` names their source\n(``ols_hc1_normal`` / ``dowhy_standard_error_normal`` / ``library_interval``, or\n``not_computed``) and ``uncertainty_note`` says how they were computed or why they\nwere not. ``method`` is the estimator that actually ran, ``estimand`` what it\nestimated in words, ``effect_scale`` ``binary_contrast`` (treatment 1 vs 0) or\n``per_unit`` (per one-unit increase in a non-binary treatment).",
+      "description": "Output from causal effect estimation (#2014).\n\n``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` are real sampling\nquantities or all ``None``. ``uncertainty_method`` names their source\n(``ols_hc1_normal`` / ``dowhy_standard_error_normal``, or ``not_computed``) and ``uncertainty_note`` says how they were computed or why they\nwere not. ``method`` is the estimator that actually ran, ``estimand`` what it\nestimated in words, ``effect_scale`` ``binary_contrast`` (treatment 1 vs 0) or\n``per_unit`` (per one-unit increase in a non-binary treatment).",
       "properties": {
         "ate": {
           "title": "Ate",
