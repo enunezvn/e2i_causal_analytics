@@ -189,31 +189,32 @@ function BootstrapIllustration({ outcome }: { outcome: Outcome }) {
 /* --------------------------------------------------------------- E-value */
 function EValueIllustration({ outcome }: { outcome: Outcome }) {
   const ok = outcome === 'pass';
-  const x0 = 24, x1 = 216, y = 56; // scale 1.0 → 4.0
-  const px = (e: number) => x0 + ((e - 1) / 3) * (x1 - x0);
-  const marker = ok ? 2.8 : 1.3;
+  const x0 = 24, x1 = 216, y = 56; // risk-ratio scale 1.0 → 2.0
+  const px = (rr: number) => x0 + ((rr - 1) / 1) * (x1 - x0);
+  const benchmark = 1.25; // illustrative: the confounding the adjustment removed
+  const marker = ok ? 1.6 : 1.12;
   return (
     <>
-      <text x="120" y="14" fontSize="9" textAnchor="middle" className={MUTED}>how strong a hidden confounder must be →</text>
-      <rect x={px(1)} y={y - 9} width={px(2) - px(1)} height="18" rx="3" fill={FAIL} fillOpacity="0.15" />
-      <rect x={px(2)} y={y - 9} width={px(4) - px(2)} height="18" rx="3" fill={PASS} fillOpacity="0.15" />
+      <text x="120" y="14" fontSize="9" textAnchor="middle" className={MUTED}>risk ratio needed to explain the effect away →</text>
+      <rect x={px(1)} y={y - 9} width={px(benchmark) - px(1)} height="18" rx="3" fill={FAIL} fillOpacity="0.15" />
+      <rect x={px(benchmark)} y={y - 9} width={px(2) - px(benchmark)} height="18" rx="3" fill={PASS} fillOpacity="0.15" />
       <line x1={x0} y1={y} x2={x1} y2={y} className={AXIS} strokeWidth="1" />
-      {[1, 2, 3, 4].map((e) => (
-        <g key={e}>
-          <line x1={px(e)} y1={y - 12} x2={px(e)} y2={y + 12} className={AXIS} strokeWidth={e === 2 ? 2 : 1} />
-          <text x={px(e)} y={y + 24} fontSize="9" textAnchor="middle" className={MUTED}>{e.toFixed(1)}</text>
+      {[1, 1.25, 1.5, 1.75, 2].map((rr) => (
+        <g key={rr}>
+          <line x1={px(rr)} y1={y - 12} x2={px(rr)} y2={y + 12} className={AXIS} strokeWidth={rr === benchmark ? 2 : 1} />
+          <text x={px(rr)} y={y + 24} fontSize="9" textAnchor="middle" className={MUTED}>{rr.toFixed(2)}</text>
         </g>
       ))}
-      <text x={px(1.5)} y={y - 16} fontSize="9" textAnchor="middle" className={MUTED}>explained away easily</text>
-      <text x={px(3)} y={y - 16} fontSize="9" textAnchor="middle" className={MUTED}>robust</text>
-      <text x={px(2)} y={y + 34} fontSize="9" fontWeight="600" textAnchor="middle" className={TXT}>threshold 2.0</text>
+      <text x={px(1.12)} y={y - 16} fontSize="9" textAnchor="middle" className={MUTED}>within measured confounding</text>
+      <text x={px(1.65)} y={y - 16} fontSize="9" textAnchor="middle" className={MUTED}>beyond it</text>
+      <text x={px(benchmark)} y={y + 34} fontSize="9" fontWeight="600" textAnchor="middle" className={TXT}>measured confounding (per run)</text>
       <path
         d={`M${px(marker)},${y - 2} l-6,-10 l12,0 z`}
         fill={ok ? PASS : FAIL}
         className={ANIM}
         style={{ transitionProperty: 'd, fill' }}
       />
-      <Verdict x={Math.min(176, Math.max(64, px(marker)))} y={110} outcome={outcome} pass="above the 2.0 threshold" fail="below 1.5 — fragile" />
+      <Verdict x={Math.min(176, Math.max(64, px(marker)))} y={110} outcome={outcome} pass="robust at measured strength" fail="sensitive — a caveat, not a block" />
     </>
   );
 }
@@ -244,8 +245,8 @@ const ILLUSTRATION_ALT: Record<RefutationTestId, Record<Outcome, string>> = {
     fail: 'A flat, wide histogram of resampled effects whose interval is far wider than the original — the test fails.',
   },
   sensitivity_e_value: {
-    pass: 'A scale from 1 to 4 with the E-value marker above the 2.0 threshold, in the robust zone.',
-    fail: 'A scale from 1 to 4 with the E-value marker below 1.5 — a weak confounder could explain the effect.',
+    pass: 'A risk-ratio scale from 1 to 2 with the E-value marker beyond measured confounding, in the robust zone.',
+    fail: 'A risk-ratio scale from 1 to 2 with the E-value marker within measured confounding — a caveat, not a block.',
   },
 };
 
@@ -338,7 +339,7 @@ function OutcomeButton({
 
 export function RefutationGate() {
   const [outcome, setOutcome] = useState<Outcome>('pass');
-  // Every test failing at once is a BLOCK (three of them are critical); every
+  // Every test failing at once is a BLOCK (two of them are critical); every
   // test passing clears the confidence bar → PROCEED.
   const activeGate: GateDecision = outcome === 'pass' ? 'proceed' : 'block';
 

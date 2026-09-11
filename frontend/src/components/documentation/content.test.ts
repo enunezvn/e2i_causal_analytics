@@ -17,6 +17,7 @@ import {
   PRACTICES,
   SCOPE_LEVELS,
   STAT_CHIPS,
+  REFUTATION_INTRO,
   REFUTATION_TESTS,
   GATE_BANDS,
   DOC_SECTIONS,
@@ -74,13 +75,12 @@ describe('content invariants', () => {
 });
 
 describe('refutation gate content', () => {
-  it('has five tests with unique ids, exactly three critical, each with a default and a pass rule', () => {
+  it('has five tests with unique ids, exactly two critical, each with a default and a pass rule', () => {
     expect(REFUTATION_TESTS).toHaveLength(5);
     expect(new Set(REFUTATION_TESTS.map((t) => t.id)).size).toBe(5);
     expect(REFUTATION_TESTS.filter((t) => t.critical).map((t) => t.id)).toEqual([
       'placebo_treatment',
       'random_common_cause',
-      'sensitivity_e_value',
     ]);
     for (const t of REFUTATION_TESTS) {
       expect(t.defaults.length).toBeGreaterThan(0);
@@ -139,5 +139,27 @@ describe('purpose: predictive cohorts and intervention channels', () => {
     const chip = (label: string) => STAT_CHIPS.find((c) => c.label === label)?.value;
     expect(chip('predictive cohorts')).toBe(String(PREDICTIVE_COHORTS.length));
     expect(chip('intervention channels')).toBe(String(INTERVENTION_CHANNELS.length));
+  });
+});
+
+// Lane D′ (2026-09-10, #1991): the E-value sensitivity test became a non-critical
+// reading benchmarked per run against the confounding the adjustment removed.
+// Only placebo and random_common_cause block on their own.
+describe('refutation documentation content (2026-09-10 sensitivity reading)', () => {
+  it('lists sensitivity as a non-critical reading with the benchmark rule', () => {
+    const sens = REFUTATION_TESTS.find((t) => t.id === 'sensitivity_e_value');
+    expect(sens).toBeDefined();
+    expect(sens!.critical).toBe(false);
+    expect(sens!.passRule).toMatch(/measured confounding/i);
+    expect(sens!.passRule).not.toMatch(/2\.0/);
+    expect(sens!.failSign).toMatch(/null finding|within measured confounding/i);
+  });
+
+  it('says two tests are critical', () => {
+    expect(REFUTATION_INTRO).toMatch(/Two are critical/);
+    expect(REFUTATION_TESTS.filter((t) => t.critical).map((t) => t.id).sort()).toEqual([
+      'placebo_treatment',
+      'random_common_cause',
+    ]);
   });
 });

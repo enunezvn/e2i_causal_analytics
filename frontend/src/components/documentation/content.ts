@@ -746,7 +746,7 @@ export interface RefutationTestDef {
 }
 
 export const REFUTATION_INTRO =
-  'No causal estimate is reported until it survives five refutation tests — adversarial attacks that try to break it. Three are critical: a single failure blocks the estimate outright. All five feed a weighted confidence score that decides the gate.';
+  'No causal estimate is reported until it survives five refutation tests — adversarial attacks that try to break it. Two are critical: a single failure blocks the estimate outright. The E-value sensitivity test is a reading, not a gate: it says how strong a hidden confounder would have to be, benchmarked against the confounding the adjustment actually removed. All five feed a weighted confidence score that decides the gate.';
 
 export const REFUTATION_TESTS: RefutationTestDef[] = [
   {
@@ -797,12 +797,12 @@ export const REFUTATION_TESTS: RefutationTestDef[] = [
     id: 'sensitivity_e_value',
     name: 'Sensitivity (E-value)',
     action: 'How strong would a hidden confounder have to be to explain the effect away?',
-    mustHold: 'robustness to unmeasured confounding',
-    defaults: 'E-value on the point estimate and on the CI bound',
-    passRule: 'E-value ≥ 2.0',
-    critical: true,
+    mustHold: 'the effect outgrows the confounding we could measure',
+    defaults: 'E-value on the point estimate and on the CI bound; benchmark = naive vs adjusted risk ratio (strongest covariate bias factor for a continuous treatment)',
+    passRule: 'point-estimate risk ratio above the measured confounding benchmark → "Robust to confounding at measured strength"',
+    critical: false,
     failSign:
-      'A weak unmeasured confounder could produce the whole effect — nothing in the data rules it out.',
+      'A caveat, never a block: "Sensitive to confounding" when a confounder no stronger than the measured set could account for the whole effect; "No detectable effect at this sample size" (a null finding) when the CI includes zero.',
   },
 ];
 

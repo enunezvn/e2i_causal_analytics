@@ -447,8 +447,9 @@ describe('RefutationGate', () => {
     for (const name of names) {
       expect(within(region).getByRole('heading', { name })).toBeInTheDocument();
     }
-    // Three tests are critical (a single failure blocks the estimate).
-    expect(region.querySelectorAll('[data-critical="true"]').length).toBe(3);
+    // Two tests are critical (a single failure blocks the estimate); the E-value
+    // sensitivity test is a per-run reading since lane D′ (#1991).
+    expect(region.querySelectorAll('[data-critical="true"]').length).toBe(2);
     // One illustration per test.
     expect(within(region).getAllByRole('img').length).toBe(5);
     // The user-facing criteria and the production defaults.
@@ -456,9 +457,9 @@ describe('RefutationGate', () => {
     expect(within(region).getByText(/effect must hold stable/i)).toBeInTheDocument();
     expect(within(region).getByText(/effect must reproduce/i)).toBeInTheDocument();
     expect(within(region).getByText(/variance must stay bounded/i)).toBeInTheDocument();
-    expect(within(region).getByText(/robustness to unmeasured confounding/i)).toBeInTheDocument();
+    expect(within(region).getByText(/outgrows the confounding we could measure/i)).toBeInTheDocument();
     expect(within(region).getByText(/50 resamples/i)).toBeInTheDocument();
-    expect(within(region).getByText(/E-value ≥ 2\.0/i)).toBeInTheDocument();
+    expect(within(region).getByText(/above the measured confounding benchmark/i)).toBeInTheDocument();
     // Gate bands.
     for (const band of ['Proceed', 'Review', 'Block']) {
       expect(within(region).getByText(band, { selector: 'dt' })).toBeInTheDocument();
