@@ -98,12 +98,15 @@ Claude-Session: https://claude.ai/code/session_018uHnM6oxkd8sepkqAY3s3o
 |---|---|---|
 | **O1** (spec §11): build the composition feedback linker | Task 16 entirely | skip Task 16. **Decided 2026-09-11 (dispatcher, within the owner's "build it / apply all recommendations"): BUILD, as the last functional task.** |
 | **O2** (spec §11): authorize the caveat experiment's LLM spend | Task 17 Step 4 (the run) | the flag stays off; the script and analysis tests still ship. **Decided 2026-09-11: ship the flag (default off) plus the script and analysis tests; do NOT run now. The run needs a fresh owner authorization once some tool reaches `n_health` ≥ 20; the runbook (Task 18) records this.** |
-| **O3** (spec §11): drop the designed DB objects | the `DROP` statements and their tests in Tasks 2–4, as **complete dependency pairs**: in 040, `update_tool_registry_metrics()` + `tool_registry.success_rate` (the function reads the column) and `get_tool_execution_order(text[])`; in 041, `find_similar_compositions(vector,integer,double precision)` + `composer_episodes.query_embedding` + `idx_composer_episodes_embedding`, and `trg_log_step_performance` **+** `trigger_log_step_performance()` (the trigger depends on the function) | **Declined variant:** delete every one of those DROP statements (both halves of each pair) and the `test_*dropped*` assertions, and replace them with `test_retained_objects_present`. Nothing else depends on them: the RPCs insert steps and never UPDATE status, so the trigger cannot fire; the sync never writes `success_rate`. Task 3 adds `test_recording_works_with_retained_trigger` (steps inserted with the trigger present: no extra perf rows). The rollbacks need no variant because they are idempotent (Task 4). |
+| **O3** (spec §11): drop the designed DB objects | the `DROP` statements and their tests in Tasks 2–4, as **complete dependency pairs**: in 040, `update_tool_registry_metrics()` + `tool_registry.success_rate` (the function reads the column) and `get_tool_execution_order(text[])`; in 041, `find_similar_compositions(vector,integer,double precision)` + `composer_episodes.query_embedding` + `idx_composer_episodes_embedding`, and `trg_log_step_performance` **+** `trigger_log_step_performance()` (the trigger depends on the function) | **Declined variant:** delete every one of those DROP statements (both halves of each pair) and the `test_*dropped*` assertions, and replace them with `test_retained_objects_present`. Nothing else depends on them: the RPCs insert steps and never UPDATE status, so the trigger cannot fire; the sync never writes `success_rate`. Task 3 adds `test_recording_works_with_retained_trigger` (steps inserted with the trigger present: no extra perf rows). The rollbacks need no variant because they are idempotent (Task 4). **Decided 2026-09-11 (owner): DROP; the declined variant is not built.** |
 | **G-LLM** (dispatcher): run the opt-in live-LLM composer test (about 2 real compositions) | Task 10 Step 3 **run** (writing the test is ungated) | leave the test skipped; the live cert (Task 19) is the first real-LLM exercise. **Decided 2026-09-11: APPROVED.** |
 
-The dispatcher records each answer in the task report before the blocked step starts. **O3 is with the
-owner (2026-09-11): no DROP statement is written until the dispatcher relays the answer.** Tasks 2–4 are
-blocked on it; Tasks 0–1 are not.
+The dispatcher records each answer in the task report before the blocked step starts. **O3 decided
+2026-09-11 (owner, relayed by the dispatcher): DROP** — the non-declined variant. The four pairs are
+dropped (`update_tool_registry_metrics()` + `success_rate`, `get_tool_execution_order(text[])`,
+`find_similar_compositions` + `query_embedding` + `idx_composer_episodes_embedding`,
+`trg_log_step_performance` + `trigger_log_step_performance()`), and the rollbacks recreate them (Task 4).
+The declined variant above is not built.
 
 ## Migration numbering (checked 2026-09-11)
 
