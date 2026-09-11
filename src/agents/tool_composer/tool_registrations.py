@@ -235,9 +235,9 @@ class PowerCalculatorInput(BaseModel):
 class PowerAnalysis(BaseModel):
     """Output from power analysis, computed by ``src/utils/power_analysis_lib`` (#2015).
 
-    ``required_n_per_arm`` and ``required_n_total`` are the library's own figures (for the
-    cluster and time-to-event designs the library floors the per-arm figure, as the
-    experiment-designer agent reports it). ``alpha`` and ``power`` are the design targets
+    ``required_n_per_arm`` and ``required_n_total`` are the library's own figures: two equal
+    arms, and for a cluster design whole clusters per arm (``design_details``), the same
+    figures the experiment-designer agent reports. ``alpha`` and ``power`` are the design targets
     the sample size was solved for. ``minimum_detectable_effect`` is on
     ``minimum_detectable_effect_scale``, which differs from the input ``effect_size`` for a
     binary design (relative change in, absolute risk difference out — #1639).

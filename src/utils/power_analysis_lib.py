@@ -147,6 +147,10 @@ def cluster_rct_power(
     Design effect = 1 + (cluster_size - 1) * ICC
     n_adjusted = n_base * design_effect
 
+    Rounded to two equal arms of whole clusters (#2015): per arm = ceil(n_adjusted / 2),
+    clusters per arm = ceil(per arm / cluster_size), total = 2 x per arm. Flooring either
+    division reported a design that could not reach its own total.
+
     Args:
         effect_size: Cohen's d.
         alpha: Type-I error rate.
@@ -162,11 +166,12 @@ def cluster_rct_power(
     base = continuous_outcome_power(effect_size, alpha, power)
     design_effect = 1 + (cluster_size - 1) * icc
     adjusted_n = int(np.ceil(base.sample_size * design_effect))
-    n_clusters = int(np.ceil(adjusted_n / cluster_size))
+    per_arm = -(-adjusted_n // 2)
+    clusters_per_arm = -(-per_arm // cluster_size)
 
     return PowerResult(
-        sample_size=adjusted_n,
-        sample_size_per_arm=adjusted_n // 2,
+        sample_size=2 * per_arm,
+        sample_size_per_arm=per_arm,
         mde=abs(effect_size),
         analysis_type="cluster_rct_adjusted",
         effect_size_type="cohens_d",
@@ -177,8 +182,8 @@ def cluster_rct_power(
             "Exchangeable correlation structure within clusters",
         ],
         extra={
-            "n_clusters_total": n_clusters,
-            "n_clusters_per_arm": max(1, n_clusters // 2),
+            "n_clusters_total": 2 * clusters_per_arm,
+            "n_clusters_per_arm": clusters_per_arm,
             "cluster_size": cluster_size,
             "icc": icc,
             "design_effect": design_effect,
@@ -196,7 +201,7 @@ def time_to_event_power(
     """Log-rank test power via Schoenfeld formula.
 
     required_events = 4 * (z_alpha/2 + z_beta)^2 / (log HR)^2
-    total_n = required_events / event_rate
+    total_n = required_events / event_rate, rounded up to two equal arms (#2015)
 
     Args:
         hazard_ratio: HR treatment vs. control. Must be > 0 and != 1.
@@ -215,10 +220,10 @@ def time_to_event_power(
         )
     z_alpha, z_beta = _z_scores(alpha, power)
     required_events = int(np.ceil(4 * ((z_alpha + z_beta) / log_hr) ** 2))
-    total_n = int(np.ceil(required_events / event_rate))
+    per_arm = -(-int(np.ceil(required_events / event_rate)) // 2)
     return PowerResult(
-        sample_size=total_n,
-        sample_size_per_arm=total_n // 2,
+        sample_size=2 * per_arm,
+        sample_size_per_arm=per_arm,
         mde=hazard_ratio,
         analysis_type="log_rank_test",
         effect_size_type="hazard_ratio",

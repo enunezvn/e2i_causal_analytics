@@ -56,12 +56,18 @@ def test_binary_design_uses_the_baseline_rate():
     assert result.design_details["expected_treatment_rate"] == pytest.approx(0.33)
 
 
-def test_cluster_design_applies_the_design_effect():
+def test_cluster_design_applies_the_design_effect_in_whole_clusters():
+    """codex whole-diff F1: the tool reported 683 in total but 17 clusters of 20 per arm
+    (680 subjects). Checked against the formula, not the library's own figures."""
     result = tr.power_calculator(effect_size=0.3, design="cluster", icc=0.05, cluster_size=20)
-    expected = lib.cluster_rct_power(0.3, 0.05, 0.8, 0.05, 20)
-    assert result.required_n_total == expected.sample_size
-    assert result.required_n_per_arm == expected.sample_size_per_arm
-    assert result.design_details["n_clusters_total"] == expected.extra["n_clusters_total"]
+    individual_total = 2 * math.ceil(2 * (2.8015852 / 0.3) ** 2)  # z(0.975) + z(0.8)
+    required = math.ceil(individual_total * 1.95)
+    clusters_per_arm = result.design_details["n_clusters_per_arm"]
+    assert (individual_total, required) == (350, 683)
+    assert result.required_n_total == 2 * result.required_n_per_arm >= required
+    assert clusters_per_arm * 2 * 20 >= result.required_n_total
+    assert (result.required_n_per_arm, clusters_per_arm) == (342, 18)
+    assert result.design_details["n_clusters_total"] == 36
     assert result.design_details["design_effect"] == pytest.approx(1.95)
 
 
