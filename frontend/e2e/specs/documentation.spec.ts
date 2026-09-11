@@ -53,7 +53,7 @@ test.describe('Documentation Page', () => {
       await expect(docPage.causalDag.getByText(/back-door paths the estimator must close/i)).toBeVisible()
     })
 
-    test('quality gate section: five refutation tests and the fail-state toggle', async () => {
+    test('quality gate section: six refutation tests and the fail-state toggle', async () => {
       await docPage.qualityGateNavLink.click()
       await expect(docPage.refutationGate).toBeVisible()
       for (const name of [
@@ -62,6 +62,7 @@ test.describe('Documentation Page', () => {
         'Data Subset',
         'Bootstrap',
         'Sensitivity (E-value)',
+        'Negative-Control Outcome',
       ]) {
         await expect(docPage.refutationGate.getByRole('heading', { name })).toBeVisible()
       }
