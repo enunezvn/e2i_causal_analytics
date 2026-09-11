@@ -141,11 +141,6 @@ def _independent_n_per_arm(frame, regions, effect):
 # ---------------------------------------------------------------------------
 
 
-def _baseline(engine, regions):
-    twins = [t for t in engine.population.twins if not regions or t.features["region"] in regions]
-    return float(np.mean([t.baseline_propensity for t in twins]))
-
-
 def test_the_result_is_the_engine_estimate_not_a_scaled_constant(whole_population, provider):
     out = tr._simulation_results(
         whole_population,
@@ -173,10 +168,10 @@ def test_the_result_is_the_engine_estimate_not_a_scaled_constant(whole_populatio
     assert out.twin_count == len(_population().twins)
     assert out.data_provenance == "cohort_estimated_synthetic_gold_v1"
     assert out.recommendation == whole_population.recommendation.value
-    # codex whole-diff #3 F1: the engine sizes the study from the twins' heuristic treatment
-    # PROPENSITY taken as a conversion proportion; the outcome is a continuous rate.
+    # #2015: the page (engine) and the chat tool state ONE size, from the cohort outcome's
+    # comparison-arm spread — not the twins' propensity taken as a conversion proportion.
     assert out.recommended_sample_size == _independent_n_per_arm(_frame(provider), [], out.effect)
-    assert out.recommended_sample_size != whole_population.recommended_sample_size
+    assert out.recommended_sample_size == whole_population.recommended_sample_size
 
 
 def test_a_targeted_request_is_answered_with_inference_on_the_targeted_regions(
@@ -186,7 +181,7 @@ def test_a_targeted_request_is_answered_with_inference_on_the_targeted_regions(
     region filter (measured), so a targeted question needs its own inference. Midwest's
     planted effect (0.02) is below the policy's 0.05 minimum while the cohort's is not."""
     frame = _frame(provider)
-    targeted = tr._targeted_effect(frame, ["midwest"], baseline_rate=_baseline(engine, ["midwest"]))
+    targeted = tr._targeted_effect(frame, ["midwest"])
     midwest_run = _simulate(engine, ["midwest"])
     out = tr._simulation_results(
         midwest_run,
@@ -211,9 +206,7 @@ def test_a_targeted_request_is_answered_with_inference_on_the_targeted_regions(
 
 def test_a_multi_region_target_is_the_average_effect_over_those_regions(engine, provider):
     frame = _frame(provider)
-    targeted = tr._targeted_effect(
-        frame, ["northeast", "west"], baseline_rate=_baseline(engine, ["northeast", "west"])
-    )
+    targeted = tr._targeted_effect(frame, ["northeast", "west"])
     assert targeted.effect == pytest.approx((PLANTED["northeast"] + PLANTED["west"]) / 2, abs=0.07)
     assert targeted.ci_lower < targeted.effect < targeted.ci_upper
     assert targeted.recommendation == "deploy"
@@ -226,7 +219,7 @@ def test_a_target_region_the_cohort_does_not_cover_is_refused(engine):
     no_west = CohortEffectDataProvider(_cohort().query("region != 'west'"))
     frame = _frame(no_west)
     with pytest.raises(ToolRefusalError, match="west"):
-        tr._targeted_effect(frame, ["west"], baseline_rate=0.3)
+        tr._targeted_effect(frame, ["west"])
     run = SimulationEngine(
         population=_population(), effect_provider=no_west, effect_estimator=CohortCausalEstimator()
     ).simulate(InterventionConfig(intervention_type="email_campaign"), use_cache=False)
@@ -454,11 +447,6 @@ def test_a_targeted_sample_size_comes_from_the_cohort_not_the_twins_propensity(p
     )
 
 
-def test_no_size_is_recommended_for_a_zero_effect(provider):
-    size, note = tr._experiment_size(_frame(provider), [], 0.0)
-    assert size is None and "zero" in note
-
-
 def test_simulating_the_whole_population_has_no_targeted_inference(provider):
     from uuid import uuid4
 
@@ -581,7 +569,34 @@ def test_the_budget_expires_before_the_executor_envelope():
     assert tr._COUNTERFACTUAL_BUDGET_S < envelope
 
 
-def test_no_size_is_recommended_when_the_effect_dwarfs_the_outcome_spread(provider):
-    """codex whole-diff #5: d so large the design would have fewer than two per arm."""
-    size, note = tr._experiment_size(_frame(provider), [], 1e6)
-    assert size is None and "per arm" in note
+def test_the_page_and_the_tool_state_the_same_size_for_the_same_run(provider):
+    """Owner GO (#2015): POST /digital-twin/simulate returns the engine's
+    ``recommended_sample_size`` verbatim (src/api/routes/digital_twin.py builds the response
+    from ``result.recommended_sample_size``); the chat tool reports its own. Same frame, same
+    population, same effect -> same number, and it does not move with twin propensity."""
+    from uuid import uuid4
+
+    frame = _frame(provider)
+    sizes = []
+    for population in (_population(), _population_with_regional_baselines()):
+        page = SimulationEngine(
+            population=population,
+            effect_provider=provider,
+            effect_estimator=CohortCausalEstimator(),
+        ).simulate(InterventionConfig(intervention_type="email_campaign"), use_cache=False)
+        result, targeted = tr._simulate_population(
+            population,
+            provider=provider,
+            frame=frame,
+            intervention_type="email_campaign",
+            regions=[],
+            model_id=uuid4(),
+        )
+        chat = tr._simulation_results(
+            result, brand="Kisqali", intervention_type="email_campaign", frame=frame, targeted=None
+        )
+        assert page.recommended_sample_size is not None
+        assert page.recommended_sample_size == chat.recommended_sample_size
+        assert page.recommended_sample_size == _independent_n_per_arm(frame, [], page.simulated_ate)
+        sizes.append(page.recommended_sample_size)
+    assert sizes[0] == sizes[1]
