@@ -10,6 +10,7 @@ A pair RESPONDS when the adjusted CI includes 0 and the omitted CI excludes 0. T
 are fitted the same two ways as a positive control that the frame and fits match the calibration file.
 Nothing here touches src/.
 """
+
 from __future__ import annotations
 
 import json
@@ -72,7 +73,9 @@ def excludes_zero(ci):
 
 
 def main() -> int:
-    cfg = GeneratorConfig(seed=21, n_records=N_ROWS, brand=Brand.REMIBRUTINIB, dgp_type=DGPType.HETEROGENEOUS)
+    cfg = GeneratorConfig(
+        seed=21, n_records=N_ROWS, brand=Brand.REMIBRUTINIB, dgp_type=DGPType.HETEROGENEOUS
+    )
     df = PatientGenerator(cfg).generate()
     rows = []
     t0 = time.time()
@@ -88,16 +91,26 @@ def main() -> int:
             truth = None
             if kind == "truth":
                 truth = float(df.attrs["true_ate_by_arm"][arm][outcome]["ate"])
-            row = dict(
-                kind=kind, arm=arm, outcome=outcome, confounders=covs, n=int(len(df)), n_treated=n1, n_control=n0,
-                truth=truth,
-                adjusted=dict(ate=adj, ci=list(adj_ci), excludes_zero=excludes_zero(adj_ci)),
-                omitted=dict(ate=om, ci=list(om_ci), excludes_zero=excludes_zero(om_ci)),
-                naive=dict(ate=nv, ci=list(nv_ci), excludes_zero=excludes_zero(nv_ci)),
-                shift_omitted_minus_adjusted=om - adj,
-                responds=(not excludes_zero(adj_ci)) and excludes_zero(om_ci),
-                seconds=round(time.time() - ta, 1),
-            )
+            row = {
+                "kind": kind,
+                "arm": arm,
+                "outcome": outcome,
+                "confounders": covs,
+                "n": int(len(df)),
+                "n_treated": n1,
+                "n_control": n0,
+                "truth": truth,
+                "adjusted": {
+                    "ate": adj,
+                    "ci": list(adj_ci),
+                    "excludes_zero": excludes_zero(adj_ci),
+                },
+                "omitted": {"ate": om, "ci": list(om_ci), "excludes_zero": excludes_zero(om_ci)},
+                "naive": {"ate": nv, "ci": list(nv_ci), "excludes_zero": excludes_zero(nv_ci)},
+                "shift_omitted_minus_adjusted": om - adj,
+                "responds": (not excludes_zero(adj_ci)) and excludes_zero(om_ci),
+                "seconds": round(time.time() - ta, 1),
+            }
             rows.append(row)
             print(
                 f"{kind:5} {arm:>18} -> {outcome:<20} adj {adj:+.4f} [{adj_ci[0]:+.4f},{adj_ci[1]:+.4f}]"
@@ -136,8 +149,10 @@ def main() -> int:
             f" | {r['shift_omitted_minus_adjusted']:+.4f} | {'**yes**' if r['responds'] else 'no'} |"
         )
     (OUT / "disproof.md").write_text("\n".join(md) + "\n")
-    print(f"\nresponders {len(responders)}/{len(nulls)}; adjusted null false positives {len(adj_false_pos)}; "
-          f"truths detected adjusted {len(truth_adj_ok)}/{len(truths)}; {time.time() - t0:.0f}s")
+    print(
+        f"\nresponders {len(responders)}/{len(nulls)}; adjusted null false positives {len(adj_false_pos)}; "
+        f"truths detected adjusted {len(truth_adj_ok)}/{len(truths)}; {time.time() - t0:.0f}s"
+    )
     return 0
 
 
