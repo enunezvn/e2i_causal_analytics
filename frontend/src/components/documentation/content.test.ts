@@ -89,6 +89,16 @@ describe('refutation gate content', () => {
     }
   });
 
+  it('scores random common cause in SE units, never as a percentage of the effect (#2005)', () => {
+    const rcc = REFUTATION_TESTS.find((t) => t.id === 'random_common_cause');
+    expect(rcc).toBeDefined();
+    expect(rcc!.critical).toBe(true);
+    expect(rcc!.passRule).toMatch(/\bSE\b/);
+    // Guard sanity: the same literal must reject the old copy.
+    expect('effect moves by < 20 %').toMatch(/%/);
+    expect(rcc!.passRule).not.toMatch(/%/);
+  });
+
   it('describes the three gate bands in order', () => {
     expect(GATE_BANDS.map((b) => b.decision)).toEqual(['proceed', 'review', 'block']);
   });

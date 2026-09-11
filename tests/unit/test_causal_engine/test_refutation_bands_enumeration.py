@@ -16,15 +16,26 @@ confidence alone. That sentence is what the lineage page's callout prints (Task
 10), so it is pinned from the code here rather than from the arithmetic. If either
 enumeration changes, this test and that callout must change together.
 
-The two CRITICAL tests never carry SKIPPED, so the enumeration below gives them
-only {PASSED, WARNING, FAILED}: a budget skip of a critical test raises
-``RefutationError`` instead of appending a result (pinned by
+Placebo never carries SKIPPED, so the enumeration below gives it only {PASSED,
+WARNING, FAILED}: a budget skip of a critical test raises ``RefutationError``
+instead of appending a result (pinned by
 ``test_refutation_runner_1419.py::TestNonCriticalBudgetSkipDegrades::
-test_critical_budget_skip_still_fails_closed``), and neither
-``RefutationRunner._run_placebo_test`` nor ``_run_random_common_cause_test``
-has a SKIPPED return; only ``_run_data_subset_test`` and ``_run_bootstrap_test``
-reach the SKIPPED helpers. Enumerating a SKIPPED critical would add two
-confidence values (0.0 and 0.30) that no run can produce.
+test_critical_budget_skip_still_fails_closed``) and
+``RefutationRunner._run_placebo_test`` has no SKIPPED return. Enumerating a
+SKIPPED placebo would add confidence values (0.0 with everything else skipped or
+failed) that no run can produce.
+
+random_common_cause CAN carry SKIPPED since 2026-09-11 (#2005): its verdict is
+the shift in units of the REPORTED interval's SE, and a zero-width reported
+interval is an honest SKIPPED through ``_degenerate_ci_skip_result``, decided
+BEFORE any refit (the same helper data_subset and bootstrap use). The budget
+skip still raises. So rcc gets {PASSED, WARNING, FAILED, SKIPPED} in BOTH
+spaces; what that adds is pinned below: the arithmetic confidence-only BLOCK
+gains 0.30 (placebo WARNING, rcc SKIPPED, both non-criticals FAILED) and the
+operational floor without a critical FAILED moves from 0.5333 to exactly 0.50
+(placebo PASSED, rcc SKIPPED, sensitivity SKIPPED, both non-criticals FAILED:
+0.25 / 0.50) -- still REVIEW, so BLOCK stays reachable only through a critical
+FAILED.
 """
 
 from __future__ import annotations
@@ -52,8 +63,9 @@ NONCRIT = (RefutationTestType.DATA_SUBSET, RefutationTestType.BOOTSTRAP)
 SENS = RefutationTestType.SENSITIVITY_E_VALUE
 
 # Statuses each test can actually carry in a result list (see the module docstring
-# for why the criticals exclude SKIPPED).
-CRITICAL_STATUSES = [P, W, F]
+# for why placebo excludes SKIPPED and random_common_cause, since #2005, does not).
+PLACEBO_STATUSES = [P, W, F]
+RCC_STATUSES = [P, W, F, S]
 SENS_STATUSES = [P, W, S]
 NONCRIT_STATUSES = [P, W, F, S]
 
@@ -66,9 +78,12 @@ EMITTABLE = {
     # already below 0.05, so it can never be >= 0.10 (#1994 option 1: documented,
     # behaviour unchanged). No SKIPPED: the failure paths raise RefutationError.
     RefutationTestType.PLACEBO_TREATMENT: (P, F),
-    # ``_run_random_common_cause_test``: delta_percent <= 20% PASSED, <= 30%
-    # WARNING, else FAILED. All three reachable. No SKIPPED (failures raise).
-    RefutationTestType.RANDOM_COMMON_CAUSE: (P, W, F),
+    # ``_run_random_common_cause_test`` (#2005): the shift |refuted - original| in
+    # units of the reported interval's SE, scaled to the refit frame -- <= 1.0
+    # PASSED, <= 2.0 WARNING, else FAILED (``_score_common_cause_shift``). SKIPPED
+    # from ``_degenerate_ci_skip_result`` when the reported interval has no width,
+    # decided before any refit. Refuter failures and the budget skip still raise.
+    RefutationTestType.RANDOM_COMMON_CAUSE: (P, W, F, S),
     # ``_run_sensitivity_test`` via ``evalue.STATUS_BY_READING``: PASSED for
     # ``beyond_measured_confounding``; WARNING for ``within_measured_confounding``,
     # ``null_finding`` and ``unbenchmarked``; SKIPPED for the randomized design.
@@ -97,7 +112,7 @@ def _suite(pl, rcc, sens, sub, boot):
 
 def _all_combos():
     yield from itertools.product(
-        CRITICAL_STATUSES, CRITICAL_STATUSES, SENS_STATUSES, NONCRIT_STATUSES, NONCRIT_STATUSES
+        PLACEBO_STATUSES, RCC_STATUSES, SENS_STATUSES, NONCRIT_STATUSES, NONCRIT_STATUSES
     )
 
 
@@ -141,10 +156,13 @@ def test_reachable_confidence_values_without_a_critical_failure():
     block = sorted(v for v in reachable if v < 0.50)
     assert review, "REVIEW must be reachable without a critical failure"
     assert 0.65 in review and 0.6 in review
-    # Confidence-only BLOCK needs BOTH critical tests in WARNING and BOTH non-critical
-    # tests FAILED (sensitivity PASSED/WARNING/SKIPPED): 0.40, 0.45 and 0.48. Pinned so
-    # the lineage callout and this test move together.
-    assert block == [0.4, 0.45, 0.48], block
+    # Confidence-only BLOCK needs a placebo WARNING (which the code never emits),
+    # random_common_cause WARNING or SKIPPED, and BOTH non-critical tests FAILED
+    # (sensitivity PASSED/WARNING/SKIPPED): 0.40, 0.45 and 0.48 with rcc WARNING,
+    # plus 0.30 with rcc SKIPPED (#2005: 0.15 / 0.50 -- placebo WARNING, sensitivity
+    # SKIPPED, both non-criticals FAILED). Pinned so the lineage callout and this
+    # test move together.
+    assert block == [0.3, 0.4, 0.45, 0.48], block
     assert max(reachable) == 1.0
 
 
@@ -163,8 +181,11 @@ def test_block_is_only_reachable_through_a_critical_failed_with_emittable_status
     alone never blocks — the floor without a critical FAILED is REVIEW.
 
     Hand arithmetic for that floor: placebo can only be PASSED here (it emits no
-    WARNING), random_common_cause WARNING, sensitivity SKIPPED (excluded from the
-    average), and both non-criticals FAILED:
+    WARNING), random_common_cause SKIPPED (#2005: a zero-width reported interval;
+    excluded from the average like any SKIPPED), sensitivity SKIPPED, and both
+    non-criticals FAILED:
+    0.25 * 1.0 / (0.25 + 0.125 + 0.125) = 0.25 / 0.50 = 0.50 -- exactly the REVIEW
+    cut, still not BLOCK. With rcc WARNING instead (the pre-#2005 floor):
     (0.25*1.0 + 0.25*0.6) / (0.25 + 0.25 + 0.125 + 0.125) = 0.40 / 0.75 = 0.5333.
     """
     r = RefutationRunner()
@@ -184,7 +205,7 @@ def test_block_is_only_reachable_through_a_critical_failed_with_emittable_status
             floor = conf if floor is None else min(floor, conf)
             if 0.50 <= conf < 0.70:
                 review.add(conf)
-    assert floor == pytest.approx(0.5333, abs=1e-3)
+    assert floor == pytest.approx(0.50, abs=1e-9)
     assert 0.50 <= floor < 0.70, "the floor without a critical failure is REVIEW"
     # Operationally reachable REVIEW values. Each is derived by hand below from one
     # witness combination, so the pin has an arithmetic independent of this loop.
@@ -192,6 +213,7 @@ def test_block_is_only_reachable_through_a_critical_failed_with_emittable_status
     # WARNING 0.6, FAILED 0.0; SKIPPED drops out of BOTH numerator and denominator.
     # Placebo is PASSED in every witness — it emits no WARNING, and FAILED would
     # block. Columns are placebo / rcc / sensitivity / subset / bootstrap.
+    #   0.50    P S S F F  0.25                   / 0.50  = 0.25  / 0.50   (#2005)
     #   0.5333  P W S F F  (0.25 + 0.15)          / 0.75  = 0.40  / 0.75
     #   0.55    P W W F F  (0.25 + 0.15 + 0.15)   / 1.0   = 0.55  / 1.0
     #   0.625   P W W W F  (0.25 + 0.15 + 0.15 + 0.075) / 1.0 = 0.625 / 1.0
@@ -202,6 +224,7 @@ def test_block_is_only_reachable_through_a_critical_failed_with_emittable_status
     #   0.6667  P P S F F  (0.25 + 0.25)          / 0.75  = 0.50  / 0.75
     #   0.675   P W W P F  (0.25 + 0.15 + 0.15 + 0.125) / 1.0 = 0.675 / 1.0
     assert sorted(review) == [
+        0.5,
         0.5333,
         0.55,
         0.625,

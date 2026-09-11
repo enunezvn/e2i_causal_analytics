@@ -251,6 +251,53 @@ def extract_failure_patterns(
     return patterns
 
 
+def _random_common_cause_severity(test) -> str:
+    """Severity of a random_common_cause pattern, from the verdict's own statistic.
+
+    #2005 (2026-09-11): the runner scores the refit shift in units of the
+    reported interval's SE (``details["shift_se_units"]``; FAILED above the
+    ``common_cause_shift_se`` warning cutoff, WARNING between the two cutoffs).
+    The retired label -- ``"high" if delta_percent > 30 else "medium"`` on
+    ``|delta| / |ATE|`` -- was decoupled from that verdict: a FAILED row at a
+    large effect can carry a small percentage, and a null's percentage can be
+    huge at a small shift (measured 174 % at 0.34 SE on the DGP).
+
+    Precedence: the persisted shift when present; else the stored status (a
+    result built before the key existed still carries its verdict); else the
+    retired percentage rule. That last branch is a defensive fallback for a
+    DIRECT caller handing in a result with neither the shift nor a decisive
+    status -- ``extract_failure_patterns`` admits only FAILED / WARNING results,
+    and the store re-hydrates ``ValidationFailurePattern`` rows with their
+    stored severity without calling this, so no production path reaches it.
+    """
+    from .refutation_runner import RefutationRunner, RefutationStatus
+
+    details = test.details if isinstance(getattr(test, "details", None), dict) else {}
+    shift = details.get("shift_se_units")
+    if shift is not None:
+        try:
+            # The cutoff that PRODUCED the verdict: the runner persists its (possibly
+            # overridden) thresholds beside the shift; the class default is only
+            # for a row that carries the shift without them.
+            persisted = details.get("thresholds_se")
+            warning_cutoff = float(
+                persisted["warning"]
+                if isinstance(persisted, dict) and persisted.get("warning") is not None
+                else RefutationRunner.PASS_THRESHOLDS["common_cause_shift_se"]["warning"]
+            )
+            return "high" if float(shift) > warning_cutoff else "medium"
+        except (TypeError, ValueError, KeyError):
+            pass  # a non-numeric persisted value: fall through to the status
+    status = getattr(test, "status", None)
+    if status == RefutationStatus.FAILED:
+        return "high"
+    if status == RefutationStatus.WARNING:
+        return "medium"
+    # Defensive fallback (see the docstring): neither the shift nor a decisive
+    # status. The retired percentage rule survives only here.
+    return "high" if abs(test.delta_percent) > 30 else "medium"
+
+
 def _categorize_failure(test) -> tuple:
     """Categorize a test failure into a learning category."""
     from .refutation_runner import RefutationTestType
@@ -334,7 +381,7 @@ def _categorize_failure(test) -> tuple:
     elif test_name == RefutationTestType.RANDOM_COMMON_CAUSE:
         return (
             FailureCategory.MODEL_MISSPECIFICATION,
-            "high" if delta > 30 else "medium",
+            _random_common_cause_severity(test),
             "Effect is sensitive to random common causes. Review the causal DAG "
             "for missing confounders or incorrect causal assumptions.",
         )
@@ -390,6 +437,32 @@ def _describe_failure(test) -> str:
         return f"E-value of {e_value} indicates sensitivity to unmeasured confounding"
 
     elif test_name == RefutationTestType.RANDOM_COMMON_CAUSE:
+        # #2005: the verdict is the shift in units of the REFERENCE SE -- the
+        # reported interval's SE, scaled to the refit frame when the refutation
+        # ran on a #1419 subsample (``reference_se_scale`` != 1). The stored
+        # percentage stays as context; its denominator is floored at 1e-10, so
+        # on a ~zero effect it is not "a percentage of the effect" and is not
+        # printed as one. Legacy rows carry no shift.
+        details = test.details or {}
+        shift = details.get("shift_se_units")
+        if shift is not None:
+            scale = details.get("reference_se_scale")
+            scale_txt = (
+                f", scaled x{float(scale):.2f} to the refit frame"
+                if scale is not None and float(scale) != 1.0
+                else ""
+            )
+            if abs(float(test.original_effect)) <= 1e-10:
+                pct_txt = (
+                    f"; stored delta {abs(delta):.1f}% is against a floored denominator, "
+                    "the effect is ~0"
+                )
+            else:
+                pct_txt = f" (stored delta {abs(delta):.1f}% of the effect)"
+            return (
+                f"Random common cause shifted the effect by {float(shift):.2f} SE of the "
+                f"reference interval (the reported interval's SE{scale_txt}){pct_txt}"
+            )
         return f"Random common cause changed effect by {abs(delta):.1f}%"
 
     elif test_name == RefutationTestType.DATA_SUBSET:

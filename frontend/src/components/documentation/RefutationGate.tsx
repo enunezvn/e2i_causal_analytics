@@ -97,7 +97,7 @@ function RandomCommonCauseIllustration({ outcome }: { outcome: Outcome }) {
       <rect x="126" y={base - afterH} width="22" height={afterH} rx="2" fill={ok ? TREATMENT : FAIL} fillOpacity={ok ? 0.5 : 1} className={ANIM} />
       <text x="103" y={base + 12} fontSize="9" textAnchor="middle" className={MUTED}>before</text>
       <text x="137" y={base + 12} fontSize="9" textAnchor="middle" className={MUTED}>after</text>
-      <Verdict x={200} y={100} outcome={outcome} pass="Δ < 20 %" fail="Δ > 30 %" />
+      <Verdict x={200} y={100} outcome={outcome} pass="Δ ≤ 1 SE" fail="Δ > 2 SE" />
     </>
   );
 }
