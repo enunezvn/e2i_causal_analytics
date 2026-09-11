@@ -297,9 +297,10 @@ class RefutationResults(BaseModel):
     """Output from ``refutation_runner``: the DoWhy refutation suite and its summary.
 
     The summary fields are read from the suite with ``.get`` and stay optional.
+    ``estimate_id`` is the caller's optional label, echoed (#2014).
     """
 
-    estimate_id: str
+    estimate_id: Optional[str]
     treatment: str
     outcome: str
     n_samples: int
@@ -1319,7 +1320,11 @@ def _describe_estimate(
         {
             "name": "estimate_id",
             "type": "str",
-            "description": "ID of the causal estimate to refute (echoed back for provenance)",
+            "description": (
+                "Optional label echoed back; the suite re-estimates from the data and does "
+                "not look an estimate up by it"
+            ),
+            "required": False,
         },
         {
             "name": "treatment",
@@ -1342,7 +1347,7 @@ def _describe_estimate(
     avg_execution_ms=5000,
     output_model=RefutationResults,
 )
-def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
+def refutation_runner(estimate_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     """Run the REAL DoWhy refutation suite on the in-context data (#778).
 
     The live DoWhy model/estimand/estimate do not survive serialization across
@@ -1361,8 +1366,13 @@ def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
     verdict.
 
     Args:
-        estimate_id: Echoed back for provenance; not used to fetch a live
-            estimate (which is impossible across the serialization boundary).
+        estimate_id: Optional caller label, echoed back. Not used to fetch a live
+            estimate (impossible across the serialization boundary). Optional since
+            #2014: no tool produces an estimate id, so the planner filled the required
+            field with whatever it could reference (``$step_1.method``,
+            ``$step_1.ate``). An id minted by ``causal_effect_estimator`` was rejected:
+            the suite re-estimates from the data, so the id would claim a link to an
+            estimate this run never refutes.
         **kwargs: Must carry the DataFrame (one of ``_DATAFRAME_KWARGS_KEYS``)
             and ``treatment``/``outcome`` (plus optional ``confounders``).
 
