@@ -353,7 +353,7 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
   - `attempts int`;
   - `is_synthetic boolean NOT NULL DEFAULT false`, copied from the episode (§6);
   - `tool_version text`, copied from `tool_registry.version` at insert;
-  - a unique partial index on `step_id`, so one performance row per step.
+  - a unique index on `step_id` (NULLs stay distinct in PostgreSQL, so `ON CONFLICT (step_id)` infers it), so one performance row per step.
 - Rows are written only for steps where the tool was **invoked**. A cache hit, a plan defect, an unmet
   dependency, an open circuit or an unregistered tool never ran the tool and says nothing about its
   health.

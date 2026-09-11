@@ -45,7 +45,10 @@ before Task 1.
   - Every test command: `cd $W && $PY -m pytest <paths> -q -p no:cacheprovider -n 0`. **Always `-n 0`.**
   - Before any import-based probe, assert `src.__file__` starts with `$W/`.
 - **Real-DB tests** are opt-in: `E2I_DB_INTEGRATION=1 $PY -m pytest … -n 0`.
-  - They create and drop only the throwaway databases `learning_loop_upgrade` and `learning_loop_fail`.
+  - They create and drop only throwaway databases named `learning_loop_*`. The template `learning_loop_base`
+    is built once per session; every test **module** gets its own `CREATE DATABASE learning_loop_<module> TEMPLATE learning_loop_base`
+    with the migrations it needs applied by the `migrated_db(upto=…)` fixture. Every test file is
+    independently runnable.
   - The password is read at runtime with `docker exec supabase-db printenv POSTGRES_PASSWORD` and never
     written to any file or log.
   - The direct DB port is `127.0.0.1:5433`. Port 5432 is the pooler, which answers "Tenant or user not
@@ -71,6 +74,17 @@ Claude-Session: https://claude.ai/code/session_018uHnM6oxkd8sepkqAY3s3o
 ```
 
 - **Nothing is pushed until Task 19,** and only after the dispatcher's go. Never squash.
+
+## Owner and dispatcher gates (resolve before the named step; never assume)
+
+| Gate | Blocks | If the answer is "no" |
+|---|---|---|
+| **O1** (spec §11): build the composition feedback linker | Task 16 entirely | skip Task 16 |
+| **O2** (spec §11): authorize the caveat experiment's LLM spend | Task 17 Step 4 (the run) | the flag stays off; the script and analysis tests still ship |
+| **O3** (spec §11): drop the designed DB objects | the `DROP` statements and their tests in Tasks 2–4: `update_tool_registry_metrics`, `success_rate`, `get_tool_execution_order` (040); `find_similar_compositions`, `query_embedding` + index, `trg_log_step_performance` (041) | delete exactly those statements, their `test_*dropped*` assertions and the matching rollback sections. Nothing else depends on them: the RPCs never UPDATE step status, so the trigger cannot fire; the sync never writes `success_rate`. Confirm with one real-DB test that recording works with the objects present. |
+| **G-LLM** (dispatcher): run the opt-in live-LLM composer test (about 2 real compositions) | Task 10 Step 3 **run** (writing the test is ungated) | leave the test skipped; the live cert (Task 19) is the first real-LLM exercise |
+
+The dispatcher records each answer in the task report before the blocked step starts.
 
 ## Migration numbering (checked 2026-09-11)
 
@@ -154,15 +168,38 @@ Claude-Session: https://claude.ai/code/session_018uHnM6oxkd8sepkqAY3s3o
   `pytestmark = pytest.mark.skipif(os.getenv("E2I_DB_INTEGRATION") != "1", …)`.
 
 ```python
-def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
+LANE_TABLES = ("tool_registry","tool_dependencies","tool_performance","composer_episodes",
+               "composition_steps","classification_logs","episodic_memories","schema_migrations")
+
+def test_fixture_matches_prod_ledger_and_registry(base_db, prod_readonly):
     # prod_readonly: docker exec supabase-db psql -tA (SELECT only)
-    assert upgrade_db.scalar("select count(*) from public.schema_migrations") == \
+    assert base_db.scalar("select count(*) from public.schema_migrations") == \
         prod_readonly.scalar("select count(*) from public.schema_migrations")
-    assert upgrade_db.scalar("select count(*) from tool_registry") == 16
-    assert upgrade_db.scalar("select count(*) from tool_dependencies") == 11
-    assert upgrade_db.scalar("select 'ml/037_tool_registry_schema_sync.sql' in (select filename from public.schema_migrations)")
-    assert upgrade_db.scalar("select to_regtype('e2i_agent_name') is not null")
-    assert upgrade_db.scalar("select has_table_privilege('anon','public.tool_registry','SELECT')") is False
+    assert base_db.scalar("select count(*) from tool_registry") == 16
+    assert base_db.scalar("select count(*) from tool_dependencies") == 11
+
+def test_fixture_schema_equivalent_for_lane_objects(base_db, prod_readonly):
+    # Exact equality with prod, object by object, for everything this lane reads or changes.
+    for q in (
+        "select conrelid::regclass||':'||conname||':'||pg_get_constraintdef(oid) from pg_constraint "
+        "where conrelid::regclass::text = any(%(t)s) order by 1",
+        "select indexrelid::regclass||':'||pg_get_indexdef(indexrelid) from pg_index "
+        "where indrelid::regclass::text = any(%(t)s) order by 1",
+        "select c.relname||':'||coalesce(c.relacl::text,'') from pg_class c "
+        "where c.relnamespace='public'::regnamespace and c.relname = any(%(t)s || array['v_tool_reliability',"
+        "'v_composition_success_rate','v_active_compositions','v_classification_accuracy']) order by 1",
+        "select p.oid::regprocedure||':'||md5(pg_get_functiondef(p.oid))||':'||coalesce(p.proacl::text,'') "
+        "from pg_proc p where p.proname in ('update_tool_registry_metrics','find_similar_compositions',"
+        "'get_tool_execution_order','trigger_log_step_performance','trigger_update_tool_registry_timestamp') order by 1",
+        "select t.typname||':'||string_agg(e.enumlabel, ',' order by e.enumsortorder) from pg_type t join pg_enum e "
+        "on e.enumtypid=t.oid where t.typname in ('tool_category','composition_status','routing_pattern','e2i_agent_name') group by t.typname order by 1",
+        "select extname||':'||extversion||':'||extnamespace::regnamespace from pg_extension order by 1",
+        "select defaclrole::regrole||':'||defaclobjtype||':'||defaclacl::text from pg_default_acl order by 1",
+    ):
+        assert base_db.rows(q, t=list(LANE_TABLES)) == prod_readonly.rows(q, t=list(LANE_TABLES)), q
+
+def test_restore_reported_no_unexpected_errors(base_db_restore_log):
+    assert base_db_restore_log.unexpected == [], base_db_restore_log.unexpected
 ```
 
 - [ ] **Step 2: Run it.** `E2I_DB_INTEGRATION=1 … -n 0`. Expect an ERROR: the fixture does not exist yet.
@@ -175,17 +212,35 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
     `jsonb` adaptation. It is the same contract as the production `SupabaseRpcPort` (Task 5).
   - `run_runner(project_root, db)`: `SUPABASE_DB_URL=db_url(db) bash <project_root>/scripts/run_migrations.sh`,
     returning (rc, stdout).
-- [ ] **Step 4: Implement `conftest.py`** with session fixture `upgrade_db`:
-  1. `DROP DATABASE IF EXISTS learning_loop_upgrade WITH (FORCE); CREATE DATABASE learning_loop_upgrade;`
-  2. In the new database, as `supabase_admin`: `CREATE SCHEMA IF NOT EXISTS extensions; CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions; CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions; CREATE EXTENSION IF NOT EXISTS vector;`
-     plus the roles `anon`, `authenticated` and `service_role` if missing (the `test_058` pattern).
-  3. Run `docker exec supabase-db pg_dump -U postgres -s -n auth -n public postgres`, restored with
-     `psql -v ON_ERROR_STOP=0`. Capture every restore error line. **The test fails if any error line does
-     not match an allowlist of Supabase-internal objects** (event triggers, publications) that the
-     fixture records explicitly, never blanket-ignored.
-  4. Run `pg_dump -U postgres -a -t public.schema_migrations -t public.tool_registry -t public.tool_dependencies postgres`
-     and restore it.
-  5. At teardown: `DROP DATABASE … WITH (FORCE)`.
+- [ ] **Step 4: Implement `conftest.py`.**
+  - **First, an inventory probe** (read-only, prod), committed as `_prod_inventory.sql` with its output
+    pasted into the task report:
+    - `pg_extension` (name, version, schema): measured 2026-09-11, `vector` in `public`, `pgcrypto` and
+      `uuid-ossp` in `extensions`, plus any others found;
+    - every `pg_depend` edge from a `public` object to an object in another schema;
+    - the non-public schemas those edges name.
+  - **Session fixture `base_db`:**
+    1. `DROP DATABASE IF EXISTS learning_loop_base WITH (FORCE); CREATE DATABASE learning_loop_base;`
+    2. As `supabase_admin`, create exactly the extensions and schemas the inventory lists, with the
+       listed versions (`CREATE EXTENSION … VERSION '<v>' SCHEMA <s>`), plus the roles `anon`,
+       `authenticated` and `service_role` if missing (the `test_058` pattern).
+    3. Run `pg_dump -U postgres -s` with `-n public` plus every schema the inventory names (for example
+       `-n auth`), then restore with `psql -v ON_ERROR_STOP=0`.
+       - Parse every `ERROR:` line.
+       - An error is **expected** only when it names an object in `EXPECTED_RESTORE_ERRORS`: a dict of
+         exact object names to the reason, for example an event trigger owned by `supabase_admin` that
+         this lane never reads.
+       - Every other error is recorded in `restore_log.unexpected`, which Step 1's test asserts is empty.
+         Never widen the dict to get green; report instead.
+    4. Run `pg_dump -U postgres -a -t public.schema_migrations -t public.tool_registry -t public.tool_dependencies`
+       and restore it.
+    5. At session teardown, drop `learning_loop_base` and every `learning_loop_*` database.
+  - **Module fixture `migrated_db(upto)`:** `CREATE DATABASE learning_loop_<module> TEMPLATE learning_loop_base`,
+    then apply ml/039 (plain) / ml/040 / ml/041 (`--single-transaction`) up to `upto`, yield a `PgConn`,
+    and drop the database at module teardown.
+  - **Per-test isolation:** tests that do not need committed state run inside a transaction rolled back
+    by the fixture. Concurrency, runner and COHORT-after-commit tests use their own module database and
+    commit.
 - [ ] **Step 5: Run it.** Expect PASS. Also run the default suite without `E2I_DB_INTEGRATION`: SKIPPED.
 - [ ] **Step 6: Lint, codex loop, commit** `test(learning-loop): throwaway DB restored from a schema-only dump of prod`.
 
@@ -197,8 +252,8 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
 - Create `database/ml/039_tool_category_cohort.sql`, `database/ml/040_tool_registry_startup_sync.sql`
 - Test `tests/integration/tool_composer_learning_loop/test_040_registry_sync.py`
 
-- [ ] **Step 1: Write red tests.** Apply 039 with plain psql and 040 with `--single-transaction`, the
-  runner's branches, to `upgrade_db` in a module fixture. Tests:
+- [ ] **Step 1: Write red tests** on `migrated_db(upto="040")`, which applies 039 with plain psql and 040
+  with `--single-transaction` (the runner's branches). Tests:
   - `test_cohort_category_insertable_after_039_commit`: a `cohort_builder` row with `COHORT` and
     `cohort_constructor` inserts in a new transaction.
   - `test_valid_agent_follows_e2i_agent_name`: `casual_impact` raises `check_violation`;
@@ -223,7 +278,8 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
 - [ ] **Step 2: Run.** Expect FAIL: the files do not exist.
 - [ ] **Step 3: Write 039.** One statement plus a header comment explaining the un-wrapped runner branch
   (`scripts/run_migrations.sh:157–190`).
-- [ ] **Step 4: Write 040.** Start from the rehearsed draft (session scratchpad `draft_039.sql`, sections
+- [ ] **Step 4: Write 040.** Start from the rehearsed draft committed at
+  `docs/superpowers/plans/assets/2026-09-11-learning-loop-rehearsal-draft.sql` (sections
   1, 3 and 4) with these changes:
   - Signature `sync_tool_registry(p_tools jsonb, p_dependencies jsonb, p_max_deprecations integer DEFAULT 3)`.
   - **Validate before any write:** array non-empty; no duplicate `name`; every dependency endpoint in the
@@ -249,7 +305,7 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
 - Create `database/ml/041_composer_learning_loop_recording.sql`
 - Test `tests/integration/tool_composer_learning_loop/test_041_recording.py`
 
-- [ ] **Step 1: Write red tests** (041 applied wrapped on top of Task 2's database).
+- [ ] **Step 1: Write red tests** on `migrated_db(upto="041")`, independent of Task 2's test module.
   - **Schema:**
     - `test_columns_added`: every column in spec §5.2, including `audit_workflow_id`, `plan_source`,
       `error_type`, `last_activity_at`, `tool_performance.is_synthetic` and `tool_version`.
@@ -261,7 +317,9 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
       called **first**, exactly one episode exists afterwards.
     - `test_phase_updates_only_non_terminal`.
     - `test_steps_idempotent_receipt`: the same steps twice give `already_present` equal to n and no
-      duplicate `composition_steps` / `tool_performance` rows.
+      duplicate `composition_steps` / `tool_performance` rows. This proves the `ON CONFLICT (step_id)`
+      inference works on first insert and on replay.
+    - `test_perf_unique_index_allows_null_step_ids`: two manual perf rows with NULL `step_id` insert.
     - `test_steps_perf_rows_only_for_invoked_classes`: 10 classes in, perf rows only for succeeded,
       refused, input_rejected, timeout and error.
     - `test_steps_unknown_tools_reported_and_rest_recorded`.
@@ -291,14 +349,18 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
       functions (`composer_record_{start,phase,steps,heartbeat,finish}`, `composer_public_column_names`,
       `composer_steps_for`), `get_tool_reliability` and the 3 views.
 - [ ] **Step 2: Run.** Expect FAIL.
-- [ ] **Step 3: Write 041.** Start from the draft's sections 2, 5, 6 and 7 and apply the spec deltas:
+- [ ] **Step 3: Write 041.** Start from the committed draft's sections 2, 5, 6 and 7 and apply the spec
+  deltas:
   - **Seed first:** every RPC begins with an `INSERT … ON CONFLICT (composition_id) DO NOTHING` from `p_seed`.
   - **`composer_record_steps`:**
     - resolves `tool_id` by name;
     - re-checks `{"type":"column"}` entries against `pg_attribute ⋈ pg_class` in `public`;
     - `ON CONFLICT (episode_id, step_number) DO NOTHING`;
     - inserts perf rows with `is_synthetic` from the episode and `tool_version` from the registry,
-      `ON CONFLICT (step_id) DO NOTHING`;
+      `ON CONFLICT (step_id) DO NOTHING`, inferred from a **full** unique index
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_performance_step ON tool_performance(step_id)`. NULLs stay
+      distinct, so non-composer rows with NULL `step_id` are unaffected. A partial index would not be
+      inferred by that clause;
     - returns `{recorded, already_present, unknown_tools}`.
   - **`composer_record_finish`:** sets every snapshot field and the latencies; a terminal episode returns
     `{recorded:false, already_terminal:true}`.
@@ -369,9 +431,8 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
   - `test_second_call_in_process_is_noop`: the once-guard makes no second RPC. The port counts calls.
   - `test_failure_is_logged_not_raised`: a port pointed at a dropped database logs WARNING and returns
     `None`.
-  - `test_column_allowlist_fetch_and_fail_closed`: `fetch_column_allowlist()` returns a frozenset holding
-    `treatment`. When the port fails, it returns `None`, and the recorder treats `None` as an empty
-    allowlist.
+  - `test_column_allowlist_fetch`: `fetch_column_allowlist()` returns a frozenset holding `treatment`, and
+    returns `None` when the port fails. The recorder's handling of `None` is tested in Task 9.
 - [ ] **Step 3: Run.** Expect FAIL.
 - [ ] **Step 4: Implement.**
   - `rpc_port.py`: `class RpcPort(Protocol): async def call(self, name: str, params: dict) -> Any`, and
@@ -402,15 +463,19 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
   - `docs/data/03-ML-PIPELINE-SCHEMA.md` §4.1.
 
 - [ ] **Step 1: Write the red test** `tests/unit/test_agents/test_tool_composer/test_registry_sync_regime.py`.
-  - `test_no_code_references_the_retired_regime`: `git grep -n` over `src scripts tests` for
-    `generate_tool_registry_sync_migration|register_from_database|sync_to_database|NOT_SEEDED_IN_DB`
-    returns nothing outside this test file.
+  - `test_no_code_references_the_retired_regime`: a filesystem walk (`pathlib.Path.rglob("*.py")`) over
+    `src`, `scripts` and `tests` finds no occurrence of
+    `generate_tool_registry_sync_migration|register_from_database|sync_to_database|NOT_SEEDED_IN_DB`,
+    excluding this test file by path. No `git` subprocess, so it runs in CI.
   - `test_registry_doc_describes_runtime_sync`: `03-ML-PIPELINE-SCHEMA.md` §4.1 no longer says "never
     registered at runtime", and names `sync_tool_registry`.
 - [ ] **Step 2: Run.** Expect FAIL.
 - [ ] **Step 3: Delete and edit.**
-  - Keep `ToolCategory` in `registry.py` only if `grep` shows a remaining importer. `get_tools_by_category`
-    references it (L606): keep both unless unused; report either way.
+  - **Do not touch** `ToolCategory` or `get_tools_by_category` (`registry.py:56, 606–616`). They are not part
+    of the retired DB regime; only `register_from_database`'s `category_filter` parameter used the enum.
+    `get_tools_by_category` is a separate documented placeholder ("returns empty list as category is not
+    in ToolSchema"), and classifying it needs its own intent investigation, which is out of this lane. Name
+    it in the task report as an observed placeholder for the dispatcher.
   - The comment at `tool_registry.py:214–216` becomes: "The DB `tool_registry` / `tool_dependencies`
     rows are synced from these definitions at API startup by `registry_sync.sync_tool_registry_once()`
     (ml/040)."
@@ -448,10 +513,15 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
   - `test_callback_called_per_step_single_and_parallel`: a plan with a single group and a 2-step parallel
     group gets one callback per step, with the right step numbers.
   - `test_cancel_keeps_finished_parallel_sibling`: a parallel group of a fast callable and a slow one.
-    Cancel the `execute` task after the fast one's callback fires. The callback saw the fast step and not
+    Cancel the `execute` task after the fast one's callback fires, awaited through an `asyncio.Event` set
+    by the callback, never a sleep. The callback saw the fast step and not
     the slow one, and `CancelledError` propagates.
-  - `test_escaping_exception_keeps_finished_sibling`: the slow sibling raises during input construction
-    (a context object whose attribute access raises). The fast sibling's callback fired.
+  - `test_escaping_exception_keeps_finished_sibling`: synchronised, not timing-based.
+    - The fast sibling's callback sets an `asyncio.Event`.
+    - The slow sibling's input mapping resolves through a context object whose attribute access **first
+      awaits that event** (via a registered async callable that awaits it before raising a non-tool
+      exception from input construction), then raises.
+    - Assert the fast sibling's callback fired before the exception propagated out of `execute`.
 - [ ] **Step 2: Run.** Expect FAIL.
 - [ ] **Step 3: Implement.**
   - `StepResult` gains `outcome_class: Optional[str] = None`, `attempts: int = 0`, `cache_hit: bool = False`
@@ -489,8 +559,12 @@ def test_fixture_matches_prod_ledger_and_registry(upgrade_db, prod_readonly):
   - `test_planner_wraps_validator_error_in_planning_error`: `ToolPlanner._build_execution_steps` output
     with duplicate ids reaching `ExecutionPlan(...)` inside `plan()` raises `PlanningError`.
   - `test_executor_runs_every_step_of_omitted_step_plan`: a real `PlanExecutor` on real tools; `trace.tools_executed == 2`.
+  - `test_plan_source_and_cache_key_fields`: `ExecutionPlan` has `plan_source: Optional[Literal["llm","plan_cache","kpi_deterministic"]] = None`
+    and `plan_cache_key: Optional[str] = None`. They round-trip through `model_dump(mode="json")` and
+    `dump_json_safe`, and an invalid `plan_source` raises.
 - [ ] **Step 2: Run.** Expect FAIL.
 - [ ] **Step 3: Implement.**
+  - Add the two fields above to `ExecutionPlan`; Task 10 sets them.
   - A `@model_validator(mode="after")` on `ExecutionPlan` checks uniqueness, known dependencies and
     acyclicity (DFS).
   - A private attribute `_repair_reason` and a property `execution_order_repaired`.
@@ -536,11 +610,33 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
     the finish snapshot restoring `tool_plan`, `plan_source`, groups and latencies.
   - `test_lost_response_resend_no_duplicates`: the port raises after executing (response lost); the retry
     gives an identical DB state.
+  - `test_exhausted_step_write_resent_by_finish`: a port failing `composer_record_steps` twice for step 1.
+    After `finish`, step 1 and its perf row are persisted. The recorder retains every step it was given,
+    independently of the trace.
+  - `test_cancel_resends_retained_steps`: two scenarios, each with a real `PlanExecutor` plus recorder on
+    `PsycopgRpcPort`:
+    - a finished sibling in the **same** parallel group as a slow step;
+    - a finished step in an **earlier** group.
+
+    The step-write port fails until cancel. `recorder.cancelled("execute")` is followed by `drain()`. The
+    DB holds the finished steps, their perf rows, and the episode `cancelled` in phase `execute`.
+  - `test_sentinel_absent_after_real_db_round_trip`: the Step 1 sentinel models go through `start`,
+    `phase` ×3, `step` ×n and `finish` on `PsycopgRpcPort`, then `drain()`.
+    - Every column of the episode, step and perf rows for that composition, as `row_to_json(t)::text`,
+      lacks the sentinel.
+    - `error_message` is NULL on both tables, `tool_outputs = '{}'` and `synthesized_response IS NULL`.
   - `test_unknown_tools_trigger_lazy_sync_then_resend`: start the database without cohort rows (sync not
     run). A step for `cohort_builder` makes the recorder run `sync_tool_registry_once` and re-send, and the
     step is recorded.
-  - `test_heartbeat_liveness`: heartbeat 1 s, window 5 s, step callable sleeping 10 s → never abandoned.
-    Cancel the heartbeat task → abandoned after 6 s.
+  - `test_heartbeat_keeps_activity_fresh`: heartbeat period 1 s and a step sleeping 10 s. Sampled every
+    second, `last_activity_at` never lags `now()` by more than 2.5 s, and the heartbeat task is gone
+    after finish.
+  - `test_abandoned_uses_production_predicate`: controlled timestamps against the **production** view.
+    `UPDATE composer_episodes SET last_activity_at = now() - interval '6 minutes'` on a non-terminal
+    episode makes it `abandoned`; `- interval '4 minutes'` does not. The 5-minute window is not
+    parameterised.
+  - `test_allowlist_none_keeps_no_names_end_to_end`: a recorder whose allowlist fetch failed persists no
+    `{"type":"column"}` names.
   - `test_drain_flushes_pending`: enqueue 20 writes, then `await drain(timeout=5)`: all rows present.
   - `test_no_latency_on_user_path`:
     - two ports: connection refused, and a 10 s hang;
@@ -579,10 +675,12 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
     is a pure helper. It returns the `audit_workflow_id` argument and ignores `context["audit_workflow_id"]`.
     Three cases: argument `None` with no context key; argument `None` with a stale context uuid; argument
     set with a different stale context uuid.
-  - `test_audit_block_yields_none_when_absent_or_raising`: extract the audit start into
+  - `test_audit_block_yields_none_when_absent`: extract the audit start into
     `_start_audit(audit_service, query, context) -> Optional[UUID]`. It returns `None` for
-    `audit_service=None`, and `None` for a real `AuditChainService` constructed on a client whose
-    `start_workflow` raises: a real client pointed at a dropped database, not a mock.
+    `audit_service=None`. This is a pure unit test.
+  - The raising-audit case needs a real client against a dropped database, so it lives in the **gated**
+    integration file `tests/integration/tool_composer_learning_loop/test_composer_audit_identity_realdb.py`:
+    `_start_audit` returns `None` and logs WARNING.
   - The call-site order (seed built after the audit block) is exercised by the opt-in live-LLM test in
     Step 3, run twice: audit service wired and unset.
   - `test_composition_id_consistent_across_results`: every `CompositionResult` from `_fail_closed`,
@@ -594,11 +692,21 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
     context dict; `compose` is not mocked.
 - [ ] **Step 2: Write red eviction tests** (real `ToolPlanner`, real `ToolComposerCacheManager`, real
   `DecompositionResult` objects that meet spec §7.3 eligibility, no LLM on the cached path).
-  - `test_failed_composition_evicts_cached_plan`: `cache_plan(d1, p)`, then
-    `composer._after_execution(p, trace_all_failed)`, then `planner._cache_manager.get_similar_plan(d2)` is
-    `None`.
-  - `test_plan_defect_step_evicts`.
-  - `test_succeeded_composition_keeps_cache` (positive control).
+  - Extract the planner's cache-check block (`planner.py:212–228`) into
+    `ToolPlanner._try_cached_plan(decomposition, available_columns, column_profiles, outcome_hint) -> Optional[ExecutionPlan]`.
+    `plan()` calls it unchanged. `PlanSimilarityCache.get_similar` returns `(plan, similarity, key)`, with
+    callers updated, so the matched key is preserved through adaptation.
+  - Use `d1` and `d2`: two decompositions with **different** signatures and similarity ≥ 0.8 (for example
+    intents {CAUSAL, COMPARATIVE} with 1 dependency, versus the same plus one entity), and equal
+    sub-question counts.
+  - `test_cached_adaptation_carries_matched_key`: `cache_plan(d1, p1)`, then
+    `planner._try_cached_plan(d2, …)` returns a plan with `plan_source == "plan_cache"` and
+    `plan_cache_key == key(d1)`, and steps equal to `p1`'s.
+  - `test_failed_composition_evicts_and_next_lookup_misses`: after `composer._after_execution(adapted, trace_all_failed)`,
+    `planner._try_cached_plan(d2, …)` is `None` and `get_similar_plan(d1)` is `None`.
+  - `test_not_registered_step_evicts` and `test_plan_defect_step_evicts`.
+  - `test_partial_without_defect_keeps_cache` and `test_succeeded_composition_keeps_cache` (positive
+    controls): `_try_cached_plan(d2, …)` still returns the adapted plan.
   - `test_plan_source_values`: `llm` / `plan_cache` / `kpi_deterministic` are set on the plan by the
     three paths.
   - `test_kpi_plan_never_touches_cache`.
@@ -610,8 +718,8 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
   - perf rows equal to the invoked classes;
   - `audit_workflow_id` NULL for the unset run and equal to the audit id for the wired run.
 
-  Run it once on the droplet (≈ 2 real compositions of LLM spend, within the owner's standing lane
-  protocol for real results), and paste the summary into the task report.
+  **Running it is gated on G-LLM** (about 2 real compositions of production LLM spend). Write the test
+  ungated; run it only after the dispatcher records G-LLM, and paste the summary into the task report.
 - [ ] **Step 4: Run.** Expect FAIL.
 - [ ] **Step 5: Implement.**
   - `compose()`:
@@ -646,6 +754,9 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
     - `test_partial_reference_recommends_only_succeeded`: steps succeeded, refused and
       dependency_unmet. "Tools that worked" lists only the succeeded tool; "Did not work" lists the other
       two with their classes.
+    - `test_cache_hit_steps_count_as_worked`: a reference with `cache_hit` and `succeeded` steps lists both
+      under "Tools that worked", in step order.
+    - `test_all_cache_hit_reference_renders`: every step `cache_hit` still renders; it is not dropped.
     - `test_zero_success_reference_dropped`.
     - `test_legacy_partial_reference_dropped`: the two live `raw_content` shapes copied verbatim from
       `episodic_memories`, `partial_success` with no steps.
@@ -689,16 +800,38 @@ and `dspy_integration.py` (L189–225). Tests `tests/unit/test_agents/test_tool_
       (60, True).
     - `test_reader_fail_open`: a failing port returns `{}`.
   - **Flag:**
-    - `test_flag_off_prompt_byte_identical`: capture `_format_tools_for_prompt()` and the DSPy tool block
-      from `main` (via `git show 56f8b8589:…` into a fixture) against the new code with the flag unset;
-      both are equal.
+    - `test_flag_off_prompt_byte_identical`: compared against committed golden fixtures
+      `tests/unit/test_agents/test_tool_composer/fixtures/planner_tools_prompt_56f8b8589.txt` and
+      `dspy_tools_block_56f8b8589.txt`. They are generated **once**, in Step 0 below, from the pre-change
+      code on the current live registry. The test only reads files: no git, CI-safe.
     - `test_flag_on_caveat_line_only`: the reader returns `caveat` for one tool. Exactly one added line
       per caveated tool, and the "Avg execution" line is unchanged.
+  - **Production wiring (real DB, gated):** `tests/integration/tool_composer_learning_loop/test_reliability_wiring_realdb.py`.
+    - `test_planner_fetches_verdicts_when_flag_on`: seed perf rows that yield `caveat` for one tool
+      (n_health 40, 12 failures). With the flag set, `ToolPlanner.plan()`'s prompt-building path awaits
+      `ToolReliabilityReader.get(30)` on `PsycopgRpcPort` and the caveat line appears. With the flag unset
+      the reader is never called (the port counts calls).
+    - `test_reader_cache_expiry`: TTL 1 s in the test, rows changed between calls, and the second call
+      after 1.1 s sees them.
+    - `test_reader_provenance`: with `E2I_INCLUDE_SYNTHETIC` unset, synthetic rows are excluded from the
+      verdict counts.
+    - `test_admin_route_uses_reader`: Task 14's route test asserts the counts come through the same reader
+      (port call observed).
+- [ ] **Step 0 (before Step 1): generate the golden fixtures** with the pre-change code:
+  `cd $W && git stash list` must be empty; then
+  `$PY -c "…ToolPlanner(...)._format_tools_for_prompt()…"` and
+  `$PY -c "…format_available_tools_for_planning()…"` write the two fixture files. Commit them alone
+  (`test(tool-composer): golden tool-prompt fixtures at 56f8b8589`).
 - [ ] **Step 2: Run.** Expect FAIL.
 - [ ] **Step 3: Implement** `wilson()`, `verdict(counts) -> Verdict`, `ToolReliabilityReader` (async, TTL 300 s,
-  key `(days, include_synthetic)`) and `format_tool_block(tool, verdict_or_none)`, which the planner and
-  DSPy both call. The flag is read fresh per call: `os.getenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", "")`
-  truthy.
+  key `(days, include_synthetic)`) and `format_tool_block(tool, verdict_or_none)`.
+  - **Planner wiring:** `ToolPlanner.plan()` is async. When the flag is set it awaits the reader
+    **before** `_format_tools_for_prompt(verdicts)`, which becomes pure over its argument. Flag unset: no
+    read, `verdicts=None`.
+  - **DSPy:** `format_available_tools_for_planning(schemas=None, verdicts=None)` accepts pre-fetched
+    verdicts. It has no production caller today (grep: only its own module and `__all__`), so no fetch is
+    wired there; its docstring says callers must pass verdicts.
+  - The flag is read fresh per call: `os.getenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", "")` truthy.
 - [ ] **Step 4: Run** plus `test_planner.py`, `test_dspy_integration.py` and
   `test_planner_token_budget_1365.py`, all `-n 0`.
 - [ ] **Step 5: Codex loop, commit** `feat(tool-composer): calibrated reliability verdicts; planner caveat behind a default-off flag`.
@@ -710,8 +843,9 @@ and `dspy_integration.py` (L189–225). Tests `tests/unit/test_agents/test_tool_
 **Files:** modify `executor.py` (delete `update_tool_performance`, L1312–1375) and
 `tests/unit/test_agents/test_tool_composer/test_executor.py` (delete the class at ~L1610–1686).
 
-- [ ] **Step 1: Red test** in `test_registry_sync_regime.py`: `test_g8_update_tool_performance_removed`,
-  a grep over `src tests` for `update_tool_performance(`.
+- [ ] **Step 1: Red test** in `test_registry_sync_regime.py`: `test_g8_update_tool_performance_removed`, a
+  filesystem walk over `src` and `tests` for `update_tool_performance(` that excludes
+  `test_registry_sync_regime.py` by path.
 - [ ] **Step 2: Delete, run** `test_executor.py` and the regime test with `-n 0`.
 - [ ] **Step 3: Codex loop** (brief carries spec §7.5's intent evidence). Commit
   `refactor(tool-composer): remove the unwired in-memory G8 latency writer`.
@@ -739,8 +873,10 @@ and `dspy_integration.py` (L189–225). Tests `tests/unit/test_agents/test_tool_
     pattern); `days` bounds 1–365; schema of the response model.
 - [ ] **Step 2: Run.** Expect FAIL.
 - [ ] **Step 3: Implement.**
-  - The sync service uses `get_supabase_client()` (service key) and `client.rpc("get_tool_reliability", …)`
-    plus table selects. It calls `reliability.verdict()`.
+  - The route is `async`. It awaits `ToolReliabilityReader.get(days)`, the same cached reader as the
+    planner, and passes the rows to the sync service run via `asyncio.to_thread`. The service does the
+    composition aggregates with `get_supabase_client()` (service key) table selects and calls
+    `reliability.verdict()`.
   - The route is `GET /admin/observability/tool-composer`, run via `asyncio.to_thread`, with a docstring.
     **The docstring is an OpenAPI change.**
 - [ ] **Step 4: Regenerate the contract** the way `verify-types.yml` does. `free -m` first; this imports
@@ -768,7 +904,10 @@ and `dspy_integration.py` (L189–225). Tests `tests/unit/test_agents/test_tool_
     - "Too few runs to judge (n=3)" for too-few rows;
     - measured latency shows "—" when null, with declared latency labelled "declared";
     - stat cards: compositions, success, partial, failed, cancelled, abandoned;
-    - the days selector shared with the tab drives the query key.
+    - the days selector shared with the tab drives the query key;
+    - the **recent-failures list** renders each failed or partial episode with its `failed_phase`, the
+      failing step classes (for example "gap_calculator: refused") and the ≤ 100-char query preview, and
+      shows an empty state when there are none.
 - [ ] **Step 2: Run** `npx vitest run <files>`. Expect FAIL.
 - [ ] **Step 3: Implement,** following `ObservabilityTab.tsx`'s existing stat-card and table patterns.
 - [ ] **Step 4: Run** vitest on the new and existing `ObservabilityTab.test.tsx`, plus `npm run typecheck`.
