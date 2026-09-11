@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
@@ -563,6 +564,19 @@ class ToolPlanner:
         )
         return "\n".join(lines)
 
+    @staticmethod
+    def _as_number(value: Any) -> float:
+        """A stored value as a number, or ``0`` when it cannot be rendered as one.
+
+        A JSON number carries no size limit: ``10**400`` is numeric, passes an isinstance check,
+        and then overflows ``:.2f``. One reference's stored value must never abort the rest.
+        """
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        return number if math.isfinite(number) else 0.0
+
     #: What a step's outcome class says happened to it, for the "did not work" list. The text
     #: comes from the class the executor recorded, never from a tool's error message (§5.5).
     _OUTCOME_PHRASES = {
@@ -603,12 +617,8 @@ class ToolPlanner:
                 continue
             worked, did_not_work, hydrated = tools
             raw = reference_raw_content(comp)
-            confidence = raw.get("confidence", 0)
-            duration = raw.get("total_duration_ms", 0)
-            if not isinstance(confidence, (int, float)):
-                confidence = 0
-            if not isinstance(duration, (int, float)):
-                duration = 0
+            confidence = self._as_number(raw.get("confidence"))
+            duration = int(self._as_number(raw.get("total_duration_ms")))
 
             lines = [f"### Reference {len(blocks) + 1}"]
             if hydrated:

@@ -238,6 +238,16 @@ def test_a_malformed_reference_does_not_take_a_valid_one_with_it(raw):
     assert select_renderable([malformed], 3) == []
 
 
+def test_an_out_of_range_confidence_does_not_abort_the_other_references():
+    """10**400 is JSON-representable and numeric, but formatting it with ':.2f' overflows."""
+    huge = _reference({**LIVE_ALL_SUCCESS, "confidence": 10**400})
+
+    block = _formatter()._format_episodic_context([huge, HYDRATED_PARTIAL])
+
+    assert block.count("### Reference") == 2
+    assert "causal_effect_estimator" in _worked_line(block)
+
+
 def test_a_step_backed_reference_renders_even_without_raw_content():
     """The steps say what worked; the counts are only the fallback for rows without them."""
     reference = {
