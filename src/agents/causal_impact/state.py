@@ -130,6 +130,7 @@ class RefutationTest(TypedDict, total=False):
         "bootstrap",
         "sensitivity_e_value",  # E-value sensitivity analysis
         "unobserved_common_cause",  # Contract key for sensitivity test
+        "negative_control_outcome",  # #2007 weight-0 reading (plan decision 8)
     ]
     passed: bool  # Whether effect survived refutation
     status: Literal["passed", "warning", "failed"]  # #1867: three-state verdict

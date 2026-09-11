@@ -94,6 +94,17 @@ def linear_dml_fit(frames):
     )
 
 
+def test_state_literal_admits_the_negative_control_test_name():
+    """state.RefutationTest.test_name is the typed contract for the legacy
+    individual_tests entries the node emits (plan decision 8)."""
+    import typing
+
+    from src.agents.causal_impact.state import RefutationTest
+
+    literal = typing.get_type_hints(RefutationTest)["test_name"]
+    assert RefutationTestType.NEGATIVE_CONTROL_OUTCOME.value in typing.get_args(literal)
+
+
 # --------------------------------------------------------------- (a) interval
 class TestNegativeControlInterval:
     def test_linear_dml_interval_reproduces_the_estimate_value(self, linear_dml_fit, monkeypatch):
