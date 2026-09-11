@@ -1472,11 +1472,25 @@ BEGIN
           "description": "Estimated average treatment effect"
         },
         "ci_lower": {
-          "type": "number",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "description": "Lower confidence bound (optional; null when the estimate has no interval, which makes the report point-only)"
         },
         "ci_upper": {
-          "type": "number",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "description": "Upper confidence bound (optional; defaults to ate + (ate - ci_lower))"
         },
         "baseline_risk": {
