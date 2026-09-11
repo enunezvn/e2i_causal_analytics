@@ -21,8 +21,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-from uuid import UUID
+from typing import Any, Callable, Dict, List, Optional
+from uuid import UUID, uuid4
 
 # Import tool modules to ensure tools are registered in the global registry
 # These imports trigger the auto-registration decorators
@@ -37,6 +37,7 @@ from src.utils.redaction import redact_query
 
 from .decomposer import DecompositionError, QueryDecomposer
 from .executor import ExecutionError, PlanExecutor
+from .learning_recorder import CompositionRecorder, NullRecorder, learning_loop_enabled
 from .memory_hooks import (
     ToolComposerMemoryHooks,
     contribute_to_memory,
@@ -135,6 +136,7 @@ class ToolComposer:
         config: Optional[Dict[str, Any]] = None,
         memory_hooks: Optional[ToolComposerMemoryHooks] = None,
         enable_memory_contribution: bool = True,
+        recorder_factory: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
     ):
         """
         Initialize the Tool Composer.
@@ -151,12 +153,16 @@ class ToolComposer:
             config: Optional configuration overrides
             memory_hooks: Optional memory hooks instance (G1, G2 integration)
             enable_memory_contribution: Whether to store compositions in memory
+            recorder_factory: ``(composition_id, seed) -> recorder`` for the learning-loop record
+                of each composition. ``None``: the real ``CompositionRecorder`` where the learning
+                loop is enabled (``TOOL_COMPOSER_LEARNING_LOOP_ENABLED``), otherwise no recording.
         """
         self.llm_client = llm_client
         self.registry = tool_registry or get_registry()
         self.config = config or {}
         self.memory_hooks = memory_hooks or get_tool_composer_memory_hooks()
         self.enable_memory_contribution = enable_memory_contribution
+        self._recorder_factory = recorder_factory
 
         # Initialize phase handlers
         self._init_phase_handlers()
@@ -254,44 +260,22 @@ class ToolComposer:
         Returns:
             CompositionResult with the synthesized response and full trace
         """
+        # One id for the whole composition: every result and every recording write carries it.
+        composition_id = f"comp_{uuid4().hex[:8]}"
         started_at = datetime.now(timezone.utc)
         phase_durations: Dict[str, int] = {}
         context = context or {}
 
         logger.info(f"Starting composition for query: {redact_query(query, max_len=100)}")
 
-        # S14 (Phase 7 prerequisite): extract experiment_id from the
-        # existing context-dict carrier. Phase 7.2's auto-population
-        # hook in executor.py reads ``context["experiment_id"]`` to
-        # query active role attributions. We log it here for audit
-        # provenance (downstream queries can join compositions to
-        # experiments) while keeping ``start_workflow``'s kwarg surface
-        # unchanged.
-        experiment_id = context.get("experiment_id")
-
         # Initialize audit chain workflow
-        audit_workflow_id: Optional[UUID] = None
         audit_service = get_audit_chain_service()
-        if audit_service:
-            try:
-                audit_input_data: Dict[str, Any] = {"query": query[:500]}
-                if isinstance(experiment_id, str) and experiment_id:
-                    audit_input_data["experiment_id"] = experiment_id
-                entry = audit_service.start_workflow(
-                    agent_name="tool_composer",
-                    agent_tier=AgentTier.COORDINATION,
-                    action_type="workflow_start",
-                    input_data=audit_input_data,  # Truncate for storage
-                    user_id=context.get("user_id"),
-                    session_id=context.get("session_id"),
-                    query_text=query,
-                    brand=context.get("brand"),
-                )
-                audit_workflow_id = entry.workflow_id
-                context["audit_workflow_id"] = audit_workflow_id
-                logger.debug(f"Started audit workflow {audit_workflow_id} for tool_composer")
-            except Exception as e:
-                logger.warning(f"Failed to start audit workflow: {e}")
+        audit_workflow_id = self._start_audit(audit_service, query, context)
+
+        # The record's seed is built after the audit start, from the id it just returned
+        # (spec §5.3). Enqueueing never waits on the database.
+        recorder = self._new_recorder(composition_id, query, context, audit_workflow_id)
+        recorder.start()
 
         # Known to every exit below: the plan-cache eviction needs the plan and the steps that
         # finished before an exception or a cancel.
@@ -322,6 +306,7 @@ class ToolComposer:
                 phase_durations["decompose"],
                 {"sub_questions_count": decomposition.question_count},
             )
+            recorder.decomposed(decomposition, latency_ms=phase_durations["decompose"])
 
             # ================================================================
             # PHASE 2: PLAN
@@ -370,6 +355,7 @@ class ToolComposer:
                 phase_durations["plan"],
                 {"steps_planned": plan.step_count},
             )
+            recorder.planned(plan, latency_ms=phase_durations["plan"], plan_source=plan.plan_source)
 
             # ================================================================
             # PHASE 3: EXECUTE
@@ -378,12 +364,17 @@ class ToolComposer:
             current_phase = "execute"
             logger.info("Phase 3: Executing tool chain...")
 
+            def on_step_result(step_number: int, result: Any) -> None:
+                completed_results.append(result)
+                recorder.step(step_number, result)
+
             execution_trace = await self.executor.execute(
-                plan, context, on_step_result=lambda _n, result: completed_results.append(result)
+                plan, context, on_step_result=on_step_result
             )
             self._after_execution(plan, execution_trace)
 
             phase_durations["execute"] = self._elapsed_ms(phase_start)
+            recorder.executed(latency_ms=phase_durations["execute"])
             logger.info(
                 f"Phase 3 complete: {execution_trace.tools_succeeded}/"
                 f"{execution_trace.tools_executed} tools succeeded "
@@ -434,6 +425,14 @@ class ToolComposer:
                     },
                     validation_passed=False,
                 )
+                recorder.finish(
+                    status="FAILED",
+                    outcome="failed",
+                    failed_phase=CompositionPhase.EXECUTE.value,
+                    total_latency_ms=self._elapsed_ms(started_at),
+                    tools_executed=execution_trace.tools_executed,
+                    tools_succeeded=execution_trace.tools_succeeded,
+                )
                 return self._create_total_failure_result(
                     query,
                     decomposition,
@@ -441,6 +440,7 @@ class ToolComposer:
                     execution_trace,
                     started_at,
                     phase_durations,
+                    composition_id=composition_id,
                 )
 
             # ================================================================
@@ -502,6 +502,7 @@ class ToolComposer:
                 errors=[],  # No errors on successful path
                 started_at=started_at,
                 completed_at=completed_at,
+                composition_id=composition_id,
             )
 
             logger.info(f"Composition complete in {total_duration}ms")
@@ -512,14 +513,25 @@ class ToolComposer:
             if self.enable_memory_contribution:
                 await self._contribute_to_memory(result, context)
 
+            recorder.finish(
+                status="COMPLETED",
+                outcome="success" if status == CompositionStatus.SUCCESS else "partial",
+                total_latency_ms=total_duration,
+                synthesize_latency_ms=phase_durations["synthesize"],
+                tools_executed=execution_trace.tools_executed,
+                tools_succeeded=execution_trace.tools_succeeded,
+            )
             return result
 
         except asyncio.CancelledError:
+            # Recorded as cancelled in the phase it interrupted, then propagated (spec §5.3).
+            recorder.cancelled(current_phase)
             # A cancel is not a verdict on the plan; a defect in a step that already finished is.
             self._after_execution(plan, completed=completed_results)
             raise
 
         except DecompositionError as e:
+            self._record_failure(recorder, e, CompositionPhase.DECOMPOSE.value, started_at)
             return self._fail_closed(
                 audit_service,
                 audit_workflow_id,
@@ -528,9 +540,11 @@ class ToolComposer:
                 phase_durations,
                 f"Decomposition failed: {e}",
                 CompositionPhase.DECOMPOSE,
+                composition_id=composition_id,
             )
 
         except PlanningError as e:
+            self._record_failure(recorder, e, CompositionPhase.PLAN.value, started_at)
             return self._fail_closed(
                 audit_service,
                 audit_workflow_id,
@@ -539,9 +553,11 @@ class ToolComposer:
                 phase_durations,
                 f"Planning failed: {e}",
                 CompositionPhase.PLAN,
+                composition_id=composition_id,
             )
 
         except ExecutionError as e:
+            self._record_failure(recorder, e, CompositionPhase.EXECUTE.value, started_at)
             self._after_execution(plan, completed=completed_results, raised=True)
             return self._fail_closed(
                 audit_service,
@@ -551,10 +567,12 @@ class ToolComposer:
                 phase_durations,
                 f"Execution failed: {e}",
                 CompositionPhase.EXECUTE,
+                composition_id=composition_id,
             )
 
         except Exception as e:
             logger.exception(f"Unexpected error during composition: {e}")
+            self._record_failure(recorder, e, current_phase, started_at)
             if current_phase == "execute":
                 self._after_execution(plan, completed=completed_results, raised=True)
             return self._fail_closed(
@@ -565,7 +583,110 @@ class ToolComposer:
                 phase_durations,
                 f"Unexpected error: {e}",
                 None,
+                composition_id=composition_id,
             )
+
+    def _start_audit(
+        self, audit_service: Any, query: str, context: Dict[str, Any]
+    ) -> Optional[UUID]:
+        """Start the audit-chain workflow; its id, or ``None`` without a service or on failure."""
+        if not audit_service:
+            return None
+        # S14 (Phase 7 prerequisite): extract experiment_id from the
+        # existing context-dict carrier. Phase 7.2's auto-population
+        # hook in executor.py reads ``context["experiment_id"]`` to
+        # query active role attributions. We log it here for audit
+        # provenance (downstream queries can join compositions to
+        # experiments) while keeping ``start_workflow``'s kwarg surface
+        # unchanged.
+        experiment_id = context.get("experiment_id")
+        try:
+            audit_input_data: Dict[str, Any] = {"query": query[:500]}
+            if isinstance(experiment_id, str) and experiment_id:
+                audit_input_data["experiment_id"] = experiment_id
+            entry = audit_service.start_workflow(
+                agent_name="tool_composer",
+                agent_tier=AgentTier.COORDINATION,
+                action_type="workflow_start",
+                input_data=audit_input_data,  # Truncate for storage
+                user_id=context.get("user_id"),
+                session_id=context.get("session_id"),
+                query_text=query,
+                brand=context.get("brand"),
+            )
+            audit_workflow_id: UUID = entry.workflow_id
+            context["audit_workflow_id"] = audit_workflow_id
+            logger.debug(f"Started audit workflow {audit_workflow_id} for tool_composer")
+            return audit_workflow_id
+        except Exception as e:
+            logger.warning(f"Failed to start audit workflow: {e}")
+            return None
+
+    def _recording_seed(
+        self,
+        composition_id: str,
+        query: str,
+        context: Dict[str, Any],
+        audit_workflow_id: Optional[UUID],
+    ) -> Dict[str, Any]:
+        """The episode identity (spec §5.3).
+
+        ``audit_workflow_id`` is the id this composition's own audit start returned, never a value
+        a caller left in ``context``. ``entry_point`` is set by the two entry points; anything
+        else calling ``compose`` is ``direct``.
+        """
+        from src.repositories.provenance import deployment_includes_synthetic
+
+        return {
+            "composition_id": composition_id,
+            "query_text": redact_query(query, max_len=500),
+            "session_id": context.get("session_id"),
+            "user_id": context.get("user_id"),
+            "entry_point": context.get("entry_point") or "direct",
+            "brand": context.get("brand"),
+            "region": context.get("region"),
+            "audit_workflow_id": audit_workflow_id,
+            "is_synthetic": deployment_includes_synthetic(),
+        }
+
+    def _new_recorder(
+        self,
+        composition_id: str,
+        query: str,
+        context: Dict[str, Any],
+        audit_workflow_id: Optional[UUID],
+    ) -> Any:
+        """This composition's recorder. Building it never fails the composition."""
+        try:
+            if self._recorder_factory is None and not learning_loop_enabled():
+                return NullRecorder(composition_id)
+            seed = self._recording_seed(composition_id, query, context, audit_workflow_id)
+            if self._recorder_factory is not None:
+                return self._recorder_factory(composition_id, seed)
+            return CompositionRecorder(composition_id, seed)
+        except Exception as exc:  # noqa: BLE001 - recording never fails a composition
+            logger.warning("composer recording off for %s (%s)", composition_id, type(exc).__name__)
+            return NullRecorder(composition_id)
+
+    @staticmethod
+    def _error_type(exc: BaseException) -> str:
+        """The failure's class name; for a wrapped phase error, the class it wraps. Never text."""
+        if isinstance(exc, (DecompositionError, PlanningError, ExecutionError)) and (
+            exc.__cause__ is not None
+        ):
+            return type(exc.__cause__).__name__
+        return type(exc).__name__
+
+    def _record_failure(
+        self, recorder: Any, exc: BaseException, phase: str, started_at: datetime
+    ) -> None:
+        recorder.finish(
+            status="FAILED",
+            outcome="failed",
+            failed_phase=phase,
+            error_type=self._error_type(exc),
+            total_latency_ms=self._elapsed_ms(started_at),
+        )
 
     def _fail_closed(
         self,
@@ -576,6 +697,8 @@ class ToolComposer:
         phase_durations: Dict[str, int],
         error: str,
         failed_phase: Optional[CompositionPhase],
+        *,
+        composition_id: Optional[str] = None,
     ) -> CompositionResult:
         """Record the failed run in the audit chain, then build the error result.
 
@@ -594,7 +717,9 @@ class ToolComposer:
             {"error": error[:500], "phase": phase},
             validation_passed=False,
         )
-        return self._create_error_result(query, started_at, phase_durations, error, failed_phase)
+        return self._create_error_result(
+            query, started_at, phase_durations, error, failed_phase, composition_id=composition_id
+        )
 
     # Step classes that say the PLAN was wrong, not the data or the tool (spec §7.3).
     _PLAN_DEFECT_CLASSES = frozenset({"plan_defect", "not_registered"})
@@ -1035,6 +1160,8 @@ class ToolComposer:
         phase_durations: Dict[str, int],
         error: str,
         failed_phase: Optional[CompositionPhase],
+        *,
+        composition_id: Optional[str] = None,
     ) -> CompositionResult:
         """Create an error result when composition fails"""
         from .models.composition_models import (
@@ -1079,6 +1206,7 @@ class ToolComposer:
             error=error,
             started_at=started_at,
             completed_at=completed_at,
+            **({"composition_id": composition_id} if composition_id else {}),
         )
 
     def _create_total_failure_result(
@@ -1089,6 +1217,8 @@ class ToolComposer:
         execution_trace: Any,
         started_at: datetime,
         phase_durations: Dict[str, int],
+        *,
+        composition_id: Optional[str] = None,
     ) -> CompositionResult:
         """Build a FAILED result when every executed tool failed (F6 fail-closed).
 
@@ -1154,6 +1284,7 @@ class ToolComposer:
             error=msg,
             started_at=started_at,
             completed_at=completed_at,
+            **({"composition_id": composition_id} if composition_id else {}),
         )
 
 

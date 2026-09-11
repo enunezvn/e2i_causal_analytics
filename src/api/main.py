@@ -302,6 +302,26 @@ async def lifespan(app: FastAPI):
         app.state.supabase_available = False
         logger.warning(f"Supabase initialization failed (degraded mode): {e}")
 
+    # Tool-composer learning loop (spec 2026-09-11 §5.4), an opt-in per process through
+    # TOOL_COMPOSER_LEARNING_LOOP_ENABLED (docker-compose x-common-env). The registry sync and
+    # the column-allowlist fetch run in a background task that never raises and is never awaited
+    # here, so a slow or unreachable database cannot delay or block startup.
+    learning_loop_on = False
+    learning_loop_task = None
+    try:
+        from src.agents.tool_composer import learning_recorder, registry_sync
+
+        learning_loop_on = learning_recorder.learning_loop_enabled()
+        if learning_loop_on:
+            learning_loop_task = asyncio.create_task(registry_sync.learning_loop_startup())
+            logger.info("Tool-composer learning loop: startup registry sync scheduled")
+        else:
+            logger.info(
+                "Tool-composer learning loop DISABLED (TOOL_COMPOSER_LEARNING_LOOP_ENABLED)"
+            )
+    except Exception as e:  # noqa: BLE001 - never block startup on this
+        logger.warning(f"Tool-composer learning loop startup not scheduled: {e}")
+
     # LLM usage capture (admin observability, spec 2026-07-12): one global
     # litellm logger covers all dspy.LM traffic; LangChain traffic is captured
     # per-instance inside llm_factory. Fail-open — never blocks startup.
@@ -469,6 +489,28 @@ async def lifespan(app: FastAPI):
     try:
         yield  # Application runs here
     finally:
+        # Tool-composer learning loop first, while the clients its writes use are still open:
+        # stop a startup sync still running, stop this worker's heartbeats (its unfinished
+        # compositions will read abandoned, which they are), then wait up to 5 s for in-flight
+        # recording writes so a graceful deploy keeps them.
+        if learning_loop_task is not None and not learning_loop_task.done():
+            learning_loop_task.cancel()
+            try:
+                await learning_loop_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        if learning_loop_on:
+            try:
+                from src.agents.tool_composer import learning_recorder
+
+                remaining = await learning_recorder.drain(timeout=5.0, cancel_heartbeats=True)
+                if remaining:
+                    logger.warning(
+                        f"Tool-composer learning loop: {remaining} recording write(s) undrained"
+                    )
+            except Exception as e:  # noqa: BLE001 - shutdown must continue
+                logger.warning(f"Tool-composer learning loop drain failed: {e}")
+
         # Stop the health-history heartbeat first so no check fires against
         # connections the cleanup below is about to close.
         if health_history_task is not None:

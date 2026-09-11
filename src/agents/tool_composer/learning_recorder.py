@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import time
 from collections.abc import Mapping
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
@@ -60,6 +61,11 @@ HEARTBEAT_MAX_S = 3 * 3600.0
 
 # The seed fields an episode records (spec §5.3); nothing else in a caller's seed is sent.
 ENTRY_POINTS = frozenset({"chat_tool", "orchestrator_agent", "direct"})
+
+#: Recording is an explicit per-process opt-in. The API containers set it (docker-compose
+#: ``x-common-env``); a composer run in tests, scripts or benchmarks records nothing, so their
+#: compositions never reach the reliability readers the planner uses.
+LEARNING_LOOP_ENV = "TOOL_COMPOSER_LEARNING_LOOP_ENABLED"
 # Failures worth one retry: the transport or a timeout. Anything else (a rejected payload, a
 # database error) fails the same way again, so it is counted at once.
 _TRANSPORT_ERROR_NAMES = frozenset(
@@ -393,6 +399,41 @@ def _count_failure(rpc: str) -> None:
 
 
 _OMITTED = object()
+
+
+def learning_loop_enabled() -> bool:
+    """Whether this process records compositions; read on every call (truthy: 1 / true / yes)."""
+    return os.getenv(LEARNING_LOOP_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+class NullRecorder:
+    """The recorder where the learning loop is off: the composer's calls do nothing."""
+
+    def __init__(self, composition_id: str) -> None:
+        self.composition_id = composition_id
+
+    def start(self) -> None:
+        return None
+
+    def decomposed(self, decomposition: DecompositionResult, *, latency_ms: float) -> None:
+        return None
+
+    def planned(
+        self, plan: ExecutionPlan, *, latency_ms: float, plan_source: Optional[str]
+    ) -> None:
+        return None
+
+    def step(self, step_number: int, result: StepResult) -> None:
+        return None
+
+    def executed(self, *, latency_ms: float) -> None:
+        return None
+
+    def finish(self, **_fields: Any) -> None:
+        return None
+
+    def cancelled(self, phase: str) -> None:
+        return None
 
 
 class CompositionRecorder:

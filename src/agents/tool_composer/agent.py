@@ -397,6 +397,8 @@ class ToolComposerAgent:
 
         # Merge contexts
         merged_context = {**context, **extracted_entities, **user_context}
+        # Who called, for the composition record (spec §5.3): the orchestrator's dispatch path.
+        merged_context["entry_point"] = "orchestrator_agent"
 
         # F2-core: normalize a caller-supplied DataFrame (passed as
         # input_data["data"]) into the canonical context key the executor's
