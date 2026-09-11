@@ -166,6 +166,7 @@ class ToolPlanner:
         memory_hooks: Optional[ToolComposerMemoryHooks] = None,
         use_episodic_memory: bool = True,
         enable_caching: bool = True,
+        reliability_reader: Optional[Any] = None,
     ):
         self.llm_client = llm_client
         self.registry = tool_registry or ToolRegistry()
@@ -175,6 +176,9 @@ class ToolPlanner:
         self.memory_hooks = memory_hooks or get_tool_composer_memory_hooks()
         self.use_episodic_memory = use_episodic_memory
         self.enable_caching = enable_caching
+        # Built on first use, and only while the reliability flag is set (spec §7.2). Injected by
+        # the real-database tests so the read goes through their psycopg port.
+        self._reliability_reader = reliability_reader
 
         # G6: Initialize cache manager for plan similarity matching
         self._cache_manager = get_cache_manager() if enable_caching else None
@@ -222,8 +226,9 @@ class ToolPlanner:
             if cached_plan is not None:
                 return cached_plan
 
-            # Get available tools for planning
-            tools_description = self._format_tools_for_prompt()
+            # Get available tools for planning, with measured reliability only where the
+            # experiment flag is set (spec §7.2) — an unset flag costs no read at all.
+            tools_description = self._format_tools_for_prompt(await self._reliability_verdicts())
 
             # G1/G2: Check episodic memory for similar past compositions
             similar_compositions = await self._check_episodic_memory(decomposition.original_query)
@@ -396,27 +401,41 @@ class ToolPlanner:
             logger.warning(f"Failed to check episodic memory: {e}")
             return []
 
-    def _format_tools_for_prompt(self) -> str:
-        """Format available tools for the planning prompt"""
+    async def _reliability_verdicts(self) -> Optional[Dict[str, Any]]:
+        """Measured tool reliability for the prompt, or ``None`` while the flag is off.
+
+        The reader is fail-open (``{}`` on any error) and cached per process, so planning never
+        waits on a second read and never fails because reliability could not be read.
+        """
+        from .reliability import ToolReliabilityReader, reliability_in_planner_enabled
+
+        if not reliability_in_planner_enabled():
+            return None
+        if self._reliability_reader is None:
+            self._reliability_reader = ToolReliabilityReader()
+        return await self._reliability_reader.get()
+
+    def _format_tools_for_prompt(self, verdicts: Optional[Dict[str, Any]] = None) -> str:
+        """Format available tools for the planning prompt.
+
+        Pure over ``verdicts``: the caller decides whether to read reliability, and this renders
+        what it was handed. With no verdicts — or with ``TOOL_COMPOSER_RELIABILITY_IN_PLANNER``
+        unset, the default — the block is byte-identical to what it rendered before the
+        reliability work existed, which a committed golden fixture pins. One shared formatter
+        serves this path and the DSPy one (#1584), so the two cannot drift apart.
+        """
+        # Function-local: reliability pulls the RPC port, which planning does not otherwise need.
+        from .reliability import format_tool_block, reliability_in_planner_enabled
+
         schemas = self.registry.get_schemas_for_planning()
 
         if not schemas:
             raise PlanningError("No tools available in registry")
 
-        lines = []
+        reliability = verdicts if (verdicts and reliability_in_planner_enabled()) else {}
+        lines: List[str] = []
         for tool in schemas:
-            lines.append(f"### {tool['name']} ({tool['source']})")
-            lines.append(f"Description: {tool['description']}")
-            lines.append(f"Inputs: {', '.join(tool['inputs'])}")
-            # #1573: show the REAL output field names so $step_N.<field>
-            # references can only be planned against fields that exist.
-            output_fields = tool.get("output_fields") or []
-            if output_fields:
-                lines.append(f"Output: {tool['output']} (fields: {', '.join(output_fields)})")
-            else:
-                lines.append(f"Output: {tool['output']}")
-            lines.append(f"Avg execution: {tool['avg_ms']}ms")
-            lines.append("")
+            lines.extend(format_tool_block(tool, reliability.get(tool["name"])))
 
         return "\n".join(lines)
 
