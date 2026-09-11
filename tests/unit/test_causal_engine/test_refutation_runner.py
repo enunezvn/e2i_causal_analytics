@@ -1940,3 +1940,69 @@ class TestSensitivityOutcomeStdMasking:
         sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
         assert sens.details["covariates_measured"] == 2
         assert sens.details["benchmark_basis"] == "measured_unscoreable"
+
+    @staticmethod
+    def _two_unscoreable_covariates_frame(n: int = 600, seed: int = 3) -> pd.DataFrame:
+        """A real frame on which the runner's OWN benchmark-inputs branch runs and
+        measures TWO covariates, both unscoreable: ``x`` collinear with the continuous
+        treatment (the live ``centrality_z`` shape) and ``w`` its mirror image, whose
+        median split puts every control in one stratum. Computed count 2, factors {}."""
+        rng = np.random.default_rng(seed)
+        t = rng.normal(0.0, 1.0, n)
+        return pd.DataFrame(
+            {
+                "t": t,
+                "y": (rng.random(n) < 0.30 + 0.10 * (t > 0)).astype(float),
+                "x": t + 1e-9 * rng.normal(0.0, 1.0, n),
+                "w": -t,
+            }
+        )
+
+    def _computed_branch_suite(self, **kwargs):
+        """No caller-supplied benchmark inputs, so the runner computes them from the
+        frame with the model's common causes (the branch at the top of the
+        sensitivity block in ``run_all_tests``)."""
+        model = _full_stub_causal_model()
+        model.get_common_causes = lambda: ["x", "w"]
+        return self._sensitivity_only_runner().run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=self._two_unscoreable_covariates_frame(),
+            treatment="t",
+            outcome="y",
+            causal_model=model,
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            **kwargs,
+        )
+
+    @staticmethod
+    def _sensitivity_details(suite) -> dict:
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        return sens.details
+
+    def test_computed_covariates_measured_is_the_number_of_covariates_present(self):
+        """No caller value: the count the runner's own branch measured on the frame."""
+        d = self._sensitivity_details(self._computed_branch_suite())
+        assert d["covariate_bias_factors"] == {}  # both were measured, neither scoreable
+        assert d["covariates_measured"] == 2
+        assert d["benchmark_basis"] == "measured_unscoreable"
+        assert d["headline"] == evalue.HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE
+
+    def test_caller_covariates_measured_wins_when_the_computed_branch_ran(self):
+        """The agent node measures on the FULL frame; the runner's ``data`` may be a
+        subsample. A conflicting caller value must win over the branch's own 2."""
+        d = self._sensitivity_details(self._computed_branch_suite(covariates_measured=5))
+        assert d["covariates_measured"] == 5
+        assert d["benchmark_basis"] == "measured_unscoreable"
+        assert "none of the 5 measured confounder(s) could be scored" in d["message"]
+
+    def test_caller_explicit_zero_covariates_measured_wins_over_the_computed_count(self):
+        """Zero is a VALUE, not an absence (same rule as ``n_rows``): an explicit 0
+        from the caller must not be replaced by the branch's computed 2, and the
+        reading then says nothing was measured."""
+        d = self._sensitivity_details(self._computed_branch_suite(covariates_measured=0))
+        assert d["covariates_measured"] == 0
+        assert d["benchmark_basis"] == "none_measured"
+        assert d["headline"] == evalue.HEADLINES["unbenchmarked"]
+        assert "no measured confounders exist for this design" in d["message"]
