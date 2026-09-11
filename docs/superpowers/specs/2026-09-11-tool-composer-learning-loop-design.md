@@ -521,13 +521,16 @@ on truncation to hide them.
       - The allowlist is the catalog: the column names of relations in schema `public`, developer-authored
         DDL.
       - **The check runs in the serializer, before anything leaves the process.**
-        - The recorder fetches the allowlist once per process, then hourly, through an RPC
+        - The recorder fetches the allowlist at API startup (the same fire-and-forget startup task as the
+          registry sync, §4), then hourly, through an RPC
           `composer_public_column_names()` (service_role only). It returns the distinct `attname` of
           `pg_attribute ⋈ pg_class` where `relnamespace = 'public'::regnamespace`, `attnum > 0` and
           `NOT attisdropped`. Measured as service_role on 2026-09-11: the catalog is readable, and
           `treatment` / `region` / `brand` are in it while `PT-0001` is not.
         - **While the allowlist is unavailable** (not yet fetched, or the fetch failed), no string is kept
-          as a name. Privacy fails closed.
+          as a name. Privacy fails closed. The finish snapshot is serialized at finish time, so a
+          composition that started before the fetch completed still records names, provided the fetch
+          has landed by then.
         - No frame is needed, so the plan snapshot gets the same treatment as finished steps.
       - A name that is not in the catalog becomes `{"type":"str","len":n}` in the payload itself. That
         covers derived feature columns, pivoted value-columns, and caller-authored names.
