@@ -28,6 +28,7 @@ import math
 import time
 from collections.abc import Mapping
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from uuid import UUID
 
 import numpy as np
 
@@ -53,6 +54,17 @@ WRITE_TIMEOUT_S = 5.0
 RETRY_DELAY_S = 1.0
 # v_active_compositions calls a run abandoned after 5 minutes without a write: five heartbeats.
 HEARTBEAT_S = 60.0
+# No composition legitimately runs this long; a recorder whose owner never finished stops
+# keeping its episode alive, so the episode reads abandoned instead of live forever.
+HEARTBEAT_MAX_S = 3 * 3600.0
+
+# The seed fields an episode records (spec §5.3); nothing else in a caller's seed is sent.
+ENTRY_POINTS = frozenset({"chat_tool", "orchestrator_agent", "direct"})
+# Failures worth one retry: the transport or a timeout. Anything else (a rejected payload, a
+# database error) fails the same way again, so it is counted at once.
+_TRANSPORT_ERROR_NAMES = frozenset(
+    {"OperationalError", "InterfaceError", "TransportError", "NetworkError", "TimeoutException"}
+)
 
 
 # =============================================================================
@@ -106,7 +118,25 @@ def structure_value(
     step_numbers: Optional[Mapping[str, int]] = None,
     fields_of_step: Optional[Callable[[int], List[str]]] = None,
 ) -> Any:
-    """One parameter value as structure: settings are kept, anything data-like is reduced."""
+    """One parameter value as structure: settings are kept, anything data-like is reduced.
+
+    Total: a value that cannot even be measured is reduced to ``{"type": "str", "len": None}``.
+    """
+    try:
+        return _structure_value(
+            value, allowlist=allowlist, step_numbers=step_numbers, fields_of_step=fields_of_step
+        )
+    except Exception:  # noqa: BLE001 - an unmeasurable value is sent as nothing
+        return {"type": "str", "len": None}
+
+
+def _structure_value(
+    value: Any,
+    *,
+    allowlist: Optional[frozenset[str]],
+    step_numbers: Optional[Mapping[str, int]],
+    fields_of_step: Optional[Callable[[int], List[str]]],
+) -> Any:
     if value is None:
         return None
     if isinstance(value, (bool, np.bool_)):
@@ -280,22 +310,65 @@ def to_record(
 # Recorder
 # =============================================================================
 
+
+def _text(value: Any, max_len: int) -> Optional[str]:
+    return value[:max_len] if isinstance(value, str) else None
+
+
+def seed_record(seed: Mapping[str, Any], composition_id: str) -> Dict[str, Any]:
+    """The episode identity every RPC carries, and nothing else from the caller's seed."""
+    audit = seed.get("audit_workflow_id")
+    try:
+        audit_id: Optional[str] = str(UUID(str(audit))) if audit is not None else None
+    except (TypeError, ValueError):
+        audit_id = None
+    entry_point = seed.get("entry_point")
+    return {
+        "composition_id": _text(seed.get("composition_id"), 100) or composition_id,
+        "query_text": _text(seed.get("query_text"), 1000) or "",
+        "session_id": _text(seed.get("session_id"), 100),
+        "user_id": _text(seed.get("user_id"), 100),
+        "entry_point": entry_point if entry_point in ENTRY_POINTS else None,
+        "brand": _text(seed.get("brand"), 100),
+        "region": _text(seed.get("region"), 100),
+        "audit_workflow_id": audit_id,
+        "is_synthetic": seed.get("is_synthetic") is True,
+    }
+
+
+def _retryable(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
+    return any(cls.__name__ in _TRANSPORT_ERROR_NAMES for cls in type(exc).__mro__)
+
+
 _pending: Set[asyncio.Task] = set()
+_heartbeats: Set[asyncio.Task] = set()
 
 
-def _track(task: asyncio.Task) -> None:
-    _pending.add(task)
-    task.add_done_callback(_pending.discard)
+def _track(task: asyncio.Task, into: Set[asyncio.Task]) -> None:
+    into.add(task)
+    task.add_done_callback(into.discard)
 
 
 def pending_count() -> int:
     return sum(1 for task in _pending if not task.done())
 
 
-async def drain(timeout: float = 5.0) -> int:
-    """Wait up to ``timeout`` seconds for in-flight recording writes; return how many remain."""
+async def drain(timeout: float = 5.0, *, cancel_heartbeats: bool = False) -> int:
+    """Wait up to ``timeout`` seconds for in-flight recording writes; return how many remain.
+
+    ``cancel_heartbeats=True`` (shutdown) first stops every heartbeat of this event loop: the
+    worker is going away, so its unfinished compositions will read abandoned, which they are.
+    """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
+    if cancel_heartbeats:
+        beats = [t for t in _heartbeats if not t.done() and t.get_loop() is loop]
+        for beat in beats:
+            beat.cancel()
+        if beats:
+            await asyncio.wait(beats, timeout=max(timeout, 0.1))
     while True:
         tasks = [t for t in _pending if not t.done() and t.get_loop() is loop]
         if not tasks:
@@ -315,27 +388,35 @@ def _count_failure(rpc: str) -> None:
         logger.debug("composer recording failure metric unavailable", exc_info=True)
 
 
+_OMITTED = object()
+
+
 class CompositionRecorder:
     """Seeded, idempotent, fail-open recording of one composition."""
 
     def __init__(
         self,
         composition_id: str,
-        seed: Dict[str, Any],
+        seed: Mapping[str, Any],
         *,
         port: Optional[RpcPort] = None,
         sync: Optional[RegistrySync] = None,
         heartbeat_s: float = HEARTBEAT_S,
+        heartbeat_max_s: float = HEARTBEAT_MAX_S,
         write_timeout_s: float = WRITE_TIMEOUT_S,
         retry_delay_s: float = RETRY_DELAY_S,
+        sync_timeout_s: Optional[float] = None,
     ):
         self.composition_id = composition_id
-        self._seed = dict(seed)
+        self._seed = seed_record(seed, composition_id)
         self._sync = sync or default_registry_sync()
         self._port = port
         self._heartbeat_s = heartbeat_s
+        self._heartbeat_max_s = heartbeat_max_s
         self._write_timeout_s = write_timeout_s
         self._retry_delay_s = retry_delay_s
+        # Building the sync payload imports the tool registrations on its first use.
+        self._sync_timeout_s = sync_timeout_s if sync_timeout_s is not None else 6 * write_timeout_s
         self._tail: Optional[asyncio.Task] = None
         self._heartbeat: Optional[asyncio.Task] = None
         self._decomposition: Optional[DecompositionResult] = None
@@ -364,8 +445,8 @@ class CompositionRecorder:
             self._latencies["decompose_latency_ms"] = latency_ms
             self._phase(
                 "PLANNING",
-                lambda allowlist: {
-                    "sub_questions": sub_questions_record(decomposition),
+                {
+                    "sub_questions": lambda allowlist: sub_questions_record(decomposition),
                     "decompose_latency_ms": latency_ms,
                 },
             )
@@ -381,8 +462,8 @@ class CompositionRecorder:
             self._latencies["plan_latency_ms"] = latency_ms
             self._phase(
                 "EXECUTING",
-                lambda allowlist: {
-                    "tool_plan": plan_record(plan, allowlist=allowlist),
+                {
+                    "tool_plan": lambda allowlist: plan_record(plan, allowlist=allowlist),
                     "plan_source": plan_source,
                     "plan_latency_ms": latency_ms,
                 },
@@ -405,8 +486,10 @@ class CompositionRecorder:
             plan = self._plan
             self._phase(
                 "SYNTHESIZING",
-                lambda allowlist: {
-                    "parallelizable_groups": groups_record(plan) if plan is not None else [],
+                {
+                    "parallelizable_groups": lambda allowlist: (
+                        groups_record(plan) if plan is not None else []
+                    ),
                     "execute_latency_ms": latency_ms,
                 },
             )
@@ -437,7 +520,7 @@ class CompositionRecorder:
             if self._steps:
                 numbers = sorted(self._steps)
                 self._enqueue(lambda: self._write_steps(numbers))
-            scalars = {
+            fields: Dict[str, Any] = {
                 "status": status,
                 "outcome": outcome,
                 "failed_phase": failed_phase,
@@ -447,16 +530,16 @@ class CompositionRecorder:
                 "tools_succeeded": tools_succeeded,
                 **self._latencies,
             }
+            decomposition, plan, plan_source = self._decomposition, self._plan, self._plan_source
+            if decomposition is not None:
+                fields["sub_questions"] = lambda allowlist: sub_questions_record(decomposition)
+            if plan is not None:
+                fields["tool_plan"] = lambda allowlist: plan_record(plan, allowlist=allowlist)
+                fields["parallelizable_groups"] = lambda allowlist: groups_record(plan)
+                fields["plan_source"] = plan_source
 
             async def write() -> None:
-                allowlist = await self._allowlist()
-                final: Dict[str, Any] = dict(scalars)
-                if self._decomposition is not None:
-                    final["sub_questions"] = sub_questions_record(self._decomposition)
-                if self._plan is not None:
-                    final["tool_plan"] = plan_record(self._plan, allowlist=allowlist)
-                    final["parallelizable_groups"] = groups_record(self._plan)
-                    final["plan_source"] = self._plan_source
+                final = await self._build("composer_record_finish", fields)
                 await self._write(
                     "composer_record_finish", {"p_seed": self._seed, "p_final": final}
                 )
@@ -487,16 +570,27 @@ class CompositionRecorder:
         self._enqueue(lambda: self._write("composer_record_start", {"p_seed": self._seed}))
         if self._heartbeat is None:
             self._heartbeat = asyncio.get_running_loop().create_task(self._heartbeat_loop())
+            _track(self._heartbeat, _heartbeats)
 
     def _stop_heartbeat(self) -> None:
         if self._heartbeat is not None and not self._heartbeat.done():
             self._heartbeat.cancel()
 
     async def _heartbeat_loop(self) -> None:
-        # Not on the chain: a slow write must not delay liveness.
+        # Not on the chain: a slow write must not delay liveness. It ends at finish (cancelled),
+        # when the database says the episode is already terminal, or at the lifetime cap.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._heartbeat_max_s
         while True:
-            await asyncio.sleep(self._heartbeat_s)
-            await self._write("composer_record_heartbeat", {"p_seed": self._seed})
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(self._heartbeat_s, remaining))
+            if loop.time() >= deadline:
+                return
+            alive = await self._write("composer_record_heartbeat", {"p_seed": self._seed})
+            if alive is False:
+                return
 
     def _enqueue(self, write: Callable[[], Awaitable[Any]]) -> None:
         previous = self._tail
@@ -517,13 +611,33 @@ class CompositionRecorder:
 
         task = asyncio.get_running_loop().create_task(chained())
         self._tail = task
-        _track(task)
+        _track(task, _pending)
 
-    def _phase(
-        self, status: str, build: Callable[[Optional[frozenset[str]]], Dict[str, Any]]
-    ) -> None:
+    async def _build(self, rpc: str, fields: Mapping[str, Any]) -> Dict[str, Any]:
+        """Evaluate a payload's structural parts; a part that fails is omitted and counted."""
+        allowlist = await self._allowlist()
+        built: Dict[str, Any] = {}
+        for key, value in fields.items():
+            if callable(value):
+                try:
+                    value = value(allowlist)
+                except Exception as exc:  # noqa: BLE001 - the rest of the payload still records
+                    logger.warning(
+                        "composer recording could not serialize %s of %s for %s (%s)",
+                        key,
+                        rpc,
+                        self.composition_id,
+                        type(exc).__name__,
+                    )
+                    _count_failure(rpc)
+                    value = _OMITTED
+            if value is not _OMITTED:
+                built[key] = value
+        return built
+
+    def _phase(self, status: str, fields: Mapping[str, Any]) -> None:
         async def write() -> None:
-            patch = build(await self._allowlist())
+            patch = await self._build("composer_record_phase", fields)
             await self._write(
                 "composer_record_phase",
                 {"p_seed": self._seed, "p_status": status, "p_patch": patch},
@@ -533,8 +647,12 @@ class CompositionRecorder:
 
     async def _allowlist(self) -> Optional[frozenset[str]]:
         try:
-            return await self._sync.column_allowlist()
-        except Exception:  # noqa: BLE001 - no allowlist means no names are kept
+            return await asyncio.wait_for(
+                self._sync.column_allowlist(), timeout=self._write_timeout_s
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - timed out or failed: no names are kept this time
             return None
 
     async def _write_steps(self, numbers: List[int]) -> None:
@@ -542,11 +660,21 @@ class CompositionRecorder:
         if plan is None:
             return
         allowlist = await self._allowlist()
-        payload = [
-            step_record(n, self._steps[n], plan, allowlist=allowlist)
-            for n in sorted(set(numbers))
-            if n in self._steps and _registered(self._steps[n].tool_name)
-        ]
+        payload = []
+        for n in sorted(set(numbers)):
+            result = self._steps.get(n)
+            if result is None or not _registered(result.tool_name):
+                continue
+            try:
+                payload.append(step_record(n, result, plan, allowlist=allowlist))
+            except Exception as exc:  # noqa: BLE001 - the other steps still record
+                logger.warning(
+                    "composer recording could not serialize step %s for %s (%s)",
+                    n,
+                    self.composition_id,
+                    type(exc).__name__,
+                )
+                _count_failure("composer_record_steps")
         if not payload:
             return
         params = {"p_seed": self._seed, "p_steps": payload}
@@ -555,8 +683,16 @@ class CompositionRecorder:
             return
         if receipt.get("unknown_tools") or receipt.get("schema_mismatch_tools"):
             # The DB registry is behind the running code (the startup sync has not landed).
-            ran = await self._sync.sync_once()
-            if ran is not None and receipt.get("unknown_tools"):
+            try:
+                await asyncio.wait_for(self._sync.sync_once(), timeout=self._sync_timeout_s)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a hung or failed sync leaves the steps unrecorded
+                logger.warning(
+                    "composer recording: registry sync did not complete for %s", self.composition_id
+                )
+            # Re-send whenever the registry is now synced, by this recorder or another one.
+            if self._sync.synced and receipt.get("unknown_tools"):
                 await self._write("composer_record_steps", params)
 
     async def _write(self, rpc: str, params: Dict[str, Any]) -> Any:
@@ -576,15 +712,16 @@ class CompositionRecorder:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - counted and dropped below
-                if attempt == 1:
+                if attempt == 1 and _retryable(exc):
                     await asyncio.sleep(self._retry_delay_s)
                     continue
                 logger.warning(
-                    "composer recording write %s failed for %s after one retry (%s); "
-                    "the composition is unaffected",
+                    "composer recording write %s failed for %s%s (%s); the composition is unaffected",
                     rpc,
                     self.composition_id,
+                    " after one retry" if attempt == 2 else "",
                     type(exc).__name__,
                 )
                 _count_failure(rpc)
+                return None
         return None

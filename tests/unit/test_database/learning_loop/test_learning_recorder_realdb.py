@@ -408,9 +408,43 @@ async def test_unknown_tools_trigger_lazy_sync_then_resend(clone_db):
     assert _one(db, "select count(*) from tool_registry where deprecated_at is null") == 20
 
 
+async def test_concurrent_recorders_sharing_one_sync_both_record(clone_db):
+    db = clone_db("lazy_race")
+    _pg.migrate(db, UPTO)  # no sync yet
+    port = _pg.PsycopgRpcPort(db)
+    shared = RegistrySync(port=port)
+    d = _decomposition(["DESCRIPTIVE"])
+    step = _step("build", "cohort_builder", "sq_0", {"brand": "brand"})
+    plan = _plan(d, [step], [["build"]])
+    for cid in ("race_1", "race_2"):
+        recorder = CompositionRecorder(
+            cid, _seed(cid), port=port, sync=shared, retry_delay_s=0.05, heartbeat_s=3600.0
+        )
+        recorder.planned(plan, latency_ms=1, plan_source="llm")
+        recorder.step(0, _result(step, outcome_class="succeeded", result={"total_eligible": 3}))
+    await drain(timeout=60)
+    assert port.calls.count("sync_tool_registry") == 1
+    assert _count(db, "composition_steps", "race_1") == 1
+    assert _count(db, "composition_steps", "race_2") == 1
+
+
 # ---------------------------------------------------------------------------
 # Liveness and drain
 # ---------------------------------------------------------------------------
+
+
+async def test_heartbeat_stops_once_another_finish_closed_the_episode(synced):
+    beating = _recorder("closed_elsewhere", _pg.PsycopgRpcPort(synced), heartbeat_s=0.3)
+    beating.start()
+    await drain(timeout=30)
+    closer = _recorder("closed_elsewhere", _pg.PsycopgRpcPort(synced))
+    closer.finish(status="COMPLETED", outcome="success", total_latency_ms=1)
+    await drain(timeout=30)
+    for _ in range(40):
+        if beating.heartbeat_stopped:
+            break
+        await asyncio.sleep(0.1)
+    assert beating.heartbeat_stopped
 
 
 async def test_heartbeat_keeps_activity_fresh(synced):
