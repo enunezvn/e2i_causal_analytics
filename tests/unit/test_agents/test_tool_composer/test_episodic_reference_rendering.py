@@ -23,6 +23,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import pytest
+
+from src.agents.tool_composer.memory_hooks import select_renderable
 from src.agents.tool_composer.planner import ToolPlanner
 
 # The three live `composition_completed` rows, verbatim (raw_content only, query text elided to
@@ -192,3 +195,56 @@ def test_a_dropped_reference_does_not_take_the_others_with_it():
 def test_no_references_and_no_renderable_references_both_yield_no_context():
     assert _formatter()._format_episodic_context([]) == ""
     assert _formatter()._format_episodic_context([_reference({})]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Selection: dropping happens before the limit, not after
+# ---------------------------------------------------------------------------
+
+
+def test_dropped_candidates_do_not_starve_a_renderable_one():
+    """Three un-renderable candidates must not consume all three reference slots."""
+    candidates = [
+        _reference(LIVE_PARTIAL_1_OF_6),
+        _reference(LIVE_PARTIAL_5_OF_6),
+        _reference(LIVE_PARTIAL_1_OF_6),
+        _reference(LIVE_ALL_SUCCESS),
+    ]
+    kept = select_renderable(candidates, 3)
+    assert [r["raw_content"]["composition_id"] for r in kept] == ["comp_016c9c4b"]
+
+
+def test_selection_keeps_search_order_and_respects_the_limit():
+    candidates = [HYDRATED_PARTIAL, _reference(LIVE_ALL_SUCCESS), HYDRATED_PARTIAL]
+    kept = select_renderable(candidates, 2)
+    assert len(kept) == 2
+    assert kept[0] is HYDRATED_PARTIAL and kept[1]["raw_content"] is LIVE_ALL_SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# Malformed rows
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw", [None, "not a dict", ["gap_calculator"], 7, {}])
+def test_a_malformed_reference_does_not_take_a_valid_one_with_it(raw):
+    malformed = {"memory_id": "m", "raw_content": raw, "recorded_steps": []}
+
+    block = _formatter()._format_episodic_context([malformed, HYDRATED_PARTIAL])
+
+    assert "causal_effect_estimator" in _worked_line(block)
+    assert select_renderable([malformed], 3) == []
+
+
+def test_a_step_backed_reference_renders_even_without_raw_content():
+    """The steps say what worked; the counts are only the fallback for rows without them."""
+    reference = {
+        "memory_id": "m",
+        "raw_content": None,
+        "recorded_steps": [_step(0, "cohort_builder", "succeeded")],
+    }
+
+    block = _formatter()._format_episodic_context([reference])
+
+    assert "cohort_builder" in _worked_line(block)
+    assert select_renderable([reference], 3) == [reference]

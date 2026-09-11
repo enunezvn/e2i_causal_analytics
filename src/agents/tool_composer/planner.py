@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -22,9 +22,10 @@ from src.utils.llm_content import normalize_llm_content, parse_llm_json
 
 from .cache import get_cache_manager
 from .memory_hooks import (
-    WORKED_OUTCOME_CLASSES,
     ToolComposerMemoryHooks,
     get_tool_composer_memory_hooks,
+    reference_raw_content,
+    reference_tools,
 )
 from .models.composition_models import (
     DecompositionResult,
@@ -572,44 +573,6 @@ class ToolPlanner:
         "not_registered": "skipped: tool not registered",
     }
 
-    def _reference_tools(
-        self, reference: Dict[str, Any]
-    ) -> Optional[Tuple[List[str], List[str], bool]]:
-        """``(worked, did_not_work, hydrated)`` for one reference, or ``None`` to drop it.
-
-        A reference is only worth recommending if it can say which tools worked (spec §7.3).
-        With recorded steps that is the succeeded / cache_hit ones in step order. Without them
-        — the pre-loop rows, and any row whose step writes were lost — the only honest reading
-        is the counts: every tool worked, or the reference cannot name the ones that failed.
-        """
-        steps = reference.get("recorded_steps") or []
-        if steps:
-            worked = [
-                str(s.get("tool_name"))
-                for s in steps
-                if s.get("outcome_class") in WORKED_OUTCOME_CLASSES
-            ]
-            if not worked:
-                return None
-            did_not_work = [
-                f"{s.get('tool_name')} "
-                f"({self._OUTCOME_PHRASES.get(str(s.get('outcome_class')), 'did not succeed')})"
-                for s in steps
-                if s.get("outcome_class") not in WORKED_OUTCOME_CLASSES
-            ]
-            return worked, did_not_work, True
-
-        raw = reference.get("raw_content") or {}
-        executed, succeeded = raw.get("tools_executed"), raw.get("tools_succeeded")
-        if (
-            isinstance(executed, int)
-            and isinstance(succeeded, int)
-            and executed > 0
-            and executed == succeeded
-        ):
-            return [str(t) for t in raw.get("tool_sequence") or []], [], False
-        return None
-
     def _format_episodic_context(self, similar_compositions: List[Dict[str, Any]]) -> str:
         """Format similar compositions as context for the LLM.
 
@@ -632,19 +595,27 @@ class ToolPlanner:
 
         blocks: List[str] = []
         for comp in similar_compositions:
-            tools = self._reference_tools(comp)
+            tools = reference_tools(comp)
             if tools is None:
                 continue
             worked, did_not_work, hydrated = tools
-            raw = comp.get("raw_content", {})
+            raw = reference_raw_content(comp)
             confidence = raw.get("confidence", 0)
             duration = raw.get("total_duration_ms", 0)
+            if not isinstance(confidence, (int, float)):
+                confidence = 0
+            if not isinstance(duration, (int, float)):
+                duration = 0
 
             lines = [f"### Reference {len(blocks) + 1}"]
             if hydrated:
                 lines.append(f"- Tools that worked: {', '.join(worked)}")
                 if did_not_work:
-                    lines.append(f"- Did not work for that question: {', '.join(did_not_work)}")
+                    phrased = ", ".join(
+                        f"{name} ({self._OUTCOME_PHRASES.get(str(outcome), 'did not succeed')})"
+                        for name, outcome in did_not_work
+                    )
+                    lines.append(f"- Did not work for that question: {phrased}")
             else:
                 lines.append(f"- Tools used: {', '.join(worked)}")
             lines.append(f"- Success confidence: {confidence:.2f}")

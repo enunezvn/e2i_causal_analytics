@@ -21,7 +21,7 @@ import logging
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -566,9 +566,12 @@ class ToolComposerMemoryHooks:
             successful = [r for r in results if r.get("raw_content", {}).get("success", False)]
 
             # ``success`` is true for a PARTIAL run, so a kept row can name tools that failed.
-            # Hydrate each reference with its recorded steps so the planner's context can
-            # recommend only what worked (spec §7.3); fail-open, see below.
-            return await hydrate_reference_steps(successful[:limit])
+            # Hydrate the whole candidate set in ONE read, drop the references that cannot say
+            # what worked, and only THEN apply the limit (spec §7.3): limiting first would let
+            # three un-renderable rows starve a usable one sitting just below them, the same
+            # starvation the over-fetch window above exists to avoid.
+            hydrated = await hydrate_reference_steps(successful)
+            return select_renderable(hydrated, limit)
         except Exception as e:
             logger.warning(f"Failed to find similar compositions: {e}")
             return []
@@ -624,6 +627,66 @@ async def hydrate_reference_steps(
             key=lambda s: s.get("step_number", 0),
         )
     return rows
+
+
+def reference_raw_content(reference: Dict[str, Any]) -> Dict[str, Any]:
+    """The reference's stored payload, or ``{}`` when it is missing or not a mapping.
+
+    Hydration yields ``{}`` for rows whose stored content is unparseable, and a malformed row
+    must never raise and take its valid neighbours out of the planner's context with it.
+    """
+    raw = reference.get("raw_content")
+    return raw if isinstance(raw, dict) else {}
+
+
+def reference_tools(
+    reference: Dict[str, Any],
+) -> Optional[Tuple[List[str], List[Tuple[str, Optional[str]]], bool]]:
+    """``(worked, did_not_work, hydrated)`` for one reference, or ``None`` to drop it.
+
+    A reference is only worth recommending if it can say which tools worked (spec §7.3). With
+    recorded steps that is the succeeded / cache_hit ones in step order, and the rest come back
+    with the class the executor recorded, for the caller to phrase. Without steps — the
+    pre-loop rows, and any row whose step writes were lost — the only honest reading is the
+    counts: either every tool worked, or the reference cannot name the ones that failed.
+    """
+    steps = [s for s in (reference.get("recorded_steps") or []) if isinstance(s, dict)]
+    if steps:
+        worked = [
+            str(s.get("tool_name"))
+            for s in steps
+            if s.get("outcome_class") in WORKED_OUTCOME_CLASSES
+        ]
+        if not worked:
+            return None
+        did_not_work = [
+            (str(s.get("tool_name")), s.get("outcome_class"))
+            for s in steps
+            if s.get("outcome_class") not in WORKED_OUTCOME_CLASSES
+        ]
+        return worked, did_not_work, True
+
+    raw = reference_raw_content(reference)
+    executed, succeeded = raw.get("tools_executed"), raw.get("tools_succeeded")
+    if (
+        isinstance(executed, int)
+        and isinstance(succeeded, int)
+        and executed > 0
+        and executed == succeeded
+    ):
+        return [str(t) for t in raw.get("tool_sequence") or []], [], False
+    return None
+
+
+def select_renderable(references: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    """The first ``limit`` references that can say which tools worked, in search order."""
+    kept: List[Dict[str, Any]] = []
+    for reference in references:
+        if len(kept) >= limit:
+            break
+        if reference_tools(reference) is not None:
+            kept.append(reference)
+    return kept
 
 
 # =============================================================================
