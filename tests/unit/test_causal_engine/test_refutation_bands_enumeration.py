@@ -36,6 +36,17 @@ operational floor without a critical FAILED moves from 0.5333 to exactly 0.50
 (placebo PASSED, rcc SKIPPED, sensitivity SKIPPED, both non-criticals FAILED:
 0.25 / 0.50) -- still REVIEW, so BLOCK stays reachable only through a critical
 FAILED.
+
+negative_control_outcome (#2007) is a sixth test in BOTH spaces with
+{PASSED, WARNING, FAILED, SKIPPED}: PASSED when the control's CI includes zero,
+WARNING when it excludes zero and |nc| < |original|, FAILED when it excludes zero
+and |nc| >= |original|, SKIPPED (``_negative_control_skip_result``) when no
+control is declared, the caller could not fit one, or the interval is unusable.
+It is non-critical with weight 0.0, so it adds NO reachable confidence value and
+changes NO gate: every pin below is unchanged by its status, and
+``test_negative_control_status_never_changes_confidence_or_gate`` pins that
+directly over the whole arithmetic space. The budget skip does not apply to it
+(no refit).
 """
 
 from __future__ import annotations
@@ -61,6 +72,7 @@ P, W, F, S = (
 CRITICAL = (RefutationTestType.PLACEBO_TREATMENT, RefutationTestType.RANDOM_COMMON_CAUSE)
 NONCRIT = (RefutationTestType.DATA_SUBSET, RefutationTestType.BOOTSTRAP)
 SENS = RefutationTestType.SENSITIVITY_E_VALUE
+NC = RefutationTestType.NEGATIVE_CONTROL_OUTCOME
 
 # Statuses each test can actually carry in a result list (see the module docstring
 # for why placebo excludes SKIPPED and random_common_cause, since #2005, does not).
@@ -68,6 +80,7 @@ PLACEBO_STATUSES = [P, W, F]
 RCC_STATUSES = [P, W, F, S]
 SENS_STATUSES = [P, W, S]
 NONCRIT_STATUSES = [P, W, F, S]
+NC_STATUSES = [P, W, F, S]
 
 # What each refuter can actually EMIT, read off the runner source 2026-09-10. This
 # is NARROWER than the arithmetic space above; see the operational test below.
@@ -96,24 +109,51 @@ EMITTABLE = {
     # ``_run_bootstrap_test``: ci_ratio <= 1.50 PASSED, <= 1.75 WARNING, else
     # FAILED; same four SKIPPED sources as data_subset.
     RefutationTestType.BOOTSTRAP: (P, W, F, S),
+    # ``_run_negative_control_test`` (#2007): the control's CI includes zero
+    # PASSED; excludes zero and |nc| < |original| WARNING; excludes zero and
+    # |nc| >= |original| FAILED. SKIPPED from ``_negative_control_skip_result``
+    # (no control declared, column missing, too few rows, unusable interval).
+    # Weight 0.0 and non-critical: it can never move the confidence or the gate.
+    RefutationTestType.NEGATIVE_CONTROL_OUTCOME: (P, W, F, S),
 }
 
 
-def _suite(pl, rcc, sens, sub, boot):
+def _suite(pl, rcc, sens, sub, boot, nc=None):
+    """``nc=None`` omits the negative-control row (the five-test suite every pin
+    below was derived on); a status appends it as the sixth row."""
     mk = lambda n, s: RefutationResult(n, s, 0.1, 0.1)  # noqa: E731
-    return [
+    tests = [
         mk(CRITICAL[0], pl),
         mk(CRITICAL[1], rcc),
         mk(SENS, sens),
         mk(NONCRIT[0], sub),
         mk(NONCRIT[1], boot),
     ]
+    if nc is not None:
+        tests.append(mk(NC, nc))
+    return tests
 
 
 def _all_combos():
     yield from itertools.product(
         PLACEBO_STATUSES, RCC_STATUSES, SENS_STATUSES, NONCRIT_STATUSES, NONCRIT_STATUSES
     )
+
+
+def test_negative_control_status_never_changes_confidence_or_gate():
+    """#2007, the whole arithmetic space: for every five-test combination and
+    every negative-control status, the confidence value and the gate are the
+    SAME as without the row. This is the pin that lets every other enumeration
+    in this file stay five-wide: a weight-0 row adds nothing to either space."""
+    r = RefutationRunner()
+    for pl, rcc, sens, sub, boot in _all_combos():
+        base = _suite(pl, rcc, sens, sub, boot)
+        conf = r._calculate_confidence_score(base)
+        gate = r._determine_gate_decision(base, conf)
+        for nc in NC_STATUSES:
+            tests = _suite(pl, rcc, sens, sub, boot, nc)
+            assert r._calculate_confidence_score(tests) == conf, (pl, rcc, sens, sub, boot, nc)
+            assert r._determine_gate_decision(tests, conf) == gate, (pl, rcc, sens, sub, boot, nc)
 
 
 def test_sensitivity_status_never_changes_a_proceed_when_the_other_tests_pass():
@@ -196,6 +236,8 @@ def test_block_is_only_reachable_through_a_critical_failed_with_emittable_status
         tests = [RefutationResult(n, st, 0.1, 0.1) for n, st in zip(names, combo, strict=True)]
         # An all-SKIPPED suite cannot occur here: placebo emits only PASSED/FAILED.
         assert not all(t.status == S for t in tests)
+        # The sixth column (#2007) is the weight-0 negative control; the floor and
+        # the REVIEW set below are the five-test values and must stay so.
         conf = round(r._calculate_confidence_score(tests), 4)
         gate = r._determine_gate_decision(tests, conf)
         critical_failed = combo[0] == F or combo[1] == F

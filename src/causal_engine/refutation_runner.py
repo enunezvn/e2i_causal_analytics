@@ -413,6 +413,81 @@ def _degenerate_ci_skip_result(
     )
 
 
+_NEGATIVE_CONTROL_SKIP_EXPLANATIONS: Dict[str, str] = {
+    "no_negative_control_declared": (
+        "no negative-control outcome is declared for this treatment on this "
+        "dataset; the test cannot run"
+    ),
+    "negative_control_column_missing": (
+        "the declared negative-control outcome is not a column of the frame the "
+        "refutation ran on; the test cannot run"
+    ),
+    "negative_control_too_few_rows": (
+        "too few non-null rows of the declared negative-control outcome to re-run "
+        "the adjusted fit; the test cannot run"
+    ),
+    "negative_control_ci_unavailable": (
+        "the negative-control fit gave no usable interval (non-finite or inverted "
+        "endpoints); the test cannot be scored"
+    ),
+}
+
+
+def _negative_control_skip_result(
+    skip_reason: str,
+    original_effect: float,
+    nc_outcome: Optional[str] = None,
+    nc_n: Optional[int] = None,
+    received: Optional[Dict[str, Any]] = None,
+    execution_time_ms: float = 0.0,
+) -> RefutationResult:
+    """The ONE emitter of a SKIPPED negative-control row (#2007).
+
+    ``skip_reason`` is a token of ``NEGATIVE_CONTROL_SKIP_REASONS`` and is
+    persisted bare (``details["skip_reason"]``) for machine reading; ``reason``
+    starts with the same token followed by the explanation, and ``message`` is
+    what ``to_legacy_format`` forwards into ``skipped_tests`` -- the same
+    ``reason`` / ``message`` contract as the other SKIPPED helpers. The row
+    carries the ORIGINAL effect as ``refuted_effect`` (their shape) and no
+    interval: a skipped reading never invents a number.
+    """
+    try:
+        explanation = _NEGATIVE_CONTROL_SKIP_EXPLANATIONS[skip_reason]
+    except KeyError:
+        raise ValueError(
+            "negative_control_skip_reason must be one of "
+            f"{sorted(_NEGATIVE_CONTROL_SKIP_EXPLANATIONS)}, got {skip_reason!r}"
+        ) from None
+    name = RefutationTestType.NEGATIVE_CONTROL_OUTCOME.value
+    details: Dict[str, Any] = {
+        "reason": f"{skip_reason} — {explanation}; the remaining tests decide the suite",
+        "message": (
+            f"{name} skipped: {explanation}; a weight-0 reading, excluded from the "
+            "confidence average, not scored as a failure"
+        ),
+        "skip_reason": skip_reason,
+        "nc_outcome": nc_outcome,
+        "nc_effect": None,
+        "nc_ci": None,
+        "nc_n": nc_n,
+        "rule": "negative_control_ci_vs_zero",
+        "weight": 0.0,
+        "critical": False,
+    }
+    if received is not None:
+        details["received"] = received
+    return RefutationResult(
+        test_name=RefutationTestType.NEGATIVE_CONTROL_OUTCOME,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=original_effect,
+        p_value=None,
+        delta_percent=0.0,
+        details=details,
+        execution_time_ms=execution_time_ms,
+    )
+
+
 _Z975 = 1.959964  # two-sided 95 % normal quantile: half-width / SE of a reported interval
 
 
@@ -592,6 +667,33 @@ class RefutationTestType(str, Enum):
     DATA_SUBSET = "data_subset"
     BOOTSTRAP = "bootstrap"
     SENSITIVITY_E_VALUE = "sensitivity_e_value"
+    # #2007: a negative-control outcome (Lipsitch, Tchetgen Tchetgen & Cohen
+    # 2010) -- an outcome the treatment cannot causally affect but that shares
+    # its confounders. The only refuter that can DETECT unmeasured confounding:
+    # the others perturb or resample the fit and are silent when the adjustment
+    # set is missing a common cause. DB enum value added by migration 138.
+    NEGATIVE_CONTROL_OUTCOME = "negative_control_outcome"
+
+
+# #2007: the closed vocabulary of ``skip_reason`` tokens the negative-control
+# test can persist (``details["skip_reason"]``; ``details["reason"]`` starts with
+# the same token). The runner emits every SKIPPED row for this test -- the node
+# only names WHY it could not produce the ``(nc_outcome, nc_effect, nc_ci, nc_n)``
+# tuple -- so the vocabulary is enforced in one place and a typo at the call site
+# is a ``ValueError``, not a new, unrecognised reason in ``skipped_tests``.
+# Single-sourced from ``_NEGATIVE_CONTROL_SKIP_EXPLANATIONS`` (the token -> sentence
+# map the emitter prints) so the vocabulary and its wording cannot drift apart:
+#   no_negative_control_declared     no registry entry for this treatment /
+#                                    dataset (every non-agent caller;
+#                                    treatment_arm, hcp_adoption, nba_triggers;
+#                                    the two arms the 2026-09-11 disproof found
+#                                    no responding control for)
+#   negative_control_column_missing  declared, but the loaded frame lacks it
+#   negative_control_too_few_rows    declared and present, too few rows to fit
+#   negative_control_ci_unavailable  the fit gave no usable interval, or the
+#                                    backend cannot provide one -- never a
+#                                    fabricated interval
+NEGATIVE_CONTROL_SKIP_REASONS: frozenset = frozenset(_NEGATIVE_CONTROL_SKIP_EXPLANATIONS)
 
 
 # ============================================================================
@@ -685,7 +787,13 @@ class RefutationSuite:
 
     @property
     def total_tests(self) -> int:
-        """Total number of tests run (excluding skipped)."""
+        """Total number of tests run (excluding skipped).
+
+        Readings count here like scored tests do -- the sensitivity reading
+        and, since #2007, the weight-0 negative-control reading -- so
+        ``tests_passed / total_tests`` include them while ``confidence_score``
+        weighs them at their configured weight (0 for the negative control).
+        """
         return sum(1 for t in self.tests if t.status != RefutationStatus.SKIPPED)
 
     @property
@@ -728,6 +836,11 @@ class RefutationSuite:
         - random_common_cause
         - data_subset
         - unobserved_common_cause (maps from sensitivity_e_value)
+        - bootstrap (additional, passes through unmapped)
+        - negative_control_outcome (#2007, passes through unmapped; its
+          ``details`` string is the one-sentence ``reading``, and a SKIPPED
+          row lands in ``skipped_tests`` under the same key with its
+          ``message``, never in ``individual_tests``)
 
         #1249: ``skipped_tests`` ({contract_key: reason}, always present)
         records WHY a test was SKIPPED. Skipped entries stay out of
@@ -896,6 +1009,18 @@ class RefutationRunner:
             # a correct one. The benchmark is the confounding this run measured.
             "critical": False,
         },
+        "negative_control_outcome": {
+            "enabled": True,
+            # #2007: a READING for the first live period -- non-critical AND weight
+            # 0 in ``_calculate_confidence_score`` (an unlisted test would default
+            # to 0.1 there). The rule is calibrated on the synthetic generator only
+            # (2026-09-11: 0/9 adjusted false positives, 3/9 nulls respond to an
+            # omitted confounder, 11/11 truths detected at n = 1500); no live count
+            # exists yet, and a WARNING a leader reads must be rare and concrete.
+            # Promotion to a weighted or critical test is an owner decision after
+            # the live counts are in.
+            "critical": False,
+        },
     }
 
     # Thresholds for determining pass/fail/warning
@@ -994,6 +1119,8 @@ class RefutationRunner:
         covariates_measured: Optional[int] = None,
         reference_n: Optional[int] = None,
         refit_n: Optional[int] = None,
+        negative_control: Optional[Tuple[str, float, Tuple[float, float], int]] = None,
+        negative_control_skip_reason: Optional[str] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -1096,6 +1223,28 @@ class RefutationRunner:
                 refutation frame, a #1419 subsample on the agent path), else the
                 scale stays 1.0. Both counts are persisted on the test's details
                 with the scale applied so a reader can undo it.
+            negative_control: #2007. ``(nc_outcome, nc_effect, (nc_lo, nc_hi),
+                nc_n)`` -- the SAME adjusted fit re-run with the declared
+                negative-control outcome (an outcome the treatment cannot
+                causally affect but that shares its confounders), its 95 %
+                interval and the row count it was fit on. The caller (the agent
+                refutation node) fits it; the runner only scores it against
+                zero and the claimed effect (``_run_negative_control_test``).
+                ``None`` on an enabled test emits a persisted SKIPPED row with
+                reason ``no_negative_control_declared`` (or the caller's
+                ``negative_control_skip_reason``) so ``skipped_tests`` says why
+                the reading is absent. The comparison costs nothing, so it is
+                never budget-skipped and never feeds the per-refit average.
+            negative_control_skip_reason: #2007. Why the caller could not
+                produce ``negative_control`` -- one of
+                ``NEGATIVE_CONTROL_SKIP_REASONS`` (``negative_control_column_missing``,
+                ``negative_control_too_few_rows``,
+                ``negative_control_ci_unavailable``; ``no_negative_control_declared``
+                is the default when both are ``None``). The runner is the one
+                place that emits the SKIPPED row, with THAT reason. An unknown
+                token is a ``ValueError`` (a call-site bug, not a data
+                condition). Ignored, with a warning, when a tuple is also given:
+                the numbers are evidence, the reason cannot be.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -1513,6 +1662,54 @@ class RefutationRunner:
                 skipped_for_budget,
                 ran,
             )
+
+        # #2007: the negative-control reading. Validated before the enabled
+        # check so a mistyped reason is caught even on a disabled test.
+        if (
+            negative_control_skip_reason is not None
+            and negative_control_skip_reason not in NEGATIVE_CONTROL_SKIP_REASONS
+        ):
+            raise ValueError(
+                "negative_control_skip_reason must be one of "
+                f"{sorted(NEGATIVE_CONTROL_SKIP_REASONS)}, got "
+                f"{negative_control_skip_reason!r}"
+            )
+        if self.config["negative_control_outcome"]["enabled"]:
+            # NOT budget-gated, deliberately: the test does no refit -- it is
+            # arithmetic on a tuple the caller already computed -- so
+            # ``_budget_allows`` (a per-refit cost model) does not apply and a
+            # deadline that has already passed saves nothing by skipping it.
+            # It runs LAST -- after the #1419 budget accounting above -- so the
+            # critical-first order of the refit tests is unchanged, a
+            # fail-closed ``time_budget_exceeded`` error still reports only the
+            # refuters that actually ``ran``, and its ~us elapsed is never
+            # ``_record``-ed (the same reason the analytic E-value is kept out
+            # of the average).
+            if negative_control is not None:
+                if negative_control_skip_reason is not None:
+                    logger.warning(
+                        "negative_control tuple given alongside "
+                        "negative_control_skip_reason=%r; scoring the tuple (it is "
+                        "evidence) and ignoring the reason.",
+                        negative_control_skip_reason,
+                    )
+                test_result = self._run_test_with_tracing(
+                    test_name="negative_control_outcome",
+                    test_func=self._run_negative_control_test,
+                    opik=opik,
+                    trace_id=trace_id,
+                    estimate_id=estimate_id,
+                    original_effect=original_effect,
+                    negative_control=negative_control,
+                )
+                tests.append(test_result)
+            else:
+                tests.append(
+                    _negative_control_skip_result(
+                        negative_control_skip_reason or "no_negative_control_declared",
+                        original_effect,
+                    )
+                )
 
         total_time = (time.time() - start_time) * 1000
 
@@ -2251,6 +2448,111 @@ class RefutationRunner:
             execution_time_ms=(time.time() - start_time) * 1000,
         )
 
+    def _run_negative_control_test(
+        self,
+        original_effect: float,
+        negative_control: Tuple[str, float, Tuple[float, float], int],
+    ) -> RefutationResult:
+        """Negative-control-outcome READING (#2007), non-critical, weight 0.
+
+        A negative-control outcome (Lipsitch, Tchetgen Tchetgen & Cohen 2010) is
+        an outcome the treatment cannot causally affect but that shares the
+        treatment's confounders. The caller re-runs the SAME adjusted fit with it
+        as the outcome; if that fit finds a non-null effect, the adjustment is
+        leaking confounding -- the one signal the perturbation and resampling
+        refuters cannot give. Measured on the synthetic generator 2026-09-11
+        (``docs/demos/results/2026-09-11_negative_control_disproof``): omitting
+        the declared confounders moves 3 of 9 structural nulls out of their CI;
+        the adjusted fits give 0/9 false positives and detect 11/11 truths.
+
+        Rule (``negative_control_ci_vs_zero``)::
+
+            PASSED   nc_lo <= 0 <= nc_hi            the control stayed null
+            WARNING  CI excludes 0, |nc| <  |orig|  moved, less than the claim
+            FAILED   CI excludes 0, |nc| >= |orig|  moved at least as much as
+                                                    the claimed effect
+            SKIPPED  non-finite effect / endpoint, or lo > hi
+                     (``negative_control_ci_unavailable``) -- never a
+                     placeholder number, the same fail-honest class as
+                     ``_require_finite_ci`` / ``_degenerate_ci_skip_result``
+
+        ``refuted_effect`` is the control's effect; ``p_value`` is ``None`` (the
+        verdict is an interval rule, not a test statistic); ``delta_percent`` is
+        ``100 * |nc| / |orig|`` -- the FAILED ratio itself, so the persisted
+        column carries the verdict's number (0.0 when the claimed effect is
+        exactly 0, where no ratio exists). ``details["reading"]`` is the one
+        sentence the narrative prints and ``details["message"]`` is the same
+        sentence, which ``to_legacy_format`` forwards as the legacy per-test
+        ``details`` string the interpretation node reads.
+        """
+        start_time = time.time()
+        nc_outcome, nc_effect, nc_ci, nc_n = negative_control
+        outcome_name = str(nc_outcome)
+        usable_n = _usable_count(nc_n)
+        try:
+            eff = float(nc_effect)
+            lo, hi = float(nc_ci[0]), float(nc_ci[1])
+        except (TypeError, ValueError, IndexError):
+            eff, lo, hi = float("nan"), float("nan"), float("nan")
+        if not (np.isfinite(eff) and np.isfinite(lo) and np.isfinite(hi)) or lo > hi:
+            ci_repr: List[str]
+            try:
+                ci_repr = [repr(v) for v in nc_ci]
+            except TypeError:
+                ci_repr = [repr(nc_ci)]
+            return _negative_control_skip_result(
+                "negative_control_ci_unavailable",
+                original_effect,
+                nc_outcome=outcome_name,
+                nc_n=usable_n,
+                # repr, not the floats: NaN / inf are not JSONB-safe.
+                received={"nc_effect": repr(nc_effect), "nc_ci": ci_repr},
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+
+        includes_zero = lo <= 0.0 <= hi
+        claimed = abs(float(original_effect))
+        on_n = f" on n = {usable_n}" if usable_n is not None else ""
+        subject = f"A negative-control outcome the treatment cannot affect ({outcome_name})"
+        interval = f"{eff:+.3f} [{lo:+.3f}, {hi:+.3f}]"
+        if includes_zero:
+            status = RefutationStatus.PASSED
+            reading = f"{subject} stayed null: {interval}{on_n}."
+        elif abs(eff) < claimed:
+            status = RefutationStatus.WARNING
+            reading = (
+                f"{subject} moved by {interval}{on_n}, less than the claimed effect "
+                f"{float(original_effect):+.3f}."
+            )
+        else:
+            status = RefutationStatus.FAILED
+            reading = (
+                f"{subject} moved by {interval}{on_n}, at least as much as the claimed "
+                f"effect {float(original_effect):+.3f}: the adjustment is leaking "
+                "confounding."
+            )
+        delta_percent = 100.0 * abs(eff) / claimed if claimed > 0.0 else 0.0
+        return RefutationResult(
+            test_name=RefutationTestType.NEGATIVE_CONTROL_OUTCOME,
+            status=status,
+            original_effect=original_effect,
+            refuted_effect=eff,
+            p_value=None,
+            delta_percent=delta_percent,
+            details={
+                "nc_outcome": outcome_name,
+                "nc_effect": eff,
+                "nc_ci": [lo, hi],
+                "nc_n": usable_n,
+                "rule": "negative_control_ci_vs_zero",
+                "weight": 0.0,
+                "critical": False,
+                "reading": reading,
+                "message": reading,
+            },
+            execution_time_ms=(time.time() - start_time) * 1000,
+        )
+
     # ========================================================================
     # F-014 (#416): The previous ``_mock_*`` methods that simulated placebo,
     # random_common_cause, data_subset, and bootstrap tests via seeded random
@@ -2312,6 +2614,14 @@ class RefutationRunner:
           0.25 each (sensitivity is non-critical since 2026-09-10; its weight is
           unchanged — it still carries evidence, it just cannot block)
         - data_subset and bootstrap weigh 0.125 each
+        - negative_control_outcome weighs 0.0 (#2007: a reading for the first
+          live period). With weight 0 its row adds 0 to both the numerator and
+          the denominator, so the score is IDENTICAL with and without the row
+          in every status, FAILED included; an all-SKIPPED-elsewhere suite still
+          fails closed to 0.0 because the reading's weight cannot make the
+          denominator positive. The entry is EXPLICIT because an unlisted test
+          would take the 0.1 default below (measured: an all-PASSED suite
+          would read 0.909 with a FAILED control under that default).
 
         Args:
             tests: List of test results
@@ -2328,6 +2638,7 @@ class RefutationRunner:
             RefutationTestType.SENSITIVITY_E_VALUE: 0.25,
             RefutationTestType.DATA_SUBSET: 0.125,
             RefutationTestType.BOOTSTRAP: 0.125,
+            RefutationTestType.NEGATIVE_CONTROL_OUTCOME: 0.0,
         }
 
         status_scores = {
