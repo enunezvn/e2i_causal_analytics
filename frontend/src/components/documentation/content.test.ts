@@ -157,6 +157,8 @@ describe('refutation documentation content (2026-09-10 sensitivity reading)', ()
     // All three warning readings are pinned: sensitive, null finding, not benchmarked
     // (both sub-cases), plus the reading order and the minimum cell size.
     expect(sens!.failSign).toMatch(/could account for the whole effect/i);
+    expect(sens!.failSign).toMatch(/measured-confounding benchmark/i);
+    expect(sens!.failSign).not.toMatch(/measured set/i);
     expect(sens!.failSign).toMatch(/null finding/i);
     expect(sens!.failSign).toMatch(/not benchmarked|unbenchmarked/i);
     expect(sens!.failSign).toMatch(/no measured confounders/i);

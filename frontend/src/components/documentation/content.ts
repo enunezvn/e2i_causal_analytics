@@ -804,7 +804,7 @@ export const REFUTATION_TESTS: RefutationTestDef[] = [
       'Read in order: a randomized design is skipped (not applicable); a CI that includes zero is a null finding, even when the point risk ratio would clear the benchmark; no benchmark → not benchmarked. For a benchmarked, non-null estimate: point-estimate risk ratio above the measured confounding benchmark → "Robust to confounding at measured strength"; otherwise "Sensitive to confounding".',
     critical: false,
     failSign:
-      'A caveat, never a block — three warning readings. "Sensitive to confounding": a confounder no stronger than the measured set could account for the whole effect. "No detectable effect at this sample size": a null finding, the CI includes zero. "Robustness not benchmarked": no measured confounders, or measured confounders that could not be scored (for example a covariate collinear with the treatment).',
+      'A caveat, never a block — three warning readings. "Sensitive to confounding": a confounder no stronger than the measured-confounding benchmark (defined above) could account for the whole effect. "No detectable effect at this sample size": a null finding, the CI includes zero. "Robustness not benchmarked": no measured confounders, or measured confounders that could not be scored (for example a covariate collinear with the treatment).',
   },
 ];
 
