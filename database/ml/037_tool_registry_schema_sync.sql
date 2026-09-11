@@ -449,13 +449,6 @@ BEGIN
         "max_k": {
           "type": "integer",
           "description": "Maximum conditioning set size (-1 for unlimited)"
-        },
-        "node_names": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Custom node names (defaults to column names)"
         }
       },
       "required": []

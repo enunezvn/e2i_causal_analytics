@@ -1299,12 +1299,6 @@ def register_discover_dag_tool() -> None:
                 description="Maximum conditioning set size (-1 for unlimited)",
                 required=False,
             ),
-            ToolParameter(
-                name="node_names",
-                type="List[str]",
-                description="Custom node names (defaults to column names)",
-                required=False,
-            ),
         ],
         output_schema="DiscoverDagOutput",
         avg_execution_ms=5000,
