@@ -567,3 +567,137 @@ async def test_loader_then_task_gives_index_aligned_frames_for_the_node(monkeypa
     aligned = nc.loc[subsample.index]
     assert aligned.index.equals(subsample.index)
     assert len(aligned) == 2
+
+
+# ---------------------------------------------------------------------------
+# (g) codex round 1 folds: row-drop ALIGNMENT through the REAL loader (both
+# task paths) and the JOIN refusal on nba_triggers
+# ---------------------------------------------------------------------------
+
+
+def _traceable_rows():
+    """Distinct control values per row, a distinct marker covariate per row
+    (insurance_access_score), one NULL treatment row (dropped by the loader),
+    one NULL control row (kept, NaN), and a categorical covariate the loader
+    one-hot expands AFTER the passthrough is fetched."""
+    return [
+        {
+            "copay_support": 1,
+            "adherent_180d": 1,
+            "insurance_access_score": 0.1,
+            "geographic_region": "south",
+            "treatment_initiated": 10,
+        },
+        {
+            "copay_support": 0,
+            "adherent_180d": 0,
+            "insurance_access_score": 0.2,
+            "geographic_region": "west",
+            "treatment_initiated": None,
+        },
+        {
+            "copay_support": None,
+            "adherent_180d": 1,
+            "insurance_access_score": 0.3,
+            "geographic_region": "midwest",
+            "treatment_initiated": 30,
+        },
+        {
+            "copay_support": 1,
+            "adherent_180d": 0,
+            "insurance_access_score": 0.4,
+            "geographic_region": "south",
+            "treatment_initiated": 40,
+        },
+        {
+            "copay_support": 0,
+            "adherent_180d": 1,
+            "insurance_access_score": 0.5,
+            "geographic_region": "northeast",
+            "treatment_initiated": 50,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_discover", [True, False])
+async def test_real_loader_output_splits_row_for_row_aligned_on_both_task_paths(
+    monkeypatch, auto_discover
+):
+    captured = _capture_task_state(monkeypatch)
+    with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(_traceable_rows()))):
+        df, expanded_cols = await causal_routes._load_agent_estimation_frame(
+            dataset="patient_journeys",
+            treatment_var="copay_support",
+            outcome_var="adherent_180d",
+            covariates=["insurance_access_score", "geographic_region"],
+            limit=1500,
+            passthrough_columns=["treatment_initiated"],
+        )
+    # The loader one-hot expanded the categorical (a transformation AFTER the
+    # passthrough was fetched) and dropped the NULL-treatment row.
+    assert "geographic_region=south" in expanded_cols
+    assert "treatment_initiated" not in expanded_cols
+    assert len(df) == 4
+
+    req = AgentCausalAnalysisRequest(
+        treatment_var="copay_support",
+        outcome_var="adherent_180d",
+        dataset="patient_journeys",
+        covariates=["insurance_access_score", "geographic_region"],
+        auto_discover=auto_discover,
+    )
+    confounders = [c for c in expanded_cols if c not in ("copay_support", "adherent_180d")]
+    await causal_routes._run_agent_analysis_task("aid-trace", req, df, confounders, "live")
+    assert captured["auto_discover"] is auto_discover
+
+    est = captured["data_cache"]["estimation_data"]
+    nc = captured["data_cache"]["negative_control_data"]
+    assert "treatment_initiated" not in est.columns
+    assert "geographic_region=south" in est.columns
+    assert list(nc.columns) == ["treatment_initiated"]
+    assert nc.index.equals(est.index)
+    assert len(est) == len(nc) == 4
+
+    # Row-for-row: trace each control value back through the marker covariate.
+    # The NULL-treatment row (marker 0.3, control 30) is absent from BOTH; the
+    # NULL-control row (marker 0.2) is present in both with NaN.
+    expected = {0.1: 10.0, 0.2: None, 0.4: 40.0, 0.5: 50.0}
+    assert sorted(est["insurance_access_score"].tolist()) == sorted(expected)
+    for idx, marker in est["insurance_access_score"].items():
+        value = nc.at[idx, "treatment_initiated"]
+        if expected[marker] is None:
+            assert pd.isna(value), (idx, marker, value)
+        else:
+            assert value == expected[marker], (idx, marker, value)
+    assert 30.0 not in nc["treatment_initiated"].tolist()
+    assert "treatment_initiated" not in captured["confounders"]
+    assert "treatment_initiated" not in captured["modeled_confounders"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("covariates", "baseline_covariates"),
+    [
+        (["disease_severity"], None),
+        ([], ["disease_severity"]),
+        (["disease_severity"], ["age_at_diagnosis"]),
+    ],
+)
+async def test_loader_refuses_a_passthrough_on_the_nba_triggers_join_path(
+    covariates, baseline_covariates
+):
+    with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient([]))):
+        with pytest.raises(causal_routes.HTTPException) as ei:
+            await causal_routes._load_agent_estimation_frame(
+                dataset="nba_triggers",
+                treatment_var="acceptance_status",
+                outcome_var="conversion_flag",
+                covariates=covariates,
+                limit=10,
+                baseline_covariates=baseline_covariates,
+                passthrough_columns=["action_taken"],
+            )
+    assert ei.value.status_code == 400
+    assert "passthrough" in str(ei.value.detail)
+    assert "nba_triggers" in str(ei.value.detail)
