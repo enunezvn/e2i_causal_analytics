@@ -52,23 +52,9 @@ async def _discard(client: Redis) -> None:
         logger.debug(f"Closing an unpublished Redis client failed: {e}")
 
 
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
-    before=before_log(logger, logging.WARNING),
-    reraise=True,
-)
-async def init_redis() -> Redis:
-    """
-    Initialize Redis connection pool.
-
-    Returns:
-        Redis client instance
-
-    Raises:
-        ConnectionError: If Redis connection fails after retries
-    """
+async def _connect_once() -> Redis:
+    """One connection attempt: the body ``init_redis()`` retries, and the single
+    attempt a background reconnect makes (#1999)."""
     global _redis_client
 
     # Reset stale reference so retries don't short-circuit
@@ -109,13 +95,35 @@ async def init_redis() -> Redis:
         logger.error(f"Failed to connect to Redis: {e}")
         raise ConnectionError(f"Redis connection failed: {e}") from e
 
-    if _redis_client is not None:
-        # Another initialiser published first; keep one pool.
+    winner = _redis_client
+    if winner is not None:
+        # Another initialiser published first; keep one pool. Return the client
+        # read here, not the global after the await: it can change meanwhile.
         await _discard(candidate)
-        return _redis_client
+        return winner
     _redis_client = candidate
     logger.info("Redis connection established successfully")
-    return _redis_client
+    return candidate
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
+    before=before_log(logger, logging.WARNING),
+    reraise=True,
+)
+async def init_redis() -> Redis:
+    """
+    Initialize Redis connection pool.
+
+    Returns:
+        Redis client instance
+
+    Raises:
+        ConnectionError: If Redis connection fails after retries
+    """
+    return await _connect_once()
 
 
 async def get_redis() -> Redis:
@@ -128,12 +136,12 @@ async def get_redis() -> Redis:
     Raises:
         RuntimeError: If Redis is not initialized
     """
-    global _redis_client
-
-    if _redis_client is None:
-        _redis_client = await init_redis()
-
-    return _redis_client
+    client = _redis_client
+    if client is None:
+        # init_redis() publishes the client itself; assigning its return here
+        # could overwrite a client another initialiser published meanwhile (#1999).
+        client = await init_redis()
+    return client
 
 
 def current_client() -> Optional[Redis]:
@@ -160,7 +168,7 @@ async def _reconnect_once() -> None:
     global _reconnect_failed_at
 
     try:
-        await init_redis.retry_with(stop=stop_after_attempt(1))()
+        await _connect_once()
     except Exception as e:
         _reconnect_failed_at = time.monotonic()
         logger.warning(

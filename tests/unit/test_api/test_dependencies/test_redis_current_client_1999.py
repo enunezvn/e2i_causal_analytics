@@ -30,14 +30,14 @@ import time
 from typing import List
 
 import pytest
-from tenacity import stop_after_attempt
 
 from src.api.dependencies import redis_client
 
 # Generous against a 16 s backoff, tight against any retry wait (min 2 s).
 FAST_SECONDS = 1.0
-# Socket timeout for the hung-server tests: how long a parked PING lasts.
-HUNG_TIMEOUT_SECONDS = 1.5
+# Socket timeout for the hung-server tests: far longer than any test, so a parked
+# PING ends only when the test releases the peer (never by a wall-clock race).
+HUNG_TIMEOUT_SECONDS = 20.0
 
 
 def _refused_url() -> str:
@@ -124,16 +124,32 @@ async def test_inflight_lock_degrades_to_local_without_waiting(redis_down):
     assert elapsed < FAST_SECONDS
 
 
+class _HungPeer:
+    """A TCP peer that accepts and never replies until ``release()`` closes its
+    connections (the parked PING then fails at once with a connection error)."""
+
+    def __init__(self) -> None:
+        self.accepted: List[asyncio.StreamWriter] = []
+
+    def __len__(self) -> int:
+        return len(self.accepted)
+
+    async def release(self) -> None:
+        for writer in self.accepted:
+            writer.close()
+        await asyncio.sleep(0.05)
+
+
 @pytest.fixture
 async def redis_hung(monkeypatch):
     """Lifespan started degraded, and Redis now ACCEPTS connections but never
-    answers (a hung server): a reconnect round parks inside its PING until the
-    socket timeout, which lets a test act while the round is provably in flight.
+    answers (a hung server): an attempt parks inside its PING until the test
+    releases the peer, so a test acts while the attempt is provably in flight.
     A real TCP peer, not a Redis double: it never sends a byte."""
-    accepted: List[asyncio.StreamWriter] = []
+    peer = _HungPeer()
 
     async def _accept(reader, writer):
-        accepted.append(writer)
+        peer.accepted.append(writer)
 
     server = await asyncio.start_server(_accept, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
@@ -141,16 +157,15 @@ async def redis_hung(monkeypatch):
     monkeypatch.setattr(redis_client, "REDIS_SOCKET_TIMEOUT", HUNG_TIMEOUT_SECONDS)
     monkeypatch.setattr(redis_client, "_redis_client", None)
     try:
-        yield accepted
+        yield peer
     finally:
         await redis_client.close_redis()
-        for writer in accepted:
-            writer.close()
+        await peer.release()
         server.close()
         await server.wait_closed()
 
 
-async def _reconnect_inside_ping(accepted) -> "asyncio.Task[None]":
+async def _reconnect_inside_ping(peer: _HungPeer) -> "asyncio.Task[None]":
     """Trigger a degraded call and return the reconnect task once the hung
     server has accepted its connection (the round is now awaiting PING)."""
     with pytest.raises(RuntimeError):
@@ -159,7 +174,7 @@ async def _reconnect_inside_ping(accepted) -> "asyncio.Task[None]":
     assert task is not None
     loop = asyncio.get_running_loop()
     deadline = loop.time() + FAST_SECONDS
-    while not accepted:
+    while not peer:
         assert loop.time() < deadline, "the reconnect never connected"
         await asyncio.sleep(0.01)
     assert not task.done()
@@ -198,7 +213,7 @@ async def test_close_redis_cancels_a_reconnect_that_is_inside_its_ping(redis_hun
 
     assert task.cancelled()
     assert redis_client._reconnect_task is None
-    await asyncio.sleep(HUNG_TIMEOUT_SECONDS + 0.2)  # past the ping's own timeout
+    await redis_hung.release()  # whatever was still pending on the peer ends now
     assert redis_client.current_client() is None
 
 
@@ -208,18 +223,20 @@ async def test_a_failed_attempt_does_not_clear_a_client_published_during_its_pin
     ``get_redis()``) must not undo each other. A client published while this
     attempt waits on PING survives the attempt's failure, and the attempt's own
     candidate is never published."""
-    attempt = asyncio.create_task(redis_client.init_redis.retry_with(stop=stop_after_attempt(1))())
+    attempt = asyncio.create_task(redis_client._connect_once())
     loop = asyncio.get_running_loop()
     deadline = loop.time() + FAST_SECONDS
     while not redis_hung:
         assert loop.time() < deadline, "the attempt never connected"
         await asyncio.sleep(0.01)
 
+    assert not attempt.done()  # parked on the peer until released
     winner = redis_client.aioredis.from_url(_refused_url())  # published by "another initialiser"
     redis_client._redis_client = winner
+    await redis_hung.release()  # now the attempt's PING fails
 
     with pytest.raises(ConnectionError):
-        await asyncio.wait_for(attempt, timeout=HUNG_TIMEOUT_SECONDS + FAST_SECONDS)
+        await asyncio.wait_for(attempt, timeout=FAST_SECONDS)
     assert redis_client.current_client() is winner
     redis_client._redis_client = None  # never connected; nothing to close
     await winner.aclose()

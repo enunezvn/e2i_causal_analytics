@@ -90,3 +90,52 @@ async def test_a_store_degraded_at_startup_becomes_durable_once_redis_is_back(mo
             await reader.delete(key)
         await reader.aclose()
         await redis_client.close_redis()
+
+
+# --- Codex round 2: competing SUCCESSFUL initialisers (needs pings that succeed) ---
+
+
+async def _get_redis_losing_publication_while(monkeypatch, swap_to) -> tuple:
+    """``get_redis()`` whose init attempt pings OK but finds a client already
+    published (``winner``); while it discards its own candidate, another
+    initialiser replaces the module client with ``swap_to``. The hook wraps the
+    real ``_discard`` only to place that interleaving deterministically."""
+    monkeypatch.setattr(redis_client, "REDIS_URL", REAL_REDIS_URL)
+    monkeypatch.setattr(redis_client, "_redis_client", None)
+    winner = aioredis.from_url(REAL_REDIS_URL)
+    real_discard = redis_client._discard
+
+    async def _discard_while_another_initialiser_publishes(client):
+        redis_client._redis_client = swap_to
+        await real_discard(client)
+
+    monkeypatch.setattr(redis_client, "_discard", _discard_while_another_initialiser_publishes)
+    task = asyncio.create_task(redis_client.get_redis())
+    await asyncio.sleep(0)  # the attempt is now inside its candidate's PING (socket I/O)
+    assert not task.done()
+    redis_client._redis_client = winner
+    returned = await asyncio.wait_for(task, timeout=10)
+    return winner, returned
+
+
+async def test_get_redis_never_returns_none_when_the_client_is_cleared_during_cleanup(
+    monkeypatch,
+):
+    winner, returned = await _get_redis_losing_publication_while(monkeypatch, swap_to=None)
+    try:
+        assert returned is winner  # a validated client, never None
+    finally:
+        redis_client._redis_client = None
+        await winner.aclose()
+
+
+async def test_get_redis_does_not_overwrite_a_client_published_during_cleanup(monkeypatch):
+    replacement = aioredis.from_url(REAL_REDIS_URL)
+    winner, returned = await _get_redis_losing_publication_while(monkeypatch, swap_to=replacement)
+    try:
+        assert returned is winner
+        assert redis_client.current_client() is replacement  # not overwritten by get_redis
+    finally:
+        redis_client._redis_client = None
+        await winner.aclose()
+        await replacement.aclose()

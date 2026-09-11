@@ -459,6 +459,10 @@ async def test_local_table_holds_only_in_flight_ids_and_never_drops_a_held_one()
 async def test_default_factory_uses_the_initialised_client_and_never_calls_init_redis(
     monkeypatch,
 ):
+    # #1999: the request path never AWAITS init_redis() (its backoff blocked a
+    # request 16 s). A degraded call schedules one background connection attempt
+    # (redis_client._connect_once, no backoff) that the request does not wait on;
+    # tests/unit/test_api/test_dependencies/test_redis_current_client_1999.py pins it.
     async def _init_redis_must_not_run():
         raise AssertionError("init_redis() must not be triggered from a request")
 
