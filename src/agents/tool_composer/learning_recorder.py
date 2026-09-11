@@ -436,6 +436,53 @@ class NullRecorder:
         return None
 
 
+class GuardedRecorder:
+    """Wraps a recorder so one that raises can never fail a composition.
+
+    ``CompositionRecorder`` already guards its own writes; this covers whatever recorder the
+    composer is handed, a factory's included. It catches ``Exception`` only, so a cancellation
+    passing through ``cancelled()`` still reaches the caller.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.composition_id = getattr(inner, "composition_id", "")
+
+    def _call(self, name: str, *args: Any, **kwargs: Any) -> None:
+        try:
+            getattr(self._inner, name)(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - recording never fails a composition
+            logger.warning(
+                "composer recording %s failed for %s (%s)",
+                name,
+                self.composition_id,
+                type(exc).__name__,
+            )
+
+    def start(self) -> None:
+        self._call("start")
+
+    def decomposed(self, decomposition: DecompositionResult, *, latency_ms: float) -> None:
+        self._call("decomposed", decomposition, latency_ms=latency_ms)
+
+    def planned(
+        self, plan: ExecutionPlan, *, latency_ms: float, plan_source: Optional[str]
+    ) -> None:
+        self._call("planned", plan, latency_ms=latency_ms, plan_source=plan_source)
+
+    def step(self, step_number: int, result: StepResult) -> None:
+        self._call("step", step_number, result)
+
+    def executed(self, *, latency_ms: float) -> None:
+        self._call("executed", latency_ms=latency_ms)
+
+    def finish(self, **fields: Any) -> None:
+        self._call("finish", **fields)
+
+    def cancelled(self, phase: str) -> None:
+        self._call("cancelled", phase)
+
+
 class CompositionRecorder:
     """Seeded, idempotent, fail-open recording of one composition."""
 

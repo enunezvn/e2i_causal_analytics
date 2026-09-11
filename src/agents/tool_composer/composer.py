@@ -37,7 +37,12 @@ from src.utils.redaction import redact_query
 
 from .decomposer import DecompositionError, QueryDecomposer
 from .executor import ExecutionError, PlanExecutor
-from .learning_recorder import CompositionRecorder, NullRecorder, learning_loop_enabled
+from .learning_recorder import (
+    CompositionRecorder,
+    GuardedRecorder,
+    NullRecorder,
+    learning_loop_enabled,
+)
 from .memory_hooks import (
     ToolComposerMemoryHooks,
     contribute_to_memory,
@@ -656,14 +661,14 @@ class ToolComposer:
         context: Dict[str, Any],
         audit_workflow_id: Optional[UUID],
     ) -> Any:
-        """This composition's recorder. Building it never fails the composition."""
+        """This composition's recorder, wrapped so neither building nor calling it can fail it."""
         try:
             if self._recorder_factory is None and not learning_loop_enabled():
                 return NullRecorder(composition_id)
             seed = self._recording_seed(composition_id, query, context, audit_workflow_id)
             if self._recorder_factory is not None:
-                return self._recorder_factory(composition_id, seed)
-            return CompositionRecorder(composition_id, seed)
+                return GuardedRecorder(self._recorder_factory(composition_id, seed))
+            return GuardedRecorder(CompositionRecorder(composition_id, seed))
         except Exception as exc:  # noqa: BLE001 - recording never fails a composition
             logger.warning("composer recording off for %s (%s)", composition_id, type(exc).__name__)
             return NullRecorder(composition_id)

@@ -380,23 +380,129 @@ async def test_a_failing_audit_start_yields_a_null_id_and_the_composition_procee
 
     The client and its transport are real (supabase-py over http); only the endpoint is a
     closed local port, so ``start_workflow``'s insert raises the way a dropped database does.
+    The service is installed for the whole composition, and the caller's context carries a
+    STALE audit id: the seed must still be null, never that value.
     """
     from supabase import create_client
 
+    from src.agents.base.audit_chain_mixin import set_audit_chain_service
     from src.utils.audit_chain import AuditChainService
 
     # Not a secret: a syntactically valid key shape for a port nothing listens on.
     service = AuditChainService(create_client("http://127.0.0.1:9", "aaaa.bbbb.cccc"))
+    stale = uuid.uuid4()
     capture = Capture()
     composer = _composer(mock_llm_client, mock_tool_registry, capture)
 
-    with caplog.at_level("WARNING"):
-        assert composer._start_audit(service, "q", {}) is None
-        result = await composer.compose(QUERY)
+    set_audit_chain_service(service)
+    try:
+        with caplog.at_level("WARNING"):
+            result = await composer.compose(QUERY, {"audit_workflow_id": stale})
+    finally:
+        set_audit_chain_service(None)
     assert await drain(timeout=10) == 0
 
     assert result.success is True
     assert any("audit workflow" in record.message for record in caplog.records)
     assert capture.seeds[0]["audit_workflow_id"] is None
-    (finish,) = capture.payloads("composer_record_finish")
-    assert finish["p_seed"]["audit_workflow_id"] is None
+    for _name, params in capture.port.payloads:
+        assert params.get("p_seed", {}).get("audit_workflow_id") is None
+        assert str(stale) not in json.dumps(params, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Recording never fails a composition
+# ---------------------------------------------------------------------------
+
+
+class ThrowingRecorder:
+    """A recorder whose every call raises, as a broken or misconfigured one would."""
+
+    def __init__(self, composition_id: str) -> None:
+        self.composition_id = composition_id
+        self.calls: List[str] = []
+
+    def _raise(self, name: str) -> None:
+        self.calls.append(name)
+        raise RuntimeError(f"recorder {name} is broken")
+
+    def start(self) -> None:
+        self._raise("start")
+
+    def decomposed(self, decomposition: Any, *, latency_ms: float) -> None:
+        self._raise("decomposed")
+
+    def planned(self, plan: Any, *, latency_ms: float, plan_source: Any) -> None:
+        self._raise("planned")
+
+    def step(self, step_number: int, result: Any) -> None:
+        self._raise("step")
+
+    def executed(self, *, latency_ms: float) -> None:
+        self._raise("executed")
+
+    def finish(self, **fields: Any) -> None:
+        self._raise("finish")
+
+    def cancelled(self, phase: str) -> None:
+        self._raise("cancelled")
+
+
+async def test_a_recorder_that_raises_everywhere_does_not_fail_the_composition(
+    mock_llm_client, mock_tool_registry
+):
+    broken: List[ThrowingRecorder] = []
+
+    def factory(composition_id: str, seed: Dict[str, Any]) -> ThrowingRecorder:
+        broken.append(ThrowingRecorder(composition_id))
+        return broken[-1]
+
+    composer = ToolComposer(
+        llm_client=mock_llm_client,
+        tool_registry=mock_tool_registry,
+        enable_memory_contribution=False,
+        recorder_factory=factory,
+        config={"phases": {"execute": {"max_retries": 0}}},
+    )
+    result = await composer.compose(QUERY)
+
+    assert result.success is True
+    # Every hook was reached and every one raised; none of it reached the caller.
+    assert {"start", "decomposed", "planned", "executed", "finish"} <= set(broken[0].calls)
+
+
+async def test_a_recorder_that_raises_does_not_swallow_a_cancel(
+    mock_llm_client, mock_tool_registry
+):
+    started = asyncio.Event()
+
+    async def slow(**_: Any) -> Any:
+        started.set()
+        await asyncio.sleep(30)
+        return {"late": True}
+
+    _register(mock_tool_registry, "slow_probe", slow)
+    mock_llm_client.set_planning_response(
+        _planning(
+            [
+                {
+                    "step_id": "step_1",
+                    "sub_question_id": "sq_1",
+                    "tool_name": "slow_probe",
+                    "input_mapping": {},
+                }
+            ]
+        )
+    )
+    composer = ToolComposer(
+        llm_client=mock_llm_client,
+        tool_registry=mock_tool_registry,
+        enable_memory_contribution=False,
+        recorder_factory=lambda cid, seed: ThrowingRecorder(cid),
+        config={"phases": {"execute": {"max_retries": 0}}},
+    )
+    task = asyncio.create_task(composer.compose(QUERY))
+    await asyncio.wait_for(started.wait(), timeout=10)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

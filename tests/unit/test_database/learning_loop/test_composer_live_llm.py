@@ -169,6 +169,13 @@ async def test_a_real_composition_records_one_episode_with_a_null_audit_id(live_
     assert episode["outcome"] in ("success", "partial", "failed")
     assert episode["query_text"] and episode["entry_point"] == "direct"
 
+    # The run must REACH execution, or the comparisons below are 0 == 0 and this spend
+    # tests nothing about step and performance recording.
+    assert result.execution.step_results, (
+        "the composition failed before executing any tool; the recording assertions would be "
+        f"vacuous (status={episode['status']}, failed_phase={episode['failed_phase']})"
+    )
+
     steps = _one(
         live_db,
         "select count(*) from composition_steps s join composer_episodes e using (episode_id) "
@@ -182,6 +189,7 @@ async def test_a_real_composition_records_one_episode_with_a_null_audit_id(live_
         for r in result.execution.step_results
         if getattr(r, "outcome_class", None) not in (None, "dependency_unmet", "not_registered")
     }
+    assert invoked, "no step was performance-eligible; the tool_performance check would be vacuous"
     perf = _one(
         live_db,
         "select count(distinct tool_name) from tool_performance where composition_id = %s",
