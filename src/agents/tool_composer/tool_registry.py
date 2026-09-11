@@ -211,7 +211,7 @@ class ToolRegistry:
 # This module keeps what only it carries -- each tool's category and the tools whose
 # output it can consume -- and DERIVES everything else from the live registry, so its
 # input/output schemas cannot drift from the registered callables again (#2003: the
-# hand-written copies had drifted on 15 of 16 tools). The DB ``tool_registry`` /
+# hand-written copies had drifted on 14 of 16 tools). The DB ``tool_registry`` /
 # ``tool_dependencies`` rows are synced from these definitions by
 # ``scripts/generate_tool_registry_sync_migration.py``.
 

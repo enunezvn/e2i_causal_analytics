@@ -12,10 +12,10 @@ Three surfaces describe a tool's inputs and outputs (measured 2026-09-11):
    then invents ``$step_N.<field>`` references, #1573) are defects in the planning path.
 2. ``create_default_tools()`` (``src/agents/tool_composer/tool_registry.py``), the JSON
    Schema copy that also carries each tool's category and dependency metadata. Nothing
-   imports it at runtime; its hand-written schemas had drifted on 15 of 16 tools, which
+   imports it at runtime; its hand-written schemas had drifted on 14 of its 16 tools, which
    is how #2003 came to be filed against a copy the planner never reads.
 3. The ``tool_registry`` / ``tool_dependencies`` rows seeded by ``database/ml/013`` and
-   ``027``. No code reads them either; they drifted the same way.
+   ``027``. No code reads them either; all 16 rows and 8 of 11 dependency mappings had drifted.
 
 The live registry is the single source of truth. The callable itself is the ground truth
 the registry is checked against: its signature (and the literal ``kwargs`` keys its body
