@@ -76,6 +76,12 @@ LIVE_TOOLS = frozenset(
 
 # Accepted inputs that are deliberately NOT planner-visible, with the reason.
 INTERNAL_INPUTS: Dict[str, Dict[str, str]] = {
+    "cohort_builder": {
+        # Not offered to the planner: whenever the context carries a frame the executor
+        # injects it and region is ignored, so a planned region would promise a filter
+        # that is not applied. Applying it to injected frames is an open decision.
+        "region": "applied only when no DataFrame is injected (the resolution path)",
+    },
     "discover_dag": {
         "trace_context": "Opik trace plumbing for agent callers",
         # Not offered to the planner: advertising it would promise renamed nodes that
