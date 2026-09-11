@@ -61,7 +61,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-import numpy as np
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
