@@ -22,9 +22,11 @@ three legacy shapes are copied verbatim from the live `episodic_memories` rows (
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from unittest.mock import AsyncMock
 
 import pytest
 
+from src.agents.tool_composer import memory_hooks as hooks_module
 from src.agents.tool_composer.memory_hooks import select_renderable
 from src.agents.tool_composer.planner import ToolPlanner
 
@@ -248,3 +250,108 @@ def test_a_step_backed_reference_renders_even_without_raw_content():
 
     assert "cohort_builder" in _worked_line(block)
     assert select_renderable([reference], 3) == [reference]
+
+
+@pytest.mark.parametrize("sequence", [7, "gap_calculator", {"a": 1}])
+def test_a_legacy_reference_whose_tool_sequence_is_unusable_is_dropped_not_raised(sequence):
+    broken = _reference({"tools_executed": 5, "tools_succeeded": 5, "tool_sequence": sequence})
+
+    block = _formatter()._format_episodic_context([broken, HYDRATED_PARTIAL])
+
+    assert "causal_effect_estimator" in _worked_line(block)
+    assert select_renderable([broken], 3) == []
+
+
+@pytest.mark.parametrize("steps", [7, "steps", {"step_number": 0}])
+def test_unusable_recorded_steps_drop_the_reference_without_raising(steps):
+    broken = {"memory_id": "m", "raw_content": {}, "recorded_steps": steps}
+
+    block = _formatter()._format_episodic_context([broken, HYDRATED_PARTIAL])
+
+    assert "causal_effect_estimator" in _worked_line(block)
+    assert select_renderable([broken], 3) == []
+
+
+def test_an_unhashable_outcome_class_neither_raises_nor_counts_as_worked():
+    reference = {
+        "memory_id": "m",
+        "raw_content": {},
+        "recorded_steps": [
+            {"step_number": 0, "tool_name": "gap_calculator", "outcome_class": {"weird": 1}},
+            _step(1, "cate_analyzer", "succeeded"),
+        ],
+    }
+
+    worked = _worked_line(_formatter()._format_episodic_context([reference]))
+
+    assert "cate_analyzer" in worked and "gap_calculator" not in worked
+
+
+# ---------------------------------------------------------------------------
+# The hook itself drops before it limits
+# ---------------------------------------------------------------------------
+
+
+async def test_find_similar_compositions_drops_before_limiting(monkeypatch):
+    """Restoring the premature slice would leave a usable reference unrendered (codex iter-1)."""
+    candidates = [
+        {"memory_id": "1", "raw_content": dict(LIVE_PARTIAL_1_OF_6)},
+        {"memory_id": "2", "raw_content": dict(LIVE_PARTIAL_5_OF_6)},
+        {"memory_id": "3", "raw_content": dict(LIVE_PARTIAL_1_OF_6)},
+        {"memory_id": "4", "raw_content": dict(LIVE_ALL_SUCCESS)},
+    ]
+
+    async def fake_search(**_: Any) -> List[Dict[str, Any]]:
+        return [dict(row) for row in candidates]
+
+    async def fake_hydrate_raw(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return results
+
+    monkeypatch.setattr("src.memory.episodic_memory.search_episodic_by_text", fake_search)
+    monkeypatch.setattr("src.memory.episodic_memory.hydrate_raw_content", fake_hydrate_raw)
+
+    class StepsPort:
+        def __init__(self) -> None:
+            self.calls: List[Any] = []
+
+        async def call(self, name: str, params: Dict[str, Any]) -> Any:
+            self.calls.append((name, params))
+            return {}
+
+    port = StepsPort()
+    real_hydrate = hooks_module.hydrate_reference_steps
+
+    async def hydrate_with_port(references: List[Dict[str, Any]], **_: Any):
+        return await real_hydrate(references, port=port)
+
+    monkeypatch.setattr(hooks_module, "hydrate_reference_steps", hydrate_with_port)
+
+    kept = await hooks_module.ToolComposerMemoryHooks().find_similar_compositions("q", limit=3)
+
+    assert [r["raw_content"]["composition_id"] for r in kept] == ["comp_016c9c4b"]
+    ((name, params),) = port.calls
+    assert name == "composer_steps_for"
+    # One read, for the WHOLE candidate set — not just the first three.
+    assert set(params["p_composition_ids"]) == {
+        "comp_9aa4c262",
+        "comp_023ff592",
+        "comp_016c9c4b",
+    }
+
+
+async def test_check_episodic_memory_survives_a_malformed_confidence():
+    """The debug log must not format a caller's value numerically: it would discard every row."""
+    rows = [
+        {"memory_id": "bad", "raw_content": {**LIVE_ALL_SUCCESS, "confidence": "high"}},
+        {"memory_id": "ok", "raw_content": dict(LIVE_ALL_SUCCESS)},
+    ]
+    hooks = AsyncMock()
+    hooks.find_similar_compositions = AsyncMock(return_value=rows)
+    planner = _formatter()
+    planner.use_episodic_memory = True
+    planner.memory_hooks = hooks
+
+    similar = await planner._check_episodic_memory("q")
+
+    assert len(similar) == 2
+    assert planner._format_episodic_context(similar).count("### Reference") == 2

@@ -650,31 +650,41 @@ def reference_tools(
     pre-loop rows, and any row whose step writes were lost — the only honest reading is the
     counts: either every tool worked, or the reference cannot name the ones that failed.
     """
-    steps = [s for s in (reference.get("recorded_steps") or []) if isinstance(s, dict)]
+    # Every shape below is checked before it is iterated or looked up: one malformed row must be
+    # dropped on its own, never raise and take the whole reference set with it.
+    raw_steps = reference.get("recorded_steps")
+    steps = (
+        [s for s in raw_steps if isinstance(s, dict)]
+        if isinstance(raw_steps, (list, tuple))
+        else []
+    )
     if steps:
-        worked = [
-            str(s.get("tool_name"))
-            for s in steps
-            if s.get("outcome_class") in WORKED_OUTCOME_CLASSES
-        ]
+
+        def outcome_of(step: Dict[str, Any]) -> Optional[str]:
+            outcome = step.get("outcome_class")
+            return outcome if isinstance(outcome, str) else None
+
+        worked = [str(s.get("tool_name")) for s in steps if outcome_of(s) in WORKED_OUTCOME_CLASSES]
         if not worked:
             return None
         did_not_work = [
-            (str(s.get("tool_name")), s.get("outcome_class"))
+            (str(s.get("tool_name")), outcome_of(s))
             for s in steps
-            if s.get("outcome_class") not in WORKED_OUTCOME_CLASSES
+            if outcome_of(s) not in WORKED_OUTCOME_CLASSES
         ]
         return worked, did_not_work, True
 
     raw = reference_raw_content(reference)
     executed, succeeded = raw.get("tools_executed"), raw.get("tools_succeeded")
+    sequence = raw.get("tool_sequence")
     if (
         isinstance(executed, int)
         and isinstance(succeeded, int)
         and executed > 0
         and executed == succeeded
+        and isinstance(sequence, (list, tuple))
     ):
-        return [str(t) for t in raw.get("tool_sequence") or []], [], False
+        return [str(t) for t in sequence], [], False
     return None
 
 

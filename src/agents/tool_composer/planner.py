@@ -382,10 +382,13 @@ class ToolPlanner:
                 logger.info(f"Found {len(similar)} similar compositions in episodic memory")
                 # Log the tool sequences for debugging
                 for comp in similar:
-                    raw = comp.get("raw_content", {})
+                    # No numeric formatting of a stored value: an f-string is built even when
+                    # debug logging is off, so a malformed confidence would raise here and the
+                    # handler below would discard every reference.
+                    raw = reference_raw_content(comp)
                     logger.debug(
-                        f"  Similar: tools={raw.get('tool_sequence', [])}, "
-                        f"confidence={raw.get('confidence', 0):.2f}"
+                        f"  Similar: tools={raw.get('tool_sequence')}, "
+                        f"confidence={raw.get('confidence')}"
                     )
             return similar
         except Exception as e:
