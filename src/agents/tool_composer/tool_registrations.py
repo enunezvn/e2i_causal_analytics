@@ -85,6 +85,13 @@ _DATAFRAME_KWARGS_KEYS: Tuple[str, ...] = (
     "estimation_data",
 )
 
+# The one estimator ``causal_effect_estimator`` runs (#2014): DoWhy's default
+# pipeline method, the only one with an analytic standard error.
+_EFFECT_ESTIMATOR_METHOD = "backdoor.linear_regression"
+
+# Two-sided 95 % normal critical value (the consensus aggregator uses the same).
+_Z_95 = 1.959963984540054
+
 
 # `_DataAwareSequentialPipeline` was deleted in #458 once `PipelineState` /
 # `PipelineInput` declared `estimation_data` as a first-class field — the
@@ -98,22 +105,38 @@ _DATAFRAME_KWARGS_KEYS: Tuple[str, ...] = (
 
 
 class EffectEstimatorInput(BaseModel):
-    """Input for causal effect estimation"""
+    """Input for causal effect estimation.
+
+    No ``method``: the tool runs DoWhy linear regression only (#2014).
+    """
 
     treatment: str
     outcome: str
     confounders: List[str] = []
-    method: str = "backdoor.linear_regression"
 
 
 class EffectEstimate(BaseModel):
-    """Output from causal effect estimation"""
+    """Output from causal effect estimation (#2014).
+
+    ``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` are real sampling
+    quantities or all ``None``. ``uncertainty_method`` names their source
+    (``ols_hc1_normal`` / ``dowhy_standard_error_normal`` / ``library_interval``, or
+    ``not_computed``) and ``uncertainty_note`` says how they were computed or why they
+    were not. ``method`` is the estimator that actually ran, ``estimand`` what it
+    estimated in words, ``effect_scale`` ``binary_contrast`` (treatment 1 vs 0) or
+    ``per_unit`` (per one-unit increase in a non-binary treatment).
+    """
 
     ate: float
-    ci_lower: float
-    ci_upper: float
-    p_value: float
+    ci_lower: Optional[float]
+    ci_upper: Optional[float]
+    p_value: Optional[float]
+    standard_error: Optional[float]
+    uncertainty_method: str
+    uncertainty_note: str
     method: str
+    estimand: str
+    effect_scale: str
     n_samples: int
 
 
@@ -799,7 +822,12 @@ def cohort_statistics(
 
 @composable_tool(
     name="causal_effect_estimator",
-    description="Estimate average treatment effect (ATE/ATT) using DoWhy/EconML with confidence intervals",
+    description=(
+        "Estimate the effect of a treatment on an outcome with DoWhy linear regression, "
+        "adjusted for confounders; reports a 95% CI and p-value from a "
+        "heteroskedasticity-robust (HC1) standard error, or none with the reason, and "
+        "names the estimand (per unit for a non-binary treatment)"
+    ),
     source_agent="causal_impact",
     tier=2,
     input_parameters=[
@@ -811,7 +839,6 @@ def cohort_statistics(
             "description": "Confounder variables",
             "required": False,
         },
-        {"name": "method", "type": "str", "description": "Estimation method", "required": False},
     ],
     output_schema="EffectEstimate",
     avg_execution_ms=2000,
@@ -822,7 +849,7 @@ def causal_effect_estimator(
     treatment: str,
     outcome: str,
     confounders: Optional[List[str]] = None,
-    method: str = "backdoor.linear_regression",
+    method: Optional[str] = None,
     **kwargs: Any,
 ) -> EffectEstimate:
     """Estimate causal effect by routing the request through ``SequentialPipeline``.
@@ -860,20 +887,28 @@ def causal_effect_estimator(
       signal).
 
     Returned ``EffectEstimate`` fields are derived from the pipeline output:
-    - ``ate`` = ``PipelineOutput.consensus_effect`` (the confidence-weighted
-      cross-library consensus produced by C-6's ``_aggregate_results``).
-    - ``ci_lower`` / ``ci_upper`` = primary library's ``ate_ci_lower`` /
-      ``ate_ci_upper`` when present in ``primary_result`` (EconML emits
-      these directly); otherwise derived from ``consensus_confidence`` as
-      ``ate +/- width`` where ``width = max(|ate|, 0.05) * (1 -
-      consensus_confidence) + 0.001``. This is a documented derivation
-      from real pipeline outputs — NOT a hardcoded placeholder.
-    - ``p_value`` = primary library's ``p_value`` when present; otherwise
-      derived from ``consensus_confidence`` as
-      ``max(0.001, min(0.999, 1 - consensus_confidence))``. Again documented
-      derivation — NOT a hardcoded constant.
-    - ``method`` = the caller's requested method (echoed back).
+    - ``ate`` = ``PipelineOutput.consensus_effect`` (the cross-library
+      consensus produced by C-6's ``_aggregate_results``; with the tool's own
+      query wording only DoWhy estimates, so it is DoWhy's estimate).
+    - ``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` come from
+      :func:`_derive_uncertainty` (#2014): the 95 % normal interval and
+      two-sided p of the primary library's own standard error — for DoWhy the
+      HC1 SE of its OLS fit — or all ``None`` with the reason in
+      ``uncertainty_note``. The former proxy (``ate +/- 0.001, p = 0.001``
+      whenever one library ran, built from library agreement) is gone.
+    - ``method`` / ``estimand`` / ``effect_scale`` = what actually ran and what
+      it estimated (:func:`_describe_estimate`).
     - ``n_samples`` = ``len(df)`` from the caller-supplied DataFrame.
+
+    ``method`` is not offered to the planner (#2014). It used to be echoed back
+    while DoWhy ran linear regression regardless. Passing it through was
+    measured and rejected: only linear regression has an analytic SE; the other
+    DoWhy methods need a bootstrap (100 refits at n = 8,730: matching 8.0 s,
+    weighting 6.1 s, stratification 126 s — past the 120 s step envelope),
+    DoWhy's bootstrap is unseeded (the same question would give a different
+    interval each run), and ``refutation_runner`` re-estimates with linear
+    regression, so it would refute a different estimate than the one reported.
+    A caller that still names another estimator gets a ``ToolInputError``.
 
     Cross-refs:
     - Dispatch plan: ``.claude/plans/354_dispatch_plan_v1.md`` §2.4 C-7
@@ -885,8 +920,8 @@ def causal_effect_estimator(
         treatment: Name of the treatment column in the supplied DataFrame.
         outcome: Name of the outcome column.
         confounders: Confounder column names (optional).
-        method: Estimation method label echoed back in the result; the
-            pipeline picks its own per-library estimator internally.
+        method: Not offered to the planner. Accepted only as ``None`` or
+            ``"backdoor.linear_regression"``; any other value is refused.
         **kwargs: Must contain the DataFrame under one of
             ``_DATAFRAME_KWARGS_KEYS``. May also contain ``data_source``
             (passed through as ``PipelineInput.data_source``) and
@@ -896,6 +931,8 @@ def causal_effect_estimator(
         ``EffectEstimate`` populated from the pipeline's real consensus.
 
     Raises:
+        ToolInputError: when ``method`` names an estimator other than DoWhy
+            linear regression.
         RuntimeError: when the caller did not supply a DataFrame, when the
             pipeline reports failure, or when the pipeline did not produce a
             finite consensus effect.
@@ -903,6 +940,14 @@ def causal_effect_estimator(
             ``ExecutorDataUnavailable`` from a downstream executor) is
             propagated unchanged.
     """
+    if method is not None and method != _EFFECT_ESTIMATOR_METHOD:
+        raise ToolInputError(
+            f"causal_effect_estimator estimates with DoWhy {_EFFECT_ESTIMATOR_METHOD!r} "
+            f"only; got method={method!r}. No other estimator is run by this tool, so the "
+            "request is refused rather than answered with a linear-regression estimate "
+            "labelled as another method (#2014). Omit method."
+        )
+
     # --- 1. Locate the caller's real DataFrame (fail-closed if missing). ---
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
@@ -917,8 +962,10 @@ def causal_effect_estimator(
 
     # --- 2. Build the PipelineInput. ---
     data_source = kwargs.get("data_source") or "tool_composer.causal_effect_estimator"
+    # Wording unchanged from when ``method`` was echoed into it: routing reads it.
     query = kwargs.get("query") or (
-        f"Estimate the causal effect of {treatment} on {outcome} using method={method!r}."
+        f"Estimate the causal effect of {treatment} on {outcome} "
+        f"using method={_EFFECT_ESTIMATOR_METHOD!r}."
     )
     # Pass the DataFrame via the first-class `estimation_data` field (#458).
     # The orchestrator's `_create_initial_state` copies this into
@@ -984,21 +1031,25 @@ def causal_effect_estimator(
             f"(got {ate_value}). Refusing to emit non-finite ATE to caller."
         )
 
-    # --- 5. Derive CI / p-value from real pipeline outputs. ---
+    # --- 5. Real uncertainty of the reported effect, and what was estimated. ---
     primary_result = pipeline_output.get("primary_result") or {}
-    consensus_confidence = pipeline_output.get("consensus_confidence")
-    ci_lower, ci_upper, p_value = _derive_ci_and_p_value(
+    uncertainty = _derive_uncertainty(ate=ate_value, primary_result=primary_result)
+    method_used, estimand, effect_scale = _describe_estimate(
         ate=ate_value,
         primary_result=primary_result,
-        consensus_confidence=consensus_confidence,
+        libraries_used=list(pipeline_output.get("libraries_used") or []),
+        treatment_values=df.get(treatment),
+        treatment=treatment,
+        outcome=outcome,
+        confounders=confounders or [],
     )
 
     return EffectEstimate(
         ate=ate_value,
-        ci_lower=ci_lower,
-        ci_upper=ci_upper,
-        p_value=p_value,
-        method=method,
+        **uncertainty,
+        method=method_used,
+        estimand=estimand,
+        effect_scale=effect_scale,
         n_samples=int(len(df)),
     )
 
@@ -1061,84 +1112,197 @@ def _run_pipeline_sync(
         new_loop.close()
 
 
-def _derive_ci_and_p_value(
+def _finite_float(value: Any) -> Optional[float]:
+    """``value`` as a finite float, or None (bools and non-numbers are None)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    f = float(value)
+    return f if math.isfinite(f) else None
+
+
+def _primary_estimate(primary_result: Dict[str, Any]) -> Tuple[Optional[str], Optional[float]]:
+    """The primary library's name and its OWN effect estimate, from its result keys.
+
+    DoWhy reports ``causal_effect`` (and ``dowhy_method``); EconML ``ate`` with its
+    ``estimator``; CausalML ``ate`` with its ``model``. NetworkX (primary for
+    impact-flow wording) estimates no effect.
+    """
+    if "dowhy_method" in primary_result:
+        return "dowhy", _finite_float(primary_result.get("causal_effect"))
+    if "estimator" in primary_result and "ate" in primary_result:
+        return "econml", _finite_float(primary_result.get("ate"))
+    if "model" in primary_result and "ate" in primary_result:
+        return "causalml", _finite_float(primary_result.get("ate"))
+    return ("networkx" if "is_dag" in primary_result else None), None
+
+
+def _derive_uncertainty(*, ate: float, primary_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Real sampling uncertainty of the reported effect, or None with the reason (#2014).
+
+    Replaces the former proxy, which built ``ate +/- width`` and ``p`` from library
+    AGREEMENT (``consensus_confidence``) — ATE +/- 0.001 with p = 0.001 whenever a
+    single library ran — while the standard error DoWhy returned went unread.
+
+    An interval exists only when the reported ``ate`` IS the primary library's own
+    estimate and that library measured its sampling error:
+
+    * DoWhy: its ``standard_error`` (the HC1 SE of its OLS fit) gives the 95 % normal
+      interval ``ate +/- z*SE`` and the two-sided normal p-value.
+    * EconML / CausalML: the 95 % interval they report, with the SE back-derived from
+      its width (``(hi - lo) / 2z``) and the p-value from that SE.
+
+    Otherwise every field is None: the effect is a consensus across libraries (no SE
+    exists for that blend), the primary library produced no estimate of its own, or
+    it measured no SE (e.g. zero residual degrees of freedom).
+    """
+    library, own_effect = _primary_estimate(primary_result)
+
+    def not_computed(reason: str) -> Dict[str, Any]:
+        return {
+            "ci_lower": None,
+            "ci_upper": None,
+            "p_value": None,
+            "standard_error": None,
+            "uncertainty_method": "not_computed",
+            "uncertainty_note": f"No confidence interval or p-value: {reason}",
+        }
+
+    if own_effect is None:
+        return not_computed(
+            f"the primary library ({library or 'unknown'}) produced no effect estimate of "
+            "its own, so no standard error belongs to the reported effect."
+        )
+    if not math.isclose(own_effect, ate, rel_tol=1e-9, abs_tol=1e-12):
+        return not_computed(
+            f"the reported effect is the consensus of several libraries' estimates "
+            f"({library} reported {own_effect:.6g}); no standard error exists for that blend."
+        )
+
+    if library == "dowhy":
+        se = _finite_float(primary_result.get("standard_error"))
+        if se is None or se <= 0:
+            return not_computed(
+                f"DoWhy's {primary_result.get('dowhy_method')!r} produced no standard error "
+                "for this estimate (linear regression needs residual degrees of freedom)."
+            )
+        se_method = primary_result.get("standard_error_method")
+        robust = se_method == "ols_hc1"
+        lower, upper = ate - _Z_95 * se, ate + _Z_95 * se
+        method_code = "ols_hc1_normal" if robust else "dowhy_standard_error_normal"
+        note = "95% normal-approximation interval and two-sided p-value from the " + (
+            "heteroskedasticity-robust (HC1) standard error of the OLS fit."
+            if robust
+            else f"standard error DoWhy reported ({se_method or 'method unstated'})."
+        )
+    else:
+        lower_raw = _finite_float(primary_result.get("ate_ci_lower"))
+        upper_raw = _finite_float(primary_result.get("ate_ci_upper"))
+        if (
+            lower_raw is None
+            or upper_raw is None
+            or not lower_raw < upper_raw
+            or not lower_raw <= ate <= upper_raw
+        ):
+            return not_computed(
+                f"{library} reported no usable interval around its estimate "
+                f"(ate_ci_lower={primary_result.get('ate_ci_lower')!r}, "
+                f"ate_ci_upper={primary_result.get('ate_ci_upper')!r})."
+            )
+        lower, upper = lower_raw, upper_raw
+        se = (upper - lower) / (2.0 * _Z_95)
+        method_code = "library_interval"
+        note = (
+            f"95% interval as reported by {library}; the standard error and two-sided "
+            "p-value are back-derived from its width under a normal approximation."
+        )
+
+    return {
+        "ci_lower": lower,
+        "ci_upper": upper,
+        "p_value": math.erfc(abs(ate / se) / math.sqrt(2.0)),
+        "standard_error": se,
+        "uncertainty_method": method_code,
+        "uncertainty_note": note,
+    }
+
+
+def _is_binary_01(values: Any) -> bool:
+    """Whether a treatment column holds only 0 and 1 (booleans included)."""
+    if values is None:
+        return False
+    try:
+        observed = {float(v) for v in values.dropna().unique()}
+    except (TypeError, ValueError):
+        return False
+    return bool(observed) and observed <= {0.0, 1.0}
+
+
+def _describe_estimate(
     *,
     ate: float,
     primary_result: Dict[str, Any],
-    consensus_confidence: Optional[float],
-) -> Tuple[float, float, float]:
-    """Derive ``(ci_lower, ci_upper, p_value)`` from real pipeline outputs.
+    libraries_used: List[str],
+    treatment_values: Any,
+    treatment: str,
+    outcome: str,
+    confounders: List[str],
+) -> Tuple[str, str, str]:
+    """``(method, estimand, effect_scale)`` for what the pipeline actually estimated (#2014).
 
-    Priority order:
-
-    1. **Primary library emits CI / p-value directly** (EconML does this
-       — see ``executors/econml.py``'s ``ate_ci_lower`` / ``ate_ci_upper``
-       fields). Use those values when finite and consistent (lower <= ate
-       <= upper).
-    2. **Derive from ``consensus_confidence``** as a documented fallback.
-       The pipeline does not (yet) surface a cross-library standard error
-       at the consensus level; we use confidence as a proxy for relative
-       uncertainty. Formula:
-       - ``width = max(|ate|, 0.05) * (1 - confidence) + 0.001``
-       - ``ci_lower = ate - width``
-       - ``ci_upper = ate + width``
-       - ``p_value = clamp(1 - confidence, 0.001, 0.999)``
-
-       This is a derivation from real pipeline outputs (consensus_confidence
-       comes from C-6's confidence-weighted aggregation across actually-run
-       libraries). It is NOT a hardcoded constant.
-
-    Returns:
-        Tuple of ``(ci_lower, ci_upper, p_value)``; all floats; CI always
-        brackets the ATE.
+    DoWhy's linear regression reports ``E[Y | T=1] - E[Y | T=0]`` from the fitted model,
+    which is the treatment coefficient: for a binary treatment a regression-adjusted
+    1-vs-0 difference, for any other numeric treatment the change per ONE UNIT.
     """
-    # Priority 1: primary-library CI/p-value when usable.
-    pr_ci_lower_raw = primary_result.get("ate_ci_lower")
-    pr_ci_upper_raw = primary_result.get("ate_ci_upper")
-    pr_p_value_raw = primary_result.get("p_value")
-    if (
-        isinstance(pr_ci_lower_raw, (int, float))
-        and isinstance(pr_ci_upper_raw, (int, float))
-        and math.isfinite(float(pr_ci_lower_raw))
-        and math.isfinite(float(pr_ci_upper_raw))
-    ):
-        ci_lower_pl = float(pr_ci_lower_raw)
-        ci_upper_pl = float(pr_ci_upper_raw)
-        if ci_lower_pl <= ate <= ci_upper_pl and ci_lower_pl < ci_upper_pl:
-            if isinstance(pr_p_value_raw, (int, float)) and math.isfinite(float(pr_p_value_raw)):
-                p_value_pl = max(0.0, min(1.0, float(pr_p_value_raw)))
-            else:
-                p_value_pl = _derive_p_value_from_confidence(consensus_confidence)
-            return ci_lower_pl, ci_upper_pl, p_value_pl
-
-    # Priority 2: derive from consensus_confidence (documented formula above).
-    confidence = (
-        float(consensus_confidence)
-        if isinstance(consensus_confidence, (int, float))
-        and math.isfinite(float(consensus_confidence))
-        else 0.5  # Documented neutral fallback when confidence is also missing.
+    library, own_effect = _primary_estimate(primary_result)
+    binary = _is_binary_01(treatment_values)
+    effect_scale = "binary_contrast" if binary else "per_unit"
+    # A count, not the names: the synthesizer truncates each step's JSON at 1,000
+    # characters, and a long confounder list would cut this sentence off.
+    adjusted = (
+        f"adjusted for {len(confounders)} confounder{'s' if len(confounders) != 1 else ''}"
+        if confounders
+        else "with no confounder adjustment"
     )
-    confidence = max(0.0, min(1.0, confidence))
-    width = max(abs(ate), 0.05) * (1.0 - confidence) + 0.001
-    ci_lower = ate - width
-    ci_upper = ate + width
-    p_value = _derive_p_value_from_confidence(consensus_confidence)
-    return ci_lower, ci_upper, p_value
-
-
-def _derive_p_value_from_confidence(consensus_confidence: Optional[float]) -> float:
-    """Map ``consensus_confidence`` -> two-sided p-value proxy.
-
-    ``p_value = clamp(1 - confidence, 0.001, 0.999)``. When confidence is
-    missing/None/non-finite, returns 0.5 (documented neutral fallback —
-    NOT a hardcoded placeholder; the formula remains deterministic given
-    the available information).
-    """
-    if not isinstance(consensus_confidence, (int, float)) or not math.isfinite(
-        float(consensus_confidence)
-    ):
-        return 0.5
-    return max(0.001, min(0.999, 1.0 - float(consensus_confidence)))
+    contrast = (
+        f"between {treatment} = 1 and {treatment} = 0"
+        if binary
+        else f"per one-unit increase in {treatment}"
+    )
+    consensus = own_effect is None or not math.isclose(own_effect, ate, rel_tol=1e-9, abs_tol=1e-12)
+    if consensus:
+        effect_libraries = [lib for lib in libraries_used if lib != "networkx"]
+        return (
+            f"consensus({','.join(effect_libraries)})",
+            f"Consensus of the {', '.join(effect_libraries)} estimates of the effect on "
+            f"{outcome} {contrast}, {adjusted}.",
+            effect_scale,
+        )
+    if library == "dowhy":
+        dowhy_method = str(primary_result.get("dowhy_method"))
+        if "linear_regression" in dowhy_method:
+            estimand = (
+                f"Regression-adjusted difference in {outcome} {contrast} (OLS with an "
+                f"additive treatment term, {adjusted}); it is the average treatment effect "
+                "only if the effect does not vary across units"
+                + ("." if binary else f" and is linear in {treatment}.")
+            )
+        else:
+            estimand = f"Effect on {outcome} {contrast}, {adjusted} (DoWhy {dowhy_method})."
+        return dowhy_method, estimand, effect_scale
+    if library == "econml":
+        estimator = primary_result.get("estimator")
+        return (
+            f"econml.{estimator}",
+            f"Average treatment effect on {outcome} {contrast}, {adjusted} (EconML {estimator}).",
+            effect_scale,
+        )
+    model = primary_result.get("model")
+    return (
+        f"causalml.{model}",
+        f"Mean model-predicted uplift in {outcome} {contrast} (CausalML {model}); not an "
+        "identification-validated average treatment effect.",
+        effect_scale,
+    )
 
 
 @composable_tool(
