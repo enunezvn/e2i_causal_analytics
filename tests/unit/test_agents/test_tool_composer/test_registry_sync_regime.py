@@ -41,6 +41,22 @@ def _rel(path: Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
 
 
+def test_g8_in_memory_latency_writer_is_gone():
+    """``update_tool_performance`` wrote measured latency back into the in-memory registry only.
+
+    Nothing called it, the value never left the process, and ``tool_performance`` (ml/041) is now
+    the record of what each tool actually did — read by ``get_tool_reliability`` and the admin
+    surface. A writer whose number no consumer reads is not a second source of truth (spec §7.5).
+    """
+    hits = [
+        f"{_rel(path)}:{number}"
+        for path in _python_files()
+        for number, line in enumerate(path.read_text(errors="replace").splitlines(), start=1)
+        if "update_tool_performance(" in line
+    ]
+    assert hits == []
+
+
 def test_generator_script_is_deleted():
     assert not (REPO_ROOT / "scripts" / "generate_tool_registry_sync_migration.py").exists()
 
