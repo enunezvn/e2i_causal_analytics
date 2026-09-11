@@ -343,6 +343,82 @@ def test_every_accepted_input_is_declared_or_documented_internal(name):
     )
 
 
+# Declared inputs the tool computation does not read. They predate #2003 and are NOT
+# fixed by it: each is a functional defect reported for an owner decision (the planner is
+# offered a knob that changes nothing). Listed so no NEW unread declaration can land.
+PREEXISTING_UNREAD_INPUTS: Dict[str, Dict[str, str]] = {
+    "cohort_builder": {"indication": "never applied to the cohort"},
+    "counterfactual_simulator": {
+        "intervention": "lift is expected_effect * 0.85 regardless of the intervention",
+        "target_entities": "lift is expected_effect * 0.85 regardless of the entities",
+    },
+    "power_calculator": {
+        "alpha": "required_n hardcodes z = 1.96 + 0.84 (power is ignored too, only echoed)"
+    },
+    "risk_scorer": {
+        "entity_type": "documented as provenance but not echoed",
+        "risk_type": "documented as provenance but not echoed",
+    },
+}
+
+
+def _names_read(fn: Any, *, attribute_of: str | None = None) -> Set[str]:
+    """Names the function BODY reads (decorator and docstring excluded).
+
+    With ``attribute_of="params"`` returns the attributes read off ``params`` instead —
+    how a tool class's ``invoke`` consumes its input model.
+    """
+    node = _function_def(fn)
+    body = [
+        stmt
+        for stmt in node.body
+        if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant))
+    ]
+    walked = [child for stmt in body for child in ast.walk(stmt)]
+    if attribute_of is not None:
+        return {
+            n.attr
+            for n in walked
+            if isinstance(n, ast.Attribute)
+            and isinstance(n.value, ast.Name)
+            and n.value.id == attribute_of
+        }
+    return {n.id for n in walked if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+
+
+def _delegated_invoke(name: str) -> Any:
+    """The tool-class ``invoke`` a ``src/tool_registry/tools`` wrapper hands its inputs to."""
+    import importlib
+
+    module_and_class = {
+        "discover_dag": ("causal_discovery", "CausalDiscoveryTool"),
+        "rank_drivers": ("causal_discovery", "DriverRankerTool"),
+        "detect_structural_drift": ("structural_drift", "StructuralDriftTool"),
+        "model_inference": ("model_inference", "ModelInferenceTool"),
+    }.get(name)
+    if module_and_class is None:
+        return None
+    module = importlib.import_module(f"src.tool_registry.tools.{module_and_class[0]}")
+    return getattr(module, module_and_class[1]).invoke
+
+
+@pytest.mark.parametrize("name", sorted(LIVE_TOOLS))
+def test_every_declared_input_is_read_by_the_computation(name):
+    registered = _registry().get(name)
+    read = _names_read(registered.callable) | _kwargs_literal_keys(registered.callable)
+    invoke = _delegated_invoke(name)
+    if invoke is not None:
+        read &= _names_read(invoke, attribute_of="params")
+    declared = {p.name for p in registered.schema.input_parameters}
+    known = set(PREEXISTING_UNREAD_INPUTS.get(name, {}))
+    assert known <= declared - read, (
+        f"{name}: stale PREEXISTING_UNREAD_INPUTS {sorted(known & read)}"
+    )
+    assert declared - read - known == set(), (
+        f"{name}: declared inputs the computation never reads: {sorted(declared - read - known)}"
+    )
+
+
 @pytest.mark.parametrize("name", sorted(LIVE_TOOLS))
 def test_required_flags_match_the_signature(name):
     registered = _registry().get(name)
