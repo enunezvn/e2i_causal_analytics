@@ -2824,7 +2824,6 @@ async def counterfactual_simulator(
         intervention, brand, target_entities
     )
 
-    from src.api.dependencies.compute import run_in_bounded_executor
     from src.digital_twin.twin_repository import TwinRepository
     from src.memory.services.factories import get_async_supabase_client
 
@@ -2841,8 +2840,15 @@ async def counterfactual_simulator(
     model_row = actives[0]
     provider = await _load_cohort_provider(repo.client, intervention_type, brand_value)
     frame = provider.get_training_frame(intervention_type, brand=brand_value, twin_type="hcp")
-    result, targeted = await run_in_bounded_executor(
-        _run_twin_simulation, model_row, provider, frame, intervention_type, brand_value, regions
+    result, targeted = await _offload_within_budget(
+        _run_twin_simulation,
+        model_row,
+        provider,
+        frame,
+        intervention_type,
+        brand_value,
+        regions,
+        budget_s=_COUNTERFACTUAL_COMPUTE_BUDGET_S,
     )
     return _simulation_results(
         result,
@@ -2862,6 +2868,45 @@ async def counterfactual_simulator(
 #: is 0.2235 (south), so 700 twins put a single targeted region at ~156 +/- 11, five
 #: standard deviations above the floor, for ~47 s of generation.
 _COUNTERFACTUAL_TWIN_COUNT = 700
+
+#: Seconds the pool offload (hydrate, generate, simulate, targeted fit) may take, queueing
+#: included. It must expire before the executor's 120 s step envelope: that envelope
+#: cancels the coroutine but not the pool thread, and the executor's generic retry arm
+#: would then queue a second simulation behind the abandoned one (codex iter-3). Measured
+#: runs take 47-52 s, so this is about twice the observed cost.
+_COUNTERFACTUAL_COMPUTE_BUDGET_S = 100.0
+
+
+async def _offload_within_budget(func: Any, *args: Any, budget_s: float) -> Any:
+    """Run ``func`` on the bounded heavy-compute pool, failing once if ``budget_s`` expires.
+
+    The executor's sync-tool envelope (#1592) applied to this async tool's offload: an
+    expired budget raises ``SyncToolTimeout``, which the executor records against the
+    circuit breaker and does not retry, because the thread keeps running and a retry would
+    queue the same work behind it. An exception raised by ``func`` — including its own
+    ``TimeoutError`` — propagates unchanged.
+    """
+    from src.api.dependencies.compute import run_in_bounded_executor
+
+    from .executor import SyncToolTimeout
+
+    async def bounded_call() -> Tuple[Any, Optional[Exception]]:
+        try:
+            return await run_in_bounded_executor(func, *args), None
+        except Exception as exc:  # noqa: BLE001 - re-raised below
+            return None, exc
+
+    try:
+        value, error = await asyncio.wait_for(bounded_call(), timeout=budget_s)
+    except asyncio.TimeoutError as exc:
+        raise SyncToolTimeout(
+            f"counterfactual_simulator timed out after {budget_s:g}s (the twin simulation is "
+            "still running on the bounded heavy-compute pool — a thread cannot be cancelled); "
+            "not retried"
+        ) from exc
+    if error is not None:
+        raise error
+    return value
 
 
 def _twin_type_hcp() -> Any:

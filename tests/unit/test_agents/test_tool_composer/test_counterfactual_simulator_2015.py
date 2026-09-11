@@ -458,3 +458,73 @@ def test_simulating_the_whole_population_has_no_targeted_inference(provider):
         model_id=uuid4(),
     )
     assert targeted is None and result.twin_count == 520
+
+
+# ---------------------------------------------------------------------------
+# An expired compute budget is not re-dispatched (codex iter-3 F1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _fresh_bounded_pool():
+    from src.api.dependencies.compute import _reset_limiter_cache_for_tests
+
+    _reset_limiter_cache_for_tests()
+    yield
+    _reset_limiter_cache_for_tests()
+
+
+async def test_an_expired_compute_budget_fails_the_step_once(_fresh_bounded_pool):
+    """The simulation runs in a pool thread that a timeout cannot cancel (#1592). Before
+    this, the executor's own envelope fired around the async tool and the generic retry arm
+    queued a second ~50 s simulation behind the abandoned one."""
+    import threading
+
+    from src.agents.tool_composer.executor import PlanExecutor, SyncToolTimeout
+    from src.agents.tool_composer.models.composition_models import ExecutionStatus
+    from tests.unit.test_agents.test_tool_composer.test_sync_tool_bounded_timeout_1592 import (
+        _registry_with,
+        _single_step_plan,
+    )
+
+    release = threading.Event()
+    calls = []
+
+    def slow_simulation():
+        calls.append(1)
+        release.wait(timeout=10)
+        return "late"
+
+    async def probe(**_kwargs):
+        return await tr._offload_within_budget(slow_simulation, budget_s=0.3)
+
+    executor = PlanExecutor(
+        tool_registry=_registry_with("counterfactual_probe", probe),
+        enable_caching=False,
+        max_retries=2,
+        timeout_seconds=30,
+    )
+    try:
+        trace = await executor.execute(_single_step_plan("counterfactual_probe"), context={})
+    finally:
+        release.set()
+    result = trace.get_result("step_1")
+    assert result.status == ExecutionStatus.FAILED
+    assert "timed out after 0.3s" in (result.output.error or "")
+    assert len(calls) == 1, "an expired simulation must not be re-dispatched"
+
+    def raises_its_own_timeout():
+        raise TimeoutError("the tool's own timeout")
+
+    with pytest.raises(TimeoutError) as own:
+        await tr._offload_within_budget(raises_its_own_timeout, budget_s=5)
+    assert not isinstance(own.value, SyncToolTimeout)
+
+
+def test_the_compute_budget_fires_before_the_executor_envelope():
+    import inspect as _inspect
+
+    from src.agents.tool_composer.executor import PlanExecutor
+
+    envelope = _inspect.signature(PlanExecutor.__init__).parameters["timeout_seconds"].default
+    assert tr._COUNTERFACTUAL_COMPUTE_BUDGET_S < envelope
