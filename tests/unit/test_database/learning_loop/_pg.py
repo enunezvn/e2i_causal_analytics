@@ -303,8 +303,12 @@ class ThrowawayPg:
                 raise DbFixtureError(f"docker run failed: {proc.stderr.decode()}")
             deadline = time.monotonic() + ready_timeout_s
             while time.monotonic() < deadline:
-                # The image restarts postgres once after its init scripts; require a real query.
-                if self.try_rows("postgres", "select 1") == ["1"]:
+                # The image runs its init scripts on a temporary server that listens on the unix
+                # socket only (listen_addresses=''), then shuts it down and starts the real one.
+                # A socket query can therefore succeed seconds before "the database system is
+                # shutting down" (measured 2026-09-11); require a TCP query, which only the real
+                # server answers.
+                if self._tcp_ready():
                     break
                 time.sleep(2)
             else:
@@ -314,6 +318,17 @@ class ThrowawayPg:
         except BaseException:
             self.stop()
             raise
+
+    def _tcp_ready(self) -> bool:
+        proc = _run(
+            [
+                "docker", "exec", "-e", "PGPASSWORD", self.name,
+                "psql", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres", "-X", "-tA",
+                "-c", "select 1",
+            ],
+            env={**os.environ, "PGPASSWORD": self._password},
+        )  # fmt: skip
+        return proc.returncode == 0 and _rows(proc.stdout) == ["1"]
 
     def exists(self) -> bool:
         return _run(["docker", "inspect", self.name]).returncode == 0
