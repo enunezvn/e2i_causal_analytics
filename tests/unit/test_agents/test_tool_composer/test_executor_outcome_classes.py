@@ -325,15 +325,27 @@ async def test_callback_called_per_step_single_and_parallel(registry):
 
 
 async def test_callback_step_number_is_plan_position_not_completion_order(registry):
+    fast_reported = asyncio.Event()
+
     async def slow(**_: Any) -> Any:
-        await asyncio.sleep(0.2)
+        # Finishes only after the fast step's result was reported: ordering by event, not time.
+        await asyncio.wait_for(fast_reported.wait(), timeout=5)
+        return {"ok": True}
+
+    async def fast(**_: Any) -> Any:
         return {"ok": True}
 
     _register(registry, "slow", slow)
-    _register(registry, "fast", lambda **_: {"ok": True})
+    _register(registry, "fast", fast)
     plan = _plan([_step("p0_slow", "slow"), _step("p1_fast", "fast")], [["p0_slow", "p1_fast"]])
     seen: List[Tuple[int, str]] = []
-    await _executor(registry).execute(plan, on_step_result=lambda n, r: seen.append((n, r.step_id)))
+
+    def record(n: int, result: StepResult) -> None:
+        seen.append((n, result.step_id))
+        if result.step_id == "p1_fast":
+            fast_reported.set()
+
+    await _executor(registry).execute(plan, on_step_result=record)
     assert seen == [(1, "p1_fast"), (0, "p0_slow")]
 
 
