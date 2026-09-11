@@ -25,11 +25,22 @@ def is_numeric_column(frame: Any, column: str) -> bool:
     Covariates are NOT screened this way: ``evalue`` scores a categorical covariate
     level by level, and dropping one would understate the measured-confounding
     benchmark (see ``sensitivity_benchmark_inputs``).
+
+    A bool column is numeric (``is_numeric_dtype(bool)`` is True). A column whose
+    dtype cannot be read at all is not "False": it RAISES ``RefutationError``
+    (``sensitivity_benchmark_failed``), because a present column the frame cannot
+    even describe is a data error to surface, not a missing input to fall back on.
     """
     try:
         return bool(pd.api.types.is_numeric_dtype(frame[column]))
-    except Exception:  # noqa: BLE001 - an unreadable column is a missing input
-        return False
+    except Exception as exc:  # noqa: BLE001 - re-raised with a reason code, never swallowed
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"Sensitivity benchmark inputs could not be computed on the estimation frame: "
+            f"column {column!r} is present but its dtype could not be read: {exc}",
+            details={"reason": "sensitivity_benchmark_failed", "column": column},
+            original_error=exc,
+        ) from exc
 
 
 def sensitivity_benchmark_inputs(
@@ -55,11 +66,18 @@ def sensitivity_benchmark_inputs(
     ``beyond_measured_confounding`` on confounding this run actually measured.
 
     MISSING inputs are a legitimate fallback: empty inputs, and the reading is
-    ``unbenchmarked``. Missing means no frame, an absent treatment/outcome column, or
-    a NON-NUMERIC treatment or outcome. The last is not a screening choice but a
-    statement about the frame: the estimator cannot have fit a string T or Y, so a
-    frame carrying one is not the frame the reported effect came from, and there is
-    no contrast to benchmark.
+    ``unbenchmarked``. Missing means no frame, or an ABSENT treatment/outcome column.
+
+    A PRESENT but NON-NUMERIC treatment or outcome (object/string dtype, or a column
+    whose dtype cannot be read) is NOT missing: it raises ``RefutationError`` with
+    reason ``sensitivity_benchmark_failed``, naming the column and its dtype. Two
+    reasons. The engines must agree: the runner's own fallback
+    (``run_all_tests`` -> ``benchmark_inputs_from_frame``) raises that same reason on
+    the same frame, so reading it as ``unbenchmarked`` here would have the sensitivity
+    node and the refutation node disagree on one run. And the estimator could not
+    have fit a string T or Y, so a frame carrying one is a data error to surface,
+    not a silent fallback (spec §5: a present-but-unusable input surfaces, a missing
+    one falls back).
 
     A computation that RAISES inside ``evalue`` (e.g. a covariate — or one level of a
     categorical covariate — that perfectly separates treatment and outcome, a
@@ -73,10 +91,23 @@ def sensitivity_benchmark_inputs(
         return empty
     if treatment not in estimation_data.columns or outcome not in estimation_data.columns:
         return empty
-    if not is_numeric_column(estimation_data, treatment) or not is_numeric_column(
-        estimation_data, outcome
-    ):
-        return empty
+    for role, column in (("treatment", treatment), ("outcome", outcome)):
+        if not is_numeric_column(estimation_data, column):
+            dtype = str(estimation_data[column].dtype)
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without "
+                "refutation. Sensitivity benchmark inputs could not be computed on the "
+                f"estimation frame: {role} column {column!r} is present but not numeric "
+                f"(dtype {dtype}); the estimator could not have fit it, so there is no "
+                "contrast to benchmark.",
+                details={
+                    "reason": "sensitivity_benchmark_failed",
+                    "treatment": treatment,
+                    "outcome": outcome,
+                    "column": column,
+                    "dtype": dtype,
+                },
+            )
     covariates = [
         str(c)
         for c in (estimation_result.get("covariates_adjusted") or [])

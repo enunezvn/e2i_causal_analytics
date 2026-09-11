@@ -87,12 +87,58 @@ class TestBenchmarkInputs:
         assert inputs.naive_effect == 0.123
         assert inputs.baseline_risk is not None
 
-    def test_a_non_numeric_treatment_yields_empty_inputs(self):
+    def test_a_present_non_numeric_treatment_raises_like_the_runner(self):
+        """Whole-diff review F1: a PRESENT string treatment is a data error, not a
+        missing input. The runner's own fallback (``run_all_tests``) raises
+        ``sensitivity_benchmark_failed`` on the same frame; reading it as empty
+        inputs here would make the two engines disagree (spec §5)."""
+        from src.causal_engine.errors import RefutationError
+
         frame = _frame()
         frame["arm_label"] = ["control", "treated"] * (len(frame) // 2)
+        with pytest.raises(RefutationError) as ei:
+            node_mod._sensitivity_benchmark_inputs(
+                estimation_data=frame,
+                treatment="arm_label",
+                outcome="treatment_initiated",
+                estimation_result={"covariates_adjusted": ["disease_severity"]},
+            )
+        assert ei.value.details["reason"] == "sensitivity_benchmark_failed"
+        assert "arm_label" in ei.value.message
+        assert "object" in ei.value.message
+
+    def test_a_present_non_numeric_outcome_raises_like_the_runner(self):
+        from src.causal_engine.errors import RefutationError
+
+        frame = _frame().assign(treatment_initiated="yes")
+        with pytest.raises(RefutationError) as ei:
+            node_mod._sensitivity_benchmark_inputs(
+                estimation_data=frame,
+                treatment="treatment_arm",
+                outcome="treatment_initiated",
+                estimation_result={"covariates_adjusted": ["disease_severity"]},
+            )
+        assert ei.value.details["reason"] == "sensitivity_benchmark_failed"
+        assert "treatment_initiated" in ei.value.message
+
+    def test_a_bool_treatment_is_numeric_and_benchmarked(self):
+        """``is_numeric_dtype(bool)`` is True: a bool T/Y must keep being benchmarked."""
+        frame = _frame()
+        frame["treatment_arm"] = frame["treatment_arm"].astype(bool)
         inputs = node_mod._sensitivity_benchmark_inputs(
             estimation_data=frame,
-            treatment="arm_label",
+            treatment="treatment_arm",
+            outcome="treatment_initiated",
+            estimation_result={"covariates_adjusted": ["disease_severity"]},
+        )
+        assert inputs.baseline_risk is not None
+        assert set(inputs.covariate_bias_factors) == {"disease_severity"}
+
+    def test_an_absent_treatment_column_still_yields_empty_inputs(self):
+        """The MISSING fallback is kept: no column, nothing to benchmark, no error."""
+        inputs = node_mod._sensitivity_benchmark_inputs(
+            estimation_data=_frame().drop(columns=["treatment_arm"]),
+            treatment="treatment_arm",
             outcome="treatment_initiated",
             estimation_result={"covariates_adjusted": ["disease_severity"]},
         )
@@ -137,6 +183,37 @@ class TestBenchmarkInputs:
                 estimation_result={"covariates_adjusted": ["c"]},
             )
         assert ei.value.details["reason"] == "sensitivity_benchmark_failed"
+
+
+class TestRefutationNodeSurfacesBenchmarkFailure:
+    async def test_a_string_treatment_fails_the_run_closed_with_the_benchmark_reason(self):
+        """Whole-diff review F1: the refutation node reaches the shared helper before
+        DoWhy reconstruction; a PRESENT string treatment must fail the run closed
+        with ``sensitivity_benchmark_failed`` (the node's RefutationError path),
+        not read ``unbenchmarked``."""
+        frame = _frame()
+        frame["treatment_arm"] = np.where(frame["treatment_arm"] == 1, "treated", "control")
+        state = {
+            "query": "q",
+            "query_id": "q-string-t",
+            "status": "pending",
+            "treatment_var": "treatment_arm",
+            "outcome_var": "treatment_initiated",
+            "estimation_result": {
+                "method": "CausalForestDML",
+                "ate": 0.10,
+                "ate_ci_lower": 0.05,
+                "ate_ci_upper": 0.15,
+                "p_value": 0.01,
+                "sample_size": len(frame),
+                "covariates_adjusted": ["disease_severity"],
+            },
+            "estimation_data": frame,
+        }
+        result = await node_mod.RefutationNode().execute(state)  # type: ignore[arg-type]
+        assert result["status"] == "failed"
+        assert result["refutation_error_details"]["reason"] == "sensitivity_benchmark_failed"
+        assert "treatment_arm" in result["refutation_error"]
 
 
 class TestNullCaveat:

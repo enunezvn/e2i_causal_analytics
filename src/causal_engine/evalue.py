@@ -622,9 +622,10 @@ def outcome_std_from_frame(frame: Any, outcome: str, *, treatment: Optional[str]
 
     ``treatment`` applies the SAME joint mask ``benchmark_inputs_from_frame`` uses, so
     the SD and ``n_rows`` describe the same rows. A treatment column that is absent —
-    or not numeric, in which case the callers already treat the frame as unbenchmarkable
-    — is simply not masked on: it is a row filter here, never the subject of the
-    measurement, so it must not fail a reading its own outcome column can support.
+    or not numeric, which the callers surface separately as a benchmark failure
+    (``sensitivity_benchmark_failed``) — is simply not masked on: it is a row filter
+    here, never the subject of the measurement, so it must not fail a reading its own
+    outcome column can support.
 
     The OUTCOME is the subject, so a present-but-unusable one (a string column) RAISES
     rather than being coerced into an invented SD. A constant outcome returns 0.0, a

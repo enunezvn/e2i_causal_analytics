@@ -224,6 +224,36 @@ class TestSensitivityNode:
         assert "sensitivity_error" not in result
 
     @pytest.mark.asyncio
+    async def test_a_frame_without_the_treatment_column_reads_unbenchmarked(self):
+        """An ABSENT treatment column is a MISSING input, same as an absent outcome:
+        the fallback is kept and the run reads ``unbenchmarked`` (spec §5)."""
+        state = _state_with_frame(0.15, 0.08, 0.22, naive=0.20)
+        state["estimation_data"] = _frame().drop(columns=["treatment_arm"])
+        result = await SensitivityNode().execute(state)
+        sens = result["sensitivity_analysis"]
+        assert sens["reading"] == "unbenchmarked"
+        assert sens["benchmark"] is None
+        assert "sensitivity_error" not in result
+
+    @pytest.mark.asyncio
+    async def test_a_string_treatment_column_surfaces_as_sensitivity_error(self):
+        """A PRESENT but non-numeric treatment is a data error, not a missing input:
+        the estimator could not have fit a string T, and the runner's own fallback
+        raises ``sensitivity_benchmark_failed`` on the same frame. The node must
+        surface it as ``sensitivity_error`` naming the column, never read it as
+        ``unbenchmarked`` (spec §5; whole-diff review F1)."""
+        state = _state_with_frame(0.15, 0.08, 0.22, naive=0.20)
+        frame = _frame()
+        frame["treatment_arm"] = np.where(frame["treatment_arm"] == 1, "treated", "control")
+        state["estimation_data"] = frame
+        result = await SensitivityNode().execute(state)
+        assert "sensitivity_error" in result
+        assert result["status"] == "failed"
+        assert "sensitivity_analysis" not in result
+        assert "treatment_arm" in result["sensitivity_error"]
+        assert "object" in result["sensitivity_error"]
+
+    @pytest.mark.asyncio
     async def test_an_unusable_outcome_column_surfaces_as_sensitivity_error(self):
         """UNUSABLE is a failure: a PRESENT outcome column that cannot be converted to a
         number has no σ_Y, and a reading standardized by nothing would be
