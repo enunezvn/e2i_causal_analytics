@@ -1123,10 +1123,11 @@ per-tool drill-down there would split one reading across two surfaces.
   the LLM reading the declared "Avg execution" line. Its effect is unmeasured (§7.2). It needs its own
   experiment arm, or a deadline-aware planner, first.
 - **A platform PII scrubber for query text.** Query text is already persisted in four stores (§5.5).
-  - Changing `redact_query` alone would **not** cover them. Three of the four bypass it:
+  - Changing `redact_query` alone would **not** cover them. All four bypass it:
     - `audit_chain_entries` receives `query_text=query` (`composer.py:286`);
     - `classification_logs` receives the raw query (`intent_classifier.py:115`);
-    - episodic memory slices `query[:500]` (`memory_hooks.py:408`).
+    - episodic memory slices `query[:500]` (`memory_hooks.py:408`);
+    - `chatbot_messages` stores the raw human message (`copilotkit.py:3603`, inserted at `:1670–1684`).
   - The follow-up must both implement scrubbing and wire it into each persistence path. This lane's
     composer_episodes writer goes through `redact_query`, so it needs no change then.
   This lane stores no raw parameter values and no generic exception text, so it adds no exposure class.
