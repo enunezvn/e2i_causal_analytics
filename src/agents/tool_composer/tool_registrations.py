@@ -1525,6 +1525,9 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
     - No DataFrame supplied via the canonical kwargs keys -> ``RuntimeError``.
     - The treatment / outcome / segment columns missing from the frame ->
       ``RuntimeError``. The tool never substitutes a plausible-but-fake result.
+    - A treatment that is not a 0/1 column -> ``RuntimeError`` (#2016). A count
+      would otherwise be estimated as "exactly 1 vs exactly 0", ignoring every
+      other value.
     - No segment yields a MEASURED CATE -> ``RuntimeError`` (#1610). An empty
       segment set would read as "no heterogeneity between segments", a finding
       this data cannot support because no segment was ever estimated.
@@ -1582,6 +1585,19 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
                 f"DataFrame (columns={list(df.columns)!r}). Refusing to "
                 "fabricate a result."
             )
+    # Checked over the WHOLE column, null-keyed segments included: one non-0/1 value
+    # anywhere means the column is not a treatment indicator (#2016). Null treatment
+    # rows fall in neither arm below, as they always have.
+    _refuse_unless_binary_01(
+        df[treatment],
+        tool="cate_analyzer",
+        role="treatment",
+        column=treatment,
+        consequence=(
+            "Refusing to report a difference between only the rows equal to 1 and those "
+            "equal to 0 as the segment's treatment effect."
+        ),
+    )
 
     segment_dicts: List[Dict[str, Any]] = []
     effect_by_segment: Dict[str, float] = {}
@@ -2083,6 +2099,53 @@ def _is_missing_group_key(value: Any) -> bool:
         return bool(pd.isna(value))
     except (TypeError, ValueError):
         return False
+
+
+_BINARY_CHECK_SAMPLE = 6
+
+
+def _refuse_unless_binary_01(
+    series: Any, *, tool: str, role: str, column: str, consequence: str
+) -> None:
+    """Refuse unless the non-null values of ``series`` are a subset of {0, 1}.
+
+    The one binary check for every tool that reads a planner-bound column as a 0/1
+    indicator: ``risk_scorer.outcome`` (#2003) and the ``treatment`` of
+    ``propensity_estimator`` and ``cate_analyzer`` (#2016). Each tool cast or split
+    the column as binary without checking. A count became a multi-class target
+    whose P(class == 1) was reported as a score or propensity, or an "exactly 1 vs
+    exactly 0" contrast that ignored every other value. A 0-1 rate truncated to one
+    class and was refused for the wrong reason.
+
+    bool, int, float and nullable ``Int64`` encodings pass: ``True == 1`` and
+    ``1.0 == 1`` hash equal, and ``dropna`` removes ``NaN`` and ``pd.NA``. Nulls are
+    the caller's decision, since the tools disagree on what a null row means.
+    List- or dict-valued cells make ``unique()`` raise ``TypeError``, so they are
+    refused here rather than escaping into the executor's retrying arm.
+    """
+    non_null = series.dropna()
+    try:
+        observed = set(non_null.unique())
+    except TypeError:
+        sample = [_clip_name(str(v)) for v in non_null.head(_BINARY_CHECK_SAMPLE)]
+        carries = f"non-scalar values such as {sample!r}"
+    else:
+        if observed <= {0, 1}:
+            return
+        values = [v.item() if hasattr(v, "item") else v for v in observed]
+        try:
+            ordered = sorted(values)
+        except TypeError:
+            ordered = sorted(values, key=str)
+        sample = [_clip_name(v) if isinstance(v, str) else v for v in ordered]
+        carries = (
+            f"{len(observed)} distinct non-null values, including {sample[:_BINARY_CHECK_SAMPLE]!r}"
+        )
+    raise ToolRefusalError(
+        f"{tool}: {role} column {_clip_name(column)!r} is not a binary 0/1 column: its "
+        "non-null values must be a subset of {0, 1} (bool, int, float or nullable Int64), "
+        f"but it carries {carries}. {consequence}"
+    )
 
 
 def _gap_comparability_reason(
@@ -2839,13 +2902,15 @@ def risk_scorer(
             f"(numeric columns minus outcome were empty; columns={list(work.columns)!r})."
         )
 
-    observed = set(work[outcome].dropna().unique())
-    if not observed <= {0, 1}:
-        raise ToolRefusalError(
-            f"risk_scorer: outcome column {outcome!r} is not a binary 0/1 event column "
-            f"(observed values include {sorted(map(str, observed))[:6]!r}). Refusing to "
-            "cast it to classes and report a class probability as a risk score."
-        )
+    _refuse_unless_binary_01(
+        work[outcome],
+        tool="risk_scorer",
+        role="outcome",
+        column=outcome,
+        consequence=(
+            "Refusing to cast it to classes and report a class probability as a risk score."
+        ),
+    )
     y = work[outcome].astype(int)
     if y.nunique() < 2:
         raise ToolRefusalError(
@@ -2920,8 +2985,9 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
       region (the real common-support overlap, not a fabricated 0.94).
     - ``overlap_assessment`` is a label derived from ``common_support``.
 
-    Fail-closed: no DataFrame, missing treatment / covariate columns, or fewer
-    than 2 treatment classes -> ``RuntimeError``.
+    Fail-closed: no DataFrame, missing treatment / covariate columns, a treatment
+    that is not a 0/1 column (#2016), a null treatment value, or fewer than 2
+    treatment classes -> ``RuntimeError``.
 
     Args:
         treatment: Binary treatment column name in the DataFrame.
@@ -2957,6 +3023,25 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
             f"the supplied DataFrame (columns={list(df.columns)!r})."
         )
 
+    _refuse_unless_binary_01(
+        df[treatment],
+        tool="propensity_estimator",
+        role="treatment",
+        column=treatment,
+        consequence=(
+            "Refusing to fit it as classes and report P(class == 1) as the propensity of treatment."
+        ),
+    )
+    # A propensity describes units whose assignment is known. Dropping the null rows
+    # would silently shrink the population the reported distribution covers, and
+    # PropensityScores has no field to disclose it (#2016).
+    n_null = int(df[treatment].isna().sum())
+    if n_null:
+        raise ToolRefusalError(
+            f"propensity_estimator: treatment column {_clip_name(treatment)!r} has "
+            f"{n_null} null values of {len(df)} rows. Refusing to drop them silently "
+            "from the population the propensity distribution describes."
+        )
     t = df[treatment].astype(int)
     if t.nunique() < 2:
         raise ToolRefusalError(
