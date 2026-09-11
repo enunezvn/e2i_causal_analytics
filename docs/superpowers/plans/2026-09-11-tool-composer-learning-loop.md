@@ -45,14 +45,24 @@ before Task 1.
   - Every test command: `cd $W && $PY -m pytest <paths> -q -p no:cacheprovider -n 0`. **Always `-n 0`.**
   - Before any import-based probe, assert `src.__file__` starts with `$W/`.
 - **Real-DB tests** are opt-in: `E2I_DB_INTEGRATION=1 $PY -m pytest … -n 0`.
-  - They create and drop only throwaway databases named `learning_loop_*`. The template `learning_loop_base`
-    is built once per session; every test **module** gets its own `CREATE DATABASE learning_loop_<module> TEMPLATE learning_loop_base`
-    with the migrations it needs applied by the `migrated_db(upto=…)` fixture. Every test file is
-    independently runnable.
-  - The password is read at runtime with `docker exec supabase-db printenv POSTGRES_PASSWORD` and never
-    written to any file or log.
-  - The direct DB port is `127.0.0.1:5433`. Port 5432 is the pooler, which answers "Tenant or user not
-    found", measured 2026-09-11.
+  - **Dispatcher constraint (2026-09-11): the live `supabase-db` is never written.** All writes go to a
+    throwaway Postgres **container**:
+    - same image as prod (`supabase/postgres:15.8.1.085`);
+    - unique name `e2i-learnloop-pg-<8 hex>`;
+    - `--memory 1g --memory-swap 1g`, port published on `127.0.0.1` only (random host port);
+    - a random per-session password that never reaches a file or log;
+    - `docker rm -f` at session teardown, and also via `atexit`.
+  - The prod side is **read-only**: `pg_dump --schema-only -n public` (no data rows) plus SELECTs for the
+    equivalence checks.
+  - The rows the lane needs are **reconstructed from the repository**, never dumped:
+    - the `schema_migrations` ledger, from the migration filenames;
+    - the 16 `tool_registry` / 11 `tool_dependencies` rows, by re-applying ml/013, ml/027 and ml/037,
+      which are idempotent.
+
+    Both are compared with prod by read-only SELECTs.
+  - Inside the container, the template database `learning_loop_base` is built once per session. Every test
+    **module** gets `CREATE DATABASE learning_loop_<module> TEMPLATE learning_loop_base` with the
+    migrations it needs applied by `migrated_db(upto=…)`. Every test file is independently runnable.
 - **Lint:** `$PY -m ruff check <files>`, then `$PY -m ruff format --check <files>` (ruff 0.14.10).
   - Type-check changed files only: `$PY -m mypy --config-file pyproject.toml <files>`.
   - **Never whole-tree mypy on this box.**
@@ -79,12 +89,14 @@ Claude-Session: https://claude.ai/code/session_018uHnM6oxkd8sepkqAY3s3o
 
 | Gate | Blocks | If the answer is "no" |
 |---|---|---|
-| **O1** (spec §11): build the composition feedback linker | Task 16 entirely | skip Task 16 |
-| **O2** (spec §11): authorize the caveat experiment's LLM spend | Task 17 Step 4 (the run) | the flag stays off; the script and analysis tests still ship |
+| **O1** (spec §11): build the composition feedback linker | Task 16 entirely | skip Task 16. **Decided 2026-09-11 (dispatcher, within the owner's "build it / apply all recommendations"): BUILD, as the last functional task.** |
+| **O2** (spec §11): authorize the caveat experiment's LLM spend | Task 17 Step 4 (the run) | the flag stays off; the script and analysis tests still ship. **Decided 2026-09-11: ship the flag (default off) plus the script and analysis tests; do NOT run now. The run needs a fresh owner authorization once some tool reaches `n_health` ≥ 20; the runbook (Task 18) records this.** |
 | **O3** (spec §11): drop the designed DB objects | the `DROP` statements and their tests in Tasks 2–4, as **complete dependency pairs**: in 040, `update_tool_registry_metrics()` + `tool_registry.success_rate` (the function reads the column) and `get_tool_execution_order(text[])`; in 041, `find_similar_compositions(vector,integer,double precision)` + `composer_episodes.query_embedding` + `idx_composer_episodes_embedding`, and `trg_log_step_performance` **+** `trigger_log_step_performance()` (the trigger depends on the function) | **Declined variant:** delete every one of those DROP statements (both halves of each pair) and the `test_*dropped*` assertions, and replace them with `test_retained_objects_present`. Nothing else depends on them: the RPCs insert steps and never UPDATE status, so the trigger cannot fire; the sync never writes `success_rate`. Task 3 adds `test_recording_works_with_retained_trigger` (steps inserted with the trigger present: no extra perf rows). The rollbacks need no variant because they are idempotent (Task 4). |
-| **G-LLM** (dispatcher): run the opt-in live-LLM composer test (about 2 real compositions) | Task 10 Step 3 **run** (writing the test is ungated) | leave the test skipped; the live cert (Task 19) is the first real-LLM exercise |
+| **G-LLM** (dispatcher): run the opt-in live-LLM composer test (about 2 real compositions) | Task 10 Step 3 **run** (writing the test is ungated) | leave the test skipped; the live cert (Task 19) is the first real-LLM exercise. **Decided 2026-09-11: APPROVED.** |
 
-The dispatcher records each answer in the task report before the blocked step starts.
+The dispatcher records each answer in the task report before the blocked step starts. **O3 is with the
+owner (2026-09-11): no DROP statement is written until the dispatcher relays the answer.** Tasks 2–4 are
+blocked on it; Tasks 0–1 are not.
 
 ## Migration numbering (checked 2026-09-11)
 
@@ -219,22 +231,31 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
       `uuid-ossp` in `extensions`, plus any others found;
     - every `pg_depend` edge from a `public` object to an object in another schema;
     - the non-public schemas those edges name.
-  - **Session fixture `base_db`:**
-    1. `DROP DATABASE IF EXISTS learning_loop_base WITH (FORCE); CREATE DATABASE learning_loop_base;`
-    2. As `supabase_admin`, create exactly the extensions and schemas the inventory lists, with the
-       listed versions (`CREATE EXTENSION … VERSION '<v>' SCHEMA <s>`), plus the roles `anon`,
-       `authenticated` and `service_role` if missing (the `test_058` pattern).
-    3. Run `pg_dump -U postgres -s` with `-n public` plus every schema the inventory names (for example
-       `-n auth`), then restore with `psql -v ON_ERROR_STOP=0`.
+  - **Session fixture `pg_container`:** starts the throwaway container above and waits for
+    `pg_isready`, capped at 180 s.
+  - **Session fixture `base_db`**, inside that container:
+    1. `CREATE DATABASE learning_loop_base;`
+    2. As `supabase_admin`, ensure exactly the extensions and schemas the inventory lists exist, with the
+       listed versions. The image's own init already creates the Supabase roles and most schemas; the
+       fixture checks rather than assumes.
+    3. Pipe `docker exec supabase-db pg_dump -U postgres --schema-only -n public postgres` (read-only on
+       prod) into `psql -v ON_ERROR_STOP=0` in the container.
        - Parse every `ERROR:` line.
        - An error is **expected** only when it names an object in `EXPECTED_RESTORE_ERRORS`: a dict of
          exact object names to the reason, for example an event trigger owned by `supabase_admin` that
          this lane never reads.
        - Every other error is recorded in `restore_log.unexpected`, which Step 1's test asserts is empty.
          Never widen the dict to get green; report instead.
-    4. Run `pg_dump -U postgres -a -t public.schema_migrations -t public.tool_registry -t public.tool_dependencies`
-       and restore it.
-    5. At session teardown, drop `learning_loop_base` and every `learning_loop_*` database.
+    4. **Reconstruct, don't dump, the rows.**
+       - Insert the ledger rows for every forward migration file present in the repo, using the runner's
+         key format and skip rules, **except** ml/039–041.
+       - Re-apply `database/ml/013`, `027`, `037`.
+       - The sanity test compares with prod by read-only SELECT:
+         - ledger filename set equality, minus files added to prod after the lane's base commit;
+         - `(name, category, source_agent, md5(description), md5(input_schema::text), md5(output_schema::text), avg_latency_ms, version)`
+           equality for tool_registry;
+         - `(consumer, producer, output_field, input_field)` equality for tool_dependencies.
+    5. At session teardown, `docker rm -f` the container.
   - **Module fixture `migrated_db(upto)`:** `CREATE DATABASE learning_loop_<module> TEMPLATE learning_loop_base`,
     then apply ml/039 (plain) / ml/040 / ml/041 (`--single-transaction`) up to `upto`, yield a `PgConn`,
     and drop the database at module teardown.
