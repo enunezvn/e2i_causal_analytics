@@ -529,8 +529,13 @@ on truncation to hide them.
           `pg_attribute ⋈ pg_class` where `relnamespace = 'public'::regnamespace`, `attnum > 0` and
           `NOT attisdropped`. Measured as service_role on 2026-09-11: the catalog is readable, and
           `treatment` / `region` / `brand` are in it while `PT-0001` is not.
-        - **While the allowlist is unavailable** (not yet fetched, or the fetch failed), no string is kept
-          as a name. Privacy fails closed. The finish snapshot is serialized at finish time, so a
+        - **While no allowlist has been fetched in this process** (not yet fetched, or every fetch
+          failed), no string is kept as a name. Privacy fails closed. A failed hourly *refresh*
+          keeps the last fetched set (amended at Task 5, 2026-09-11): it holds only names that
+          were public column names when fetched, developer-authored DDL and never data values,
+          and the RPCs re-check every name against the live catalog. After a failed fetch the
+          recorder does not retry for 60 s, so an outage does not add a failing call per
+          composition. The finish snapshot is serialized at finish time, so a
           composition that started before the fetch completed still records names, provided the fetch
           has landed by then.
         - No frame is needed, so the plan snapshot gets the same treatment as finished steps.

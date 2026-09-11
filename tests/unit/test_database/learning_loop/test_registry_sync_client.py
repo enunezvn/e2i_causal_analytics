@@ -90,19 +90,27 @@ async def test_concurrent_callers_share_one_rpc(migrated):
     assert sum(r is not None for r in results) == 1
 
 
-async def test_failure_is_logged_not_raised_and_retried_later(clone_db, caplog):
-    db = clone_db("sync_gone")
-    _pg.migrate(db, UPTO)
-    port = _pg.PsycopgRpcPort(db)
-    _pg.drop(db)
-    sync = registry_sync.RegistrySync(port=port)
+async def test_failure_is_logged_cooled_down_then_retried(migrated, clone_db, caplog):
+    gone = clone_db("sync_gone")
+    _pg.migrate(gone, UPTO)
+    port = _pg.PsycopgRpcPort(gone)
+    _pg.drop(gone)
+    sync = registry_sync.RegistrySync(port=port, retry_after_s=0.5)
     with caplog.at_level(logging.WARNING, logger=registry_sync.__name__):
-        assert await sync.sync_once() is None
-        assert await sync.sync_once() is None
+        results = await asyncio.gather(sync.sync_once(), sync.sync_once(), sync.sync_once())
+        assert results == [None, None, None]
+        assert await sync.sync_once() is None  # within the cooldown: no new attempt
     assert sync.synced is False
-    assert port.calls == ["sync_tool_registry", "sync_tool_registry"]  # not latched on failure
+    assert port.calls == ["sync_tool_registry"]  # queued callers shared the failing attempt
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert warnings and "sync_tool_registry" in warnings[0].getMessage()
+    assert len(warnings) == 1 and "sync_tool_registry" in warnings[0].getMessage()
+
+    # The database is back after the cooldown: the next call syncs.
+    port.conn = migrated
+    await asyncio.sleep(0.6)
+    counts = await sync.sync_once()
+    assert counts is not None and counts["inserted"] == 4
+    assert sync.synced is True and port.calls == ["sync_tool_registry", "sync_tool_registry"]
 
 
 async def test_column_allowlist_fetch(migrated, clone_db):
@@ -118,14 +126,41 @@ async def test_column_allowlist_fetch(migrated, clone_db):
     _pg.migrate(gone, UPTO)
     failing = _pg.PsycopgRpcPort(gone)
     _pg.drop(gone)
+    # Never fetched: no names at all (privacy fails closed).
     assert await registry_sync.RegistrySync(port=failing).column_allowlist() is None
 
 
+async def test_allowlist_refresh_failure_keeps_last_set_cools_down_and_recovers(migrated, clone_db):
+    gone = clone_db("allowlist_blip")
+    _pg.migrate(gone, UPTO)
+    port = _pg.PsycopgRpcPort(migrated)
+    sync = registry_sync.RegistrySync(port=port, allowlist_ttl_s=0.3, retry_after_s=0.5)
+    first = await sync.column_allowlist()
+    assert first is not None
+
+    await asyncio.sleep(0.4)  # expired
+    port.conn = gone
+    _pg.drop(gone)
+    stale = await sync.column_allowlist()
+    assert stale is first  # a failed refresh keeps the fetched catalog names
+    assert await sync.column_allowlist() is first  # cooling down: no new attempt
+    assert port.calls == ["composer_public_column_names"] * 2
+
+    port.conn = migrated
+    await asyncio.sleep(0.6)
+    recovered = await sync.column_allowlist()
+    assert recovered == first and recovered is not first
+    assert port.calls == ["composer_public_column_names"] * 3
+
+
 async def test_startup_runs_sync_and_allowlist_and_never_raises(migrated, clone_db):
-    sync = registry_sync.RegistrySync(port=_pg.PsycopgRpcPort(migrated))
+    port = _pg.PsycopgRpcPort(migrated)
+    sync = registry_sync.RegistrySync(port=port)
     await registry_sync.learning_loop_startup(sync)
+    assert port.calls == ["sync_tool_registry", "composer_public_column_names"]
     assert sync.synced is True
     assert await sync.column_allowlist() is not None
+    assert port.calls == ["sync_tool_registry", "composer_public_column_names"]  # cached
     assert _json(migrated, "select count(*) from tool_registry where deprecated_at is null") == 20
 
     gone = clone_db("startup_gone")

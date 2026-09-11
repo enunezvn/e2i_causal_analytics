@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 MAX_DEPRECATIONS = 3
 # The public catalog changes only with migrations, which redeploy the API.
 ALLOWLIST_TTL_S = 3600.0
+# After a failed attempt, callers within this window get the current answer without another
+# RPC: the recorder asks on every composition, and a database outage must not turn each one
+# into a failing round trip.
+RETRY_AFTER_S = 60.0
 
 SYNC_COUNT_KEYS = frozenset(
     {"inserted", "updated", "deprecated", "dependencies_upserted", "dependencies_deleted"}
@@ -89,14 +93,18 @@ class RegistrySync:
         *,
         max_deprecations: int = MAX_DEPRECATIONS,
         allowlist_ttl_s: float = ALLOWLIST_TTL_S,
+        retry_after_s: float = RETRY_AFTER_S,
     ):
         self._port = port
         self._max_deprecations = max_deprecations
         self._allowlist_ttl_s = allowlist_ttl_s
+        self._retry_after_s = retry_after_s
         self._sync_lock = asyncio.Lock()
         self._allowlist_lock = asyncio.Lock()
         self._allowlist: Optional[frozenset[str]] = None
         self._allowlist_at: Optional[float] = None
+        self._sync_retry_at = 0.0
+        self._allowlist_retry_at = 0.0
         self.synced = False
 
     @property
@@ -108,13 +116,14 @@ class RegistrySync:
     async def sync_once(self) -> Optional[Dict[str, int]]:
         """Sync the DB registry unless this process already did; returns the counts if it ran.
 
-        ``None`` means no sync happened now: it already succeeded earlier, or it failed (logged
-        at WARNING; a later call tries again).
+        ``None`` means no sync happened now: it already succeeded earlier, it failed (logged at
+        WARNING), or a failure within the last ``retry_after_s`` is cooling down. Callers queued
+        behind a failing attempt share its outcome instead of repeating it.
         """
         if self.synced:
             return None
         async with self._sync_lock:
-            if self.synced:
+            if self.synced or time.monotonic() < self._sync_retry_at:
                 return None
             try:
                 tools, dependencies = await asyncio.to_thread(build_sync_payload)
@@ -129,6 +138,7 @@ class RegistrySync:
                 if not isinstance(counts, dict) or set(counts) != SYNC_COUNT_KEYS:
                     raise TypeError(f"unexpected receipt {counts!r}")
             except Exception as exc:
+                self._sync_retry_at = time.monotonic() + self._retry_after_s
                 logger.warning(
                     "sync_tool_registry failed (%s: %s); the DB tool registry keeps its previous rows",
                     type(exc).__name__,
@@ -142,19 +152,24 @@ class RegistrySync:
     async def column_allowlist(self) -> Optional[frozenset[str]]:
         """Column names of public relations, refreshed hourly.
 
-        ``None`` while no fetch has ever succeeded: the serializer then keeps no string as a
-        name. A failed refresh keeps the last good set (catalog names, developer-authored).
+        ``None`` while no fetch has succeeded in this process: the serializer then keeps no
+        string as a name (privacy fails closed). A failed hourly refresh keeps the last fetched
+        set on purpose: it holds only names that were public column names when fetched, which
+        are developer-authored DDL and never data values, and the recording RPCs re-check every
+        name against the live catalog anyway. Dropping to ``None`` there would discard
+        structure during a database blip without protecting anything.
         """
         if self._fresh():
             return self._allowlist
         async with self._allowlist_lock:
-            if self._fresh():
+            if self._fresh() or time.monotonic() < self._allowlist_retry_at:
                 return self._allowlist
             try:
                 names = await self.port.call("composer_public_column_names", {})
                 if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
                     raise TypeError(f"unexpected column list of type {type(names).__name__}")
             except Exception as exc:
+                self._allowlist_retry_at = time.monotonic() + self._retry_after_s
                 logger.warning(
                     "composer_public_column_names failed (%s: %s); %s",
                     type(exc).__name__,
