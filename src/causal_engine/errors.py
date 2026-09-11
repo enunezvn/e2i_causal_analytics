@@ -74,6 +74,27 @@ class EstimationError(CausalEngineError):
     """
 
 
+class DiscoveryError(CausalEngineError):
+    """Raised when a causal discovery algorithm is asked to run on data that
+    violates its identifying assumptions.
+
+    This is a FAIL-CLOSED error: the wrapper refuses to fit rather than return
+    a plausible-looking, mis-specified DAG with ``converged=True``. Through
+    ``DiscoveryRunner`` it becomes a FAILED algorithm result (``converged=False``,
+    ``metadata["error"]`` carries this message) so the gate scores no evidence —
+    the same policy as a per-algorithm timeout (#1978); direct callers of a
+    wrapper see the exception itself.
+
+    Triggers:
+    - DirectLiNGAM / ICA-LiNGAM requested on a frame with a binary column
+      (#2009): LiNGAM assumes linear structure with non-Gaussian CONTINUOUS
+      errors, and every platform outcome is a 0/1 flag.
+
+    ``details`` carries ``algorithm`` (the ``DiscoveryAlgorithmType`` value) and
+    ``binary_columns`` (the offending column names, frame order).
+    """
+
+
 class RefutationError(CausalEngineError):
     """Raised when refutation analysis cannot run against a real CausalModel.
 
