@@ -2758,13 +2758,21 @@ def power_calculator(
     # normal-approximation arithmetic is also an INPUT to the data-preparer sufficiency gate
     # (multiplied by the observational inflation), where refusing it dropped a requirement
     # (codex whole-diff #8). A recommended design needs two per arm to estimate a variance,
-    # and a log-rank comparison two events.
+    # a cluster-randomised one two clusters per arm (#10), and a log-rank comparison two
+    # events.
     if forward.sample_size_per_arm < 2:
         raise ToolInputError(
             f"power_calculator: effect_size {effect} gives {forward.sample_size_per_arm} per "
             "arm, below the two per arm a two-arm test needs; the effect is too large, or "
             "alpha/power too lax, for this approximation (is the effect in outcome units "
             "rather than standardised?)"
+        )
+    if int(forward.extra.get("n_clusters_per_arm", 2)) < 2:
+        raise ToolInputError(
+            f"power_calculator: the design needs {forward.extra['n_clusters_per_arm']} cluster "
+            f"per arm ({forward.sample_size_per_arm} subjects, {forward.extra['cluster_size']} "
+            "per cluster); with one cluster per arm treatment is confounded with the cluster. "
+            "A cluster-randomised comparison needs at least two clusters per arm."
         )
     if int(forward.extra.get("required_events", 2)) < 2:
         raise ToolInputError(

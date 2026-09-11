@@ -250,3 +250,45 @@ def test_the_remaining_unusable_designs_are_refused(kwargs):
     cluster inflation and at an extreme alpha."""
     with pytest.raises(ToolInputError):
         tr.power_calculator(**kwargs)
+
+
+async def test_a_cluster_design_with_one_cluster_per_arm_fails_the_planned_step_once(
+    _fresh_bounded_pool,
+):
+    """codex whole-diff #10: d=2, ICC 0.05, 20 per cluster needs 8 subjects per arm — one
+    cluster per arm, which confounds treatment with cluster. Two clusters per arm are the
+    minimum for any between-cluster comparison."""
+    from src.agents.tool_composer.executor import PlanExecutor
+    from src.agents.tool_composer.models.composition_models import ExecutionStatus
+    from tests.unit.test_agents.test_tool_composer.test_sync_tool_bounded_timeout_1592 import (
+        _registry_with,
+        _single_step_plan,
+    )
+
+    with pytest.raises(ToolInputError, match="cluster"):
+        tr.power_calculator(effect_size=2, design="cluster", icc=0.05, cluster_size=20)
+    two_per_arm = tr.power_calculator(effect_size=2, design="cluster", icc=0.05, cluster_size=4)
+    assert two_per_arm.design_details["n_clusters_per_arm"] >= 2
+
+    calls = []
+
+    def counted_power_calculator(**kwargs):
+        calls.append(1)
+        return tr.power_calculator(**kwargs)
+
+    executor = PlanExecutor(
+        tool_registry=_registry_with("power_calculator", counted_power_calculator),
+        enable_caching=False,
+        max_retries=2,
+        backoff_base_delay=0.01,
+    )
+    trace = await executor.execute(
+        _single_step_plan(
+            "power_calculator",
+            {"effect_size": 2, "design": "cluster", "icc": 0.05, "cluster_size": 20},
+        ),
+        context={},
+    )
+    result = trace.get_result("step_1")
+    assert result.status == ExecutionStatus.FAILED and result.output.result is None
+    assert len(calls) == 1
