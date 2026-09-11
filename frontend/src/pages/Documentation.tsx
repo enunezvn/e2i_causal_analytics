@@ -3,7 +3,7 @@
  * ==================================================================
  *
  * Scroll narrative in six sections: Purpose, Causal Impact (variable-role
- * explainer + the CausalImpactAgent DAG), Quality Gate (the five refutation
+ * explainer + the CausalImpactAgent DAG), Quality Gate (the six refutation
  * tests + proceed/review/block bands), Methodology, Best Practices, Expected
  * Impact. Spec: docs/superpowers/specs/2026-07-10-documentation-page-design.md
  *

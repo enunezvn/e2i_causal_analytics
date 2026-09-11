@@ -61,7 +61,7 @@ export class DocumentationPage extends BasePage {
   }
 
   get refutationGate(): Locator {
-    return this.page.getByRole('region', { name: /five refutation tests/i })
+    return this.page.getByRole('region', { name: /six refutation tests/i })
   }
 
   refutationOutcomeButton(name: RegExp): Locator {

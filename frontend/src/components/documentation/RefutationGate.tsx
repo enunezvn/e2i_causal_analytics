@@ -1,5 +1,5 @@
 /**
- * RefutationGate — the quality gate on causal estimates: the five refutation
+ * RefutationGate — the quality gate on causal estimates: the six refutation
  * tests, each with an illustration that can be flipped between "estimate
  * survives" and "estimate fails", and the proceed / review / block bands the
  * results feed. Content (defaults, pass rules, bands) lives in content.ts and
@@ -220,12 +220,57 @@ function EValueIllustration({ outcome }: { outcome: Outcome }) {
   );
 }
 
+/* ------------------------------------------------- Negative-control outcome */
+// #2007: the same adjusted fit, re-run with an outcome the treatment cannot
+// affect. Two interval bars on one effect axis: the claimed T → Y effect and
+// the control's. Pass: the control's CI straddles zero. Fail: it sits away from
+// zero and is at least as large as the claim — the adjustment leaks confounding.
+function NegativeControlIllustration({ outcome }: { outcome: Outcome }) {
+  const ok = outcome === 'pass';
+  const px = (e: number) => 100 + e * 600; // effect axis: −0.10 → 40 … +0.167 → 200
+  const yClaim = 46, yControl = 80;
+  const claim = { lo: 0.03, mid: 0.08, hi: 0.13 }; // illustrative claimed effect
+  const control = ok ? { lo: -0.04, mid: 0.005, hi: 0.05 } : { lo: 0.04, mid: 0.09, hi: 0.14 };
+  const controlColor = ok ? OUTCOME : FAIL;
+  return (
+    <>
+      <text x="120" y="14" fontSize="9" textAnchor="middle" className={MUTED}>same adjustment, two outcomes · 95 % CI</text>
+      {/* zero line */}
+      <line x1={px(0)} y1="24" x2={px(0)} y2="98" className={AXIS} strokeWidth="1" strokeDasharray="2 2" />
+      <text x={px(0)} y="108" fontSize="9" textAnchor="middle" className={MUTED}>0</text>
+      {/* claimed effect T → Y */}
+      <text x="36" y={yClaim + 3} fontSize="9" textAnchor="end" className={TXT}>T → Y</text>
+      <line x1={px(claim.lo)} y1={yClaim} x2={px(claim.hi)} y2={yClaim} stroke={TREATMENT} strokeWidth="3" strokeLinecap="round" />
+      <circle cx={px(claim.mid)} cy={yClaim} r="4" fill={TREATMENT} />
+      <text x={px(claim.hi) + 6} y={yClaim + 3} fontSize="9" textAnchor="start" className={MUTED}>claimed effect</text>
+      {/* negative control T → NC */}
+      <text x="36" y={yControl + 3} fontSize="9" textAnchor="end" className={TXT}>T → NC</text>
+      <line
+        x1={px(control.lo)}
+        y1={yControl}
+        x2={px(control.hi)}
+        y2={yControl}
+        stroke={controlColor}
+        strokeWidth="3"
+        strokeLinecap="round"
+        className={ANIM}
+      />
+      <circle cx={px(control.mid)} cy={yControl} r="4" fill={controlColor} className={ANIM} />
+      <text x={px(Math.max(control.hi, claim.hi)) + 6} y={yControl + 3} fontSize="9" textAnchor="start" className={MUTED}>
+        control (cannot be affected)
+      </text>
+      <Verdict x={ok ? 66 : 150} y={116} outcome={outcome} pass="control stays null" fail="control ≥ the claim" />
+    </>
+  );
+}
+
 const ILLUSTRATIONS: Record<RefutationTestId, (p: { outcome: Outcome }) => JSX.Element> = {
   placebo_treatment: PlaceboIllustration,
   random_common_cause: RandomCommonCauseIllustration,
   data_subset: DataSubsetIllustration,
   bootstrap: BootstrapIllustration,
   sensitivity_e_value: EValueIllustration,
+  negative_control_outcome: NegativeControlIllustration,
 };
 
 const ILLUSTRATION_ALT: Record<RefutationTestId, Record<Outcome, string>> = {
@@ -248,6 +293,10 @@ const ILLUSTRATION_ALT: Record<RefutationTestId, Record<Outcome, string>> = {
   sensitivity_e_value: {
     pass: 'A risk-ratio scale from 1 to 2 with the point-estimate risk ratio beyond the measured-confounding benchmark, in the robust zone. Shown for a benchmarked, non-null estimate; the null-finding and not-benchmarked readings are caveats without a marker.',
     fail: 'A risk-ratio scale from 1 to 2 with the point-estimate risk ratio within the measured-confounding benchmark — a caveat, not a block. Shown for a benchmarked, non-null estimate; the null-finding and not-benchmarked readings are caveats without a marker.',
+  },
+  negative_control_outcome: {
+    pass: 'Two confidence intervals on one effect axis: the claimed treatment effect sits right of zero; the negative-control outcome, fitted with the same adjustment, straddles zero — the control stayed null.',
+    fail: 'Two confidence intervals on one effect axis: the negative-control outcome, fitted with the same adjustment, sits away from zero and is at least as large as the claimed effect — the adjustment is leaking confounding. A reading, not a block.',
   },
 };
 
@@ -352,7 +401,7 @@ export function RefutationGate() {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h3 id="refutation-tests-heading" className="text-sm font-semibold text-[var(--color-foreground)]">
-            Five refutation tests
+            Six refutation tests
           </h3>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--color-foreground)]">{REFUTATION_INTRO}</p>
         </div>

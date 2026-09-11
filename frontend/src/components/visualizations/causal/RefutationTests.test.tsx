@@ -155,3 +155,89 @@ describe('RefutationTests — three-state status (#1867)', () => {
     expect(screen.queryByText('Warning')).not.toBeInTheDocument();
   });
 });
+
+// Lane G (#2007, 2026-09-11): the negative-control-outcome reading arrives from
+// the backend under its own test name. It must render its own label — an
+// unknown method would otherwise fall through to the raw enum string, and the
+// drill-down's method map would fall back to "Random Common Cause".
+describe('RefutationTests — negative-control outcome (#2007)', () => {
+  it('renders the negative-control method with its own label', () => {
+    const nc: RefutationResult[] = [
+      {
+        id: 'nco',
+        method: 'negative_control_outcome',
+        originalEstimate: 0.0879,
+        refutedEstimate: 0.0047, // the control stayed null (CI includes 0)
+        pValue: null, // the verdict is an interval rule; the backend sends p_value null
+        passed: true,
+        status: 'passed',
+        description:
+          'A negative-control outcome the treatment cannot affect (treatment_initiated) stayed null: +0.005 [-0.043, +0.052] on n = 1500.',
+      },
+    ];
+    render(<RefutationTests results={nc} />);
+    expect(screen.getByText('Negative-Control Outcome')).toBeInTheDocument();
+    expect(screen.queryByText('negative_control_outcome')).not.toBeInTheDocument();
+    expect(screen.queryByText('Random Common Cause')).not.toBeInTheDocument();
+  });
+});
+
+// A reading with no p-value (the negative control and the E-value reading are
+// interval rules) must render an honest "—", never a fabricated "< 0.001" —
+// which is exactly what formatPValue(0) printed when the adapter coerced null
+// to 0 (#2007 codex round on 0c80e1562).
+describe('RefutationTests — nullable p-value (#2007)', () => {
+  const mixed: RefutationResult[] = [
+    {
+      id: 'nco',
+      method: 'negative_control_outcome',
+      originalEstimate: 0.0879,
+      refutedEstimate: 0.0047,
+      pValue: null,
+      passed: true,
+      status: 'passed',
+    },
+    {
+      id: 'plc',
+      method: 'placebo_treatment',
+      originalEstimate: 0.0879,
+      refutedEstimate: 0.0001,
+      pValue: 0.0001,
+      passed: true,
+      status: 'passed',
+    },
+  ];
+
+  it('renders "—" with an explanatory label for a null p-value, and formats a numeric one as before', () => {
+    render(<RefutationTests results={mixed} />);
+    const dash = screen.getByTitle(/no p-value/i);
+    expect(dash).toHaveTextContent('—');
+    expect(dash).toHaveAttribute('aria-label', expect.stringMatching(/interval-based reading/i));
+    // The numeric row keeps the existing precision rule.
+    expect(screen.getByText('< 0.001')).toBeInTheDocument();
+    // Exactly one "< 0.001": the null row must not have become one.
+    expect(screen.getAllByText('< 0.001')).toHaveLength(1);
+    expect(screen.queryByText('NaN')).not.toBeInTheDocument();
+  });
+
+  it('routes a NaN p-value through the same labelled dash path as null (codex round 3)', () => {
+    // A NaN can arrive from arithmetic upstream of the adapter; it must not
+    // render an unlabelled dash (or "NaN") while null gets the explanation.
+    const nan: RefutationResult[] = [
+      {
+        id: 'nan',
+        method: 'negative_control_outcome',
+        originalEstimate: 0.0879,
+        refutedEstimate: 0.0047,
+        pValue: Number.NaN,
+        passed: true,
+        status: 'passed',
+      },
+    ];
+    render(<RefutationTests results={nan} />);
+    const dash = screen.getByTitle(/no p-value/i);
+    expect(dash).toHaveTextContent('—');
+    expect(dash).toHaveAttribute('aria-label', expect.stringMatching(/interval-based reading/i));
+    expect(screen.queryByText('NaN')).not.toBeInTheDocument();
+  });
+});

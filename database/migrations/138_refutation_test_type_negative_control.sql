@@ -1,0 +1,44 @@
+-- ============================================================================
+-- Migration 138: add negative_control_outcome to refutation_test_type
+-- (Lane G, issue #2007; PR follows commits d429182d5 / 4722815b6 in this
+-- branch which add RefutationTestType.NEGATIVE_CONTROL_OUTCOME to the runner).
+-- ============================================================================
+-- A negative-control outcome (Lipsitch, Tchetgen Tchetgen & Cohen 2010) is an
+-- outcome the treatment cannot causally affect but that shares its declared
+-- confounders. A non-null adjusted effect on it means the adjustment set is
+-- leaking unmeasured confounding -- it is the only refuter in this enum that
+-- can DETECT that failure mode; placebo_treatment, random_common_cause,
+-- data_subset, bootstrap and sensitivity_e_value all perturb or resample the
+-- fit and stay silent when the adjustment set itself is missing a common
+-- cause. First live, it ships as a non-critical, weight-0 READING (it does
+-- not move gate_decision), per RefutationRunner's per-test-type weight table.
+--
+-- Measured on the synthetic generator (seed 21, n = 1500; recorded
+-- 2026-09-11 in docs/demos/results/2026-09-11_negative_control_disproof/):
+-- omitting the declared confounders moves 3 of 9 structural-null outcomes out
+-- of the adjusted-fit confidence interval (copay_support -> treatment_initiated,
+-- psp_enrolled -> treatment_initiated, rep_detailing_high -> persistent_180d),
+-- while the adjusted fit itself has 0/9 false positives on those same nulls
+-- and detects 11/11 planted true effects -- i.e. the adjustment set the
+-- pipeline already uses is sound on this generator, and the negative-control
+-- test is positioned to catch it if that ever stops being true.
+--
+-- Blast radius if this value is missing: src/repositories/causal_validation.py
+-- save_suite() inserts every row of a RefutationSuite in ONE Supabase call
+-- (`.insert(rows).execute()`); a test_type value absent from this enum raises
+-- Postgres error 22P02 (invalid input value for enum) on that insert, which
+-- drops persistence for the WHOLE suite -- not just the negative-control row.
+-- The value must exist before the negative-control node is reachable in any
+-- environment that persists suites.
+--
+-- CAVEAT: ALTER TYPE ... ADD VALUE is non-transactional. run_migrations.sh
+-- detects "ALTER TYPE ... ADD VALUE" (after stripping `--` comments) and
+-- applies this file UN-wrapped (no --single-transaction), tracking it
+-- separately on clean exit. Do NOT add any statement here that consumes the
+-- new value (it is unusable until this statement commits) -- that also means
+-- no COMMENT ON TYPE in this file: 071 (the precedent for this exact pattern)
+-- has none either, and a second statement here would defeat the point of
+-- keeping the un-wrapped file to exactly one statement.
+-- ----------------------------------------------------------------------------
+
+ALTER TYPE refutation_test_type ADD VALUE IF NOT EXISTS 'negative_control_outcome';

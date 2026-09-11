@@ -40,7 +40,8 @@ export type RefutationMethod =
   | 'data_subset'
   | 'bootstrap'
   | 'add_unobserved_common_cause'
-  | 'dummy_outcome';
+  | 'dummy_outcome'
+  | 'negative_control_outcome';
 
 export interface RefutationResult {
   /** Unique identifier for this test result */
@@ -53,8 +54,12 @@ export interface RefutationResult {
   originalEstimate: number;
   /** Effect estimate after refutation */
   refutedEstimate: number;
-  /** P-value for the refutation test */
-  pValue: number;
+  /**
+   * P-value for the refutation test. `null` when the verdict is an interval
+   * rule with no test statistic (the negative-control reading, the E-value
+   * reading) — rendered as "—", never coerced to 0 (#2007).
+   */
+  pValue: number | null;
   /** Whether the refutation test passed */
   passed: boolean;
   /**
@@ -102,6 +107,7 @@ const METHOD_LABELS: Record<RefutationMethod, string> = {
   bootstrap: 'Bootstrap Validation',
   add_unobserved_common_cause: 'Unobserved Common Cause',
   dummy_outcome: 'Dummy Outcome',
+  negative_control_outcome: 'Negative-Control Outcome',
 };
 
 const METHOD_DESCRIPTIONS: Record<RefutationMethod, string> = {
@@ -117,6 +123,8 @@ const METHOD_DESCRIPTIONS: Record<RefutationMethod, string> = {
     'Tests sensitivity to unmeasured confounding',
   dummy_outcome:
     'Tests if treatment affects a dummy/random outcome variable',
+  negative_control_outcome:
+    'Refits the same adjustment on an outcome the treatment cannot affect; a non-null effect there means the adjustment is leaking confounding (#2007, a weight-0 reading)',
 };
 
 // =============================================================================
@@ -133,7 +141,22 @@ function formatNumber(value: number, decimals: number): string {
 /**
  * Formats a p-value with appropriate precision
  */
-function formatPValue(pValue: number): string {
+/**
+ * True when the row carries no usable p-value: null (an interval-based reading —
+ * the negative control, the E-value) or NaN (arithmetic upstream). Both take the
+ * same labelled dash path in the cell; the check lives here so formatPValue and
+ * the cell cannot disagree (#2007, codex round 3).
+ */
+function isReadingWithoutP(pValue: number | null): boolean {
+  return pValue === null || Number.isNaN(pValue);
+}
+
+function formatPValue(pValue: number | null): string {
+  // A reading without a test statistic: an honest dash. Coercing null to 0
+  // would print "< 0.001" — a fabricated significant p-value (#2007).
+  // `pValue === null` only narrows the type for the formatting below; the
+  // helper is the rule.
+  if (isReadingWithoutP(pValue) || pValue === null) return '—';
   if (pValue < 0.001) return '< 0.001';
   if (pValue < 0.01) return pValue.toFixed(3);
   return pValue.toFixed(2);
@@ -645,7 +668,8 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                             dummy-outcome checks PASS when p is high (the fake effect could
                             not be reproduced from noise); random-common-cause passes when
                             the estimate barely moves. A low p is only a problem for the
-                            checks that rely on it.
+                            checks that rely on it. A dash means the check is an
+                            interval-based reading with no p-value at all.
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -721,7 +745,16 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                           {changePercent.toFixed(1)}%
                         </TableCell>
                         <TableCell className="text-right font-mono text-xs">
-                          {formatPValue(result.pValue)}
+                          {isReadingWithoutP(result.pValue) ? (
+                            <span
+                              title="no p-value: an interval-based reading"
+                              aria-label="no p-value: an interval-based reading"
+                            >
+                              {formatPValue(null)}
+                            </span>
+                          ) : (
+                            formatPValue(result.pValue)
+                          )}
                         </TableCell>
                         <TableCell className="text-center">
                           <Badge

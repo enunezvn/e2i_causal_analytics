@@ -69,6 +69,12 @@ const REFUTATION_METHOD_MAP: Record<string, RefutationMethod> = {
   unobserved_common_cause: 'add_unobserved_common_cause',
   add_unobserved_common_cause: 'add_unobserved_common_cause',
   sensitivity_e_value: 'add_unobserved_common_cause',
+  // #2007: the negative-control-outcome reading arrives under its runner name.
+  // HAZARD: `toRefutationResults` falls back to 'random_common_cause' for ANY
+  // name missing from this map, so an unmapped test silently renders as
+  // "Random Common Cause" with that test's description. Every runner test type
+  // must have a row here.
+  negative_control_outcome: 'negative_control_outcome',
 };
 
 function toRefutationResults(tests: RefutationTestDetail[] | undefined | null): RefutationResult[] {
@@ -78,7 +84,9 @@ function toRefutationResults(tests: RefutationTestDetail[] | undefined | null): 
     method: REFUTATION_METHOD_MAP[t.test_name] ?? 'random_common_cause',
     originalEstimate: t.original_effect ?? 0,
     refutedEstimate: t.new_effect ?? 0,
-    pValue: t.p_value ?? 0,
+    // #2007: a reading with no test statistic (negative control, E-value) sends
+    // p_value null; keep it null — 0 would render as "< 0.001".
+    pValue: t.p_value ?? null,
     passed: t.passed,
     // #1867: three-state verdict — a 'warning' must not render as a failure.
     // Unknown/absent values are dropped so the viz falls back to `passed`.
