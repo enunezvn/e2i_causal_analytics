@@ -433,6 +433,10 @@ _NEGATIVE_CONTROL_SKIP_EXPLANATIONS: Dict[str, str] = {
     "negative_control_reference_effect_non_finite": (
         "the claimed effect is not a finite number; the negative control cannot be compared to it"
     ),
+    "negative_control_budget_exhausted": (
+        "the compute deadline left no room for the control's fit; the primary suite ran "
+        "without the reading"
+    ),
 }
 
 
@@ -700,6 +704,12 @@ class RefutationTestType(str, Enum):
 #                                    the claimed (primary) effect is NaN / inf,
 #                                    so there is nothing to compare the
 #                                    control to (runner-emitted only)
+#   negative_control_budget_exhausted
+#                                    the caller's compute deadline left no room
+#                                    for one more model build (or lapsed while
+#                                    the control's fit waited for a slot); a
+#                                    weight-0 reading must never cost the
+#                                    primary suite a budget failure
 NEGATIVE_CONTROL_SKIP_REASONS: frozenset = frozenset(_NEGATIVE_CONTROL_SKIP_EXPLANATIONS)
 
 
@@ -1246,7 +1256,8 @@ class RefutationRunner:
                 produce ``negative_control`` -- one of
                 ``NEGATIVE_CONTROL_SKIP_REASONS`` (``negative_control_column_missing``,
                 ``negative_control_too_few_rows``,
-                ``negative_control_ci_unavailable``; ``no_negative_control_declared``
+                ``negative_control_ci_unavailable``,
+                ``negative_control_budget_exhausted``; ``no_negative_control_declared``
                 is the default when both are ``None``). The runner is the one
                 place that emits the SKIPPED row, with THAT reason. An unknown
                 token is a ``ValueError`` (a call-site bug, not a data

@@ -991,6 +991,7 @@ async def _fit_negative_control(
     common_causes: List[str],
     estimation_result: Dict[str, Any],
     deadline: Optional[float],
+    per_refit_hint_heavy: Optional[float] = None,
 ) -> Tuple[Optional[Tuple[str, float, Tuple[float, float], int]], Optional[str]]:
     """Fit the declared negative-control outcome on the refutation frame and
     return ``(tuple, skip_reason)`` for ``RefutationRunner.run_all_tests`` (#2007).
@@ -1014,7 +1015,16 @@ async def _fit_negative_control(
 
     Any failure inside the fit is a SKIPPED reading (logged at WARNING), never a
     failure of the primary analysis -- and never a fabricated PASSED.
-    ``ComputeBudgetExpired`` propagates like the other bounded fits.
+
+    Budget (lead decision 2026-09-11: a weight-0 reading must NEVER cost the
+    primary analysis a budget failure): ``per_refit_hint_heavy`` is the
+    measured cost of the primary reconstruction -- the honest estimate of one
+    more model build. When ``deadline`` is set and ``now + that cost`` runs
+    past it, the fit is not started (``negative_control_budget_exhausted``);
+    when the fit's bounded slot raises ``ComputeBudgetExpired`` (the deadline
+    lapsed while it queued) the same token is returned instead of propagating.
+    The primary suite then runs under its own deadline; if that also expires,
+    that is the primary's own honest failure, not the control's.
     """
     if (
         negative_control_data is None
@@ -1072,6 +1082,19 @@ async def _fit_negative_control(
         return None, "negative_control_ci_unavailable"
 
     n_rows = int(len(frame))
+    if (
+        deadline is not None
+        and per_refit_hint_heavy is not None
+        and time.monotonic() + per_refit_hint_heavy > deadline
+    ):
+        logger.info(
+            "Negative-control %s not fitted: one more model build (~%.1f s) would run past "
+            "the compute deadline (%.1f s left); the primary suite runs without the reading.",
+            nc_outcome,
+            per_refit_hint_heavy,
+            deadline - time.monotonic(),
+        )
+        return None, "negative_control_budget_exhausted"
     if n_rows < NEGATIVE_CONTROL_MIN_ROWS or frame[nc_outcome].nunique(dropna=True) < 2:
         logger.info(
             "Negative-control %s not fitted: %d non-null rows (min %d), %d distinct values.",
@@ -1093,7 +1116,12 @@ async def _fit_negative_control(
             estimation_result=estimation_result,
         )
     except ComputeBudgetExpired:
-        raise
+        logger.info(
+            "Negative-control %s not fitted: the compute deadline lapsed while its fit "
+            "waited for a bounded slot; the primary suite runs without the reading.",
+            nc_outcome,
+        )
+        return None, "negative_control_budget_exhausted"
     except Exception as exc:  # noqa: BLE001 - the control must never fail the primary
         logger.warning(
             "Negative-control fit on %s failed (%s: %s); the reading is skipped and the "
@@ -1983,23 +2011,25 @@ class RefutationNode:
             # one (``negative_control_outcome``); with no key the runner emits
             # its own ``no_negative_control_declared`` SKIPPED row. The tuple /
             # skip reason go to ``run_all_tests`` as-is: a caller reason wins
-            # over a tuple there, and an unknown token raises.
+            # over a tuple there, and an unknown token raises. The fit never
+            # raises for budget: a lapsed deadline is the SKIPPED reason
+            # ``negative_control_budget_exhausted`` (the reconstruction cost is
+            # the honest estimate of one more build), and the primary suite
+            # still runs under its own deadline.
             negative_control_kwargs: Dict[str, Any] = {}
             nc_key = state.get("negative_control_outcome")
             if nc_key:
                 nc_data = (state.get("data_cache") or {}).get("negative_control_data")
-                try:
-                    nc_tuple, nc_skip_reason = await _fit_negative_control(
-                        refutation_data=refutation_data,
-                        negative_control_data=nc_data,
-                        treatment=treatment,
-                        nc_outcome=str(nc_key),
-                        common_causes=common_causes,
-                        estimation_result=cast(Dict[str, Any], estimation_result),
-                        deadline=deadline,
-                    )
-                except ComputeBudgetExpired as be:
-                    raise _queued_budget_error() from be
+                nc_tuple, nc_skip_reason = await _fit_negative_control(
+                    refutation_data=refutation_data,
+                    negative_control_data=nc_data,
+                    treatment=treatment,
+                    nc_outcome=str(nc_key),
+                    common_causes=common_causes,
+                    estimation_result=cast(Dict[str, Any], estimation_result),
+                    deadline=deadline,
+                    per_refit_hint_heavy=per_refit_hint_heavy,
+                )
                 negative_control_kwargs = {
                     "negative_control": nc_tuple,
                     "negative_control_skip_reason": nc_skip_reason,

@@ -1058,13 +1058,19 @@ def _is_randomized_treatment(dataset: Optional[str], treatment_var: str) -> bool
 #
 # This registry is DECLARED, never inferred from discovery, and lists ONLY the
 # pairs MEASURED to respond on the synthetic generator (omitted-confounder fits,
-# seed 21, n = 1500, production LinearDML —
+# seed 21, n = 1500, the disproof script's estimator: run_disproof.py `_fit`,
+# LinearDML with X = confounders, W = None —
 # docs/demos/results/2026-09-11_negative_control_disproof/disproof.md):
 #   copay_support      -> treatment_initiated  adjusted +0.017 -> omitted +0.052
 #   psp_enrolled       -> treatment_initiated  adjusted +0.005 -> omitted +0.090
 #   rep_detailing_high -> persistent_180d      adjusted +0.031 -> omitted +0.058
 # (adjusted CI contains 0, omitted CI does not; 0/9 adjusted false positives on
 # the structural nulls; 11/11 planted truths detected by the adjusted fit).
+# The refutation node's own DoWhy reconstruction (X = W = confounders, RF
+# nuisances) reads +0.0153 / +0.0022 / +0.0281 adjusted for the same three
+# pairs, all PASSED (CI contains 0) — nc_fit_timing.py in the same directory;
+# the two fits condition on the same columns through different econml
+# arguments, so their points differ in the third decimal, not in verdict.
 #
 # DELIBERATELY ABSENT: sample_dropped and trigger_accepted — none of their
 # candidate controls responds at n = 1500 (0/3 each), so a declared control

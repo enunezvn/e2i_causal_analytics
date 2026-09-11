@@ -288,9 +288,47 @@ class TestFitNegativeControl:
         assert any(str(exc) in rec.getMessage() for rec in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_compute_budget_expiry_propagates(self, frames):
-        with pytest.raises(ComputeBudgetExpired):
-            await _fit_negative_control(**_fit_kwargs(frames, deadline=time.monotonic() - 1.0))
+    async def test_no_room_for_one_more_build_is_budget_exhausted_without_fitting(
+        self, frames, monkeypatch
+    ):
+        """(a) The measured reconstruction cost is the honest estimate of one more
+        model build; when it would run past the deadline the fit is not started."""
+        monkeypatch.setattr(
+            _ref_mod, "_build_dowhy_estimate", lambda **_k: pytest.fail("must not fit")
+        )
+        clock = {"now": 5000.0}
+        monkeypatch.setattr(_ref_mod.time, "monotonic", lambda: clock["now"])
+        result = await _fit_negative_control(
+            **_fit_kwargs(frames, deadline=5000.0 + 8.0, per_refit_hint_heavy=10.0)
+        )
+        assert result == (None, "negative_control_budget_exhausted")
+        # With room for the build the pre-check does not fire (the fit then runs
+        # under the real budget guard, which is what the next test exercises).
+        clock["now"] = 5000.0
+        monkeypatch.setattr(_ref_mod, "_build_dowhy_estimate", lambda **_k: (None, None, None, "x"))
+        monkeypatch.setattr(_ref_mod, "_negative_control_interval", lambda *_a: (0.0, (-1.0, 1.0)))
+        tuple_, reason = await _fit_negative_control(
+            **_fit_kwargs(frames, deadline=5000.0 + 12.0, per_refit_hint_heavy=10.0)
+        )
+        assert reason is None and tuple_ is not None
+
+    @pytest.mark.asyncio
+    async def test_deadline_lapsed_while_queued_is_budget_exhausted_not_raised(
+        self, frames, monkeypatch
+    ):
+        """(b) The bounded slot's ComputeBudgetExpired is caught INSIDE the fit
+        and becomes the same token -- a weight-0 reading never raises the
+        primary's budget error. A deadline already in the past trips the real
+        guard in run_bounded_with_budget (no pre-check: no hint given)."""
+        result = await _fit_negative_control(**_fit_kwargs(frames, deadline=time.monotonic() - 1.0))
+        assert result == (None, "negative_control_budget_exhausted")
+
+        def _expired(**_k):
+            raise ComputeBudgetExpired("lapsed while queued")
+
+        monkeypatch.setattr(_ref_mod, "_negative_control_fit_sync", _expired)
+        result = await _fit_negative_control(**_fit_kwargs(frames))
+        assert result == (None, "negative_control_budget_exhausted")
 
     @pytest.mark.asyncio
     async def test_every_reason_is_a_runner_token(self, frames, monkeypatch):
@@ -417,6 +455,8 @@ class TestExecuteWiring:
         assert fit["estimation_result"] is recon["estimation_result"]
         assert fit["treatment"] == recon["treatment"] == TREATMENT
         assert fit["deadline"] == deadline
+        # The measured reconstruction cost is what the fit budgets one more build on.
+        assert fit["per_refit_hint_heavy"] == runner["per_refit_hint_heavy"]
         assert runner["negative_control"] == nc_tuple
         assert runner["negative_control_skip_reason"] is None
         assert runner["data"] is recon["data"]
@@ -437,6 +477,52 @@ class TestExecuteWiring:
 
         assert seen["runner"]["negative_control"] is None
         assert seen["runner"]["negative_control_skip_reason"] == "negative_control_too_few_rows"
+
+    @pytest.mark.asyncio
+    async def test_no_room_after_reconstruction_skips_the_control_and_runs_the_suite(
+        self, frames, monkeypatch
+    ):
+        """Fake clock: the reconstruction costs 10 s of a 15 s budget, so the
+        calibration is skipped and one more build (10 s) would overrun -> the
+        REAL fit returns the budget token without fitting and the suite still
+        runs with that reason."""
+        frame, nc_df = frames
+        node = RefutationNode()
+        clock = {"now": 5000.0}
+        monkeypatch.setattr(_ref_mod.time, "monotonic", lambda: clock["now"])
+        seen: dict = {}
+
+        def fake_recon(**kwargs):
+            clock["now"] += 10.0
+            return (SimpleNamespace(), object(), object())
+
+        def spy_run_all_tests(**kwargs):
+            seen.update(kwargs)
+            return _proceed_suite()
+
+        async def _no_signal(outcome):
+            return None
+
+        monkeypatch.setattr(_ref_mod, "_reconstruct_dowhy_artifacts", fake_recon)
+        monkeypatch.setattr(
+            _ref_mod, "_build_dowhy_estimate", lambda **_k: pytest.fail("must not fit")
+        )
+        monkeypatch.setattr(node.runner, "run_all_tests", spy_run_all_tests)
+        monkeypatch.setattr(node, "_log_validation_outcome_signal", _no_signal)
+
+        result = await node.execute(
+            _node_state(
+                frame,
+                negative_control_outcome=NC,
+                data_cache={"negative_control_data": nc_df},
+                compute_deadline=5000.0 + 15.0,
+            )
+        )
+
+        assert result["gate_decision"] == "proceed"
+        assert seen["negative_control"] is None
+        assert seen["negative_control_skip_reason"] == "negative_control_budget_exhausted"
+        assert seen["per_refit_hint_heavy"] == pytest.approx(10.0)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("state_extra", [{}, {"negative_control_outcome": None}])
@@ -558,8 +644,23 @@ class TestRealRunnerEndToEnd:
         assert _nc_row(undeclared)["status"] == "skipped"
         assert _nc_row(undeclared)["details"]["skip_reason"] == "no_negative_control_declared"
 
+        # (b) the deadline lapses while the control's fit queues: the token, the
+        # suite still runs, the verdict is untouched.
+        def _expired(**_k):
+            raise ComputeBudgetExpired("lapsed while queued")
+
+        monkeypatch.undo()
+        monkeypatch.setattr(_ref_mod, "_negative_control_fit_sync", _expired)
+        budget_lapsed = await _run_real(
+            RefutationNode(config=DETERMINISTIC_CONFIG), declared, monkeypatch
+        )
+        assert _nc_row(budget_lapsed)["status"] == "skipped"
+        assert (
+            _nc_row(budget_lapsed)["details"]["skip_reason"] == "negative_control_budget_exhausted"
+        )
+
         verdicts = {
             (r["gate_decision"], r["refutation_suite"]["confidence_score"], r["status"])
-            for r in (with_reading, fit_failed, undeclared)
+            for r in (with_reading, fit_failed, undeclared, budget_lapsed)
         }
         assert len(verdicts) == 1, verdicts

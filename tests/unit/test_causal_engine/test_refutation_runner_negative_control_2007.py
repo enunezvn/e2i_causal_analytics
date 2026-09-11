@@ -232,6 +232,7 @@ def test_run_all_tests_without_a_declared_control_emits_the_skipped_reason():
         "negative_control_column_missing",
         "negative_control_too_few_rows",
         "negative_control_ci_unavailable",
+        "negative_control_budget_exhausted",
     ],
 )
 def test_caller_signalled_skip_reason_passes_through(reason):
@@ -255,6 +256,7 @@ def test_skip_reason_vocabulary_is_closed():
             "negative_control_too_few_rows",
             "negative_control_ci_unavailable",
             "negative_control_reference_effect_non_finite",
+            "negative_control_budget_exhausted",
         }
     )
     with pytest.raises(ValueError, match="negative_control_skip_reason"):
