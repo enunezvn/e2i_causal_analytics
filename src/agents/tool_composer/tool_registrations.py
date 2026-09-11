@@ -2806,7 +2806,7 @@ async def counterfactual_simulator(
     * ``RuntimeError`` (retried) — no active twin model could be read or loaded; the route
       answers the same condition with a 503 + Retry-After.
 
-    Heavy work (MLflow hydration, generating 1,000 twins — ~54 s measured — and the
+    Heavy work (MLflow hydration, generating the twins — ~67 ms each, measured — and the
     causal-forest fit) runs on the executor's bounded compute pool, never on the event loop.
     """
     intervention_type, brand_value, regions = _counterfactual_inputs(
@@ -2848,12 +2848,15 @@ async def counterfactual_simulator(
     )
 
 
-#: Twins generated per simulation: the ``/digital-twin/simulate`` request default, so both
-#: surfaces simulate the same population size. The twins do not enter the ATE or its
-#: interval (those come from the cohort fit); they carry the per-region effects, the
-#: engine's 100-twin floor after filtering (a single region holds ~230-270 of 1,000,
-#: measured) and the recommendation's baseline rate.
-_COUNTERFACTUAL_TWIN_COUNT = 1000
+#: Twins generated per simulation. The twins do not enter the ATE, its interval or the
+#: per-region effects (those come from the cohort fit, so any count gives the same numbers);
+#: they set the engine's 100-twin floor after filtering and the recommendation's baseline
+#: rate. Measured 2026-09-11 on the deployed image: generation costs 66-69 ms per twin, and
+#: a run at the /simulate default of 1,000 took 100 s end to end — too close to the
+#: composer's 120 s step timeout. The smallest region share in all three active HCP models
+#: is 0.2235 (south), so 700 twins put a single targeted region at ~156 +/- 11, five
+#: standard deviations above the floor, for ~47 s of generation.
+_COUNTERFACTUAL_TWIN_COUNT = 700
 
 
 def _twin_type_hcp() -> Any:
