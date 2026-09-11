@@ -419,6 +419,60 @@ class PgConn:
             conn.close()
 
 
+class PsycopgRpcPort:
+    """The recorder's ``RpcPort`` over psycopg: a real database through another transport.
+
+    Mirrors PostgREST's ``POST /rpc/<name>`` as the production ``SupabaseRpcPort`` uses it: one
+    autocommit transaction per call, as ``service_role``, arguments bound BY NAME and cast to the
+    function's declared types, the result returned as JSON (a set-returning function gives a
+    list of row objects). ``calls`` records every function name called.
+    """
+
+    def __init__(self, conn: PgConn, *, role: Optional[str] = "service_role"):
+        self.conn = conn
+        self.role = role
+        self.calls: List[str] = []
+
+    async def call(self, name: str, params: Dict[str, Any]) -> Any:
+        import json
+
+        import psycopg
+
+        self.calls.append(name)
+        async with await psycopg.AsyncConnection.connect(
+            self.conn.pg.dsn(self.conn.db), password=self.conn.pg._password, autocommit=True
+        ) as aconn:
+            if self.role:
+                await aconn.execute(f'set role "{self.role}"')
+            cur = await aconn.execute(
+                "select p.proretset, coalesce(p.proargnames, '{}'), "
+                "array(select format_type(t, null) from unnest(p.proargtypes::oid[]) "
+                "with ordinality u(t, o) order by o) "
+                "from pg_proc p where p.oid = to_regproc(%s)",
+                (f"public.{name}",),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise LookupError(f"function public.{name} not found (or overloaded)")
+            retset, argnames, argtypes = row
+            # proargnames also lists RETURNS TABLE columns; the input arguments come first.
+            declared = dict(zip(argnames[: len(argtypes)], argtypes, strict=True))
+            unknown = sorted(set(params) - set(declared))
+            if unknown:
+                raise TypeError(f"{name}: no parameter(s) {unknown}")
+            args = ", ".join(f'"{k}" => %({k})s::{declared[k]}' for k in params)
+            values = {
+                k: json.dumps(v) if declared[k] in ("jsonb", "json") else v
+                for k, v in params.items()
+            }
+            if retset:
+                sql = f"select coalesce(jsonb_agg(to_jsonb(r)), '[]'::jsonb) from public.{name}({args}) r"
+            else:
+                sql = f"select to_jsonb(public.{name}({args}))"
+            result = await (await aconn.execute(sql, values)).fetchone()
+            return result[0] if result else None
+
+
 def runner_unwraps(sql_text: str) -> bool:
     """True when scripts/run_migrations.sh applies the file un-wrapped (no --single-transaction)."""
     return any(_RUNNER_UNWRAP.search(re.sub(r"--.*$", "", line)) for line in sql_text.splitlines())
