@@ -340,7 +340,7 @@ class ResourceHealthResponse(BaseModel):
 #
 # This mirrors the sibling fix in ``src/api/routes/segments.py`` (the segment
 # analyses store, C21): back the data in Redis, REUSING the app's existing
-# async Redis client (``src.api.dependencies.redis_client.get_redis``, already
+# async Redis client (``src.api.dependencies.redis_client.current_client``, already
 # wired into the FastAPI lifespan in ``src/api/main.py``). When Redis is
 # unavailable it transparently falls back to a BOUNDED in-process dict —
 # mirroring the app's existing graceful-degradation posture
@@ -368,7 +368,7 @@ _REDIS_INDEX_KEY = "resources:optimization:index"
 # — NOT the builtin ``ConnectionError`` / ``TimeoutError``. They both subclass
 # ``redis.exceptions.RedisError``, so catching ``RedisError`` covers every
 # client-raised Redis failure. ``OSError`` covers socket-level failures;
-# ``RuntimeError`` covers "redis not initialised" from get_redis().
+# ``RuntimeError`` covers "redis not initialised" from request_path_client().
 _REDIS_DEGRADE_ERRORS = (RedisError, OSError, RuntimeError)
 
 # Read-side deserialisation failures that must fail SOFT (skip/None + cleanup)
@@ -468,8 +468,8 @@ class _BoundedOptimizationsStore(Dict[str, OptimizationResponse]):
 
 
 # Type of the zero-arg async factory that yields a Redis client. Defaults to the
-# app's canonical ``get_redis`` (lazily imported to keep this module importable
-# without a live Redis and to avoid import cycles).
+# app's initialised client via ``request_path_client`` (lazily imported to keep
+# this module importable without a live Redis and to avoid import cycles).
 RedisFactory = Callable[[], Awaitable[Any]]
 
 
@@ -478,11 +478,14 @@ async def _default_redis_factory() -> Any:
 
     Imported lazily so the module imports cleanly in environments without Redis
     configured (tests, CLI tools); failures here are caught by the durable
-    store and trigger the in-memory fallback.
+    store and trigger the in-memory fallback. Never ``get_redis()`` here: with
+    the client unset it runs ``init_redis()``'s backoff on the request path
+    (measured 16 s per call, #1999); ``request_path_client`` raises
+    ``RuntimeError`` at once and reconnects in the background.
     """
-    from src.api.dependencies.redis_client import get_redis
+    from src.api.dependencies.redis_client import request_path_client
 
-    return await get_redis()
+    return await request_path_client()
 
 
 class _DurableOptimizationsStore:

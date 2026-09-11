@@ -10,8 +10,10 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
 import logging
 import os
+import time
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -109,9 +111,85 @@ async def get_redis() -> Redis:
     return _redis_client
 
 
+def current_client() -> Optional[Redis]:
+    """The client the lifespan initialised, or ``None``. Never connects or waits.
+
+    For request paths: ``get_redis()`` runs ``init_redis()``'s multi-attempt
+    backoff when the client is unset (startup in Redis-degraded mode), which
+    measured 16 s per call against a refused Redis (#1999).
+    """
+    return _redis_client
+
+
+# Per-process background reconnect (#1999): request paths that find no client
+# degrade at once and schedule ONE connection attempt here, so a Redis that
+# comes back makes them durable again without a request waiting on it. One
+# attempt per round and a cooldown between failed rounds bound the probing to
+# one connect per RECONNECT_COOLDOWN_SECONDS per worker while Redis stays down.
+RECONNECT_COOLDOWN_SECONDS = 30.0
+_reconnect_task: "Optional[asyncio.Task[None]]" = None
+_reconnect_failed_at: Optional[float] = None
+
+
+async def _reconnect_once() -> None:
+    global _reconnect_failed_at
+
+    try:
+        await init_redis.retry_with(stop=stop_after_attempt(1))()
+    except Exception as e:
+        _reconnect_failed_at = time.monotonic()
+        logger.warning(
+            f"Background Redis reconnect failed; next attempt in "
+            f"{RECONNECT_COOLDOWN_SECONDS:g}s at the earliest: {e}"
+        )
+        return
+    _reconnect_failed_at = None
+    logger.info("Background Redis reconnect succeeded; request paths are durable again")
+
+
+def _schedule_reconnect() -> None:
+    global _reconnect_task
+
+    if _redis_client is not None:
+        return
+    loop = asyncio.get_running_loop()
+    task = _reconnect_task
+    if task is not None and not task.done() and task.get_loop() is loop:
+        return  # single-flight
+    if (
+        _reconnect_failed_at is not None
+        and time.monotonic() - _reconnect_failed_at < RECONNECT_COOLDOWN_SECONDS
+    ):
+        return
+    _reconnect_task = loop.create_task(_reconnect_once(), name="redis-background-reconnect")
+
+
+async def request_path_client() -> Redis:
+    """``current_client()`` for request paths that degrade without Redis.
+
+    Returns the initialised client, or schedules the background reconnect and
+    raises ``RuntimeError`` (which every durable store and ``InflightLock``
+    already treat as "Redis unavailable, degrade") without waiting.
+    """
+    client = current_client()
+    if client is None:
+        _schedule_reconnect()
+        raise RuntimeError("Redis client not initialised (startup degraded mode)")
+    return client
+
+
 async def close_redis() -> None:
     """Close Redis connection pool."""
-    global _redis_client
+    global _redis_client, _reconnect_task, _reconnect_failed_at
+
+    # Cancel a pending background reconnect FIRST: it could otherwise install
+    # a client after this close (init_redis assigns the client before its ping).
+    task = _reconnect_task
+    _reconnect_task = None
+    _reconnect_failed_at = None
+    if task is not None and not task.done() and task.get_loop() is asyncio.get_running_loop():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     if _redis_client is not None:
         logger.info("Closing Redis connection")

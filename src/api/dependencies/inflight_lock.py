@@ -89,11 +89,11 @@ local table holds only in-flight ids (an entry is dropped when its last
 holder/waiter leaves), so it is bounded by concurrency, and a held entry is
 never evicted.
 
-Deliberate deviation from ``durable_job_store``: the default client getter reads
-the client the lifespan initialised (``redis_client._redis_client``) instead of
-calling ``get_redis()``, because ``get_redis()`` runs ``init_redis()``, a
-5-attempt exponential backoff (2..30 s), when the client is None, and a request
-must not wait on that.
+The default client getter is ``redis_client.request_path_client()``, the client
+the lifespan initialised, never ``get_redis()``: that runs ``init_redis()``'s
+multi-attempt backoff when the client is None (measured 16 s per call, #1999),
+and a request must not wait on it. With no client it raises ``RuntimeError`` at
+once (an outage here) and schedules one background reconnect for the process.
 """
 
 from __future__ import annotations
@@ -132,15 +132,11 @@ class _BudgetExhausted(Exception):
 
 
 async def _default_redis_factory() -> Any:
-    """The app's already-initialised async Redis client, WITHOUT ``get_redis()``:
-    that would run ``init_redis()``'s multi-attempt backoff on the request path
-    when startup ran in Redis-degraded mode. Not initialised -> degrade."""
-    from src.api.dependencies import redis_client
+    """The app's already-initialised async Redis client, WITHOUT ``get_redis()``
+    (see the module docstring). Not initialised -> ``RuntimeError`` -> degrade."""
+    from src.api.dependencies.redis_client import request_path_client
 
-    client = redis_client._redis_client
-    if client is None:
-        raise RuntimeError("Redis client not initialised (startup degraded mode)")
-    return client
+    return await request_path_client()
 
 
 LockMode = Literal["redis", "local", "none"]
