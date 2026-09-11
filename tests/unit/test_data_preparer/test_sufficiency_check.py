@@ -717,3 +717,28 @@ class TestF15CausalEPVInteraction:
         assert "epv_floor*n_features" in report["verdict_rationale"]
         # required_n is at least the EPV-floor candidate value
         assert report["required_n"] >= 5 * 500
+
+
+@pytest.mark.parametrize("alpha", [1e-200])
+def test_an_uncomputable_causal_power_requirement_does_not_pass(alpha):
+    """#2015 (codex whole-diff #7): the causal classifier treats a PowerCalculationError as
+    "fall back to the floors", which can PASS. An alpha so small the z-score is infinite
+    has no finite power requirement; before the #2015 library guards it raised
+    OverflowError into the node's blocking INCONCLUSIVE handler, and it must not become a
+    floor-only PASS."""
+    from src.agents.ml_foundation.data_preparer.nodes.sufficiency_check import _classify_causal
+
+    try:
+        verdict = _classify_causal(
+            n_rows=10000,
+            n_features=1,
+            baseline_rate=0.5,
+            sigma_outcome=None,
+            user_config=None,
+            resolved=[],
+            alpha=alpha,
+            power=0.8,
+        )[0]
+    except OverflowError:
+        return  # reaches the node's INCONCLUSIVE handler
+    assert verdict != "PASS"

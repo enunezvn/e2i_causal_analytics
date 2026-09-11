@@ -343,13 +343,22 @@ class TestUnusableDesignsAreRefused:
             (cluster_rct_power, (1e-200, 0.05, 0.80, 0.05, 20)),
         ],
     )
-    def test_a_calculation_outside_the_float_range_is_refused(self, call, args):
-        with pytest.raises(PowerCalculationError, match="finite"):
+    def test_a_calculation_outside_the_float_range_is_an_overflow(self, call, args):
+        # OverflowError, NOT PowerCalculationError: the data-preparer sufficiency gate
+        # turns a PowerCalculationError into a floor-only verdict that can PASS, while an
+        # uncomputable requirement must reach its blocking INCONCLUSIVE handler.
+        with pytest.raises(OverflowError, match="finite") as raised:
             call(*args)
+        assert not isinstance(raised.value, PowerCalculationError)
 
     def test_a_time_to_event_design_needs_two_events(self):
         with pytest.raises(PowerCalculationError, match="events"):
             time_to_event_power(1e100, 0.05, 0.80, 1.0)
+
+    def test_a_time_to_event_design_needs_two_per_arm(self):
+        # codex whole-diff #7: two events at event_rate 1 gave 2 in total, 1 per arm.
+        with pytest.raises(PowerCalculationError, match="per arm"):
+            time_to_event_power(100, 0.05, 0.80, 1.0)
 
     def test_a_binary_design_needs_two_per_arm_too(self):
         # codex whole-diff #6: at low power the lower bound (z_a + z_b)^2 / 2 is below 2.
@@ -365,6 +374,7 @@ class TestUnusableDesignsAreRefused:
             (time_to_event_power, (0.7, 1e-200, 0.80, 0.5)),
         ],
     )
-    def test_every_overflow_is_a_power_calculation_error(self, call, args):
-        with pytest.raises(PowerCalculationError):
+    def test_every_overflow_is_an_overflow_error(self, call, args):
+        with pytest.raises(OverflowError) as raised:
             call(*args)
+        assert not isinstance(raised.value, PowerCalculationError)

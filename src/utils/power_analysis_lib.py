@@ -57,28 +57,27 @@ def _z_scores(alpha: float, power: float) -> tuple[float, float]:
         raise PowerCalculationError(f"alpha must be in (0, 1); got {alpha}")
     if not 0.0 < power < 1.0:
         raise PowerCalculationError(f"power must be in (0, 1); got {power}")
-    z_alpha, z_beta = float(stats.norm.ppf(1 - alpha / 2)), float(stats.norm.ppf(power))
-    if not (math.isfinite(z_alpha) and math.isfinite(z_beta)):
-        # 1 - alpha / 2 rounds to 1.0 for alpha below ~1e-16 (#2015).
-        raise PowerCalculationError(
-            f"alpha={alpha} and power={power} are too extreme for a finite z-score"
-        )
-    return z_alpha, z_beta
+    return float(stats.norm.ppf(1 - alpha / 2)), float(stats.norm.ppf(power))
 
 
 def _whole_count(compute: Callable[[], float], what: str) -> int:
-    """``ceil`` of a sample-size expression, refused when it is not a finite number.
+    """``ceil`` of a sample-size expression, with an unrepresentable result made explicit.
 
-    A float ``**`` that leaves the float range raises ``OverflowError`` rather than
-    returning ``inf``; either way the result is not a sample size (#2015).
+    A float ``**`` that leaves the float range raises ``OverflowError``; an infinite result
+    (an extreme alpha gives an infinite z-score) is not a sample size either. Both raise
+    ``OverflowError`` with a message (#2015) — deliberately NOT ``PowerCalculationError``:
+    the data-preparer sufficiency gate turns a ``PowerCalculationError`` into a floor-only
+    verdict that can PASS, while an uncomputable requirement must reach its blocking
+    INCONCLUSIVE handler, as the bare ``OverflowError`` did before.
     """
     try:
         value = float(compute())
     except OverflowError:
         value = float("inf")
     if not math.isfinite(value):
-        raise PowerCalculationError(
-            f"{what} is not a finite number for these inputs; check the effect size and rates"
+        raise OverflowError(
+            f"{what} is not a finite number for these inputs; check the effect size, alpha, "
+            "power and rates"
         )
     return int(math.ceil(value))
 
@@ -280,7 +279,10 @@ def time_to_event_power(
             f"hazard_ratio {hazard_ratio} needs {required_events} event(s); a log-rank "
             "comparison needs at least two events"
         )
-    per_arm = -(-_whole_count(lambda: required_events / event_rate, "the total sample size") // 2)
+    per_arm = _two_per_arm(
+        -(-_whole_count(lambda: required_events / event_rate, "the total sample size") // 2),
+        hazard_ratio,
+    )
     return PowerResult(
         sample_size=2 * per_arm,
         sample_size_per_arm=per_arm,
