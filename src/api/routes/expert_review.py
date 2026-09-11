@@ -360,9 +360,13 @@ async def _build_under_lock(
     before it sends the lifespan shutdown, and the request task awaits this one
     (a disconnect does not cancel it), so a graceful stop (SIGTERM, a
     ``--max-requests`` recycle) lets the build persist before Redis/Supabase are
-    closed; test_expert_review_shutdown_ordering_1999.py pins it. What still
-    loses a build is a KILL: docker's stop timeout on a deploy recreate, or
-    gunicorn's graceful/worker timeout. Then the key clears at its TTL and
+    closed; test_expert_review_shutdown_ordering_1999.py pins it. The api's
+    compose ``stop_grace_period: 35s`` lets a deploy recreate wait out gunicorn's
+    ``--graceful-timeout 30`` (docker's 10 s default killed it first). What still
+    loses a build is a KILL: a build still running at gunicorn's 30 s graceful
+    timeout, or a ``--max-requests`` recycle blocked behind OTHER in-flight
+    requests, which stops heartbeating and can be aborted by the arbiter's worker
+    timeout (from source, not measured). Then the key clears at its TTL and
     nothing is corrupted.
     """
     async with _ASSESSMENT_LOCK.hold(review_id) as lease:

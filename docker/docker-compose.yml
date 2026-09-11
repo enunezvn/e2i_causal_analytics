@@ -895,6 +895,15 @@ services:
     image: ghcr.io/${IMAGE_OWNER:-local}/e2i-api:${IMAGE_TAG:-latest}
     container_name: e2i_api
     restart: unless-stopped
+    # #1999: the deploy recreates this container (`up -d --force-recreate`, no -t),
+    # so docker waits stop_grace_period before SIGKILL (default 10 s). gunicorn's
+    # --graceful-timeout 30 lets in-flight requests (and a shielded expert-review
+    # build) finish, then SIGKILLs leftovers; its master exited at graceful-timeout
+    # + 0.13 s when measured. 35 s covers that with ~5 s headroom. Before this,
+    # docker killed the whole container at 10 s. Cost: a deploy with a long
+    # request in flight waits up to +25 s before the new api starts.
+    # Guarded by tests/unit/test_docker/test_compose_api_stop_grace_period_1999.py.
+    stop_grace_period: 35s
     logging: *default-logging
     ports:
       - "8000:8000"
