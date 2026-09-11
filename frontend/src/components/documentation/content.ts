@@ -766,7 +766,7 @@ export const REFUTATION_TESTS: RefutationTestDef[] = [
     action: 'Add a random confounder',
     mustHold: 'effect must hold stable',
     defaults: '20 simulations, confounder strength 0.1',
-    passRule: 'effect moves by < 20 %',
+    passRule: 'effect moves by ≤ 1 SE of its reported interval (SE-units, not a percentage; 1–2 SE warns, more fails)',
     critical: true,
     failSign:
       'The estimate swings with a confounder that carries no information — the adjustment is fragile.',
