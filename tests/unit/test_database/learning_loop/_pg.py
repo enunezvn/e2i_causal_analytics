@@ -55,9 +55,20 @@ _RUNNER_UNWRAP = re.compile(
     r"ALTER[ \t]+TYPE[ \t].*ADD[ \t]+VALUE|CONCURRENTLY|^[ \t]*COMMIT[ \t]*;", re.IGNORECASE
 )
 
-# A prod query must be ONE read statement: no statement separator (so it cannot COMMIT out of
-# the read-only transaction it runs in) and no write or session-changing keyword.
+# Prod queries: only exact SQL strings approved in code (``ProdReadOnly.approve``) reach prod.
+# Approval itself refuses anything but ONE read statement: no statement separator (so it cannot
+# COMMIT out of the read-only transaction it runs in), no write or session-changing keyword, and
+# no function with a side effect a READ ONLY transaction does not block (backend signalling,
+# advisory locks, sequence advance, notifications, file/large-object access, config, stats reset).
 _READ_START = re.compile(r"^\s*(select|show|with)\b", re.IGNORECASE)
+_SIDE_EFFECT_FUNCTIONS = re.compile(
+    r"\b(pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|pg_advisory\w*|"
+    r"pg_try_advisory\w*|nextval|setval|set_config|pg_notify|lo_\w+|dblink\w*|pg_read_\w*file|"
+    r"pg_ls_\w+|pg_stat_reset\w*|pg_switch_wal|pg_create_\w+|pg_drop_\w+|pg_replication_\w+|"
+    r"pg_logical_\w+|pg_promote|pg_log_backend_memory_contexts|txid_current|pg_current_xact_id|"
+    r"pg_import_system_collations|pg_sleep\w*)\s*\(",
+    re.IGNORECASE,
+)
 _WRITE_WORDS = re.compile(
     r"\b(insert|update|delete|merge|copy|call|do|create|alter|drop|grant|revoke|truncate|set|reset|"
     r"begin|commit|rollback|start|savepoint|lock|vacuum|analyze|cluster|reindex|refresh|notify|"
@@ -96,17 +107,34 @@ def _rows(stdout: bytes) -> List[str]:
 
 
 class ProdReadOnly:
-    """Single read statements against the live database, inside a READ ONLY transaction."""
+    """Approved read statements against the live database, inside a READ ONLY transaction."""
+
+    def __init__(self) -> None:
+        self._approved: set = set()
+        self.approve(*PROD_QUERIES)
 
     @staticmethod
     def check_read_only(sql: str) -> None:
-        if ";" in sql or not _READ_START.match(sql) or _WRITE_WORDS.search(sql):
+        if (
+            ";" in sql
+            or not _READ_START.match(sql)
+            or _WRITE_WORDS.search(sql)
+            or _SIDE_EFFECT_FUNCTIONS.search(sql)
+        ):
             raise ValueError(
-                f"not a single read statement, refused before reaching prod: {sql[:80]!r}"
+                f"not a single side-effect-free read, refused before reaching prod: {sql[:80]!r}"
             )
 
+    def approve(self, *queries: str) -> None:
+        for sql in queries:
+            self.check_read_only(sql)
+            self._approved.add(sql)
+
     def rows(self, sql: str) -> List[str]:
-        self.check_read_only(sql)
+        if sql not in self._approved:
+            raise ValueError(
+                f"not an approved prod query, refused before reaching prod: {sql[:80]!r}"
+            )
         proc = _run(
             [
                 "docker", "exec", "-e", "PGOPTIONS=-c default_transaction_read_only=on",
@@ -146,6 +174,28 @@ class ProdReadOnly:
 # ---------------------------------------------------------------------------
 
 
+def _process_start_ticks(pid: int) -> Optional[str]:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    # Field 22 (starttime) counted after the ")" that closes the command name.
+    return stat.rsplit(")", 1)[1].split()[19]
+
+
+def owner_identity(pid: Optional[int] = None) -> str:
+    """``host/boot_id/pid-namespace/pid/start-ticks`` of a process on THIS kernel.
+
+    A PID alone is not an identity: another Docker client (a different host, container or PID
+    namespace) can hold the same number, and PIDs are reused. Two identities describe the same
+    live process only when every field matches.
+    """
+    pid = os.getpid() if pid is None else pid
+    boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    pid_ns = os.stat("/proc/self/ns/pid").st_ino
+    return f"{os.uname().nodename}/{boot_id}/{pid_ns}/{pid}/{_process_start_ticks(pid)}"
+
+
 def _owned_containers() -> List[Dict[str, str]]:
     proc = _run(
         ["docker", "ps", "-a", "--filter", f"name={CONTAINER_PREFIX}",
@@ -153,29 +203,33 @@ def _owned_containers() -> List[Dict[str, str]]:
     )  # fmt: skip
     out = []
     for line in _rows(proc.stdout):
-        name, _, pid = line.partition("|")
+        name, _, owner = line.partition("|")
         if name.startswith(CONTAINER_PREFIX):
-            out.append({"name": name, "pid": pid})
+            out.append({"name": name, "owner": owner})
     return out
 
 
-def _pid_alive(pid: str) -> bool:
-    if not pid.isdigit():
+def owner_is_gone(owner: str) -> bool:
+    """True only when the owner provably lived on this host, boot and PID namespace and is dead.
+
+    Anything else (another host or namespace, a malformed or missing label) is NOT reaped: it may
+    belong to a live session this process cannot see.
+    """
+    parts = owner.split("/")
+    if len(parts) != 5 or not parts[3].isdigit():
         return False
-    try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
+    host, boot_id, pid_ns, pid, start = parts
+    here = owner_identity().split("/")
+    if (host, boot_id, pid_ns) != tuple(here[:3]):
         return False
-    except PermissionError:
-        return True
-    return True
+    return _process_start_ticks(int(pid)) != start
 
 
 def reap_orphans() -> List[str]:
-    """Remove throwaway containers whose owning process is gone (hard-killed pytest runs)."""
+    """Remove throwaway containers whose owning process is provably gone (hard-killed runs)."""
     removed = []
     for c in _owned_containers():
-        if not _pid_alive(c["pid"]):
+        if owner_is_gone(c["owner"]):
             _run(["docker", "rm", "-f", c["name"]])
             removed.append(c["name"])
     return removed
@@ -196,7 +250,7 @@ class ThrowawayPg:
             proc = _run(
                 [
                     "docker", "run", "-d", "--name", self.name,
-                    "--label", f"{OWNER_LABEL}={os.getpid()}",
+                    "--label", f"{OWNER_LABEL}={owner_identity()}",
                     "--memory", MEMORY_CAP, "--memory-swap", MEMORY_CAP,
                     "-e", "POSTGRES_PASSWORD",  # value comes from the environment, not argv
                     "-p", "127.0.0.1::5432",
@@ -438,11 +492,41 @@ LANE_ROLE_MEMBERSHIPS = (
 )
 
 
-def lane_migrations_already_in_prod(prod: ProdReadOnly) -> List[str]:
-    names = ",".join("'" + k + "'" for k in LANE_MIGRATIONS)
-    return prod.rows(
-        f"select filename from public.schema_migrations where filename in ({names}) order by 1"
+LANE_MIGRATIONS_IN_LEDGER = (
+    "select filename from public.schema_migrations where filename in ("
+    + ",".join("'" + k + "'" for k in LANE_MIGRATIONS)
+    + ") order by 1"
+)
+PROD_DB_OWNER = "select datdba::regrole::text from pg_database where datname = current_database()"
+PROD_E2I_ROLES = "select rolname from pg_roles where rolname like 'e2i%' order by 1"
+
+# Every query build_base and the fixtures send to prod.
+PROD_QUERIES = (
+    LANE_MIGRATIONS_IN_LEDGER,
+    PROD_DB_OWNER,
+    PROD_E2I_ROLES,
+    LANE_ROLE_MEMBERSHIPS,
+    PROD_EXTENSION_INVENTORY,
+    PROD_NONPUBLIC_REFERENCES,
+)
+
+
+def acl_text(acl_expr: str) -> str:
+    """SQL rendering an aclitem[] as sorted, de-duplicated ``grantee=privilege[*]/grantor`` items.
+
+    ``*`` marks WITH GRANT OPTION. De-duplication matters only for concatenated arrays (the
+    effective-default-ACL model); a real object ACL never repeats an item.
+    """
+    return (
+        "(select string_agg(i.item, ',' order by i.item) from (select distinct "
+        "a.grantee::regrole::text || '=' || a.privilege_type "
+        "|| case when a.is_grantable then '*' else '' end || '/' || a.grantor::regrole::text as item "
+        f"from aclexplode({acl_expr}) a) i)"
     )
+
+
+def lane_migrations_already_in_prod(prod: ProdReadOnly) -> List[str]:
+    return prod.rows(LANE_MIGRATIONS_IN_LEDGER)
 
 
 def build_base(pg: ThrowawayPg, prod: ProdReadOnly, db: str = BASE_DB) -> RestoreLog:
@@ -450,16 +534,14 @@ def build_base(pg: ThrowawayPg, prod: ProdReadOnly, db: str = BASE_DB) -> Restor
     # event triggers; a bare CREATE DATABASE does not (probe 2026-09-11), so copy it.
     # Same owner as prod's database: PG15's public schema is owned by pg_database_owner, so the
     # database owner decides whether ``postgres`` (the migration role) may CREATE in public.
-    (owner,) = prod.rows(
-        "select datdba::regrole::text from pg_database where datname = current_database()"
-    )
+    (owner,) = prod.rows(PROD_DB_OWNER)
     pg.terminate_connections("postgres")
     pg.rows("template1", f'create database {db} template postgres owner "{owner}"')
 
     # Roles prod grants to that the image does not create, and prod's memberships of the roles
     # the lane runs as (role attributes of those roles are compared by the sanity suite).
     image_roles = set(pg.rows(db, "select rolname from pg_roles"))
-    for role in prod.rows("select rolname from pg_roles where rolname like 'e2i%' order by 1"):
+    for role in prod.rows(PROD_E2I_ROLES):
         if role not in image_roles:
             pg.rows(db, f'create role "{role}" nologin')
             image_roles.add(role)

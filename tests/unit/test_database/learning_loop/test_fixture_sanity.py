@@ -109,9 +109,7 @@ EQUIVALENCE_QUERIES = {
         False,
     ),
     "relation_acls": (
-        "select c.relname || ':' || coalesce((select string_agg(a.grantee::regrole::text || '=' "
-        "|| a.privilege_type || '/' || a.grantor::regrole::text, ',' order by 1) "
-        "from aclexplode(c.relacl) a), '<owner-default>') from pg_class c "
+        f"select c.relname || ':' || coalesce({_pg.acl_text('c.relacl')}, '<owner-default>') from pg_class c "
         f"where {_PUBLIC_REL} and c.relname in {_in(LANE_TABLES + LANE_VIEWS)} order by 1",
         False,
     ),
@@ -122,7 +120,8 @@ EQUIVALENCE_QUERIES = {
         True,
     ),
     "owned_sequences": (
-        "select t.relname || ':' || s.relname || ':' || coalesce(s.relacl::text, '') from pg_depend d "
+        f"select t.relname || ':' || s.relname || ':' || coalesce({_pg.acl_text('s.relacl')}, '<owner-default>') "
+        "from pg_depend d "
         "join pg_class s on s.oid = d.objid and s.relkind = 'S' join pg_class t on t.oid = d.refobjid "
         f"where t.relnamespace = 'public'::regnamespace and t.relname in {_in(LANE_TABLES)} order by 1",
         True,
@@ -134,8 +133,7 @@ EQUIVALENCE_QUERIES = {
     ),
     "functions": (
         "select p.oid::regprocedure || ':' || md5(pg_get_functiondef(p.oid)) || ':' "
-        "|| pg_get_userbyid(p.proowner) || ':' || coalesce((select string_agg(a.grantee::regrole::text "
-        "|| '=' || a.privilege_type, ',' order by 1) from aclexplode(p.proacl) a), '<owner-default>') "
+        f"|| pg_get_userbyid(p.proowner) || ':' || coalesce({_pg.acl_text('p.proacl')}, '<owner-default>') "
         f"from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in {_in(LANE_FUNCTIONS)} "
         "order by 1",
         False,
@@ -160,8 +158,7 @@ EQUIVALENCE_QUERIES = {
     ),
     "default_acls": (
         "select defaclrole::regrole || ':' || defaclnamespace::regnamespace || ':' || defaclobjtype::text "
-        "|| ':' || (select string_agg(a.grantee::regrole::text || '=' || a.privilege_type, ',' order by 1) "
-        "from aclexplode(defaclacl) a) from pg_default_acl "
+        f"|| ':' || {_pg.acl_text('defaclacl')} from pg_default_acl "
         "where defaclnamespace in (0, 'public'::regnamespace) order by 1",
         False,
     ),
@@ -176,8 +173,7 @@ EQUIVALENCE_QUERIES = {
         False,
     ),
     "public_schema": (
-        "select nspowner::regrole::text || ':' || (select string_agg(a.grantee::regrole::text || '=' "
-        "|| a.privilege_type, ',' order by 1) from aclexplode(nspacl) a) from pg_namespace "
+        f"select nspowner::regrole::text || ':' || {_pg.acl_text('nspacl')} from pg_namespace "
         "where nspname = 'public'",
         False,
     ),
@@ -188,6 +184,44 @@ EQUIVALENCE_QUERIES = {
         True,
     ),
 }
+
+
+LEDGER_QUERY = "select filename from public.schema_migrations"
+READ_ONLY_PROBE = "show transaction_read_only"
+REGISTRY_SEED_QUERY = (
+    "select name || '|' || category || '|' || source_agent || '|' || md5(description) || '|' "
+    "|| md5(input_schema::text) || '|' || md5(output_schema::text) || '|' "
+    "|| coalesce(avg_latency_ms::text, '') || '|' || coalesce(version, '') from tool_registry order by name"
+)
+DEPENDENCIES_QUERY = (
+    "select c.name || '<-' || p.name || '|' || coalesce(d.output_field, '') || '|' "
+    "|| coalesce(d.input_field, '') from tool_dependencies d "
+    "join tool_registry c on c.tool_id = d.consumer_tool_id "
+    "join tool_registry p on p.tool_id = d.producer_tool_id order by 1"
+)
+REQUIRED_OBJECTS_QUERY = (
+    "select c.relkind::text || ':' || c.relname from pg_class c "
+    f"where {_PUBLIC_REL} and c.relname in {_in(LANE_TABLES + LANE_VIEWS)} "
+    "union all select 'f:' || p.proname from pg_proc p "
+    f"where p.pronamespace = 'public'::regnamespace and p.proname in {_in(LANE_FUNCTIONS)} "
+    f"union all select 'e:' || t.typname from pg_type t where t.typname in {_in(LANE_ENUMS)} order by 1"
+)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _approve_this_modules_prod_queries(request):
+    if os.getenv("E2I_DB_INTEGRATION") != "1":
+        return
+    prod = request.getfixturevalue("prod_readonly")
+    prod.approve(
+        LEDGER_QUERY,
+        READ_ONLY_PROBE,
+        REGISTRY_SEED_QUERY,
+        DEPENDENCIES_QUERY,
+        REQUIRED_OBJECTS_QUERY,
+        *(query for query, _ in EQUIVALENCE_QUERIES.values()),
+        *(_effective_default_acl_query(t) for t in PROBES),
+    )
 
 
 def test_container_is_throwaway_capped_and_local(pg_container):
@@ -201,7 +235,7 @@ def test_container_is_throwaway_capped_and_local(pg_container):
     assert info["HostConfig"]["Memory"] == 1024**3
     assert info["HostConfig"]["MemorySwap"] == 1024**3
     assert [b["HostIp"] for b in info["HostConfig"]["PortBindings"]["5432/tcp"]] == ["127.0.0.1"]
-    assert info["Config"]["Labels"][_pg.OWNER_LABEL] == str(os.getpid())
+    assert info["Config"]["Labels"][_pg.OWNER_LABEL] == _pg.owner_identity()
     assert info["Config"]["Image"] == _pg.ProdReadOnly().image()
     # The password travels in the environment, never in argv (docker inspect Args).
     assert pg_container._password not in json.dumps(info["Args"])
@@ -218,15 +252,26 @@ def test_container_is_throwaway_capped_and_local(pg_container):
         "set default_transaction_read_only = off",
         "begin read write",
         "drop table tool_registry",
+        "select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid()",
+        "select nextval('some_seq')",
+        "select pg_advisory_lock(1)",
     ],
 )
-def test_prod_access_refuses_anything_but_one_read(sql):
+def test_prod_access_refuses_anything_but_approved_side_effect_free_reads(sql):
+    prod = _pg.ProdReadOnly()
     with pytest.raises(ValueError, match="refused before reaching prod"):
-        _pg.ProdReadOnly().rows(sql)
+        prod.rows(sql)
+    with pytest.raises(ValueError, match="refused before reaching prod"):
+        prod.approve(sql)
+
+
+def test_prod_access_refuses_an_unapproved_read():
+    with pytest.raises(ValueError, match="not an approved prod query"):
+        _pg.ProdReadOnly().rows("select count(*) from tool_registry")
 
 
 def test_prod_reads_run_in_a_read_only_transaction(prod_readonly):
-    assert prod_readonly.rows("show transaction_read_only") == ["on"]
+    assert prod_readonly.rows(READ_ONLY_PROBE) == ["on"]
 
 
 def test_restore_errors_were_exactly_the_expected_ones(base_db):
@@ -236,10 +281,10 @@ def test_restore_errors_were_exactly_the_expected_ones(base_db):
 
 def test_ledger_is_the_repository_ledger_and_prod_has_nothing_older(base_db, prod_readonly):
     # Sorted in Python: the database collation orders punctuation differently from byte order.
-    copy = sorted(base_db.rows("select filename from public.schema_migrations"))
+    copy = sorted(base_db.rows(LEDGER_QUERY))
     expected = sorted(k for k in _pg.runner_migration_keys() if k not in _pg.LANE_MIGRATIONS)
     assert copy == expected
-    prod = set(prod_readonly.rows("select filename from public.schema_migrations"))
+    prod = set(prod_readonly.rows(LEDGER_QUERY))
     assert set(copy) <= prod, sorted(set(copy) - prod)
     # Anything prod has beyond the repository must be NEWER than the repository's last file in
     # the same directory (deployed after this branch's base), never an older gap.
@@ -252,26 +297,15 @@ def test_ledger_is_the_repository_ledger_and_prod_has_nothing_older(base_db, pro
 
 
 def test_tool_registry_seed_fields_equal_prod(base_db, prod_readonly):
-    query = (
-        "select name || '|' || category || '|' || source_agent || '|' || md5(description) || '|' "
-        "|| md5(input_schema::text) || '|' || md5(output_schema::text) || '|' "
-        "|| coalesce(avg_latency_ms::text, '') || '|' || coalesce(version, '') from tool_registry order by name"
-    )
-    rows = base_db.rows(query)
+    rows = base_db.rows(REGISTRY_SEED_QUERY)
     assert len(rows) == 16
-    assert rows == prod_readonly.rows(query)
+    assert rows == prod_readonly.rows(REGISTRY_SEED_QUERY)
 
 
 def test_tool_dependencies_equal_prod(base_db, prod_readonly):
-    query = (
-        "select c.name || '<-' || p.name || '|' || coalesce(d.output_field, '') || '|' "
-        "|| coalesce(d.input_field, '') from tool_dependencies d "
-        "join tool_registry c on c.tool_id = d.consumer_tool_id "
-        "join tool_registry p on p.tool_id = d.producer_tool_id order by 1"
-    )
-    rows = base_db.rows(query)
+    rows = base_db.rows(DEPENDENCIES_QUERY)
     assert len(rows) == 11
-    assert rows == prod_readonly.rows(query)
+    assert rows == prod_readonly.rows(DEPENDENCIES_QUERY)
 
 
 def test_loop_tables_start_empty(base_db):
@@ -282,21 +316,14 @@ def test_loop_tables_start_empty(base_db):
 
 
 def test_required_lane_objects_exist_on_both_sides(base_db, prod_readonly):
-    query = (
-        "select c.relkind::text || ':' || c.relname from pg_class c "
-        f"where {_PUBLIC_REL} and c.relname in {_in(LANE_TABLES + LANE_VIEWS)} "
-        "union all select 'f:' || p.proname from pg_proc p "
-        f"where p.pronamespace = 'public'::regnamespace and p.proname in {_in(LANE_FUNCTIONS)} "
-        f"union all select 'e:' || t.typname from pg_type t where t.typname in {_in(LANE_ENUMS)} order by 1"
-    )
     expected = sorted(
         [f"r:{t}" for t in LANE_TABLES]
         + [f"v:{v}" for v in LANE_VIEWS]
         + [f"f:{f}" for f in LANE_FUNCTIONS]
         + [f"e:{e}" for e in LANE_ENUMS]
     )
-    assert base_db.rows(query) == expected
-    assert prod_readonly.rows(query) == expected
+    assert sorted(base_db.rows(REQUIRED_OBJECTS_QUERY)) == expected
+    assert sorted(prod_readonly.rows(REQUIRED_OBJECTS_QUERY)) == expected
 
 
 @pytest.mark.parametrize("aspect", sorted(EQUIVALENCE_QUERIES))
@@ -321,40 +348,42 @@ def test_non_public_objects_public_depends_on_exist_in_the_copy(base_db, prod_re
     assert missing == []
 
 
-_EXPLODED = (
-    "(select string_agg(g || '=' || p, ',' order by g, p) from (select distinct "
-    "a.grantee::regrole::text as g, a.privilege_type as p from aclexplode({acl}) a) x)"
-)
+# pg_default_acl object type -> acldefault() object type (sequences differ: 'S' vs 's').
+_ACLDEFAULT_TYPE = {"r": "r", "S": "s", "f": "f"}
 
 
-@pytest.mark.parametrize("objtype,ddl,acl_query", [
-    ("r", "create table public.zz_default_acl_probe (id int)",
-     "select {e} from pg_class where oid = 'public.zz_default_acl_probe'::regclass"),
-    ("S", "create sequence public.zz_default_acl_probe_seq",
-     "select {e} from pg_class where oid = 'public.zz_default_acl_probe_seq'::regclass"),
-    ("f", "create function public.zz_default_acl_probe_fn() returns int language sql as 'select 1'",
-     "select {e} from pg_proc where oid = 'public.zz_default_acl_probe_fn()'::regprocedure"),
-])  # fmt: skip
-def test_new_objects_get_prods_effective_default_privileges(
-    clone_db, prod_readonly, objtype, ddl, acl_query
-):
-    # What a migration running as postgres actually gets on a new public object must equal what
-    # prod would give it: the built-in default for the object type (acldefault; for functions
-    # that includes EXECUTE to PUBLIC) plus prod's schema-level default ACL for (postgres, public).
-    # Prod has no database-wide (namespace 0) default ACL rows, so nothing replaces acldefault;
-    # the default_acls aspect above pins that.
-    want = prod_readonly.rows(
-        "select (select string_agg(g || '=' || p, ',' order by g, p) from (select distinct "
-        "a.grantee::regrole::text as g, a.privilege_type as p from aclexplode("
-        f"acldefault('{objtype}', 'postgres'::regrole) || d.defaclacl) a) x) "
-        "from pg_default_acl d where d.defaclrole = 'postgres'::regrole "
-        f"and d.defaclnamespace = 'public'::regnamespace and d.defaclobjtype = '{objtype}'"
+def _effective_default_acl_query(objtype: str) -> str:
+    # PG15 (aclchk.c get_user_default_acl): a database-wide (namespace 0) default ACL row for the
+    # creating role REPLACES the built-in acldefault(); a schema row is then ADDED.
+    return "select " + _pg.acl_text(
+        "coalesce((select defaclacl from pg_default_acl where defaclrole = 'postgres'::regrole "
+        f"and defaclnamespace = 0 and defaclobjtype = '{objtype}'), "
+        f"acldefault('{_ACLDEFAULT_TYPE[objtype]}', 'postgres'::regrole)) "
+        "|| coalesce((select defaclacl from pg_default_acl where defaclrole = 'postgres'::regrole "
+        f"and defaclnamespace = 'public'::regnamespace and defaclobjtype = '{objtype}'), '{{}}'::aclitem[])"
     )
-    assert len(want) == 1
+
+
+PROBES = {
+    "r": ("create table public.zz_default_acl_probe (id int)",
+          "select {acl} from pg_class where oid = 'public.zz_default_acl_probe'::regclass", "relacl"),
+    "S": ("create sequence public.zz_default_acl_probe_seq",
+          "select {acl} from pg_class where oid = 'public.zz_default_acl_probe_seq'::regclass", "relacl"),
+    "f": ("create function public.zz_default_acl_probe_fn() returns int language sql as 'select 1'",
+          "select {acl} from pg_proc where oid = 'public.zz_default_acl_probe_fn()'::regprocedure", "proacl"),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("objtype", sorted(PROBES))
+def test_new_objects_get_prods_effective_default_privileges(clone_db, prod_readonly, objtype):
+    # What a migration running as postgres actually gets on a new public object must equal what
+    # prod's default ACLs prescribe for it (the model above; namespace-0 rows are covered too).
+    want = prod_readonly.rows(_effective_default_acl_query(objtype))
+    assert len(want) == 1 and want[0]
+    ddl, acl_query, column = PROBES[objtype]
     db = clone_db("default_acl")
     db.execute(ddl, user="postgres")
-    column = "proacl" if objtype == "f" else "relacl"
-    assert db.rows(acl_query.format(e=_EXPLODED.format(acl=column))) == want
+    assert db.rows(acl_query.format(acl=_pg.acl_text(column))) == want
 
 
 def test_clone_is_independent_and_uniquely_named(base_db, clone_db):
@@ -408,22 +437,56 @@ def test_migrate_rejects_unknown_or_missing_lane_files(clone_db):
     assert _pg.migrate(db, None) == []
 
 
-def test_reap_removes_only_containers_whose_owner_is_gone(prod_readonly):
+def test_owner_is_gone_needs_the_same_host_boot_and_pid_namespace():
+    me = _pg.owner_identity()
+    host, boot_id, pid_ns, pid, start = me.split("/")
+    assert _pg.owner_is_gone(me) is False
+    # Same host, boot and namespace, but the PID's start time differs: that process is gone.
+    assert _pg.owner_is_gone(f"{host}/{boot_id}/{pid_ns}/{pid}/0") is True
+    # Another host, boot or PID namespace: may be a live session we cannot see; never reaped.
+    assert _pg.owner_is_gone(f"other-host/{boot_id}/{pid_ns}/{pid}/0") is False
+    assert _pg.owner_is_gone(f"{host}/other-boot/{pid_ns}/{pid}/0") is False
+    assert _pg.owner_is_gone(f"{host}/{boot_id}/1/{pid}/0") is False
+    assert _pg.owner_is_gone("12345") is False
+    assert _pg.owner_is_gone("") is False
+
+
+def test_reap_removes_only_containers_whose_owner_is_provably_gone(prod_readonly):
     import secrets
 
     image = prod_readonly.image()
-    dead = _pg.CONTAINER_PREFIX + "reapdead" + secrets.token_hex(3)
-    alive = _pg.CONTAINER_PREFIX + "reapalive" + secrets.token_hex(3)
+    host, boot_id, pid_ns, pid, _ = _pg.owner_identity().split("/")
+    labelled = {
+        _pg.CONTAINER_PREFIX
+        + "reapdead"
+        + secrets.token_hex(3): f"{host}/{boot_id}/{pid_ns}/{pid}/0",
+        _pg.CONTAINER_PREFIX + "reapalive" + secrets.token_hex(3): _pg.owner_identity(),
+        _pg.CONTAINER_PREFIX
+        + "reapforeign"
+        + secrets.token_hex(3): f"other-host/{boot_id}/{pid_ns}/1/0",
+    }
     try:
-        for name, pid in ((dead, "999999999"), (alive, str(os.getpid()))):
+        for name, owner in labelled.items():
             subprocess.run(
-                ["docker", "create", "--name", name, "--label", f"{_pg.OWNER_LABEL}={pid}", image],
+                [
+                    "docker",
+                    "create",
+                    "--name",
+                    name,
+                    "--label",
+                    f"{_pg.OWNER_LABEL}={owner}",
+                    image,
+                ],
                 capture_output=True,
                 check=True,
             )
-        removed = _pg.reap_orphans()
-        assert dead in removed and alive not in removed
+        removed = set(_pg.reap_orphans())
+        dead, alive, foreign = labelled
+        assert dead in removed and alive not in removed and foreign not in removed
         assert subprocess.run(["docker", "inspect", dead], capture_output=True).returncode != 0
-        assert subprocess.run(["docker", "inspect", alive], capture_output=True).returncode == 0
+        for survivor in (alive, foreign):
+            assert (
+                subprocess.run(["docker", "inspect", survivor], capture_output=True).returncode == 0
+            )
     finally:
-        subprocess.run(["docker", "rm", "-f", dead, alive], capture_output=True)
+        subprocess.run(["docker", "rm", "-f", *labelled], capture_output=True)

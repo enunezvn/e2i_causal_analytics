@@ -79,8 +79,8 @@ def module_db(
     def get(upto: Optional[str]) -> _pg.PgConn:
         if upto not in made:
             conn = _pg.clone(base_db.pg, f"{request.module.__name__.rsplit('.', 1)[-1]}")
+            made[upto] = conn  # tracked before migrating, so a failed migration is still dropped
             _pg.migrate(conn, upto)
-            made[upto] = conn
         return made[upto]
 
     yield get
