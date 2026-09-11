@@ -192,10 +192,10 @@ function EValueIllustration({ outcome }: { outcome: Outcome }) {
   const x0 = 24, x1 = 216, y = 56; // risk-ratio scale 1.0 → 2.0
   const px = (rr: number) => x0 + ((rr - 1) / 1) * (x1 - x0);
   const benchmark = 1.25; // illustrative: the confounding the adjustment removed
-  const marker = ok ? 1.6 : 1.12;
+  const marker = ok ? 1.6 : 1.12; // the point-estimate risk ratio (rr_point), compared to the benchmark
   return (
     <>
-      <text x="120" y="14" fontSize="9" textAnchor="middle" className={MUTED}>risk ratio needed to explain the effect away →</text>
+      <text x="120" y="14" fontSize="9" textAnchor="middle" className={MUTED}>point-estimate risk ratio vs the confounding the adjustment removed →</text>
       <rect x={px(1)} y={y - 9} width={px(benchmark) - px(1)} height="18" rx="3" fill={FAIL} fillOpacity="0.15" />
       <rect x={px(benchmark)} y={y - 9} width={px(2) - px(benchmark)} height="18" rx="3" fill={PASS} fillOpacity="0.15" />
       <line x1={x0} y1={y} x2={x1} y2={y} className={AXIS} strokeWidth="1" />
@@ -245,8 +245,8 @@ const ILLUSTRATION_ALT: Record<RefutationTestId, Record<Outcome, string>> = {
     fail: 'A flat, wide histogram of resampled effects whose interval is far wider than the original — the test fails.',
   },
   sensitivity_e_value: {
-    pass: 'A risk-ratio scale from 1 to 2 with the E-value marker beyond measured confounding, in the robust zone.',
-    fail: 'A risk-ratio scale from 1 to 2 with the E-value marker within measured confounding — a caveat, not a block.',
+    pass: 'A risk-ratio scale from 1 to 2 with the point-estimate risk ratio beyond the measured-confounding benchmark, in the robust zone.',
+    fail: 'A risk-ratio scale from 1 to 2 with the point-estimate risk ratio within the measured-confounding benchmark — a caveat, not a block.',
   },
 };
 

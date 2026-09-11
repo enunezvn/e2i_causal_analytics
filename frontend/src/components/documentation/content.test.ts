@@ -151,8 +151,12 @@ describe('refutation documentation content (2026-09-10 sensitivity reading)', ()
     expect(sens).toBeDefined();
     expect(sens!.critical).toBe(false);
     expect(sens!.passRule).toMatch(/measured confounding/i);
+    // Guard sanity: the same literal must reject the old copy.
+    expect('E-value ≥ 2.0').toMatch(/2\.0/);
     expect(sens!.passRule).not.toMatch(/2\.0/);
-    expect(sens!.failSign).toMatch(/null finding|within measured confounding/i);
+    // Both warning readings are pinned: the caveat and the null finding.
+    expect(sens!.failSign).toMatch(/could account for the whole effect/i);
+    expect(sens!.failSign).toMatch(/null finding/i);
   });
 
   it('says two tests are critical', () => {
