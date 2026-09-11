@@ -817,6 +817,298 @@ def _reconstruct_dowhy_artifacts(
     return model, identified_estimand, estimate
 
 
+# #2007: the smallest non-null row basis on which the negative-control fit is
+# attempted. Below it the SAME production estimator (RandomForest nuisances,
+# min_samples_leaf=5, 50 trees, K-fold cross-fitting) has too few rows per
+# treatment x fold cell for any interval to mean anything -- and a wide
+# zero-containing interval on a handful of rows would read PASSED ("the control
+# stayed null") when nothing was measured. Pinned, not derived: the runner's
+# ``negative_control_too_few_rows`` is the honest reading below it.
+NEGATIVE_CONTROL_MIN_ROWS = 30
+
+# The interval is only trusted when its point reproduces ``estimate.value`` to
+# floating-point noise: measured 2026-09-11, a hand-built X in the caller's
+# column order gave -1.16 vs +0.03 on one pair (DoWhy sorts its effect-modifier
+# columns), so identity is the guard against reading a DIFFERENT fit's interval.
+_NEGATIVE_CONTROL_POINT_REL_TOL = 1e-6
+_NEGATIVE_CONTROL_ALPHA = 0.05
+
+
+def _econml_interval_on_dowhy_frame(estimate: Any) -> Tuple[float, float, float]:
+    """``(point, lo, hi)`` from the fitted econml estimator DoWhy wraps.
+
+    Measured 2026-09-11 (``docs/demos/results/2026-09-11_negative_control_disproof/
+    ci_availability.md``): DoWhy's ``get_confidence_intervals()`` is NaN for all
+    three econml production methods, but ``estimate.estimator.estimator`` (the
+    econml object inside DoWhy's ``Econml`` wrapper) run on DoWhy's OWN encoded
+    effect-modifier frame (``estimate.estimator._effect_modifiers``, columns in
+    DoWhy's sorted order) reproduces ``estimate.value`` exactly in <= 0.3 s on
+    LinearDML / CausalForestDML / DRLearner. Never rebuild X from the caller's
+    columns: the order differs.
+    """
+    wrapper = estimate.estimator
+    econ = wrapper.estimator
+    frame = getattr(wrapper, "_effect_modifiers", None)
+    X = None if frame is None or len(frame) == 0 else np.asarray(frame, dtype=float)
+    inference = econ.ate_inference(X)
+    point_arr = np.asarray(inference.mean_point, dtype=float).ravel()
+    lo_arr, hi_arr = (
+        np.asarray(v, dtype=float).ravel()
+        for v in inference.conf_int_mean(alpha=_NEGATIVE_CONTROL_ALPHA)
+    )
+    if point_arr.size != 1 or lo_arr.size != 1 or hi_arr.size != 1:
+        raise ValueError(
+            f"expected a scalar ATE inference, got shapes {point_arr.shape}/{lo_arr.shape}"
+        )
+    return float(point_arr[0]), float(lo_arr[0]), float(hi_arr[0])
+
+
+def _linear_regression_interval(estimate: Any) -> Tuple[float, float, float]:
+    """``(point, lo, hi)`` for ``backdoor.linear_regression`` from the statsmodels
+    result DoWhy keeps (``LinearRegressionEstimator.model``, dowhy 0.14
+    ``regression_estimator.py``).
+
+    The reconstruction passes the common causes as EFFECT MODIFIERS, so DoWhy's
+    OLS design is ``[const, T, W..., T*X...]`` and ``estimate.value`` is
+    ``mean(predict(T=1) - predict(T=0))`` = ``b_T + sum(b_TX * mean(X))`` -- NOT
+    the treatment coefficient (measured 2026-09-11 on the seed-21 frame:
+    ``params[1]`` = -0.123 vs ``value`` = +0.003; DoWhy's own
+    ``_estimate_confidence_intervals`` raises NotImplementedError there). The
+    contrast ``c = mean(F(T=1) - F(T=0), axis=0)`` built with DoWhy's own
+    ``_build_features`` on the estimate's own data makes ``c @ params`` the value
+    by linearity, and ``t_test(c)`` its t-interval (df_resid) -- which collapses
+    to ``conf_int()``'s treatment row when there are no modifiers.
+    """
+    inner = estimate.estimator
+    sm_result = inner.model
+    data = estimate._data
+    treatment_cols = list(inner._target_estimand.treatment_variable)
+    if len(treatment_cols) != 1:
+        raise ValueError(f"one treatment column expected, got {treatment_cols}")
+
+    def _features_at(value: Any) -> Any:
+        # Mirror RegressionEstimator.interventional_outcomes exactly: set the
+        # treatment, keep its dtype, rebuild the design through DoWhy's encoders.
+        frame = data.copy()
+        original_type = frame[treatment_cols].dtypes
+        frame[treatment_cols] = value
+        frame[treatment_cols] = frame[treatment_cols].astype(original_type, copy=False)
+        return np.asarray(inner._build_features(frame), dtype=float)
+
+    contrast = (_features_at(estimate.treatment_value) - _features_at(estimate.control_value)).mean(
+        axis=0
+    )
+    t_test = sm_result.t_test(contrast)
+    point = float(np.asarray(t_test.effect, dtype=float).ravel()[0])
+    bounds = np.asarray(t_test.conf_int(alpha=_NEGATIVE_CONTROL_ALPHA), dtype=float).ravel()
+    return point, float(bounds[0]), float(bounds[1])
+
+
+def _negative_control_interval(
+    estimate: Any, dowhy_method: str
+) -> Optional[Tuple[float, Tuple[float, float]]]:
+    """``(point, (lo, hi))`` for a rebuilt DoWhy estimate, or ``None`` when no
+    interval can be read that reproduces ``estimate.value`` (#2007).
+
+    econml methods read the fitted estimator on DoWhy's own effect-modifier
+    frame; ``backdoor.linear_regression`` reads the statsmodels contrast; every
+    other method (``propensity_score_weighting``, unknown) has no analytic
+    interval here and returns ``None``. ``get_confidence_intervals()`` is NEVER
+    called (NaN on econml, a 20-94 s bootstrap on the backdoor methods).
+    ``None`` is the honest answer -- the caller maps it to the runner's
+    ``negative_control_ci_unavailable`` -- never a placeholder number.
+    """
+    try:
+        value = float(estimate.value)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if not math.isfinite(value):
+        return None
+    try:
+        if dowhy_method.startswith("backdoor.econml."):
+            point, lo, hi = _econml_interval_on_dowhy_frame(estimate)
+        elif dowhy_method == "backdoor.linear_regression":
+            point, lo, hi = _linear_regression_interval(estimate)
+        else:
+            logger.debug("No analytic negative-control interval for dowhy method %r.", dowhy_method)
+            return None
+    except Exception as exc:  # noqa: BLE001 - a missing interval is a SKIPPED reading
+        logger.warning(
+            "Negative-control interval unavailable for %s (%s: %s).",
+            dowhy_method,
+            type(exc).__name__,
+            exc,
+        )
+        return None
+    if abs(point - value) > _NEGATIVE_CONTROL_POINT_REL_TOL * max(1.0, abs(value)):
+        logger.warning(
+            "Negative-control interval refused for %s: inference point %.6g does not "
+            "reproduce the estimate value %.6g (a different fit's interval).",
+            dowhy_method,
+            point,
+            value,
+        )
+        return None
+    if not (math.isfinite(lo) and math.isfinite(hi)) or lo > hi:
+        logger.warning(
+            "Negative-control interval refused for %s: bounds [%s, %s] around %.6g.",
+            dowhy_method,
+            lo,
+            hi,
+            point,
+        )
+        return None
+    return point, (lo, hi)
+
+
+def _negative_control_fit_sync(
+    *,
+    frame: Any,
+    treatment: str,
+    nc_outcome: str,
+    common_causes: List[str],
+    estimation_result: Dict[str, Any],
+) -> Optional[Tuple[float, Tuple[float, float]]]:
+    """The pooled CPU work of the negative-control reading: the SAME model
+    build as the primary reconstruction (same method, same init params, same
+    encoding) with the control as the outcome, then its interval."""
+    _, _, estimate, dowhy_method = _build_dowhy_estimate(
+        data=frame,
+        treatment=treatment,
+        outcome=nc_outcome,
+        common_causes=common_causes,
+        estimation_result=estimation_result,
+    )
+    return _negative_control_interval(estimate, dowhy_method)
+
+
+async def _fit_negative_control(
+    *,
+    refutation_data: Any,
+    negative_control_data: Any,
+    treatment: str,
+    nc_outcome: str,
+    common_causes: List[str],
+    estimation_result: Dict[str, Any],
+    deadline: Optional[float],
+) -> Tuple[Optional[Tuple[str, float, Tuple[float, float], int]], Optional[str]]:
+    """Fit the declared negative-control outcome on the refutation frame and
+    return ``(tuple, skip_reason)`` for ``RefutationRunner.run_all_tests`` (#2007).
+
+    ``tuple`` is ``(nc_outcome, effect, (lo, hi), n_rows_used)``; ``skip_reason``
+    is one of the runner's closed ``NEGATIVE_CONTROL_SKIP_REASONS``. Exactly one
+    of the two is set.
+
+    The control rides SEPARATELY from ``estimation_data`` as a one-column frame
+    sharing the loader's index (T3: inside the estimation frame it would be
+    tiered as a covariate by guided discovery and adjusted on by the estimator's
+    fallback). The #1419 subsample is ``frame.iloc[indices]`` and keeps the
+    labels, so the control is aligned with ``.loc`` on ``refutation_data.index``
+    -- every label must exist, or the reading is refused
+    (``negative_control_ci_unavailable``) rather than silently reindexed.
+
+    A continuous treatment is binarized at the REFUTATION frame's median BEFORE
+    the control's NULL rows are dropped, so the control fit conditions on the
+    same split as the primary fit (the build would otherwise re-split at the
+    smaller frame's median -- a different estimand).
+
+    Any failure inside the fit is a SKIPPED reading (logged at WARNING), never a
+    failure of the primary analysis -- and never a fabricated PASSED.
+    ``ComputeBudgetExpired`` propagates like the other bounded fits.
+    """
+    if (
+        negative_control_data is None
+        or not hasattr(negative_control_data, "columns")
+        or nc_outcome not in negative_control_data.columns
+    ):
+        return None, "negative_control_column_missing"
+
+    try:
+        if not hasattr(refutation_data, "index") or nc_outcome in refutation_data.columns:
+            logger.warning(
+                "Negative-control %s cannot be aligned: refutation frame is %s%s; refusing.",
+                nc_outcome,
+                type(refutation_data).__name__,
+                " and already carries the control column"
+                if hasattr(refutation_data, "columns") and nc_outcome in refutation_data.columns
+                else "",
+            )
+            return None, "negative_control_ci_unavailable"
+        if not refutation_data.index.is_unique or not negative_control_data.index.is_unique:
+            logger.warning(
+                "Negative-control %s cannot be aligned: duplicate index labels "
+                "(refutation unique=%s, control unique=%s); refusing to reindex.",
+                nc_outcome,
+                refutation_data.index.is_unique,
+                negative_control_data.index.is_unique,
+            )
+            return None, "negative_control_ci_unavailable"
+        missing_labels = refutation_data.index.difference(negative_control_data.index)
+        if len(missing_labels) > 0:
+            logger.warning(
+                "Negative-control %s index does not cover the refutation frame: %d of %d "
+                "labels missing (first: %s); refusing to reindex.",
+                nc_outcome,
+                len(missing_labels),
+                len(refutation_data.index),
+                list(missing_labels[:3]),
+            )
+            return None, "negative_control_ci_unavailable"
+
+        nc_col = negative_control_data.loc[refutation_data.index, nc_outcome]
+        frame = refutation_data.join(nc_col)
+        treatment_arr = frame[treatment].to_numpy()
+        if not np.array_equal(treatment_arr, treatment_arr.astype(int)):
+            frame = frame.copy()
+            frame[treatment] = (treatment_arr > np.median(treatment_arr)).astype(int)
+        frame = frame.dropna(subset=[nc_outcome])
+    except Exception as exc:  # noqa: BLE001 - alignment/coercion failure: SKIPPED, not fatal
+        logger.warning(
+            "Negative-control %s could not be prepared (%s: %s); the reading is skipped.",
+            nc_outcome,
+            type(exc).__name__,
+            exc,
+        )
+        return None, "negative_control_ci_unavailable"
+
+    n_rows = int(len(frame))
+    if n_rows < NEGATIVE_CONTROL_MIN_ROWS or frame[nc_outcome].nunique(dropna=True) < 2:
+        logger.info(
+            "Negative-control %s not fitted: %d non-null rows (min %d), %d distinct values.",
+            nc_outcome,
+            n_rows,
+            NEGATIVE_CONTROL_MIN_ROWS,
+            int(frame[nc_outcome].nunique(dropna=True)),
+        )
+        return None, "negative_control_too_few_rows"
+
+    try:
+        interval = await run_bounded_with_budget(
+            _negative_control_fit_sync,
+            budget_deadline=deadline,
+            frame=frame,
+            treatment=treatment,
+            nc_outcome=nc_outcome,
+            common_causes=common_causes,
+            estimation_result=estimation_result,
+        )
+    except ComputeBudgetExpired:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the control must never fail the primary
+        logger.warning(
+            "Negative-control fit on %s failed (%s: %s); the reading is skipped and the "
+            "primary analysis is unaffected.",
+            nc_outcome,
+            type(exc).__name__,
+            exc,
+        )
+        return None, "negative_control_ci_unavailable"
+    if interval is None:
+        return None, "negative_control_ci_unavailable"
+    effect, (lo, hi) = interval
+    return (nc_outcome, effect, (lo, hi), n_rows), None
+
+
 class RefutationNode:
     """Runs refutation tests on causal estimates.
 
@@ -1685,6 +1977,50 @@ class RefutationNode:
                         cal_err,
                     )
 
+            # #2007: the negative-control reading -- the SAME frame, adjustment
+            # set and estimator spec as the primary reconstruction above, with
+            # the declared control as the outcome. Only when the API declared
+            # one (``negative_control_outcome``); with no key the runner emits
+            # its own ``no_negative_control_declared`` SKIPPED row. The tuple /
+            # skip reason go to ``run_all_tests`` as-is: a caller reason wins
+            # over a tuple there, and an unknown token raises.
+            negative_control_kwargs: Dict[str, Any] = {}
+            nc_key = state.get("negative_control_outcome")
+            if nc_key:
+                nc_data = (state.get("data_cache") or {}).get("negative_control_data")
+                try:
+                    nc_tuple, nc_skip_reason = await _fit_negative_control(
+                        refutation_data=refutation_data,
+                        negative_control_data=nc_data,
+                        treatment=treatment,
+                        nc_outcome=str(nc_key),
+                        common_causes=common_causes,
+                        estimation_result=cast(Dict[str, Any], estimation_result),
+                        deadline=deadline,
+                    )
+                except ComputeBudgetExpired as be:
+                    raise _queued_budget_error() from be
+                negative_control_kwargs = {
+                    "negative_control": nc_tuple,
+                    "negative_control_skip_reason": nc_skip_reason,
+                }
+                if nc_tuple is not None:
+                    logger.info(
+                        "Negative-control outcome %s: effect %+.4f [%+.4f, %+.4f] on "
+                        "n = %d rows (#2007).",
+                        nc_tuple[0],
+                        nc_tuple[1],
+                        nc_tuple[2][0],
+                        nc_tuple[2][1],
+                        nc_tuple[3],
+                    )
+                else:
+                    logger.info(
+                        "Negative-control outcome %s not read: %s (#2007).",
+                        nc_key,
+                        nc_skip_reason,
+                    )
+
             # Run all refutation tests
             try:
                 suite: RefutationSuite = await run_bounded_with_budget(
@@ -1737,6 +2073,7 @@ class RefutationNode:
                     # information (SKIPPED) instead of a benchmarked reading.
                     # Fail-closed: absent/False keeps the full observational gate.
                     randomized_design=bool(state.get("randomized_design")),
+                    **negative_control_kwargs,
                 )
             except ComputeBudgetExpired as be:
                 raise _queued_budget_error() from be
