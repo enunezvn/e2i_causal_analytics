@@ -649,6 +649,7 @@ class TestDefaultConfigLatencyBounds:
         runner = RefutationRunner()
         runner._run_random_common_cause_test(
             original_effect=0.15,
+            original_ci=(0.08, 0.22),
             causal_model=stub_model,
             identified_estimand=object(),
             estimate=_stub_estimate(),
@@ -745,6 +746,7 @@ class TestRandomCommonCauseTest:
         with pytest.raises(RefutationError) as exc_info:
             runner._run_random_common_cause_test(
                 original_effect=0.15,
+                original_ci=(0.08, 0.22),
                 causal_model=None,
                 identified_estimand=None,
                 estimate=None,
@@ -759,6 +761,7 @@ class TestRandomCommonCauseTest:
         )
         result = runner._run_random_common_cause_test(
             original_effect=0.15,
+            original_ci=(0.08, 0.22),
             causal_model=stub_model,
             identified_estimand=object(),
             estimate=_stub_estimate(),
@@ -774,6 +777,7 @@ class TestRandomCommonCauseTest:
         )
         result = runner._run_random_common_cause_test(
             original_effect=0.15,
+            original_ci=(0.08, 0.22),
             causal_model=stub_model,
             identified_estimand=object(),
             estimate=_stub_estimate(),

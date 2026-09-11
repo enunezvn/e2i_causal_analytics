@@ -371,10 +371,18 @@ def _degenerate_ci_skip_result(
     original_ci: Tuple[float, float],
     config_details: Dict[str, Any],
     execution_time_ms: float = 0.0,
+    unscorable: str = "coverage / width ratio",
 ) -> RefutationResult:
     """Honest SKIPPED, decided BEFORE any re-fit, when the reported interval has
     no width: coverage of a point and a width ratio against ~0 cannot be scored
-    and would blame the estimate for an upstream degenerate interval."""
+    and would blame the estimate for an upstream degenerate interval.
+
+    ``unscorable`` names the quantity the caller could not score (the two
+    distributional tests score coverage / width ratio; random_common_cause
+    scores the shift in SE units, #2005) so one helper -- one ``reason``
+    vocabulary, ``original_ci_degenerate`` -- serves every interval-referenced
+    test without misdescribing what was skipped.
+    """
     name = test_name.value
     return RefutationResult(
         test_name=test_name,
@@ -384,7 +392,7 @@ def _degenerate_ci_skip_result(
         details={
             "reason": (
                 "original_ci_degenerate — the reported interval has no width, so "
-                "coverage / width ratio cannot be scored; the critical gates decide "
+                f"{unscorable} cannot be scored; the critical gates decide "
                 "the suite"
             ),
             "message": (
@@ -399,6 +407,107 @@ def _degenerate_ci_skip_result(
         },
         execution_time_ms=execution_time_ms,
     )
+
+
+_Z975 = 1.959964  # two-sided 95 % normal quantile: half-width / SE of a reported interval
+
+
+def _score_common_cause_shift(
+    original_effect: float,
+    refuted_effect: float,
+    original_ci: Tuple[float, float],
+    reference_n: Optional[int],
+    refit_n: Optional[int],
+    thresholds: Dict[str, float],
+) -> Tuple[RefutationStatus, Dict[str, Any]]:
+    """Score a random-common-cause shift in units of the reported interval's SE (#2005).
+
+    Pure: no re-fit, no I/O. The caller has already decided the interval is
+    finite (``_require_finite_ci``) and has width (``_degenerate_ci_skip_result``).
+
+    Rule::
+
+        reported_se  = (ci_upper - ci_lower) / (2 * 1.959964)
+        scale        = sqrt(reference_n / refit_n)   when both counts are known,
+                                                     > 0, and refit_n < reference_n
+                     = 1.0                            otherwise
+        reference_se = reported_se * scale
+        shift_se     = |refuted - original| / reference_se
+        PASSED  <= thresholds["pass"]     (1.0)
+        WARNING <= thresholds["warning"]  (2.0)
+        FAILED  otherwise
+
+    Why SE units and not ``|delta| / |effect|`` (the rule this replaced):
+    measured 2026-09-11 on the 136 live agent runs, every one of the 7 FAILED
+    rows had |ATE| <= 0.047 and an ABSOLUTE shift smaller than the PASSED rows'
+    -- the percentage denominator made a small true effect fail on the same
+    perturbation noise a large effect absorbs (a scale-dependent defect, the
+    same class as the retired E-value cutoffs). The reported interval is the
+    estimator's own statement of its precision, so a shift within one SE is
+    indistinguishable from sampling noise whatever the effect's size.
+
+    Why the ``sqrt(reference_n / refit_n)`` scale: the refits run on the frame
+    the runner was handed, which #1419 subsamples to the selection row cap
+    when the estimation frame is larger, while the reported interval comes
+    from the FULL frame. A 5 000-row refit of a 37 515-row estimate has an SE
+    ~2.7x the reported one; scoring it against the full-frame SE over-flags
+    (live: 3 PASSED -> WARNING rows, all subsampled, 0.39-0.55 SE against the
+    refit frame). The scale is persisted (``reference_se_scale``) with both
+    counts so a reader can undo it; it never shrinks the SE (a refit frame at
+    least as large as the reference keeps 1.0) and a missing or zero count
+    keeps 1.0 rather than guessing.
+    """
+    lo, hi = float(original_ci[0]), float(original_ci[1])
+    reported_se = (hi - lo) / (2.0 * _Z975)
+    scale = 1.0
+    if reference_n and refit_n and 0 < refit_n < reference_n:
+        scale = float(np.sqrt(float(reference_n) / float(refit_n)))
+    reference_se = reported_se * scale
+    shift = abs(float(refuted_effect) - float(original_effect))
+    shift_se = shift / reference_se
+    pass_se = float(thresholds["pass"])
+    warning_se = float(thresholds["warning"])
+    scale_txt = (
+        f"; reference SE scaled x{scale:.2f} from the reported interval on "
+        f"{reference_n} rows to the {refit_n}-row refit frame"
+        if scale != 1.0
+        else ""
+    )
+    if shift_se <= pass_se:
+        status = RefutationStatus.PASSED
+        message = (
+            "Effect remains stable when adding a random common cause: shift "
+            f"{shift_se:.2f} SE of the reported interval (PASSED at <= {pass_se:g} SE"
+            f"{scale_txt})"
+        )
+    elif shift_se <= warning_se:
+        status = RefutationStatus.WARNING
+        message = (
+            "Effect somewhat sensitive to a random common cause: shift "
+            f"{shift_se:.2f} SE of the reported interval (WARNING between {pass_se:g} "
+            f"and {warning_se:g} SE{scale_txt})"
+        )
+    else:
+        status = RefutationStatus.FAILED
+        message = (
+            "WARNING: Effect highly sensitive to a random common cause: shift "
+            f"{shift_se:.2f} SE of the reported interval (FAILED above {warning_se:g} SE"
+            f"{scale_txt})"
+        )
+    details: Dict[str, Any] = {
+        "message": message,
+        "rule": "shift_vs_reported_se",
+        "reference_ci": (lo, hi),
+        "reported_se": reported_se,
+        "reference_se_scale": scale,
+        "reference_se": reference_se,
+        "shift": shift,
+        "shift_se_units": shift_se,
+        "reference_n": reference_n,
+        "refit_n": refit_n,
+        "thresholds_se": {"pass": pass_se, "warning": warning_se},
+    }
+    return status, details
 
 
 def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
@@ -770,9 +879,16 @@ class RefutationRunner:
             "pass": 0.05,
             "warning": 0.10,
         },
-        "common_cause_delta": {
-            "pass": 0.20,  # Effect change must be < 20%
-            "warning": 0.30,  # Warning if 20% < delta < 30%
+        "common_cause_shift_se": {
+            # |refuted - original| in units of the REPORTED interval's SE, scaled
+            # to the refit frame (``_score_common_cause_shift``, #2005). The
+            # ``common_cause_delta`` rule this replaced (|delta| / |effect| at
+            # 20 % / 30 %) was scale-dependent: measured 2026-09-11, all 7 live
+            # FAILED rows had |ATE| <= 0.047 and smaller absolute shifts than the
+            # PASSED rows. Live re-band under these cutoffs: the 7 FAILED become
+            # 3 PASSED / 3 WARNING / 1 FAILED, no PASSED row becomes FAILED.
+            "pass": 1.0,  # shift <= 1 SE: within the estimate's own noise
+            "warning": 2.0,  # 1-2 SE: sensitive; above 2 SE: FAILED
         },
         "subset_ci_coverage": {
             "pass": 0.80,  # 80% of subsets must contain original effect
@@ -848,6 +964,8 @@ class RefutationRunner:
         covariate_bias_factors: Optional[Dict[str, float]] = None,
         n_rows: Optional[int] = None,
         covariates_measured: Optional[int] = None,
+        reference_n: Optional[int] = None,
+        refit_n: Optional[int] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -938,6 +1056,18 @@ class RefutationRunner:
                 be scored" instead of "no measured confounders". Same precedence
                 as ``n_rows``: the caller's value wins, else the count the runner's
                 own benchmark-inputs branch computed, else 0.
+            reference_n: Row count of the frame the REPORTED interval
+                (``original_ci``) was estimated on. The random_common_cause test
+                scores its shift in units of that interval's SE, scaled to the
+                frame the refits ran on by ``sqrt(reference_n / refit_n)``
+                (#2005, ``_score_common_cause_shift``). ``None`` falls back to
+                ``n_rows`` -- the same full-frame count -- so a caller that
+                already passes ``n_rows`` gets the scaling without repeating it.
+            refit_n: Row count of the frame the refuters actually re-fit on.
+                ``None`` falls back to ``len(data)`` when ``data`` is given (the
+                refutation frame, a #1419 subsample on the agent path), else the
+                scale stays 1.0. Both counts are persisted on the test's details
+                with the scale applied so a reader can undo it.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -1000,6 +1130,19 @@ class RefutationRunner:
         # and seed their draws from the estimate id so a re-run reproduces its
         # evidence (None → unseeded, the pre-lane-1 behaviour).
         resample_seed = _resample_seed_for(estimate_id)
+
+        # #2005: the random_common_cause shift is scored against the reported
+        # interval's SE scaled to the refit frame. ``reference_n`` is the frame
+        # the interval came from (falls back to ``n_rows``, the same count);
+        # ``refit_n`` is the frame the refits run on (falls back to the frame
+        # the runner was handed). Either unknown -> no scaling (scale 1.0).
+        if reference_n is None:
+            reference_n = n_rows
+        if refit_n is None and data is not None:
+            try:
+                refit_n = int(len(data))
+            except TypeError:
+                refit_n = None
 
         tests: List[RefutationResult] = []
 
@@ -1220,10 +1363,13 @@ class RefutationRunner:
                     trace_id=trace_id,
                     estimate_id=estimate_id,
                     original_effect=original_effect,
+                    original_ci=original_ci,
                     causal_model=causal_model,
                     identified_estimand=identified_estimand,
                     estimate=estimate,
                     use_dowhy=use_dowhy,
+                    reference_n=reference_n,
+                    refit_n=refit_n,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1568,23 +1714,52 @@ class RefutationRunner:
     def _run_random_common_cause_test(
         self,
         original_effect: float,
+        original_ci: Tuple[float, float],
         causal_model: Optional[Any],
         identified_estimand: Optional[Any],
         estimate: Optional[Any],
         use_dowhy: bool,
+        *,
+        reference_n: Optional[int] = None,
+        refit_n: Optional[int] = None,
     ) -> RefutationResult:
         """Run random common cause refutation test.
 
-        Adds a random variable as a common cause. If the effect changes
-        significantly, unmeasured confounding may be present.
+        Adds a random variable as a common cause and re-estimates. The shift
+        ``|refuted - original|`` is scored in units of the REPORTED interval's
+        SE, scaled to the refit frame (``_score_common_cause_shift``, #2005):
+        PASSED within 1 SE, WARNING within 2, FAILED beyond. ``delta_percent``
+        is still populated (it is the persisted ``causal_validations`` column
+        and descriptive text reads it) but no longer decides.
+
+        ``original_ci`` is the estimation node's reported interval, the same
+        reference data_subset and bootstrap use; it is checked BEFORE any
+        refit -- a non-finite endpoint fails closed (``_require_finite_ci``),
+        a zero-width interval is an honest SKIPPED
+        (``_degenerate_ci_skip_result``). ``reference_n`` / ``refit_n`` are
+        the row counts of the interval's frame and of the refit frame.
         """
         import time
 
         start_time = time.time()
 
         test_name = RefutationTestType.RANDOM_COMMON_CAUSE
+        config_details = {"effect_strength": self.config["random_common_cause"]["effect_strength"]}
 
         if use_dowhy and causal_model is not None:
+            # The reference interval decides first: no refit is spent on an
+            # interval the shift cannot be scored against (same order as
+            # data_subset / bootstrap).
+            _require_finite_ci(original_ci, "random_common_cause", original_effect)
+            if original_ci[1] - original_ci[0] <= 0:
+                return _degenerate_ci_skip_result(
+                    test_name,
+                    original_effect,
+                    original_ci,
+                    config_details,
+                    execution_time_ms=(time.time() - start_time) * 1000,
+                    unscorable="the shift in SE units",
+                )
             try:
                 # Pass num_simulations ONLY when configured, so prod (no key set)
                 # keeps DoWhy's own default exactly. DoWhy defaults to 100
@@ -1634,21 +1809,21 @@ class RefutationRunner:
                 },
             )
 
-        # Calculate delta percentage
+        # Descriptive only (persisted column; ``_describe_failure`` prints it).
         delta_percent = (
             abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
         )
 
-        # Determine status: effect should remain stable
-        if delta_percent <= self.thresholds["common_cause_delta"]["pass"] * 100:
-            status = RefutationStatus.PASSED
-            message = "Effect remains stable when adding random common cause"
-        elif delta_percent <= self.thresholds["common_cause_delta"]["warning"] * 100:
-            status = RefutationStatus.WARNING
-            message = "Effect somewhat sensitive to random confounders"
-        else:
-            status = RefutationStatus.FAILED
-            message = "WARNING: Effect highly sensitive to random confounders"
+        # The verdict: the shift in units of the reported interval's SE (#2005).
+        status, details = _score_common_cause_shift(
+            original_effect=original_effect,
+            refuted_effect=refuted_effect,
+            original_ci=original_ci,
+            reference_n=reference_n,
+            refit_n=refit_n,
+            thresholds=self.thresholds["common_cause_shift_se"],
+        )
+        details.update(config_details)
 
         execution_time = (time.time() - start_time) * 1000
 
@@ -1659,10 +1834,7 @@ class RefutationRunner:
             refuted_effect=refuted_effect,
             p_value=p_value,
             delta_percent=delta_percent,
-            details={
-                "message": message,
-                "effect_strength": self.config["random_common_cause"]["effect_strength"],
-            },
+            details=details,
             execution_time_ms=execution_time,
         )
 

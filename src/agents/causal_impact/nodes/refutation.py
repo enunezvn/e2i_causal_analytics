@@ -1671,6 +1671,19 @@ class RefutationNode:
                     # the runner fall back to len(data) — the refutation subsample.
                     # A computed 0 (frame present, no usable rows) must stay 0.
                     n_rows=benchmark_inputs.n_rows,
+                    # #2005: the random_common_cause shift is scored in units of
+                    # the REPORTED interval's SE scaled to the refit frame. The
+                    # interval came from the full estimation frame
+                    # (``refutation_n_rows_total``); the refits run on
+                    # ``refutation_data`` (``refutation_n_rows``, a #1419
+                    # subsample above the row cap). Both are the disclosure
+                    # counts stamped on every test's details below, so a reader
+                    # can undo the scale from the persisted row alone.
+                    # (``estimation_result["n_samples"]`` is NOT a key the
+                    # estimation node sets -- ``sample_size`` is -- so it is not
+                    # the source here.)
+                    reference_n=data_disclosure["refutation_n_rows_total"],
+                    refit_n=data_disclosure["refutation_n_rows"],
                     # How many backdoor covariates the FULL frame carried, scoreable
                     # or not: with no factor and no naive contrast this is what makes
                     # the reading say "measured confounders could not be scored"
