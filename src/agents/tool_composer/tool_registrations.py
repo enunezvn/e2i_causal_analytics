@@ -58,7 +58,7 @@ import asyncio
 import math
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -1039,11 +1039,16 @@ def causal_effect_estimator(
 
     # --- 5. Real uncertainty of the reported effect, and what was estimated. ---
     primary_result = pipeline_output.get("primary_result") or {}
-    uncertainty = _derive_uncertainty(ate=ate_value, primary_result=primary_result)
+    libraries_used = list(pipeline_output.get("libraries_used") or [])
+    errors = list(pipeline_output.get("errors") or [])
+    uncertainty = _derive_uncertainty(
+        ate=ate_value, primary_result=primary_result, libraries_used=libraries_used, errors=errors
+    )
     method_used, estimand, effect_scale = _describe_estimate(
         ate=ate_value,
         primary_result=primary_result,
-        libraries_used=list(pipeline_output.get("libraries_used") or []),
+        libraries_used=libraries_used,
+        errors=errors,
         treatment_values=df.get(treatment),
         treatment=treatment,
         outcome=outcome,
@@ -1142,7 +1147,64 @@ def _primary_estimate(primary_result: Dict[str, Any]) -> Tuple[Optional[str], Op
     return ("networkx" if "is_dag" in primary_result else None), None
 
 
-def _derive_uncertainty(*, ate: float, primary_result: Dict[str, Any]) -> Dict[str, Any]:
+# Libraries whose result is an effect estimate the pipeline consensus can blend.
+_EFFECT_LIBRARIES = ("dowhy", "econml", "causalml")
+
+# EconML estimators whose reported ATE interval is a sampling interval: econml's
+# ``ate_inference`` (causal_forest, linear_dml, drlearner) or OLS's Welch / seeded
+# bootstrap SE. The S/T/X-learner and OrthoForest-fallback intervals are
+# ``std(CATE) / sqrt(n)`` — the spread of heterogeneous effects, not an SE (#1188
+# measured that construction ~50x too narrow). The selector's default set is exactly
+# these four.
+_ECONML_SAMPLING_INTERVAL_ESTIMATORS = frozenset(
+    {"causal_forest", "linear_dml", "drlearner", "ols"}
+)
+
+
+class _EstimateProvenance(NamedTuple):
+    """Which library the reported effect came from (#2014)."""
+
+    library: Optional[str]  # the primary library
+    own_effect: Optional[float]  # the primary library's own estimate
+    effect_libraries: List[str]  # libraries that ran without error and estimate effects
+    is_primary_estimate: bool  # the reported ate IS the primary library's sole estimate
+
+
+def _estimate_provenance(
+    *,
+    ate: float,
+    primary_result: Dict[str, Any],
+    libraries_used: List[str],
+    errors: List[Any],
+) -> _EstimateProvenance:
+    """Whether the reported ``ate`` is the primary library's own, unblended estimate.
+
+    Decided from provenance, not only numbers: the consensus blends every effect
+    library that ran, so two libraries agreeing (or a blend landing on the primary's
+    value) must not borrow the primary's uncertainty. A library counts when it ran
+    and reported no error; one that ran but contributed no effect is still counted,
+    which can only withhold an interval, never invent one.
+    """
+    library, own_effect = _primary_estimate(primary_result)
+    failed = {e.get("library") for e in errors if isinstance(e, dict)}
+    effect_libraries = [
+        lib for lib in libraries_used if lib in _EFFECT_LIBRARIES and lib not in failed
+    ]
+    is_primary_estimate = (
+        own_effect is not None
+        and effect_libraries == [library]
+        and math.isclose(own_effect, ate, rel_tol=1e-9, abs_tol=1e-12)
+    )
+    return _EstimateProvenance(library, own_effect, effect_libraries, is_primary_estimate)
+
+
+def _derive_uncertainty(
+    *,
+    ate: float,
+    primary_result: Dict[str, Any],
+    libraries_used: List[str],
+    errors: List[Any],
+) -> Dict[str, Any]:
     """Real sampling uncertainty of the reported effect, or None with the reason (#2014).
 
     Replaces the former proxy, which built ``ate +/- width`` and ``p`` from library
@@ -1150,18 +1212,24 @@ def _derive_uncertainty(*, ate: float, primary_result: Dict[str, Any]) -> Dict[s
     single library ran — while the standard error DoWhy returned went unread.
 
     An interval exists only when the reported ``ate`` IS the primary library's own
-    estimate and that library measured its sampling error:
+    estimate (:func:`_estimate_provenance`) and that library measured its sampling
+    error:
 
     * DoWhy: its ``standard_error`` (the HC1 SE of its OLS fit) gives the 95 % normal
       interval ``ate +/- z*SE`` and the two-sided normal p-value.
-    * EconML / CausalML: the 95 % interval they report, with the SE back-derived from
-      its width (``(hi - lo) / 2z``) and the p-value from that SE.
+    * EconML, for the estimators whose interval is a sampling interval: that 95 %
+      interval, with the SE back-derived from its width (``(hi - lo) / 2z``) and the
+      p-value from that SE.
 
     Otherwise every field is None: the effect is a consensus across libraries (no SE
-    exists for that blend), the primary library produced no estimate of its own, or
-    it measured no SE (e.g. zero residual degrees of freedom).
+    exists for that blend), the primary library produced no estimate of its own, it
+    measured no SE (e.g. zero residual degrees of freedom), or its interval is not a
+    sampling interval — CausalML's is always ``std(predicted uplift) / sqrt(n)``,
+    which ignores the uncertainty of fitting the uplift model.
     """
-    library, own_effect = _primary_estimate(primary_result)
+    prov = _estimate_provenance(
+        ate=ate, primary_result=primary_result, libraries_used=libraries_used, errors=errors
+    )
 
     def not_computed(reason: str) -> Dict[str, Any]:
         return {
@@ -1173,18 +1241,19 @@ def _derive_uncertainty(*, ate: float, primary_result: Dict[str, Any]) -> Dict[s
             "uncertainty_note": f"No confidence interval or p-value: {reason}",
         }
 
-    if own_effect is None:
+    if prov.own_effect is None:
         return not_computed(
-            f"the primary library ({library or 'unknown'}) produced no effect estimate of "
-            "its own, so no standard error belongs to the reported effect."
+            f"the primary library ({prov.library or 'unknown'}) produced no effect estimate "
+            "of its own, so no standard error belongs to the reported effect."
         )
-    if not math.isclose(own_effect, ate, rel_tol=1e-9, abs_tol=1e-12):
+    if not prov.is_primary_estimate:
         return not_computed(
-            f"the reported effect is the consensus of several libraries' estimates "
-            f"({library} reported {own_effect:.6g}); no standard error exists for that blend."
+            "the reported effect is the consensus of the "
+            f"{', '.join(prov.effect_libraries) or 'pipeline'} estimates; no standard error "
+            "exists for that blend."
         )
 
-    if library == "dowhy":
+    if prov.library == "dowhy":
         se = _finite_float(primary_result.get("standard_error"))
         if se is None or se <= 0:
             return not_computed(
@@ -1200,7 +1269,13 @@ def _derive_uncertainty(*, ate: float, primary_result: Dict[str, Any]) -> Dict[s
             if robust
             else f"standard error DoWhy reported ({se_method or 'method unstated'})."
         )
-    else:
+    elif prov.library == "econml":
+        estimator = primary_result.get("estimator")
+        if estimator not in _ECONML_SAMPLING_INTERVAL_ESTIMATORS:
+            return not_computed(
+                f"EconML's {estimator!r} interval is the spread of its per-unit effects "
+                "divided by sqrt(n), not a sampling interval for the average effect."
+            )
         lower_raw = _finite_float(primary_result.get("ate_ci_lower"))
         upper_raw = _finite_float(primary_result.get("ate_ci_upper"))
         if (
@@ -1210,7 +1285,7 @@ def _derive_uncertainty(*, ate: float, primary_result: Dict[str, Any]) -> Dict[s
             or not lower_raw <= ate <= upper_raw
         ):
             return not_computed(
-                f"{library} reported no usable interval around its estimate "
+                f"EconML reported no usable interval around its estimate "
                 f"(ate_ci_lower={primary_result.get('ate_ci_lower')!r}, "
                 f"ate_ci_upper={primary_result.get('ate_ci_upper')!r})."
             )
@@ -1218,8 +1293,14 @@ def _derive_uncertainty(*, ate: float, primary_result: Dict[str, Any]) -> Dict[s
         se = (upper - lower) / (2.0 * _Z_95)
         method_code = "library_interval"
         note = (
-            f"95% interval as reported by {library}; the standard error and two-sided "
-            "p-value are back-derived from its width under a normal approximation."
+            f"95% interval as reported by EconML {estimator}; the standard error and "
+            "two-sided p-value are back-derived from its width under a normal approximation."
+        )
+    else:
+        return not_computed(
+            "CausalML's interval is the spread of its model-predicted uplift divided by "
+            "sqrt(n); it omits the uncertainty of fitting the uplift model, so it is not a "
+            "sampling interval for the effect."
         )
 
     return {
@@ -1248,6 +1329,7 @@ def _describe_estimate(
     ate: float,
     primary_result: Dict[str, Any],
     libraries_used: List[str],
+    errors: List[Any],
     treatment_values: Any,
     treatment: str,
     outcome: str,
@@ -1257,9 +1339,14 @@ def _describe_estimate(
 
     DoWhy's linear regression reports ``E[Y | T=1] - E[Y | T=0]`` from the fitted model,
     which is the treatment coefficient: for a binary treatment a regression-adjusted
-    1-vs-0 difference, for any other numeric treatment the change per ONE UNIT.
+    1-vs-0 difference, for any other numeric treatment the change per ONE UNIT. With an
+    additive treatment term and effects that vary with the confounders, OLS weights
+    each confounder profile by its treatment variance (Angrist 1998); the wording gives
+    the sufficient conditions under which that is the average treatment effect.
     """
-    library, own_effect = _primary_estimate(primary_result)
+    prov = _estimate_provenance(
+        ate=ate, primary_result=primary_result, libraries_used=libraries_used, errors=errors
+    )
     binary = _is_binary_01(treatment_values)
     effect_scale = "binary_contrast" if binary else "per_unit"
     # A count, not the names: the synthesizer truncates each step's JSON at 1,000
@@ -1274,28 +1361,29 @@ def _describe_estimate(
         if binary
         else f"per one-unit increase in {treatment}"
     )
-    consensus = own_effect is None or not math.isclose(own_effect, ate, rel_tol=1e-9, abs_tol=1e-12)
-    if consensus:
-        effect_libraries = [lib for lib in libraries_used if lib != "networkx"]
+    if not prov.is_primary_estimate:
+        libraries = prov.effect_libraries or [lib for lib in libraries_used if lib != "networkx"]
         return (
-            f"consensus({','.join(effect_libraries)})",
-            f"Consensus of the {', '.join(effect_libraries)} estimates of the effect on "
-            f"{outcome} {contrast}, {adjusted}.",
+            f"consensus({','.join(libraries)})",
+            f"Consensus of the {', '.join(libraries)} estimates of the effect on {outcome} "
+            f"{contrast}, {adjusted}.",
             effect_scale,
         )
-    if library == "dowhy":
+    if prov.library == "dowhy":
         dowhy_method = str(primary_result.get("dowhy_method"))
         if "linear_regression" in dowhy_method:
             estimand = (
                 f"Regression-adjusted difference in {outcome} {contrast} (OLS with an "
-                f"additive treatment term, {adjusted}); it is the average treatment effect "
-                "only if the effect does not vary across units"
-                + ("." if binary else f" and is linear in {treatment}.")
+                f"additive treatment term, {adjusted}"
+                + ("" if binary else f"; assumes the effect is linear in {treatment}")
+                + "). It is the average treatment effect when the effect is constant or "
+                "treatment does not depend on the confounders; otherwise a "
+                "treatment-variance-weighted average of the confounder-specific effects."
             )
         else:
             estimand = f"Effect on {outcome} {contrast}, {adjusted} (DoWhy {dowhy_method})."
         return dowhy_method, estimand, effect_scale
-    if library == "econml":
+    if prov.library == "econml":
         estimator = primary_result.get("estimator")
         return (
             f"econml.{estimator}",

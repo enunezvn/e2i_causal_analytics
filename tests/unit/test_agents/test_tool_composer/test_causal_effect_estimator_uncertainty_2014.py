@@ -153,9 +153,8 @@ def test_primary_library_without_an_estimate_yields_none_and_a_reason() -> None:
     assert "networkx" in result.uncertainty_note.lower()
 
 
-def test_a_consensus_of_several_libraries_has_no_interval() -> None:
-    df = _frame("continuous", n=400)
-    output = asyncio.run(
+def _run_pipeline(libraries: list, n: int = 400) -> dict:
+    return asyncio.run(
         SequentialPipeline().execute(
             {
                 "query": "Estimate the causal effect of treatment on outcome.",
@@ -165,50 +164,58 @@ def test_a_consensus_of_several_libraries_has_no_interval() -> None:
                 "effect_modifiers": None,
                 "data_source": "test",
                 "filters": None,
-                "estimation_data": df,
+                "estimation_data": _frame("continuous", n=n),
                 "mode": "sequential",
-                "libraries_enabled": ["dowhy", "econml"],
+                "libraries_enabled": libraries,
                 "cross_validate": None,
             }
         )
     )
-    primary = output["primary_result"]
-    consensus = output["consensus_effect"]
-    assert primary["standard_error"] is not None
-    assert consensus != pytest.approx(primary["causal_effect"], abs=1e-6)
 
-    uncertainty = tr._derive_uncertainty(ate=consensus, primary_result=primary)
+
+def _uncertainty(output: dict, ate: float) -> dict:
+    return tr._derive_uncertainty(
+        ate=ate,
+        primary_result=output["primary_result"],
+        libraries_used=output["libraries_used"],
+        errors=output["errors"],
+    )
+
+
+def test_a_consensus_of_several_libraries_has_no_interval() -> None:
+    output = _run_pipeline(["dowhy", "econml"])
+    primary = output["primary_result"]
+    assert primary["standard_error"] is not None
+    assert output["consensus_effect"] != pytest.approx(primary["causal_effect"], abs=1e-6)
+
+    uncertainty = _uncertainty(output, output["consensus_effect"])
 
     assert uncertainty["ci_lower"] is None and uncertainty["p_value"] is None
     assert uncertainty["uncertainty_method"] == "not_computed"
     assert "consensus" in uncertainty["uncertainty_note"]
 
 
-def test_a_library_interval_is_used_with_its_back_derived_se() -> None:
-    df = _frame("continuous", n=400)
-    output = asyncio.run(
-        SequentialPipeline().execute(
-            {
-                "query": "Estimate the causal effect of treatment on outcome.",
-                "treatment_var": "treatment",
-                "outcome_var": "outcome",
-                "confounders": ["confounder_a"],
-                "effect_modifiers": None,
-                "data_source": "test",
-                "filters": None,
-                "estimation_data": df,
-                "mode": "sequential",
-                "libraries_enabled": ["econml"],
-                "cross_validate": None,
-            }
-        )
-    )
+def test_agreeing_libraries_do_not_lend_the_primary_its_interval() -> None:
+    # Provenance, not numbers: if the blend lands on DoWhy's own value (two libraries
+    # agreeing), the reported effect is still a consensus whose variance nobody measured.
+    output = _run_pipeline(["dowhy", "econml"])
+    assert output["errors"] == []
+
+    uncertainty = _uncertainty(output, output["primary_result"]["causal_effect"])
+
+    assert uncertainty["ci_lower"] is None and uncertainty["standard_error"] is None
+    assert "consensus" in uncertainty["uncertainty_note"]
+
+
+def test_an_econml_sampling_interval_is_used_with_its_back_derived_se() -> None:
+    output = _run_pipeline(["econml"])
     primary = output["primary_result"]
+    assert primary["estimator"] in {"causal_forest", "linear_dml", "drlearner", "ols"}
     lo, hi = primary["ate_ci_lower"], primary["ate_ci_upper"]
-
-    uncertainty = tr._derive_uncertainty(ate=output["consensus_effect"], primary_result=primary)
-
     assert output["consensus_effect"] == pytest.approx(primary["ate"], abs=1e-12)
+
+    uncertainty = _uncertainty(output, output["consensus_effect"])
+
     assert (uncertainty["ci_lower"], uncertainty["ci_upper"]) == (lo, hi)
     se = (hi - lo) / (2.0 * Z_95)
     assert uncertainty["standard_error"] == pytest.approx(se, rel=1e-12)
@@ -216,6 +223,47 @@ def test_a_library_interval_is_used_with_its_back_derived_se() -> None:
         math.erfc(abs(primary["ate"] / se) / math.sqrt(2.0)), rel=1e-9
     )
     assert uncertainty["uncertainty_method"] == "library_interval"
+
+
+def test_an_econml_dispersion_interval_is_not_a_sampling_interval() -> None:
+    # The S/T/X-learner intervals are std(CATE)/sqrt(n) (estimator_selector.py), the
+    # construction #1188 measured ~50x too narrow. Same real result, learner relabelled.
+    output = _run_pipeline(["econml"])
+    relabelled = {
+        **output,
+        "primary_result": {**output["primary_result"], "estimator": "s_learner"},
+    }
+
+    uncertainty = _uncertainty(relabelled, output["consensus_effect"])
+
+    assert uncertainty["ci_lower"] is None and uncertainty["p_value"] is None
+    assert "not a sampling interval" in uncertainty["uncertainty_note"]
+
+
+def test_causalml_uplift_interval_is_not_a_sampling_interval() -> None:
+    # CausalML's interval is std(predicted uplift)/sqrt(n). Measured on this frame
+    # (n = 400, planted effect 0.4, HC1 SE ~0.2): ATE 0.175 with CI 0.167-0.184.
+    output = _run_pipeline(["causalml"])
+    primary = output["primary_result"]
+    assert primary["ate_ci_lower"] is not None
+    assert output["consensus_effect"] == pytest.approx(primary["ate"], abs=1e-12)
+
+    uncertainty = _uncertainty(output, output["consensus_effect"])
+
+    assert uncertainty["ci_lower"] is None and uncertainty["p_value"] is None
+    assert uncertainty["uncertainty_method"] == "not_computed"
+    assert "CausalML" in uncertainty["uncertainty_note"]
+
+
+def test_the_estimand_states_sufficient_conditions_not_a_false_necessary_one() -> None:
+    result = _estimate(_frame("continuous"))
+
+    assert "only if" not in result.estimand
+    assert (
+        "average treatment effect when the effect is constant or treatment does not depend "
+        "on the confounders" in result.estimand
+    )
+    assert "treatment-variance-weighted average" in result.estimand
 
 
 def test_method_is_not_offered_to_the_planner() -> None:
