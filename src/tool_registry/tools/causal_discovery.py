@@ -1264,8 +1264,11 @@ def register_discover_dag_tool() -> None:
             ToolParameter(
                 name="data",
                 type="Dict[str, List[Any]]",
-                description="Data as dict of column names to values",
-                required=True,
+                description=(
+                    "Data as dict of column names to values (optional; the in-context "
+                    "DataFrame is used when omitted)"
+                ),
+                required=False,
             ),
             ToolParameter(
                 name="algorithms",
@@ -1287,6 +1290,18 @@ def register_discover_dag_tool() -> None:
                 description="Significance level for CI tests",
                 required=False,
                 default=0.05,
+            ),
+            ToolParameter(
+                name="max_k",
+                type="int",
+                description="Maximum conditioning set size (-1 for unlimited)",
+                required=False,
+            ),
+            ToolParameter(
+                name="node_names",
+                type="List[str]",
+                description="Custom node names (defaults to column names)",
+                required=False,
             ),
         ],
         output_schema="DiscoverDagOutput",
@@ -1333,14 +1348,20 @@ def register_rank_drivers_tool() -> None:
             ToolParameter(
                 name="shap_values",
                 type="List[List[float]]",
-                description="SHAP values matrix (n_samples x n_features)",
-                required=True,
+                description=(
+                    "SHAP values matrix (n_samples x n_features; optional, derived from the "
+                    "in-context DataFrame unless given together with feature_names)"
+                ),
+                required=False,
             ),
             ToolParameter(
                 name="feature_names",
                 type="List[str]",
-                description="Feature names",
-                required=True,
+                description=(
+                    "Feature names (optional; without shap_values, limits the features SHAP "
+                    "is derived for)"
+                ),
+                required=False,
             ),
             ToolParameter(
                 name="concordance_threshold",
@@ -1348,6 +1369,13 @@ def register_rank_drivers_tool() -> None:
                 description="Max rank diff for concordant features",
                 required=False,
                 default=2,
+            ),
+            ToolParameter(
+                name="importance_percentile",
+                type="float",
+                description="Top percentile of features counted as important (0-1)",
+                required=False,
+                default=0.25,
             ),
         ],
         output_schema="RankDriversOutput",

@@ -509,6 +509,13 @@ def register_model_inference_tool() -> None:
                 required=False,
             ),
             ToolParameter(
+                name="time_horizon",
+                type="str",
+                description="Prediction time horizon: 'short_term', 'medium_term', 'long_term'",
+                required=False,
+                default="short_term",
+            ),
+            ToolParameter(
                 name="return_probabilities",
                 type="bool",
                 description="Return class probabilities",
