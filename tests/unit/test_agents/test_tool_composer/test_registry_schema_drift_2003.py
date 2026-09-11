@@ -76,7 +76,13 @@ LIVE_TOOLS = frozenset(
 
 # Accepted inputs that are deliberately NOT planner-visible, with the reason.
 INTERNAL_INPUTS: Dict[str, Dict[str, str]] = {
-    "discover_dag": {"trace_context": "Opik trace plumbing for agent callers"},
+    "discover_dag": {
+        "trace_context": "Opik trace plumbing for agent callers",
+        # Not offered to the planner: advertising it would promise renamed nodes that
+        # never appear. Implementing or removing it is an open decision.
+        "node_names": "accepted but never applied — CausalDiscoveryTool.invoke builds "
+        "the frame from `data` and ignores it (since b23c17355)",
+    },
     "rank_drivers": {"trace_context": "Opik trace plumbing for agent callers"},
     "detect_structural_drift": {"trace_context": "Opik trace plumbing for agent callers"},
     "model_inference": {"trace_context": "Opik trace plumbing for agent callers"},
@@ -333,7 +339,7 @@ def test_every_accepted_input_is_declared_or_documented_internal(name):
     assert internal <= accepted, f"{name}: stale INTERNAL_INPUTS {sorted(internal - accepted)}"
     assert accepted - internal == declared, (
         f"{name}: accepted-but-undeclared={sorted(accepted - internal - declared)} "
-        f"declared-but-not-accepted={sorted(declared - (accepted - internal))}"
+        f"declared-but-internal-or-not-accepted={sorted(declared - (accepted - internal))}"
     )
 
 
