@@ -377,9 +377,9 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 2. **After decompose / plan / execute**, update the recorder's in-memory **snapshot** and enqueue
    `composer_record_phase` with that phase's delta:
    - the new status and the phase latency;
-   - `sub_questions`: id and intent only (no text, §5.5);
-   - `tool_plan`: steps with step_id, step_number, tool_name, depends_on, input_mapping keys and `$step`
-     references;
+   - `sub_questions`: positional index and normalized intent only (no text, no LLM ids, §5.5);
+   - `tool_plan`: per step its step_number, tool_name, depends-on step numbers, and the structural input
+     map of §5.5;
    - `plan_source`, and whether the execution order was repaired (§7.4);
    - `parallelizable_groups`, sent by execute.
 3. **Per finished step, during execution.** `PlanExecutor.execute` gains an optional
@@ -497,33 +497,52 @@ The repo has no content scrubber: `redact_query` only truncates (`src/utils/reda
 design therefore **does not persist raw data values** where the loop does not need them. It does not rely
 on truncation to hide them.
 
-- **Input parameters: structure only.**
-  - A string value that names a column of the step's frame is stored as `{"type":"column","name":c}`.
-    Column names are schema, and they are the plan.
-  - Any other string is stored as `{"type":"str","len":n}`, without the value.
-  - Numbers and bools are kept: effect sizes, alpha, top_n. They are the plan's settings, not
-    identifiers.
-  - Lists are `{"type":"list","len":n}`, dicts `{"type":"dict","keys":[…]}`, DataFrames
-    `{"type":"frame","rows":r,"columns":c}`.
-  - Entity id lists (for example `target_entities`) are therefore never stored.
-- **Errors: no error text is persisted, at step or episode level.** `error_type` (exception class) plus
-  `outcome_class` (plus `failed_phase` for episodes) is what is stored and aggregated.
-  - Refusal text can name data values: #1574's disclosure lists the entity groups a frame covered.
-  - Generic exception text can echo inputs.
-  - The composer already returns every failed step's reason text in the total-failure chat answer
-    (`composer.py:1033–1065`), generic exceptions included. That is a pre-existing exposure of the chat
-    surface, recorded in §10. It is not a justification for copying the text into a new store.
-  - `composition_steps.error_message` and `composer_episodes.error_message` stay NULL.
-  - **What is lost:** the admin surface can say "gap_calculator: refused (ToolRefusalError)", but not
-    *why*. Structured refusal reason codes would restore that safely. They need changes in
-    `tool_registrations.py`, which LANE-2015 and LANE-2016 are editing now, so they are recorded in §10
-    as a follow-up.
-  - A test raises real tool exceptions (refusal, input error, generic `KeyError`) whose text carries an
-    input value, and pins that the value is absent from every persisted column.
-- **Sub-question text** is not stored; id and intent are.
-- **Output:** keys only (`output_result = {"keys":[…]}`).
-- **Guarantee, stated narrowly:** the only free text this lane persists is the query (next item). Every
-  other stored string is a column name, a tool or step identifier, a class name or an enum value.
+- **Everything except the query is either a registry-validated identifier, a number or an enum.**
+  Anything the LLM or the data authored is dropped or reduced to structure.
+  - **Identifiers are positional.**
+    - Sub-questions are stored by index (0…n−1) and steps by `step_number`.
+    - LLM-authored `sub_question_id` / `step_id` strings are never stored. `step_name` is `step_<n>`.
+    - `depends_on_steps` and `$step` references are remapped to step numbers.
+  - **Intents are normalized** to the decomposer's declared vocabulary (`decomposer.py:54`: CAUSAL,
+    COMPARATIVE, PREDICTIVE, DESCRIPTIVE, EXPERIMENTAL). Anything else becomes `OTHER`.
+    `SubQuestion.intent` is a free `str` (`composition_models.py:68`).
+  - **Question text is never stored,** neither sub-question text nor the planner's reasoning.
+  - **Tool names** are stored only if registered. The planner already raises on unknown tools
+    (`planner._validate_plan`).
+  - **Input maps are keyed only by the tool's declared parameter names** (`ToolSchema.input_parameters`).
+    Undeclared keys are counted (`{"undeclared_params": k}`), never named. Values are stored as structure:
+    - a string that names a column of the step's frame → `{"type":"column","name":c}`. Column names are
+      the loader's schema, and they are the plan;
+    - a `$step` reference → `{"type":"ref","step":n,"field":f}`, where `f` is kept only if it is a
+      field of the producer's registered output model, else `null`;
+    - any other string → `{"type":"str","len":n}`, without the value;
+    - numbers and bools are kept (effect sizes, alpha, top_n): settings, not identifiers;
+    - lists → `{"type":"list","len":n}`; dicts → `{"type":"dict","len":n}`, with **no keys**, because
+      dict keys can be data values such as segment names; DataFrames →
+      `{"type":"frame","rows":r,"columns":c}`.
+  - **Output:** only the keys that are fields of the tool's registered pydantic output model, plus
+    `{"other_keys": k}`. Dynamic keys (for example per-segment dicts) are never named.
+  - **Errors: no error text is persisted, at step or episode level.** `error_type` (exception class name)
+    plus `outcome_class` (plus `failed_phase` for episodes) is what is stored and aggregated.
+    - Refusal text can name data values: #1574's disclosure lists the entity groups a frame covered.
+    - Generic exception text can echo inputs.
+    - The composer already returns every failed step's reason text in the total-failure chat answer
+      (`composer.py:1033–1065`), generic exceptions included. That is a pre-existing exposure of the
+      chat surface, recorded in §10. It is not a justification for copying the text into a new store.
+    - `composition_steps.error_message` and `composer_episodes.error_message` stay NULL.
+    - **What is lost:** the admin surface can say "gap_calculator: refused (ToolRefusalError)", but not
+      *why*. Structured refusal reason codes would restore that safely. They need changes in
+      `tool_registrations.py`, which LANE-2015 and LANE-2016 are editing now, so they are a §10
+      follow-up.
+  - **The single serializer** (`learning_recorder.to_record()`) is the only path to the RPCs. Its test
+    plants a sentinel string in every LLM- and data-authored position:
+    - question text, intent, sub_question_id, step_id;
+    - an undeclared parameter key, a string value, a dict key, a `$step` field;
+    - a dynamic output key;
+    - refusal, input-error and generic exception messages.
+
+    It asserts the sentinel is absent from the serialized payload and from every persisted column after
+    a real-DB round trip.
 - **Query text is stored, `redact_query(query, 500)`.** This is a deliberate decision, not a redaction
   claim.
   - The query is needed for the admin failure list and the reuse audit.
@@ -655,32 +674,54 @@ n = 5.**
 
 **What this lane builds.**
 1. **`ToolReliabilityReader`** (`src/agents/tool_composer/reliability.py`):
-   - calls `get_tool_reliability(30, deployment_includes_synthetic())` through the service client;
-   - caches per process for 300 s;
+   - calls `get_tool_reliability(days, deployment_includes_synthetic())` through the service client;
+   - `days` defaults to 30, which the planner integration uses. The admin API passes the requested window;
+   - caches per process for 300 s, keyed by `(days, include_synthetic)`;
    - fail-open: returns `{}` on any error.
 
    The admin API uses it (§8).
 2. **The planner integration, behind `TOOL_COMPOSER_RELIABILITY_IN_PLANNER` (default off).**
    - One shared formatter serves the planner prompt (`planner.py:371`) and the DSPy formatter
      (`dspy_integration.py:189–225`).
-   - On `caveat` it adds "Reliability caveat: 6 of 24 runs failed on tool errors (timeout)".
-   - At `n_succeeded` ≥ 20 it replaces the declared latency with the measured median.
+   - On `caveat` it adds exactly one line per caveated tool: "Reliability caveat: 6 of 24 runs failed on
+     tool errors (timeout)". The flag controls nothing else.
+   - The declared "Avg execution" line is unchanged. Measured latency is **not** substituted into the
+     prompt: nothing in planning consumes latency (no deadline-aware planning, and `estimated_duration_ms`
+     has no reader), so a substituted number would be a label. Measured latency is shown on the admin
+     surface (§8), and §10 records prompt substitution as waiting for a consumer.
    - With the flag off, the prompt is byte-identical to today, and a test pins that.
-3. **The experiment that decides the flag** (`scripts/benchmarks/tool_composer/reliability_caveat_experiment.py`):
-   - **Paired, real-LLM planner calls on fixed real decompositions.** Each decomposition names a
-     sub-question that two registered tools can each answer, for example `psi_calculator` /
-     `distribution_comparator` or `risk_scorer` / `propensity_estimator`. The planner is otherwise
-     free to choose.
-   - **Arms:** A = today's prompt; B = the same prompt with a planted caveat on the tool that arm A
-     picks most.
-   - **Pre-registered pass rule:** in arm B the caveated tool's selection rate falls by ≥ 30 percentage
-     points against arm A, over K ≥ 30 pairs. Fisher exact one-sided p < 0.05. No increase in planning
-     failures (`PlanningError` or `plan_defect`) in arm B.
-   - **Cost:** 2K planner calls with thinking disabled, about 1,000 output tokens each (`composer.py:71–90`).
-     The spend needs the owner's authorization (O2).
-   - **Result handling:** the result is committed under `docs/demos/results/`. The flag default flips
-     to on only in a follow-up commit that cites a passing result. A failing result leaves the flag off
-     and records why.
+3. **The experiment that decides the flag** (`scripts/benchmarks/tool_composer/reliability_caveat_experiment.py`).
+   It is pre-registered in the script's docstring before any evaluation call.
+   - **Items.** K ≥ 30 fixed real decompositions. Each has a sub-question that two registered tools can
+     each answer (for example `psi_calculator` / `distribution_comparator`, or `risk_scorer` /
+     `propensity_estimator`), plus a real frame from the cohort / KPI loaders the entry points use. The
+     item set is frozen, and its hash is recorded.
+   - **Target selection from a separate pilot.** A pilot of P = 10 different decompositions, run on
+     today's prompt only, fixes per item family which tool is caveated: the one the planner picks more
+     often. The pilot items are excluded from evaluation. This removes the selection bias of choosing
+     the target from the evaluation baseline.
+   - **Arms, paired per item.** A = the flag off, today's prompt. B = the flag on, with a planted
+     `caveat` verdict for the target tool. That is the complete enabled prompt, byte-for-byte what
+     production would send. Arm order is randomised per item with a fixed seed.
+   - **Primary outcome, paired analysis.** Per item, whether the plan selects the target tool, in A and
+     in B. Test: exact McNemar on the discordant pairs, one-sided. **Pass requires both:**
+     - (b − c) / K ≥ 0.30, where b counts items that picked the target in A only and c items that picked
+       it in B only;
+     - p < 0.05.
+   - **Validity outcomes, executable, per arm.**
+     - Every returned plan goes through `planner._validate_plan` and the §7.4 execution-order checks.
+     - It is then **executed** with the real `PlanExecutor` on the item's real frame.
+     - Counted per arm: `PlanningError`, `plan_defect`, `not_registered` and total-failure
+       compositions, plus succeeded steps per plan.
+     - **Pass also requires** arm B to have no more invalid or totally failed plans than arm A (exact
+       McNemar on those paired binary outcomes, one-sided p ≥ 0.05 for "B worse"), and a median
+       succeeded-steps count no lower than A's.
+   - **Cost.** Planner calls: P + 2K ≥ 70, thinking disabled, about 1,000 output tokens each
+     (`composer.py:71–90`). The executions are local compute. The spend needs the owner's authorization
+     (O2).
+   - **Result handling.** The result JSON and a summary are committed under `docs/demos/results/`. The flag
+     default flips to on only in a follow-up commit that cites a passing result. A failing result leaves
+     the flag off and records which condition failed.
 
 **Feedback-loop guards, whatever the flag:**
 - no automatic removal of a tool from the offer;
@@ -784,19 +825,31 @@ returns the LLM's `parallel_groups` unchecked:
 - groups `[["a"]]` for steps a, b → `[["a"]]`: **step b never executes**;
 - groups `[["a","b"]]` where b depends on a → `[["a","b"]]`: the consumer runs **in parallel with** its
   producer, and its `$a.…` reference cannot resolve;
-- groups `[]` → `[["a"],["b"]]`: sequential, which is correct but never parallel.
+- groups `[]` → one group per step **in list order**. That is correct only when producers precede
+  consumers: steps `[b, a]` with b depending on a run b first, and b's reference cannot resolve.
+- **Duplicate step ids** are not rejected. `_validate_plan` does not check them, `_check_cycles` collapses
+  them into a dict (`planner.py:932`), and `ExecutionPlan.get_step()` returns the first match
+  (`composition_models.py:155`). Two different steps named `a` execute the first one twice (codex
+  iteration-4 probe).
 
 `planner._validate_plan` checks tool names and dependency ids, not groups (`planner.py:662–712`). Cached
 plans reuse the same groups (`planner.py:324`). The design intent ("dependency-aware execution DAG …
 identify parallelizable tool groups", §6) is therefore unmet at runtime.
 
-**New behaviour.** `get_execution_order()` accepts the given groups only when:
-- every step appears exactly once;
-- no group names an unknown step;
-- every `depends_on_steps` entry sits in a strictly earlier group.
+**New behaviour.**
+1. **Duplicate step ids are a plan error.** A new `ExecutionPlan` model validator raises on duplicate
+   `step_id`s, on a `depends_on_steps` entry naming no step, and on a dependency cycle. Every plan passes
+   through it wherever it was built: LLM planner, cache adaptation, KPI builder, and directly
+   constructed plans. It is the execution-boundary check.
+   - A planner-built plan that fails it raises `PlanningError`, recorded as `failed` in phase `plan`.
+2. `get_execution_order()` accepts the given groups only when:
+   - every step appears exactly once;
+   - no group names an unknown step;
+   - every `depends_on_steps` entry sits in a strictly earlier group.
 
-Otherwise it returns the **topological levels** of `depends_on_steps` (steps with all dependencies in
-earlier levels run together). Cycles are already rejected by `planner._check_cycles`. The plan records
+   Otherwise, **including when groups are empty**, it returns the topological levels of
+   `depends_on_steps`: each level is the set of steps whose dependencies are all in earlier levels, in
+   plan order within a level. The plan records
 `execution_order_repaired` and the violated condition. The episode's `tool_plan` carries both, so the
 frequency becomes measurable.
 
@@ -810,7 +863,8 @@ unchanged. A test pins that.
 - It has no production caller.
 - It mutates the process-wide `ToolSchema.avg_execution_ms` from one executor's EMA. Wired in, one
   request's stats would leak into every later plan.
-- Its intent (learned latency) is served by §7.2.
+- Its intent (learned latency) is partly served: measured latency per tool is recorded and shown on the
+  admin surface (§6, §8). Feeding it into planning waits for a planning consumer of latency (§7.2, §10).
 
 `ToolFailureTracker` stays. It drives the in-request circuit breaker and retry policy.
 
@@ -914,23 +968,27 @@ per-tool drill-down there would split one reading across two surfaces.
 - **No latency on the user path.** An unreachable transport (connection refused and a 10 s hang, both
   cases) under a composer call with a 1 s deadline. Composition time is unchanged against a no-recorder
   run within 50 ms, and no exception reaches the caller.
-- **No raw values persisted.** Real tool exceptions whose text carries an input value (for example a
-  `KeyError` naming a value) and string parameters that are not column names. The test asserts the values
-  appear in no persisted column (`input_params`, `error_message`, `output_result`, `tool_plan`).
+- **No raw values persisted.** The sentinel test of §5.5, through the real serializer and a real-DB round
+  trip.
 - **Plan-cache eviction.** A real `ToolPlanner` and a real cache, with non-KPI `DecompositionResult`
   objects that meet the §7.3 eligibility. A failed composition evicts, and the next similar decomposition
   does not get the cached steps. A succeeded composition keeps them (positive control). A
   `kpi_deterministic` plan never touches the cache.
 - **Episodic references.** The four shapes listed in §7.3.
-- **Execution order.** The three measured shapes from §7.4 (omitted step, consumer grouped with its
-  producer, empty groups) plus a valid plan and the KPI deterministic plan. Invalid groups are repaired to
+- **Execution order.** These shapes from §7.4 plus a valid plan and the KPI deterministic plan:
+  - omitted step;
+  - consumer grouped with its producer;
+  - empty groups with a consumer listed before its producer;
+  - duplicate step ids, which the model validator rejects;
+  - a dependency on an unknown step and a cycle, which it also rejects. Invalid groups are repaired to
   topological levels and flagged; valid ones are returned unchanged. A real `PlanExecutor` run over the
   omitted-step plan executes every step.
 - **Planner integration flag.** With `TOOL_COMPOSER_RELIABILITY_IN_PLANNER` unset, the planner and DSPy
   prompts are byte-identical to the pre-change prompt for the same registry. With it set and a `caveat`
   verdict, the caveat line appears.
-- **Caveat experiment** (§7.2). It runs only after the owner authorizes the spend (O2). Its result file
-  and the flag decision are committed with it.
+- **Caveat experiment** (§7.2). The script's pure analysis functions (McNemar, the pass rule) are unit
+  tested on constructed paired tables with known answers. The run itself happens only after the owner
+  authorizes the spend (O2), and its result file and the flag decision are committed with it.
 - **Composer wiring.** An opt-in real-LLM run (`E2I_LIVE_LLM=1`) records to the throwaway database
   through the psycopg transport, plus the live cert.
 - **Reliability rule.** The planted-truth test reproduces the §7.1 table bounds: false caveat ≤ 1% at
@@ -1001,6 +1059,8 @@ per-tool drill-down there would split one reading across two surfaces.
 - **Procedural-memory `tool_composition` patterns.**
 - **`tool_performance` rows from non-composer callers** (`called_by='agent'|'direct'`); none exist.
 - **A retention/purge job** (§5.5).
+- **Measured latency in the planning prompt or plan estimates.** Nothing in planning consumes latency
+  today (§7.2). Revisit when deadline-aware planning exists.
 - **A platform PII scrubber for query text.** Query text is already persisted in four stores (§5.5). A
   scrubber belongs at `redact_query`, the platform's single hook, and would cover all five stores at once.
   This lane stores no raw parameter values and no generic exception text, so it adds no exposure class.
@@ -1017,7 +1077,8 @@ per-tool drill-down there would split one reading across two surfaces.
     to be chased later. It reverses if the owner prefers to wait for feedback volume. The plan marks it
     as a task gated on this answer.
 - **O2. Authorize the caveat experiment's LLM spend (§7.2).**
-  - What it is: 2K ≥ 60 planner calls on the production provider, with thinking disabled.
+  - What it is: P + 2K ≥ 70 planner calls on the production provider, thinking disabled, plus local plan
+    executions.
   - The planner integration is built behind a default-off flag either way. Only a passing, committed
     result turns it on.
   - **Recommendation:** authorize it, but run it once any tool reaches `n_health` ≥ 20. Before that the
