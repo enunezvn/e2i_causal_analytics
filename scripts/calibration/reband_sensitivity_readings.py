@@ -94,9 +94,10 @@ RECONCILE_PAIR = ("acceptance_status", "conversion_flag")
 # The 2026-09-10 preview's own pull for that pair (live_reband_preview.py): raw SQL,
 # treatment derived in SQL, NO covariates, NULL outcomes DROPPED by pandas.
 PREVIEW_SQL = (
-    "select (lower(acceptance_status::text)='accepted')::int t, conversion_flag::int y "
-    "from triggers where brand_id = '{brand}' limit {n}"
+    "select trigger_id, (lower(acceptance_status::text)='accepted')::int t, "
+    "conversion_flag::int y from triggers where brand_id = '{brand}' limit {n}"
 )
+RECONCILE_COVARIATES = ["disease_severity", "engagement_score"]  # the pair's curated backdoor
 
 
 async def _rows(client) -> List[Dict[str, Any]]:
@@ -294,25 +295,113 @@ def _preview_pull(brand: str, n: int) -> Optional[Dict[str, Any]]:
         return None
     dropped: List[Tuple[float, float]] = []
     filled: List[Tuple[float, float]] = []
+    ids: Dict[str, Tuple[float, float]] = {}
     n_null = 0
-    for t, y in rows:
+    for tid, t, y in rows:
         tv = float(t)
+        yv = 0.0 if y == "" else float(y)
         if y == "":
             n_null += 1
-            filled.append((tv, 0.0))
-            continue
-        dropped.append((tv, float(y)))
-        filled.append((tv, float(y)))
+        else:
+            dropped.append((tv, yv))
+        filled.append((tv, yv))
+        ids[tid] = (tv, yv)
     p0_d, naive_d = _p0_naive(dropped)
     p0_f, naive_f = _p0_naive(filled)
     return {
         "n_pulled": len(rows),
         "n_null_outcome": n_null,
+        "n_dropped_rows": len(dropped),
         "p0_dropped": p0_d,
         "naive_dropped": naive_d,
         "p0_filled": p0_f,
         "naive_filled": naive_f,
+        "ids": ids,
     }
+
+
+def _current_rule(
+    ate: float,
+    ci: Tuple[float, float],
+    sd: float,
+    p0: Optional[float],
+    naive: Optional[float],
+    n_rows: Optional[int],
+) -> Optional[evalue.SensitivityReading]:
+    """The CURRENT reading rule on a set of inputs that carries no covariates (the
+    preview pulled none), so the route-frame table and the preview-pull tables are
+    read under the same rule and differ only in their inputs."""
+    if p0 is None or naive is None:
+        return None
+    return evalue.classify(
+        ate,
+        ci,
+        randomized=False,
+        baseline_risk=p0,
+        outcome_std=sd,
+        naive_effect=naive,
+        covariate_factors={},
+        n_rows=n_rows,
+        covariates_measured=0,
+    )
+
+
+async def _route_replica_pull(client, brand: str, n: int) -> Dict[str, Any]:
+    """The route's NBA join pull, replayed with the route's OWN helpers
+    (``_load_trigger_question_rows`` whole-brand paged read, ``_load_patient_baseline_rows``,
+    the same inner merge, the same coercion and drop rules, the request cap applied
+    post-join) but carrying ``trigger_id`` so the returned ROW SET can be compared with
+    the preview's pull. Read-only. Records how many merged rows were dropped and why."""
+    import pandas as pd
+
+    from src.api.routes.causal import (
+        _derive_is_accepted,
+        _load_patient_baseline_rows,
+        _load_trigger_question_rows,
+    )
+
+    trigger_rows = await _load_trigger_question_rows(
+        client, ["trigger_id", "acceptance_status", "conversion_flag"], brand
+    )
+    patient_rows = await _load_patient_baseline_rows(client, RECONCILE_COVARIATES)
+    trigger_df = pd.DataFrame(trigger_rows)
+    patient_df = pd.DataFrame(patient_rows).drop_duplicates(subset="patient_id")
+    merged = trigger_df.merge(patient_df, on="patient_id", how="inner")
+    ids: Dict[str, Tuple[float, float]] = {}
+    dropped = Counter()
+    for _, row in merged.iterrows():
+        acc = row["acceptance_status"]
+        if acc is None or (isinstance(acc, float) and math.isnan(acc)):
+            dropped["null_treatment"] += 1  # _coerce_estimation_row would return None
+            continue
+        conv = row["conversion_flag"]
+        y = 0.0 if conv is None or (isinstance(conv, float) and math.isnan(conv)) else float(conv)
+        if any(
+            row[c] is None or (isinstance(row[c], float) and math.isnan(row[c]))
+            for c in RECONCILE_COVARIATES
+        ):
+            dropped["null_covariate"] += 1
+            continue
+        ids[str(row["trigger_id"])] = (_derive_is_accepted(acc), y)
+        if len(ids) >= n:
+            break
+    p0, naive = _p0_naive(list(ids.values()))
+    return {
+        "n_triggers": len(trigger_rows),
+        "n_merged": len(merged),
+        "n_orphans": len(trigger_rows) - len(merged),
+        "dropped": dict(dropped),
+        "ids": ids,
+        "p0": p0,
+        "naive": naive,
+    }
+
+
+def _overlap(
+    a: Dict[str, Tuple[float, float]], b: Dict[str, Tuple[float, float]]
+) -> Tuple[int, bool]:
+    shared = set(a) & set(b)
+    return len(shared), all(a[k] == b[k] for k in shared)
 
 
 def _preview_rule(ate: float, p0: Optional[float], naive: Optional[float]) -> str:
@@ -436,6 +525,7 @@ async def main(out: Path) -> int:
                     ci = _recover_ci(ate, e["e_ci"], None)
                     e["sd_branch"] = "unstandardized"
                 e["ci"] = ci
+                e["sd_used"] = sd
                 rd = _classify_on(got_capped, e["t"], e["o"], ate, ci, sd)
                 reading, new_sens = rd.reading, rd.status
                 e.update(
@@ -535,17 +625,22 @@ async def main(out: Path) -> int:
             + ", ".join(sorted({f"{_run_label(x)} [{x['cmp']}]" for x in not_compared}))
             + "."
         )
+    # Retirement is earned per run: a COMPLETE full table AND the same reading on it.
+    retired = [x for x in compared if not x.get("full_capped") and not x.get("frame_sensitive")]
+    capped_flipped = [x for x in capped_cmp if x.get("frame_sensitive")]
     if not flips and not not_compared and not capped_cmp:
         lines.append(
             f"Every one of the {len(mapped)} mapped non-randomized runs was classified on two "
             "complete frames with the same reading — the row-order caveat is retired by measurement."
         )
     else:
-        retired_n = len(compared) - len(capped_cmp)
         lines.append(
-            f"The row-order caveat is retired only for the {retired_n} runs compared on a COMPLETE "
-            f"full table with no flip; it stands for the {len(capped_cmp)} runs whose full pull was "
-            f"capped ({', '.join(sorted({_run_label(x) for x in capped_cmp})) or 'none'}) and for "
+            f"The row-order caveat is retired only for the {len(retired)} runs compared on a COMPLETE "
+            f"full table with the SAME reading on both frames; it stands for the {len(flips)} runs "
+            f"whose reading flipped ({', '.join(sorted({_run_label(x) for x in flips})) or 'none'}"
+            f"{'; ' + str(len(capped_flipped)) + ' of them on a capped full pull' if capped_flipped else ''}), "
+            f"for the {len(capped_cmp)} runs whose full pull was capped "
+            f"({', '.join(sorted({_run_label(x) for x in capped_cmp})) or 'none'}) and for "
             f"the {len(not_compared)} runs not compared."
         )
 
@@ -599,45 +694,174 @@ async def main(out: Path) -> int:
             f"{_fmt(x.get('p0'))} | {_fmt(x.get('naive'))} | {_fmt(x.get('rr_point'))} | "
             f"{_fmt(x.get('benchmark'))} | {x.get('basis', '-')} | {x.get('conversion', '-')} | {x.get('reading', '-')} |"
         )
-    lines += [
-        "",
-        "The preview's pull, re-run read-only with its own SQL (`(lower(acceptance_status::text)='accepted')::int`, `conversion_flag::int`, brand filter, `limit n`, no covariates), scored two ways — NULL outcomes DROPPED (the preview's `dropna`) and NULL outcomes FILLED TO 0 (the route's loader) — next to the route frame, with the preview's own reading rule applied to each set of inputs:",
-        "",
-        "| brand | n | ate | preview pull: rows / NULL outcome | p0 / naive (NULL dropped) | preview rule on those | p0 / naive (NULL → 0) | preview rule on those | p0 / naive (route frame) | preview rule on route inputs | current reading |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
-    ]
+    # The preview's pull (its own SQL, read-only), scored two ways, each under BOTH rules.
     preview_cache: Dict[Tuple[str, int], Optional[Dict[str, Any]]] = {}
     for x in recon:
         pk = (x["brand"], x["n"])
         if pk not in preview_cache:
             preview_cache[pk] = _preview_pull(x["brand"], x["n"])
-        pv = preview_cache[pk]
-        if pv is None:
-            pull_txt = "unavailable"
-            d_txt = f_txt = r_d = r_f = "-"
-        else:
-            pull_txt = f"{pv['n_pulled']} / {pv['n_null_outcome']}"
-            d_txt = f"{_fmt(pv['p0_dropped'])} / {_fmt(pv['naive_dropped'])}"
-            f_txt = f"{_fmt(pv['p0_filled'])} / {_fmt(pv['naive_filled'])}"
-            r_d = _preview_rule(x["ate"], pv["p0_dropped"], pv["naive_dropped"])
-            r_f = _preview_rule(x["ate"], pv["p0_filled"], pv["naive_filled"])
-        r_route = _preview_rule(x["ate"], x.get("p0"), x.get("naive"))
-        lines.append(
-            f"| {x['brand'] or '<all>'} | {x['n']} | {_fmt(x['ate'], 4)} | {pull_txt} | {d_txt} | {r_d} | "
-            f"{f_txt} | {r_f} | {_fmt(x.get('p0'))} / {_fmt(x.get('naive'))} | {r_route} | {x.get('reading', '-')} |"
-        )
+    preview_failed = sorted({f"{b} n={n}" for (b, n), pv in preview_cache.items() if pv is None})
+
+    # current-rule / preview-rule reading counts per variant, so the closing words
+    # are counted, not asserted
+    rule_counts: Dict[str, Counter] = {"dropped": Counter(), "filled": Counter()}
+    preview_rule_counts: Dict[str, Counter] = {"dropped": Counter(), "filled": Counter()}
+
+    def _preview_table(variant: str, title: str) -> List[str]:
+        rows_out = [
+            "",
+            title,
+            "",
+            "| brand | n | ate | preview pull: rows / NULL outcome / rows scored | recovered CI | p0 (baseline risk) | naive | rr_point | benchmark | basis | conversion | reading (current rule) | preview rule |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        ]
+        for x in recon:
+            pv = preview_cache[(x["brand"], x["n"])]
+            ci = x.get("ci")
+            ci_txt = "[" + _fmt(ci[0], 4) + ", " + _fmt(ci[1], 4) + "]" if ci else "-"
+            if pv is None:
+                rows_out.append(
+                    f"| {x['brand'] or '<all>'} | {x['n']} | {_fmt(x['ate'], 4)} | preview pull FAILED for this run | "
+                    f"{ci_txt} | - | - | - | - | - | - | - | - |"
+                )
+                continue
+            p0, naive = pv[f"p0_{variant}"], pv[f"naive_{variant}"]
+            scored = pv["n_dropped_rows"] if variant == "dropped" else pv["n_pulled"]
+            rd = (
+                _current_rule(x["ate"], ci, x["sd_used"], p0, naive, scored)
+                if ci and "sd_used" in x
+                else None
+            )
+            rule_counts[variant][rd.reading if rd else "-"] += 1
+            preview_rule_counts[variant][_preview_rule(x["ate"], p0, naive)] += 1
+            rows_out.append(
+                f"| {x['brand'] or '<all>'} | {x['n']} | {_fmt(x['ate'], 4)} | "
+                f"{pv['n_pulled']} / {pv['n_null_outcome']} / {scored} | {ci_txt} | {_fmt(p0)} | {_fmt(naive)} | "
+                f"{_fmt(rd.rr_point) if rd else '-'} | {_fmt(rd.benchmark) if rd else '-'} | "
+                f"{rd.benchmark_basis if rd else '-'} | {rd.conversion if rd else '-'} | "
+                f"{rd.reading if rd else '-'} | {_preview_rule(x['ate'], p0, naive)} |"
+            )
+        return rows_out
+
+    lines += _preview_table(
+        "dropped",
+        "The preview's pull, re-run read-only with its own SQL (`(lower(acceptance_status::text)='accepted')::int`, `conversion_flag::int`, brand filter, `limit n`, no covariates), NULL outcomes DROPPED (the preview's `dropna`), read under the CURRENT rule (no covariates, so the benchmark is the joint naive-vs-adjusted one) and under the preview's own rule:",
+    )
+    lines += _preview_table(
+        "filled",
+        "The same pull with NULL outcomes FILLED TO 0 (what the route's loader does for the designed-NULL `conversion_flag`), read under both rules:",
+    )
+
+    # Residual between the NULL->0 preview pull and the route frame: measured on the
+    # ROW SETS, with the route's own helpers replayed to carry trigger ids.
+    from src.repositories.provenance import deployment_includes_synthetic
+
+    sync_scans = _psql("show synchronize_seqscans")
+    sync_txt = sync_scans[0][0] if sync_scans else "unknown"
     lines += [
         "",
-        "Reading of the two tables above: the preview and this script agree on the stored effect and on the "
-        "conversion; they differ on the INPUTS. The preview's `dropna` removed every trigger whose "
-        "`conversion_flag` is NULL (a designed NULL — the DB stored-generated `outcome_value > 0` is NULL "
-        "when no outcome was recorded), so its control-arm rate and naive contrast describe only the "
-        "triggers with a recorded outcome. The route's loader fills that designed NULL to 0 "
-        "(`_CAUSAL_FILL_ZERO_OUTCOMES['nba_triggers']`) before the estimator ever sees the frame, which is "
-        "what produced the stored ATE; filling the raw pull the same way reproduces the route's p0 and "
-        "naive to the third decimal. The route's pull is the faithful one because it is the frame "
-        "production estimated on. Whether the preview's own rule reads `within` or `beyond` on each set "
-        "of inputs is printed per run, so the flip is attributed by measurement, not by argument.",
+        "Residual between the NULL → 0 preview pull and the route frame, measured on the row sets. The route's NBA join pull is replayed with the route's own helpers (whole-brand paged trigger read, patient join, same coercion and drop rules, request cap applied post-join) carrying `trigger_id`; the preview's SQL is run twice; the replay is run twice:",
+        "",
+        "| brand | n | route frame p0 / naive | replay 1 p0 / naive | replay 2 p0 / naive | preview 1 p0 / naive (NULL → 0) | preview 2 p0 / naive | triggers read / joined / orphans / dropped | preview 1 ∩ preview 2 | replay 1 ∩ replay 2 | preview 1 ∩ replay 1 | values agree on shared rows |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    residual_rows: List[Dict[str, Any]] = []
+    seen_pk: set = set()
+    for x in recon:
+        pk = (x["brand"], x["n"])
+        if pk in seen_pk:
+            continue
+        seen_pk.add(pk)
+        pv1 = preview_cache[pk]
+        pv2 = _preview_pull(x["brand"], x["n"])
+        try:
+            rp1 = await _route_replica_pull(client, x["brand"], x["n"])
+            rp2 = await _route_replica_pull(client, x["brand"], x["n"])
+        except Exception as exc:  # noqa: BLE001 - report, never guess
+            print(f"route replay failed {pk}: {exc!r}", file=sys.stderr)
+            lines.append(
+                f"| {x['brand']} | {x['n']} | {_fmt(x.get('p0'))} / {_fmt(x.get('naive'))} | route replay FAILED: {type(exc).__name__} | - | - | - | - | - | - | - | - |"
+            )
+            continue
+        route_frame_p0 = next(
+            (y.get("p0") for y in recon if (y["brand"], y["n"]) == pk and y.get("p0") is not None),
+            None,
+        )
+        route_frame_naive = next(
+            (
+                y.get("naive")
+                for y in recon
+                if (y["brand"], y["n"]) == pk and y.get("naive") is not None
+            ),
+            None,
+        )
+        o_pp, _ = _overlap(pv1["ids"], pv2["ids"]) if pv1 and pv2 else (None, None)
+        o_rr, _ = _overlap(rp1["ids"], rp2["ids"])
+        o_pr, agree = _overlap(pv1["ids"], rp1["ids"]) if pv1 else (None, None)
+        residual_rows.append(
+            {
+                "pk": pk,
+                "o_pp": o_pp,
+                "o_rr": o_rr,
+                "o_pr": o_pr,
+                "agree": agree,
+                "orphans": rp1["n_orphans"],
+                "dropped": sum(rp1["dropped"].values()),
+                "n": x["n"],
+            }
+        )
+        lines.append(
+            f"| {x['brand']} | {x['n']} | {_fmt(route_frame_p0)} / {_fmt(route_frame_naive)} | "
+            f"{_fmt(rp1['p0'])} / {_fmt(rp1['naive'])} | {_fmt(rp2['p0'])} / {_fmt(rp2['naive'])} | "
+            f"{_fmt(pv1['p0_filled']) if pv1 else '-'} / {_fmt(pv1['naive_filled']) if pv1 else '-'} | "
+            f"{_fmt(pv2['p0_filled']) if pv2 else '-'} / {_fmt(pv2['naive_filled']) if pv2 else '-'} | "
+            f"{rp1['n_triggers']} / {rp1['n_merged']} / {rp1['n_orphans']} / {rp1['dropped'] or 0} | "
+            f"{o_pp if o_pp is not None else '-'} | {o_rr} | {o_pr if o_pr is not None else '-'} | "
+            f"{'yes' if agree else ('-' if agree is None else 'NO')} |"
+        )
+
+    lines += [
+        "",
+        "Loader facts, read from the route code and the live server: both pulls filter on `brand_id`; neither orders (the route pages the whole brand table with `range()` and no `order()`, the preview uses `limit n` with no `ORDER BY`); "
+        f"the provenance filter is {'ACTIVE' if not deployment_includes_synthetic() else 'a no-op (`E2I_INCLUDE_SYNTHETIC` is set)'} on the route path and absent from the preview SQL; "
+        f"`synchronize_seqscans` = {sync_txt} on the server.",
+    ]
+    if preview_failed:
+        lines.append(
+            "The preview pull FAILED for: "
+            + ", ".join(preview_failed)
+            + " — no reconciliation is claimed for those runs; the rows above mark them."
+        )
+    measured = [r for r in residual_rows if r["o_pr"] is not None]
+    if not measured:
+        lines.append(
+            "Residual cause NOT established: the preview pull or the route replay was unavailable, so the row sets could not be compared."
+        )
+    else:
+        all_agree = all(r["agree"] for r in measured)
+        any_drop = any(r["orphans"] or r["dropped"] for r in measured)
+        min_pp = (
+            min(r["o_pp"] for r in measured if r["o_pp"] is not None)
+            if any(r["o_pp"] is not None for r in measured)
+            else None
+        )
+        max_pr = max(r["o_pr"] for r in measured)
+        max_rr = max(r["o_rr"] for r in measured)
+        if all_agree and not any_drop and all(r["o_pr"] < r["n"] for r in measured):
+            lines.append(
+                "Measured cause of the residual: it is row SELECTION, not row VALUES or loader logic. The join adds and drops nothing "
+                f"(every trigger has a patient row and non-NULL covariates; orphans and drops are 0 in every replay); on every trigger shared by the two pulls the treatment and outcome values agree; but the two pulls are different subsets of the same table — at most {max_pr} of n rows are shared between the preview pull and the route replay, and the SAME pull repeated shares as few as {min_pp if min_pp is not None else '-'} of n rows with itself through psql and at most {max_rr} through the route's paged read. With `synchronize_seqscans` = {sync_txt}, an unordered `limit n` / `range()` read of this table starts wherever the previous sequential scan left off, so each pull is a different n-row subset and p0 / naive move by sampling variation between subsets (the differences seen here are of the same size as the run-to-run differences of the same pull). The route frame the stored ATE was estimated on was itself one such subset; the reconciliation therefore rests on the NULL fill (preview rule on NULL-dropped inputs: {dict(preview_rule_counts['dropped'])}; on NULL → 0 inputs: {dict(preview_rule_counts['filled'])}) and on what the current rule reads on the NULL → 0 subsets measured ({dict(rule_counts['filled'])}), not on any two pulls returning the same rows."
+            )
+        else:
+            lines.append(
+                "Residual p0 / naive difference between the NULL → 0 preview pull and the route frame NOT fully explained by the row-set measurement: "
+                f"values agree on shared rows = {all_agree}; join orphans/drops present = {any_drop}; max preview∩replay overlap = {max_pr}. Candidates: rows dropped or added by the patient join, a coercion difference on `acceptance_status`, or a different subset per unordered pull (`synchronize_seqscans` = {sync_txt})."
+            )
+    lines += [
+        "",
+        "What the tables establish without an equivalence claim: the preview and this script agree on the stored effect and on the conversion; they differ on the INPUTS. The preview's `dropna` removed every trigger whose `conversion_flag` is NULL (a designed NULL — the DB stored-generated `outcome_value > 0` is NULL when no outcome was recorded), so its control-arm rate and naive contrast describe only the triggers with a recorded outcome; on those inputs its own rule reads "
+        f"{dict(preview_rule_counts['dropped'])} and the current rule reads {dict(rule_counts['dropped'])}. The route's loader fills that designed NULL to 0 (`_CAUSAL_FILL_ZERO_OUTCOMES['nba_triggers']`) before the estimator ever sees the frame; on NULL → 0 inputs the preview's own rule reads "
+        f"{dict(preview_rule_counts['filled'])} and the current rule reads {dict(rule_counts['filled'])} (the current rule reads the interval first, so a run whose CI includes zero is a null finding under it regardless of the benchmark). The route's frame is the faithful one because it is the frame production estimated the stored ATE on.",
     ]
 
     lines += [
@@ -652,6 +876,7 @@ async def main(out: Path) -> int:
         "- Pairs listed as `unmapped` have no current dataset mapping and were not guessed.",
         "- Runs whose sensitivity row was SKIPPED (randomized design) keep SKIPPED.",
         "- The per-run covariate set is not persisted; the re-pull uses the brand-scoped curated default the submit route applies. Runs submitted through the discovery path used the SSOT adjustment set, which may differ; the perturbation check covers row order only.",
+        "- Run-to-run movement of this table: between the round-1 table (commit a779170db) and the round-2 table only the two `acceptance_status → conversion_flag` pairs (Fabhalta, Remibrutinib) changed their median rr_point / benchmark; every patient and HCP pair was identical. Cause established as the re-pull, not Task 9b: rr_point depends only on the stored ATE and the frame's p0 under the risk-ratio conversion, Task 9b (50547c566) changed no benchmark arithmetic (it added the `measured_unscoreable` sub-case and its words), and the residual measurement above shows the NBA join pull returns a different row subset on every call, so p0 and the joint benchmark move with each regeneration for that dataset.",
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
