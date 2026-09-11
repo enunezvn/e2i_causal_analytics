@@ -516,12 +516,13 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
     Cancel the `execute` task after the fast one's callback fires, awaited through an `asyncio.Event` set
     by the callback, never a sleep. The callback saw the fast step and not
     the slow one, and `CancelledError` propagates.
-  - `test_escaping_exception_keeps_finished_sibling`: synchronised, not timing-based.
-    - The fast sibling's callback sets an `asyncio.Event`.
-    - The slow sibling's input mapping resolves through a context object whose attribute access **first
-      awaits that event** (via a registered async callable that awaits it before raising a non-tool
-      exception from input construction), then raises.
-    - Assert the fast sibling's callback fired before the exception propagated out of `execute`.
+  - `test_escaping_exception_keeps_finished_sibling`: deterministic ordering, not timing-based.
+    - `PlanExecutor(max_parallel=1)` makes the group's semaphore run sibling A (listed first) to
+      completion before sibling B acquires it (`executor.py:921–925`).
+    - B's escaping exception is raised before B's tool call, where `_execute_step` has no handler: an
+      `input_mapping` value whose resolution raises a non-`ReferenceResolutionError` (for example a
+      `$step` reference into a producer output whose field access raises `TypeError`).
+    - Assert A's callback fired, and the exception propagated out of `execute` as `ExecutionError`.
 - [ ] **Step 2: Run.** Expect FAIL.
 - [ ] **Step 3: Implement.**
   - `StepResult` gains `outcome_class: Optional[str] = None`, `attempts: int = 0`, `cache_hit: bool = False`
