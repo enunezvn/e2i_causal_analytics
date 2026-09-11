@@ -15,6 +15,14 @@ migration is exactly ONE statement: a second statement that consumed the new
 value in the same file would fail (a new enum value is unusable until the
 ``ALTER TYPE`` commits), and a second statement of any kind reintroduces a
 multi-statement file the un-wrapped path was designed to avoid.
+
+Deploy ordering (why the blast radius above is not merely theoretical):
+``.github/workflows/deploy.yml`` runs ``bash scripts/run_migrations.sh`` at
+line 946, then force-recreates the app services (``api frontend
+worker_light worker_medium scheduler``) at lines 1065-1066 -- both under the
+script-wide ``set -e`` from line 403. A missing enum value would 22P02 on the
+very first suite persisted after the app services flip to code that emits
+``negative_control_outcome`` rows, with no transactional undo available.
 """
 
 from __future__ import annotations
@@ -41,8 +49,13 @@ def _stripped_body() -> str:
 
 @pytest.mark.unit
 def test_adds_the_value_idempotently():
-    sql = MIGRATION.read_text(encoding="utf-8")
-    assert ADD_VALUE in sql
+    """Assert against the comment-stripped body, not raw file text: a raw
+    substring check (``ADD_VALUE in sql``) would still pass a file that
+    comments out this exact line and executes a DIFFERENT statement (e.g.
+    targeting the wrong enum) instead -- the comment text alone satisfies a
+    substring match. The executable body, once ``--`` comments are stripped
+    and outer whitespace trimmed, must be EXACTLY this one statement."""
+    assert _stripped_body().strip() == ADD_VALUE
 
 
 @pytest.mark.unit
