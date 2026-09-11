@@ -305,10 +305,13 @@ async def generate_review_assessment(
 
     # Codex HIGH 1: the build runs in its OWN task and the request only shields
     # it. Cancelling ``await asyncio.to_thread(...)`` does not stop the builder
-    # thread, so an unshielded request that lost its client (disconnect, nginx
-    # 504) would release the lock while the thread kept building, and a second
-    # caller would build concurrently. Shielded, the task finishes the persist
-    # and releases at the right moment; waiters then replay its result.
+    # thread, so an unshielded request that was cancelled would release the lock
+    # while the thread kept building, and a second caller would build
+    # concurrently. Shielded, the task finishes the persist and releases at the
+    # right moment; waiters then replay its result. (#1999 measured that a
+    # client disconnect alone does NOT cancel the request task on this stack;
+    # uvicorn cancels request tasks only past a ``timeout_graceful_shutdown``,
+    # which the UvicornWorker does not set. The shield covers any such path.)
     task = asyncio.create_task(
         _build_under_lock(repo, review_id, review, cached, force),
         name=f"expert-review-assessment:{review_id}",
@@ -353,10 +356,14 @@ async def _build_under_lock(
     the SAFE 503 (``_reread_row``): building from the stale snapshot could
     overwrite a result persisted meanwhile.
 
-    Worker shutdown (bounded limitation): the shielded build is still cancelled
-    when the worker's loop shuts down (recycle, deploy) before its persist, the
-    same loss as any in-flight request; the key clears at its TTL and nothing
-    is corrupted. Draining belongs to main.py's lifespan (follow-up).
+    Worker shutdown (#1999, measured): uvicorn waits for every request task
+    before it sends the lifespan shutdown, and the request task awaits this one
+    (a disconnect does not cancel it), so a graceful stop (SIGTERM, a
+    ``--max-requests`` recycle) lets the build persist before Redis/Supabase are
+    closed; test_expert_review_shutdown_ordering_1999.py pins it. What still
+    loses a build is a KILL: docker's stop timeout on a deploy recreate, or
+    gunicorn's graceful/worker timeout. Then the key clears at its TTL and
+    nothing is corrupted.
     """
     async with _ASSESSMENT_LOCK.hold(review_id) as lease:
         if lease.mode == "none":
