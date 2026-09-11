@@ -774,15 +774,24 @@ async def main(out: Path) -> int:
         seen_pk.add(pk)
         pv1 = preview_cache[pk]
         pv2 = _preview_pull(x["brand"], x["n"])
+        failed_pulls = [name for name, pv in (("preview 1", pv1), ("preview 2", pv2)) if pv is None]
+        rp1 = rp2 = None
         try:
             rp1 = await _route_replica_pull(client, x["brand"], x["n"])
             rp2 = await _route_replica_pull(client, x["brand"], x["n"])
         except Exception as exc:  # noqa: BLE001 - report, never guess
             print(f"route replay failed {pk}: {exc!r}", file=sys.stderr)
+            failed_pulls.append(
+                f"route replay {'1' if rp1 is None else '2'} ({type(exc).__name__})"
+            )
+        if failed_pulls:
+            residual_rows.append({"pk": pk, "ok": False, "failed": failed_pulls, "n": x["n"]})
             lines.append(
-                f"| {x['brand']} | {x['n']} | {_fmt(x.get('p0'))} / {_fmt(x.get('naive'))} | route replay FAILED: {type(exc).__name__} | - | - | - | - | - | - | - | - |"
+                f"| {x['brand']} | {x['n']} | {_fmt(x.get('p0'))} / {_fmt(x.get('naive'))} | "
+                f"FAILED: {', '.join(failed_pulls)} | - | - | - | - | - | - | - | - |"
             )
             continue
+        assert pv1 is not None and pv2 is not None and rp1 is not None and rp2 is not None
         route_frame_p0 = next(
             (y.get("p0") for y in recon if (y["brand"], y["n"]) == pk and y.get("p0") is not None),
             None,
@@ -795,29 +804,37 @@ async def main(out: Path) -> int:
             ),
             None,
         )
-        o_pp, _ = _overlap(pv1["ids"], pv2["ids"]) if pv1 and pv2 else (None, None)
-        o_rr, _ = _overlap(rp1["ids"], rp2["ids"])
-        o_pr, agree = _overlap(pv1["ids"], rp1["ids"]) if pv1 else (None, None)
+        # Value agreement is only a statement about SHARED rows: with zero overlap
+        # there is nothing to compare, and the pair is excluded from the agreement claim.
+        o_pp, agree_pp = _overlap(pv1["ids"], pv2["ids"])
+        o_rr, agree_rr = _overlap(rp1["ids"], rp2["ids"])
+        o_pr, agree_pr = _overlap(pv1["ids"], rp1["ids"])
+        agree: Optional[bool] = None if o_pr == 0 else agree_pr
+        # drops / orphans are checked on BOTH replays that are printed
+        orphans = rp1["n_orphans"] + rp2["n_orphans"]
+        dropped = sum(rp1["dropped"].values()) + sum(rp2["dropped"].values())
         residual_rows.append(
             {
                 "pk": pk,
+                "ok": True,
                 "o_pp": o_pp,
                 "o_rr": o_rr,
                 "o_pr": o_pr,
                 "agree": agree,
-                "orphans": rp1["n_orphans"],
-                "dropped": sum(rp1["dropped"].values()),
+                "agree_repeats": (o_pp == 0 or agree_pp) and (o_rr == 0 or agree_rr),
+                "orphans": orphans,
+                "dropped": dropped,
                 "n": x["n"],
             }
         )
         lines.append(
             f"| {x['brand']} | {x['n']} | {_fmt(route_frame_p0)} / {_fmt(route_frame_naive)} | "
             f"{_fmt(rp1['p0'])} / {_fmt(rp1['naive'])} | {_fmt(rp2['p0'])} / {_fmt(rp2['naive'])} | "
-            f"{_fmt(pv1['p0_filled']) if pv1 else '-'} / {_fmt(pv1['naive_filled']) if pv1 else '-'} | "
-            f"{_fmt(pv2['p0_filled']) if pv2 else '-'} / {_fmt(pv2['naive_filled']) if pv2 else '-'} | "
-            f"{rp1['n_triggers']} / {rp1['n_merged']} / {rp1['n_orphans']} / {rp1['dropped'] or 0} | "
-            f"{o_pp if o_pp is not None else '-'} | {o_rr} | {o_pr if o_pr is not None else '-'} | "
-            f"{'yes' if agree else ('-' if agree is None else 'NO')} |"
+            f"{_fmt(pv1['p0_filled'])} / {_fmt(pv1['naive_filled'])} | "
+            f"{_fmt(pv2['p0_filled'])} / {_fmt(pv2['naive_filled'])} | "
+            f"{rp1['n_triggers']} / {rp1['n_merged']} / {orphans} (both replays) / {dropped} (both replays) | "
+            f"{o_pp} | {o_rr} | {o_pr} | "
+            f"{'no shared rows to compare' if agree is None else ('yes' if agree else 'NO')} |"
         )
 
     lines += [
@@ -832,30 +849,48 @@ async def main(out: Path) -> int:
             + ", ".join(preview_failed)
             + " — no reconciliation is claimed for those runs; the rows above mark them."
         )
-    measured = [r for r in residual_rows if r["o_pr"] is not None]
-    if not measured:
-        lines.append(
-            "Residual cause NOT established: the preview pull or the route replay was unavailable, so the row sets could not be compared."
-        )
+    # ONE gate for every causal sentence below: every pull and replay the paragraph
+    # relies on (both preview pulls and both route replays, for every pair) succeeded.
+    all_pulls_ok = (
+        bool(residual_rows) and not preview_failed and all(r["ok"] for r in residual_rows)
+    )
+    failed_txt = "; ".join(
+        f"{r['pk'][0]} n={r['pk'][1]}: {', '.join(r['failed'])}"
+        for r in residual_rows
+        if not r["ok"]
+    ) or (", ".join("preview: " + p for p in preview_failed) if preview_failed else "no pull ran")
+    cause_established = False
+    if not all_pulls_ok:
+        lines.append(f"Cause not established: {failed_txt} — the causal paragraph is omitted.")
     else:
-        all_agree = all(r["agree"] for r in measured)
-        any_drop = any(r["orphans"] or r["dropped"] for r in measured)
-        min_pp = (
-            min(r["o_pp"] for r in measured if r["o_pp"] is not None)
-            if any(r["o_pp"] is not None for r in measured)
-            else None
+        measured = residual_rows
+        with_shared = [r for r in measured if r["agree"] is not None]
+        no_shared = [r for r in measured if r["agree"] is None]
+        all_agree = all(r["agree"] for r in with_shared) and all(
+            r["agree_repeats"] for r in measured
         )
+        any_drop = any(r["orphans"] or r["dropped"] for r in measured)
+        min_pp = min(r["o_pp"] for r in measured)
         max_pr = max(r["o_pr"] for r in measured)
         max_rr = max(r["o_rr"] for r in measured)
-        if all_agree and not any_drop and all(r["o_pr"] < r["n"] for r in measured):
+        rows_inspected = " / ".join(sorted({str(r["n"]) for r in measured}))
+        no_shared_txt = (
+            " ("
+            + ", ".join(f"{r['pk'][0]} n={r['pk'][1]}" for r in no_shared)
+            + " had no shared rows to compare and are excluded from that statement)"
+            if no_shared
+            else ""
+        )
+        cause_established = all_agree and not any_drop and all(r["o_pr"] < r["n"] for r in measured)
+        if cause_established:
             lines.append(
-                "Measured cause of the residual: it is row SELECTION, not row VALUES or loader logic. The join adds and drops nothing "
-                f"(every trigger has a patient row and non-NULL covariates; orphans and drops are 0 in every replay); on every trigger shared by the two pulls the treatment and outcome values agree; but the two pulls are different subsets of the same table — at most {max_pr} of n rows are shared between the preview pull and the route replay, and the SAME pull repeated shares as few as {min_pp if min_pp is not None else '-'} of n rows with itself through psql and at most {max_rr} through the route's paged read. With `synchronize_seqscans` = {sync_txt}, an unordered `limit n` / `range()` read of this table starts wherever the previous sequential scan left off, so each pull is a different n-row subset and p0 / naive move by sampling variation between subsets (the differences seen here are of the same size as the run-to-run differences of the same pull). The route frame the stored ATE was estimated on was itself one such subset; the reconciliation therefore rests on the NULL fill (preview rule on NULL-dropped inputs: {dict(preview_rule_counts['dropped'])}; on NULL → 0 inputs: {dict(preview_rule_counts['filled'])}) and on what the current rule reads on the NULL → 0 subsets measured ({dict(rule_counts['filled'])}), not on any two pulls returning the same rows."
+                "Measured cause of the residual: it is row SELECTION, not row VALUES or loader logic. In the "
+                f"{rows_inspected} rows inspected per pull the join added and dropped nothing (each inspected trigger had a patient row and non-NULL covariates; orphans and drops are 0 in both replays of every pair); on every trigger shared by two pulls the treatment and outcome values agree{no_shared_txt}; but the pulls are different subsets of the same table — at most {max_pr} of n rows are shared between the preview pull and the route replay, and the SAME pull repeated shares as few as {min_pp} of n rows with itself through psql and at most {max_rr} through the route's paged read. With `synchronize_seqscans` = {sync_txt}, an unordered `limit n` / `range()` read of this table starts wherever the previous sequential scan left off, so each pull is a different n-row subset and p0 / naive move by sampling variation between subsets (the differences seen here are of the same size as the run-to-run differences of the same pull). The route frame the stored ATE was estimated on was itself one such subset; the reconciliation therefore rests on the NULL fill (preview rule on NULL-dropped inputs: {dict(preview_rule_counts['dropped'])}; on NULL → 0 inputs: {dict(preview_rule_counts['filled'])}) and on what the current rule reads on the NULL → 0 subsets measured ({dict(rule_counts['filled'])}), not on any two pulls returning the same rows."
             )
         else:
             lines.append(
                 "Residual p0 / naive difference between the NULL → 0 preview pull and the route frame NOT fully explained by the row-set measurement: "
-                f"values agree on shared rows = {all_agree}; join orphans/drops present = {any_drop}; max preview∩replay overlap = {max_pr}. Candidates: rows dropped or added by the patient join, a coercion difference on `acceptance_status`, or a different subset per unordered pull (`synchronize_seqscans` = {sync_txt})."
+                f"values agree on shared rows = {all_agree}{no_shared_txt}; join orphans/drops present in the inspected rows = {any_drop}; max preview∩replay overlap = {max_pr}. Candidates: rows dropped or added by the patient join, a coercion difference on `acceptance_status`, or a different subset per unordered pull (`synchronize_seqscans` = {sync_txt})."
             )
     lines += [
         "",
@@ -876,7 +911,12 @@ async def main(out: Path) -> int:
         "- Pairs listed as `unmapped` have no current dataset mapping and were not guessed.",
         "- Runs whose sensitivity row was SKIPPED (randomized design) keep SKIPPED.",
         "- The per-run covariate set is not persisted; the re-pull uses the brand-scoped curated default the submit route applies. Runs submitted through the discovery path used the SSOT adjustment set, which may differ; the perturbation check covers row order only.",
-        "- Run-to-run movement of this table: between the round-1 table (commit a779170db) and the round-2 table only the two `acceptance_status → conversion_flag` pairs (Fabhalta, Remibrutinib) changed their median rr_point / benchmark; every patient and HCP pair was identical. Cause established as the re-pull, not Task 9b: rr_point depends only on the stored ATE and the frame's p0 under the risk-ratio conversion, Task 9b (50547c566) changed no benchmark arithmetic (it added the `measured_unscoreable` sub-case and its words), and the residual measurement above shows the NBA join pull returns a different row subset on every call, so p0 and the joint benchmark move with each regeneration for that dataset.",
+        "- Run-to-run movement of this table: between the round-1 table (commit a779170db) and the round-2 table only the two `acceptance_status → conversion_flag` pairs (Fabhalta, Remibrutinib) changed their median rr_point / benchmark; every patient and HCP pair was identical. "
+        + (
+            "Cause established as the re-pull, not Task 9b: rr_point depends only on the stored ATE and the frame's p0 under the risk-ratio conversion, Task 9b (50547c566) changed no benchmark arithmetic (it added the `measured_unscoreable` sub-case and its words), and the residual measurement above shows the NBA join pull returns a different row subset on every call, so p0 and the joint benchmark move with each regeneration for that dataset."
+            if cause_established
+            else f"Cause not established: the residual measurement did not complete ({failed_txt if not all_pulls_ok else 'row sets measured but the cause condition did not hold'}); Task 9b (50547c566) changed no benchmark arithmetic, so the re-pull remains the candidate, unconfirmed."
+        ),
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
