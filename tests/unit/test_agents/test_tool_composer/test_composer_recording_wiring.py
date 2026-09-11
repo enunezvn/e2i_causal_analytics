@@ -467,8 +467,10 @@ async def test_a_recorder_that_raises_everywhere_does_not_fail_the_composition(
     result = await composer.compose(QUERY)
 
     assert result.success is True
-    # Every hook was reached and every one raised; none of it reached the caller.
-    assert {"start", "decomposed", "planned", "executed", "finish"} <= set(broken[0].calls)
+    # Every hook was reached and every one raised; none of it reached the caller. `step` is
+    # named explicitly, and counted, so removing per-step recording would fail this too.
+    assert {"start", "decomposed", "planned", "step", "executed", "finish"} <= set(broken[0].calls)
+    assert broken[0].calls.count("step") == 2
 
 
 async def test_a_recorder_that_raises_does_not_swallow_a_cancel(
