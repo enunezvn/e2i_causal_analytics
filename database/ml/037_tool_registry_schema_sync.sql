@@ -1550,14 +1550,14 @@ $tool_registry_sync$::jsonb)
   {
     "consumer": "counterfactual_simulator",
     "producer": "gap_calculator",
-    "output_field": "bottom_performer",
-    "input_field": "target_entities"
+    "output_field": null,
+    "input_field": null
   },
   {
     "consumer": "power_calculator",
     "producer": "cate_analyzer",
-    "output_field": "effect_by_segment",
-    "input_field": "effect_size"
+    "output_field": null,
+    "input_field": null
   },
   {
     "consumer": "power_calculator",

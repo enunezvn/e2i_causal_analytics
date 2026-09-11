@@ -266,12 +266,14 @@ DEPENDENCY_FIELD_MAPPINGS: dict[tuple[str, str], tuple[Optional[str], Optional[s
     ("segment_ranker", "cate_analyzer"): (None, "cate_results"),
     ("roi_estimator", "gap_calculator"): (None, "gap_analysis"),
     ("power_calculator", "causal_effect_estimator"): ("ate", "effect_size"),
-    # A per-segment dict: the planner picks the segment's effect.
-    ("power_calculator", "cate_analyzer"): ("effect_by_segment", "effect_size"),
+    # No direct field: effect_by_segment is a per-segment dict and effect_size one number,
+    # so the planner has to pick the segment's effect.
+    ("power_calculator", "cate_analyzer"): (None, None),
     ("counterfactual_simulator", "causal_effect_estimator"): ("ate", "expected_effect"),
     ("counterfactual_simulator", "cate_analyzer"): ("high_responders", "target_entities"),
-    # A single entity name: the planner wraps it in a list.
-    ("counterfactual_simulator", "gap_calculator"): ("bottom_performer", "target_entities"),
+    # No direct field: bottom_performer is one entity name and target_entities a list,
+    # so the planner has to build the list.
+    ("counterfactual_simulator", "gap_calculator"): (None, None),
     ("rank_drivers", "discover_dag"): ("edge_list", "dag_edge_list"),
 }
 
