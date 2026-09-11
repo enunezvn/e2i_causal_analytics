@@ -60,6 +60,7 @@ _active_requests: "Gauge | None" = None
 _error_counter: "Counter | None" = None
 _agent_invocations: "Counter | None" = None
 _health_gauge: "Gauge | None" = None
+_composer_record_failures: "Counter | None" = None
 
 
 def _init_metrics() -> None:
@@ -67,6 +68,7 @@ def _init_metrics() -> None:
     global _metrics_registry, _metrics_initialized
     global _request_counter, _request_latency, _active_requests
     global _error_counter, _agent_invocations, _health_gauge
+    global _composer_record_failures
 
     if _metrics_initialized or not PROMETHEUS_AVAILABLE:
         return
@@ -117,6 +119,15 @@ def _init_metrics() -> None:
         "e2i_component_health",
         "Health status of system components (1=healthy, 0=unhealthy)",
         ["component"],
+        registry=_metrics_registry,
+    )
+
+    # Tool-composer learning loop: recording writes that failed their one retry and were
+    # dropped (the composition itself was unaffected). See docs/runbooks/tool-composer-learning-loop.md.
+    _composer_record_failures = Counter(
+        "composer_record_failures_total",
+        "Composition recording writes dropped after their retry, by RPC",
+        ["rpc"],
         registry=_metrics_registry,
     )
 
@@ -173,6 +184,19 @@ def record_error(method: str, endpoint: str, error_type: str) -> None:
         ).inc()
     except Exception as e:
         logger.debug(f"Failed to record error metric: {e}")
+
+
+def inc_composer_record_failure(rpc: str) -> None:
+    """Count a composition recording write dropped after its retry."""
+    if not PROMETHEUS_AVAILABLE or not _metrics_initialized:
+        return
+    if _composer_record_failures is None:
+        return
+
+    try:
+        _composer_record_failures.labels(rpc=rpc).inc()
+    except Exception as e:
+        logger.debug(f"Failed to record composer recording failure metric: {e}")
 
 
 def record_agent_invocation(agent_name: str, tier: str, status: str) -> None:
