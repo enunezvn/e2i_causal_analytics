@@ -68,6 +68,7 @@ from src.causal_engine.pipeline import (
     PipelineOutput,
     SequentialPipeline,
 )
+from src.causal_engine.pipeline.sequential import ECONML_SAMPLING_INTERVAL_ESTIMATORS
 from src.services import cohort_resolution
 from src.tool_registry import (
     composable_tool,
@@ -1164,16 +1165,6 @@ def _primary_estimate(primary_result: Dict[str, Any]) -> Tuple[Optional[str], Op
 # Libraries whose result is an effect estimate the pipeline consensus can blend.
 _EFFECT_LIBRARIES = ("dowhy", "econml", "causalml")
 
-# EconML estimators whose reported ATE interval is a sampling interval: econml's
-# ``ate_inference`` (causal_forest, linear_dml, drlearner) or OLS's Welch / seeded
-# bootstrap SE. The S/T/X-learner and OrthoForest-fallback intervals are
-# ``std(CATE) / sqrt(n)`` — the spread of heterogeneous effects, not an SE (#1188
-# measured that construction ~50x too narrow). The selector's default set is exactly
-# these four.
-_ECONML_SAMPLING_INTERVAL_ESTIMATORS = frozenset(
-    {"causal_forest", "linear_dml", "drlearner", "ols"}
-)
-
 
 class _EstimateProvenance(NamedTuple):
     """Which library the reported effect came from (#2014)."""
@@ -1285,7 +1276,7 @@ def _derive_uncertainty(
         )
     elif prov.library == "econml":
         estimator = primary_result.get("estimator")
-        if estimator not in _ECONML_SAMPLING_INTERVAL_ESTIMATORS:
+        if estimator not in ECONML_SAMPLING_INTERVAL_ESTIMATORS:
             return not_computed(
                 f"EconML's {estimator!r} interval is the spread of its per-unit effects "
                 "divided by sqrt(n), not a sampling interval for the average effect."
