@@ -21,8 +21,10 @@
 --        performance row per finished step, moves into composer_record_steps().
 -- 3. Structure-only helpers (§5.5). The Python serializer is the primary guard; these repeat
 --    it inside the database: a {"type":"column"} name survives only if it is a column of a
---    public relation, anything that is not a known structure node is reduced to its type and
---    length, identifiers are positional, intents are normalized, and no error text is stored.
+--    public relation; input keys, output keys and reference fields survive only if the
+--    registered tool schemas declare them (others are counted, never named); anything that is
+--    not a known structure node is reduced to its type and length; identifiers are positional,
+--    intents are normalized, and no error text is stored.
 -- 4. Five seeded, idempotent recording RPCs (§5.4). Each begins by creating the episode from
 --    the seed if it does not exist, so whichever write lands first records the composition,
 --    and each can be re-sent after a lost response.
@@ -136,8 +138,37 @@ AS $fn$
     ) AS d;
 $fn$;
 
+-- Property names of a registered JSON Schema (tool_registry.input_schema / output_schema, which
+-- sync_tool_registry keeps equal to the running code's declared inputs and output models).
+CREATE OR REPLACE FUNCTION composer_schema_names(p_schema jsonb)
+RETURNS text[]
+LANGUAGE sql
+IMMUTABLE
+SECURITY INVOKER
+SET search_path = public
+AS $fn$
+    SELECT COALESCE(
+        (SELECT array_agg(k.key ORDER BY k.key COLLATE "C")
+         FROM jsonb_object_keys(CASE WHEN jsonb_typeof(p_schema->'properties') = 'object'
+                                     THEN p_schema->'properties' ELSE '{}'::jsonb END) AS k(key)),
+        '{}'::text[]);
+$fn$;
+
+-- Every output field any registered tool declares: the names a {"type":"ref"} field may keep.
+CREATE OR REPLACE FUNCTION composer_registered_output_fields()
+RETURNS text[]
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $fn$
+    SELECT COALESCE(array_agg(DISTINCT f.name), '{}'::text[])
+    FROM tool_registry tr
+    CROSS JOIN LATERAL unnest(composer_schema_names(tr.output_schema)) AS f(name);
+$fn$;
+
 -- One parameter value reduced to structure.
-CREATE OR REPLACE FUNCTION composer_structure_value(p_value jsonb, p_columns text[])
+CREATE OR REPLACE FUNCTION composer_structure_value(p_value jsonb, p_columns text[], p_ref_fields text[])
 RETURNS jsonb
 LANGUAGE plpgsql
 IMMUTABLE
@@ -189,7 +220,7 @@ BEGIN
                 'step', CASE WHEN jsonb_typeof(p_value->'step') = 'number'
                              THEN p_value->'step' ELSE 'null'::jsonb END,
                 'field', CASE WHEN jsonb_typeof(p_value->'field') = 'string'
-                               AND (p_value->>'field') ~ '^[A-Za-z_][A-Za-z0-9_]{0,99}$'
+                               AND (p_value->>'field') = ANY (p_ref_fields)
                               THEN p_value->'field' ELSE 'null'::jsonb END);
         END IF;
     END IF;
@@ -197,21 +228,32 @@ BEGIN
 END
 $fn$;
 
--- An input map: identifier keys (the tool's declared parameter names) to structure values.
-CREATE OR REPLACE FUNCTION composer_structure_params(p_params jsonb, p_columns text[])
+-- An input map: only the tool's declared parameter names are kept as keys; any other key is
+-- counted into undeclared_params, never named.
+CREATE OR REPLACE FUNCTION composer_structure_params(
+    p_params jsonb, p_columns text[], p_declared text[], p_ref_fields text[]
+)
 RETURNS jsonb
 LANGUAGE sql
 IMMUTABLE
 SECURITY INVOKER
 SET search_path = public
 AS $fn$
-    SELECT CASE WHEN jsonb_typeof(p_params) = 'object' THEN
+    SELECT CASE WHEN jsonb_typeof(p_params) IS DISTINCT FROM 'object' THEN '{}'::jsonb ELSE
         COALESCE(
-            (SELECT jsonb_object_agg(e.key, composer_structure_value(e.value, p_columns))
+            (SELECT jsonb_object_agg(e.key, composer_structure_value(e.value, p_columns, p_ref_fields))
              FROM jsonb_each(p_params) AS e
-             WHERE e.key ~ '^[A-Za-z_][A-Za-z0-9_]{0,99}$'),
+             WHERE e.key = ANY (p_declared)),
             '{}'::jsonb)
-    ELSE '{}'::jsonb END;
+        || (SELECT CASE WHEN c.n > 0 THEN jsonb_build_object('undeclared_params', c.n) ELSE '{}'::jsonb END
+            FROM (
+                SELECT (SELECT count(*) FROM jsonb_each(p_params) AS e
+                        WHERE NOT (e.key = ANY (p_declared)) AND e.key <> 'undeclared_params')
+                       + COALESCE(CASE WHEN jsonb_typeof(p_params->'undeclared_params') = 'number'
+                                       THEN floor((p_params->>'undeclared_params')::numeric)::bigint END, 0)
+                       AS n
+            ) AS c)
+    END;
 $fn$;
 
 -- A JSON array reduced to its number elements, in order.
@@ -275,28 +317,29 @@ AS $fn$
         '[]'::jsonb);
 $fn$;
 
--- A step's output: the registered output-model field names and a count of other keys.
-CREATE OR REPLACE FUNCTION composer_structure_output(p_value jsonb)
+-- A step's output: only the tool's declared output fields are named; any other key is counted.
+CREATE OR REPLACE FUNCTION composer_structure_output(p_value jsonb, p_declared text[])
 RETURNS jsonb
 LANGUAGE sql
 IMMUTABLE
 SECURITY INVOKER
 SET search_path = public
 AS $fn$
+    WITH x AS (
+        SELECT e.k, e.o, (jsonb_typeof(e.k) = 'string' AND (e.k #>> '{}') = ANY (p_declared)) AS kept
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_value->'keys') = 'array'
+                                       THEN p_value->'keys' ELSE '[]'::jsonb END)
+             WITH ORDINALITY AS e(k, o)
+    )
     SELECT jsonb_build_object(
-        'keys', COALESCE(
-            (SELECT jsonb_agg(x.k ORDER BY x.o)
-             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_value->'keys') = 'array'
-                                            THEN p_value->'keys' ELSE '[]'::jsonb END)
-                  WITH ORDINALITY AS x(k, o)
-             WHERE jsonb_typeof(x.k) = 'string'
-               AND (x.k #>> '{}') ~ '^[A-Za-z_][A-Za-z0-9_]{0,99}$'),
-            '[]'::jsonb),
-        'other_keys', CASE WHEN jsonb_typeof(p_value->'other_keys') = 'number'
-                           THEN p_value->'other_keys' ELSE 'null'::jsonb END);
+        'keys', COALESCE((SELECT jsonb_agg(x.k ORDER BY x.o) FROM x WHERE x.kept), '[]'::jsonb),
+        'other_keys', (SELECT count(*) FROM x WHERE NOT x.kept)
+                      + COALESCE(CASE WHEN jsonb_typeof(p_value->'other_keys') = 'number'
+                                      THEN floor((p_value->>'other_keys')::numeric)::bigint END, 0));
 $fn$;
 
--- A plan: per step its number, registered tool name, dependency step numbers and input map.
+-- A plan: per step its number, registered tool name, dependency step numbers and input map
+-- (keyed by that tool's declared parameters).
 CREATE OR REPLACE FUNCTION composer_structure_plan(p_plan jsonb, p_columns text[])
 RETURNS jsonb
 LANGUAGE sql
@@ -315,7 +358,11 @@ AS $fn$
                                                                WHERE tr.name = x.s->>'tool_name')
                                                   THEN x.s->'tool_name' ELSE 'null'::jsonb END,
                                 'depends_on_steps', composer_structure_numbers(x.s->'depends_on_steps'),
-                                'input_params', composer_structure_params(x.s->'input_params', p_columns))
+                                'input_params', composer_structure_params(
+                                    x.s->'input_params', p_columns,
+                                    composer_schema_names((SELECT tr.input_schema FROM tool_registry tr
+                                                           WHERE tr.name = x.s->>'tool_name')),
+                                    composer_registered_output_fields()))
                             ORDER BY x.o)
                  FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_plan->'steps') = 'array'
                                                 THEN p_plan->'steps' ELSE '[]'::jsonb END)
@@ -498,6 +545,7 @@ DECLARE
     v_id uuid;
     v_synthetic boolean;
     v_columns text[];
+    v_ref_fields text[];
     v_known integer;
     v_recorded integer;
     v_unknown text[];
@@ -517,6 +565,7 @@ BEGIN
     v_id := composer_seed_episode(p_seed);
     SELECT is_synthetic INTO v_synthetic FROM composer_episodes WHERE episode_id = v_id;
     v_columns := composer_public_column_names();
+    v_ref_fields := composer_registered_output_fields();
 
     SELECT COALESCE(array_agg(DISTINCT s->>'tool_name' ORDER BY s->>'tool_name'), '{}'::text[])
     INTO v_unknown
@@ -539,8 +588,9 @@ BEGIN
             'step_' || ((s->>'step_number')::numeric::integer),
             tr.tool_id,
             tr.name,
-            composer_structure_params(s->'input_params', v_columns),
-            composer_structure_output(s->'output_keys'),
+            composer_structure_params(s->'input_params', v_columns,
+                                      composer_schema_names(tr.input_schema), v_ref_fields),
+            composer_structure_output(s->'output_keys', composer_schema_names(tr.output_schema)),
             ARRAY(SELECT (e #>> '{}')::numeric::integer
                   FROM jsonb_array_elements(composer_structure_numbers(s->'depends_on_steps')) AS e),
             CASE WHEN (s->>'serves_sub_question') ~ '^[0-9]{1,6}$' THEN s->>'serves_sub_question' END,
@@ -808,12 +858,14 @@ COMMENT ON VIEW v_active_compositions IS
 -- 6. Access: service_role only
 -- ---------------------------------------------------------------------------
 REVOKE ALL ON FUNCTION composer_public_column_names() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION composer_structure_value(jsonb, text[]) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION composer_structure_params(jsonb, text[]) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION composer_schema_names(jsonb) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION composer_registered_output_fields() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION composer_structure_value(jsonb, text[], text[]) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION composer_structure_params(jsonb, text[], text[], text[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION composer_structure_numbers(jsonb) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION composer_structure_groups(jsonb) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION composer_structure_sub_questions(jsonb) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION composer_structure_output(jsonb) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION composer_structure_output(jsonb, text[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION composer_structure_plan(jsonb, text[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION composer_episode_patch(jsonb, text[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION composer_seed_episode(jsonb) FROM PUBLIC, anon, authenticated;
@@ -827,12 +879,14 @@ REVOKE ALL ON FUNCTION get_tool_reliability(integer, boolean) FROM PUBLIC, anon,
 
 GRANT EXECUTE ON FUNCTION
     composer_public_column_names(),
-    composer_structure_value(jsonb, text[]),
-    composer_structure_params(jsonb, text[]),
+    composer_schema_names(jsonb),
+    composer_registered_output_fields(),
+    composer_structure_value(jsonb, text[], text[]),
+    composer_structure_params(jsonb, text[], text[], text[]),
     composer_structure_numbers(jsonb),
     composer_structure_groups(jsonb),
     composer_structure_sub_questions(jsonb),
-    composer_structure_output(jsonb),
+    composer_structure_output(jsonb, text[]),
     composer_structure_plan(jsonb, text[]),
     composer_episode_patch(jsonb, text[]),
     composer_seed_episode(jsonb),

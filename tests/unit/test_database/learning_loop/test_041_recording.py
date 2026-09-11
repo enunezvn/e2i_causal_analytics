@@ -11,6 +11,7 @@ Opt-in: ``E2I_DB_INTEGRATION=1``. Run with ``-n 0``.
 
 from __future__ import annotations
 
+import itertools
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -69,8 +70,10 @@ def step(n: int, tool: str, cls: str, **over: Any) -> Dict[str, Any]:
     return {
         "step_number": n,
         "tool_name": tool,
-        "input_params": {"segment_col": {"type": "column", "name": "region"}, "top_n": 5},
-        "output_keys": {"keys": ["segments"], "other_keys": 0},
+        # gap_calculator's declared names (registry input/output schema); other tools reduce
+        # these to an undeclared count, which the tests that care assert explicitly.
+        "input_params": {"group_by": {"type": "column", "name": "region"}, "metric": 5},
+        "output_keys": {"keys": ["gap"], "other_keys": 0},
         "depends_on_steps": [],
         "serves_sub_question": "0",
         # Relative to the run, so the reliability window (executed_at = completed_at) holds
@@ -104,7 +107,7 @@ def final(**over: Any) -> Dict[str, Any]:
                     "step_number": 0,
                     "tool_name": "gap_calculator",
                     "depends_on_steps": [],
-                    "input_params": {"metric_col": {"type": "column", "name": "brand"}},
+                    "input_params": {"metric": {"type": "column", "name": "brand"}},
                 }
             ],
             "execution_order_repaired": None,
@@ -362,6 +365,32 @@ def test_steps_idempotent_receipt(db):
     assert n_perf == 3  # succeeded, refused, error — dependency_unmet never ran the tool
 
 
+def test_resend_restores_a_missing_performance_row_once(db):
+    s = seed("recover")
+    batch = [step(0, "gap_calculator", "succeeded"), step(1, "roi_estimator", "error")]
+    with db.rolled_back() as conn:
+        call(conn, "composer_record_steps", s, batch)
+        original_steps = steps_of(conn, "recover")
+        lost = next(p for p in perf_of(conn, "recover") if p["outcome_class"] == "error")
+        conn.execute(
+            "delete from tool_performance where performance_id = %s", (lost["performance_id"],)
+        )
+        assert len(perf_of(conn, "recover")) == 1
+        receipt = call(conn, "composer_record_steps", s, batch)
+        again = call(conn, "composer_record_steps", s, batch)
+        steps_after = steps_of(conn, "recover")
+        perf_after = perf_of(conn, "recover")
+    assert receipt == {"recorded": 0, "already_present": 2, "unknown_tools": []}
+    assert again == receipt
+    assert steps_after == original_steps
+    assert sorted(p["outcome_class"] for p in perf_after) == ["error", "succeeded"]
+    restored = next(p for p in perf_after if p["outcome_class"] == "error")
+    assert restored["step_id"] == lost["step_id"]
+    assert {k: v for k, v in restored.items() if k != "performance_id"} == {
+        k: v for k, v in lost.items() if k != "performance_id"
+    }
+
+
 def test_perf_unique_index_allows_null_step_ids(db):
     with db.rolled_back() as conn:
         for _ in range(2):
@@ -442,6 +471,12 @@ def test_finish_restores_snapshot_and_second_finish_is_noop(db):
     with db.rolled_back() as conn:
         call(conn, "composer_record_start", s)  # the phase writes were "lost"
         first = call(conn, "composer_record_finish", s, snapshot)
+        # now() is frozen per transaction: backdate the terminal timestamps so a replay that
+        # rewrote them would show.
+        conn.execute(
+            "update composer_episodes set completed_at = now() - interval '1 hour', "
+            "last_activity_at = now() - interval '1 hour' where composition_id = 'finish'"
+        )
         after_first = episode(conn, "finish")
         second = call(
             conn, "composer_record_finish", s, final(outcome="success", total_latency_ms=1.0)
@@ -488,24 +523,43 @@ def test_cancelled_outcome_recorded(db):
 
 def test_every_rpc_bumps_activity_only_while_non_terminal(db):
     s = seed("beat")
-    stale = "update composer_episodes set last_activity_at = now() - interval '10 minutes' where composition_id = 'beat'"
-    fresh_sql = "select (last_activity_at >= now() - interval '1 second') from composer_episodes where composition_id = 'beat'"
+    stale = (
+        "update composer_episodes set last_activity_at = now() - interval '10 minutes' "
+        "where composition_id = 'beat'"
+    )
+    bumped_sql = (
+        "select (last_activity_at >= now() - interval '1 second') from composer_episodes "
+        "where composition_id = 'beat'"
+    )
+    numbers = itertools.count()
+    writes = {
+        "start": lambda conn: call(conn, "composer_record_start", s),
+        "heartbeat": lambda conn: call(conn, "composer_record_heartbeat", s),
+        "phase": lambda conn: call(conn, "composer_record_phase", s, "EXECUTING", {}),
+        "steps": lambda conn: call(
+            conn, "composer_record_steps", s, [step(next(numbers), "gap_calculator", "succeeded")]
+        ),
+    }
     with db.rolled_back() as conn:
         call(conn, "composer_record_start", s)
-        for name, fn in (
-            ("heartbeat", lambda: call(conn, "composer_record_heartbeat", s)),
-            ("phase", lambda: call(conn, "composer_record_phase", s, "EXECUTING", {})),
-            ("steps", lambda: call(conn, "composer_record_steps", s, [step(0, "gap_calculator", "succeeded")])),
-        ):  # fmt: skip
+        for name, write in writes.items():
             conn.execute(stale)
-            fn()
-            (bumped,) = conn.execute(fresh_sql).fetchone()
-            assert bumped is True, name
-        call(conn, "composer_record_finish", s, final())
+            write(conn)
+            (bumped,) = conn.execute(bumped_sql).fetchone()
+            assert bumped is True, f"{name} did not bump an open episode"
         conn.execute(stale)
-        assert call(conn, "composer_record_heartbeat", s) is False
-        (bumped,) = conn.execute(fresh_sql).fetchone()
-    assert bumped is False
+        call(conn, "composer_record_finish", s, final())
+        (bumped,) = conn.execute(bumped_sql).fetchone()
+        assert bumped is True, "finish did not bump"
+
+        for name, write in {
+            **writes,
+            "finish": lambda conn: call(conn, "composer_record_finish", s, final()),
+        }.items():
+            conn.execute(stale)
+            write(conn)
+            (bumped,) = conn.execute(bumped_sql).fetchone()
+            assert bumped is False, f"{name} bumped a terminal episode"
 
 
 def test_steps_for_returns_steps_in_order(db):
@@ -551,8 +605,8 @@ SENTINEL = "SENTINEL_7f3"
 def test_rpc_rechecks_column_entries(db):
     s = seed("recheck")
     params = {
-        "x": {"type": "column", "name": SENTINEL},
-        "y": {"type": "column", "name": "brand"},
+        "metric": {"type": "column", "name": SENTINEL},
+        "group_by": {"type": "column", "name": "brand"},
     }
     plan = final()["tool_plan"]
     plan["steps"][0]["input_params"] = params
@@ -569,8 +623,8 @@ def test_rpc_rechecks_column_entries(db):
         call(conn, "composer_record_finish", s, final(tool_plan=plan))
         finish_plan = episode(conn, "recheck")["tool_plan"]
     expected = {
-        "x": {"type": "str", "len": len(SENTINEL)},
-        "y": {"type": "column", "name": "brand"},
+        "metric": {"type": "str", "len": len(SENTINEL)},
+        "group_by": {"type": "column", "name": "brand"},
     }
     assert stored_step == expected
     assert phase_plan["steps"][0]["input_params"] == expected
@@ -578,31 +632,50 @@ def test_rpc_rechecks_column_entries(db):
 
 
 def test_rpc_reduces_anything_that_is_not_structure(db):
+    """Every LLM- or data-authored position the RPCs accept, planted with a sentinel.
+
+    Declared parameter names come from the registry (measured): gap_calculator IN metric,
+    entities, group_by, entity_type / OUT gap, entity_values, top_performer, bottom_performer;
+    causal_effect_estimator IN method, outcome, treatment, confounders; psi_calculator IN
+    feature, period_column, current_period, baseline_period.
+    """
     s = seed("reduce")
-    params = {
-        "raw": SENTINEL,
-        "extra": {"type": "str", "len": 3, "value": SENTINEL},
-        "unknown": {"type": SENTINEL, "k": 1},
-        "nested": {SENTINEL: {"a": 1}},
-        "listed": [SENTINEL, 1],
-        "ref": {"type": "ref", "step": 1, "field": "edge_list", "raw": SENTINEL},
-        "frame": {"type": "frame", "rows": 10, "columns": 3, "cols": [SENTINEL]},
-        "num": 0.05,
-        "flag": True,
+    gap_params = {
+        "metric": SENTINEL,
+        "group_by": {"type": "str", "len": 3, "value": SENTINEL},
+        "entities": {"type": SENTINEL, "k": 1},
+        "entity_type": {SENTINEL: {"a": 1}},
+        SENTINEL: 1,
+        "listed": [SENTINEL],
         "undeclared_params": 2,
     }
-    bad_step = step(
-        0,
-        "gap_calculator",
-        "refused",
-        input_params=params,
-        serves_sub_question=SENTINEL,
-        error_type=f"Refused {SENTINEL}!",
-        error_message=SENTINEL,
-        step_name=SENTINEL,
-        output_keys={"keys": ["segments"], "other_keys": 1, SENTINEL: SENTINEL},
-        depends_on_steps=[0],
-    )
+    cee_params = {
+        "treatment": {"type": "ref", "step": 0, "field": "gap", "raw": SENTINEL},
+        "outcome": {"type": "ref", "step": 0, "field": SENTINEL},
+        "confounders": [SENTINEL, 1],
+        "method": {"type": "frame", "rows": 10, "columns": 3, "cols": [SENTINEL]},
+    }
+    psi_params = {
+        "current_period": 0.05,
+        "baseline_period": True,
+        "feature": {"type": "column", "name": "brand"},
+    }
+    bad_steps = [
+        step(
+            0,
+            "gap_calculator",
+            "refused",
+            input_params=gap_params,
+            serves_sub_question=SENTINEL,
+            error_type=f"Refused {SENTINEL}!",
+            error_message=SENTINEL,
+            step_name=SENTINEL,
+            output_keys={"keys": ["gap", SENTINEL, "ate"], "other_keys": 1, SENTINEL: SENTINEL},
+            depends_on_steps=[SENTINEL, 0],
+        ),
+        step(1, "causal_effect_estimator", "succeeded", input_params=cee_params),
+        step(2, "psi_calculator", "succeeded", input_params=psi_params),
+    ]
     snapshot = final(
         sub_questions=[
             {"index": 0, "intent": SENTINEL, "text": SENTINEL},
@@ -614,11 +687,14 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
         synthesized_response=SENTINEL,
         tool_outputs={SENTINEL: 1},
     )
-    snapshot["tool_plan"]["steps"][0]["tool_name"] = SENTINEL
-    snapshot["tool_plan"]["steps"][0][SENTINEL] = SENTINEL
+    snapshot["tool_plan"]["steps"][0]["input_params"] = gap_params
+    snapshot["tool_plan"]["steps"].append(
+        {"step_number": 1, "tool_name": SENTINEL, "input_params": {"metric": 1}, SENTINEL: SENTINEL}
+    )
     snapshot["tool_plan"]["reasoning"] = SENTINEL
+    snapshot["tool_plan"]["execution_order_repaired"] = SENTINEL
     with db.rolled_back() as conn:
-        call(conn, "composer_record_steps", s, [bad_step])
+        call(conn, "composer_record_steps", s, bad_steps)
         call(
             conn,
             "composer_record_phase",
@@ -628,25 +704,30 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
         )
         call(conn, "composer_record_finish", s, snapshot)
         rows = [episode(conn, "reduce")] + steps_of(conn, "reduce") + perf_of(conn, "reduce")
-        stored = steps_of(conn, "reduce")[0]
+        stored = steps_of(conn, "reduce")
         ep = episode(conn, "reduce")
     assert all(SENTINEL not in json.dumps(r) for r in rows), [
         r for r in rows if SENTINEL in json.dumps(r)
     ]
-    assert stored["input_params"] == {
-        "raw": {"type": "str", "len": len(SENTINEL)},
-        "extra": {"type": "str", "len": 3},
-        "unknown": {"type": "dict", "len": 2},
-        "nested": {"type": "dict", "len": 1},
-        "listed": {"type": "list", "len": 2},
-        "ref": {"type": "ref", "step": 1, "field": "edge_list"},
-        "frame": {"type": "frame", "rows": 10, "columns": 3},
-        "num": 0.05,
-        "flag": True,
-        "undeclared_params": 2,
+    reduced_gap = {
+        "metric": {"type": "str", "len": len(SENTINEL)},
+        "group_by": {"type": "str", "len": 3},
+        "entities": {"type": "dict", "len": 2},
+        "entity_type": {"type": "dict", "len": 1},
+        "undeclared_params": 4,  # SENTINEL and "listed", plus the 2 the serializer counted
     }
-    assert stored["serves_sub_question"] is None and stored["error_type"] is None
-    assert stored["output_result"] == {"keys": ["segments"], "other_keys": 1}
+    assert stored[0]["input_params"] == reduced_gap
+    assert stored[1]["input_params"] == {
+        "treatment": {"type": "ref", "step": 0, "field": "gap"},
+        "outcome": {"type": "ref", "step": 0, "field": None},
+        "confounders": {"type": "list", "len": 2},
+        "method": {"type": "frame", "rows": 10, "columns": 3},
+    }
+    # Positive control: declared names, numbers, booleans and catalog columns survive.
+    assert stored[2]["input_params"] == psi_params
+    assert stored[0]["serves_sub_question"] is None and stored[0]["error_type"] is None
+    assert stored[0]["depends_on_steps"] == [0]
+    assert stored[0]["output_result"] == {"keys": ["gap"], "other_keys": 3}
     assert ep["sub_questions"] == [
         {"index": 0, "intent": "OTHER"},
         {"index": 1, "intent": "CAUSAL"},
@@ -656,10 +737,16 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
         "steps": [
             {
                 "step_number": 0,
+                "tool_name": "gap_calculator",
+                "depends_on_steps": [],
+                "input_params": reduced_gap,
+            },
+            {
+                "step_number": 1,
                 "tool_name": None,
                 "depends_on_steps": [],
-                "input_params": {"metric_col": {"type": "column", "name": "brand"}},
-            }
+                "input_params": {"undeclared_params": 1},
+            },
         ],
         "execution_order_repaired": None,
     }
