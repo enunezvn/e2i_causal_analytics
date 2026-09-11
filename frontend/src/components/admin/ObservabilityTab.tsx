@@ -21,6 +21,8 @@ import {
 } from 'recharts';
 import { useLlmUsage } from '@/hooks/api/use-admin';
 
+import { ToolComposerSection } from './ToolComposerSection';
+
 const fmtInt = (n: number) => n.toLocaleString();
 const fmtCost = (n: number | null | undefined) => {
   if (n == null) return '—';
@@ -279,6 +281,10 @@ export function ObservabilityTab() {
           </section>
         </>
       )}
+
+      {/* The tool composer reads its own endpoint, so it renders whether or not there was LLM
+          usage to show above: the two surfaces answer different questions about the same window. */}
+      <ToolComposerSection days={days} />
     </div>
   );
 }

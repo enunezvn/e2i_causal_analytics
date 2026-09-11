@@ -1715,3 +1715,76 @@ export const BrandModelSummaryWireSchema = z.object({
   is_synthetic_cohort: z.boolean(),
 });
 export type BrandModelSummary = z.infer<typeof BrandModelSummaryWireSchema>;
+
+// Tool-composer observability (GET /admin/observability/tool-composer, spec 2026-09-11 §8).
+// Nullable measured latency is an honest "not measured yet" (below 20 successful runs), never a
+// zero; declared_latency_ms is the registry's own number and is kept separate. The verdict is an
+// enum so a word the rule cannot produce fails loudly here instead of rendering as a label.
+export const ToolVerdictEnum = z.enum([
+  'no_runs',
+  'too_few_runs',
+  'caveat',
+  'reliable',
+  'inconclusive',
+]);
+
+export const ToolComposerCompositionCountsSchema = z.object({
+  total: z.number().int().nonnegative(),
+  success: z.number().int().nonnegative(),
+  partial: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  cancelled: z.number().int().nonnegative(),
+  unfinished: z.number().int().nonnegative(),
+  abandoned: z.number().int().nonnegative(),
+  by_plan_source: z.record(z.string(), z.number().int().nonnegative()),
+  p50_latency_ms: z.number().nullable(),
+  p95_latency_ms: z.number().nullable(),
+});
+
+export const ToolComposerToolRowSchema = z.object({
+  tool_name: z.string(),
+  verdict: ToolVerdictEnum,
+  category: z.string().nullable(),
+  source_agent: z.string().nullable(),
+  n_invoked: z.number().int().nonnegative(),
+  n_succeeded: z.number().int().nonnegative(),
+  n_refused: z.number().int().nonnegative(),
+  n_health_failures: z.number().int().nonnegative(),
+  n_health: z.number().int().nonnegative(),
+  n_retried: z.number().int().nonnegative(),
+  n_synthetic: z.number().int().nonnegative(),
+  p50_latency_ms: z.number().nullable(),
+  p95_latency_ms: z.number().nullable(),
+  declared_latency_ms: z.number().nullable(),
+  most_common_health_error: z.string().nullable(),
+  last_executed_at: z.string().nullable(),
+});
+
+export const ToolComposerStepClassSchema = z.object({
+  step_number: z.number().int().nullable(),
+  tool_name: z.string().nullable(),
+  outcome_class: z.string().nullable(),
+});
+
+export const ToolComposerRecentFailureSchema = z.object({
+  composition_id: z.string(),
+  outcome: z.string().nullable(),
+  status: z.string().nullable(),
+  failed_phase: z.string().nullable(),
+  error_type: z.string().nullable(),
+  entry_point: z.string().nullable(),
+  plan_source: z.string().nullable(),
+  query_preview: z.string(),
+  step_classes: z.array(ToolComposerStepClassSchema),
+  last_activity_at: z.string().nullable(),
+  total_latency_ms: z.number().nullable(),
+});
+
+export const ToolComposerObservabilityResponseSchema = z.object({
+  window_days: z.number().int().positive(),
+  include_synthetic: z.boolean(),
+  compositions: ToolComposerCompositionCountsSchema,
+  tools: z.array(ToolComposerToolRowSchema),
+  recent_failures: z.array(ToolComposerRecentFailureSchema),
+});
+export type ToolComposerObservability = z.infer<typeof ToolComposerObservabilityResponseSchema>;

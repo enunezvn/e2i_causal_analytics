@@ -10,6 +10,9 @@ import type { LlmUsageResponse } from '@/types/admin';
 
 vi.mock('@/hooks/api/use-admin', () => ({
   useLlmUsage: vi.fn(),
+  // The tab now mounts ToolComposerSection, which reads its own endpoint. These tests are about
+  // the LLM-usage surface, so the section is left in its loading state; its own suite covers it.
+  useToolComposerObservability: vi.fn(() => ({ data: undefined, isLoading: true, isError: false })),
 }));
 
 import * as adminHooks from '@/hooks/api/use-admin';
