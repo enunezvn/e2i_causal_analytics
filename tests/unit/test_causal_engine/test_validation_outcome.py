@@ -371,6 +371,58 @@ class TestExtractFailurePatterns:
             "is needed to detect a smaller effect." in null
         )
 
+    @staticmethod
+    def _unbenchmarked_pattern(details):
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.30,
+                    refuted_effect=0.30,
+                    delta_percent=0.0,
+                    details={"reading": "unbenchmarked", "e_value": 1.2, "message": "m", **details},
+                )
+            ],
+        )
+        (pattern,) = extract_failure_patterns(suite)
+        return pattern
+
+    def test_unbenchmarked_recommendation_follows_the_measured_unscoreable_basis(self):
+        """Whole-diff review F2: the persisted recommendation must follow the
+        benchmark basis. On ``measured_unscoreable`` the confounders WERE measured
+        (the live ``peer_influence_score -> adopted`` runs declared ``centrality_z``,
+        collinear with the treatment); "no measured confounders exist for this
+        design" is false there and "add covariates" is the wrong instruction."""
+        pattern = self._unbenchmarked_pattern(
+            {"benchmark_basis": "measured_unscoreable", "covariates_measured": 1}
+        )
+        assert pattern.category == FailureCategory.UNOBSERVED_CONFOUNDING
+        assert pattern.severity == "medium"
+        assert "the 1 measured confounder(s) could not be scored on this frame" in (
+            pattern.recommendation
+        )
+        assert "collinear with the treatment" in pattern.recommendation
+        assert "varies independently of the treatment" in pattern.recommendation
+        assert "no measured confounders exist" not in pattern.recommendation
+
+    def test_unbenchmarked_recommendation_without_a_count_still_names_the_measured_set(self):
+        pattern = self._unbenchmarked_pattern({"benchmark_basis": "measured_unscoreable"})
+        assert "the measured confounders could not be scored on this frame" in (
+            pattern.recommendation
+        )
+        assert "no measured confounders exist" not in pattern.recommendation
+
+    def test_unbenchmarked_recommendation_keeps_todays_text_on_none_measured(self):
+        for details in ({"benchmark_basis": "none_measured"}, {}):
+            pattern = self._unbenchmarked_pattern(details)
+            assert "no measured confounders exist for this design" in pattern.recommendation
+            assert "Add covariates so the E-value has a benchmark" in pattern.recommendation
+            assert "could not be scored" not in pattern.recommendation
+
     def test_legacy_sensitivity_row_without_a_reading_is_never_critical(self):
         """Rows persisted before 2026-09-10 carry an e_value and no ``reading``.
 

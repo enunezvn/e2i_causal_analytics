@@ -293,6 +293,28 @@ def _categorize_failure(test) -> tuple:
                 "measured confounding.",
             )
         if reading == "unbenchmarked":
+            # The recommendation follows the BENCHMARK BASIS (whole-diff review
+            # F2). ``measured_unscoreable`` means confounders WERE measured and
+            # adjusted for but none could be scored on this frame; "no measured
+            # confounders exist" is false there and "add covariates" is the wrong
+            # instruction. ``none_measured`` (or a legacy row with no basis) keeps
+            # the original text.
+            if test.details.get("benchmark_basis") == "measured_unscoreable":
+                k = test.details.get("covariates_measured")
+                measured = (
+                    f"the {int(k)} measured confounder(s)"
+                    if isinstance(k, (int, float)) and not isinstance(k, bool) and k > 0
+                    else "the measured confounders"
+                )
+                return (
+                    FailureCategory.UNOBSERVED_CONFOUNDING,
+                    "medium",
+                    f"Robustness to confounding could not be benchmarked: {measured} "
+                    "could not be scored on this frame (no usable contrast — for "
+                    "example a covariate collinear with the treatment). Add a measured "
+                    "confounder that varies independently of the treatment, or use a "
+                    "design that removes the measured confounding.",
+                )
             return (
                 FailureCategory.UNOBSERVED_CONFOUNDING,
                 "medium",
