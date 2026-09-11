@@ -1224,8 +1224,8 @@ def _derive_uncertainty(
     * DoWhy: its ``standard_error`` (the HC1 SE of its OLS fit) gives the 95 % normal
       interval ``ate +/- z*SE`` and the two-sided normal p-value.
     * EconML, for the estimators whose interval is a sampling interval: that 95 %
-      interval, with the SE back-derived from its width (``(hi - lo) / 2z``) and the
-      p-value from that SE.
+      interval and its ``ate_std`` (the SE back-derived from the width, ``(hi - lo) /
+      2z``, only when ``ate_std`` is absent), with the p-value from that SE.
 
     Otherwise every field is None: the effect is a consensus across libraries (no SE
     exists for that blend), the primary library produced no estimate of its own, it
@@ -1296,11 +1296,14 @@ def _derive_uncertainty(
                 f"ate_ci_upper={primary_result.get('ate_ci_upper')!r})."
             )
         lower, upper = lower_raw, upper_raw
-        se = (upper - lower) / (2.0 * _Z_95)
+        # EconML's own standard error when it reports one (as /causal/treatment-effects
+        # reads it), else back-derived from the interval's width.
+        ate_std = _finite_float(primary_result.get("ate_std"))
+        se = ate_std if ate_std is not None and ate_std > 0 else (upper - lower) / (2.0 * _Z_95)
         method_code = "library_interval"
         note = (
-            f"95% interval as reported by EconML {estimator}; the standard error and "
-            "two-sided p-value are back-derived from its width under a normal approximation."
+            f"95% interval and standard error as reported by EconML {estimator}; the "
+            "two-sided p-value is from that standard error under a normal approximation."
         )
     else:
         return not_computed(

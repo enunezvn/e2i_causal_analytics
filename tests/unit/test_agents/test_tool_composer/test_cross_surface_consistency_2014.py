@@ -95,3 +95,41 @@ def test_refutation_reads_the_estimators_own_interval(monkeypatch) -> None:
     assert effect == pytest.approx(estimate.ate, rel=1e-12)
     assert lower == pytest.approx(estimate.ci_lower, rel=1e-12)
     assert upper == pytest.approx(estimate.ci_upper, rel=1e-12)
+
+
+def test_an_econml_ols_estimate_reads_the_same_on_the_tool_and_the_api() -> None:
+    # EconML's OLS wrapper built its CI with 1.96 * ate_std; the tool back-derived the SE
+    # from that width with the exact quantile, and /causal/treatment-effects uses ate_std
+    # directly - so the same estimate had two p-values that can straddle 0.05.
+    from src.api.routes.causal import _te_pvalue_from_z
+    from src.causal_engine.energy_score.estimator_selector import (
+        EstimatorConfig,
+        EstimatorType,
+        OLSWrapper,
+    )
+
+    rng = np.random.default_rng(2014)
+    n = 400
+    c = rng.normal(0.0, 1.0, n)
+    t = (c + rng.normal(0.0, 1.0, n) > 0.3).astype(int)
+    y = 0.4 * t + 0.8 * c + rng.normal(0.0, 1.0, n)
+    fit = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(
+        t, y, pd.DataFrame({"confounder_a": c})
+    )
+    assert fit.success and fit.ate_std
+
+    assert fit.ate_ci_upper - fit.ate == pytest.approx(Z_95 * fit.ate_std, rel=1e-12)
+    primary = {
+        "estimator": "ols",
+        "ate": fit.ate,
+        "ate_ci_lower": fit.ate_ci_lower,
+        "ate_ci_upper": fit.ate_ci_upper,
+        "ate_std": fit.ate_std,
+    }
+    uncertainty = tr._derive_uncertainty(
+        ate=fit.ate, primary_result=primary, libraries_used=["econml"], errors=[]
+    )
+    assert uncertainty["standard_error"] == pytest.approx(fit.ate_std, rel=1e-12)
+    assert uncertainty["p_value"] == pytest.approx(
+        _te_pvalue_from_z(fit.ate, fit.ate_std), rel=1e-9
+    )
