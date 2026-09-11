@@ -195,13 +195,14 @@ engines cannot disagree on a run.
 `classify` returns a `SensitivityReading` dataclass: `reading`, `status`, `headline`, `message`,
 `e_value_point`, `e_value_ci`, `rr_point`, `rr_ci`, `ci_includes_null`, `conversion`
 (`risk_ratio` | `standardized_difference`), `baseline_risk`, `naive_effect`, `benchmark`,
-`benchmark_basis`, `covariate_bias_factors`, `n_rows`. Evaluated in this order:
+`benchmark_basis`, `covariate_bias_factors`, `n_rows`, `covariates_measured`. Evaluated in this order:
 
 | # | condition | reading | status | headline |
 |---|---|---|---|---|
 | 1 | `randomized` | `not_applicable_randomized` | SKIPPED | Not applicable: randomized design |
 | 2 | `ci_lo ≤ 0 ≤ ci_hi` | `null_finding` | WARNING | No detectable effect at this sample size |
-| 3 | no benchmark (`none_measured`) | `unbenchmarked` | WARNING | Robustness not benchmarked: no measured confounders |
+| 3a | no benchmark, basis `none_measured` (no covariate measured on the frame, no naive contrast) | `unbenchmarked` | WARNING | Robustness not benchmarked: no measured confounders |
+| 3b | no benchmark, basis `measured_unscoreable` (≥ 1 covariate measured on the frame, every one skipped for want of a usable contrast, no naive contrast) | `unbenchmarked` | WARNING | Robustness not benchmarked: measured confounders could not be scored |
 | 4 | `rr_point > benchmark` | `beyond_measured_confounding` | PASSED | Robust to confounding at measured strength |
 | 5 | otherwise (ties included) | `within_measured_confounding` | WARNING | Sensitive to confounding |
 
@@ -215,13 +216,33 @@ Message templates (one sentence each, numbers to two decimals, the verdict first
   as more reliable than the size."
 - **null_finding**: "The 95 % CI [{lo}, {hi}] includes zero at n = {n_rows}. The estimate is reported as a
   null finding; no unmeasured confounder is needed to explain it."
-- **unbenchmarked**: "The interval excludes zero (E-value {e_value_point}), but no measured confounders exist
-  for this design, so robustness to confounding cannot be benchmarked."
+- **unbenchmarked / `none_measured`**: "The interval excludes zero (E-value {e_value_point}), but no measured
+  confounders exist for this design, so robustness to confounding cannot be benchmarked."
+- **unbenchmarked / `measured_unscoreable`**: "The interval excludes zero (E-value {e_value_point}), but none of
+  the {covariates_measured} measured confounder(s) could be scored on this frame (no usable contrast — for
+  example a covariate collinear with the treatment), so robustness to confounding cannot be benchmarked."
 - **not_applicable_randomized**: today's text, unchanged.
 
-`unbenchmarked` is reserved for a non-randomized run with an empty backdoor set and no naive contrast.
-The live population has zero such runs (§2.6); the re-band in §7 confirms that count and the CI test in
-§6 pins the reading so it can never silently absorb a benchmarked case.
+`unbenchmarked` is one reading with two sub-cases, told apart by `benchmark_basis`, the headline and the
+message only (reading name, status and weight are identical):
+
+- `none_measured`: a non-randomized run with no covariate measured on the frame and no naive contrast.
+- `measured_unscoreable`: at least one covariate WAS measured on the frame (`BenchmarkInputs.covariates_measured
+  > 0`, the requested covariates present in the frame) but every one was skipped by `covariate_bias_factors`
+  (no usable contrast), and there is no naive contrast. The confounder was measured and adjusted for; it simply
+  cannot benchmark the effect. Saying "no measured confounders exist for this design" there is false, and every
+  caveat must say what it means.
+
+Measured on the live population (re-band, 2026-09-10, `docs/demos/results/2026-09-10_sensitivity_calibration/reband.md`):
+6 live runs read `unbenchmarked`, all of them `peer_influence_score → adopted` (dataset `hcp_adoption`,
+continuous treatment, the single declared covariate `centrality_z`). On the live frame
+corr(peer_influence_score, centrality_z) = 0.9995 for both brands, so the covariate's median split coincides
+with the treatment's, no control sits in its high stratum, and the factor is skipped. All 6 are the
+`measured_unscoreable` sub-case; the population has zero `none_measured` runs. `covariates_measured` is
+threaded exactly like `n_rows` (agent nodes pass the full-frame count; the runner falls back to the count its
+own benchmark-inputs branch measured, else 0) and is persisted in `details` with the other reading fields.
+The chat tool `sensitivity_analyzer` has no frame and stays on `none_measured` with its own text. The CI test
+in §6 pins both sub-cases so neither can silently absorb a benchmarked case.
 
 Status scores and weights are unchanged (PASSED 1.0, WARNING 0.6, SKIPPED excluded; sensitivity weight
 0.25). Only criticality and the labels change. The confidence score and band arithmetic are debt 2's
