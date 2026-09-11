@@ -276,10 +276,15 @@ class SimulationResults(BaseModel):
 
 
 class SensitivityReport(BaseModel):
-    """Output from ``sensitivity_analyzer``: E-values and the shared ``evalue`` reading."""
+    """Output from ``sensitivity_analyzer``: E-values and the shared ``evalue`` reading.
+
+    Without a confidence interval (#2014) the report is point-only: ``e_value_ci`` and
+    ``benchmark`` are None, ``reading`` is ``interval_unavailable`` and
+    ``benchmark_basis`` is ``not_assessed``.
+    """
 
     e_value_point: float
-    e_value_ci: float
+    e_value_ci: Optional[float]
     reading: str
     headline: str
     benchmark: Optional[float]
@@ -1537,7 +1542,15 @@ def _run_dowhy_refutation(
     tier=2,
     input_parameters=[
         {"name": "ate", "type": "float", "description": "Estimated average treatment effect"},
-        {"name": "ci_lower", "type": "float", "description": "Lower confidence bound"},
+        {
+            "name": "ci_lower",
+            "type": "float",
+            "description": (
+                "Lower confidence bound (optional; null when the estimate has no interval, "
+                "which makes the report point-only)"
+            ),
+            "required": False,
+        },
         {
             "name": "ci_upper",
             "type": "float",
@@ -1569,7 +1582,7 @@ def _run_dowhy_refutation(
 )
 def sensitivity_analyzer(
     ate: float,
-    ci_lower: float,
+    ci_lower: Optional[float] = None,
     ci_upper: Optional[float] = None,
     baseline_risk: Optional[float] = None,
     naive_ate: Optional[float] = None,
@@ -1588,6 +1601,13 @@ def sensitivity_analyzer(
     refused rather than silently read on the standardized-difference scale. A CI
     that includes zero is reported as a null finding regardless of the benchmark
     (spec §4.4 precedence).
+
+    Without an interval (#2014: ``causal_effect_estimator`` returns ``ci_lower`` /
+    ``ci_upper`` = None when no sampling uncertainty was measured, and the planner maps
+    those fields here by name) the report is point-only: the point E-value under the
+    same conversion rule, no CI E-value, no benchmark, and reading
+    ``interval_unavailable`` — null / beyond / within all need the interval. An upper
+    bound without a lower one is refused rather than mirrored into an invented bound.
     """
     for name, value in (
         ("ate", ate),
@@ -1602,6 +1622,14 @@ def sensitivity_analyzer(
                 "fabricate an E-value — per anti-mocking discipline non-finite inputs surface as "
                 "a structured error."
             )
+    if ci_lower is None:
+        if ci_upper is not None:
+            raise ToolInputError(
+                f"sensitivity_analyzer got ci_upper={ci_upper!r} without ci_lower. An interval "
+                "needs both bounds (or ci_lower alone, mirrored around ate); refusing to invent "
+                "the lower bound."
+            )
+        return _point_only_sensitivity(ate, baseline_risk=baseline_risk, naive_ate=naive_ate)
     hi = float(ci_upper) if ci_upper is not None else float(ate) + (float(ate) - float(ci_lower))
     try:
         reading = evalue.classify(
@@ -1641,6 +1669,45 @@ def sensitivity_analyzer(
         benchmark_basis=reading.benchmark_basis,
         conversion=reading.conversion,
         interpretation=interpretation,
+    ).model_dump()
+
+
+_READING_INTERVAL_UNAVAILABLE = "interval_unavailable"
+
+
+def _point_only_sensitivity(
+    ate: float, *, baseline_risk: Optional[float], naive_ate: Optional[float]
+) -> Dict[str, Any]:
+    """``sensitivity_analyzer``'s report when the estimate has no confidence interval (#2014)."""
+    try:
+        e_point, _, conversion = evalue.point_e_value(
+            float(ate), baseline_risk=baseline_risk, outcome_std=None, naive_effect=naive_ate
+        )
+    except ValueError as exc:
+        raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}") from exc
+    if baseline_risk is not None and conversion != "risk_ratio":
+        raise ToolRefusalError(
+            f"sensitivity_analyzer: baseline_risk={baseline_risk!r} with ate={ate!r} does not "
+            "form valid risks in (0, 1), so no risk-ratio E-value exists. Refusing to "
+            "substitute a standardized-difference scale for a caller who asked for the "
+            "risk-ratio path."
+        )
+    return SensitivityReport(
+        e_value_point=e_point,
+        e_value_ci=None,
+        reading=_READING_INTERVAL_UNAVAILABLE,
+        headline="Robustness not assessed: the estimate has no confidence interval",
+        benchmark=None,
+        benchmark_basis="not_assessed",
+        conversion=conversion,
+        interpretation=(
+            f"No confidence interval exists for this estimate, so only the point E-value is "
+            f"reported: an unobserved confounder would need a risk ratio of at least "
+            f"{e_point:.2f} with both treatment and outcome to explain away the point "
+            "estimate. Without the interval it is unknown whether the effect is "
+            "distinguishable from zero, so no robustness reading (null finding, or beyond / "
+            "within measured confounding) is given."
+        ),
     ).model_dump()
 
 
