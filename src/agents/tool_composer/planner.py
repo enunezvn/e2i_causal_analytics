@@ -209,24 +209,12 @@ class ToolPlanner:
             available_columns = [str(p["name"]) for p in column_profiles if p.get("name")]
 
         try:
-            # G6: Check for similar cached plan
-            if self._cache_manager:
-                cached_result = self._cache_manager.get_similar_plan(decomposition)
-                if cached_result:
-                    cached_plan, similarity = cached_result
-                    logger.info(f"Found similar cached plan (similarity: {similarity:.2f})")
-                    # Adapt cached plan to current decomposition
-                    adapted_plan = self._adapt_cached_plan(cached_plan, decomposition)
-                    if adapted_plan:
-                        # KPI outcome hint + treatment guard apply to cached plans
-                        # too (#810).
-                        self._apply_outcome_hint(
-                            adapted_plan.steps, outcome_hint, available_columns
-                        )
-                        self._apply_treatment_guard(
-                            adapted_plan.steps, column_profiles, outcome_hint
-                        )
-                        return adapted_plan
+            # G6: reuse a similar cached plan (recording the key it matched, spec §7.3)
+            cached_plan = self._try_cached_plan(
+                decomposition, available_columns, column_profiles, outcome_hint
+            )
+            if cached_plan is not None:
+                return cached_plan
 
             # Get available tools for planning
             tools_description = self._format_tools_for_prompt()
@@ -288,9 +276,11 @@ class ToolPlanner:
                 timestamp=datetime.now(timezone.utc),
             )
 
-            # G6: Cache the plan for future similarity matching
+            plan.plan_source = "llm"
+            # G6: Cache the plan for future similarity matching, under the key a composition that
+            # fails with it evicts (spec §7.3).
             if self._cache_manager:
-                self._cache_manager.cache_plan(decomposition, plan)
+                plan.plan_cache_key = self._cache_manager.cache_plan(decomposition, plan)
                 logger.debug("Cached plan for future similarity matching")
 
             logger.info(f"Created plan with {len(execution_steps)} steps")
@@ -299,6 +289,35 @@ class ToolPlanner:
         except Exception as e:
             logger.error(f"Planning failed: {e}")
             raise PlanningError(f"Failed to create execution plan: {e}") from e
+
+    def _try_cached_plan(
+        self,
+        decomposition: DecompositionResult,
+        available_columns: Optional[List[str]],
+        column_profiles: Optional[List[Dict[str, Any]]],
+        outcome_hint: Optional[str],
+    ) -> Optional[ExecutionPlan]:
+        """G6: a similar cached plan adapted to ``decomposition``, or ``None``.
+
+        The adapted plan carries ``plan_source="plan_cache"`` and the key of the entry it matched,
+        so a composition that fails with it can evict that entry.
+        """
+        if not self._cache_manager:
+            return None
+        match = self._cache_manager.get_similar_plan_with_key(decomposition)
+        if not match:
+            return None
+        cached_plan, similarity, key = match
+        logger.info(f"Found similar cached plan (similarity: {similarity:.2f})")
+        adapted_plan = self._adapt_cached_plan(cached_plan, decomposition)
+        if adapted_plan is None:
+            return None
+        # KPI outcome hint + treatment guard apply to cached plans too (#810).
+        self._apply_outcome_hint(adapted_plan.steps, outcome_hint, available_columns)
+        self._apply_treatment_guard(adapted_plan.steps, column_profiles, outcome_hint)
+        adapted_plan.plan_source = "plan_cache"
+        adapted_plan.plan_cache_key = key
+        return adapted_plan
 
     def _adapt_cached_plan(
         self, cached_plan: ExecutionPlan, decomposition: DecompositionResult

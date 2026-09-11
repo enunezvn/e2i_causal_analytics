@@ -370,6 +370,7 @@ class ToolComposer:
             logger.info("Phase 3: Executing tool chain...")
 
             execution_trace = await self.executor.execute(plan, context)
+            self._after_execution(plan, execution_trace)
 
             phase_durations["execute"] = self._elapsed_ms(phase_start)
             logger.info(
@@ -574,6 +575,40 @@ class ToolComposer:
             validation_passed=False,
         )
         return self._create_error_result(query, started_at, phase_durations, error, failed_phase)
+
+    # Step classes that say the PLAN was wrong, not the data or the tool (spec §7.3).
+    _PLAN_DEFECT_CLASSES = frozenset({"plan_defect", "not_registered"})
+
+    def _after_execution(self, plan: Any, execution_trace: Any) -> None:
+        """Evict the plan-cache entry of a plan that just failed, so it is not reused as if it worked.
+
+        Evicts when every executed tool failed, or when any step was a plan defect or named an
+        unregistered tool. Success, and partial success without a defect, stay cached (G6: skip
+        planning for similar work). A plan with no cache key (LLM planning without the cache, the
+        deterministic KPI plan) has nothing to evict.
+        """
+        key = getattr(plan, "plan_cache_key", None)
+        if not key:
+            return
+        results = list(getattr(execution_trace, "step_results", None) or [])
+        failed = execution_trace.tools_executed > 0 and execution_trace.tools_succeeded == 0
+        defect = any(
+            getattr(r, "outcome_class", None) in self._PLAN_DEFECT_CLASSES for r in results
+        )
+        if not (failed or defect):
+            return
+        try:
+            from .cache import get_cache_manager
+
+            evicted = get_cache_manager().evict_plan(key)
+            logger.info(
+                "Plan cache: evicted entry %s after a %s composition (present=%s)",
+                key,
+                "failed" if failed else "plan-defect",
+                evicted,
+            )
+        except Exception as e:  # noqa: BLE001 - eviction must never fail a composition
+            logger.warning(f"Plan cache eviction failed: {e}")
 
     def _elapsed_ms(self, start: datetime) -> int:
         """Calculate elapsed milliseconds since start"""
@@ -865,6 +900,7 @@ class ToolComposer:
             steps=steps,
             tool_mappings=mappings,
             parallel_groups=[parallel_first, ["kpi_rank"]],
+            plan_source="kpi_deterministic",
             planning_reasoning=(
                 f"Deterministic KPI causal analysis for outcome '{outcome}': effect of "
                 f"'{treatment}' (confounders={confounders}), driver ranking, and segment "
