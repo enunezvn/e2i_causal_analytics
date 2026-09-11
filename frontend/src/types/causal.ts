@@ -223,7 +223,7 @@ export interface CausalDAGModel {
 
 /** One refutation test's result, for the drill-down per-test table. */
 export interface RefutationTestDetail {
-  /** placebo_treatment / random_common_cause / data_subset / unobserved_common_cause / bootstrap */
+  /** placebo_treatment / random_common_cause / data_subset / unobserved_common_cause / bootstrap / negative_control_outcome (#2007) */
   test_name: string;
   passed: boolean;
   /**

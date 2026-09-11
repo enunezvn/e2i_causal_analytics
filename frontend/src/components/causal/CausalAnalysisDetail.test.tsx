@@ -44,6 +44,11 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
           (r) => r.status === 'warning'
         ).length ?? 0
       }
+      data-refutation-methods={
+        (refutationResults as Array<{ method: string }> | undefined)
+          ?.map((r) => r.method)
+          .join(',') ?? ''
+      }
     />
   ),
 }));
@@ -160,6 +165,27 @@ describe('CausalAnalysisDetail', () => {
     };
     renderWithProviders(<CausalAnalysisDetail result={withWarning} />);
     expect(screen.getByTestId('causal-dag')).toHaveAttribute('data-refutation-warnings', '1');
+  });
+
+  it('maps the negative-control outcome to its own viz method, never the Random Common Cause fallback (#2007)', () => {
+    const withNegativeControl: AgentCausalAnalysisResponse = {
+      ...RESULT,
+      refutation: {
+        ...RESULT.refutation!,
+        tests: [
+          { test_name: 'random_common_cause', passed: true, status: 'passed', original_effect: 0.0875, new_effect: 0.086, p_value: 0.9 },
+          // The reading arrives under its runner name with p_value null (an
+          // interval rule, not a test statistic). An unmapped name falls back to
+          // 'random_common_cause' in REFUTATION_METHOD_MAP — the hazard this pins.
+          { test_name: 'negative_control_outcome', passed: true, status: 'passed', original_effect: 0.0875, new_effect: 0.0047, p_value: null, details: 'A negative-control outcome the treatment cannot affect (treatment_initiated) stayed null: +0.005 [-0.043, +0.052] on n = 1500.' },
+        ],
+      },
+    };
+    renderWithProviders(<CausalAnalysisDetail result={withNegativeControl} />);
+    expect(screen.getByTestId('causal-dag')).toHaveAttribute(
+      'data-refutation-methods',
+      'random_common_cause,negative_control_outcome'
+    );
   });
 
   it('renders the estimator-comparison panel (the #1030 data-driven evaluation)', () => {

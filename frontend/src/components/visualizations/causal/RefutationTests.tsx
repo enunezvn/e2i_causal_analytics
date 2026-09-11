@@ -40,7 +40,8 @@ export type RefutationMethod =
   | 'data_subset'
   | 'bootstrap'
   | 'add_unobserved_common_cause'
-  | 'dummy_outcome';
+  | 'dummy_outcome'
+  | 'negative_control_outcome';
 
 export interface RefutationResult {
   /** Unique identifier for this test result */
@@ -102,6 +103,7 @@ const METHOD_LABELS: Record<RefutationMethod, string> = {
   bootstrap: 'Bootstrap Validation',
   add_unobserved_common_cause: 'Unobserved Common Cause',
   dummy_outcome: 'Dummy Outcome',
+  negative_control_outcome: 'Negative-Control Outcome',
 };
 
 const METHOD_DESCRIPTIONS: Record<RefutationMethod, string> = {
@@ -117,6 +119,8 @@ const METHOD_DESCRIPTIONS: Record<RefutationMethod, string> = {
     'Tests sensitivity to unmeasured confounding',
   dummy_outcome:
     'Tests if treatment affects a dummy/random outcome variable',
+  negative_control_outcome:
+    'Refits the same adjustment on an outcome the treatment cannot affect; a non-null effect there means the adjustment is leaking confounding (#2007, a weight-0 reading)',
 };
 
 // =============================================================================

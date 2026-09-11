@@ -155,3 +155,29 @@ describe('RefutationTests — three-state status (#1867)', () => {
     expect(screen.queryByText('Warning')).not.toBeInTheDocument();
   });
 });
+
+// Lane G (#2007, 2026-09-11): the negative-control-outcome reading arrives from
+// the backend under its own test name. It must render its own label — an
+// unknown method would otherwise fall through to the raw enum string, and the
+// drill-down's method map would fall back to "Random Common Cause".
+describe('RefutationTests — negative-control outcome (#2007)', () => {
+  it('renders the negative-control method with its own label', () => {
+    const nc: RefutationResult[] = [
+      {
+        id: 'nco',
+        method: 'negative_control_outcome',
+        originalEstimate: 0.0879,
+        refutedEstimate: 0.0047, // the control stayed null (CI includes 0)
+        pValue: 0, // the verdict is an interval rule; the backend sends p_value null
+        passed: true,
+        status: 'passed',
+        description:
+          'A negative-control outcome the treatment cannot affect (treatment_initiated) stayed null: +0.005 [-0.043, +0.052] on n = 1500.',
+      },
+    ];
+    render(<RefutationTests results={nc} />);
+    expect(screen.getByText('Negative-Control Outcome')).toBeInTheDocument();
+    expect(screen.queryByText('negative_control_outcome')).not.toBeInTheDocument();
+    expect(screen.queryByText('Random Common Cause')).not.toBeInTheDocument();
+  });
+});

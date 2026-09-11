@@ -19,6 +19,7 @@ import {
   STAT_CHIPS,
   REFUTATION_INTRO,
   REFUTATION_TESTS,
+  type RefutationTestId,
   GATE_BANDS,
   DOC_SECTIONS,
   PREDICTIVE_COHORTS,
@@ -75,9 +76,9 @@ describe('content invariants', () => {
 });
 
 describe('refutation gate content', () => {
-  it('has five tests with unique ids, exactly two critical, each with a default and a pass rule', () => {
-    expect(REFUTATION_TESTS).toHaveLength(5);
-    expect(new Set(REFUTATION_TESTS.map((t) => t.id)).size).toBe(5);
+  it('has six tests with unique ids, exactly two critical, each with a default and a pass rule', () => {
+    expect(REFUTATION_TESTS).toHaveLength(6);
+    expect(new Set(REFUTATION_TESTS.map((t) => t.id)).size).toBe(6);
     expect(REFUTATION_TESTS.filter((t) => t.critical).map((t) => t.id)).toEqual([
       'placebo_treatment',
       'random_common_cause',
@@ -186,5 +187,38 @@ describe('refutation documentation content (2026-09-10 sensitivity reading)', ()
       'placebo_treatment',
       'random_common_cause',
     ]);
+  });
+});
+
+// Lane G (2026-09-11, #2007): the negative-control-outcome test — the only
+// refuter that can DETECT confounding (the others perturb or resample the same
+// fit). A weight-0 READING for the first live period: non-critical, never
+// blocks, never moves the confidence score.
+describe('refutation documentation content (2026-09-11 negative-control reading)', () => {
+  it('lists the negative-control outcome as a sixth, non-critical reading', () => {
+    // Compile-time pin: the id is a member of the RefutationTestId union.
+    const id: RefutationTestId = 'negative_control_outcome';
+    const nc = REFUTATION_TESTS.find((t) => t.id === id);
+    expect(nc).toBeDefined();
+    expect(nc!.critical).toBe(false);
+    expect(nc!.name).toBe('Negative-Control Outcome');
+    expect(nc!.mustHold).toMatch(/must stay null/i);
+    // The rule is an interval rule on the control's CI, three-way.
+    expect(nc!.passRule).toMatch(/includes 0/);
+    expect(nc!.passRule).toMatch(/warns/);
+    expect(nc!.passRule).toMatch(/fails/);
+    // Weight 0 — a reading, declared per treatment.
+    expect(nc!.defaults).toMatch(/weight 0/);
+    expect(nc!.defaults).toMatch(/per treatment/i);
+    // The failing sign names the mechanism: the adjustment leaks confounding.
+    expect(nc!.failSign).toMatch(/leaking confounding/i);
+    expect(REFUTATION_TESTS.map((t) => t.id).indexOf(id)).toBe(5);
+  });
+
+  it('counts six tests in the intro and says the negative control is the one that can detect confounding', () => {
+    expect(REFUTATION_INTRO).toMatch(/six refutation tests/);
+    expect(REFUTATION_INTRO).not.toMatch(/five refutation tests/i);
+    expect(REFUTATION_INTRO).toMatch(/detect confounding/i);
+    expect(REFUTATION_INTRO).toMatch(/reading/i);
   });
 });

@@ -644,6 +644,11 @@ agents:
     causal_engine:
       library: "dowhy"
       estimator: "propensity_score_matching"
+      # Consumed ONLY by the GEPA causal-impact metric
+      # (src/optimization/gepa/metrics/causal_impact_metric.py::_score_refutation),
+      # a pass-rate over the tests listed here. negative_control_outcome (#2007,
+      # a weight-0 reading) is DELIBERATELY not listed: adding it would change
+      # GEPA scoring, an owner decision, not a documentation one.
       refutation_tests:
         - placebo_treatment
         - random_common_cause

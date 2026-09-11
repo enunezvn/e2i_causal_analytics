@@ -300,7 +300,7 @@ def _random_common_cause_severity(test) -> str:
 
 def _categorize_failure(test) -> tuple:
     """Categorize a test failure into a learning category."""
-    from .refutation_runner import RefutationTestType
+    from .refutation_runner import RefutationStatus, RefutationTestType
 
     test_name = test.test_name
     delta = abs(test.delta_percent)
@@ -402,6 +402,30 @@ def _categorize_failure(test) -> tuple:
             "investigate heterogeneous treatment effects.",
         )
 
+    elif test_name == RefutationTestType.NEGATIVE_CONTROL_OUTCOME:
+        # #2007 (2026-09-11): the SAME adjusted fit, re-run with a declared
+        # outcome the treatment cannot affect, found a non-null effect. That is
+        # confounding the adjustment left behind, read from a different
+        # instrument than the sensitivity test's ``within`` reading, so the
+        # category is the existing UNOBSERVED_CONFOUNDING -- no new member.
+        # Severity follows the runner's verdict (``negative_control_ci_vs_zero``):
+        # FAILED = the control moved at least as much as the claimed effect;
+        # WARNING = it moved, less than the claim. ``delta_percent`` here is the
+        # FAILED ratio itself (100 * |nc| / |claim|), not a stability measure.
+        status = getattr(test, "status", None)
+        severity = "high" if status == RefutationStatus.FAILED else "medium"
+        return (
+            FailureCategory.UNOBSERVED_CONFOUNDING,
+            severity,
+            "The negative-control outcome moved under the same adjustment: the "
+            "adjustment is leaking confounding, and whatever moved the control "
+            "is still moving the claimed effect. Do not act on the size of this "
+            "effect; find the confounder the control shares with the treatment "
+            "(measure it and add it to the adjustment set, or use a design that "
+            "removes it), and confirm the control cannot itself be affected by "
+            "the treatment.",
+        )
+
     return (
         FailureCategory.UNKNOWN,
         "medium",
@@ -470,6 +494,33 @@ def _describe_failure(test) -> str:
 
     elif test_name == RefutationTestType.BOOTSTRAP:
         return f"Bootstrap variance: effect changed by {abs(delta):.1f}%"
+
+    elif test_name == RefutationTestType.NEGATIVE_CONTROL_OUTCOME:
+        # #2007: the description IS the runner's sentence (``details["reading"]``,
+        # composed with the control's name, interval and row basis), so the
+        # learned row cannot contradict the verdict stored beside it. A row
+        # without the sentence gets one built from the control's own numbers --
+        # never the generic "% change": ``delta_percent`` is the FAILED ratio and
+        # reads 0.0 when the claimed effect is exactly 0.
+        details = test.details if isinstance(test.details, dict) else {}
+        reading = details.get("reading")
+        if reading:
+            return str(reading)
+        outcome = details.get("nc_outcome") or "unknown"
+        eff = details.get("nc_effect")
+        try:
+            eff_txt = f"{float(eff):+.3f}" if eff is not None else "n/a"
+        except (TypeError, ValueError):
+            eff_txt = "n/a"
+        ci = details.get("nc_ci")
+        try:
+            ci_txt = f" [{float(ci[0]):+.3f}, {float(ci[1]):+.3f}]" if ci is not None else ""
+        except (TypeError, ValueError, IndexError, KeyError):
+            ci_txt = ""
+        return (
+            f"Negative-control outcome {outcome} (an outcome the treatment cannot "
+            f"affect) moved by {eff_txt}{ci_txt} under the same adjustment"
+        )
 
     return f"Test {test_name.value} failed with {abs(delta):.1f}% change"
 
