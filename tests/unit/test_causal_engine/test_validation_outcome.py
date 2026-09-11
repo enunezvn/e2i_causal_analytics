@@ -1017,3 +1017,97 @@ class TestGlobalAccessors:
         outcome_id = await log_validation_outcome(outcome)
 
         assert outcome_id == "vo_log_test"
+
+
+class TestRandomCommonCauseSeverityFollowsTheSeUnitsRule:
+    """#2005: the rcc pattern's severity follows the verdict's own statistic.
+
+    The retired label was ``"high" if delta_percent > 30 else "medium"`` on
+    ``|Δ| / |ATE|``, which the runner no longer scores: a FAILED row now means
+    the shift exceeded 2 SE of the reported interval, and the percentage can be
+    huge on a null (measured 2026-09-11: 174 % at 0.34 SE). Severity reads
+    ``details["shift_se_units"]``; a row persisted before the key existed
+    follows its stored status; only a row with neither keeps the percentage.
+    """
+
+    @staticmethod
+    def _rcc(status, delta_percent, details=None, original_effect=0.039):
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.40,
+            gate_decision=GateDecision.BLOCK,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                    status=status,
+                    original_effect=original_effect,
+                    refuted_effect=0.045,
+                    delta_percent=delta_percent,
+                    details=details or {},
+                )
+            ],
+        )
+        return extract_failure_patterns(suite)[0]
+
+    def test_the_persisted_shift_outranks_the_status(self):
+        """Precedence pinned with CONFLICTING inputs: a status-only reading would
+        invert both of these."""
+        p = self._rcc(RefutationStatus.WARNING, 5.0, {"shift_se_units": 2.7})
+        assert p.severity == "high"
+        p = self._rcc(RefutationStatus.FAILED, 300.0, {"shift_se_units": 0.9})
+        assert p.severity == "medium"
+
+    def test_the_cutoff_is_inclusive_at_exactly_two_se(self):
+        assert (
+            self._rcc(RefutationStatus.WARNING, 5.0, {"shift_se_units": 2.0}).severity == "medium"
+        )
+        assert (
+            self._rcc(RefutationStatus.WARNING, 5.0, {"shift_se_units": 2.0000001}).severity
+            == "high"
+        )
+
+    def test_description_names_the_refit_frame_scale_when_applied(self):
+        p = self._rcc(
+            RefutationStatus.WARNING,
+            15.4,
+            {"shift_se_units": 1.47, "reference_se_scale": 2.7391604553220317},
+        )
+        assert "1.47 SE" in p.description
+        assert "scaled x2.74 to the refit frame" in p.description
+        unscaled = self._rcc(
+            RefutationStatus.WARNING, 15.4, {"shift_se_units": 1.47, "reference_se_scale": 1.0}
+        )
+        assert "scaled" not in unscaled.description
+
+    def test_description_does_not_call_a_floored_percentage_a_share_of_a_zero_effect(self):
+        p = self._rcc(
+            RefutationStatus.FAILED,
+            6.0e9,
+            {"shift_se_units": 2.4},
+            original_effect=0.0,
+        )
+        assert "2.40 SE" in p.description
+        assert "% of the effect" not in p.description
+        assert "floored denominator" in p.description
+
+    def test_failed_beyond_two_se_is_high_even_at_a_small_percentage(self):
+        p = self._rcc(
+            RefutationStatus.FAILED, 15.4, {"shift_se_units": 2.35, "rule": "shift_vs_reported_se"}
+        )
+        assert p.severity == "high"
+        assert p.category == FailureCategory.MODEL_MISSPECIFICATION
+        assert "2.35 SE" in p.description
+        assert "15.4" in p.description  # the percentage stays, as context
+
+    def test_warning_band_is_medium_even_at_a_huge_percentage(self):
+        p = self._rcc(
+            RefutationStatus.WARNING, 174.0, {"shift_se_units": 1.4, "rule": "shift_vs_reported_se"}
+        )
+        assert p.severity == "medium"
+        assert "1.40 SE" in p.description
+
+    def test_legacy_row_without_the_key_follows_its_stored_status(self):
+        assert self._rcc(RefutationStatus.FAILED, 12.0).severity == "high"
+        assert self._rcc(RefutationStatus.WARNING, 95.0).severity == "medium"
+        assert "SE" not in self._rcc(RefutationStatus.WARNING, 95.0).description
+        assert "95.0%" in self._rcc(RefutationStatus.WARNING, 95.0).description

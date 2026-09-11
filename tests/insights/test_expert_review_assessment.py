@@ -228,3 +228,88 @@ class TestLmParseAndVouching:
         assert "refuter" in items["conf_complete"]["rationale"] or "test" in (
             items["conf_complete"]["rationale"].lower()
         )
+
+
+class TestRefutationEvidenceNamesTheSeShift:
+    """#2005: an rcc row's verdict is its shift in SE units, persisted in
+    ``details_json``; the grounding must print it so the reviewer (and the
+    digit-vouching LM rationale) sees the number the verdict used, not only the
+    retired percentage."""
+
+    def test_rcc_row_with_shift_prints_se_units(self):
+        rows = [
+            {
+                "test_type": "random_common_cause",
+                "status": "failed",
+                "original_effect": 0.30,
+                "refuted_effect": 0.36,
+                "delta_percent": 20.0,
+                "details_json": {"shift_se_units": 2.3523, "rule": "shift_vs_reported_se"},
+            }
+        ]
+        text = build_grounding(REVIEW_ROW, rows)["refutation_evidence"]
+        assert "shift 2.35 SE" in text
+        assert "delta 20.0%" in text
+
+    def test_details_json_as_a_string_is_decoded(self):
+        rows = [
+            {
+                "test_type": "random_common_cause",
+                "status": "passed",
+                "original_effect": 0.30,
+                "refuted_effect": 0.31,
+                "delta_percent": 3.3,
+                "details_json": '{"shift_se_units": 0.4}',
+            }
+        ]
+        assert "shift 0.40 SE" in build_grounding(REVIEW_ROW, rows)["refutation_evidence"]
+
+    def test_legacy_row_without_the_key_is_unchanged(self):
+        text = build_grounding(REVIEW_ROW, VALIDATIONS)["refutation_evidence"]
+        assert "SE" not in text
+        assert "delta 1.7%" in text
+
+    @staticmethod
+    def _pred(conf_complete: str):
+        return _FakePred(
+            conf_complete=conf_complete,
+            edge_plausible="unclear — verify augmented edges",
+            no_forbidden="supports — acyclic",
+            mediators_correct="unclear — m is a mediator",
+            sutva_plausible="no_evidence — requires domain judgment",
+            positivity="concern — data_subset failed",
+        )
+
+    def test_the_printed_shift_vouches_an_lm_rationale_that_cites_it(self, monkeypatch):
+        """The grounding text is what the digit-vouching gate checks an LM rationale
+        against: with the shift printed, a rationale citing 2.35 SE is kept; a
+        neighbouring number that is NOT in the grounding is still rejected; and
+        without the shift (legacy rows) the same rationale falls back."""
+        rows = [dict(VALIDATIONS[0], details_json={"shift_se_units": 2.3523}, status="failed")]
+        monkeypatch.setattr(
+            "src.insights.expert_review_assessment.run_signature",
+            lambda *a, **k: self._pred(
+                "concern — the refit moved 2.35 SE under a random confounder"
+            ),
+        )
+        items = _items_by_id(generate_assessment(build_grounding(REVIEW_ROW, rows)))
+        assert items["conf_complete"]["verdict"] == "concern"
+        assert "2.35 SE" in items["conf_complete"]["rationale"]
+
+        monkeypatch.setattr(
+            "src.insights.expert_review_assessment.run_signature",
+            lambda *a, **k: self._pred(
+                "concern — the refit moved 2.36 SE under a random confounder"
+            ),
+        )
+        items = _items_by_id(generate_assessment(build_grounding(REVIEW_ROW, rows)))
+        assert "2.36" not in items["conf_complete"]["rationale"]
+
+        monkeypatch.setattr(
+            "src.insights.expert_review_assessment.run_signature",
+            lambda *a, **k: self._pred(
+                "concern — the refit moved 2.35 SE under a random confounder"
+            ),
+        )
+        items = _items_by_id(generate_assessment(build_grounding(REVIEW_ROW, VALIDATIONS)))
+        assert "2.35" not in items["conf_complete"]["rationale"]

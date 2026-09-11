@@ -200,6 +200,19 @@ def _coerce_structure(raw: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _shift_se_units(raw: Any) -> Optional[float]:
+    """``details_json`` arrives as dict (JSONB) or a JSON string; the rcc shift
+    lives at ``shift_se_units``. None when absent or non-numeric."""
+    details = _coerce_structure(raw)
+    if not details:
+        return None
+    try:
+        value = details.get("shift_se_units")
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def build_grounding(review: Dict[str, Any], validations: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Assemble the evidence strings the assessment is grounded in."""
     structure = _coerce_structure(review.get("dag_structure_json"))
@@ -232,6 +245,11 @@ def build_grounding(review: Dict[str, Any], validations: List[Dict[str, Any]]) -
     for row in validations:
         line = f"{row.get('test_type')}: {row.get('status')}"
         if row.get("original_effect") is not None and row.get("refuted_effect") is not None:
+            # #2005: a random_common_cause verdict is its shift in SE units of the
+            # reported interval, persisted in details_json; print it beside the
+            # percentage so the reviewer sees the number the verdict used (and the
+            # digit-vouched LM rationale can cite it). Legacy rows carry no shift.
+            shift = _shift_se_units(row.get("details_json"))
             line += (
                 f" (effect {row['original_effect']} -> {row['refuted_effect']}"
                 + (
@@ -239,6 +257,7 @@ def build_grounding(review: Dict[str, Any], validations: List[Dict[str, Any]]) -
                     if row.get("delta_percent") is not None
                     else ""
                 )
+                + (f", shift {shift:.2f} SE" if shift is not None else "")
                 + ")"
             )
         if row.get("p_value") is not None:
