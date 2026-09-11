@@ -491,8 +491,8 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
       new sync writes to the DB.
     - **Harm and fit:** `get_tools_by_category` is a placeholder that logs a warning and returns `[]`
       (`registry.py:606–616`). The enum's docstring claims it matches "database constraint", but its values
-      (`causal`, `comparative`, `predictive`, …) do not match the DB enum (`CAUSAL`, `SEGMENTATION`, `GAP`,
-      …; §2.3 of the spec).
+      (`causal`, `comparative`, `predictive`, …) do not match the live DB enum, measured 2026-09-11:
+      `CAUSAL, SEGMENTATION, GAP, EXPERIMENT, PREDICTION, MONITORING`.
     - **Consumers:** none outside `test_registry.py`. The package `src/tool_registry/__init__.py` does not
       re-export `ToolCategory`. The `get_tools_by_category` in `src/optimization/gepa/tools/causal_tools.py:337`
       is an unrelated function and is untouched.
