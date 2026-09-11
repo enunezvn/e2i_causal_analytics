@@ -1078,6 +1078,26 @@ def _is_randomized_treatment(dataset: Optional[str], treatment_var: str) -> bool
 # re-verified PER DATA SOURCE with the same omitted-confounder experiment before
 # the test is allowed to score: a control that responds on the generator is
 # not evidence it responds on real claims data.
+#
+# SHAPE (why the control is NOT a column of ``estimation_data``): the submit
+# endpoint fetches the declared control as a loader PASSTHROUGH column (same
+# rows, same select), and ``_run_agent_analysis_task`` splits it off into
+# ``data_cache["negative_control_data"]`` — a one-column frame sharing the
+# estimation frame's index. Measured disproof of "an extra frame column is
+# inert": two existing consumers treat EVERY non-question column of the
+# estimation frame as a covariate —
+#   * src/agents/causal_impact/nodes/graph_builder.py:787-800 (guided
+#     discovery) tiers all of them as candidate pre-treatment covariates and
+#     hands the whole frame to discover_dag, so the control would become a
+#     DAG node and could enter the DAG-derived adjustment set;
+#   * src/agents/causal_impact/nodes/estimation.py:286-295 (no-backdoor
+#     fallback) adjusts on all of them.
+# Only the static PROVENANCE_DROP_COLS is excluded on those paths; a per-
+# question column cannot go there. Keeping the control OUT of the frame holds
+# "the estimate conditions on exactly the declared covariates" by construction
+# instead of by two nodes each remembering to drop a dynamic column. The
+# refutation node aligns by index (the #1419 subsample is ``frame.iloc[...]``,
+# which keeps the original labels): ``negative_control_data.loc[frame.index]``.
 _CAUSAL_NEGATIVE_CONTROL_OUTCOMES: Dict[str, Dict[str, str]] = {
     "patient_journeys": {
         "copay_support": "treatment_initiated",

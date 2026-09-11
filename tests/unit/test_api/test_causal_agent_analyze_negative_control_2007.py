@@ -516,3 +516,54 @@ async def test_loader_refuses_a_passthrough_on_the_join_datasets():
             )
     assert ei.value.status_code == 400
     assert "passthrough" in str(ei.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# (f) end-to-end shape contract for T4: loader -> task split
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_loader_then_task_gives_index_aligned_frames_for_the_node(monkeypatch):
+    """The refutation node aligns the control by INDEX
+    (``negative_control_data.loc[refutation_data.index]`` after the #1419
+    subsample, which is ``frame.iloc[...]`` and keeps the original labels).
+    Pins: both frames are built from the same records BEFORE the split, so
+    every row-drop the loader applies (a NULL treatment here) applies to both
+    identically; a NULL control drops nothing (stays NaN); the estimation
+    frame never carries the control column."""
+    captured = _capture_task_state(monkeypatch)
+    with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(_pj_rows()))):
+        df, expanded_cols = await causal_routes._load_agent_estimation_frame(
+            dataset="patient_journeys",
+            treatment_var="copay_support",
+            outcome_var="adherent_180d",
+            covariates=["insurance_access_score"],
+            limit=1500,
+            passthrough_columns=["treatment_initiated"],
+        )
+    req = AgentCausalAnalysisRequest(
+        treatment_var="copay_support",
+        outcome_var="adherent_180d",
+        dataset="patient_journeys",
+    )
+    confounders = [c for c in expanded_cols if c not in ("copay_support", "adherent_180d")]
+    await causal_routes._run_agent_analysis_task("aid-e2e", req, df, confounders, "live")
+
+    est = captured["data_cache"]["estimation_data"]
+    nc = captured["data_cache"]["negative_control_data"]
+    # Same rows: the NULL-treatment row is absent from BOTH; the NULL control
+    # row is present in BOTH (NaN in the control frame).
+    assert len(est) == len(nc) == 3
+    assert nc.index.equals(est.index)
+    assert nc["treatment_initiated"].isna().sum() == 1
+    assert "treatment_initiated" not in est.columns
+    assert list(nc.columns) == ["treatment_initiated"]
+    assert captured["negative_control_outcome"] == "treatment_initiated"
+    assert "treatment_initiated" not in captured["confounders"]
+    assert "treatment_initiated" not in captured["modeled_confounders"]
+    # T4's alignment on a positional subsample of the estimation frame.
+    subsample = est.iloc[[2, 0]]
+    aligned = nc.loc[subsample.index]
+    assert aligned.index.equals(subsample.index)
+    assert len(aligned) == 2
