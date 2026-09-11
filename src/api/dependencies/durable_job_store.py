@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 # Errors that should DEGRADE to the in-memory fallback rather than surface a 500.
-# RuntimeError covers "redis not initialised" raised by get_redis().
+# RuntimeError covers "redis not initialised" raised by request_path_client().
 try:  # pragma: no cover - import shape varies by redis version
     from redis.exceptions import RedisError as _RedisError
 
@@ -58,17 +58,23 @@ _RECORD_DECODE_ERRORS: tuple = (ValidationError, json.JSONDecodeError, ValueErro
 DEFAULT_TTL_SECONDS = 3600  # 1h: ample for a multi-minute job + the FE poll/view window
 DEFAULT_MAX_FALLBACK = 256
 
-# Zero-arg async factory yielding a Redis client (defaults to the app's canonical
-# ``get_redis``; injectable for tests).
+# Zero-arg async factory yielding a Redis client (defaults to the app's initialised
+# client via ``request_path_client``; injectable for tests).
 RedisFactory = Callable[[], Awaitable[Any]]
 
 
 async def _default_redis_factory() -> Any:
-    """Return the app's canonical async Redis client (lazy import avoids a hard
-    Redis dependency at import time and import cycles)."""
-    from src.api.dependencies.redis_client import get_redis
+    """Return the app's initialised async Redis client (lazy import avoids a hard
+    Redis dependency at import time and import cycles).
 
-    return await get_redis()
+    Never ``get_redis()`` on a request path: with the client unset (startup in
+    Redis-degraded mode) it runs ``init_redis()``'s backoff, measured 16 s per
+    call (#1999). ``request_path_client`` raises ``RuntimeError`` at once (a
+    degrade error here) and reconnects in the background.
+    """
+    from src.api.dependencies.redis_client import request_path_client
+
+    return await request_path_client()
 
 
 class DurableJobStore(Generic[T]):

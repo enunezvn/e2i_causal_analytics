@@ -61,10 +61,11 @@ logger = logging.getLogger(__name__)
 # HTTPException(503) pattern (routes/causal.py, routes/digital_twin.py). The
 # app's StarletteHTTPException handler MASKS a 503 detail unless it is marked
 # with errors.user_safe_503_detail(); this one names no internals, so it is
-# marked and reaches the client as the response ``message``. (The handler
-# builds its own JSONResponse, so an HTTPException ``Retry-After`` header
-# would be dropped -- its body already says "try again in 30 seconds".)
+# marked and reaches the client as the response ``message``. The handler
+# forwards HTTPException headers (#1999), so the 503 sends the ``Retry-After``
+# its DependencyError body already promises ("try again in 30 seconds").
 _STORE_UNAVAILABLE_DETAIL = "Expert-review store unavailable. Retry shortly."
+_STORE_UNAVAILABLE_RETRY_AFTER_SECONDS = 30
 
 # #1993: one LLM build per review id across BOTH gunicorn workers. Redis
 # ``SET NX PX`` with a process-local fallback. The TTL (120 s) tracks nginx's
@@ -106,6 +107,7 @@ def _store_unavailable(operation: str, exc: Exception) -> HTTPException:
     return HTTPException(
         status_code=503,
         detail=user_safe_503_detail(_STORE_UNAVAILABLE_DETAIL),
+        headers={"Retry-After": str(_STORE_UNAVAILABLE_RETRY_AFTER_SECONDS)},
     )
 
 
@@ -303,10 +305,13 @@ async def generate_review_assessment(
 
     # Codex HIGH 1: the build runs in its OWN task and the request only shields
     # it. Cancelling ``await asyncio.to_thread(...)`` does not stop the builder
-    # thread, so an unshielded request that lost its client (disconnect, nginx
-    # 504) would release the lock while the thread kept building, and a second
-    # caller would build concurrently. Shielded, the task finishes the persist
-    # and releases at the right moment; waiters then replay its result.
+    # thread, so an unshielded request that was cancelled would release the lock
+    # while the thread kept building, and a second caller would build
+    # concurrently. Shielded, the task finishes the persist and releases at the
+    # right moment; waiters then replay its result. (#1999 measured that a
+    # client disconnect alone does NOT cancel the request task on this stack;
+    # uvicorn cancels request tasks only past a ``timeout_graceful_shutdown``,
+    # which the UvicornWorker does not set. The shield covers any such path.)
     task = asyncio.create_task(
         _build_under_lock(repo, review_id, review, cached, force),
         name=f"expert-review-assessment:{review_id}",
@@ -351,10 +356,18 @@ async def _build_under_lock(
     the SAFE 503 (``_reread_row``): building from the stale snapshot could
     overwrite a result persisted meanwhile.
 
-    Worker shutdown (bounded limitation): the shielded build is still cancelled
-    when the worker's loop shuts down (recycle, deploy) before its persist, the
-    same loss as any in-flight request; the key clears at its TTL and nothing
-    is corrupted. Draining belongs to main.py's lifespan (follow-up).
+    Worker shutdown (#1999, measured): uvicorn waits for every request task
+    before it sends the lifespan shutdown, and the request task awaits this one
+    (a disconnect does not cancel it), so a graceful stop (SIGTERM, a
+    ``--max-requests`` recycle) lets the build persist before Redis/Supabase are
+    closed; test_expert_review_shutdown_ordering_1999.py pins it. The api's
+    compose ``stop_grace_period: 35s`` lets a deploy recreate wait out gunicorn's
+    ``--graceful-timeout 30`` (docker's 10 s default killed it first). What still
+    loses a build is a KILL: a build still running at gunicorn's 30 s graceful
+    timeout, or a ``--max-requests`` recycle blocked behind OTHER in-flight
+    requests, which stops heartbeating and can be aborted by the arbiter's worker
+    timeout (from source, not measured). Then the key clears at its TTL and
+    nothing is corrupted.
     """
     async with _ASSESSMENT_LOCK.hold(review_id) as lease:
         if lease.mode == "none":

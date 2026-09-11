@@ -10,8 +10,10 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
 import logging
 import os
+import time
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -42,6 +44,80 @@ _health_circuit_breaker = CircuitBreaker(
 )
 
 
+async def _close_quietly(client: Redis) -> None:
+    try:
+        await client.aclose()
+    except Exception as e:  # noqa: BLE001 - the attempt is already over
+        logger.debug(f"Closing an unpublished Redis client failed: {e}")
+
+
+async def _discard(client: Redis) -> None:
+    """Close a client that was never published, even if the caller is cancelled
+    meanwhile (``close_redis()`` cancelling a reconnect at shutdown): the close
+    runs in its own task and is awaited to completion before the cancellation
+    propagates, so its socket is not left open."""
+    closing = asyncio.ensure_future(_close_quietly(client))
+    try:
+        await asyncio.shield(closing)
+    except asyncio.CancelledError:
+        await closing
+        raise
+
+
+async def _connect_once() -> Redis:
+    """One connection attempt: the body ``init_redis()`` retries, and the single
+    attempt a background reconnect makes (#1999)."""
+    global _redis_client
+
+    # Reset stale reference so retries don't short-circuit
+    existing = _redis_client
+    if existing is not None:
+        try:
+            await existing.ping()  # type: ignore[misc]
+            return existing
+        except Exception:
+            # #1999: clear only the client this call found; another initialiser
+            # may have published a working one during the ping.
+            if _redis_client is existing:
+                _redis_client = None
+
+    logger.info(f"Initializing Redis connection to {REDIS_URL}")
+
+    # #1999: the candidate is published only after its ping succeeds. Request
+    # paths read the module client concurrently (current_client(), and the
+    # background reconnect runs while requests are served), so an unverified
+    # client must never be visible, and a failed or cancelled attempt must not
+    # clear a client someone else published meanwhile.
+    candidate: Optional[Redis] = None
+    try:
+        candidate = aioredis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=REDIS_SOCKET_TIMEOUT,
+            max_connections=REDIS_MAX_CONNECTIONS,
+        )
+
+        # Verify connection
+        await candidate.ping()  # type: ignore[misc]
+    except BaseException as e:
+        if candidate is not None:
+            await _discard(candidate)
+        if not isinstance(e, Exception):
+            raise  # cancellation: nothing was published
+        logger.error(f"Failed to connect to Redis: {e}")
+        raise ConnectionError(f"Redis connection failed: {e}") from e
+
+    winner = _redis_client
+    if winner is not None:
+        # Another initialiser published first; keep one pool. Return the client
+        # read here, not the global after the await: it can change meanwhile.
+        await _discard(candidate)
+        return winner
+    _redis_client = candidate
+    logger.info("Redis connection established successfully")
+    return candidate
+
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -59,36 +135,7 @@ async def init_redis() -> Redis:
     Raises:
         ConnectionError: If Redis connection fails after retries
     """
-    global _redis_client
-
-    # Reset stale reference so retries don't short-circuit
-    if _redis_client is not None:
-        try:
-            await _redis_client.ping()  # type: ignore[misc]
-            return _redis_client
-        except Exception:
-            _redis_client = None
-
-    logger.info(f"Initializing Redis connection to {REDIS_URL}")
-
-    try:
-        _redis_client = aioredis.from_url(
-            REDIS_URL,
-            decode_responses=True,
-            socket_timeout=REDIS_SOCKET_TIMEOUT,
-            max_connections=REDIS_MAX_CONNECTIONS,
-        )
-
-        # Verify connection
-        await _redis_client.ping()  # type: ignore[misc]
-        logger.info("Redis connection established successfully")
-
-        return _redis_client
-
-    except Exception as e:
-        _redis_client = None
-        logger.error(f"Failed to connect to Redis: {e}")
-        raise ConnectionError(f"Redis connection failed: {e}") from e
+    return await _connect_once()
 
 
 async def get_redis() -> Redis:
@@ -101,17 +148,93 @@ async def get_redis() -> Redis:
     Raises:
         RuntimeError: If Redis is not initialized
     """
-    global _redis_client
+    client = _redis_client
+    if client is None:
+        # init_redis() publishes the client itself; assigning its return here
+        # could overwrite a client another initialiser published meanwhile (#1999).
+        client = await init_redis()
+    return client
 
-    if _redis_client is None:
-        _redis_client = await init_redis()
 
+def current_client() -> Optional[Redis]:
+    """The client the lifespan initialised, or ``None``. Never connects or waits.
+
+    For request paths: ``get_redis()`` runs ``init_redis()``'s multi-attempt
+    backoff when the client is unset (startup in Redis-degraded mode), which
+    measured 16 s per call against a refused Redis (#1999).
+    """
     return _redis_client
+
+
+# Per-process background reconnect (#1999): request paths that find no client
+# degrade at once and schedule ONE connection attempt here, so a Redis that
+# comes back makes them durable again without a request waiting on it. One
+# attempt per round and a cooldown between failed rounds bound the probing to
+# one connect per RECONNECT_COOLDOWN_SECONDS per worker while Redis stays down.
+RECONNECT_COOLDOWN_SECONDS = 30.0
+_reconnect_task: "Optional[asyncio.Task[None]]" = None
+_reconnect_failed_at: Optional[float] = None
+
+
+async def _reconnect_once() -> None:
+    global _reconnect_failed_at
+
+    try:
+        await _connect_once()
+    except Exception as e:
+        _reconnect_failed_at = time.monotonic()
+        logger.warning(
+            f"Background Redis reconnect failed; next attempt in "
+            f"{RECONNECT_COOLDOWN_SECONDS:g}s at the earliest: {e}"
+        )
+        return
+    _reconnect_failed_at = None
+    logger.info("Background Redis reconnect succeeded; request paths are durable again")
+
+
+def _schedule_reconnect() -> None:
+    global _reconnect_task
+
+    if _redis_client is not None:
+        return
+    loop = asyncio.get_running_loop()
+    task = _reconnect_task
+    if task is not None and not task.done() and task.get_loop() is loop:
+        return  # single-flight
+    if (
+        _reconnect_failed_at is not None
+        and time.monotonic() - _reconnect_failed_at < RECONNECT_COOLDOWN_SECONDS
+    ):
+        return
+    _reconnect_task = loop.create_task(_reconnect_once(), name="redis-background-reconnect")
+
+
+async def request_path_client() -> Redis:
+    """``current_client()`` for request paths that degrade without Redis.
+
+    Returns the initialised client, or schedules the background reconnect and
+    raises ``RuntimeError`` (which every durable store and ``InflightLock``
+    already treat as "Redis unavailable, degrade") without waiting.
+    """
+    client = current_client()
+    if client is None:
+        _schedule_reconnect()
+        raise RuntimeError("Redis client not initialised (startup degraded mode)")
+    return client
 
 
 async def close_redis() -> None:
     """Close Redis connection pool."""
-    global _redis_client
+    global _redis_client, _reconnect_task, _reconnect_failed_at
+
+    # Cancel a pending background reconnect FIRST: one whose ping succeeds after
+    # this close would otherwise publish a new client on a shutting-down worker.
+    task = _reconnect_task
+    _reconnect_task = None
+    _reconnect_failed_at = None
+    if task is not None and not task.done() and task.get_loop() is asyncio.get_running_loop():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     if _redis_client is not None:
         logger.info("Closing Redis connection")

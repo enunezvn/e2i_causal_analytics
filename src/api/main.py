@@ -1509,9 +1509,14 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
     else:
         e2i_error = _generic_http_error(exc)
 
+    # #1999: forward the exception's headers (Retry-After on the expert-review
+    # 409 and digital-twin 503s, Starlette's Allow on 405), as FastAPI's default
+    # handler does. The 503 masking above is about the DETAIL text; headers
+    # are set explicitly by the raise site, never interpolated from errors.
     return JSONResponse(
         status_code=exc.status_code,
         content=error_response(e2i_error, include_debug=DEBUG_MODE),
+        headers=exc.headers,
     )
 
 
@@ -1525,9 +1530,12 @@ async def not_found_handler(request, exc):
     """
     e2i_error = _e2i_404_error(request, exc)
 
+    # #1999: forward headers here too; this handler, not the class handler,
+    # answers every HTTPException(404).
     return JSONResponse(
         status_code=404,
         content=error_response(e2i_error, include_debug=DEBUG_MODE),
+        headers=getattr(exc, "headers", None),
     )
 
 
