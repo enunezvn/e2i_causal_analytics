@@ -396,15 +396,6 @@ class CohortStatisticsOutput(BaseModel):
             "description": "Exclusion criteria expressions",
             "required": False,
         },
-        {
-            "name": "region",
-            "type": "str",
-            "description": (
-                "Geographic region narrowing the resolved population (used only when no "
-                "DataFrame is in context)"
-            ),
-            "required": False,
-        },
     ],
     output_schema="CohortBuilderOutput",
     avg_execution_ms=5000,
@@ -1817,7 +1808,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     top- and bottom-performing entity group. No fabricated regions/values.
 
     Grouping column resolution (first match wins):
-    1. explicit ``group_by`` kwarg,
+    1. explicit ``group_by`` kwarg (refused when it is not a column),
     2. ``entity_type`` if it is a column,
     3. a column named ``<entity_type>`` or ``geographic_region`` /
        ``territory`` / ``brand`` heuristics.
@@ -1864,7 +1855,14 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             f"DataFrame (columns={list(df.columns)!r})."
         )
 
-    group_col = _resolve_grouping_column(df, kwargs.get("group_by"), entity_type)
+    group_by = kwargs.get("group_by")
+    if group_by is not None and group_by not in df.columns:
+        raise ToolRefusalError(
+            f"gap_calculator: group_by={group_by!r} is not a column of the supplied "
+            f"DataFrame (columns={list(df.columns)!r}). Refusing to group by a different "
+            "column than the one requested."
+        )
+    group_col = _resolve_grouping_column(df, group_by, entity_type)
     if group_col is None:
         raise ToolRefusalError(
             "gap_calculator: could not resolve a grouping column from group_by="
