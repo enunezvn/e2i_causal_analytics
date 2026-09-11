@@ -60,7 +60,14 @@ before Task 1.
       which are idempotent.
 
     Both are compared with prod by read-only SELECTs.
-  - Inside the container, the template database `learning_loop_base` is built once per session. Every test
+  - **Location:** `tests/unit/test_database/learning_loop/`, not `tests/integration/`.
+    - `tests/integration/conftest.py` imports `src.api.main` at collection. Measured 2026-09-11:
+      1.1 GiB max RSS and 60 s per pytest process.
+    - `tests/unit/test_database/` has a light conftest and is on the CI unit list
+      (`backend-tests.yml` L318). There the opt-in gate makes the suite skip.
+  - Inside the container, the template database `learning_loop_base` is created
+    `TEMPLATE postgres`: the image's `postgres` database carries the Supabase schemas (`auth`, `extensions`,
+    …), and a bare `CREATE DATABASE` does not (probe 2026-09-11). It is built once per session. Every test
     **module** gets `CREATE DATABASE learning_loop_<module> TEMPLATE learning_loop_base` with the
     migrations it needs applied by `migrated_db(upto=…)`. Every test file is independently runnable.
 - **Lint:** `$PY -m ruff check <files>`, then `$PY -m ruff format --check <files>` (ruff 0.14.10).
@@ -121,34 +128,34 @@ blocked on it; Tasks 0–1 are not.
 
 | Path | Responsibility | Task |
 |---|---|---|
-| `tests/integration/tool_composer_learning_loop/__init__.py`, `conftest.py`, `_pg.py` | throwaway-DB fixture (schema dump + ledger/registry data), psycopg `RpcPort`, runner helpers | 1 |
-| `tests/integration/tool_composer_learning_loop/test_fixture_sanity.py` | fixture restores prod schema faithfully | 1 |
+| `tests/unit/test_database/learning_loop/__init__.py`, `conftest.py`, `_pg.py` | throwaway-DB fixture (schema dump + ledger/registry data), psycopg `RpcPort`, runner helpers | 1 |
+| `tests/unit/test_database/learning_loop/test_fixture_sanity.py` | fixture restores prod schema faithfully | 1 |
 | `database/ml/039_tool_category_cohort.sql` | `ALTER TYPE tool_category ADD VALUE IF NOT EXISTS 'COHORT'` | 2 |
 | `database/ml/040_tool_registry_startup_sync.sql` | `valid_agent` CHECK → `e2i_agent_name`; drop `success_rate`, `update_tool_registry_metrics`, `get_tool_execution_order`; `sync_tool_registry()`; grants | 2 |
-| `tests/integration/tool_composer_learning_loop/test_040_registry_sync.py` | sync guards, idempotency, concurrency, grants | 2 |
+| `tests/unit/test_database/learning_loop/test_040_registry_sync.py` | sync guards, idempotency, concurrency, grants | 2 |
 | `database/ml/041_composer_learning_loop_recording.sql` | §5.2 columns, drops, 6 RPCs, `get_tool_reliability`, 3 views, grants | 3 |
-| `tests/integration/tool_composer_learning_loop/test_041_recording.py` | RPC contracts, reliability counts, views, grants | 3 |
+| `tests/unit/test_database/learning_loop/test_041_recording.py` | RPC contracts, reliability counts, views, grants | 3 |
 | `database/ml/rollback_041.sql`, `rollback_040.sql` | rollbacks (never auto-applied) | 4 |
-| `tests/integration/tool_composer_learning_loop/test_migration_runner.py` | failure-first real-runner replay, branch detector, re-apply, rollbacks | 4 |
+| `tests/unit/test_database/learning_loop/test_migration_runner.py` | failure-first real-runner replay, branch detector, re-apply, rollbacks | 4 |
 | `src/agents/tool_composer/rpc_port.py` | `RpcPort` protocol + `SupabaseRpcPort` (async) | 5 |
 | `src/agents/tool_composer/registry_sync.py` | payload, `sync_tool_registry_once()`, `fetch_column_allowlist()`, `learning_loop_startup()` | 5 |
-| `tests/unit/test_agents/test_tool_composer/test_registry_sync_payload.py`, `tests/integration/.../test_registry_sync_client.py` | payload and real-DB sync | 5 |
+| `tests/unit/test_agents/test_tool_composer/test_registry_sync_payload.py`, `tests/unit/test_database/learning_loop/test_registry_sync_client.py` | payload and real-DB sync | 5 |
 | `scripts/generate_tool_registry_sync_migration.py` (delete), drift test section 3 (delete), `src/tool_registry/registry.py` (delete DB methods), `tests/unit/test_tool_registry/test_registry.py` (delete their tests), `src/agents/tool_composer/tool_registry.py` (comment), `docs/data/03-ML-PIPELINE-SCHEMA.md` §4 | retire the #2012 regime | 6 |
 | `src/agents/tool_composer/models/composition_models.py`, `executor.py` | `StepResult` classes, attempts, cache_hit, error_type; per-step callback | 7 |
 | `tests/unit/test_agents/test_tool_composer/test_executor_outcome_classes.py` | real-tool classification, cancel with a finished sibling | 7 |
 | `models/composition_models.py`, `planner.py` | `ExecutionPlan` validator + dependency-aware `get_execution_order()` | 8 |
 | `tests/unit/test_agents/test_tool_composer/test_execution_order_repair.py` | omitted step, co-grouped consumer, reversed order, duplicates, KPI plan | 8 |
 | `src/agents/tool_composer/learning_recorder.py`, `src/api/routes/metrics.py` | serializer, recorder, heartbeat, drain, failure counter | 9 |
-| `tests/unit/.../test_learning_recorder_serializer.py`, `tests/integration/.../test_learning_recorder_realdb.py` | sentinel test; failure modes; liveness; latency | 9 |
+| `tests/unit/.../test_learning_recorder_serializer.py`, `tests/unit/test_database/learning_loop/test_learning_recorder_realdb.py` | sentinel test; failure modes; liveness; latency | 9 |
 | `src/agents/tool_composer/composer.py`, `planner.py`, `cache.py`, `agent.py`, `src/api/routes/chatbot_tools.py`, `src/api/main.py` | recorder wiring, plan_source, eviction, entry_point, startup task + drain | 10 |
-| `tests/unit/.../test_composer_recording_wiring.py`, `test_plan_cache_eviction.py`, `tests/integration/.../test_composer_live_llm.py` | wiring, eviction, opt-in live LLM | 10 |
+| `tests/unit/.../test_composer_recording_wiring.py`, `test_plan_cache_eviction.py`, `tests/unit/test_database/learning_loop/test_composer_live_llm.py` | wiring, eviction, opt-in live LLM | 10 |
 | `src/agents/tool_composer/memory_hooks.py`, `planner.py` | step-hydrated references; worked / did-not-work rendering | 11 |
-| `tests/unit/.../test_episodic_reference_rendering.py`, `tests/integration/.../test_reference_hydration_realdb.py` | four reference shapes; hydration | 11 |
+| `tests/unit/.../test_episodic_reference_rendering.py`, `tests/unit/test_database/learning_loop/test_reference_hydration_realdb.py` | four reference shapes; hydration | 11 |
 | `src/agents/tool_composer/reliability.py`, `planner.py`, `dspy_integration.py` | Wilson verdicts, reader, flag-gated caveat formatter | 12 |
 | `tests/unit/.../test_reliability_rule.py`, `test_planner_reliability_flag.py` | planted-truth calibration; byte-identical flag-off prompt | 12 |
 | `src/agents/tool_composer/executor.py`, `tests/unit/.../test_executor.py` | delete G8 `update_tool_performance` + its tests | 13 |
 | `src/services/tool_composer_observability_service.py`, `src/api/routes/admin.py`, `src/api/schemas/admin_tool_composer.py` | admin endpoint | 14 |
-| `tests/unit/test_api/test_routes/test_admin_tool_composer.py`, `tests/integration/.../test_admin_tool_composer_realdb.py`, `frontend/src/types/generated/api.ts` | endpoint tests; regenerated contract | 14 |
+| `tests/unit/test_api/test_routes/test_admin_tool_composer.py`, `tests/unit/test_database/learning_loop/test_admin_tool_composer_realdb.py`, `frontend/src/types/generated/api.ts` | endpoint tests; regenerated contract | 14 |
 | `frontend/src/api/admin.ts`, `frontend/src/lib/api-schemas.ts`, `frontend/src/hooks/api/use-admin.ts`, `frontend/src/components/admin/ToolComposerSection.tsx`, `ObservabilityTab.tsx`, tests | admin UI | 15 |
 | `src/tasks/composition_feedback_tasks.py`, `src/workers/celery_app.py` | **gated on O1**: nightly feedback linker | 16 |
 | `scripts/benchmarks/tool_composer/reliability_caveat_experiment.py`, `tests/unit/test_scripts/test_reliability_caveat_analysis.py` | experiment script and analysis tests; **the run is gated on O2** | 17 |
@@ -172,7 +179,7 @@ blocked on it; Tasks 0–1 are not.
 ### Task 1: Throwaway-database fixture from a schema-only dump of prod
 
 **Files:**
-- Create `tests/integration/tool_composer_learning_loop/{__init__.py,conftest.py,_pg.py,test_fixture_sanity.py}`
+- Create `tests/unit/test_database/learning_loop/{__init__.py,conftest.py,_pg.py,test_fixture_sanity.py}`
 
 **Why:** every later real-DB test needs prod's exact enums, CHECKs, grants, default ACLs and ledger (spec §9).
 
@@ -271,7 +278,7 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
 
 **Files:**
 - Create `database/ml/039_tool_category_cohort.sql`, `database/ml/040_tool_registry_startup_sync.sql`
-- Test `tests/integration/tool_composer_learning_loop/test_040_registry_sync.py`
+- Test `tests/unit/test_database/learning_loop/test_040_registry_sync.py`
 
 - [ ] **Step 1: Write red tests** on `migrated_db(upto="040")`, which applies 039 with plain psql and 040
   with `--single-transaction` (the runner's branches). Tests:
@@ -324,7 +331,7 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
 
 **Files:**
 - Create `database/ml/041_composer_learning_loop_recording.sql`
-- Test `tests/integration/tool_composer_learning_loop/test_041_recording.py`
+- Test `tests/unit/test_database/learning_loop/test_041_recording.py`
 
 - [ ] **Step 1: Write red tests** on `migrated_db(upto="041")`, independent of Task 2's test module.
   - **Schema:**
@@ -399,7 +406,7 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
 
 **Files:**
 - Create `database/ml/rollback_041.sql`, `database/ml/rollback_040.sql`
-- Test `tests/integration/tool_composer_learning_loop/test_migration_runner.py`
+- Test `tests/unit/test_database/learning_loop/test_migration_runner.py`
 
 - [ ] **Step 1: Write red tests.**
   - `test_runner_failure_first_on_fresh_fixture`:
@@ -441,7 +448,7 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
 
 **Files:**
 - Create `src/agents/tool_composer/rpc_port.py`, `src/agents/tool_composer/registry_sync.py`
-- Tests `tests/unit/test_agents/test_tool_composer/test_registry_sync_payload.py`, `tests/integration/tool_composer_learning_loop/test_registry_sync_client.py`
+- Tests `tests/unit/test_agents/test_tool_composer/test_registry_sync_payload.py`, `tests/unit/test_database/learning_loop/test_registry_sync_client.py`
 
 - [ ] **Step 1: Write red unit tests.**
   - `test_payload_covers_exactly_the_live_tools`: names equal the drift test's `LIVE_TOOLS` (20).
@@ -627,7 +634,7 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
 
 **Files:** create `src/agents/tool_composer/learning_recorder.py`; modify `src/api/routes/metrics.py`.
 Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializer.py`,
-`tests/integration/tool_composer_learning_loop/test_learning_recorder_realdb.py`.
+`tests/unit/test_database/learning_loop/test_learning_recorder_realdb.py`.
 
 - [ ] **Step 1: Write red serializer tests** (pure, real model objects, no DB).
   - `test_sentinel_absent_everywhere`: build a real `DecompositionResult`, `ExecutionPlan` and
@@ -713,7 +720,7 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
 **Files:** modify `composer.py`, `planner.py`, `cache.py`, `agent.py`, `src/api/routes/chatbot_tools.py`
 (only `context["entry_point"]`) and `src/api/main.py` (the lifespan startup task and drain). Tests
 `tests/unit/test_agents/test_tool_composer/test_composer_recording_wiring.py`, `test_plan_cache_eviction.py`,
-`tests/integration/tool_composer_learning_loop/test_composer_live_llm.py`.
+`tests/unit/test_database/learning_loop/test_composer_live_llm.py`.
 
 - [ ] **Step 1: Write red deterministic tests.**
   - `test_seed_uses_local_audit_id_not_context`: `ToolComposer._recording_seed(query, context, audit_workflow_id)`
@@ -724,7 +731,7 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
     `_start_audit(audit_service, query, context) -> Optional[UUID]`. It returns `None` for
     `audit_service=None`. This is a pure unit test.
   - The raising-audit case needs a real client against a dropped database, so it lives in the **gated**
-    integration file `tests/integration/tool_composer_learning_loop/test_composer_audit_identity_realdb.py`:
+    integration file `tests/unit/test_database/learning_loop/test_composer_audit_identity_realdb.py`:
     `_start_audit` returns `None` and logs WARNING.
   - The call-site order (seed built after the audit block) is exercised by the opt-in live-LLM test in
     Step 3, run twice: audit service wired and unset.
@@ -798,7 +805,7 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
 
 **Files:** modify `memory_hooks.py` (`find_similar_compositions` hydration) and `planner.py`
 (`_format_episodic_context`). Tests `tests/unit/test_agents/test_tool_composer/test_episodic_reference_rendering.py`,
-`tests/integration/tool_composer_learning_loop/test_reference_hydration_realdb.py`.
+`tests/unit/test_database/learning_loop/test_reference_hydration_realdb.py`.
 
 - [ ] **Step 1: Write red tests.**
   - **Pure formatter, on real shapes:**
@@ -857,7 +864,7 @@ and `dspy_integration.py` (L189–225). Tests `tests/unit/test_agents/test_tool_
       code on the current live registry. The test only reads files: no git, CI-safe.
     - `test_flag_on_caveat_line_only`: the reader returns `caveat` for one tool. Exactly one added line
       per caveated tool, and the "Avg execution" line is unchanged.
-  - **Production wiring (real DB, gated):** `tests/integration/tool_composer_learning_loop/test_reliability_wiring_realdb.py`.
+  - **Production wiring (real DB, gated):** `tests/unit/test_database/learning_loop/test_reliability_wiring_realdb.py`.
     - `test_planner_fetches_verdicts_when_flag_on`: seed perf rows that yield `caveat` for one tool
       (n_health 40, 12 failures). With the flag set, `ToolPlanner.plan()`'s prompt-building path awaits
       `ToolReliabilityReader.get(30)` on `PsycopgRpcPort` and the caveat line appears. With the flag unset
@@ -908,7 +915,7 @@ and `dspy_integration.py` (L189–225). Tests `tests/unit/test_agents/test_tool_
 **Files:**
 - Create `src/services/tool_composer_observability_service.py`, `src/api/schemas/admin_tool_composer.py`
 - Modify `src/api/routes/admin.py`
-- Tests `tests/unit/test_api/test_routes/test_admin_tool_composer.py`, `tests/integration/tool_composer_learning_loop/test_admin_tool_composer_realdb.py`
+- Tests `tests/unit/test_api/test_routes/test_admin_tool_composer.py`, `tests/unit/test_database/learning_loop/test_admin_tool_composer_realdb.py`
 - Regenerate `frontend/src/types/generated/api.ts`
 
 - [ ] **Step 1: Write red tests.**
