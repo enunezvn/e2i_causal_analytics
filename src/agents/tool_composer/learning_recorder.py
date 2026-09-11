@@ -317,6 +317,8 @@ def _text(value: Any, max_len: int) -> Optional[str]:
 
 def seed_record(seed: Mapping[str, Any], composition_id: str) -> Dict[str, Any]:
     """The episode identity every RPC carries, and nothing else from the caller's seed."""
+    if not isinstance(seed, Mapping):
+        seed = {}
     audit = seed.get("audit_workflow_id")
     try:
         audit_id: Optional[str] = str(UUID(str(audit))) if audit is not None else None
@@ -328,7 +330,9 @@ def seed_record(seed: Mapping[str, Any], composition_id: str) -> Dict[str, Any]:
         "query_text": _text(seed.get("query_text"), 1000) or "",
         "session_id": _text(seed.get("session_id"), 100),
         "user_id": _text(seed.get("user_id"), 100),
-        "entry_point": entry_point if entry_point in ENTRY_POINTS else None,
+        "entry_point": (
+            entry_point if isinstance(entry_point, str) and entry_point in ENTRY_POINTS else None
+        ),
         "brand": _text(seed.get("brand"), 100),
         "region": _text(seed.get("region"), 100),
         "audit_workflow_id": audit_id,
@@ -408,7 +412,10 @@ class CompositionRecorder:
         sync_timeout_s: Optional[float] = None,
     ):
         self.composition_id = composition_id
-        self._seed = seed_record(seed, composition_id)
+        try:
+            self._seed = seed_record(seed, composition_id)
+        except Exception:  # noqa: BLE001 - a seed that cannot be read records the id alone
+            self._seed = seed_record({}, composition_id)
         self._sync = sync or default_registry_sync()
         self._port = port
         self._heartbeat_s = heartbeat_s
@@ -571,6 +578,12 @@ class CompositionRecorder:
         if self._heartbeat is None:
             self._heartbeat = asyncio.get_running_loop().create_task(self._heartbeat_loop())
             _track(self._heartbeat, _heartbeats)
+            # The heartbeat also ends with the task that started it (the composition): a caller
+            # that exits without finish, by returning, raising or being cancelled, leaves no
+            # heartbeat keeping its episode alive.
+            owner = asyncio.current_task()
+            if owner is not None:
+                owner.add_done_callback(lambda _task: self._stop_heartbeat())
 
     def _stop_heartbeat(self) -> None:
         if self._heartbeat is not None and not self._heartbeat.done():
@@ -647,12 +660,8 @@ class CompositionRecorder:
 
     async def _allowlist(self) -> Optional[frozenset[str]]:
         try:
-            return await asyncio.wait_for(
-                self._sync.column_allowlist(), timeout=self._write_timeout_s
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - timed out or failed: no names are kept this time
+            return await self._sync.column_allowlist(timeout=self._write_timeout_s)
+        except Exception:  # noqa: BLE001 - failed: no names are kept this time
             return None
 
     async def _write_steps(self, numbers: List[int]) -> None:
@@ -684,10 +693,8 @@ class CompositionRecorder:
         if receipt.get("unknown_tools") or receipt.get("schema_mismatch_tools"):
             # The DB registry is behind the running code (the startup sync has not landed).
             try:
-                await asyncio.wait_for(self._sync.sync_once(), timeout=self._sync_timeout_s)
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - a hung or failed sync leaves the steps unrecorded
+                await self._sync.sync_once(timeout=self._sync_timeout_s)
+            except Exception:  # noqa: BLE001 - a failed sync leaves the steps unrecorded
                 logger.warning(
                     "composer recording: registry sync did not complete for %s", self.composition_id
                 )

@@ -13,6 +13,7 @@ a record, the seed crosses the network only as its identity fields, and the hear
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -439,3 +440,113 @@ async def test_shutdown_drain_cancels_heartbeats():
     assert not recorder.heartbeat_stopped
     assert await drain(timeout=2, cancel_heartbeats=True) == 0
     assert recorder.heartbeat_stopped
+
+
+# ---------------------------------------------------------------------------
+# Iteration 2: malformed seeds, timeouts that cool down, heartbeats bound to their owner
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "seed",
+    [
+        {"composition_id": "comp_malformed", "entry_point": []},
+        {"composition_id": "comp_malformed", "entry_point": {}},
+        {
+            "composition_id": ["x"],
+            "brand": ["x"],
+            "region": {"a": 1},
+            "audit_workflow_id": {"a": 1},
+        },
+        None,
+        "not a mapping",
+    ],
+)
+async def test_a_malformed_seed_never_raises_and_records_the_identity(seed):
+    port = ScriptedPort()
+    recorder = CompositionRecorder("comp_malformed", seed, port=port, sync=RegistrySync(port=port))
+    recorder.start()
+    assert await drain(timeout=5) == 0
+    (sent,) = [
+        params["p_seed"] for name, params in port.payloads if name == "composer_record_start"
+    ]
+    assert sent["composition_id"] == "comp_malformed"
+    assert (
+        sent["entry_point"] is None and sent["brand"] is None and sent["audit_workflow_id"] is None
+    )
+
+
+async def test_a_timed_out_catalog_fetch_cools_down_for_the_rest_of_the_chain():
+    port = ScriptedPort(hang={"composer_public_column_names"})
+    shared = RegistrySync(port=port)
+    recorder = CompositionRecorder(
+        "comp_cool", {"composition_id": "comp_cool"}, port=port, sync=shared, write_timeout_s=0.2
+    )
+    d, plan, result = _models()
+    started = time.perf_counter()
+    recorder.planned(plan, latency_ms=1, plan_source="llm")
+    recorder.step(0, result)
+    recorder.finish(status="COMPLETED", outcome="success", total_latency_ms=5)
+    assert await drain(timeout=10) == 0
+    assert port.calls.count("composer_public_column_names") == 1  # timed out once, then cooled down
+    assert time.perf_counter() - started < 1.5
+
+
+async def test_a_timed_out_refresh_keeps_the_cached_allowlist():
+    port = ScriptedPort()
+    shared = RegistrySync(port=port, allowlist_ttl_s=0.1)
+    first = await shared.column_allowlist(timeout=0.2)
+    assert first == frozenset({"brand", "region"})
+    await asyncio.sleep(0.15)  # expired
+    port.hang = {"composer_public_column_names"}
+    assert await shared.column_allowlist(timeout=0.2) is first
+    assert await shared.column_allowlist(timeout=0.2) is first  # cooling down: no new attempt
+    assert port.calls.count("composer_public_column_names") == 2
+
+
+async def test_a_timed_out_sync_cools_down_for_every_recorder_sharing_it():
+    port = ScriptedPort(hang={"sync_tool_registry"}, unknown=("gap_calculator",))
+    shared = RegistrySync(port=port)
+    d, plan, result = _models()
+    # One after the other, so the shared lock is free for the second: only the cooldown can stop
+    # it from waiting on the hung sync again.
+    for cid in ("first", "second"):
+        recorder = CompositionRecorder(
+            cid,
+            {"composition_id": cid},
+            port=port,
+            sync=shared,
+            write_timeout_s=0.1,
+            sync_timeout_s=0.3,
+        )
+        recorder.planned(plan, latency_ms=1, plan_source="llm")
+        recorder.step(0, result)
+        assert await drain(timeout=10) == 0
+    assert port.calls.count("sync_tool_registry") == 1
+    assert shared.synced is False
+
+
+@pytest.mark.parametrize("ending", ["returns", "raises", "is cancelled"])
+async def test_heartbeat_stops_when_its_owning_task_ends_without_finish(ending):
+    port = ScriptedPort()
+    started = asyncio.Event()
+    holder: Dict[str, CompositionRecorder] = {}
+
+    async def owner() -> None:
+        recorder = _recorder(port, heartbeat_s=0.05)
+        recorder.start()
+        holder["recorder"] = recorder
+        started.set()
+        if ending == "raises":
+            raise RuntimeError("the composition crashed before its finish")
+        if ending == "is cancelled":
+            await asyncio.sleep(30)
+
+    task = asyncio.create_task(owner())
+    await started.wait()
+    if ending == "is cancelled":
+        task.cancel()
+    with contextlib.suppress(BaseException):
+        await task
+    await asyncio.sleep(0.3)  # the loop stays alive well past several heartbeat periods
+    assert holder["recorder"].heartbeat_stopped

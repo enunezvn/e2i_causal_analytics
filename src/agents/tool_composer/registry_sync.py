@@ -35,6 +35,10 @@ ALLOWLIST_TTL_S = 3600.0
 # RPC: the recorder asks on every composition, and a database outage must not turn each one
 # into a failing round trip.
 RETRY_AFTER_S = 60.0
+# Bound on one RPC, and on building the payload (the first build imports the tool registrations).
+# A timeout is a failure like any other: it starts the cooldown and keeps the cached answer.
+CALL_TIMEOUT_S = 30.0
+PAYLOAD_TIMEOUT_S = 120.0
 
 SYNC_COUNT_KEYS = frozenset(
     {"inserted", "updated", "deprecated", "dependencies_upserted", "dependencies_deleted"}
@@ -94,11 +98,13 @@ class RegistrySync:
         max_deprecations: int = MAX_DEPRECATIONS,
         allowlist_ttl_s: float = ALLOWLIST_TTL_S,
         retry_after_s: float = RETRY_AFTER_S,
+        call_timeout_s: float = CALL_TIMEOUT_S,
     ):
         self._port = port
         self._max_deprecations = max_deprecations
         self._allowlist_ttl_s = allowlist_ttl_s
         self._retry_after_s = retry_after_s
+        self._call_timeout_s = call_timeout_s
         self._sync_lock = asyncio.Lock()
         self._allowlist_lock = asyncio.Lock()
         self._allowlist: Optional[frozenset[str]] = None
@@ -113,7 +119,7 @@ class RegistrySync:
             self._port = SupabaseRpcPort()
         return self._port
 
-    async def sync_once(self) -> Optional[Dict[str, int]]:
+    async def sync_once(self, timeout: Optional[float] = None) -> Optional[Dict[str, int]]:
         """Sync the DB registry unless this process already did; returns the counts if it ran.
 
         ``None`` means no sync happened now: it already succeeded earlier, it failed (logged at
@@ -125,9 +131,13 @@ class RegistrySync:
         async with self._sync_lock:
             if self.synced or time.monotonic() < self._sync_retry_at:
                 return None
+            call_timeout = self._call_timeout_s if timeout is None else timeout
             try:
-                tools, dependencies = await asyncio.to_thread(build_sync_payload)
-                counts = await self.port.call(
+                tools, dependencies = await asyncio.wait_for(
+                    asyncio.to_thread(build_sync_payload),
+                    timeout=max(PAYLOAD_TIMEOUT_S, call_timeout),
+                )
+                call = self.port.call(
                     "sync_tool_registry",
                     {
                         "p_tools": tools,
@@ -135,6 +145,7 @@ class RegistrySync:
                         "p_max_deprecations": self._max_deprecations,
                     },
                 )
+                counts = await asyncio.wait_for(call, timeout=call_timeout)
                 if not isinstance(counts, dict) or set(counts) != SYNC_COUNT_KEYS:
                     raise TypeError(f"unexpected receipt {counts!r}")
             except Exception as exc:
@@ -149,7 +160,7 @@ class RegistrySync:
             logger.info("sync_tool_registry: %s", counts)
             return counts
 
-    async def column_allowlist(self) -> Optional[frozenset[str]]:
+    async def column_allowlist(self, timeout: Optional[float] = None) -> Optional[frozenset[str]]:
         """Column names of public relations, refreshed hourly.
 
         ``None`` while no fetch has succeeded in this process: the serializer then keeps no
@@ -165,7 +176,10 @@ class RegistrySync:
             if self._fresh() or time.monotonic() < self._allowlist_retry_at:
                 return self._allowlist
             try:
-                names = await self.port.call("composer_public_column_names", {})
+                names = await asyncio.wait_for(
+                    self.port.call("composer_public_column_names", {}),
+                    timeout=self._call_timeout_s if timeout is None else timeout,
+                )
                 if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
                     raise TypeError(f"unexpected column list of type {type(names).__name__}")
             except Exception as exc:
