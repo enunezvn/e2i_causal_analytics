@@ -25,7 +25,7 @@ import pandas as pd
 import pytest
 
 from src.agents.tool_composer.composer import ToolComposer
-from src.agents.tool_composer.executor import PlanExecutor
+from src.agents.tool_composer.executor import ExecutionError, PlanExecutor
 from src.agents.tool_composer.models.composition_models import (
     ORDER_REPAIR_REASONS,
     DecompositionResult,
@@ -162,6 +162,24 @@ def test_cycle_rejected(steps):
         _plan(steps, [])
 
 
+@pytest.mark.parametrize("groups", [[], [["a"], ["b"]]])
+@pytest.mark.parametrize(
+    "mutate, message",
+    [
+        (lambda plan: plan.steps[0].depends_on_steps.append("b"), "cycle"),
+        (lambda plan: plan.steps[1].depends_on_steps.append("ghost"), "unknown step"),
+        (lambda plan: setattr(plan.steps[1], "step_id", "a"), "duplicate step id"),
+    ],
+)
+def test_graph_broken_after_construction_fails_instead_of_scheduling(mutate, message, groups):
+    plan = _plan([_step("a"), _step("b", ["a"])], groups)
+    mutate(plan)
+    with pytest.raises(ValueError, match=message):
+        plan.get_execution_order()
+    with pytest.raises(ValueError, match=message):
+        _ = plan.execution_order_repaired
+
+
 def test_error_result_plan_still_constructs():
     plan = _plan([], [])
     assert plan.get_execution_order() == []
@@ -287,3 +305,28 @@ def test_plan_source_and_cache_key_fields():
 
     with pytest.raises(ValueError):
         _plan([_step("a")], [["a"]], plan_source="guess")
+
+
+async def test_executor_runs_no_tool_for_a_graph_broken_after_construction(registry):
+    calls: List[int] = []
+
+    async def probe(**kwargs: Any) -> Any:
+        calls.append(1)
+        return {"ok": True}
+
+    registry.register(
+        schema=ToolSchema(
+            name="probe",
+            description="execution-order probe tool.",
+            source_agent="gap_analyzer",
+            tier=2,
+            avg_execution_ms=10,
+        ),
+        callable=probe,
+    )
+    plan = _plan([_step("a"), _step("b", ["a"])], [["a"], ["b"]])
+    plan.steps[0].depends_on_steps.append("b")
+    executor = PlanExecutor(tool_registry=registry, enable_caching=False, max_retries=0)
+    with pytest.raises(ExecutionError, match="cycle"):
+        await executor.execute(plan)
+    assert calls == []
