@@ -31,8 +31,9 @@ import inspect
 import json
 import re
 import textwrap
+import types
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Union, get_args, get_origin, get_type_hints
 
 import numpy as np
 import pandas as pd
@@ -456,6 +457,61 @@ def test_default_tool_dependencies_name_real_tools_and_real_fields():
         if input_field is not None:
             params = {p.name for p in registry.get(consumer).schema.input_parameters}
             assert input_field in params, (consumer, producer, input_field, sorted(params))
+
+
+def _strip_optional(tp: Any) -> Any:
+    if get_origin(tp) in (Union, types.UnionType):
+        args = [arg for arg in get_args(tp) if arg is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return tp
+
+
+def _assignable(source: Any, target: Any) -> bool:
+    """Whether a value annotated ``source`` can be passed where ``target`` is annotated."""
+    source, target = _strip_optional(source), _strip_optional(target)
+    if target is Any or source == target or (target is float and source is int):
+        return True
+    if (get_origin(source) or source) is not (get_origin(target) or target):
+        return False
+    source_args, target_args = get_args(source), get_args(target)
+    if not source_args or not target_args:
+        return True
+    return len(source_args) == len(target_args) and all(
+        _assignable(s, t) for s, t in zip(source_args, target_args, strict=True)
+    )
+
+
+def test_default_tool_dependencies_carry_values_the_consumer_can_take():
+    """A mapping must name fields whose TYPES line up, not only fields that exist.
+
+    ``(field, param)`` passes the producer field's value to the consumer parameter;
+    ``(None, param)`` passes the whole output (a dict); ``(None, None)`` maps the fields
+    that share a name with a consumer parameter.
+    """
+    from src.agents.tool_composer.tool_registry import DEPENDENCY_FIELD_MAPPINGS
+
+    registry = _registry()
+    incompatible = []
+    for (consumer, producer), (output_field, input_field) in DEPENDENCY_FIELD_MAPPINGS.items():
+        params = get_type_hints(inspect.unwrap(registry.get(consumer).callable))
+        fields = {
+            name: info.annotation
+            for name, info in registry.get(producer).pydantic_output_model.model_fields.items()
+        }
+        assert output_field is None or input_field is not None, (consumer, producer)
+        if input_field is None:
+            transfers = [(name, fields[name], params[name]) for name in set(fields) & set(params)]
+        elif output_field is None:
+            transfers = [("<whole output>", Dict[str, Any], params[input_field])]
+        else:
+            transfers = [(output_field, fields[output_field], params[input_field])]
+        incompatible += [
+            f"{producer}.{field} ({source}) -> {consumer}.{input_field or field} ({target})"
+            for field, source, target in transfers
+            if not _assignable(source, target)
+        ]
+    assert not incompatible, incompatible
 
 
 # ---------------------------------------------------------------------------
