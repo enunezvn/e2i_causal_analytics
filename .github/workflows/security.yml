@@ -21,6 +21,15 @@ jobs:
   secrets-scan:
     name: Secrets Scanning (Gitleaks)
     runs-on: ubuntu-latest
+    # On pull_request events gitleaks-action lists the PR's commits
+    # (GET /pulls/{n}/commits) to bound the scan. The repo default token grants
+    # only contents/metadata/packages: read, and since 2026-09-11 that call
+    # returns 403 "Resource not accessible by integration" without an explicit
+    # pull-requests grant (same token permissions passed at 01:10Z, failed from
+    # 05:27Z). Read-only; the action posts no PR comments unless leaks are found.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
