@@ -85,7 +85,11 @@ INTERNAL_INPUTS: Dict[str, Dict[str, str]] = {
     },
     "rank_drivers": {"trace_context": "Opik trace plumbing for agent callers"},
     "detect_structural_drift": {"trace_context": "Opik trace plumbing for agent callers"},
-    "model_inference": {"trace_context": "Opik trace plumbing for agent callers"},
+    "model_inference": {
+        "trace_context": "Opik trace plumbing for agent callers",
+        # Not offered to the planner for the same reason as discover_dag.node_names.
+        "time_horizon": "accepted but never applied — ModelInferenceTool.invoke never reads it",
+    },
     "causal_effect_estimator": {
         "data_source": "provenance label for the pipeline run",
         "query": "provenance text for the pipeline run",
