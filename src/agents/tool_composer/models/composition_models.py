@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -201,6 +201,20 @@ class ToolOutput(BaseModel):
         return self.success and self.result is not None
 
 
+StepOutcomeClass = Literal[
+    "succeeded",
+    "cache_hit",
+    "refused",
+    "input_rejected",
+    "timeout",
+    "error",
+    "plan_defect",
+    "dependency_unmet",
+    "circuit_open",
+    "not_registered",
+]
+
+
 class StepResult(BaseModel):
     """Result of executing a single step"""
 
@@ -217,6 +231,14 @@ class StepResult(BaseModel):
     started_at: datetime
     completed_at: datetime
     duration_ms: int = 0
+
+    # What happened, set by the executor from the exception type it caught (never from error
+    # text), so the learning loop can count health failures apart from refusals and plan defects
+    # (spec §5.3). ``attempts`` counts tool invocations: 0 when the tool never ran.
+    outcome_class: Optional[StepOutcomeClass] = None
+    attempts: int = 0
+    cache_hit: bool = False
+    error_type: Optional[str] = None
 
     @field_validator("duration_ms", mode="before")
     @classmethod

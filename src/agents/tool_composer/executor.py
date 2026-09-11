@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.data.adaptive_validity_repository import query_active_role_attributions
 from src.data.role_attribution import RoleAttribution, should_act
@@ -419,7 +419,10 @@ class PlanExecutor:
         self._cache_manager = get_cache_manager() if enable_caching else None
 
     async def execute(
-        self, plan: ExecutionPlan, context: Optional[Dict[str, Any]] = None
+        self,
+        plan: ExecutionPlan,
+        context: Optional[Dict[str, Any]] = None,
+        on_step_result: Optional[Callable[[int, StepResult], None]] = None,
     ) -> ExecutionTrace:
         """
         Execute the plan and return a trace of all executions.
@@ -427,6 +430,11 @@ class PlanExecutor:
         Args:
             plan: The execution plan from Phase 2
             context: Optional additional context (e.g., data, filters)
+            on_step_result: Called with ``(step_number, result)`` the moment each step's
+                result exists (``step_number`` = the step's position in ``plan.steps``), inside
+                a parallel group's task, so a finished step is reported even if its group is
+                then cancelled or another step raises. It must only enqueue; an exception it
+                raises is logged and never fails the step.
 
         Returns:
             ExecutionTrace with all step results
@@ -441,6 +449,9 @@ class PlanExecutor:
         # be short-circuited instead of crashing on a missing upstream output.
         failed_step_ids: set[str] = set()
         context = context or {}
+        step_numbers: Dict[str, int] = {}
+        for number, planned in enumerate(plan.steps):
+            step_numbers.setdefault(planned.step_id, number)
 
         try:
             # Get execution order (groups of parallel steps)
@@ -455,6 +466,7 @@ class PlanExecutor:
                     step = plan.get_step(group[0])
                     if step:
                         result = await self._execute_step(step, outputs, context, failed_step_ids)
+                        self._safe_callback(on_step_result, step_numbers[step.step_id], result)
                         trace.add_result(result)
                         if result.output.is_success:
                             outputs[step.step_id] = result.output.result
@@ -467,6 +479,8 @@ class PlanExecutor:
                         outputs,
                         context,
                         failed_step_ids,
+                        on_step_result=on_step_result,
+                        step_numbers=step_numbers,
                     )
                     for result in results:
                         trace.add_result(result)
@@ -530,6 +544,8 @@ class PlanExecutor:
                     error=f"dependency unmet: {', '.join(unmet)}",
                 ),
                 status=ExecutionStatus.SKIPPED,
+                outcome_class="dependency_unmet",
+                attempts=0,
                 started_at=started_at,
                 completed_at=completed_at,
             )
@@ -557,6 +573,9 @@ class PlanExecutor:
                     error=f"unresolvable reference: {e}",
                 ),
                 status=ExecutionStatus.FAILED,
+                outcome_class="plan_defect",
+                attempts=0,
+                error_type=type(e).__name__,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
             )
@@ -620,6 +639,9 @@ class PlanExecutor:
                         execution_time_ms=duration_ms,
                     ),
                     status=ExecutionStatus.COMPLETED,
+                    outcome_class="cache_hit",
+                    attempts=0,
+                    cache_hit=True,
                     started_at=started_at,
                     completed_at=completed_at,
                     duration_ms=duration_ms,
@@ -639,6 +661,8 @@ class PlanExecutor:
                     error=f"Circuit breaker open for tool '{step.tool_name}'",
                 ),
                 status=ExecutionStatus.SKIPPED,
+                outcome_class="circuit_open",
+                attempts=0,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
             )
@@ -660,12 +684,16 @@ class PlanExecutor:
                     error=error_msg,
                 ),
                 status=ExecutionStatus.FAILED,
+                outcome_class="not_registered",
+                attempts=0,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
             )
 
         # Execute with retries and exponential backoff
         last_error = None
+        # The exception OBJECT, not only its text: the final class and error_type come from it.
+        last_exc: Optional[BaseException] = None
         for attempt in range(self.max_retries + 1):
             try:
                 # Execute the tool
@@ -712,6 +740,8 @@ class PlanExecutor:
                         execution_time_ms=duration_ms,
                     ),
                     status=ExecutionStatus.COMPLETED,
+                    outcome_class="succeeded",
+                    attempts=attempt + 1,
                     started_at=started_at,
                     completed_at=completed_at,
                     duration_ms=duration_ms,
@@ -761,6 +791,9 @@ class PlanExecutor:
                         error=f"input contract violation: {e}" if is_input_error else str(e),
                     ),
                     status=ExecutionStatus.FAILED,
+                    outcome_class="input_rejected" if is_input_error else "refused",
+                    attempts=attempt + 1,
+                    error_type=type(e).__name__,
                     started_at=started_at,
                     completed_at=datetime.now(timezone.utc),
                 )
@@ -796,12 +829,16 @@ class PlanExecutor:
                         error=str(e),
                     ),
                     status=ExecutionStatus.FAILED,
+                    outcome_class="timeout",
+                    attempts=attempt + 1,
+                    error_type=type(e).__name__,
                     started_at=started_at,
                     completed_at=datetime.now(timezone.utc),
                 )
 
             except Exception as e:
                 last_error = str(e)
+                last_exc = e
                 logger.warning(f"Step {step.step_id} attempt {attempt + 1} failed: {e}")
                 if attempt < self.max_retries:
                     # Use exponential backoff with jitter
@@ -822,6 +859,13 @@ class PlanExecutor:
                 tool_name=step.tool_name, success=False, error=last_error or "Unknown error"
             ),
             status=ExecutionStatus.FAILED,
+            # An async tool's wait_for timeout lands in this generic arm; only the LAST
+            # attempt decides the class.
+            outcome_class=(
+                "timeout" if isinstance(last_exc, (asyncio.TimeoutError, TimeoutError)) else "error"
+            ),
+            attempts=self.max_retries + 1,
+            error_type=type(last_exc).__name__ if last_exc is not None else None,
             started_at=started_at,
             completed_at=completed_at,
         )
@@ -915,17 +959,35 @@ class PlanExecutor:
         prior_outputs: Dict[str, Any],
         context: Dict[str, Any],
         failed_step_ids: Optional[set[str]] = None,
+        on_step_result: Optional[Callable[[int, StepResult], None]] = None,
+        step_numbers: Optional[Dict[str, int]] = None,
     ) -> List[StepResult]:
         """Execute multiple steps in parallel"""
         # Limit concurrency
         semaphore = asyncio.Semaphore(self.max_parallel)
+        numbers = step_numbers or {}
 
         async def execute_with_semaphore(step: ExecutionStep) -> StepResult:
             async with semaphore:
-                return await self._execute_step(step, prior_outputs, context, failed_step_ids)
+                result = await self._execute_step(step, prior_outputs, context, failed_step_ids)
+            # Reported inside the task, before gather returns: a sibling that finished survives
+            # a later cancel of the group or an exception escaping another step.
+            self._safe_callback(on_step_result, numbers.get(step.step_id, -1), result)
+            return result
 
         tasks = [execute_with_semaphore(step) for step in steps]
         return await asyncio.gather(*tasks, return_exceptions=False)
+
+    @staticmethod
+    def _safe_callback(
+        callback: Optional[Callable[[int, StepResult], None]], step_number: int, result: StepResult
+    ) -> None:
+        if callback is None:
+            return
+        try:
+            callback(step_number, result)
+        except Exception as exc:  # noqa: BLE001 - reporting a result must never fail the step
+            logger.warning(f"on_step_result callback failed for step {result.step_id}: {exc}")
 
     def _resolve_inputs(
         self,
