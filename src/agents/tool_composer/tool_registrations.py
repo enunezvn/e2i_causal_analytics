@@ -121,8 +121,7 @@ class EffectEstimate(BaseModel):
 
     ``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` are real sampling
     quantities or all ``None``. ``uncertainty_method`` names their source
-    (``ols_hc1_normal`` / ``dowhy_standard_error_normal`` / ``library_interval``, or
-    ``not_computed``) and ``uncertainty_note`` says how they were computed or why they
+    (``ols_hc1_normal`` / ``dowhy_standard_error_normal``, or ``not_computed``) and ``uncertainty_note`` says how they were computed or why they
     were not. ``method`` is the estimator that actually ran, ``estimand`` what it
     estimated in words, ``effect_scale`` ``binary_contrast`` (treatment 1 vs 0) or
     ``per_unit`` (per one-unit increase in a non-binary treatment).
@@ -864,8 +863,11 @@ def causal_effect_estimator(
 
     Phase C-7 of GH #354. Replaces the previous hardcoded
     ``ate=0.12, ci_lower=0.08, ci_upper=0.16, p_value=0.001, n_samples=10000``
-    fabrication with a real multi-library run wired through the C-1..C-6
-    pipeline (NetworkX -> DoWhy -> EconML -> CausalML).
+    fabrication with a real run through the C-1..C-6 pipeline. Since #2014 the
+    run is pinned to DoWhy (primary) and NetworkX: the router used to pick the
+    libraries from keywords in the generated sentence, so a column name such as
+    ``payer_category`` sent the estimate to EconML + CausalML. EconML's
+    heterogeneity analysis stays in ``cate_analyzer`` and the causal_impact agent.
 
     Data flow:
     - The caller MUST supply a ``pandas.DataFrame`` under one of the canonical
@@ -895,9 +897,8 @@ def causal_effect_estimator(
       signal).
 
     Returned ``EffectEstimate`` fields are derived from the pipeline output:
-    - ``ate`` = ``PipelineOutput.consensus_effect`` (the cross-library
-      consensus produced by C-6's ``_aggregate_results``; with the tool's own
-      query wording only DoWhy estimates, so it is DoWhy's estimate).
+    - ``ate`` = ``PipelineOutput.consensus_effect``; with the pin DoWhy is the
+      only effect library, so it is DoWhy's estimate.
     - ``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` come from
       :func:`_derive_uncertainty` (#2014): the 95 % normal interval and
       two-sided p of the primary library's own standard error — for DoWhy the
@@ -991,7 +992,11 @@ def causal_effect_estimator(
         "filters": None,
         "estimation_data": df,
         "mode": "sequential",
-        "libraries_enabled": None,
+        # Pinned (#2014): DoWhy first, because the router makes the first forced
+        # library primary (measured on a real run in both orders). NetworkX runs for
+        # the graph-quality channel and estimates no effect. A ``query`` override
+        # therefore no longer changes which libraries run.
+        "libraries_enabled": ["dowhy", "networkx"],
         "cross_validate": None,
     }
 
@@ -1043,20 +1048,6 @@ def causal_effect_estimator(
     primary_result = pipeline_output.get("primary_result") or {}
     libraries_used = list(pipeline_output.get("libraries_used") or [])
     errors = list(pipeline_output.get("errors") or [])
-    provenance = _estimate_provenance(
-        ate=ate_value, primary_result=primary_result, libraries_used=libraries_used, errors=errors
-    )
-    non_dowhy = [lib for lib in provenance.effect_libraries if lib != "dowhy"]
-    if non_dowhy and not _is_binary_01(df.get(treatment)):
-        # Deterministic over the inputs and the routing their wording selects.
-        raise ToolRefusalError(
-            f"causal_effect_estimator: the pipeline routed {treatment!r} -> {outcome!r} to "
-            f"{', '.join(non_dowhy)}, and {treatment!r} is not a binary 0/1 treatment. Those "
-            "libraries do not estimate a per-unit effect of a non-binary treatment (EconML "
-            "binarizes a non-integer treatment at its median; on a 0-5 count treatment with a "
-            "per-unit effect of 0.4 it returned 0.894), so no estimate with a truthful label "
-            "exists on this route (#2014). Refusing rather than reporting a mislabelled effect."
-        )
     uncertainty = _derive_uncertainty(
         ate=ate_value, primary_result=primary_result, libraries_used=libraries_used, errors=errors
     )

@@ -140,17 +140,16 @@ def test_no_standard_error_yields_none_and_a_reason_never_a_number() -> None:
 
 
 def test_primary_library_without_an_estimate_yields_none_and_a_reason() -> None:
-    # Impact-flow wording routes NetworkX as the primary library: the reported effect is
-    # DoWhy's (the only estimate), but the primary result carries no uncertainty for it.
-    df = _frame("continuous")
+    # NetworkX first makes it primary (measured in test_causal_effect_estimator_dowhy_pin_2014):
+    # the reported effect is DoWhy's, but the primary result carries no uncertainty for it.
+    # The tool itself pins DoWhy first, so this guards the helper, not a tool route.
+    output = _run_pipeline(["networkx", "dowhy"], n=600)
 
-    result = _estimate(
-        df, query="How does the impact flow through the network path from treatment to outcome?"
-    )
+    uncertainty = _uncertainty(output, output["consensus_effect"])
 
-    assert result.ci_lower is None and result.ci_upper is None and result.p_value is None
-    assert result.uncertainty_method == "not_computed"
-    assert "networkx" in result.uncertainty_note.lower()
+    assert uncertainty["ci_lower"] is None and uncertainty["p_value"] is None
+    assert uncertainty["uncertainty_method"] == "not_computed"
+    assert "networkx" in uncertainty["uncertainty_note"].lower()
 
 
 def _run_pipeline(libraries: list, n: int = 400) -> dict:
@@ -268,15 +267,17 @@ def test_the_estimand_states_sufficient_conditions_not_a_false_necessary_one() -
     assert "variance-weighted" not in result.estimand
 
 
-def test_a_non_binary_treatment_routed_away_from_dowhy_is_refused() -> None:
-    # Heterogeneity wording routes EconML + CausalML. EconML binarizes a non-integer
-    # treatment at its median and measured 0.894 on this 0-5 count treatment whose per-unit
-    # effect is 0.4; CausalML returned a zero-width interval. Neither is a per-unit effect,
-    # and no label can make it one.
-    from src.agents.tool_composer.errors import ToolRefusalError
+def test_a_non_binary_treatment_is_estimated_per_unit_whatever_the_wording() -> None:
+    # Heterogeneity wording used to route EconML + CausalML, which estimate no per-unit
+    # effect (EconML returned 0.894 on this 0-5 count treatment, planted per-unit 0.4), and
+    # the tool refused. The pinned DoWhy run estimates the per-unit slope with its HC1 CI.
+    df = _frame("count", n=400)
+    ref = _ols_reference(df)
 
-    with pytest.raises(ToolRefusalError, match="per-unit"):
-        _estimate(_frame("count", n=400), query="How does the treatment effect vary by segment?")
+    result = _estimate(df, query="How does the treatment effect vary by segment?")
+
+    _assert_hc1_interval(result, ref)
+    assert result.effect_scale == "per_unit"
 
 
 def test_method_is_not_offered_to_the_planner() -> None:
