@@ -120,10 +120,9 @@ def test_target_regions_get_the_forests_effect_and_an_interval_on_those_rows():
     cohort = _make_confounded_cohort(n_per_region=400)
     whole = estimate_cohort_effect(cohort, "engagement_score")
     targeted = estimate_cohort_effect(cohort, "engagement_score", target_regions=["northeast"])
-    assert (targeted.ate, targeted.ate_ci_lower, targeted.ate_ci_upper) == (
-        whole.ate,
-        whole.ate_ci_lower,
-        whole.ate_ci_upper,
+    # Two seeded fits agree to float rounding (measured: differences of ~1e-16).
+    assert (targeted.ate, targeted.ate_ci_lower, targeted.ate_ci_upper) == pytest.approx(
+        (whole.ate, whole.ate_ci_lower, whole.ate_ci_upper), abs=1e-9
     )
     assert targeted.target_regions == ["northeast"]
     assert targeted.target_n == 400
