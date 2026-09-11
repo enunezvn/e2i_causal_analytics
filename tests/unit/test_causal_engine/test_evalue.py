@@ -646,6 +646,62 @@ class TestClassify:
         assert r.benchmark_basis == "joint_naive_vs_adjusted"
         assert r.covariates_measured == 3
 
+    # Whole-diff review F4: the beyond / within sentences must not overclaim the
+    # strongest-covariate fallback. Under ``joint_naive_vs_adjusted`` the benchmark
+    # IS all measured confounding combined; under ``strongest_covariate`` it is ONE
+    # covariate's bias factor, and the sentence must say so and name it.
+
+    def test_beyond_on_the_joint_basis_says_all_measured_confounding_combined(self):
+        r = self._c(0.15, (0.08, 0.22), naive_effect=0.20)
+        assert r.reading == "beyond_measured_confounding"
+        assert r.benchmark_basis == "joint_naive_vs_adjusted"
+        assert "stronger than all measured confounding combined" in r.message
+        assert "the confounding the adjustment removed, naive vs adjusted" in r.message
+        assert "strongest measured covariate" not in r.message
+        assert r.benchmark_covariate is None
+        assert r.as_details()["benchmark_covariate"] is None
+
+    def test_beyond_on_the_strongest_covariate_basis_names_the_covariate(self):
+        # RR 1.5 at p0 0.30 against the strongest factor 1.2 -> beyond, no joint
+        r = self._c(
+            0.15,
+            (0.08, 0.22),
+            naive_effect=None,
+            covariate_factors={"region": 1.05, "disease_severity": 1.2},
+        )
+        assert r.reading == "beyond_measured_confounding"
+        assert r.benchmark_basis == "strongest_covariate"
+        assert r.benchmark == pytest.approx(1.2)
+        assert r.benchmark_covariate == "disease_severity"
+        assert r.as_details()["benchmark_covariate"] == "disease_severity"
+        assert "stronger than the strongest measured covariate's confounding" in r.message
+        assert "(1.20, disease_severity)" in r.message
+        assert "combined" not in r.message
+
+    def test_within_on_the_joint_basis_says_all_measured_confounding_combined(self):
+        r = self._c(0.03, (0.01, 0.05), naive_effect=0.10)
+        assert r.reading == "within_measured_confounding"
+        assert r.benchmark_basis == "joint_naive_vs_adjusted"
+        assert "no stronger than all measured confounding combined" in r.message
+        assert "strongest measured covariate" not in r.message
+        assert r.benchmark_covariate is None
+
+    def test_within_on_the_strongest_covariate_basis_names_the_covariate(self):
+        r = self._c(
+            0.25,
+            (0.15, 0.35),
+            baseline_risk=0.25,
+            naive_effect=None,
+            covariate_factors={"c": 2.0, "d": 1.3},
+        )
+        assert r.reading == "within_measured_confounding"
+        assert r.benchmark_basis == "strongest_covariate"
+        assert r.benchmark_covariate == "c"
+        assert "no stronger than the strongest measured covariate's confounding" in r.message
+        assert "(2.00, c)" in r.message
+        assert "combined" not in r.message
+        assert "could account for the whole effect" in r.message
+
     def test_smd_path_without_baseline_risk(self):
         r = self._c(0.15, (0.08, 0.22), baseline_risk=None, naive_effect=0.20)
         assert r.conversion == "standardized_difference"

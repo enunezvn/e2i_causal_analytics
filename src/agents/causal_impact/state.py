@@ -180,6 +180,9 @@ class SensitivityAnalysis(TypedDict, total=False):
     benchmark: Optional[float]
     # joint_naive_vs_adjusted / strongest_covariate / none_measured / measured_unscoreable
     benchmark_basis: str
+    # The covariate whose bias factor is the benchmark on the strongest_covariate
+    # basis (the message names it); None on every other basis.
+    benchmark_covariate: Optional[str]
     conversion: str  # risk_ratio / standardized_difference
 
 

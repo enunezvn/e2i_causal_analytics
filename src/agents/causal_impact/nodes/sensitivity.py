@@ -98,6 +98,7 @@ class SensitivityNode:
                 "rr_ci": reading.rr_ci,
                 "benchmark": reading.benchmark,
                 "benchmark_basis": reading.benchmark_basis,
+                "benchmark_covariate": reading.benchmark_covariate,
                 "conversion": reading.conversion,
             }
 

@@ -224,6 +224,18 @@ class TestSensitivityNode:
         assert "sensitivity_error" not in result
 
     @pytest.mark.asyncio
+    async def test_state_carries_the_benchmark_covariate_field(self):
+        """Whole-diff review F4: the reading's ``benchmark_covariate`` (the covariate
+        named when the basis is ``strongest_covariate``) reaches the state. On the
+        joint basis it is None, but the key is present."""
+        state = _state_with_frame(0.15, 0.08, 0.22, naive=0.20)
+        result = await SensitivityNode().execute(state)
+        sens = result["sensitivity_analysis"]
+        assert sens["benchmark_basis"] == "joint_naive_vs_adjusted"
+        assert "benchmark_covariate" in sens
+        assert sens["benchmark_covariate"] is None
+
+    @pytest.mark.asyncio
     async def test_a_frame_without_the_treatment_column_reads_unbenchmarked(self):
         """An ABSENT treatment column is a MISSING input, same as an absent outcome:
         the fallback is kept and the run reads ``unbenchmarked`` (spec §5)."""

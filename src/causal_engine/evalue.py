@@ -707,6 +707,9 @@ class SensitivityReading:
     # Requested covariates present on the frame, scoreable or not; what separates
     # the two ``unbenchmarked`` sub-cases (``none_measured`` / ``measured_unscoreable``).
     covariates_measured: int = 0
+    # The covariate whose bias factor IS the benchmark when ``benchmark_basis`` is
+    # ``strongest_covariate`` (the message names it); None on every other basis.
+    benchmark_covariate: Optional[str] = None
 
     def as_details(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -798,6 +801,13 @@ def classify(
         raise ValueError(f"covariates_measured must be >= 0, got {covariates_measured!r}")
     if basis == BASIS_NONE_MEASURED and k_measured > 0:
         basis = BASIS_MEASURED_UNSCOREABLE
+    # ``measured_confounding_benchmark`` validated every factor as finite above, so the
+    # max here is the covariate it returned; carried so the message can name it.
+    benchmark_covariate: Optional[str] = (
+        str(max(covariate_factors, key=lambda name: float(covariate_factors[name])))
+        if basis == "strongest_covariate"
+        else None
+    )
 
     if randomized:
         reading = READING_RANDOMIZED
@@ -813,6 +823,18 @@ def classify(
     n_rows_i: Optional[int] = None if n_rows is None else int(n_rows)
     n_txt = f"n = {n_rows_i}" if n_rows_i else "this sample size"
     basis_words = BASIS_IN_WORDS[basis]
+    # What the benchmark IS, in words (whole-diff review F4): under the joint basis it
+    # is all measured confounding combined; under ``strongest_covariate`` it is ONE
+    # covariate's bias factor, and saying "combined" / "the measured set" would
+    # overclaim it. The covariate is named; the basis words are the fallback.
+    # Only the beyond / within sentences use these, and only they have a benchmark.
+    benchmark_words = benchmark_detail = ""
+    if benchmark is not None and basis == "strongest_covariate":
+        benchmark_words = "the strongest measured covariate's confounding"
+        benchmark_detail = f"{benchmark:.2f}, {benchmark_covariate or basis_words}"
+    elif benchmark is not None:
+        benchmark_words = "all measured confounding combined"
+        benchmark_detail = f"{benchmark:.2f}, {basis_words}"
     if reading == READING_RANDOMIZED:
         message = (
             "not applicable: randomized design — treatment assignment is exogenous by "
@@ -840,11 +862,11 @@ def classify(
         message = (
             "Explaining this effect away would need an unmeasured confounder with a risk ratio "
             f"of at least {e_point:.2f} with both treatment and outcome ({e_ci:.2f} at the CI "
-            f"bound), stronger than all measured confounding combined ({benchmark:.2f}, {basis_words})."
+            f"bound), stronger than {benchmark_words} ({benchmark_detail})."
         )
     else:
         message = (
-            f"A confounder no stronger than the measured set ({benchmark:.2f}, {basis_words}) "
+            f"A confounder no stronger than {benchmark_words} ({benchmark_detail}) "
             f"could account for the whole effect (risk ratio at the estimate {rr_point:.2f}; "
             f"E-value {e_point:.2f}). Do not act on the size of this effect, and treat "
             "its direction as unconfirmed against confounding of that strength."
@@ -870,4 +892,5 @@ def classify(
         covariate_bias_factors={k: float(v) for k, v in covariate_factors.items()},
         n_rows=n_rows_i,
         covariates_measured=k_measured,
+        benchmark_covariate=benchmark_covariate,
     )
