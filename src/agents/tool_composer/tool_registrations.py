@@ -247,6 +247,59 @@ class SimulationResults(BaseModel):
     uncertainty_range: List[float]
 
 
+# The four models below are the output contracts of the tools that return a plain dict
+# (#2003). Each tool builds its result through its model and returns ``model_dump()``,
+# so the keys the planner is shown (``output_fields``) are the keys the tool returns.
+
+
+class SensitivityReport(BaseModel):
+    """Output from ``sensitivity_analyzer``: E-values and the shared ``evalue`` reading."""
+
+    e_value_point: float
+    e_value_ci: float
+    reading: str
+    headline: str
+    benchmark: Optional[float]
+    benchmark_basis: str
+    conversion: str
+    interpretation: str
+
+
+class RefutationResults(BaseModel):
+    """Output from ``refutation_runner``: the DoWhy refutation suite and its summary.
+
+    The summary fields are read from the suite with ``.get`` and stay optional.
+    """
+
+    estimate_id: str
+    treatment: str
+    outcome: str
+    n_samples: int
+    refutation_results: Dict[str, Any]
+    gate_decision: Optional[str]
+    overall_robust: Optional[bool]
+    tests_passed: Optional[int]
+    tests_failed: Optional[int]
+    total_tests: Optional[int]
+    needs_review: Optional[bool]
+
+
+class DriftMetrics(BaseModel):
+    """Output from ``psi_calculator``."""
+
+    psi: float
+    interpretation: str
+    threshold: float
+    buckets: List[Dict[str, Any]]
+
+
+class DistributionComparison(BaseModel):
+    """Output from ``distribution_comparator``: one KS comparison per feature."""
+
+    comparisons: List[Dict[str, Any]]
+    overall_drift: bool
+
+
 # ============================================================================
 # COHORT CONSTRUCTOR MODELS (Tier 0)
 # ============================================================================
@@ -544,6 +597,13 @@ def _apply_cohort_criteria(
             "required": False,
             "default": 100,
         },
+        {
+            "name": "required_completeness",
+            "type": "float",
+            "description": "Minimum share of non-missing cells in the cohort data (0-1)",
+            "required": False,
+            "default": 0.8,
+        },
     ],
     output_schema="CohortValidatorOutput",
     avg_execution_ms=1000,
@@ -634,6 +694,13 @@ def cohort_validator(
             "name": "include_demographics",
             "type": "bool",
             "description": "Include demographic stats",
+            "required": False,
+            "default": True,
+        },
+        {
+            "name": "include_clinical",
+            "type": "bool",
+            "description": "Include summaries of the numeric clinical columns",
             "required": False,
             "default": True,
         },
@@ -1083,11 +1150,28 @@ def _derive_p_value_from_confidence(consensus_confidence: Optional[float]) -> fl
         {
             "name": "estimate_id",
             "type": "str",
-            "description": "ID of the causal estimate to refute",
+            "description": "ID of the causal estimate to refute (echoed back for provenance)",
+        },
+        {
+            "name": "treatment",
+            "type": "str",
+            "description": "Treatment column the refutation suite re-estimates on",
+        },
+        {
+            "name": "outcome",
+            "type": "str",
+            "description": "Outcome column the refutation suite re-estimates on",
+        },
+        {
+            "name": "confounders",
+            "type": "List[str]",
+            "description": "Confounder columns (use the ones the estimate adjusted for)",
+            "required": False,
         },
     ],
     output_schema="RefutationResults",
     avg_execution_ms=5000,
+    output_model=RefutationResults,
 )
 def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
     """Run the REAL DoWhy refutation suite on the in-context data (#778).
@@ -1146,19 +1230,19 @@ def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
 
     refutation = _run_dowhy_refutation(df, treatment, outcome, confounders)
 
-    return {
-        "estimate_id": estimate_id,
-        "treatment": treatment,
-        "outcome": outcome,
-        "n_samples": int(len(df)),
-        "refutation_results": refutation,
-        "gate_decision": refutation.get("gate_decision"),
-        "overall_robust": refutation.get("overall_robust"),
-        "tests_passed": refutation.get("tests_passed"),
-        "tests_failed": refutation.get("tests_failed"),
-        "total_tests": refutation.get("total_tests"),
-        "needs_review": refutation.get("needs_review"),
-    }
+    return RefutationResults(
+        estimate_id=estimate_id,
+        treatment=treatment,
+        outcome=outcome,
+        n_samples=int(len(df)),
+        refutation_results=refutation,
+        gate_decision=refutation.get("gate_decision"),
+        overall_robust=refutation.get("overall_robust"),
+        tests_passed=refutation.get("tests_passed"),
+        tests_failed=refutation.get("tests_failed"),
+        total_tests=refutation.get("total_tests"),
+        needs_review=refutation.get("needs_review"),
+    ).model_dump()
 
 
 def _first_kwarg(kwargs: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[str]:
@@ -1294,6 +1378,7 @@ def _run_dowhy_refutation(
             "name": "ci_upper",
             "type": "float",
             "description": "Upper confidence bound (optional; defaults to ate + (ate - ci_lower))",
+            "required": False,
         },
         {
             "name": "baseline_risk",
@@ -1302,6 +1387,7 @@ def _run_dowhy_refutation(
                 "Control-arm outcome rate for a binary outcome (optional; enables the "
                 "risk-ratio path)"
             ),
+            "required": False,
         },
         {
             "name": "naive_ate",
@@ -1310,10 +1396,12 @@ def _run_dowhy_refutation(
                 "Unadjusted difference in means (optional; enables the measured-confounding "
                 "benchmark)"
             ),
+            "required": False,
         },
     ],
     output_schema="SensitivityReport",
     avg_execution_ms=1500,
+    output_model=SensitivityReport,
 )
 def sensitivity_analyzer(
     ate: float,
@@ -1380,16 +1468,16 @@ def sensitivity_analyzer(
             "universal E-value threshold: benchmark it against the confounding the measured "
             "covariates carried (pass naive_ate and baseline_risk to get that reading)."
         )
-    return {
-        "e_value_point": reading.e_value_point,
-        "e_value_ci": reading.e_value_ci,
-        "reading": reading.reading,
-        "headline": reading.headline,
-        "benchmark": reading.benchmark,
-        "benchmark_basis": reading.benchmark_basis,
-        "conversion": reading.conversion,
-        "interpretation": interpretation,
-    }
+    return SensitivityReport(
+        e_value_point=reading.e_value_point,
+        e_value_ci=reading.e_value_ci,
+        reading=reading.reading,
+        headline=reading.headline,
+        benchmark=reading.benchmark,
+        benchmark_basis=reading.benchmark_basis,
+        conversion=reading.conversion,
+        interpretation=interpretation,
+    ).model_dump()
 
 
 # ============================================================================
@@ -1697,6 +1785,14 @@ def segment_ranker(cate_results: Dict[str, Any], **kwargs) -> SegmentRanking:
             "description": "Type of entity (region, territory, brand)",
         },
         {"name": "entities", "type": "List[str]", "description": "Entities to compare"},
+        {
+            "name": "group_by",
+            "type": "str",
+            "description": (
+                "Column to group entities by (optional; otherwise resolved from entity_type)"
+            ),
+            "required": False,
+        },
     ],
     output_schema="GapAnalysis",
     avg_execution_ms=1500,
@@ -1712,7 +1808,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     top- and bottom-performing entity group. No fabricated regions/values.
 
     Grouping column resolution (first match wins):
-    1. explicit ``group_by`` kwarg,
+    1. explicit ``group_by`` kwarg (refused when it is not a column),
     2. ``entity_type`` if it is a column,
     3. a column named ``<entity_type>`` or ``geographic_region`` /
        ``territory`` / ``brand`` heuristics.
@@ -1759,7 +1855,14 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             f"DataFrame (columns={list(df.columns)!r})."
         )
 
-    group_col = _resolve_grouping_column(df, kwargs.get("group_by"), entity_type)
+    group_by = kwargs.get("group_by")
+    if group_by is not None and group_by not in df.columns:
+        raise ToolRefusalError(
+            f"gap_calculator: group_by={group_by!r} is not a column of the supplied "
+            f"DataFrame (columns={list(df.columns)!r}). Refusing to group by a different "
+            "column than the one requested."
+        )
+    group_col = _resolve_grouping_column(df, group_by, entity_type)
     if group_col is None:
         raise ToolRefusalError(
             "gap_calculator: could not resolve a grouping column from group_by="
@@ -2193,6 +2296,13 @@ def _gap_leave_one_out_bounds(entity_values: Any) -> Optional[Tuple[float, float
     input_parameters=[
         {"name": "gap_analysis", "type": "dict", "description": "Gap analysis results"},
         {"name": "investment", "type": "float", "description": "Proposed investment amount"},
+        {
+            "name": "value_per_unit",
+            "type": "float",
+            "description": "Value of one unit of the gap metric (optional; default 1.0)",
+            "required": False,
+            "default": 1.0,
+        },
     ],
     output_schema="ROIEstimate",
     avg_execution_ms=2000,
@@ -2221,9 +2331,10 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
       than a constant. The name states what it is: a sensitivity band, NOT a
       sampling confidence interval; ``assumptions`` spells out the semantics.
 
-    Fail-closed: no ``gap`` in ``gap_analysis``, or non-positive ``investment``
-    -> ``RuntimeError`` (an ROI is undefined without a real gap or a real
-    investment; we refuse to fabricate one).
+    Fail-closed: no ``gap`` in ``gap_analysis``, non-positive ``investment``, or a
+    supplied ``value_per_unit`` that is not a finite number > 0 -> ``RuntimeError``
+    (an ROI is undefined without a real gap, a real investment and a usable unit
+    value; we refuse to fabricate one).
 
     Args:
         gap_analysis: Output of ``gap_calculator`` (carries ``gap`` and,
@@ -2253,9 +2364,19 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     gap = float(gap_raw)
     entity_values = gap_analysis.get("entity_values")
     n_entities = len(entity_values) if isinstance(entity_values, dict) and entity_values else 1
-    value_per_unit = kwargs.get("value_per_unit", 1.0)
-    if not isinstance(value_per_unit, (int, float)) or not math.isfinite(float(value_per_unit)):
+    value_per_unit = kwargs.get("value_per_unit")
+    if value_per_unit is None:
         value_per_unit = 1.0
+    elif (
+        isinstance(value_per_unit, bool)
+        or not isinstance(value_per_unit, (int, float))
+        or not math.isfinite(float(value_per_unit))
+        or value_per_unit <= 0
+    ):
+        raise ToolRefusalError(
+            f"roi_estimator requires value_per_unit to be a finite number > 0; got "
+            f"{value_per_unit!r}. Refusing to substitute 1.0 for a value the caller supplied."
+        )
 
     opportunity_value = gap * n_entities * float(value_per_unit)
     estimated_roi = opportunity_value / float(investment)
@@ -2438,9 +2559,17 @@ def _psi(baseline: Any, current: Any, *, bins: int = 10) -> Tuple[float, List[Di
         {"name": "feature", "type": "str", "description": "Feature to analyze"},
         {"name": "baseline_period", "type": "str", "description": "Baseline time period"},
         {"name": "current_period", "type": "str", "description": "Current time period"},
+        {
+            "name": "period_column",
+            "type": "str",
+            "description": "Column holding the period labels",
+            "required": False,
+            "default": "period",
+        },
     ],
     output_schema="DriftMetrics",
     avg_execution_ms=800,
+    output_model=DriftMetrics,
 )
 def psi_calculator(
     feature: str,
@@ -2491,12 +2620,12 @@ def psi_calculator(
         interpretation = "Moderate drift"
     else:
         interpretation = "Significant drift"
-    return {
-        "psi": psi_value,
-        "interpretation": interpretation,
-        "threshold": threshold,
-        "buckets": buckets,
-    }
+    return DriftMetrics(
+        psi=psi_value,
+        interpretation=interpretation,
+        threshold=threshold,
+        buckets=buckets,
+    ).model_dump()
 
 
 @composable_tool(
@@ -2508,9 +2637,17 @@ def psi_calculator(
         {"name": "features", "type": "List[str]", "description": "Features to compare"},
         {"name": "period_1", "type": "str", "description": "First time period"},
         {"name": "period_2", "type": "str", "description": "Second time period"},
+        {
+            "name": "period_column",
+            "type": "str",
+            "description": "Column holding the period labels",
+            "required": False,
+            "default": "period",
+        },
     ],
     output_schema="DistributionComparison",
     avg_execution_ms=1200,
+    output_model=DistributionComparison,
 )
 def distribution_comparator(
     features: List[str],
@@ -2577,7 +2714,7 @@ def distribution_comparator(
                 "drift_detected": drift,
             }
         )
-    return {"comparisons": comparisons, "overall_drift": any_drift}
+    return DistributionComparison(comparisons=comparisons, overall_drift=any_drift).model_dump()
 
 
 # ============================================================================
@@ -2602,6 +2739,20 @@ def distribution_comparator(
             "type": "List[str]",
             "description": "Entity IDs to score",
             "required": False,
+        },
+        {
+            "name": "id_column",
+            "type": "str",
+            "description": "Column holding the entity IDs",
+            "required": False,
+            "default": "patient_id",
+        },
+        {
+            "name": "outcome",
+            "type": "str",
+            "description": "Binary outcome column the risk model predicts (the risk event)",
+            "required": False,
+            "default": "discontinuation_flag",
         },
     ],
     output_schema="RiskScores",
@@ -2628,9 +2779,9 @@ def risk_scorer(
       feature set (reproducible provenance, not a fabricated ``v2.3.1``).
     - ``scored_at`` is the real UTC timestamp of this scoring run.
 
-    Fail-closed: no DataFrame, missing outcome column, fewer than 2 outcome
-    classes, or no usable numeric features -> ``RuntimeError`` (we refuse to
-    fabricate scores).
+    Fail-closed: no DataFrame, missing outcome column, an outcome that is not a
+    0/1 event column, fewer than 2 outcome classes, or no usable numeric features
+    -> ``RuntimeError`` (we refuse to fabricate scores).
 
     Args:
         entity_type: Logical entity type (echoed for provenance only).
@@ -2688,6 +2839,13 @@ def risk_scorer(
             f"(numeric columns minus outcome were empty; columns={list(work.columns)!r})."
         )
 
+    observed = set(work[outcome].dropna().unique())
+    if not observed <= {0, 1}:
+        raise ToolRefusalError(
+            f"risk_scorer: outcome column {outcome!r} is not a binary 0/1 event column "
+            f"(observed values include {sorted(map(str, observed))[:6]!r}). Refusing to "
+            "cast it to classes and report a class probability as a risk score."
+        )
     y = work[outcome].astype(int)
     if y.nunique() < 2:
         raise ToolRefusalError(

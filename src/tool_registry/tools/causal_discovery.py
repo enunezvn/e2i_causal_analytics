@@ -581,11 +581,13 @@ class DriverRankerTool:
             # Convert SHAP values to numpy array
             shap_array = np.array(params.shap_values)
 
-            # Update ranker settings if provided
-            if params.concordance_threshold != 2:
-                self._ranker.concordance_threshold = params.concordance_threshold
-            if params.importance_percentile != 0.25:
-                self._ranker.importance_percentile = params.importance_percentile
+            # Apply THIS call's settings, defaults included. The tool is a process-wide
+            # singleton: writing only non-default values onto the shared ranker leaked one
+            # request's settings into every later call (#2003). No await separates these
+            # writes from rank_drivers below, so concurrent calls on the event loop cannot
+            # interleave between them.
+            self._ranker.concordance_threshold = params.concordance_threshold
+            self._ranker.importance_percentile = params.importance_percentile
 
             # Run ranking
             result = self._ranker.rank_drivers(
@@ -1264,8 +1266,11 @@ def register_discover_dag_tool() -> None:
             ToolParameter(
                 name="data",
                 type="Dict[str, List[Any]]",
-                description="Data as dict of column names to values",
-                required=True,
+                description=(
+                    "Data as dict of column names to values (optional; the in-context "
+                    "DataFrame is used when omitted)"
+                ),
+                required=False,
             ),
             ToolParameter(
                 name="algorithms",
@@ -1333,14 +1338,20 @@ def register_rank_drivers_tool() -> None:
             ToolParameter(
                 name="shap_values",
                 type="List[List[float]]",
-                description="SHAP values matrix (n_samples x n_features)",
-                required=True,
+                description=(
+                    "SHAP values matrix (n_samples x n_features; optional, derived from the "
+                    "in-context DataFrame unless given together with feature_names)"
+                ),
+                required=False,
             ),
             ToolParameter(
                 name="feature_names",
                 type="List[str]",
-                description="Feature names",
-                required=True,
+                description=(
+                    "Feature names (optional; without shap_values, limits the features SHAP "
+                    "is derived for)"
+                ),
+                required=False,
             ),
             ToolParameter(
                 name="concordance_threshold",
@@ -1348,6 +1359,13 @@ def register_rank_drivers_tool() -> None:
                 description="Max rank diff for concordant features",
                 required=False,
                 default=2,
+            ),
+            ToolParameter(
+                name="importance_percentile",
+                type="float",
+                description="Top percentile of features counted as important (0-1)",
+                required=False,
+                default=0.25,
             ),
         ],
         output_schema="RankDriversOutput",

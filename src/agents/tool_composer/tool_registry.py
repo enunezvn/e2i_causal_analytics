@@ -7,7 +7,7 @@ be used by the Tool Composer. Tools are exposed by agents and
 registered at startup.
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from .schemas import ToolCategory, ToolSchema
 
@@ -205,483 +205,154 @@ class ToolRegistry:
 # =============================================================================
 # DEFAULT TOOL DEFINITIONS
 # =============================================================================
+#
+# The planner, the DSPy planning signature and the executor read the live registry in
+# ``src.tool_registry.registry`` (filled by ``@composable_tool`` / ``registry.register``).
+# This module keeps what only it carries -- each tool's category and the tools whose
+# output it can consume -- and DERIVES everything else from the live registry, so its
+# input/output schemas cannot drift from the registered callables again (#2003: the
+# hand-written copies had drifted on 14 of 16 tools). The DB ``tool_registry`` /
+# ``tool_dependencies`` rows are synced from these definitions by
+# ``scripts/generate_tool_registry_sync_migration.py``.
+
+# name -> (category, tools whose output it can consume). Covers every live tool.
+TOOL_METADATA: dict[str, tuple[ToolCategory, list[str]]] = {
+    # Cohort constructor (Tier 0)
+    "cohort_builder": (ToolCategory.COHORT, []),
+    "cohort_validator": (ToolCategory.COHORT, ["cohort_builder"]),
+    "cohort_statistics": (ToolCategory.COHORT, ["cohort_builder"]),
+    # Causal impact
+    "causal_effect_estimator": (ToolCategory.CAUSAL, []),
+    "refutation_runner": (ToolCategory.CAUSAL, ["causal_effect_estimator"]),
+    "sensitivity_analyzer": (ToolCategory.CAUSAL, ["causal_effect_estimator"]),
+    "discover_dag": (ToolCategory.CAUSAL, []),
+    "rank_drivers": (ToolCategory.CAUSAL, ["discover_dag"]),
+    # Heterogeneous optimizer
+    "cate_analyzer": (ToolCategory.SEGMENTATION, ["causal_effect_estimator"]),
+    "segment_ranker": (ToolCategory.SEGMENTATION, ["cate_analyzer"]),
+    # Gap analyzer
+    "gap_calculator": (ToolCategory.GAP, []),
+    "roi_estimator": (ToolCategory.GAP, ["gap_calculator"]),
+    # Experiment designer
+    "power_calculator": (ToolCategory.EXPERIMENT, ["causal_effect_estimator", "cate_analyzer"]),
+    "counterfactual_simulator": (
+        ToolCategory.EXPERIMENT,
+        ["causal_effect_estimator", "cate_analyzer", "gap_calculator"],
+    ),
+    # Prediction synthesizer
+    "risk_scorer": (ToolCategory.PREDICTION, []),
+    "propensity_estimator": (ToolCategory.PREDICTION, []),
+    "model_inference": (ToolCategory.PREDICTION, []),
+    # Drift monitor
+    "psi_calculator": (ToolCategory.MONITORING, []),
+    "distribution_comparator": (ToolCategory.MONITORING, []),
+    "detect_structural_drift": (ToolCategory.MONITORING, []),
+}
+
+# (consumer, producer) -> (producer output field, consumer input field), one entry per
+# ``can_consume_from`` pair. ``None`` output field = the whole output; ``None`` input
+# field = mapped by matching field names (the DB column semantics). Both are REAL keys
+# of the registered tools -- the drift test checks them.
+DEPENDENCY_FIELD_MAPPINGS: dict[tuple[str, str], tuple[Optional[str], Optional[str]]] = {
+    ("cohort_validator", "cohort_builder"): (None, "cohort_result"),
+    ("cohort_statistics", "cohort_builder"): (None, "cohort_result"),
+    # Refutation re-estimates on the same treatment/outcome/confounders; no output
+    # field of the estimate is an input of the refutation suite.
+    ("refutation_runner", "causal_effect_estimator"): (None, None),
+    # ate / ci_lower / ci_upper map by name.
+    ("sensitivity_analyzer", "causal_effect_estimator"): (None, None),
+    # Ordering only: CATE re-estimates per segment from the data.
+    ("cate_analyzer", "causal_effect_estimator"): (None, None),
+    ("segment_ranker", "cate_analyzer"): (None, "cate_results"),
+    ("roi_estimator", "gap_calculator"): (None, "gap_analysis"),
+    ("power_calculator", "causal_effect_estimator"): ("ate", "effect_size"),
+    # No direct field: effect_by_segment is a per-segment dict and effect_size one number,
+    # so the planner has to pick the segment's effect.
+    ("power_calculator", "cate_analyzer"): (None, None),
+    ("counterfactual_simulator", "causal_effect_estimator"): ("ate", "expected_effect"),
+    ("counterfactual_simulator", "cate_analyzer"): ("high_responders", "target_entities"),
+    # No direct field: bottom_performer is one entity name and target_entities a list,
+    # so the planner has to build the list.
+    ("counterfactual_simulator", "gap_calculator"): (None, None),
+    ("rank_drivers", "discover_dag"): ("edge_list", "dag_edge_list"),
+}
+
+_SCALAR_JSON_TYPES = {"str": "string", "float": "number", "int": "integer", "bool": "boolean"}
+
+
+def _json_type(type_hint: str) -> dict[str, Any]:
+    """JSON Schema for a registry parameter's Python type string."""
+    hint = type_hint.strip()
+    if hint in _SCALAR_JSON_TYPES:
+        return {"type": _SCALAR_JSON_TYPES[hint]}
+    if hint == "Any":
+        return {}
+    if hint == "dict" or (hint.startswith("Dict[") and hint.endswith("]")):
+        return {"type": "object"}
+    if hint == "list":
+        return {"type": "array"}
+    if hint.startswith("List[") and hint.endswith("]"):
+        return {"type": "array", "items": _json_type(hint[len("List[") : -1])}
+    raise ValueError(f"no JSON Schema mapping for registry parameter type {type_hint!r}")
+
+
+def _input_schema(parameters: list[Any]) -> dict[str, Any]:
+    properties: dict[str, Any] = {}
+    for param in parameters:
+        prop = {**_json_type(param.type), "description": param.description}
+        if param.default is not None:
+            prop["default"] = param.default
+        properties[param.name] = prop
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": [param.name for param in parameters if param.required],
+    }
 
 
 def create_default_tools() -> list[ToolSchema]:
     """
-    Create default tool definitions.
+    Create default tool definitions from the live registry.
 
-    Note: fn (callable) is set to None here and must be
-    populated when agents register their actual implementations.
+    Name, description, source agent, input schema, output schema, latency and the
+    callable (``fn``) come from the registered tool; category and ``can_consume_from``
+    from ``TOOL_METADATA``. Raises ``LookupError`` when a tool in ``TOOL_METADATA`` is
+    not registered or registered no output model.
     """
-    return [
-        # =====================================================================
-        # COHORT CONSTRUCTOR TOOLS (Tier 0 - ML Foundation)
-        # =====================================================================
-        ToolSchema(
-            name="cohort_builder",
-            description="Constructs patient cohorts by applying inclusion/exclusion criteria based on FDA/EMA label requirements",
-            category=ToolCategory.COHORT,
-            source_agent="cohort_constructor",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "brand": {
-                        "type": "string",
-                        "description": "Brand name (Remibrutinib, Fabhalta, Kisqali)",
-                    },
-                    "indication": {
-                        "type": "string",
-                        "description": "Disease indication (CSU, PNH, etc.)",
-                    },
-                    "inclusion_criteria": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of inclusion criteria expressions",
-                    },
-                    "exclusion_criteria": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of exclusion criteria expressions",
-                    },
-                    "lookback_days": {"type": "integer", "default": 365},
-                    "followup_days": {"type": "integer", "default": 90},
-                },
-                "required": ["brand"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "eligible_patient_ids": {"type": "array", "items": {"type": "string"}},
-                    "total_evaluated": {"type": "integer"},
-                    "total_eligible": {"type": "integer"},
-                    "eligibility_rate": {"type": "number"},
-                    "criteria_breakdown": {
-                        "type": "object",
-                        "description": "Count of patients passing each criterion",
-                    },
-                    "execution_time_ms": {"type": "number"},
-                },
-            },
-            can_consume_from=[],  # Root tool - no dependencies
-            avg_latency_ms=5000.0,  # Can take up to 120s for large cohorts
-            success_rate=0.98,
-        ),
-        ToolSchema(
-            name="cohort_validator",
-            description="Validates a constructed cohort against clinical trial requirements and data quality standards",
-            category=ToolCategory.COHORT,
-            source_agent="cohort_constructor",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "cohort_result": {
-                        "type": "object",
-                        "description": "Output from cohort_builder",
-                    },
-                    "min_cohort_size": {"type": "integer", "default": 100},
-                    "required_completeness": {"type": "number", "default": 0.8},
-                },
-                "required": ["cohort_result"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "is_valid": {"type": "boolean"},
-                    "validation_checks": {"type": "array"},
-                    "quality_score": {"type": "number"},
-                    "warnings": {"type": "array", "items": {"type": "string"}},
-                    "recommendations": {"type": "array", "items": {"type": "string"}},
-                },
-            },
-            can_consume_from=["cohort_builder"],
-            avg_latency_ms=1000.0,
-            success_rate=0.99,
-        ),
-        ToolSchema(
-            name="cohort_statistics",
-            description="Computes descriptive statistics for a patient cohort including demographics and clinical characteristics",
-            category=ToolCategory.COHORT,
-            source_agent="cohort_constructor",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "cohort_result": {
-                        "type": "object",
-                        "description": "Output from cohort_builder",
-                    },
-                    "include_demographics": {"type": "boolean", "default": True},
-                    "include_clinical": {"type": "boolean", "default": True},
-                },
-                "required": ["cohort_result"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "cohort_size": {"type": "integer"},
-                    "demographics": {
-                        "type": "object",
-                        "properties": {
-                            "age_mean": {"type": "number"},
-                            "age_std": {"type": "number"},
-                            "gender_distribution": {"type": "object"},
-                        },
-                    },
-                    "clinical_characteristics": {"type": "object"},
-                    "summary_table": {"type": "array"},
-                },
-            },
-            can_consume_from=["cohort_builder"],
-            avg_latency_ms=2000.0,
-            success_rate=0.97,
-        ),
-        # =====================================================================
-        # CAUSAL IMPACT TOOLS
-        # =====================================================================
-        ToolSchema(
-            name="causal_effect_estimator",
-            description="Estimates Average Treatment Effect (ATE) with confidence intervals",
-            category=ToolCategory.CAUSAL,
-            source_agent="causal_impact",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "treatment_col": {"type": "string"},
-                    "outcome_col": {"type": "string"},
-                    "confounders": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["treatment_col", "outcome_col"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "ate": {"type": "number"},
-                    "ci_lower": {"type": "number"},
-                    "ci_upper": {"type": "number"},
-                    "p_value": {"type": "number"},
-                    "method": {"type": "string"},
-                },
-            },
-            can_consume_from=[],  # Root tool
-        ),
-        ToolSchema(
-            name="refutation_runner",
-            description="Runs DoWhy refutation tests on causal estimates",
-            category=ToolCategory.CAUSAL,
-            source_agent="causal_impact",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "causal_result": {"type": "object"},
-                    "tests": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["causal_result"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "passed": {"type": "boolean"},
-                    "confidence_score": {"type": "number"},
-                    "test_results": {"type": "array"},
-                    "gate_decision": {"type": "string"},
-                },
-            },
-            can_consume_from=["causal_effect_estimator"],
-        ),
-        ToolSchema(
-            name="sensitivity_analyzer",
-            description=(
-                "Computes E-values and the measured-confounding sensitivity reading for "
-                "causal estimates"
-            ),
-            category=ToolCategory.CAUSAL,
-            source_agent="causal_impact",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "causal_result": {"type": "object"},
-                    "gamma_range": {"type": "array", "items": {"type": "number"}},
-                },
-                "required": ["causal_result"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "e_value": {"type": "number"},
-                    "robustness_value": {"type": "number"},
-                    "sensitivity_plot_data": {"type": "array"},
-                },
-            },
-            can_consume_from=["causal_effect_estimator"],
-        ),
-        # =====================================================================
-        # HETEROGENEOUS OPTIMIZER TOOLS
-        # =====================================================================
-        ToolSchema(
-            name="cate_analyzer",
-            description="Computes Conditional Average Treatment Effects by segment",
-            category=ToolCategory.SEGMENTATION,
-            source_agent="heterogeneous_optimizer",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "causal_result": {"type": "object"},
-                    "segment_cols": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["segment_cols"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "segments": {"type": "array"},
-                    "effect_by_segment": {"type": "object"},
-                    "high_responders": {"type": "array"},
-                    "feature_importance": {"type": "object"},
-                },
-            },
-            can_consume_from=["causal_effect_estimator"],
-        ),
-        ToolSchema(
-            name="segment_ranker",
-            description="Ranks segments by treatment effect or ROI",
-            category=ToolCategory.SEGMENTATION,
-            source_agent="heterogeneous_optimizer",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "cate_result": {"type": "object"},
-                    "rank_by": {"type": "string", "enum": ["effect", "roi", "volume", "uplift"]},
-                    "top_n": {"type": "integer", "default": 10},
-                },
-                "required": ["cate_result"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "ranked_segments": {"type": "array"},
-                    "targeting_recommendations": {"type": "array"},
-                },
-            },
-            can_consume_from=["cate_analyzer"],
-        ),
-        # =====================================================================
-        # GAP ANALYZER TOOLS
-        # =====================================================================
-        ToolSchema(
-            name="gap_calculator",
-            description="Calculates performance gaps between entities",
-            category=ToolCategory.GAP,
-            source_agent="gap_analyzer",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "entity_type": {"type": "string"},
-                    "metric": {"type": "string"},
-                    "group_by": {"type": "string"},
-                    "benchmark": {
-                        "type": "string",
-                        "enum": ["mean", "median", "top_decile", "target"],
-                    },
-                },
-                "required": ["entity_type", "metric"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "gaps": {"type": "array"},
-                    "top_performers": {"type": "array"},
-                    "bottom_performers": {"type": "array"},
-                    "total_opportunity": {"type": "number"},
-                },
-            },
-            can_consume_from=[],
-        ),
-        ToolSchema(
-            name="roi_estimator",
-            description="Estimates ROI of closing performance gaps",
-            category=ToolCategory.GAP,
-            source_agent="gap_analyzer",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "gap_result": {"type": "object"},
-                    "intervention_cost": {"type": "number"},
-                    "time_horizon_months": {"type": "integer", "default": 12},
-                },
-                "required": ["gap_result"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "estimated_roi": {"type": "number"},
-                    "breakeven_months": {"type": "number"},
-                    "npv": {"type": "number"},
-                    "confidence_range": {"type": "array"},
-                },
-            },
-            can_consume_from=["gap_calculator"],
-        ),
-        # =====================================================================
-        # EXPERIMENT DESIGNER TOOLS
-        # =====================================================================
-        ToolSchema(
-            name="power_calculator",
-            description="Calculates statistical power and required sample size",
-            category=ToolCategory.EXPERIMENT,
-            source_agent="experiment_designer",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "effect_size": {"type": "number"},
-                    "baseline_rate": {"type": "number"},
-                    "sample_size": {"type": "integer"},
-                    "alpha": {"type": "number", "default": 0.05},
-                    "power_target": {"type": "number", "default": 0.8},
-                },
-                "required": ["effect_size"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "power": {"type": "number"},
-                    "required_sample_size": {"type": "integer"},
-                    "minimum_detectable_effect": {"type": "number"},
-                    "duration_estimate_weeks": {"type": "integer"},
-                },
-            },
-            can_consume_from=["causal_effect_estimator", "cate_analyzer"],
-        ),
-        ToolSchema(
-            name="counterfactual_simulator",
-            description="Simulates counterfactual outcomes for what-if scenarios",
-            category=ToolCategory.EXPERIMENT,
-            source_agent="experiment_designer",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "baseline": {"type": "object"},
-                    "intervention": {"type": "object"},
-                    "target_population": {"type": "object"},
-                    "causal_model": {"type": "object"},
-                },
-                "required": ["baseline", "intervention"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "predicted_outcome": {"type": "number"},
-                    "confidence_interval": {"type": "array"},
-                    "lift_percentage": {"type": "number"},
-                    "assumptions": {"type": "array"},
-                    "caveats": {"type": "array"},
-                },
-            },
-            can_consume_from=["causal_effect_estimator", "cate_analyzer", "gap_calculator"],
-        ),
-        # =====================================================================
-        # PREDICTION SYNTHESIZER TOOLS
-        # =====================================================================
-        ToolSchema(
-            name="risk_scorer",
-            description="Scores entities by predicted risk",
-            category=ToolCategory.PREDICTION,
-            source_agent="prediction_synthesizer",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "entity_type": {"type": "string"},
-                    "risk_type": {"type": "string"},
-                    "time_horizon_days": {"type": "integer", "default": 90},
-                },
-                "required": ["entity_type", "risk_type"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "scores": {"type": "array"},
-                    "high_risk_entities": {"type": "array"},
-                    "risk_factors": {"type": "object"},
-                    "model_performance": {"type": "object"},
-                },
-            },
-            can_consume_from=[],
-        ),
-        ToolSchema(
-            name="propensity_estimator",
-            description="Estimates propensity scores for treatment assignment",
-            category=ToolCategory.PREDICTION,
-            source_agent="prediction_synthesizer",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "treatment_col": {"type": "string"},
-                    "covariates": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["treatment_col", "covariates"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "propensity_scores": {"type": "array"},
-                    "balance_statistics": {"type": "object"},
-                    "overlap_assessment": {"type": "object"},
-                },
-            },
-            can_consume_from=[],
-        ),
-        # =====================================================================
-        # DRIFT MONITOR TOOLS
-        # =====================================================================
-        ToolSchema(
-            name="psi_calculator",
-            description="Calculates Population Stability Index for drift detection",
-            category=ToolCategory.MONITORING,
-            source_agent="drift_monitor",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "feature_name": {"type": "string"},
-                    "reference_period": {"type": "string"},
-                    "comparison_period": {"type": "string"},
-                },
-                "required": ["feature_name"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "psi_value": {"type": "number"},
-                    "drift_severity": {"type": "string"},
-                    "bin_contributions": {"type": "array"},
-                },
-            },
-            can_consume_from=[],
-        ),
-        ToolSchema(
-            name="distribution_comparator",
-            description="Compares distributions between periods or segments",
-            category=ToolCategory.MONITORING,
-            source_agent="drift_monitor",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "columns": {"type": "array", "items": {"type": "string"}},
-                    "group_a": {"type": "object"},
-                    "group_b": {"type": "object"},
-                    "tests": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["columns"],
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "test_results": {"type": "array"},
-                    "significant_differences": {"type": "array"},
-                    "visualization_data": {"type": "object"},
-                },
-            },
-            can_consume_from=[],
-        ),
-    ]
+    # Function-local: registering the tools imports the causal engine, which this
+    # module's other users do not need.
+    from src.agents.tool_composer import tool_registrations  # noqa: F401
+    from src.tool_registry.registry import get_registry as get_live_registry
+    from src.tool_registry.tools.causal_discovery import register_all_discovery_tools
+    from src.tool_registry.tools.model_inference import register_model_inference_tool
+    from src.tool_registry.tools.structural_drift import register_structural_drift_tool
+
+    live = get_live_registry()
+    register_all_discovery_tools()
+    register_model_inference_tool()
+    register_structural_drift_tool()
+
+    tools = []
+    for name, (category, can_consume_from) in TOOL_METADATA.items():
+        registered = live.get(name)
+        if registered is None:
+            raise LookupError(f"tool '{name}' is not registered in the live tool registry")
+        if registered.pydantic_output_model is None:
+            raise LookupError(f"tool '{name}' registered no output model")
+        tools.append(
+            ToolSchema(
+                name=name,
+                description=registered.schema.description,
+                category=category,
+                source_agent=registered.schema.source_agent,
+                input_schema=_input_schema(registered.schema.input_parameters),
+                output_schema=registered.pydantic_output_model.model_json_schema(),
+                fn=registered.callable,
+                avg_latency_ms=float(registered.schema.avg_execution_ms),
+                can_consume_from=list(can_consume_from),
+            )
+        )
+    return tools
 
 
 # Global registry instance
