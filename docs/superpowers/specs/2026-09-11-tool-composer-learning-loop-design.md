@@ -169,10 +169,14 @@ weeks, and zero since 2026-08-16.** Per-tool samples are in single digits.
    - Episodic references present a PARTIAL run as a clean "successful composition".
    - With the loop, a plan whose composition failed, or had a plan defect, is evicted from the plan
      cache. Episodic references recommend only the steps that succeeded and list what did not work (§7.3).
-5. **The planner sees measured latency and a reliability caveat only when the evidence clears a
-   calibrated bar** (§7). At today's volume the bar is not reached, and the planner prompt is unchanged.
-   That silence is the correct behaviour, and a test pins it.
-6. **The DB registry matches the code on every boot** with no migration per schema change. That covers
+5. **Every planned step runs, in dependency order.** Today a step that the LLM leaves out of
+   `parallel_groups` never executes, and a consumer grouped with its producer runs before its input
+   exists (§7.4, measured).
+6. **Measured reliability reaches the planner only after an experiment shows it changes the planner's
+   choice** (§7.2).
+   - The reliability rule is calibrated on planted truth (§7.1).
+   - At today's volume it cannot fire. Its first effect is the admin surface.
+7. **The DB registry matches the code on every boot** with no migration per schema change. That covers
    all 20 live tools, including `cohort_*` and `model_inference`.
 
 ## 4. Registry sync (replaces the migration-per-schema-change regime)
@@ -298,17 +302,23 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 
 **`composer_episodes`:**
 - Add:
-  - `audit_workflow_id uuid`: the audit chain's `workflow_id` for this run (`context["audit_workflow_id"]`,
-    set at `composer.py:290` before decomposition). It is the identity join for coverage reconciliation.
-    `audit_chain_entries` has no free-form input column to carry a composition_id; it stores
-    `input_hash`, per the §2.3 column list.
+  - `audit_workflow_id uuid`, nullable: the audit chain's `workflow_id` for this run.
+    - It comes from the **local** `audit_workflow_id` variable in `compose()` (`composer.py:272`, assigned
+      at `:289` only when the audit start succeeds). It is never read from `context`, which a caller can
+      pre-populate.
+    - It is NULL when no audit service is wired or the audit start raised.
+    - It joins episodes to audit rows. `audit_chain_entries` has no free-form input column to carry a
+      composition_id. Its measured columns are entry_id, workflow_id, sequence_number, agent_name,
+      agent_tier, action_type, created_at, duration_ms, input_hash, output_hash, validation_passed,
+      confidence_score, refutation_results, previous_entry_id, previous_hash, entry_hash, user_id,
+      session_id, query_text and brand.
   - `outcome text CHECK IN ('success','partial','failed','cancelled')`, because `composition_status` has
     no PARTIAL and `status` keeps the terminal enum value (COMPLETED / FAILED / TIMEOUT).
     - A cancel is `cancelled`, not `timeout`: `CancelledError` alone does not prove a deadline expired.
     - The orchestrator's 180 s SLA (`router.py:298`) is one cause; a client disconnect or a shutdown are
       others.
     - The enum value `TIMEOUT` stays unused until a caller passes an explicit deadline reason.
-  - `failed_phase text`;
+  - `failed_phase text`, `error_type text` (§5.3 item 4);
   - `plan_source text CHECK IN ('llm','plan_cache','kpi_deterministic')`: whether the plan came from the
     LLM planner, the in-process plan cache or `_build_kpi_causal_plan` (§7.3);
   - `entry_point text` (`chat_tool` / `orchestrator_agent` / `direct`);
@@ -327,7 +337,7 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
     'plan_defect','dependency_unmet','circuit_open','not_registered')`;
   - `attempts int`;
   - `cache_hit boolean NOT NULL DEFAULT false`;
-  - `error_type text`: the exception class name, for aggregation. The message is redacted (§5.5).
+  - `error_type text`: the exception class name, for aggregation. No message is stored (§5.5).
 - `step_number` is the step's index in `plan.steps`, fixed at plan time, so it does not depend on
   completion order. It makes `(episode_id, step_number)` a stable idempotency key (the existing
   `unique_step_in_episode`).
@@ -359,16 +369,18 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 1. **`compose()` start.**
    - Generate `composition_id` up front and pass it into every `CompositionResult` built later,
      including `_create_error_result` and `_create_total_failure_result`.
-   - Build the episode **seed**: redacted query, session_id, user_id, entry_point
-     (`context["entry_point"]`, set by the two entry points), brand, region, audit_workflow_id, and
+   - **After** the audit-start attempt (`composer.py:272–293`), build the episode **seed**: redacted
+     query, session_id, user_id, entry_point (`context["entry_point"]`, set by the two entry points),
+     brand, region, the local nullable `audit_workflow_id`, and
      `is_synthetic = deployment_includes_synthetic()` (`src/repositories/provenance.py:95`).
    - Enqueue `composer_record_start(seed)` on the recorder's chain. It is not awaited.
-2. **After decompose / plan / execute**, enqueue `composer_record_phase` with:
+2. **After decompose / plan / execute**, update the recorder's in-memory **snapshot** and enqueue
+   `composer_record_phase` with that phase's delta:
    - the new status and the phase latency;
-   - `sub_questions`: id, intent, question text redacted to 200 chars;
+   - `sub_questions`: id and intent only (no text, §5.5);
    - `tool_plan`: steps with step_id, step_number, tool_name, depends_on, input_mapping keys and `$step`
      references;
-   - `plan_source`;
+   - `plan_source`, and whether the execution order was repaired (§7.4);
    - `parallelizable_groups`, sent by execute.
 3. **Per finished step, during execution.** `PlanExecutor.execute` gains an optional
    `on_step_result(step_number, StepResult)` callback. It is invoked the moment a step's `StepResult`
@@ -383,8 +395,16 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
    - A step that was still running when a cancel arrived has no result and is not recorded. The episode
      says `cancelled` in phase `execute`.
    - The callback is synchronous and only enqueues (no I/O), so it cannot slow or fail a step.
-4. **Terminal**, enqueue `composer_record_finish` with outcome, status, failed_phase, redacted error,
-   per-phase and total latency, and counts. The terminal paths are:
+4. **Terminal**, enqueue `composer_record_finish` with the **complete snapshot**, so every field a lost
+   phase write carried is restored:
+   - outcome, status, failed_phase;
+   - the episode's `error_type` (the caught exception's class, and the inner class for wrapped
+     Decomposition/Planning/ExecutionError). No error text (§5.5);
+   - every phase latency and the total;
+   - sub-question ids and intents, `tool_plan`, `plan_source`, the order-repair flag, parallel groups;
+   - counts.
+
+   The terminal paths are:
    - success or partial (end of `compose`);
    - `_create_total_failure_result`;
    - `_fail_closed` (Decomposition / Planning / Execution / unexpected);
@@ -486,16 +506,24 @@ on truncation to hide them.
   - Lists are `{"type":"list","len":n}`, dicts `{"type":"dict","keys":[…]}`, DataFrames
     `{"type":"frame","rows":r,"columns":c}`.
   - Entity id lists (for example `target_entities`) are therefore never stored.
-- **Errors.** `error_type` (exception class) plus `outcome_class` is the aggregation key. `error_message`
-  is stored **only** for `ToolRefusalError` / `ToolInputError`, and bounded to 300 characters:
-  - Those are tool-authored reasons written for the user. #1574's scope disclosures are returned
-    verbatim in the chat answer (`composer.py:1055–1065`), so storing them adds no new exposure.
-  - Every other exception (generic, timeout, not-registered) stores `error_type` only, because arbitrary
-    exception text can echo input values.
-  - A test raises real tool exceptions whose text carries an input value and pins that the value is
-    absent from every persisted column.
+- **Errors: no error text is persisted, at step or episode level.** `error_type` (exception class) plus
+  `outcome_class` (plus `failed_phase` for episodes) is what is stored and aggregated.
+  - Refusal text can name data values: #1574's disclosure lists the entity groups a frame covered.
+  - Generic exception text can echo inputs.
+  - The composer already returns every failed step's reason text in the total-failure chat answer
+    (`composer.py:1033–1065`), generic exceptions included. That is a pre-existing exposure of the chat
+    surface, recorded in §10. It is not a justification for copying the text into a new store.
+  - `composition_steps.error_message` and `composer_episodes.error_message` stay NULL.
+  - **What is lost:** the admin surface can say "gap_calculator: refused (ToolRefusalError)", but not
+    *why*. Structured refusal reason codes would restore that safely. They need changes in
+    `tool_registrations.py`, which LANE-2015 and LANE-2016 are editing now, so they are recorded in §10
+    as a follow-up.
+  - A test raises real tool exceptions (refusal, input error, generic `KeyError`) whose text carries an
+    input value, and pins that the value is absent from every persisted column.
 - **Sub-question text** is not stored; id and intent are.
 - **Output:** keys only (`output_result = {"keys":[…]}`).
+- **Guarantee, stated narrowly:** the only free text this lane persists is the query (next item). Every
+  other stored string is a column name, a tool or step identifier, a class name or an enum value.
 - **Query text is stored, `redact_query(query, 500)`.** This is a deliberate decision, not a redaction
   claim.
   - The query is needed for the admin failure list and the reuse audit.
@@ -558,16 +586,28 @@ an ordering and staleness problem for no measurable gain.
     failure classes.
   - **It is harmful as written:** no minimum n, so one failed run writes `success_rate = 0`.
   - **It has never had a caller.**
-- **Untouched:** `v_classification_accuracy` (#1341) and `get_tool_execution_order()`. The latter has
-  no consumer; the executor orders with `ExecutionPlan.get_execution_order()`. Its `{NULL}` defect is
-  listed in §10.
+- **Dropped:** `get_tool_execution_order(text[])`.
+  - **Intent (verified):** `v4.2_IMPLEMENTATION_TODO.md` @3e1c70cf4: "Implement `optimize_plan()` using
+    `get_tool_execution_order()` — Call Supabase function for topological sort — Identify parallelizable
+    tool groups".
+  - **History:** its only other references are "post-migration test" comments in ml/013 L1230 and ml/027
+    (`b23c17355`).
+  - **Why the function cannot serve that intent:** it orders *tool names* by *tool-level* dependencies.
+    A plan is a list of *steps*, which can call one tool twice or use a consumer without its producer.
+    Only the plan's `depends_on_steps` describes the real graph.
+  - **The intent is real and currently unmet at runtime:** `ExecutionPlan.get_execution_order()` returns
+    the LLM's `parallel_groups` unchecked (`models/composition_models.py:167–172`, no validation in
+    `planner._validate_plan`). §7.4 repairs that in-process, at step level, and the function is dropped.
+  - It also returns `{NULL}` for root tools (§2.3) and is EXECUTE-able by `anon`.
+- **Untouched:** `v_classification_accuracy` (#1341).
 
 ## 7. Feedback into behaviour
 
 ### 7.1 Reliability rule, calibrated on planted truth at production n
 
 The rule is a pure function in the new `src/agents/tool_composer/reliability.py`. It is the one place
-that turns counts into a verdict; the planner and the admin API both call it.
+that turns counts into a verdict. The admin API calls it, and so does the planner integration once
+§7.2's experiment gate passes.
 
 **Denominator.** `n_health = n_succeeded + n_health_failures`. Refusals never enter it, so twenty
 refusals cannot qualify a tool for a verdict. The health-failure rate is `n_health_failures / n_health`.
@@ -599,35 +639,57 @@ n = 5.**
 - **False caveats are rare at every n** (≤ 0.2% for a 5% tool at n ≥ 20).
 - **A 30% failing tool is caught** 76% of the time at n = 20 and 94.5% at n = 40.
 - **The n ≥ 20 floor removes the n = 5 false-caveat tail** (2.3% at p = 0.05).
-- **At production n** (≤ 7 invocations per tool so far) every tool reads `too_few_runs`, and the planner
-  prompt does not change. A test pins that silence.
+- **At production n** (≤ 7 invocations per tool so far) every tool reads `too_few_runs`. A test pins
+  that.
 
-### 7.2 What changes in planning
+### 7.2 Measured reliability into planning: built, experiment-gated
 
-- **Where the numbers come from.** A `ToolReliabilityReader` calls `get_tool_reliability(30)` through
-  the service client.
-  - It caches per process for 300 s, so each worker makes one read per 5 minutes, not one per plan.
-  - It is fail-open: on any error it returns `{}`, and planning uses the declared numbers as today.
-- **Planner prompt** (`planner.py:371`) and **DSPy formatter** (`dspy_integration.py:189–225`) both go
-  through one shared formatter:
-  - Declared latency is labelled "(declared)".
-  - At `n_succeeded` ≥ 20 the measured median replaces it: "Measured median 1.8 s over 24 successful
-    runs (30 days)".
-  - On `caveat` a line is added: "Reliability caveat: 6 of 24 runs failed on tool errors (timeout)".
-    Refusals are shown only as a count.
-- **`_estimate_duration`** (`planner.py:955`) uses the measured median at `n_succeeded` ≥ 20.
-- **Reader population.** The reader passes `p_include_synthetic = deployment_includes_synthetic()` (§6).
-- **Deliberately not done (feedback-loop guards):**
-  - no automatic removal of a tool from the offer;
-  - no reranking;
-  - no seeding of the circuit breaker;
-  - no change to `_get_fallback_mapping`.
+**Measured.**
+- At production volume, the §7.1 rule returns `too_few_runs` for every tool, so no planner-visible
+  reliability signal can exist for months.
+- Whether a reliability line in the planning prompt changes the LLM's tool choice has never been
+  measured. A caveat nobody has shown to change a decision is a label.
+- `ExecutionPlan.estimated_duration_ms` (`planner._estimate_duration`) has **no consumer**. grep:
+  its only other use copies it into an adapted plan (`planner.py:323`). Feeding it measured latency
+  would change a number nobody reads, so this design does not.
 
-  A caveated tool that the LLM avoids gets fewer runs. If its count then drops below the floor, the
-  caveat disappears. That oscillation is benign, and it is bounded by the 30-day window.
-- **Unverified assumption (labelled):** a caveat line changes the LLM's tool choice when an alternative
-  exists. Nothing measures that yet, and it cannot matter until a tool reaches n_health ≥ 20. The plan records
-  it as a follow-up measurement, not a claim.
+**What this lane builds.**
+1. **`ToolReliabilityReader`** (`src/agents/tool_composer/reliability.py`):
+   - calls `get_tool_reliability(30, deployment_includes_synthetic())` through the service client;
+   - caches per process for 300 s;
+   - fail-open: returns `{}` on any error.
+
+   The admin API uses it (§8).
+2. **The planner integration, behind `TOOL_COMPOSER_RELIABILITY_IN_PLANNER` (default off).**
+   - One shared formatter serves the planner prompt (`planner.py:371`) and the DSPy formatter
+     (`dspy_integration.py:189–225`).
+   - On `caveat` it adds "Reliability caveat: 6 of 24 runs failed on tool errors (timeout)".
+   - At `n_succeeded` ≥ 20 it replaces the declared latency with the measured median.
+   - With the flag off, the prompt is byte-identical to today, and a test pins that.
+3. **The experiment that decides the flag** (`scripts/benchmarks/tool_composer/reliability_caveat_experiment.py`):
+   - **Paired, real-LLM planner calls on fixed real decompositions.** Each decomposition names a
+     sub-question that two registered tools can each answer, for example `psi_calculator` /
+     `distribution_comparator` or `risk_scorer` / `propensity_estimator`. The planner is otherwise
+     free to choose.
+   - **Arms:** A = today's prompt; B = the same prompt with a planted caveat on the tool that arm A
+     picks most.
+   - **Pre-registered pass rule:** in arm B the caveated tool's selection rate falls by ≥ 30 percentage
+     points against arm A, over K ≥ 30 pairs. Fisher exact one-sided p < 0.05. No increase in planning
+     failures (`PlanningError` or `plan_defect`) in arm B.
+   - **Cost:** 2K planner calls with thinking disabled, about 1,000 output tokens each (`composer.py:71–90`).
+     The spend needs the owner's authorization (O2).
+   - **Result handling:** the result is committed under `docs/demos/results/`. The flag default flips
+     to on only in a follow-up commit that cites a passing result. A failing result leaves the flag off
+     and records why.
+
+**Feedback-loop guards, whatever the flag:**
+- no automatic removal of a tool from the offer;
+- no reranking;
+- no circuit-breaker seeding;
+- no change to `_get_fallback_mapping`.
+
+A caveated tool that the LLM avoids gets fewer runs. If its `n_health` then drops below the floor, the
+caveat disappears. That oscillation is benign, and the 30-day window bounds it.
 
 ### 7.3 Similar-composition reuse
 
@@ -715,7 +777,33 @@ two live rows repeat `gap_calculator`.
   §7.2, only a paired LLM measurement would prove it. The deterministic part (what the planner is told to
   reuse) is what this lane guarantees.
 
-### 7.4 In-memory G8
+### 7.4 Dependency-aware execution order (the intent of `get_tool_execution_order`)
+
+**Measured (probe on `models/composition_models.py`, 2026-09-11).** `ExecutionPlan.get_execution_order()`
+returns the LLM's `parallel_groups` unchecked:
+- groups `[["a"]]` for steps a, b → `[["a"]]`: **step b never executes**;
+- groups `[["a","b"]]` where b depends on a → `[["a","b"]]`: the consumer runs **in parallel with** its
+  producer, and its `$a.…` reference cannot resolve;
+- groups `[]` → `[["a"],["b"]]`: sequential, which is correct but never parallel.
+
+`planner._validate_plan` checks tool names and dependency ids, not groups (`planner.py:662–712`). Cached
+plans reuse the same groups (`planner.py:324`). The design intent ("dependency-aware execution DAG …
+identify parallelizable tool groups", §6) is therefore unmet at runtime.
+
+**New behaviour.** `get_execution_order()` accepts the given groups only when:
+- every step appears exactly once;
+- no group names an unknown step;
+- every `depends_on_steps` entry sits in a strictly earlier group.
+
+Otherwise it returns the **topological levels** of `depends_on_steps` (steps with all dependencies in
+earlier levels run together). Cycles are already rejected by `planner._check_cycles`. The plan records
+`execution_order_repaired` and the violated condition. The episode's `tool_plan` carries both, so the
+frequency becomes measurable.
+
+The deterministic KPI plan's groups (`composer.py:829–869`) satisfy all three conditions, so it is
+unchanged. A test pins that.
+
+### 7.5 In-memory G8
 
 `PlanExecutor.update_tool_performance` (`executor.py:1312–1375`) is deleted with its mock tests
 (`test_executor.py` ~L1611–1685).
@@ -767,21 +855,21 @@ per-tool drill-down there would split one reading across two surfaces.
        - The restore therefore first creates the `extensions` schema with `pgcrypto` / `uuid-ossp`, and
          includes the `auth` schema definition (`-n auth`, schema only).
        - The first plan task proves the restore is clean before any test depends on it.
-    2. Run the **real** `scripts/run_migrations.sh` in URL mode (`SUPABASE_DB_URL` pointing at the
-       throwaway database). It must report exactly 039, 040 and 041 pending and apply them in its own
-       directory order.
-       - The test asserts the runner's branch per file: 039 un-wrapped, because of `ALTER TYPE … ADD
-         VALUE`; 040 and 041 wrapped with their ledger rows.
-       - It asserts that no `ADD VALUE` or `CONCURRENTLY` text appears in 040/041, even in a comment-free
-         form, so they cannot silently fall into the un-wrapped branch.
-    3. Run it again: 0 pending.
-    4. **Partial-application recovery.**
-       - Force 041 to fail on its last statement in a copy (append `SELECT 1/0;`) and run the runner. The
-         transaction rolls back, and no ledger row is written for 041.
-       - Restore the file and run again: 041 applies.
-       - For 039 (un-wrapped): re-running after a recorded or unrecorded apply is a no-op.
-    5. Apply 039/040/041 directly a second time (040/041 with `psql --single-transaction`, 039 without):
-       idempotent re-apply.
+    2. **Failure first, on a fresh fixture.**
+       - Point the runner at a temporary copy of the repository's `scripts/` and `database/` trees in
+         which 041 ends with `SELECT 1/0;`, then run it in URL mode (`SUPABASE_DB_URL` = the throwaway
+         database).
+       - Expected: 039 applied un-wrapped and recorded, 040 applied wrapped and recorded, 041 failed.
+         No 041 ledger row and none of 041's objects are present, because body and ledger row share one
+         transaction (`scripts/run_migrations.sh:181–184`).
+    3. **Then the real files.** Run the real `scripts/run_migrations.sh` against the same database. It must
+       report exactly 041 pending and apply it. Run it again: 0 pending.
+    4. **Branch assertions.** The test re-implements the runner's detector exactly: strip `--` comments,
+       then match `ALTER TYPE … ADD VALUE`, `CONCURRENTLY` or a bare `COMMIT;` (`run_migrations.sh:175–177`).
+       It asserts 039 matches and 040/041 do not, so neither can silently fall into the un-wrapped
+       branch.
+    5. **Idempotent re-apply.** Apply 039 (plain `psql`) and 040/041 (`psql --single-transaction`)
+       directly a second time; no error and no row changes.
     6. Assert objects, grants and the sync results.
   - **Functional SQL tests** (sync guards, idempotent step/finish receipts, the dependency-endpoint
     check, `RETURNING (xmax = 0)` counts, reliability denominators, provenance filter) run on that
@@ -815,6 +903,11 @@ per-tool drill-down there would split one reading across two surfaces.
 - **Recorder failure modes** (psycopg transport against the throwaway database):
   - start write fails (database stopped for the start call only), then phase, steps and finish land: one
     episode with every field;
+  - a phase write exhausts its retry: finish restores sub-question ids, `tool_plan`, `plan_source`, groups
+    and latencies;
+  - audit identity: no audit service, audit start raising, and a caller-supplied stale
+    `context["audit_workflow_id"]`. All three give an episode whose `audit_workflow_id` is NULL, or the
+    run's real id, never the stale one;
   - a lost response re-sent: identical receipts, no duplicate rows;
   - finish twice: `already_terminal`;
   - shutdown drain: the pending set is flushed within 5 s.
@@ -829,6 +922,15 @@ per-tool drill-down there would split one reading across two surfaces.
   does not get the cached steps. A succeeded composition keeps them (positive control). A
   `kpi_deterministic` plan never touches the cache.
 - **Episodic references.** The four shapes listed in §7.3.
+- **Execution order.** The three measured shapes from §7.4 (omitted step, consumer grouped with its
+  producer, empty groups) plus a valid plan and the KPI deterministic plan. Invalid groups are repaired to
+  topological levels and flagged; valid ones are returned unchanged. A real `PlanExecutor` run over the
+  omitted-step plan executes every step.
+- **Planner integration flag.** With `TOOL_COMPOSER_RELIABILITY_IN_PLANNER` unset, the planner and DSPy
+  prompts are byte-identical to the pre-change prompt for the same registry. With it set and a `caveat`
+  verdict, the caveat line appears.
+- **Caveat experiment** (§7.2). It runs only after the owner authorizes the spend (O2). Its result file
+  and the flag decision are committed with it.
 - **Composer wiring.** An opt-in real-LLM run (`E2I_LIVE_LLM=1`) records to the throwaway database
   through the psycopg transport, plus the live cert.
 - **Reliability rule.** The planted-truth test reproduces the §7.1 table bounds: false caveat ≤ 1% at
@@ -851,12 +953,14 @@ per-tool drill-down there would split one reading across two surfaces.
   7. **Latency.** Compose wall time is within noise of the pre-deploy baseline for the same questions.
      Recorder write durations are logged at DEBUG, with p50 and max reported.
   8. **Coverage, by identity.**
-     - The cert script records every composition it triggers (session_id, request time).
+     - The cert script gives every composition it triggers a unique session_id and records it with the
+       request time. `composer_episodes.session_id` joins that list independently of the audit chain.
      - Over the cert window, three sets are compared:
        - the cert's triggered list;
        - `audit_chain_entries` `workflow_start` rows for `tool_composer`, by `workflow_id`;
-       - `composer_episodes`, by `audit_workflow_id`.
-     - Every triggered composition must appear in both stores, with the same workflow_id.
+       - `composer_episodes`, by session_id, and to audit rows by `audit_workflow_id`.
+     - Every triggered composition must have an episode. Where its audit row exists, the episode's
+       `audit_workflow_id` must equal that row's workflow_id.
      - A composition present in one store and missing from the other is listed with
        `composer_record_failures_total` and the recorder's WARNING lines.
      - Audit writes are also fail-open (`composer.py:272–294`), so a miss is attributed to whichever store
@@ -887,7 +991,13 @@ per-tool drill-down there would split one reading across two surfaces.
 - **A circuit breaker shared across requests or workers.**
 - **`chatbot_analytics.tools_succeeded` / `tools_failed` / `tool_composer_used`,** which the chat writer
   never fills (`copilotkit.py:1859–1905`). That is a chat-analytics defect, separate from this loop.
-- **Fixing `get_tool_execution_order()`'s `{NULL}`.** It has no consumer.
+- **Structured refusal reason codes** on `ToolRefusalError` / `ToolInputError`. They would let the admin
+  surface say *why* a tool refused without storing free text (§5.5). They need changes in
+  `tool_registrations.py`, which LANE-2015 and LANE-2016 are editing, so they are a follow-up issue to
+  file after those lanes merge.
+- **The chat surface's existing exposure of failure text.** The composer's total-failure answer already
+  returns every failed step's error text, generic exceptions included (`composer.py:1033–1065`). Found in
+  review, this is pre-existing, and it should be filed with the reason-code follow-up.
 - **Procedural-memory `tool_composition` patterns.**
 - **`tool_performance` rows from non-composer callers** (`called_by='agent'|'direct'`); none exist.
 - **A retention/purge job** (§5.5).
@@ -906,19 +1016,23 @@ per-tool drill-down there would split one reading across two surfaces.
   - **Recommendation:** build it in this lane as the last functional task, so the feature is not left
     to be chased later. It reverses if the owner prefers to wait for feedback volume. The plan marks it
     as a task gated on this answer.
-- **O2. The planner-prompt caveat.** §7.2's thresholds (n_health ≥ 20, 10% health-failure bar) are calibrated
-  (§7.1), but whether a caveat line changes LLM tool choice is unmeasured, and it is dormant at current
-  volume.
-  - **Recommendation:** ship it dormant with the planted-truth test.
-  - The fact that would reverse this: the owner wants no automatic prompt changes from telemetry,
-    #1341-style human-gated authority. In that case the verdicts go only to the admin surface.
-- **O3. Dropping designed DB objects:** `find_similar_compositions()`, `composer_episodes.query_embedding`
-  plus the ivfflat index, `update_tool_registry_metrics()`, `trg_log_step_performance`,
-  `tool_registry.success_rate`.
+- **O2. Authorize the caveat experiment's LLM spend (§7.2).**
+  - What it is: 2K ≥ 60 planner calls on the production provider, with thinking disabled.
+  - The planner integration is built behind a default-off flag either way. Only a passing, committed
+    result turns it on.
+  - **Recommendation:** authorize it, but run it once any tool reaches `n_health` ≥ 20. Before that the
+    rule cannot fire, so a pass would change nothing in production.
+  - The fact that would reverse this: the owner wants no automatic prompt changes from telemetry at all,
+    #1341-style human-gated authority. In that case the flag and the experiment are removed, and
+    verdicts go only to the admin surface.
+- **O3. Dropping designed DB objects:** `find_similar_compositions()`, `update_tool_registry_metrics()`,
+  `get_tool_execution_order()`, `composer_episodes.query_embedding` plus the ivfflat index,
+  `trg_log_step_performance`, `tool_registry.success_rate`.
   - **The three functions and the column** (`find_similar_compositions`, `update_tool_registry_metrics`,
-    `query_embedding`) have had no caller or writer since they were created. Their intent is served by a
-    store that is live, episodic memory or `get_tool_reliability` (§6, §7.3). `update_tool_registry_metrics`
-    also has a measured defect: no minimum n (§2.3).
+    `get_tool_execution_order`; `query_embedding`) have had no caller or writer since they were created.
+    Their intents are served by live paths: episodic memory (§7.3), `get_tool_reliability` (§6), and
+    step-level execution order (§7.4). `update_tool_registry_metrics` has a measured defect (no minimum
+    n) and so does `get_tool_execution_order` (`{NULL}`), both in §2.3.
   - **The trigger** `trg_log_step_performance` is not "unused". It is attached, and it would fire, but its
     semantics are measured wrong: it misses inserted terminal steps and double-counts COMPLETED→FAILED
     (§2.3). Its intent (a performance row per finished step) is kept in the step RPC (§5.2).
