@@ -250,6 +250,8 @@ def test_the_assumptions_name_the_contrast_the_estimate_answers(whole_population
     for fragment in ("email_campaign_count", "conversion_rate", "median", "market_share"):
         assert fragment in text, fragment
     assert "synthetic" in text
+    assert f"recommended_sample_size = {out.recommended_sample_size} per arm" in text
+    assert "unadjusted" in text
 
 
 def test_a_failed_engine_run_is_refused_not_reported(engine, provider):

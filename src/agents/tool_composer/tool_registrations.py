@@ -3180,7 +3180,8 @@ def _experiment_size(frame: Any, regions: List[str], effect: float) -> Tuple[Opt
         f"recommended_sample_size = {per_arm} per arm: a two-sided, equal-allocation test at "
         f"power {policy.power:g} and alpha {policy.alpha:g} for Cohen's d = |effect| / SD of "
         f"{frame.outcome_var} ({sd:.4g}, among the {n_rows} rows of {scope} at or below the "
-        f"median {frame.treatment_var}) = {d:.3g}."
+        f"median {frame.treatment_var}) = {d:.3g}. The SD is unadjusted, so this is "
+        "conservative next to the covariate-adjusted effect estimate."
     )
 
 
