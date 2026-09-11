@@ -149,6 +149,12 @@ class CATEResults(BaseModel):
     branch on), ``detail`` is the prose for synthesis to disclose, and ``name`` is
     ``None`` for the null-key group — the rows whose segment value is missing name
     no segment, so there is no honest label to give them.
+
+    A ``segments`` entry's ``n`` is the number of rows its CATE is computed from:
+    rows in either arm with a non-null ``outcome`` (#2016). When a segment that IS
+    estimated leaves rows out (a null treatment or outcome), those rows get an
+    ``excluded_segments`` entry with reason ``rows_missing_treatment_or_outcome``
+    and the same ``name``. That code alone does not mean the segment was dropped.
     """
 
     segments: List[Dict[str, Any]]
@@ -1489,6 +1495,9 @@ def sensitivity_analyzer(
 _CATE_EXCLUDED_MISSING = "missing_segment_value"
 _CATE_EXCLUDED_NO_CONTRAST = "no_within_segment_contrast"
 _CATE_EXCLUDED_NON_FINITE = "non_finite_mean_difference"
+# Rows left out of a segment that IS estimated (#2016); the other codes mark a
+# segment or a null-keyed group that is not estimated at all.
+_CATE_EXCLUDED_ROWS_WITHOUT_VALUES = "rows_missing_treatment_or_outcome"
 
 
 @composable_tool(
@@ -1587,7 +1596,7 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
             )
     # Checked over the WHOLE column, null-keyed segments included: one non-0/1 value
     # anywhere means the column is not a treatment indicator (#2016). Null treatment
-    # rows fall in neither arm below, as they always have.
+    # rows fall in neither arm below, as they always have, and leave the segment's n.
     _refuse_unless_binary_01(
         df[treatment],
         tool="cate_analyzer",
@@ -1678,8 +1687,28 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
                 }
             )
             continue
-        segment_dicts.append({"name": name, "cate": cate_val, "n": n})
+        # ``n`` counts the rows the CATE is computed from, not the segment's size
+        # (#2016): ``mean()`` skips a null outcome, and a null treatment sits in
+        # neither arm. Measured on the live Kisqali frame, a segment reported n=2239
+        # for a ``days_to_treatment`` CATE computed from 798 rows.
+        n_used = int(treated.notna().sum() + control.notna().sum())
+        segment_dicts.append({"name": name, "cate": cate_val, "n": n_used})
         effect_by_segment[name] = cate_val
+        if n_used < n:
+            no_treatment = int(sub[treatment].isna().sum())
+            excluded_segments.append(
+                {
+                    "name": name,
+                    "n": n - n_used,
+                    "reason": _CATE_EXCLUDED_ROWS_WITHOUT_VALUES,
+                    "detail": (
+                        f"{no_treatment} rows have no {treatment!r} value and "
+                        f"{n - no_treatment - n_used} further rows have no {outcome!r} "
+                        f"value, so the CATE for this segment uses the other {n_used} "
+                        "rows (the segment itself is still estimated)"
+                    ),
+                }
+            )
 
     if not effect_by_segment:
         no_contrast = sum(1 for e in excluded_segments if e["reason"] == _CATE_EXCLUDED_NO_CONTRAST)
