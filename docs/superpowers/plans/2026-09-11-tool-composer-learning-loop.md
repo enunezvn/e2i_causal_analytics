@@ -81,7 +81,7 @@ Claude-Session: https://claude.ai/code/session_018uHnM6oxkd8sepkqAY3s3o
 |---|---|---|
 | **O1** (spec §11): build the composition feedback linker | Task 16 entirely | skip Task 16 |
 | **O2** (spec §11): authorize the caveat experiment's LLM spend | Task 17 Step 4 (the run) | the flag stays off; the script and analysis tests still ship |
-| **O3** (spec §11): drop the designed DB objects | the `DROP` statements and their tests in Tasks 2–4: `update_tool_registry_metrics`, `success_rate`, `get_tool_execution_order` (040); `find_similar_compositions`, `query_embedding` + index, `trg_log_step_performance` (041) | delete exactly those statements, their `test_*dropped*` assertions and the matching rollback sections. Nothing else depends on them: the RPCs never UPDATE step status, so the trigger cannot fire; the sync never writes `success_rate`. Confirm with one real-DB test that recording works with the objects present. |
+| **O3** (spec §11): drop the designed DB objects | the `DROP` statements and their tests in Tasks 2–4, as **complete dependency pairs**: in 040, `update_tool_registry_metrics()` + `tool_registry.success_rate` (the function reads the column) and `get_tool_execution_order(text[])`; in 041, `find_similar_compositions(vector,integer,double precision)` + `composer_episodes.query_embedding` + `idx_composer_episodes_embedding`, and `trg_log_step_performance` **+** `trigger_log_step_performance()` (the trigger depends on the function) | **Declined variant:** delete every one of those DROP statements (both halves of each pair) and the `test_*dropped*` assertions, and replace them with `test_retained_objects_present`. Nothing else depends on them: the RPCs insert steps and never UPDATE status, so the trigger cannot fire; the sync never writes `success_rate`. Task 3 adds `test_recording_works_with_retained_trigger` (steps inserted with the trigger present: no extra perf rows). The rollbacks need no variant because they are idempotent (Task 4). |
 | **G-LLM** (dispatcher): run the opt-in live-LLM composer test (about 2 real compositions) | Task 10 Step 3 **run** (writing the test is ungated) | leave the test skipped; the live cert (Task 19) is the first real-LLM exercise |
 
 The dispatcher records each answer in the task report before the blocked step starts.
@@ -311,7 +311,7 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
       `error_type`, `last_activity_at`, `tool_performance.is_synthetic` and `tool_version`.
     - `test_outcome_and_class_checks`: an invalid value raises `check_violation`.
     - `test_dropped`: `query_embedding`, its index, `find_similar_compositions`, `trg_log_step_performance`
-      and `trigger_log_step_performance` are gone.
+      and `trigger_log_step_performance` are gone. O3-gated: see the gates table for the declined variant.
   - **RPC contracts:**
     - `test_every_rpc_creates_episode_from_seed`: for each of start / phase / steps / heartbeat / finish
       called **first**, exactly one episode exists afterwards.
@@ -400,8 +400,15 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
        `success_rate`, `update_tool_registry_metrics`, `get_tool_execution_order`) and the new functions
        are gone.
     3. Assert `rollback_040` raises when a `cohort_constructor` row exists, naming it.
+    4. **Idempotency, which covers the O3-declined variant:** run `rollback_041.sql` and `rollback_040.sql`
+       a second time on the rolled-back database, where every 013 object is already present. No error, and
+       no duplicate trigger.
+       - Recreation uses `CREATE OR REPLACE FUNCTION`, `ADD COLUMN IF NOT EXISTS`,
+         `CREATE INDEX IF NOT EXISTS`, `DROP TRIGGER IF EXISTS` + `CREATE TRIGGER`, and
+         `CREATE OR REPLACE VIEW` after `DROP VIEW IF EXISTS`.
+       - Drops of new objects use `IF EXISTS`.
 - [ ] **Step 2: Run.** Expect FAIL: no rollback files.
-- [ ] **Step 3: Write the rollbacks.** Recreate from the ml/013 definitions (L1008–1044, L1054–1113,
+- [ ] **Step 3: Write the rollbacks,** idempotent per Step 1 item 4. Recreate from the ml/013 definitions (L1008–1044, L1054–1113,
   L1143–1197, L983–1003) and the ml/013 views L411–540. Then drop the 041/040 objects. The CHECK restore
   sits in a `DO` block that raises with the offending names.
 - [ ] **Step 4: Run.** Expect PASS. `free -m` first: three fixtures are about 3 dumps.
@@ -471,11 +478,27 @@ def test_restore_reported_no_unexpected_errors(base_db_restore_log):
     registered at runtime", and names `sync_tool_registry`.
 - [ ] **Step 2: Run.** Expect FAIL.
 - [ ] **Step 3: Delete and edit.**
-  - **Do not touch** `ToolCategory` or `get_tools_by_category` (`registry.py:56, 606–616`). They are not part
-    of the retired DB regime; only `register_from_database`'s `category_filter` parameter used the enum.
-    `get_tools_by_category` is a separate documented placeholder ("returns empty list as category is not
-    in ToolSchema"), and classifying it needs its own intent investigation, which is out of this lane. Name
-    it in the task report as an observed placeholder for the dispatcher.
+  - **Also delete `ToolCategory` and `get_tools_by_category`** (`registry.py:56–64, 606–616`, `__all__`
+    entry L778) and their tests (`test_registry.py:67–80` `TestToolCategory`, `:896–901` the placeholder
+    test). Intent investigated 2026-09-11:
+    - **History:** both arrived in `fee8bc3e0` ("G3: Dynamic tool registration from database") together
+      with `register_from_database(category_filter: Optional[ToolCategory])`. `git log -S` shows no later
+      functional change; the only later commits touching the string are doc-rot fixes (`2a536855c`) and
+      the untracking chore (`663012a99`).
+    - **Requested functionality:** category-based lookup of composable tools. It is served today by the
+      composer's own registry, `src/agents/tool_composer/tool_registry.ToolRegistry.get_by_category` /
+      `get_by_domain` (`tool_registry.py:96–109`), backed by `TOOL_METADATA`, the same category source the
+      new sync writes to the DB.
+    - **Harm and fit:** `get_tools_by_category` is a placeholder that logs a warning and returns `[]`
+      (`registry.py:606–616`). The enum's docstring claims it matches "database constraint", but its values
+      (`causal`, `comparative`, `predictive`, …) do not match the DB enum (`CAUSAL`, `SEGMENTATION`, `GAP`,
+      …; §2.3 of the spec).
+    - **Consumers:** none outside `test_registry.py`. The package `src/tool_registry/__init__.py` does not
+      re-export `ToolCategory`. The `get_tools_by_category` in `src/optimization/gepa/tools/causal_tools.py:337`
+      is an unrelated function and is untouched.
+    - **Classification:** DELETE, as part of the G3 surface whose functionality is served elsewhere.
+      Extend `test_no_code_references_the_retired_regime` to `ToolCategory` imported from
+      `src.tool_registry.registry`, and to `get_tools_by_category` outside `src/optimization/gepa/`.
   - The comment at `tool_registry.py:214–216` becomes: "The DB `tool_registry` / `tool_dependencies`
     rows are synced from these definitions at API startup by `registry_sync.sync_tool_registry_once()`
     (ml/040)."
@@ -697,9 +720,15 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
     `ToolPlanner._try_cached_plan(decomposition, available_columns, column_profiles, outcome_hint) -> Optional[ExecutionPlan]`.
     `plan()` calls it unchanged. `PlanSimilarityCache.get_similar` returns `(plan, similarity, key)`, with
     callers updated, so the matched key is preserved through adaptation.
-  - Use `d1` and `d2`: two decompositions with **different** signatures and similarity ≥ 0.8 (for example
-    intents {CAUSAL, COMPARATIVE} with 1 dependency, versus the same plus one entity), and equal
-    sub-question counts.
+  - Use `d1` and `d2`: two decompositions with **different** signatures, similarity ≥ 0.8 and equal
+    sub-question counts. The score is `0.7·Jaccard(intents ∪ entities) + 0.3·dep_similarity`
+    (`cache.py:261–283`). Example:
+    - `d1` = 2 sub-questions, intents {CAUSAL, COMPARATIVE}, entities {Kisqali, TRx}, 1 dependency;
+    - `d2` = the same plus entity {Q2}.
+
+    Jaccard is 4/5, so the score is 0.7·0.8 + 0.3·1 = 0.86. The test **asserts the precondition first**:
+    `_compute_similarity(sig(d1), sig(d2)) >= 0.8` and `_hash_signature(sig(d1)) != _hash_signature(sig(d2))`.
+    Otherwise the eviction assertions would be vacuous.
   - `test_cached_adaptation_carries_matched_key`: `cache_plan(d1, p1)`, then
     `planner._try_cached_plan(d2, …)` returns a plan with `plan_source == "plan_cache"` and
     `plan_cache_key == key(d1)`, and steps equal to `p1`'s.
