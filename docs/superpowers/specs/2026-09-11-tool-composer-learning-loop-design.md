@@ -341,7 +341,9 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 - `step_number` is the step's index in `plan.steps`, fixed at plan time, so it does not depend on
   completion order. It makes `(episode_id, step_number)` a stable idempotency key (the existing
   `unique_step_in_episode`).
-- Widen `serves_sub_question` to `varchar(100)`, because planner sub-question ids are free text.
+- `serves_sub_question` holds the **positional sub-question index** as text (`"0"`, `"1"`, …), never the
+  LLM's id (§5.5). The column stays `varchar(20)`. `composition_steps.step_id` and
+  `tool_performance.step_id` are database-generated UUIDs, unrelated to planner step ids.
 - `status` uses the existing enum: COMPLETED for succeeded/cache_hit, FAILED otherwise.
 
 **`tool_performance`:**
@@ -381,7 +383,8 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
    - `tool_plan`: per step its step_number, tool_name, depends-on step numbers, and the structural input
      map of §5.5;
    - `plan_source`, and whether the execution order was repaired (§7.4);
-   - `parallelizable_groups`, sent by execute.
+   - `parallelizable_groups`, sent by execute, as lists of **step numbers**: the executed order after
+     §7.4, with a flag when it was repaired.
 3. **Per finished step, during execution.** `PlanExecutor.execute` gains an optional
    `on_step_result(step_number, StepResult)` callback. It is invoked the moment a step's `StepResult`
    exists:
@@ -401,7 +404,8 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
    - the episode's `error_type` (the caught exception's class, and the inner class for wrapped
      Decomposition/Planning/ExecutionError). No error text (§5.5);
    - every phase latency and the total;
-   - sub-question ids and intents, `tool_plan`, `plan_source`, the order-repair flag, parallel groups;
+   - sub-question indices and normalized intents, `tool_plan`, `plan_source`, the order-repair flag, and
+     parallel groups as step numbers;
    - counts.
 
    The terminal paths are:
@@ -511,8 +515,17 @@ on truncation to hide them.
     (`planner._validate_plan`).
   - **Input maps are keyed only by the tool's declared parameter names** (`ToolSchema.input_parameters`).
     Undeclared keys are counted (`{"undeclared_params": k}`), never named. Values are stored as structure:
-    - a string that names a column of the step's frame → `{"type":"column","name":c}`. Column names are
-      the loader's schema, and they are the plan;
+    - a string that is a column name **in the database catalog** → `{"type":"column","name":c}`. Frame
+      membership is not trusted: `executor.py:1236–1288` accepts caller-supplied frames, whose column
+      names are caller-authored.
+      - The allowlist is the catalog: the column names of relations in schema `public`, developer-authored
+        DDL.
+      - The check runs **inside the recording RPCs**:
+        `EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE
+        c.relnamespace = 'public'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped AND a.attname = …)`.
+        No frame is needed, and the plan snapshot gets the same treatment as finished steps.
+      - A name that is not in the catalog becomes `{"type":"str","len":n}`. That covers derived feature
+        columns, pivoted value-columns, and caller-authored names.
     - a `$step` reference → `{"type":"ref","step":n,"field":f}`, where `f` is kept only if it is a
       field of the producer's registered output model, else `null`;
     - any other string → `{"type":"str","len":n}`, without the value;
@@ -534,9 +547,10 @@ on truncation to hide them.
       *why*. Structured refusal reason codes would restore that safely. They need changes in
       `tool_registrations.py`, which LANE-2015 and LANE-2016 are editing now, so they are a §10
       follow-up.
-  - **The single serializer** (`learning_recorder.to_record()`) is the only path to the RPCs. Its test
-    plants a sentinel string in every LLM- and data-authored position:
+  - **The single serializer** (`learning_recorder.to_record()`) plus the RPC-side catalog check are the
+    only path to storage. The test plants a sentinel string in every LLM- and data-authored position:
     - question text, intent, sub_question_id, step_id;
+    - a frame column name that is also used as a parameter value;
     - an undeclared parameter key, a string value, a dict key, a `$step` field;
     - a dynamic output key;
     - refusal, input-error and generic exception messages.
@@ -640,8 +654,9 @@ refusals cannot qualify a tool for a verdict. The health-failure rate is `n_heal
 | `inconclusive` | otherwise |
 
 - Refusals are reported next to the verdict ("5 refused: data could not answer") and never enter the rate.
-- **Measured latency is eligible only at `n_succeeded` ≥ 20.** A tool that mostly fails keeps its
-  declared latency.
+- **Measured latency is shown only at `n_succeeded` ≥ 20** (admin surface, §8). Below that, the measured
+  fields are `null` with the verdict "too few successful runs (n=k)". Declared latency is a separate,
+  labelled field and is never substituted into a measured field.
 
 **Calibration** (scratch simulation, 20,000 Bernoulli draws per cell, seed 7; n here is `n_health`).
 A healthy tool is p = 0.02 or 0.05; a failing tool is p = 0.20 or 0.30. **The n = 5 row is the
@@ -685,10 +700,13 @@ n = 5.**
      (`dspy_integration.py:189–225`).
    - On `caveat` it adds exactly one line per caveated tool: "Reliability caveat: 6 of 24 runs failed on
      tool errors (timeout)". The flag controls nothing else.
-   - The declared "Avg execution" line is unchanged. Measured latency is **not** substituted into the
-     prompt: nothing in planning consumes latency (no deadline-aware planning, and `estimated_duration_ms`
-     has no reader), so a substituted number would be a label. Measured latency is shown on the admin
-     surface (§8), and §10 records prompt substitution as waiting for a consumer.
+   - The declared "Avg execution" line is unchanged.
+     - **Measured latency is not substituted.** The LLM reading that line is the only planning consumer of
+       latency: `estimated_duration_ms` has no reader, and there is no deadline-aware planning.
+     - Whether a different number there changes the LLM's choice is as unmeasured as the caveat. It would
+       need its own experiment arm, which this lane does not run.
+     - Measured latency is shown on the admin surface (§8), and §10 records prompt substitution as
+       deferred.
    - With the flag off, the prompt is byte-identical to today, and a test pins that.
 3. **The experiment that decides the flag** (`scripts/benchmarks/tool_composer/reliability_caveat_experiment.py`).
    It is pre-registered in the script's docstring before any evaluation call.
@@ -711,14 +729,26 @@ n = 5.**
    - **Validity outcomes, executable, per arm.**
      - Every returned plan goes through `planner._validate_plan` and the §7.4 execution-order checks.
      - It is then **executed** with the real `PlanExecutor` on the item's real frame.
-     - Counted per arm: `PlanningError`, `plan_defect`, `not_registered` and total-failure
-       compositions, plus succeeded steps per plan.
-     - **Pass also requires** arm B to have no more invalid or totally failed plans than arm A (exact
-       McNemar on those paired binary outcomes, one-sided p ≥ 0.05 for "B worse"), and a median
-       succeeded-steps count no lower than A's.
+     - Per item and arm, two binary outcomes. **Invalid:** `PlanningError`, a §7.4 validator rejection,
+       or any `plan_defect` / `not_registered` step. **Total failure:** zero succeeded steps.
+     - Every frozen item stays in the denominator. An item whose planner call errors counts as invalid
+       in that arm.
+     - **Pass also requires, on observed counts, each gate separately:**
+       - invalid(B) ≤ invalid(A);
+       - total_failure(B) ≤ total_failure(A);
+       - median succeeded steps(B) ≥ median(A).
+
+       No significance test is used for these guards. They are "not observed worse" gates, stated as
+       such, not a non-inferiority claim.
    - **Cost.** Planner calls: P + 2K ≥ 70, thinking disabled, about 1,000 output tokens each
-     (`composer.py:71–90`). The executions are local compute. The spend needs the owner's authorization
-     (O2).
+     (`composer.py:71–90`).
+     - Plan executions run on the droplet against local services only. `model_inference` calls the local
+       BentoML container (`bentoml_base_url` default `http://localhost:3000`, `model_inference.py:147`;
+       `e2i_bentoml`), which is no external spend.
+     - Executions are sequential, and `free -m` is checked before each item. The run stops below
+       1500 MiB available.
+     - Plans are neither restricted nor filtered: both arms offer the production tool set.
+     - The planner spend needs the owner's authorization (O2).
    - **Result handling.** The result JSON and a summary are committed under `docs/demos/results/`. The flag
      default flips to on only in a follow-up commit that cites a passing result. A failing result leaves
      the flag off and records which condition failed.
@@ -957,7 +987,8 @@ per-tool drill-down there would split one reading across two surfaces.
 - **Recorder failure modes** (psycopg transport against the throwaway database):
   - start write fails (database stopped for the start call only), then phase, steps and finish land: one
     episode with every field;
-  - a phase write exhausts its retry: finish restores sub-question ids, `tool_plan`, `plan_source`, groups
+  - a phase write exhausts its retry: finish restores sub-question indices and intents, `tool_plan`,
+    `plan_source`, groups
     and latencies;
   - audit identity: no audit service, audit start raising, and a caller-supplied stale
     `context["audit_workflow_id"]`. All three give an episode whose `audit_workflow_id` is NULL, or the
@@ -1059,8 +1090,9 @@ per-tool drill-down there would split one reading across two surfaces.
 - **Procedural-memory `tool_composition` patterns.**
 - **`tool_performance` rows from non-composer callers** (`called_by='agent'|'direct'`); none exist.
 - **A retention/purge job** (§5.5).
-- **Measured latency in the planning prompt or plan estimates.** Nothing in planning consumes latency
-  today (§7.2). Revisit when deadline-aware planning exists.
+- **Measured latency in the planning prompt or plan estimates.** The only planning consumer of latency is
+  the LLM reading the declared "Avg execution" line. Its effect is unmeasured (§7.2). It needs its own
+  experiment arm, or a deadline-aware planner, first.
 - **A platform PII scrubber for query text.** Query text is already persisted in four stores (§5.5). A
   scrubber belongs at `redact_query`, the platform's single hook, and would cover all five stores at once.
   This lane stores no raw parameter values and no generic exception text, so it adds no exposure class.
