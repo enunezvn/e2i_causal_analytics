@@ -581,11 +581,13 @@ class DriverRankerTool:
             # Convert SHAP values to numpy array
             shap_array = np.array(params.shap_values)
 
-            # Update ranker settings if provided
-            if params.concordance_threshold != 2:
-                self._ranker.concordance_threshold = params.concordance_threshold
-            if params.importance_percentile != 0.25:
-                self._ranker.importance_percentile = params.importance_percentile
+            # Apply THIS call's settings, defaults included. The tool is a process-wide
+            # singleton: writing only non-default values onto the shared ranker leaked one
+            # request's settings into every later call (#2003). No await separates these
+            # writes from rank_drivers below, so concurrent calls on the event loop cannot
+            # interleave between them.
+            self._ranker.concordance_threshold = params.concordance_threshold
+            self._ranker.importance_percentile = params.importance_percentile
 
             # Run ranking
             result = self._ranker.rank_drivers(
