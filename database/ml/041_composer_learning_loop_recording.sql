@@ -369,8 +369,10 @@ AS $fn$
                       WITH ORDINALITY AS x(s, o)),
                 '[]'::jsonb),
             'execution_order_repaired',
-                CASE WHEN jsonb_typeof(p_plan->'execution_order_repaired') = 'string'
-                      AND (p_plan->>'execution_order_repaired') ~ '^[a-z_]{1,50}$'
+                -- The violated condition ExecutionPlan.get_execution_order() repaired (Task 8).
+                CASE WHEN p_plan->>'execution_order_repaired' IN (
+                          'no_groups', 'step_missing_from_groups', 'step_repeated_in_groups',
+                          'unknown_step_in_groups', 'dependency_not_in_earlier_group')
                      THEN p_plan->'execution_order_repaired' ELSE 'null'::jsonb END)
     END;
 $fn$;
@@ -549,6 +551,7 @@ DECLARE
     v_known integer;
     v_recorded integer;
     v_unknown text[];
+    v_mismatch text[];
 BEGIN
     IF jsonb_typeof(p_steps) IS DISTINCT FROM 'array' THEN
         RAISE EXCEPTION 'composer_record_steps: steps must be an array';
@@ -571,6 +574,30 @@ BEGIN
     INTO v_unknown
     FROM jsonb_array_elements(p_steps) AS s
     WHERE NOT EXISTS (SELECT 1 FROM tool_registry tr WHERE tr.name = s->>'tool_name');
+
+    -- A registered tool whose registry schema does not declare a name the serializer sent (the
+    -- serializer names only what the running code declares): the registry is stale, e.g. the
+    -- startup sync has not landed. The step is still recorded, with those names reduced (the
+    -- outcome is never deferred; privacy fails closed), and the tool is reported so the
+    -- recorder runs the lazy sync and later compositions keep their names.
+    SELECT COALESCE(array_agg(DISTINCT tr.name::text ORDER BY tr.name::text), '{}'::text[])
+    INTO v_mismatch
+    FROM jsonb_array_elements(p_steps) AS s
+    JOIN tool_registry tr ON tr.name = s->>'tool_name'
+    WHERE EXISTS (
+              SELECT 1
+              FROM jsonb_each(CASE WHEN jsonb_typeof(s->'input_params') = 'object'
+                                   THEN s->'input_params' ELSE '{}'::jsonb END) AS e
+              WHERE (e.key <> 'undeclared_params'
+                     AND NOT (e.key = ANY (composer_schema_names(tr.input_schema))))
+                 OR (jsonb_typeof(e.value) = 'object' AND e.value->>'type' = 'ref'
+                     AND jsonb_typeof(e.value->'field') = 'string'
+                     AND NOT ((e.value->>'field') = ANY (v_ref_fields))))
+       OR EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s->'output_keys'->'keys') = 'array'
+                                             THEN s->'output_keys'->'keys' ELSE '[]'::jsonb END) AS k
+              WHERE NOT ((k #>> '{}') = ANY (composer_schema_names(tr.output_schema))));
 
     SELECT count(*) INTO v_known
     FROM jsonb_array_elements(p_steps) AS s
@@ -637,7 +664,8 @@ BEGIN
     RETURN jsonb_build_object(
         'recorded', v_recorded,
         'already_present', v_known - v_recorded,
-        'unknown_tools', to_jsonb(v_unknown)
+        'unknown_tools', to_jsonb(v_unknown),
+        'schema_mismatch_tools', to_jsonb(v_mismatch)
     );
 END
 $fn$;

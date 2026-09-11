@@ -44,6 +44,14 @@ RPC_FUNCTIONS = (
     "get_tool_reliability(integer,boolean)",
 )
 VIEWS = ("v_tool_reliability", "v_composition_success_rate", "v_active_compositions")
+NO_MISMATCH = {"schema_mismatch_tools": []}
+REPAIR_REASONS = (
+    "no_groups",
+    "step_missing_from_groups",
+    "step_repeated_in_groups",
+    "unknown_step_in_groups",
+    "dependency_not_in_earlier_group",
+)
 
 
 @pytest.fixture
@@ -70,10 +78,9 @@ def step(n: int, tool: str, cls: str, **over: Any) -> Dict[str, Any]:
     return {
         "step_number": n,
         "tool_name": tool,
-        # gap_calculator's declared names (registry input/output schema); other tools reduce
-        # these to an undeclared count, which the tests that care assert explicitly.
-        "input_params": {"group_by": {"type": "column", "name": "region"}, "metric": 5},
-        "output_keys": {"keys": ["gap"], "other_keys": 0},
+        # Neutral for every tool; tests about structure pass declared names explicitly.
+        "input_params": {},
+        "output_keys": {"keys": [], "other_keys": 0},
         "depends_on_steps": [],
         "serves_sub_question": "0",
         # Relative to the run, so the reliability window (executed_at = completed_at) holds
@@ -358,9 +365,9 @@ def test_steps_idempotent_receipt(db):
         )
         n_steps = len(steps_of(conn, "idem"))
         n_perf = len(perf_of(conn, "idem"))
-    assert first == {"recorded": 3, "already_present": 0, "unknown_tools": []}
-    assert second == {"recorded": 0, "already_present": 3, "unknown_tools": []}
-    assert third == {"recorded": 1, "already_present": 1, "unknown_tools": []}
+    assert first == {"recorded": 3, "already_present": 0, "unknown_tools": [], **NO_MISMATCH}
+    assert second == {"recorded": 0, "already_present": 3, "unknown_tools": [], **NO_MISMATCH}
+    assert third == {"recorded": 1, "already_present": 1, "unknown_tools": [], **NO_MISMATCH}
     assert n_steps == 4
     assert n_perf == 3  # succeeded, refused, error — dependency_unmet never ran the tool
 
@@ -380,7 +387,7 @@ def test_resend_restores_a_missing_performance_row_once(db):
         again = call(conn, "composer_record_steps", s, batch)
         steps_after = steps_of(conn, "recover")
         perf_after = perf_of(conn, "recover")
-    assert receipt == {"recorded": 0, "already_present": 2, "unknown_tools": []}
+    assert receipt == {"recorded": 0, "already_present": 2, "unknown_tools": [], **NO_MISMATCH}
     assert again == receipt
     assert steps_after == original_steps
     assert sorted(p["outcome_class"] for p in perf_after) == ["error", "succeeded"]
@@ -446,7 +453,12 @@ def test_steps_unknown_tools_reported_and_rest_recorded(db):
     with db.rolled_back() as conn:
         receipt = call(conn, "composer_record_steps", s, batch)
         stored = steps_of(conn, "unknown")
-    assert receipt == {"recorded": 2, "already_present": 0, "unknown_tools": ["cohort_builder"]}
+    assert receipt == {
+        "recorded": 2,
+        "already_present": 0,
+        "unknown_tools": ["cohort_builder"],
+        **NO_MISMATCH,
+    }
     assert [r["step_number"] for r in stored] == [0, 2]
 
 
@@ -471,6 +483,10 @@ def test_finish_restores_snapshot_and_second_finish_is_noop(db):
     with db.rolled_back() as conn:
         call(conn, "composer_record_start", s)  # the phase writes were "lost"
         first = call(conn, "composer_record_finish", s, snapshot)
+        (set_by_finish,) = conn.execute(
+            "select completed_at = now() and last_activity_at = now() from composer_episodes "
+            "where composition_id = 'finish'"
+        ).fetchone()
         # now() is frozen per transaction: backdate the terminal timestamps so a replay that
         # rewrote them would show.
         conn.execute(
@@ -483,6 +499,7 @@ def test_finish_restores_snapshot_and_second_finish_is_noop(db):
         )
         after_second = episode(conn, "finish")
     assert first == {"recorded": True}
+    assert set_by_finish is True
     assert second == {"recorded": False, "already_terminal": True}
     assert after_second == after_first
     for key in (
@@ -694,7 +711,7 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
     snapshot["tool_plan"]["reasoning"] = SENTINEL
     snapshot["tool_plan"]["execution_order_repaired"] = SENTINEL
     with db.rolled_back() as conn:
-        call(conn, "composer_record_steps", s, bad_steps)
+        receipt = call(conn, "composer_record_steps", s, bad_steps)
         call(
             conn,
             "composer_record_phase",
@@ -709,6 +726,10 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
     assert all(SENTINEL not in json.dumps(r) for r in rows), [
         r for r in rows if SENTINEL in json.dumps(r)
     ]
+    # Names the registry does not declare make the RPC report the tool (the recorder then runs
+    # the lazy sync); the receipt names tools, never the offending keys.
+    assert receipt["schema_mismatch_tools"] == ["causal_effect_estimator", "gap_calculator"]
+    assert SENTINEL not in json.dumps(receipt)
     reduced_gap = {
         "metric": {"type": "str", "len": len(SENTINEL)},
         "group_by": {"type": "str", "len": 3},
@@ -750,6 +771,82 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
         ],
         "execution_order_repaired": None,
     }
+
+
+@pytest.mark.parametrize("reason", REPAIR_REASONS + ("patient_sentinel", "", None, 3))
+def test_order_repair_reason_vocabulary(db, reason):
+    s = seed(f"repair_{reason}")
+    plan = final()["tool_plan"]
+    plan["execution_order_repaired"] = reason
+    with db.rolled_back() as conn:
+        call(conn, "composer_record_finish", s, final(tool_plan=plan))
+        stored = episode(conn, s["composition_id"])["tool_plan"]["execution_order_repaired"]
+    assert stored == (reason if reason in REPAIR_REASONS else None)
+
+
+def test_stale_registry_schema_reports_the_tool_and_still_records_the_outcome(db):
+    declared = {
+        "metric": {"type": "column", "name": "brand"},
+        "group_by": {"type": "column", "name": "region"},
+    }
+    with db.rolled_back() as conn:
+        (original_in, original_out) = conn.execute(
+            "select input_schema, output_schema from tool_registry where name = 'gap_calculator'"
+        ).fetchone()
+        conn.execute(
+            "update tool_registry set input_schema = '{}', output_schema = '{}' where name = 'gap_calculator'"
+        )
+        stale = call(
+            conn,
+            "composer_record_steps",
+            seed("stale"),
+            [
+                step(
+                    0,
+                    "gap_calculator",
+                    "error",
+                    input_params=declared,
+                    output_keys={"keys": ["gap"], "other_keys": 0},
+                )
+            ],
+        )
+        stale_step = steps_of(conn, "stale")[0]
+        stale_perf = perf_of(conn, "stale")
+
+        # The sync lands (the registry again describes the code): later writes keep the names.
+        conn.execute(
+            "update tool_registry set input_schema = %s, output_schema = %s where name = 'gap_calculator'",
+            (json.dumps(original_in), json.dumps(original_out)),
+        )
+        fresh = call(
+            conn,
+            "composer_record_steps",
+            seed("synced"),
+            [
+                step(
+                    0,
+                    "gap_calculator",
+                    "error",
+                    input_params=declared,
+                    output_keys={"keys": ["gap"], "other_keys": 0},
+                )
+            ],
+        )
+        synced_step = steps_of(conn, "synced")[0]
+    assert stale == {
+        "recorded": 1,
+        "already_present": 0,
+        "unknown_tools": [],
+        "schema_mismatch_tools": ["gap_calculator"],
+    }
+    assert stale_step["outcome_class"] == "error" and [p["outcome_class"] for p in stale_perf] == [
+        "error"
+    ]
+    assert stale_step["input_params"] == {"undeclared_params": 2}
+    assert stale_step["output_result"] == {"keys": [], "other_keys": 1}
+    assert fresh == {"recorded": 1, "already_present": 0, "unknown_tools": [], **NO_MISMATCH}
+    assert synced_step["input_params"] == declared
+    assert synced_step["output_result"] == {"keys": ["gap"], "other_keys": 0}
 
 
 def test_error_type_keeps_class_names(db):
