@@ -487,48 +487,36 @@ def _subsample_for_refutation(
     }
 
 
-def _reconstruct_dowhy_artifacts(
+def _build_dowhy_estimate(
     *,
     data: Any,
     treatment: str,
     outcome: str,
     common_causes: List[str],
     estimation_result: Dict[str, Any],
-) -> Tuple[Any, Any, Any]:
-    """Reconstruct DoWhy CausalModel, identified_estimand, and estimate.
+) -> Tuple[Any, Any, Any, str]:
+    """Build the DoWhy ``CausalModel`` + identified estimand + estimate, NO guard.
 
-    The agent state does not persist the live DoWhy model from the estimation
-    node (would require serialization of fitted EconML wrappers). Instead,
-    we re-build the model in-place using the same DAG inputs (treatment,
-    outcome, common_causes) and the persisted data passthrough.
-
-    Codex iter-2 H3 (#416): the rebuilt estimate uses the SAME estimator
-    method that produced the reported ATE (resolved via
-    ``_resolve_dowhy_method``). Earlier iter-1 used a hardcoded
-    ``backdoor.linear_regression`` which meant refuters critiqued a
-    different estimate than the one reported to chat — silent-wrong.
-
-    This is NOT a mock — it constructs a real DoWhy CausalModel which runs
-    real refutation methods (placebo_treatment_refuter, random_common_cause,
-    data_subset_refuter, bootstrap_refuter) against real EconML estimators
-    matching the reported method.
-
-    Args:
-        data: pandas DataFrame with treatment, outcome, and common-cause columns
-        treatment: treatment variable name
-        outcome: outcome variable name
-        common_causes: list of confounder column names
-        estimation_result: EstimationResult dict carrying ``selected_estimator``
-            (preferred) or ``method`` (fallback) — used to resolve which
-            DoWhy estimator backend to instantiate.
+    The model-build half of ``_reconstruct_dowhy_artifacts`` (#2007 split):
+    everything up to and including ``estimate_effect`` -- the fail-closed
+    ``RefutationError`` wrapper, the median binarization of a continuous
+    treatment, the #1417 categorical encoding of the adjustment set, the
+    effect-modifier choice and the production-mirroring init params -- with the
+    reported-vs-reconstructed ATE tolerance guard left to the caller. Split out
+    so the negative-control reading (``_fit_negative_control``) can fit the
+    SAME model with a different outcome: that fit has no reported ATE to guard
+    against (its point estimate IS the reading), so the guard must not run on
+    it, and the model build must not be re-implemented for it (a second copy is
+    where transform drift starts).
 
     Returns:
-        Tuple of (causal_model, identified_estimand, estimate)
+        ``(causal_model, identified_estimand, estimate, dowhy_method)`` --
+        ``dowhy_method`` is the resolved DoWhy ``method_name`` the estimate
+        was fit with, which the caller needs to read the interval source.
 
     Raises:
-        RefutationError: when DoWhy is unavailable OR reconstruction fails.
-            Surfaces to chat as "Refutation analysis unavailable for this
-            query, retry without refutation".
+        RefutationError: DoWhy unavailable, bad passthrough, or the build
+            failed -- the same fail-closed messages as before the split.
     """
     if not DOWHY_AVAILABLE:
         raise RefutationError(
@@ -721,6 +709,60 @@ def _reconstruct_dowhy_artifacts(
             },
             original_error=exc,
         ) from exc
+
+    return model, identified_estimand, estimate, dowhy_method
+
+
+def _reconstruct_dowhy_artifacts(
+    *,
+    data: Any,
+    treatment: str,
+    outcome: str,
+    common_causes: List[str],
+    estimation_result: Dict[str, Any],
+) -> Tuple[Any, Any, Any]:
+    """Reconstruct DoWhy CausalModel, identified_estimand, and estimate.
+
+    The agent state does not persist the live DoWhy model from the estimation
+    node (would require serialization of fitted EconML wrappers). Instead,
+    we re-build the model in-place using the same DAG inputs (treatment,
+    outcome, common_causes) and the persisted data passthrough.
+
+    Codex iter-2 H3 (#416): the rebuilt estimate uses the SAME estimator
+    method that produced the reported ATE (resolved via
+    ``_resolve_dowhy_method``). Earlier iter-1 used a hardcoded
+    ``backdoor.linear_regression`` which meant refuters critiqued a
+    different estimate than the one reported to chat — silent-wrong.
+
+    This is NOT a mock — it constructs a real DoWhy CausalModel which runs
+    real refutation methods (placebo_treatment_refuter, random_common_cause,
+    data_subset_refuter, bootstrap_refuter) against real EconML estimators
+    matching the reported method.
+
+    Args:
+        data: pandas DataFrame with treatment, outcome, and common-cause columns
+        treatment: treatment variable name
+        outcome: outcome variable name
+        common_causes: list of confounder column names
+        estimation_result: EstimationResult dict carrying ``selected_estimator``
+            (preferred) or ``method`` (fallback) — used to resolve which
+            DoWhy estimator backend to instantiate.
+
+    Returns:
+        Tuple of (causal_model, identified_estimand, estimate)
+
+    Raises:
+        RefutationError: when DoWhy is unavailable OR reconstruction fails.
+            Surfaces to chat as "Refutation analysis unavailable for this
+            query, retry without refutation".
+    """
+    model, identified_estimand, estimate, dowhy_method = _build_dowhy_estimate(
+        data=data,
+        treatment=treatment,
+        outcome=outcome,
+        common_causes=common_causes,
+        estimation_result=estimation_result,
+    )
 
     # Iter-6 codex H-iter5-1 (#416): verify the reconstructed estimate's ATE
     # matches the reported ATE within tolerance. DoWhy re-fits with default
