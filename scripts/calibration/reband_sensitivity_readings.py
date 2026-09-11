@@ -155,6 +155,7 @@ def _classify_on(got, t: str, o: str, ate: float, ci: Tuple[float, float], sd: f
         naive_effect=inputs.naive_effect,
         covariate_factors=inputs.covariate_bias_factors,
         n_rows=len(df),
+        covariates_measured=inputs.covariates_measured,
     )
 
 
@@ -226,6 +227,8 @@ async def main(out: Path) -> int:
             )
 
     readings: Counter = Counter()
+    # (reading, benchmark basis) — tells the two unbenchmarked sub-cases apart
+    bases: Counter = Counter()
     moves: Counter = Counter()
     per_pair: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = defaultdict(list)
     frame_cache: Dict[Tuple[str, str, str, str, int], Any] = {}
@@ -258,6 +261,7 @@ async def main(out: Path) -> int:
                 rd = _classify_on(got_capped, e["t"], e["o"], ate, ci, sd)
                 reading, new_sens = rd.reading, rd.status
                 e.update(rr_point=rd.rr_point, benchmark=rd.benchmark, basis=rd.benchmark_basis)
+                bases[(rd.reading, rd.benchmark_basis)] += 1
                 # Perturbation check: same run, full brand table instead of the capped pull.
                 if not isinstance(got_full, Exception):
                     rd_full = _classify_on(got_full, e["t"], e["o"], ate, ci, sd)
@@ -285,6 +289,8 @@ async def main(out: Path) -> int:
         "|---|---|",
     ]
     lines += [f"| {k} | {v} |" for k, v in readings.most_common()]
+    lines += ["", "| reading / basis | runs |", "|---|---|"]
+    lines += [f"| {r} / {b} | {v} |" for (r, b), v in bases.most_common()]
     lines += ["", "## Gate moves (today → new)", "", "| move | runs |", "|---|---|"]
     lines += [f"| {a} → {b} | {n} |" for (a, b), n in sorted(moves.items())]
     flips = [(k, x) for k, es in per_pair.items() for x in es if x.get("frame_sensitive")]

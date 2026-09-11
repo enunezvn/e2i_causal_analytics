@@ -41,6 +41,11 @@ READING_NULL = "null_finding"
 READING_UNBENCHMARKED = "unbenchmarked"
 READING_RANDOMIZED = "not_applicable_randomized"
 
+# Keyed by reading. For ``unbenchmarked`` this is the ``none_measured`` text; the
+# ``measured_unscoreable`` sub-case (below) carries its own headline, chosen by
+# BASIS in ``classify``. Consumers that fall back to this map by reading alone
+# (``validation_outcome``, the interpretation node) keep working; the reading's
+# own ``headline`` field is the one to prefer.
 HEADLINES: Dict[str, str] = {
     READING_BEYOND: "Robust to confounding at measured strength",
     READING_WITHIN: "Sensitive to confounding",
@@ -48,6 +53,17 @@ HEADLINES: Dict[str, str] = {
     READING_UNBENCHMARKED: "Robustness not benchmarked: no measured confounders",
     READING_RANDOMIZED: "Not applicable: randomized design",
 }
+# The ``unbenchmarked`` reading's SECOND sub-case (spec §4.4): confounders were
+# measured on the frame but every one was skipped by ``covariate_bias_factors``
+# (no usable contrast) and no naive contrast exists. Measured live 2026-09-10:
+# 6 runs of ``peer_influence_score -> adopted`` declare the single covariate
+# ``centrality_z`` at r = 0.9995 with the continuous treatment; its median split
+# coincides with the treatment's, so it cannot be scored. Telling those runs "no
+# measured confounders exist for this design" was false — one was measured and
+# adjusted for. Reading name and status are unchanged; only the words differ.
+HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE = (
+    "Robustness not benchmarked: measured confounders could not be scored"
+)
 
 STATUS_BY_READING: Dict[str, str] = {
     READING_BEYOND: "passed",
@@ -57,10 +73,14 @@ STATUS_BY_READING: Dict[str, str] = {
     READING_RANDOMIZED: "skipped",
 }
 
+BASIS_NONE_MEASURED = "none_measured"
+BASIS_MEASURED_UNSCOREABLE = "measured_unscoreable"
+
 BASIS_IN_WORDS: Dict[str, str] = {
     "joint_naive_vs_adjusted": "the confounding the adjustment removed, naive vs adjusted",
     "strongest_covariate": "the strongest measured covariate's bias factor",
-    "none_measured": "no measured confounders",
+    BASIS_NONE_MEASURED: "no measured confounders",
+    BASIS_MEASURED_UNSCOREABLE: "measured confounders that could not be scored",
 }
 
 
@@ -239,7 +259,7 @@ def measured_confounding_benchmark(
         return _finite("joint", joint), "joint_naive_vs_adjusted"
     if values:
         return max(values.values()), "strongest_covariate"
-    return None, "none_measured"
+    return None, BASIS_NONE_MEASURED
 
 
 def _is_binary(values: np.ndarray) -> bool:
@@ -581,6 +601,13 @@ class BenchmarkInputs:
     # absence. Collapsing the two lets the refutation runner substitute the
     # SUBSAMPLE's length into a reading whose frame yielded nothing.
     n_rows: Optional[int] = None
+    # How many of the requested covariates were PRESENT in the frame (distinct
+    # names), whether or not each could be scored. ``covariate_bias_factors`` holds
+    # only the scoreable ones, so this count is what tells ``classify`` that an empty
+    # factor dict means "measured but unscoreable" rather than "nothing measured".
+    # Zero when no frame was looked at (the empty inputs) — a consumer with no frame
+    # has measured nothing.
+    covariates_measured: int = 0
 
 
 def outcome_std_from_frame(frame: Any, outcome: str, *, treatment: Optional[str] = None) -> float:
@@ -626,6 +653,9 @@ def benchmark_inputs_from_frame(
 
     ``naive_effect`` from the estimation node wins when given (it is the same
     contrast); it is recomputed only when missing and the treatment is binary.
+    ``covariates_measured`` counts the requested covariates present in the frame,
+    scoreable or not, so an empty factor dict can still say that confounders were
+    measured (see ``BenchmarkInputs``).
     """
     t = np.asarray(frame[treatment], dtype=float)
     y = np.asarray(frame[outcome], dtype=float)
@@ -641,6 +671,7 @@ def benchmark_inputs_from_frame(
             naive = float(y[t == 1].mean() - p0)
     else:
         naive = None
+    columns = getattr(frame, "columns", [])
     return BenchmarkInputs(
         baseline_risk=baseline_risk,
         naive_effect=naive,
@@ -648,6 +679,7 @@ def benchmark_inputs_from_frame(
         treatment_is_binary=t_bin,
         outcome_is_binary=y_bin,
         n_rows=int(ok.sum()),
+        covariates_measured=len({c for c in covariates if c in columns}),
     )
 
 
@@ -671,6 +703,9 @@ class SensitivityReading:
     benchmark_basis: str
     covariate_bias_factors: Dict[str, float]
     n_rows: Optional[int]
+    # Requested covariates present on the frame, scoreable or not; what separates
+    # the two ``unbenchmarked`` sub-cases (``none_measured`` / ``measured_unscoreable``).
+    covariates_measured: int = 0
 
     def as_details(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -688,8 +723,18 @@ def classify(
     naive_effect: Optional[float],
     covariate_factors: Mapping[str, float],
     n_rows: Optional[int],
+    covariates_measured: int = 0,
 ) -> SensitivityReading:
-    """Evaluate the reading rules of spec §4.4 in order."""
+    """Evaluate the reading rules of spec §4.4 in order.
+
+    ``covariates_measured`` is how many covariates were measured on the frame
+    (``BenchmarkInputs.covariates_measured``), scoreable or not. It changes no
+    reading and no status: it only decides which ``unbenchmarked`` sub-case the
+    words describe — ``none_measured`` (nothing was measured) or
+    ``measured_unscoreable`` (confounders were measured, every one was skipped
+    for want of a usable contrast, and there is no naive contrast). Callers with
+    no frame leave it at 0.
+    """
     _validate_outcome_std(outcome_std)
     eff = _finite("effect", effect)
     lo, hi = _finite("ci_lower", ci[0]), _finite("ci_upper", ci[1])
@@ -747,6 +792,11 @@ def classify(
         outcome_std=outcome_std,
     )
     benchmark, basis = measured_confounding_benchmark(joint, covariate_factors)
+    k_measured = int(covariates_measured)
+    if k_measured < 0:
+        raise ValueError(f"covariates_measured must be >= 0, got {covariates_measured!r}")
+    if basis == BASIS_NONE_MEASURED and k_measured > 0:
+        basis = BASIS_MEASURED_UNSCOREABLE
 
     if randomized:
         reading = READING_RANDOMIZED
@@ -773,6 +823,13 @@ def classify(
             f"The 95 % CI [{lo:.3f}, {hi:.3f}] includes zero at {n_txt}. The estimate is "
             "reported as a null finding; no unmeasured confounder is needed to explain it."
         )
+    elif reading == READING_UNBENCHMARKED and basis == BASIS_MEASURED_UNSCOREABLE:
+        message = (
+            f"The interval excludes zero (E-value {e_point:.2f}), but none of the {k_measured} "
+            "measured confounder(s) could be scored on this frame (no usable contrast — for "
+            "example a covariate collinear with the treatment), so robustness to confounding "
+            "cannot be benchmarked."
+        )
     elif reading == READING_UNBENCHMARKED:
         message = (
             f"The interval excludes zero (E-value {e_point:.2f}), but no measured confounders "
@@ -791,10 +848,13 @@ def classify(
             f"E-value {e_point:.2f}). Do not act on the size of this effect, and treat "
             "its direction as unconfirmed against confounding of that strength."
         )
+    headline = HEADLINES[reading]
+    if reading == READING_UNBENCHMARKED and basis == BASIS_MEASURED_UNSCOREABLE:
+        headline = HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE
     return SensitivityReading(
         reading=reading,
         status=STATUS_BY_READING[reading],
-        headline=HEADLINES[reading],
+        headline=headline,
         message=message,
         e_value_point=e_point,
         e_value_ci=e_ci,
@@ -808,4 +868,5 @@ def classify(
         benchmark_basis=basis,
         covariate_bias_factors={k: float(v) for k, v in covariate_factors.items()},
         n_rows=n_rows_i,
+        covariates_measured=k_measured,
     )

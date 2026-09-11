@@ -1671,6 +1671,12 @@ class RefutationNode:
                     # the runner fall back to len(data) — the refutation subsample.
                     # A computed 0 (frame present, no usable rows) must stay 0.
                     n_rows=benchmark_inputs.n_rows,
+                    # How many backdoor covariates the FULL frame carried, scoreable
+                    # or not: with no factor and no naive contrast this is what makes
+                    # the reading say "measured confounders could not be scored"
+                    # rather than "no measured confounders" (live: centrality_z
+                    # collinear with peer_influence_score, r = 0.9995).
+                    covariates_measured=benchmark_inputs.covariates_measured,
                     # DESIGN declaration from the API layer (dataset spec): a
                     # genuinely randomized treatment reports the E-value as
                     # information (SKIPPED) instead of a benchmarked reading.

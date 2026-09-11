@@ -98,6 +98,7 @@ def _reading(df, treatment, outcome, covariates):
         naive_effect=inputs.naive_effect,
         covariate_factors=inputs.covariate_bias_factors,
         n_rows=len(df),
+        covariates_measured=len(covariates),
     )
 
 

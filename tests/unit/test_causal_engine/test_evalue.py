@@ -154,6 +154,67 @@ class TestCovariateBiasFactors:
         assert inp.baseline_risk is None
         assert inp.naive_effect is None
 
+    @staticmethod
+    def _collinear_frame(n: int = 600, seed: int = 3) -> pd.DataFrame:
+        """The live ``peer_influence_score -> adopted`` shape (re-band 2026-09-10):
+        a continuous treatment, a binary outcome and ONE declared covariate that is
+        collinear with the treatment (live r = 0.9995). The covariate's median split
+        coincides with the treatment's, so every control sits in the covariate's
+        low stratum and the factor is skipped — the confounder was measured and
+        adjusted for, yet it cannot benchmark the effect."""
+        rng = np.random.default_rng(seed)
+        t = rng.normal(0.0, 1.0, n)
+        x = t + 1e-9 * rng.normal(0.0, 1.0, n)
+        y = (rng.random(n) < 0.30 + 0.10 * (t > 0)).astype(float)
+        return pd.DataFrame({"t": t, "y": y, "x": x})
+
+    def test_a_covariate_collinear_with_the_treatment_is_measured_but_unscoreable(self):
+        inp = ev.benchmark_inputs_from_frame(self._collinear_frame(), "t", "y", ["x"])
+        assert inp.covariate_bias_factors == {}
+        assert inp.naive_effect is None  # continuous treatment: no naive contrast
+        assert inp.covariates_measured == 1
+        r = ev.classify(
+            0.15,
+            (0.08, 0.22),
+            randomized=False,
+            baseline_risk=inp.baseline_risk,
+            outcome_std=0.46,
+            naive_effect=inp.naive_effect,
+            covariate_factors=inp.covariate_bias_factors,
+            n_rows=inp.n_rows,
+            covariates_measured=inp.covariates_measured,
+        )
+        assert r.reading == "unbenchmarked" and r.status == "warning"
+        assert r.benchmark_basis == "measured_unscoreable"
+        assert r.headline == ev.HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE
+        assert r.covariates_measured == 1
+
+    def test_a_second_scoreable_covariate_keeps_the_strongest_covariate_basis(self):
+        frame = self._collinear_frame()
+        rng = np.random.default_rng(11)
+        frame["z"] = rng.normal(0.0, 1.0, len(frame)) + 0.5 * (frame.y - frame.y.mean())
+        inp = ev.benchmark_inputs_from_frame(frame, "t", "y", ["x", "z"])
+        assert set(inp.covariate_bias_factors) == {"z"}
+        assert inp.covariates_measured == 2
+        r = ev.classify(
+            0.15,
+            (0.08, 0.22),
+            randomized=False,
+            baseline_risk=inp.baseline_risk,
+            outcome_std=0.46,
+            naive_effect=inp.naive_effect,
+            covariate_factors=inp.covariate_bias_factors,
+            n_rows=inp.n_rows,
+            covariates_measured=inp.covariates_measured,
+        )
+        assert r.benchmark_basis == "strongest_covariate"
+        assert r.reading in ("beyond_measured_confounding", "within_measured_confounding")
+
+    def test_covariates_measured_counts_only_columns_present_in_the_frame(self):
+        inp = ev.benchmark_inputs_from_frame(self._frame(), "t", "y", ["c", "absent"])
+        assert inp.covariates_measured == 1
+        assert ev.BenchmarkInputs(baseline_risk=None, naive_effect=None).covariates_measured == 0
+
     def test_bias_factor_matches_a_hand_computed_tiny_frame(self):
         # treated (t=1): c=1 for 3/6, c=0 for 3/6 -> p_hi_t = 0.5
         # control (t=0): c=1 for 2/6, c=0 for 4/6 -> p_hi_c = 1/3 -> RR_EU = 0.5/(1/3) = 1.5
@@ -541,6 +602,49 @@ class TestClassify:
         r = self._c(0.15, (0.08, 0.22), naive_effect=None, covariate_factors={})
         assert r.reading == "unbenchmarked" and r.status == "warning"
         assert r.benchmark is None and r.benchmark_basis == "none_measured"
+        assert r.headline == "Robustness not benchmarked: no measured confounders"
+        assert r.headline == ev.HEADLINES["unbenchmarked"]
+        assert "no measured confounders exist for this design" in r.message
+        assert r.covariates_measured == 0
+
+    def test_unbenchmarked_none_measured_is_explicit_at_zero_covariates(self):
+        r = self._c(
+            0.15, (0.08, 0.22), naive_effect=None, covariate_factors={}, covariates_measured=0
+        )
+        assert r.reading == "unbenchmarked" and r.benchmark_basis == "none_measured"
+        assert r.headline == "Robustness not benchmarked: no measured confounders"
+
+    def test_unbenchmarked_says_measured_but_unscoreable_when_a_covariate_was_measured(self):
+        """Live re-band 2026-09-10: 6 runs of ``peer_influence_score -> adopted`` read
+        unbenchmarked with ONE declared covariate (``centrality_z``, r = 0.9995 with
+        the treatment) that was measured and adjusted for but could not be scored.
+        "no measured confounders exist for this design" is false there; the reading
+        keeps its name and status, and the words say what actually happened."""
+        r = self._c(
+            0.15, (0.08, 0.22), naive_effect=None, covariate_factors={}, covariates_measured=1
+        )
+        assert r.reading == "unbenchmarked" and r.status == "warning"
+        assert r.benchmark is None
+        assert r.benchmark_basis == "measured_unscoreable"
+        assert r.headline == "Robustness not benchmarked: measured confounders could not be scored"
+        assert r.headline == ev.HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE
+        # the exact clause, not a loose substring: "could be scored" alone would also
+        # match a sentence claiming the confounders COULD be scored
+        assert "none of the 1 measured confounder(s) could be scored on this frame" in r.message
+        assert "collinear with the treatment" in r.message
+        assert "no measured confounders exist" not in r.message
+        assert f"E-value {r.e_value_point:.2f}" in r.message
+        assert r.covariates_measured == 1
+        assert ev.BASIS_IN_WORDS["measured_unscoreable"] == (
+            "measured confounders that could not be scored"
+        )
+        assert r.as_details()["covariates_measured"] == 1
+
+    def test_covariates_measured_does_not_touch_a_benchmarked_reading(self):
+        r = self._c(0.15, (0.08, 0.22), naive_effect=0.20, covariates_measured=3)
+        assert r.reading == "beyond_measured_confounding"
+        assert r.benchmark_basis == "joint_naive_vs_adjusted"
+        assert r.covariates_measured == 3
 
     def test_smd_path_without_baseline_risk(self):
         r = self._c(0.15, (0.08, 0.22), baseline_risk=None, naive_effect=0.20)

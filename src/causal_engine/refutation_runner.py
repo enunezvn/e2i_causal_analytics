@@ -847,6 +847,7 @@ class RefutationRunner:
         naive_effect: Optional[float] = None,
         covariate_bias_factors: Optional[Dict[str, float]] = None,
         n_rows: Optional[int] = None,
+        covariates_measured: Optional[int] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -929,6 +930,14 @@ class RefutationRunner:
                 sentence. When ``None``, ``len(data)`` is used — which may be the
                 refutation SUBSAMPLE (#1419) and would then understate the sample
                 size a leader reads.
+            covariates_measured: How many covariates of the backdoor set were
+                PRESENT on the full estimation frame, scoreable or not
+                (``BenchmarkInputs.covariates_measured``). Separates the two
+                ``unbenchmarked`` sub-cases: with an empty factor dict and no naive
+                contrast, a count above zero reads "measured confounders could not
+                be scored" instead of "no measured confounders". Same precedence
+                as ``n_rows``: the caller's value wins, else the count the runner's
+                own benchmark-inputs branch computed, else 0.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -1087,6 +1096,10 @@ class RefutationRunner:
                 # branch does not run, so the n_rows expression below falls through
                 # to ``len(data)`` instead of silently keeping a stale value.
                 _computed_n: Optional[int] = None
+                # Same contract for the measured-covariate count: set only when the
+                # branch runs, so a caller's absent value falls through to 0 (nothing
+                # measured) rather than to a stale number.
+                _computed_measured: Optional[int] = None
                 if (
                     _baseline_risk is None
                     and _naive is None
@@ -1123,6 +1136,7 @@ class RefutationRunner:
                             _inputs.covariate_bias_factors,
                         )
                         _computed_n = _inputs.n_rows
+                        _computed_measured = _inputs.covariates_measured
                     except Exception as exc:
                         raise RefutationError(
                             "Refutation analysis unavailable for this query, retry "
@@ -1161,6 +1175,13 @@ class RefutationRunner:
                             if _computed_n is not None
                             else (len(data) if data is not None else None)
                         )
+                    ),
+                    # Precedence: caller's count (full frame) > the count this
+                    # runner's own benchmark-inputs branch measured > 0.
+                    covariates_measured=(
+                        covariates_measured
+                        if covariates_measured is not None
+                        else (_computed_measured if _computed_measured is not None else 0)
                     ),
                 )
                 tests.append(test_result)
@@ -1940,6 +1961,7 @@ class RefutationRunner:
         naive_effect: Optional[float] = None,
         covariate_bias_factors: Optional[Dict[str, float]] = None,
         n_rows: Optional[int] = None,
+        covariates_measured: int = 0,
     ) -> RefutationResult:
         """E-value sensitivity READING (spec 2026-09-10 §4.4).
 
@@ -1989,6 +2011,7 @@ class RefutationRunner:
                 naive_effect=naive_effect,
                 covariate_factors=covariate_bias_factors or {},
                 n_rows=n_rows,
+                covariates_measured=covariates_measured,
             )
         except ValueError as exc:
             raise RefutationError(

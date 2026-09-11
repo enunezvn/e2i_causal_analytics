@@ -361,3 +361,46 @@ class TestOutcomeStdOnRealFrames:
         )
         assert sens["e_value"] == pytest.approx(expected.e_value_point)
         assert sens["reading"] == expected.reading
+
+
+class TestMeasuredButUnscoreableConfounders:
+    """Live re-band 2026-09-10: 6 runs of ``peer_influence_score -> adopted`` declare
+    one covariate (``centrality_z``, r = 0.9995 with the continuous treatment) that
+    was measured and adjusted for but cannot be scored, and read ``unbenchmarked``.
+    The node's state must carry the headline that says so, not "no measured
+    confounders"."""
+
+    @staticmethod
+    def _collinear_frame(n: int = 600, seed: int = 3) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        t = rng.normal(0.0, 1.0, n)
+        return pd.DataFrame(
+            {
+                "peer_influence_score": t,
+                "adopted": (rng.random(n) < 0.30 + 0.10 * (t > 0)).astype(float),
+                "centrality_z": t + 1e-9 * rng.normal(0.0, 1.0, n),
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_state_carries_the_measured_unscoreable_headline(self):
+        from src.causal_engine import evalue
+
+        state = _state_with_frame(0.15, 0.08, 0.22)
+        state["estimation_data"] = self._collinear_frame()
+        state["treatment_var"] = "peer_influence_score"
+        state["outcome_var"] = "adopted"
+        state["estimation_result"]["covariates_adjusted"] = ["centrality_z"]
+
+        result = await SensitivityNode().execute(state)
+
+        assert "sensitivity_error" not in result
+        sens = result["sensitivity_analysis"]
+        assert sens["reading"] == "unbenchmarked"
+        assert sens["benchmark_basis"] == "measured_unscoreable"
+        assert sens["headline"] == evalue.HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE
+        assert (
+            "none of the 1 measured confounder(s) could be scored on this frame"
+            in sens["interpretation"]
+        )
+        assert "no measured confounders exist" not in sens["interpretation"]

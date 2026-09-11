@@ -178,7 +178,8 @@ class SensitivityAnalysis(TypedDict, total=False):
     rr_point: float
     rr_ci: float
     benchmark: Optional[float]
-    benchmark_basis: str  # joint_naive_vs_adjusted / strongest_covariate / none_measured
+    # joint_naive_vs_adjusted / strongest_covariate / none_measured / measured_unscoreable
+    benchmark_basis: str
     conversion: str  # risk_ratio / standardized_difference
 
 

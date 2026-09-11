@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.causal_engine import evalue
 from src.causal_engine.errors import RefutationError
 from src.causal_engine.refutation_runner import (
     GateDecision,
@@ -1868,3 +1869,74 @@ class TestSensitivityOutcomeStdMasking:
         )
         sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
         assert sens.details["n_rows"] == 1500
+
+    def test_a_measured_but_unscoreable_covariate_is_named_in_the_unbenchmarked_reading(self):
+        """Live re-band 2026-09-10: ``peer_influence_score -> adopted`` declares ONE
+        covariate (``centrality_z``) collinear with the continuous treatment
+        (r = 0.9995). Its factor is skipped, the run reads ``unbenchmarked`` — and
+        the message used to claim "no measured confounders exist for this design".
+        The runner's fallback branch must count the covariates it measured and the
+        persisted details must carry the count and the truthful headline."""
+        r = self._sensitivity_only_runner()
+        rng = np.random.default_rng(3)
+        n = 600
+        t = rng.normal(0.0, 1.0, n)
+        frame = pd.DataFrame(
+            {
+                "t": t,
+                "y": (rng.random(n) < 0.30 + 0.10 * (t > 0)).astype(float),
+                "x": t + 1e-9 * rng.normal(0.0, 1.0, n),
+            }
+        )
+        model = _full_stub_causal_model()
+        model.get_common_causes = lambda: ["x"]
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="y",
+            causal_model=model,
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.status == RefutationStatus.WARNING
+        assert sens.details["reading"] == "unbenchmarked"
+        assert sens.details["covariate_bias_factors"] == {}
+        assert sens.details["covariates_measured"] == 1
+        assert sens.details["benchmark_basis"] == "measured_unscoreable"
+        assert sens.details["headline"] == evalue.HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE
+        assert (
+            "none of the 1 measured confounder(s) could be scored on this frame"
+            in sens.details["message"]
+        )
+        assert "no measured confounders exist" not in sens.details["message"]
+
+    def test_caller_covariates_measured_wins_over_the_runners_own_count(self):
+        """Same precedence as ``n_rows``: the agent node measures on the FULL frame and
+        passes its count; the runner's own (subsample) count is only the fallback."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame(
+            {
+                "t": [1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+                "y": [1.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            }
+        )
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            baseline_risk=None,
+            naive_effect=None,
+            covariate_bias_factors={},
+            covariates_measured=2,
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["covariates_measured"] == 2
+        assert sens.details["benchmark_basis"] == "measured_unscoreable"

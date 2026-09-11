@@ -71,6 +71,7 @@ class SensitivityNode:
                 naive_effect=inputs.naive_effect,
                 covariate_factors=inputs.covariate_bias_factors,
                 n_rows=n_rows,
+                covariates_measured=inputs.covariates_measured,
             )
             randomized = reading.reading == evalue.READING_RANDOMIZED
 
