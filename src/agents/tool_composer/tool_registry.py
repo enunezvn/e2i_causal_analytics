@@ -265,7 +265,10 @@ DEPENDENCY_FIELD_MAPPINGS: dict[tuple[str, str], tuple[Optional[str], Optional[s
     ("cate_analyzer", "causal_effect_estimator"): (None, None),
     ("segment_ranker", "cate_analyzer"): (None, "cate_results"),
     ("roi_estimator", "gap_calculator"): (None, "gap_analysis"),
-    ("power_calculator", "causal_effect_estimator"): ("ate", "effect_size"),
+    # Ordering only (#2015): the estimate's ``ate`` is in OUTCOME units, while
+    # ``effect_size`` is a Cohen's d, a relative change or a hazard ratio depending on the
+    # design, so passing it through would size the study for the wrong effect.
+    ("power_calculator", "causal_effect_estimator"): (None, None),
     # No direct field: effect_by_segment is a per-segment dict and effect_size one number,
     # so the planner has to pick the segment's effect.
     ("power_calculator", "cate_analyzer"): (None, None),

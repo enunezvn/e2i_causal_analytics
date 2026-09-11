@@ -366,9 +366,6 @@ PREEXISTING_UNREAD_INPUTS: Dict[str, Dict[str, str]] = {
         "intervention": "lift is expected_effect * 0.85 regardless of the intervention",
         "target_entities": "lift is expected_effect * 0.85 regardless of the entities",
     },
-    "power_calculator": {
-        "alpha": "required_n hardcodes z = 1.96 + 0.84 (power is ignored too, only echoed)"
-    },
     "risk_scorer": {
         "entity_type": "documented as provenance but not echoed",
         "risk_type": "documented as provenance but not echoed",

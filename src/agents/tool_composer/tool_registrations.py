@@ -214,20 +214,47 @@ class PropensityScores(BaseModel):
 
 
 class PowerCalculatorInput(BaseModel):
-    """Input for power analysis"""
+    """Input for power analysis (#2015).
+
+    Mirrors the callable. The previous model also declared ``ratio`` (treatment/control
+    allocation), which the tool never read and ``power_analysis_lib`` cannot honour — every
+    formula there assumes equal allocation — so it is gone rather than silently ignored.
+    """
 
     effect_size: float
     alpha: float = 0.05
     power: float = 0.8
-    ratio: float = 1.0  # Treatment/control ratio
+    outcome_type: str = "continuous"
+    design: str = "individual"
+    baseline_rate: Optional[float] = None
+    event_rate: Optional[float] = None
+    icc: Optional[float] = None
+    cluster_size: Optional[int] = None
 
 
 class PowerAnalysis(BaseModel):
-    """Output from power analysis"""
+    """Output from power analysis, computed by ``src/utils/power_analysis_lib`` (#2015).
 
-    required_n: int
-    actual_power: float
-    detectable_effect: float
+    ``required_n_per_arm`` and ``required_n_total`` are the library's own figures (for the
+    cluster and time-to-event designs the library floors the per-arm figure, as the
+    experiment-designer agent reports it). ``alpha`` and ``power`` are the design targets
+    the sample size was solved for. ``minimum_detectable_effect`` is on
+    ``minimum_detectable_effect_scale``, which differs from the input ``effect_size`` for a
+    binary design (relative change in, absolute risk difference out — #1639).
+    """
+
+    required_n_per_arm: int
+    required_n_total: int
+    alpha: float
+    power: float
+    effect_size: float
+    outcome_type: str
+    design: str
+    analysis_type: str
+    minimum_detectable_effect: float
+    minimum_detectable_effect_scale: str
+    assumptions: List[str]
+    design_details: Dict[str, Any]
 
 
 class SimulatorInput(BaseModel):
@@ -2429,40 +2456,257 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
 # ============================================================================
 
 
+_POWER_OUTCOME_TYPES = ("continuous", "binary", "time_to_event")
+_POWER_DESIGNS = ("individual", "cluster")
+# What ``PowerResult.mde`` is measured in, per outcome type (#1639: a binary design takes a
+# RELATIVE effect but reports an ABSOLUTE risk difference as its MDE).
+_POWER_MDE_SCALES = {
+    "continuous": "cohens_d",
+    "binary": "absolute_risk_difference",
+    "time_to_event": "hazard_ratio",
+}
+
+
+def _power_number(name: str, value: Any, default: Optional[float] = None) -> Optional[float]:
+    """A finite number for a power input, ``default`` when the value is omitted (``None``).
+
+    A supplied value that is not a finite number is refused rather than coerced: the tool
+    would otherwise size a study for a parameter the caller never gave.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ToolInputError(
+            f"power_calculator: {name} must be a finite number; got {value!r}. No sample "
+            "size can be computed from it."
+        )
+    return float(value)
+
+
 @composable_tool(
     name="power_calculator",
-    description="Calculate required sample size for statistical power in A/B tests",
+    description=(
+        "Required sample size (per arm and total) for a two-arm experiment with equal "
+        "allocation, from the shared power-analysis library. Designs: continuous outcome "
+        "(two-sample t-test), binary outcome (two-proportion z-test, needs baseline_rate), "
+        "time-to-event (log-rank, needs event_rate), and cluster-randomised continuous "
+        "(needs icc and cluster_size)."
+    ),
     source_agent="experiment_designer",
     tier=3,
     input_parameters=[
-        {"name": "effect_size", "type": "float", "description": "Expected effect size"},
+        {
+            "name": "effect_size",
+            "type": "float",
+            "description": (
+                "Effect to detect, non-zero: Cohen's d (standardised mean difference) for a "
+                "continuous or cluster design; relative change vs baseline_rate for a binary "
+                "design (0.10 = +10%); hazard ratio for time_to_event (not 1.0). An ATE in "
+                "outcome units is NOT a Cohen's d."
+            ),
+        },
         {
             "name": "alpha",
             "type": "float",
-            "description": "Significance level",
+            "description": "Two-sided significance level in (0, 1)",
             "required": False,
             "default": 0.05,
         },
         {
             "name": "power",
             "type": "float",
-            "description": "Desired power",
+            "description": "Target power in (0, 1)",
             "required": False,
             "default": 0.8,
         },
+        {
+            "name": "outcome_type",
+            "type": "str",
+            "description": "continuous, binary or time_to_event",
+            "required": False,
+            "default": "continuous",
+        },
+        {
+            "name": "design",
+            "type": "str",
+            "description": "individual or cluster (cluster supports a continuous outcome only)",
+            "required": False,
+            "default": "individual",
+        },
+        {
+            "name": "baseline_rate",
+            "type": "float",
+            "description": "Control-arm proportion in (0, 1); required for, and only for, binary",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "event_rate",
+            "type": "float",
+            "description": "Expected event rate in (0, 1]; required for, and only for, time_to_event",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "icc",
+            "type": "float",
+            "description": "Intra-cluster correlation in [0, 1); required for, and only for, cluster",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "cluster_size",
+            "type": "int",
+            "description": "Average cluster size (>= 1); required for, and only for, cluster",
+            "required": False,
+            "default": None,
+        },
     ],
     output_schema="PowerAnalysis",
-    avg_execution_ms=500,
+    avg_execution_ms=50,
     input_model=PowerCalculatorInput,
     output_model=PowerAnalysis,
 )
 def power_calculator(
-    effect_size: float, alpha: float = 0.05, power: float = 0.8, **kwargs
+    effect_size: float,
+    alpha: float = 0.05,
+    power: float = 0.8,
+    outcome_type: str = "continuous",
+    design: str = "individual",
+    baseline_rate: Optional[float] = None,
+    event_rate: Optional[float] = None,
+    icc: Optional[float] = None,
+    cluster_size: Optional[int] = None,
+    **kwargs,
 ) -> PowerAnalysis:
-    """Calculate sample size for desired power."""
-    # Simplified calculation - real implementation uses statsmodels
-    n = int(16 * (1.96 + 0.84) ** 2 / (effect_size**2))
-    return PowerAnalysis(required_n=n, actual_power=power, detectable_effect=effect_size)
+    """Sample size for a two-arm experiment, delegated to ``power_analysis_lib`` (#2015).
+
+    Replaces ``n = 16 * (1.96 + 0.84) ** 2 / d**2``, which ignored ``alpha`` and ``power``
+    and was about 8x the per-arm n (3,135 at d=0.2 against the library's 393 per arm).
+    The design is routed the way the experiment-designer agent's power node routes it, with
+    one difference: that node substitutes defaults for a missing baseline rate, event rate,
+    ICC or cluster size, and this tool refuses instead — a leader-facing sample size must
+    not rest on a rate nobody stated.
+
+    Every refusal is a :class:`ToolInputError` (deterministic over the inputs, never
+    retried): a non-finite or zero effect, alpha/power outside (0, 1), a design parameter
+    missing for its design, or one supplied for a design that does not use it (it would be
+    silently ignored).
+    """
+    from src.utils.power_analysis_lib import (
+        PowerCalculationError,
+        PowerResult,
+        binary_outcome_power,
+        cluster_rct_power,
+        continuous_outcome_power,
+        time_to_event_power,
+    )
+
+    effect = _power_number("effect_size", effect_size)
+    if effect is None:
+        raise ToolInputError(
+            "power_calculator: effect_size is None — no effect to detect was supplied (an "
+            "upstream step likely failed or lacked the referenced field)."
+        )
+    alpha_value = _power_number("alpha", alpha, default=0.05)
+    power_value = _power_number("power", power, default=0.8)
+    assert alpha_value is not None and power_value is not None
+    outcome = (
+        (outcome_type or "continuous").strip().lower()
+        if isinstance(outcome_type, str)
+        else outcome_type
+    )
+    design_value = (design or "individual").strip().lower() if isinstance(design, str) else design
+    if outcome not in _POWER_OUTCOME_TYPES:
+        raise ToolInputError(
+            f"power_calculator: outcome_type must be one of {list(_POWER_OUTCOME_TYPES)}; "
+            f"got {outcome_type!r}."
+        )
+    if design_value not in _POWER_DESIGNS:
+        raise ToolInputError(
+            f"power_calculator: design must be one of {list(_POWER_DESIGNS)}; got {design!r}."
+        )
+    if design_value == "cluster" and outcome != "continuous":
+        raise ToolInputError(
+            f"power_calculator: a cluster design is supported for a continuous outcome only "
+            f"(the library's design-effect formula inflates a Cohen's d sample size); got "
+            f"outcome_type={outcome!r}."
+        )
+
+    used_by = {
+        "baseline_rate": outcome == "binary",
+        "event_rate": outcome == "time_to_event",
+        "icc": design_value == "cluster",
+        "cluster_size": design_value == "cluster",
+    }
+    supplied = {
+        "baseline_rate": baseline_rate,
+        "event_rate": event_rate,
+        "icc": icc,
+        "cluster_size": cluster_size,
+    }
+    for name, value in supplied.items():
+        if value is not None and not used_by[name]:
+            raise ToolInputError(
+                f"power_calculator: {name}={value!r} was supplied but outcome_type={outcome!r} "
+                f"with design={design_value!r} does not use it; refusing to ignore it silently. "
+                "Set the design it belongs to, or omit it."
+            )
+        if value is None and used_by[name]:
+            raise ToolInputError(
+                f"power_calculator: {name} is required for outcome_type={outcome!r} with "
+                f"design={design_value!r}; no default is assumed."
+            )
+
+    forward: PowerResult
+    try:
+        if design_value == "cluster":
+            icc_value = _power_number("icc", icc)
+            if (
+                isinstance(cluster_size, bool)
+                or not isinstance(cluster_size, (int, float))
+                or not math.isfinite(cluster_size)
+                or int(cluster_size) != cluster_size
+            ):
+                raise ToolInputError(
+                    f"power_calculator: cluster_size must be a whole number; got {cluster_size!r}."
+                )
+            assert icc_value is not None
+            forward = cluster_rct_power(
+                effect, alpha_value, power_value, icc_value, int(cluster_size)
+            )
+        elif outcome == "binary":
+            rate = _power_number("baseline_rate", baseline_rate)
+            assert rate is not None
+            forward = binary_outcome_power(effect, alpha_value, power_value, rate)
+        elif outcome == "time_to_event":
+            rate = _power_number("event_rate", event_rate)
+            assert rate is not None
+            forward = time_to_event_power(effect, alpha_value, power_value, rate)
+        else:
+            forward = continuous_outcome_power(effect, alpha_value, power_value)
+    except PowerCalculationError as exc:
+        raise ToolInputError(f"power_calculator: {exc}") from exc
+
+    assumptions = [
+        f"Solved for alpha={alpha_value:g} (two-sided) and power={power_value:g} with equal "
+        f"allocation ({forward.analysis_type}).",
+        *forward.assumptions,
+    ]
+    return PowerAnalysis(
+        required_n_per_arm=forward.sample_size_per_arm,
+        required_n_total=forward.sample_size,
+        alpha=alpha_value,
+        power=power_value,
+        effect_size=effect,
+        outcome_type=outcome,
+        design=design_value,
+        analysis_type=forward.analysis_type,
+        minimum_detectable_effect=float(forward.mde),
+        minimum_detectable_effect_scale=_POWER_MDE_SCALES[outcome],
+        assumptions=assumptions,
+        design_details=dict(forward.extra),
+    )
 
 
 @composable_tool(
