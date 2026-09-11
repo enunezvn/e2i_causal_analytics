@@ -917,7 +917,12 @@ class RefutationSuite:
                 "status": t.status.value,
                 "new_effect": t.refuted_effect,
                 "original_effect": t.original_effect,
-                "p_value": t.p_value or 0.0,
+                # None stays None (codex whole-diff HIGH 3): a reading whose
+                # verdict is an interval rule (negative control, sensitivity)
+                # has no p-value, and ``0.0`` read as "significant at every
+                # level". The API schema, its mapper (``_opt_float``) and the
+                # FE type already carry null; a real 0.0 stays 0.0.
+                "p_value": t.p_value,
                 "details": t.details.get("message", ""),
             }
 

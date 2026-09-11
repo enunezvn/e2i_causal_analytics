@@ -481,7 +481,7 @@ def test_legacy_format_scored_row_lands_in_individual_tests_with_the_reading():
     assert row["passed"] is False
     assert row["new_effect"] == 0.052
     assert row["original_effect"] == ORIGINAL
-    assert row["p_value"] == 0.0  # None -> 0.0, the legacy shape
+    assert row["p_value"] is None  # an interval rule has no p; None is not 0.0
     assert row["details"] == result.details["reading"]
     assert "negative_control_outcome" not in legacy["skipped_tests"]
 
@@ -669,3 +669,26 @@ def test_delta_percent_is_clamped_to_the_column_range_and_the_exact_ratio_is_kep
     assert result.delta_percent == pytest.approx(100.0 * 0.130 / ORIGINAL)
     assert result.delta_percent == result.details["control_to_claimed_ratio"]
     assert result.delta_percent < 9999.9999
+
+
+# --- legacy p_value: None stays None (codex whole-diff HIGH 3) -----------------
+
+
+def test_legacy_p_value_is_none_for_interval_readings_and_a_float_for_placebo():
+    """``to_legacy_format`` used to write ``t.p_value or 0.0`` -- a fabricated
+    "significant at every level" for the negative-control and sensitivity
+    readings, upstream of an API schema / mapper / FE type that already carry
+    null. None stays None; a placebo row keeps its float."""
+    suite = _run(RefutationRunner(), negative_control=PASSED_NC)
+    legacy = suite.to_legacy_format()["individual_tests"]
+    assert legacy["negative_control_outcome"]["p_value"] is None
+    assert legacy["unobserved_common_cause"]["p_value"] is None
+    assert isinstance(legacy["placebo_treatment"]["p_value"], float)
+    # A REAL 0.0 is preserved as 0.0, not turned into None.
+    zero = RefutationSuite(
+        passed=True,
+        confidence_score=1.0,
+        tests=[RefutationResult(RefutationTestType.PLACEBO_TREATMENT, P, 0.1, 0.1, p_value=0.0)],
+        gate_decision=GateDecision.PROCEED,
+    )
+    assert zero.to_legacy_format()["individual_tests"]["placebo_treatment"]["p_value"] == 0.0
