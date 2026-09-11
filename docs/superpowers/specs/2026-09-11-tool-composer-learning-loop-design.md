@@ -131,7 +131,10 @@ weeks, and zero since 2026-08-16.** Per-tool samples are in single digits.
   - pgvector is 0.8.0, and `pg_cron` is not installed.
   - PostgREST reloads its schema cache on DDL through the `pgrst_ddl_watch` event trigger (ml/036 L82).
   - `scripts/run_migrations.sh` applies `database/memory` before `database/ml`, so `e2i_agent_name`
-    exists before any ml migration. It wraps each file in `--single-transaction`.
+    exists before any ml migration. It wraps a file together with its ledger row in
+    `--single-transaction`, **except** a file that contains `ALTER TYPE … ADD VALUE`, `CONCURRENTLY` or its
+    own `COMMIT` (`scripts/run_migrations.sh:157–190`). Such a file runs statement by statement, and its
+    ledger row is written only after a clean exit, so a partial failure is retried on the next deploy.
 
 ## 3. Goal: what a leader notices when the loop works
 
@@ -140,12 +143,16 @@ weeks, and zero since 2026-08-16.** Per-tool samples are in single digits.
    steps that finished before a failure or a cancel are kept. Runs abandoned mid-flight (worker killed)
    show as abandoned, not missing. Today 12 of 19 planned runs vanish without a reason.
 
-   Recording is best-effort by design, because it must never fail a user's answer. The loss is
-   *measured*, not assumed:
-   - the start write is awaited (≤ 2 s) before decomposition;
+   Recording is best-effort by design. Nothing on the user's path waits for it, so a slow or unavailable
+   database cannot delay or fail an answer. The loss is *measured*, not assumed:
+   - every RPC can create the episode, so any single write that lands records the composition;
    - every write failure is counted;
-   - the cert reconciles episodes against the audit chain's `workflow_start` rows over the same window
+   - the cert reconciles by **identity**: episodes join audit-chain `workflow_start` rows on
+     `audit_workflow_id`, and both are checked against the list of compositions the cert itself triggered
      (§5.4, §9).
+
+   Awaiting a write would not make recording durable: a crash one millisecond after an awaited start still
+   loses the steps. It would only put the database on the user's latency path.
 2. **Per-tool reliability separates three kinds of non-success:**
    - **health failures:** exception after retries, timeout;
    - **honest refusals:** `ToolRefusalError` / `ToolInputError`, meaning the data could not answer, which
@@ -156,8 +163,9 @@ weeks, and zero since 2026-08-16.** Per-tool samples are in single digits.
 3. **Verdict word first, then the numbers,** on an admin surface: "Too few runs to judge (n=3)",
    "Caveat: 6 of 24 runs failed (timeout)", "Reliable (n=52)".
 4. **A plan that failed is not reused as if it had worked.**
-   - Today the in-process plan cache (`cache.py:228–330`, 15-minute TTL) hands a similar decomposition
-     the identical steps of a plan whose execution failed, and skips the LLM planner to do it.
+   - Today the in-process plan cache (`cache.py:228–330`, 15-minute TTL) can hand a similar decomposition
+     the steps of a plan whose execution failed, and skip the LLM planner to do it. The eligibility
+     conditions are in §7.3.
    - Episodic references present a PARTIAL run as a clean "successful composition".
    - With the loop, a plan whose composition failed, or had a plan defect, is evicted from the plan
      cache. Episodic references recommend only the steps that succeeded and list what did not work (§7.3).
@@ -175,8 +183,9 @@ p_max_deprecations int DEFAULT 3)`, called by a Python sync client:
 - **At API startup:** a fire-and-forget task in `lifespan` after the Supabase client is initialised
   (`src/api/main.py` ~L278). Same pattern as the health heartbeat and the chatbot warm task, so boot
   is never delayed.
-- **Lazily before the first composition record** in any process where the startup sync did not
-  succeed, behind a process-level once-guard with an `asyncio.Lock`.
+- **Lazily, on the recorder's background chain,** in any process where the startup sync did not succeed.
+  It runs when a step write reports `unknown_tools`, behind a process-level once-guard with an
+  `asyncio.Lock`, and it is never awaited by `compose()`.
 
 **Payload** (built in the new `src/agents/tool_composer/registry_sync.py`):
 - Tool fields come from `create_default_tools()` (`tool_registry.py:313`): name, description, input
@@ -225,9 +234,17 @@ because nothing can produce two live payloads at once.
 - Any failure is logged at WARNING with the error, and the API keeps running. Recording then reports
   the missing tools (§5.4).
 
-**Schema changes (migration ml/039):**
-- `ALTER TYPE tool_category ADD VALUE IF NOT EXISTS 'COHORT'`. Only the runtime sync uses the value,
-  never the same migration transaction.
+**Schema changes — three migrations, split by the runner's transaction branch (§2.3):**
+- **ml/039_tool_category_cohort.sql** holds only `ALTER TYPE tool_category ADD VALUE IF NOT EXISTS
+  'COHORT'`.
+  - The runner applies it un-wrapped.
+  - It is one idempotent statement, so a failure cannot leave a partial state, and a re-run is a no-op.
+  - Only the runtime sync uses the value.
+- **ml/040_tool_registry_startup_sync.sql** holds everything else in this section plus
+  `sync_tool_registry`. The runner applies it with its ledger row in one transaction.
+- **ml/041_composer_learning_loop_recording.sql** holds §5.2 and §6 (wrapped, transactional).
+
+The contents of ml/040:
 - `valid_agent`: replace the hard-coded six-agent list with
   `CHECK (source_agent = ANY (enum_range(NULL::e2i_agent_name)::text[]))`.
   - `e2i_agent_name` is the maintained agent taxonomy (memory migrations 018/029/048). It already has
@@ -277,10 +294,14 @@ are deleted along with their mock tests (`tests/unit/test_tool_registry/test_reg
 
 The stores join on `composition_id`, which episodic `raw_content` already carries (`memory_hooks.py`).
 
-### 5.2 Schema fit (migration ml/040)
+### 5.2 Schema fit (migration ml/041)
 
 **`composer_episodes`:**
 - Add:
+  - `audit_workflow_id uuid`: the audit chain's `workflow_id` for this run (`context["audit_workflow_id"]`,
+    set at `composer.py:290` before decomposition). It is the identity join for coverage reconciliation.
+    `audit_chain_entries` has no free-form input column to carry a composition_id; it stores
+    `input_hash`, per the §2.3 column list.
   - `outcome text CHECK IN ('success','partial','failed','cancelled')`, because `composition_status` has
     no PARTIAL and `status` keeps the terminal enum value (COMPLETED / FAILED / TIMEOUT).
     - A cancel is `cancelled`, not `timeout`: `CancelledError` alone does not prove a deadline expired.
@@ -338,11 +359,10 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 1. **`compose()` start.**
    - Generate `composition_id` up front and pass it into every `CompositionResult` built later,
      including `_create_error_result` and `_create_total_failure_result`.
-   - **Await** `composer_record_start` with a 2 s timeout, fail-open. It carries the redacted query,
-     session_id, user_id, entry_point (`context["entry_point"]`, set by the two entry points), brand,
-     region, and `is_synthetic = deployment_includes_synthetic()` (`src/repositories/provenance.py:95`).
-   - This one write is awaited so a composition exists durably before 13 s of decomposition. One
-     PostgREST round trip is milliseconds against a 45 s pipeline, and the cert measures it.
+   - Build the episode **seed**: redacted query, session_id, user_id, entry_point
+     (`context["entry_point"]`, set by the two entry points), brand, region, audit_workflow_id, and
+     `is_synthetic = deployment_includes_synthetic()` (`src/repositories/provenance.py:95`).
+   - Enqueue `composer_record_start(seed)` on the recorder's chain. It is not awaited.
 2. **After decompose / plan / execute**, enqueue `composer_record_phase` with:
    - the new status and the phase latency;
    - `sub_questions`: id, intent, question text redacted to 200 chars;
@@ -351,11 +371,18 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
    - `plan_source`;
    - `parallelizable_groups`, sent by execute.
 3. **Per finished step, during execution.** `PlanExecutor.execute` gains an optional
-   `on_step_result(step_number, StepResult)` callback, invoked as each step's result is added to the
-   trace (`executor.py:458, 472`). The recorder enqueues `composer_record_steps` for it.
-   - A cancel or a crash in a later group leaves the earlier steps recorded.
+   `on_step_result(step_number, StepResult)` callback. It is invoked the moment a step's `StepResult`
+   exists:
+   - single-step groups: after `_execute_step` returns (`executor.py:457`);
+   - parallel groups: **inside** each task of `_execute_parallel` (`execute_with_semaphore`,
+     `executor.py:923–925`), before `asyncio.gather` returns.
+
+   The recorder enqueues `composer_record_steps` for each call.
+   - A step that finished while a sibling in the same parallel group is still running is recorded even
+     if the group is then cancelled.
    - A step that was still running when a cancel arrived has no result and is not recorded. The episode
      says `cancelled` in phase `execute`.
+   - The callback is synchronous and only enqueues (no I/O), so it cannot slow or fail a step.
 4. **Terminal**, enqueue `composer_record_finish` with outcome, status, failed_phase, redacted error,
    per-phase and total latency, and counts. The terminal paths are:
    - success or partial (end of `compose`);
@@ -391,19 +418,24 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 
 A new `CompositionRecorder` (`src/agents/tool_composer/learning_recorder.py`) owns every write.
 
-**Four RPCs, each idempotent so a lost response can be re-sent:**
+**Four RPCs. Every one carries the episode seed and begins with
+`INSERT … ON CONFLICT (composition_id) DO NOTHING`,** so whichever write lands first creates the episode.
+A failed start therefore never orphans later phase, step or finish data. Each RPC is idempotent, so a lost
+response can be re-sent.
 
-| RPC | Behaviour |
+| RPC | Behaviour after the seed insert |
 |---|---|
-| `composer_record_start(p_episode)` | `INSERT … ON CONFLICT (composition_id) DO NOTHING`; returns the episode_id either way |
-| `composer_record_phase(p_composition_id, p_status, p_patch)` | Updates only a non-terminal episode |
-| `composer_record_steps(p_composition_id, p_steps)` | `INSERT … ON CONFLICT (episode_id, step_number) DO NOTHING` for steps; performance rows for invoked classes only, `ON CONFLICT (step_id) DO NOTHING`. It works whether the episode is open or finished. It returns a stable receipt `{recorded, already_present, unknown_tools}`. |
-| `composer_record_finish(p_composition_id, p_episode)` | Upserts: when start never landed, it inserts the episode from the start fields it also carries, then sets the terminal state. A second finish on a terminal episode returns `{recorded:false, already_terminal:true}` and changes nothing. |
+| `composer_record_start(p_seed)` | Nothing more; returns the episode_id |
+| `composer_record_phase(p_seed, p_status, p_patch)` | Updates status and phase fields only while the episode is non-terminal |
+| `composer_record_steps(p_seed, p_steps)` | `INSERT … ON CONFLICT (episode_id, step_number) DO NOTHING` for steps; performance rows for invoked classes only, `ON CONFLICT (step_id) DO NOTHING`. It works whether the episode is open or finished, and returns a stable receipt `{recorded, already_present, unknown_tools}`. |
+| `composer_record_finish(p_seed, p_final)` | Sets the terminal state and **all** phase latencies. The recorder keeps them in memory, so phase fields lost with a failed phase write are restored here. A second finish on a terminal episode returns `{recorded:false, already_terminal:true}` and changes nothing. |
 
-**Ordering.**
-- After the awaited start, the recorder chains phase, steps and finish writes on one background task per
-  composition, so start < phase < steps < finish.
-- Each write has a 5 s timeout.
+**Ordering and retry.**
+- The recorder chains start, phase, steps and finish writes on one background task per composition, so
+  they apply in order.
+- Each write has a 5 s timeout and **one** retry after 1 s on a transport error or timeout.
+- After that the chain moves on. Every later write is self-sufficient because of the seed, so one lost
+  write loses only its own delta, and finish restores phase fields and re-sends every step.
 - Tasks live in a module-level set with a `discard` done-callback, the `_pending_log_tasks` pattern from
   `intent_classifier.py:72/834`.
 - The API `lifespan` shutdown awaits the pending set for up to 5 s before closing clients, so a graceful
@@ -414,11 +446,16 @@ A new `CompositionRecorder` (`src/agents/tool_composer/learning_recorder.py`) ow
 - It increments a Prometheus counter `composer_record_failures_total{rpc}`, following
   `src/api/routes/metrics.py`'s optional-client pattern.
 - It never raises into `compose()`.
-- Coverage is measured in the cert (§9): episodes against audit-chain `workflow_start` rows, and steps
-  against `ExecutionTrace` counts.
+- Coverage is measured in the cert (§9), by identity:
+  - episodes against audit-chain `workflow_start` rows on `audit_workflow_id`;
+  - both against the cert's own list of triggered compositions;
+  - steps against `ExecutionTrace` counts.
 
-**Composition latency.** Only the start write is awaited, with a 2 s cap. The live cert measures the
-start write's duration and compares compose wall time with the pre-deploy baseline (§9).
+**Composition latency.** No write is awaited on the compose path: enqueueing is an in-memory append.
+The lazy registry sync also runs on the background chain. A slow or unreachable database therefore adds
+no latency and cannot push a request past its caller's deadline. A test pins that with an unreachable
+transport under a near-expired deadline. The live cert compares compose wall time with the pre-deploy
+baseline (§9).
 
 **Unknown tools.** `composer_record_steps` reports steps whose tool has no registry row in
 `unknown_tools`. Rehearsed with the draft finish function: a `cohort_builder` step was reported, and the
@@ -436,26 +473,40 @@ other 3 steps were recorded.
 
 ### 5.5 PII and retention
 
-- **Every persisted free-text string goes through `redact_query`** (`src/utils/redaction.py`), which
-  the module documents as "the single hook for any future PII scrubbing of query text". It covers the
-  query, sub-question text, scalar parameter values and error messages. SQL `left()` is only a second
-  bound.
-  - Today that hook only truncates, and the repo has no content scrubber. This design claims bounded
-    length and one scrubbing point, not scrubbing.
-  - **Query text:** `redact_query(query, max_len=500)`, the same 500-char cap as the episodic
-    `raw_content` (`memory_hooks.py`). `classification_logs` already keeps the full text in the same
-    schema.
-  - **Input params:** string scalars `redact_query(v, 120)`, numbers and bools as-is, lists as
-    `{"type":"list","len":n}`, dicts as `{"type":"dict","keys":[…]}`, DataFrames as
-    `{"type":"frame","rows":r,"columns":c}`. Planner-bound column names are kept, because they are the
-    plan. Entity id lists (for example `target_entities`) are never stored element-wise.
-  - **Errors:** `error_type` (exception class) is the aggregation key. `error_message` is
-    `redact_query(msg, 300)`.
-    - Refusal messages are designed to be read (#1574 scope disclosures) and already reach the audit
-      chain and synthesis.
-    - The cap bounds what an exception could echo from its inputs.
-    - A test feeds real tool exceptions whose text carries an input value, and pins the stored form.
-  - **Output:** keys only (`output_result = {"keys":[…]}`).
+The repo has no content scrubber: `redact_query` only truncates (`src/utils/redaction.py:25–41`). This
+design therefore **does not persist raw data values** where the loop does not need them. It does not rely
+on truncation to hide them.
+
+- **Input parameters: structure only.**
+  - A string value that names a column of the step's frame is stored as `{"type":"column","name":c}`.
+    Column names are schema, and they are the plan.
+  - Any other string is stored as `{"type":"str","len":n}`, without the value.
+  - Numbers and bools are kept: effect sizes, alpha, top_n. They are the plan's settings, not
+    identifiers.
+  - Lists are `{"type":"list","len":n}`, dicts `{"type":"dict","keys":[…]}`, DataFrames
+    `{"type":"frame","rows":r,"columns":c}`.
+  - Entity id lists (for example `target_entities`) are therefore never stored.
+- **Errors.** `error_type` (exception class) plus `outcome_class` is the aggregation key. `error_message`
+  is stored **only** for `ToolRefusalError` / `ToolInputError`, and bounded to 300 characters:
+  - Those are tool-authored reasons written for the user. #1574's scope disclosures are returned
+    verbatim in the chat answer (`composer.py:1055–1065`), so storing them adds no new exposure.
+  - Every other exception (generic, timeout, not-registered) stores `error_type` only, because arbitrary
+    exception text can echo input values.
+  - A test raises real tool exceptions whose text carries an input value and pins that the value is
+    absent from every persisted column.
+- **Sub-question text** is not stored; id and intent are.
+- **Output:** keys only (`output_result = {"keys":[…]}`).
+- **Query text is stored, `redact_query(query, 500)`.** This is a deliberate decision, not a redaction
+  claim.
+  - The query is needed for the admin failure list and the reuse audit.
+  - It is already persisted in four service-role stores, measured 2026-09-11:
+    - `classification_logs.query_text`, full, up to 2,590 chars;
+    - `audit_chain_entries.query_text`, full: 23 tool_composer rows, up to 532 chars, passed at
+      `composer.py:286`;
+    - episodic `raw_content.query`, 500 chars;
+    - `chatbot_messages.content` for user turns, up to 2,590 chars.
+  - `composer_episodes` adds no new exposure class, and access is the same (service_role only).
+  - A platform PII scrubber would change all five stores at the single hook. That is recorded in §10.
 - **Not stored:** `synthesized_response` and `tool_outputs` stay NULL / `{}`. They can carry
   patient-level numbers, and learning does not need them.
 - **Access:** `service_role` only. There are no `anon`/`authenticated` grants, and a real-DB test pins
@@ -575,7 +626,7 @@ n = 5.**
   A caveated tool that the LLM avoids gets fewer runs. If its count then drops below the floor, the
   caveat disappears. That oscillation is benign, and it is bounded by the 30-day window.
 - **Unverified assumption (labelled):** a caveat line changes the LLM's tool choice when an alternative
-  exists. Nothing measures that yet, and it cannot matter until a tool reaches n ≥ 20. The plan records
+  exists. Nothing measures that yet, and it cannot matter until a tool reaches n_health ≥ 20. The plan records
   it as a follow-up measurement, not a claim.
 
 ### 7.3 Similar-composition reuse
@@ -600,22 +651,38 @@ Two measured defects break that intent. The loop fixes both.
 `ToolPlanner.plan` (`planner.py:212–228`):
 - calls `get_similar_plan`: intent-set Jaccard plus dependency similarity ≥ 0.8, 15-minute TTL, process
   singleton;
-- returns `_adapt_cached_plan`, which copies the cached **steps verbatim**, input mappings included
-  (`planner.py:303–332`), and bypasses the LLM planner;
+- returns `_adapt_cached_plan`, which copies the cached steps and tool mappings (`planner.py:303–332`) and
+  bypasses the LLM planner. The outcome-hint and treatment guards then run over the copied steps
+  (`planner.py:221–228`), so a KPI outcome or treatment binding can still change. Everything else is reused
+  as it was.
 - caches every plan at planning time (`planner.py:293`), before execution, whatever happens next.
 
-A plan that then failed (0 tools succeeded, a `plan_defect`, a `not_registered` step) is served again to
-the next similar question in that worker for 15 minutes.
+**Eligibility (verified):**
+- the LLM planning path only: a KPI question that `_build_kpi_causal_plan` resolves never calls
+  `ToolPlanner` (`composer.py:341–350`);
+- a cached entry whose similarity is ≥ 0.8;
+- a cached step count equal to the new sub-question count (`planner.py:314`);
+- the same worker process.
+
+The decomposition is **not** cached: `DecompositionCache` has no caller outside `cache.py`, measured by
+grep. Every question is freshly decomposed, and eviction does not need to touch decompositions.
+
+Under those conditions, a plan that failed (0 tools succeeded, a `plan_defect`, a `not_registered` step)
+is served again to the next similar question in that worker for 15 minutes.
 
 **New behaviour:**
 - `PlanSimilarityCache` gets `evict(signature_key)`.
 - `ExecutionPlan` carries the `plan_cache_key` it was stored or matched under.
 - After execution, the composer evicts that key when the composition fails, or when any step's class is
   `plan_defect` / `not_registered`.
-- `plan_source = 'plan_cache'` on the episode makes cache reuse, and its outcomes, visible in the admin
-  surface.
-- **Deterministic and testable without an LLM:** a real planner with a real cache, a failed trace, then
-  the next `plan()` must not return the cached steps.
+- `plan_source` is `llm`, `plan_cache` or `kpi_deterministic`, and the episode records it, so cache reuse
+  and its outcomes are visible in the admin surface.
+- The G6 intent ("plan similarity matching" to skip planning for similar work, `fee8bc3e0`) is kept:
+  successful and partial-without-defect plans stay cached.
+- **Deterministic and testable without an LLM:** a real `ToolPlanner` with the real cache and real
+  `DecompositionResult` objects that meet the eligibility conditions. A failed trace evicts, and the next
+  `plan()` for a similar decomposition does not return the cached steps. The positive control is a
+  succeeded trace, after which it does.
 
 **2. Episodic references recommend failed sequences.**
 
@@ -632,9 +699,18 @@ two live rows repeat `gap_calculator`.
   - "Did not work for that question: gap_calculator (refused: data could not answer), rank_drivers
     (skipped: dependency unmet)".
 - A reference with zero succeeded steps is dropped from the context.
-- A reference with no recorded steps (the 2 pre-loop rows) renders as today.
-- **Test:** a real hydrated PARTIAL reference yields a recommended sequence without the refused tool, and
-  a zero-success reference yields no context.
+- **References with no recorded steps** (the 2 live pre-loop rows, and any future row whose step writes
+  were lost):
+  - `raw_content.tools_succeeded == raw_content.tools_executed` means every tool worked. It renders as
+    today.
+  - Otherwise the reference cannot say which tools failed, so it is **dropped** rather than recommended.
+  - Both live rows are `partial_success`, so both are dropped. Backfill is impossible: no per-step
+    record of those runs exists anywhere (§2.1).
+- **Tests:**
+  - a real hydrated PARTIAL reference yields a recommended sequence without the refused tool;
+  - a zero-success reference yields no context;
+  - the two legacy raw_content shapes (copied from the live rows) are dropped;
+  - a legacy all-success shape renders.
 - **Unverified assumption (labelled):** that the LLM planner avoids the listed "did not work" tools. As in
   §7.2, only a paired LLM measurement would prove it. The deterministic part (what the planner is told to
   reuse) is what this lane guarantees.
@@ -686,12 +762,27 @@ per-tool drill-down there would split one reading across two surfaces.
     1. `pg_dump --schema-only` of prod (a read-only dump) plus a data copy of `public.schema_migrations`,
        `tool_registry` and `tool_dependencies`, restored into `learning_loop_upgrade`. Every historical
        enum, CHECK, grant, default ACL, ml/036 object and the ledger arrive as prod has them.
+       - The public schema references `extensions.*` and `auth.*`: 41 lines in a read-only
+         `pg_dump -s -n public` probe on 2026-09-11, a 1.07 MB dump.
+       - The restore therefore first creates the `extensions` schema with `pgcrypto` / `uuid-ossp`, and
+         includes the `auth` schema definition (`-n auth`, schema only).
+       - The first plan task proves the restore is clean before any test depends on it.
     2. Run the **real** `scripts/run_migrations.sh` in URL mode (`SUPABASE_DB_URL` pointing at the
-       throwaway database). It must report exactly 039 and 040 pending and apply them with its own
-       `--single-transaction` wrapper, in its own directory order.
+       throwaway database). It must report exactly 039, 040 and 041 pending and apply them in its own
+       directory order.
+       - The test asserts the runner's branch per file: 039 un-wrapped, because of `ALTER TYPE … ADD
+         VALUE`; 040 and 041 wrapped with their ledger rows.
+       - It asserts that no `ADD VALUE` or `CONCURRENTLY` text appears in 040/041, even in a comment-free
+         form, so they cannot silently fall into the un-wrapped branch.
     3. Run it again: 0 pending.
-    4. Apply 039/040 directly a second time with `psql --single-transaction`: idempotent re-apply.
-    5. Assert objects, grants and the sync results.
+    4. **Partial-application recovery.**
+       - Force 041 to fail on its last statement in a copy (append `SELECT 1/0;`) and run the runner. The
+         transaction rolls back, and no ledger row is written for 041.
+       - Restore the file and run again: 041 applies.
+       - For 039 (un-wrapped): re-running after a recorded or unrecorded apply is a no-op.
+    5. Apply 039/040/041 directly a second time (040/041 with `psql --single-transaction`, 039 without):
+       idempotent re-apply.
+    6. Assert objects, grants and the sync results.
   - **Functional SQL tests** (sync guards, idempotent step/finish receipts, the dependency-endpoint
     check, `RETURNING (xmax = 0)` counts, reliability denominators, provenance filter) run on that
     upgraded database through psycopg transactions.
@@ -713,11 +804,31 @@ per-tool drill-down there would split one reading across two surfaces.
   - a callable that fails once and then succeeds: `succeeded`, attempts = 2.
 
   Test tools are registered through `snapshot`/`restore_snapshot`.
-- **Per-step persistence under cancel.** A real two-group plan whose second group runs a slow tool. The
-  test cancels the execute task during group 2 and asserts that group 1's steps are recorded and the
-  episode is `cancelled` in phase `execute`.
-- **Plan-cache eviction.** A real `ToolPlanner` and a real cache: a failed composition evicts, and the next
-  similar decomposition does not get the cached steps. A succeeded composition keeps them.
+- **Per-step persistence under cancel.** A real plan whose parallel group holds one fast tool and one slow
+  tool. The test cancels the execute task after the fast tool finished and while the slow one runs. It
+  asserts:
+  - the fast sibling's step is recorded;
+  - the slow one is not;
+  - the episode is `cancelled` in phase `execute`.
+
+  The same shape with the fast tool in an earlier group is also covered.
+- **Recorder failure modes** (psycopg transport against the throwaway database):
+  - start write fails (database stopped for the start call only), then phase, steps and finish land: one
+    episode with every field;
+  - a lost response re-sent: identical receipts, no duplicate rows;
+  - finish twice: `already_terminal`;
+  - shutdown drain: the pending set is flushed within 5 s.
+- **No latency on the user path.** An unreachable transport (connection refused and a 10 s hang, both
+  cases) under a composer call with a 1 s deadline. Composition time is unchanged against a no-recorder
+  run within 50 ms, and no exception reaches the caller.
+- **No raw values persisted.** Real tool exceptions whose text carries an input value (for example a
+  `KeyError` naming a value) and string parameters that are not column names. The test asserts the values
+  appear in no persisted column (`input_params`, `error_message`, `output_result`, `tool_plan`).
+- **Plan-cache eviction.** A real `ToolPlanner` and a real cache, with non-KPI `DecompositionResult`
+  objects that meet the §7.3 eligibility. A failed composition evicts, and the next similar decomposition
+  does not get the cached steps. A succeeded composition keeps them (positive control). A
+  `kpi_deterministic` plan never touches the cache.
+- **Episodic references.** The four shapes listed in §7.3.
 - **Composer wiring.** An opt-in real-LLM run (`E2I_LIVE_LLM=1`) records to the throwaway database
   through the psycopg transport, plus the live cert.
 - **Reliability rule.** The planted-truth test reproduces the §7.1 table bounds: false caveat ≤ 1% at
@@ -737,27 +848,34 @@ per-tool drill-down there would split one reading across two surfaces.
   4. **Admin surface.** The endpoint and tab show "Too few runs to judge".
   5. **Dormant gate.** The planner prompt log shows the declared latency.
   6. **Access.** PostgREST with the anon key refuses the RPCs and views.
-  7. **Latency.**
-     - The awaited start write takes ≤ 2 s, logged at DEBUG, with p50 and max reported.
-     - Compose wall time is within noise of the pre-deploy baseline for the same question.
-  8. **Coverage.**
-     - Over the cert window, `count(composer_episodes)` equals `count(audit_chain_entries WHERE
-       agent_name='tool_composer' AND action_type='workflow_start')`.
-     - Any difference is reported with `composer_record_failures_total`.
-  9. **Plan-cache eviction.** The cache is per worker, so both requests in a pair must be served by the
-     same worker process (pid in the composer log line). Repeat until they are, or the result proves
-     nothing.
-     - **Positive control:** ask a succeeding question twice. The second episode has
-       `plan_source = 'plan_cache'`.
-     - **The fix:** ask a failing question twice. The second episode has `plan_source = 'llm'`.
+  7. **Latency.** Compose wall time is within noise of the pre-deploy baseline for the same questions.
+     Recorder write durations are logged at DEBUG, with p50 and max reported.
+  8. **Coverage, by identity.**
+     - The cert script records every composition it triggers (session_id, request time).
+     - Over the cert window, three sets are compared:
+       - the cert's triggered list;
+       - `audit_chain_entries` `workflow_start` rows for `tool_composer`, by `workflow_id`;
+       - `composer_episodes`, by `audit_workflow_id`.
+     - Every triggered composition must appear in both stores, with the same workflow_id.
+     - A composition present in one store and missing from the other is listed with
+       `composer_record_failures_total` and the recorder's WARNING lines.
+     - Audit writes are also fail-open (`composer.py:272–294`), so a miss is attributed to whichever store
+       lacks the row. The triggered list is the independent denominator.
+  9. **Plan cache, observed, not forced.** The live cert reports the `plan_source` distribution and each
+     `plan_cache` episode's outcome.
+     - It does not try to force a cache hit live. Eligibility needs the same worker, a similar fresh LLM
+       decomposition and equal step and sub-question counts (§7.3), so a forced pair proves nothing
+       either way.
+     - The eviction behaviour itself is certified by the deterministic integration test above.
 - **Rollback.**
   - Code: revert the PR. The recorder and sync are fail-open, so a code-only revert is safe with the
     migrations left in place.
-  - DB: `database/ml/rollback_040.sql` / `rollback_039.sql`. They recreate the dropped function,
-    trigger, column, index and views from their ml/013 definitions, restore the six-agent CHECK only
-    when no row violates it, and drop the new functions and columns. Recorded rows in the new columns
-    are lost.
-  - `COHORT` cannot be removed from an enum (PG) and is harmless.
+  - DB: `database/ml/rollback_041.sql` then `rollback_040.sql`.
+    - They recreate the dropped function, trigger, column, index and views from their ml/013 definitions.
+    - They restore the six-agent CHECK only when no row violates it. Otherwise they raise with the
+      offending rows, and the operator decides.
+    - They drop the new functions and columns. Recorded rows in the new columns are lost.
+  - ml/039 has no rollback: `COHORT` cannot be removed from an enum (PG), and it is harmless.
   - Rollback files are excluded from auto-apply by `run_migrations.sh`.
 
 ## 10. Non-goals
@@ -773,6 +891,9 @@ per-tool drill-down there would split one reading across two surfaces.
 - **Procedural-memory `tool_composition` patterns.**
 - **`tool_performance` rows from non-composer callers** (`called_by='agent'|'direct'`); none exist.
 - **A retention/purge job** (§5.5).
+- **A platform PII scrubber for query text.** Query text is already persisted in four stores (§5.5). A
+  scrubber belongs at `redact_query`, the platform's single hook, and would cover all five stores at once.
+  This lane stores no raw parameter values and no generic exception text, so it adds no exposure class.
 
 ## 11. Decisions that need the OWNER
 
@@ -785,7 +906,7 @@ per-tool drill-down there would split one reading across two surfaces.
   - **Recommendation:** build it in this lane as the last functional task, so the feature is not left
     to be chased later. It reverses if the owner prefers to wait for feedback volume. The plan marks it
     as a task gated on this answer.
-- **O2. The planner-prompt caveat.** §7.2's thresholds (n ≥ 20, 10% health-failure bar) are calibrated
+- **O2. The planner-prompt caveat.** §7.2's thresholds (n_health ≥ 20, 10% health-failure bar) are calibrated
   (§7.1), but whether a caveat line changes LLM tool choice is unmeasured, and it is dormant at current
   volume.
   - **Recommendation:** ship it dormant with the planted-truth test.
@@ -794,8 +915,14 @@ per-tool drill-down there would split one reading across two surfaces.
 - **O3. Dropping designed DB objects:** `find_similar_compositions()`, `composer_episodes.query_embedding`
   plus the ivfflat index, `update_tool_registry_metrics()`, `trg_log_step_performance`,
   `tool_registry.success_rate`.
-  - Each has verified intent that is served elsewhere, no caller ever, and a measured defect or a
-    duplicate store (§4, §5.2, §6, §7.3).
+  - **The three functions and the column** (`find_similar_compositions`, `update_tool_registry_metrics`,
+    `query_embedding`) have had no caller or writer since they were created. Their intent is served by a
+    store that is live, episodic memory or `get_tool_reliability` (§6, §7.3). `update_tool_registry_metrics`
+    also has a measured defect: no minimum n (§2.3).
+  - **The trigger** `trg_log_step_performance` is not "unused". It is attached, and it would fire, but its
+    semantics are measured wrong: it misses inserted terminal steps and double-counts COMPLETED→FAILED
+    (§2.3). Its intent (a performance row per finished step) is kept in the step RPC (§5.2).
+  - **`tool_registry.success_rate`** holds seed defaults that look measured (§2.1), and nothing reads it.
   - **Recommendation:** drop.
   - Rollback files recreate them. The owner may prefer to keep the vector column for a future
     composer-specific similarity search.
