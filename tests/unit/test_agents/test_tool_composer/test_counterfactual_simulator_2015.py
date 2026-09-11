@@ -120,6 +120,22 @@ def _frame(provider):
     return provider.get_training_frame("email_campaign", brand="Kisqali", twin_type="hcp")
 
 
+def _independent_n_per_arm(frame, regions, effect):
+    """Per-arm n for a two-sided, equal-allocation test of a continuous outcome, rebuilt
+    from the cohort: the outcome SD among the rows at or below the median intensity (the
+    estimator's comparison arm), in the target regions when given."""
+    import math
+
+    from scipy.stats import norm
+
+    df = frame.df
+    control = df[df[frame.treatment_var] <= df[frame.treatment_var].median()]
+    if regions:
+        control = control[control["region"].isin(regions)]
+    d = abs(effect) / control[frame.outcome_var].std(ddof=1)
+    return math.ceil(2 * ((norm.ppf(0.975) + norm.ppf(0.8)) / d) ** 2)
+
+
 # ---------------------------------------------------------------------------
 # What the engine computed is what the tool reports
 # ---------------------------------------------------------------------------
@@ -157,7 +173,10 @@ def test_the_result_is_the_engine_estimate_not_a_scaled_constant(whole_populatio
     assert out.twin_count == len(_population().twins)
     assert out.data_provenance == "cohort_estimated_synthetic_gold_v1"
     assert out.recommendation == whole_population.recommendation.value
-    assert out.recommended_sample_size == whole_population.recommended_sample_size
+    # codex whole-diff #3 F1: the engine sizes the study from the twins' heuristic treatment
+    # PROPENSITY taken as a conversion proportion; the outcome is a continuous rate.
+    assert out.recommended_sample_size == _independent_n_per_arm(_frame(provider), [], out.effect)
+    assert out.recommended_sample_size != whole_population.recommended_sample_size
 
 
 def test_a_targeted_request_is_answered_with_inference_on_the_targeted_regions(
@@ -392,58 +411,50 @@ def _population_with_regional_baselines() -> TwinPopulation:
     return TwinPopulation(twin_type=TwinType.HCP, brand=Brand.KISQALI, twins=twins, size=len(twins))
 
 
-def test_simulating_a_targeted_population_applies_the_policy_to_the_targeted_twins(provider):
+def test_a_targeted_sample_size_comes_from_the_cohort_not_the_twins_propensity(provider):
+    """codex whole-diff #3 F1: two twin populations that differ only in baseline propensity
+    must get the same recommended size — the outcome spread and the effect are the same."""
     from uuid import uuid4
 
-    from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
-    from src.digital_twin.effect.recommendation import PolicyThresholds, RecommendationPolicy
-
     frame = _frame(provider)
-    model_id = uuid4()
-    result, targeted = tr._simulate_population(
-        _population_with_regional_baselines(),
-        provider=provider,
-        frame=frame,
-        intervention_type="email_campaign",
-        regions=["northeast"],
-        model_id=model_id,
-    )
-    assert result.status.value == "completed" and str(result.model_id) == str(model_id)
-    assert targeted is not None and targeted.regions == ["northeast"]
-
-    def policy_n(baseline):
-        estimate = EffectEstimate(
-            ate=targeted.effect,
-            ate_ci_lower=targeted.ci_lower,
-            ate_ci_upper=targeted.ci_upper,
-            att=None,
-            atc=None,
-            per_twin_uplift=np.array([targeted.effect]),
-            auuc=None,
-            qini=None,
-            feature_importances=None,
-            n_train=targeted.cohort_rows,
-            estimator_type="cohort_causal_forest_dml",
-            data_provenance=PROVENANCE_COHORT,
+    outputs = []
+    for population in (_population_with_regional_baselines(), _population()):
+        model_id = uuid4()
+        result, targeted = tr._simulate_population(
+            population,
+            provider=provider,
+            frame=frame,
+            intervention_type="email_campaign",
+            regions=["northeast"],
+            model_id=model_id,
         )
-        return RecommendationPolicy(PolicyThresholds(min_effect=0.05)).decide(
-            estimate, baseline_rate=baseline
+        assert result.status.value == "completed" and str(result.model_id) == str(model_id)
+        assert targeted is not None and targeted.regions == ["northeast"]
+        outputs.append(
+            tr._simulation_results(
+                result,
+                brand="Kisqali",
+                intervention_type="email_campaign",
+                frame=frame,
+                targeted=targeted,
+            )
         )
-
-    decision, rationale, n_targeted = policy_n(0.10)
-    assert targeted.recommended_sample_size == n_targeted
-    assert (targeted.recommendation, targeted.recommendation_rationale) == (
-        decision.value,
-        rationale,
+    first, second = outputs
+    assert first.effect_scope == "targeted regions ['northeast']"
+    assert first.effect == pytest.approx(second.effect, abs=1e-9)
+    assert first.recommended_sample_size == second.recommended_sample_size
+    assert first.recommended_sample_size == _independent_n_per_arm(
+        frame, ["northeast"], first.effect
     )
-    assert policy_n(float(np.mean([0.10, 0.60, 0.35, 0.35])))[2] != n_targeted
-
-    out = tr._simulation_results(
-        result, brand="Kisqali", intervention_type="email_campaign", frame=frame, targeted=targeted
+    assert (first.recommendation, first.recommendation_rationale) == (
+        second.recommendation,
+        second.recommendation_rationale,
     )
-    assert out.effect == targeted.effect and out.recommended_sample_size == n_targeted
-    assert out.effect_scope == "targeted regions ['northeast']"
-    assert out.model_id == str(model_id)
+
+
+def test_no_size_is_recommended_for_a_zero_effect(provider):
+    size, note = tr._experiment_size(_frame(provider), [], 0.0)
+    assert size is None and "zero" in note
 
 
 def test_simulating_the_whole_population_has_no_targeted_inference(provider):

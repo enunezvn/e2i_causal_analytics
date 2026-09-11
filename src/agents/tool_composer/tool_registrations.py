@@ -279,8 +279,12 @@ class SimulationResults(BaseModel):
     ``cohort_effect`` / ``cohort_ci_*`` are always the engine's cohort-wide numbers — the
     ones ``/digital-twin/simulate`` returns, which a region filter does not change
     (measured). ``region_effects`` are per-region effects for the simulated twins' regions
-    that the cohort covers: point estimates. ``recommendation*`` apply the engine's CI-based
-    DEPLOY / REFINE / SKIP policy to the headline effect.
+    that the cohort covers: point estimates. ``recommendation`` / ``recommendation_rationale``
+    apply the engine's CI-based DEPLOY / REFINE / SKIP policy to the headline effect.
+    ``recommended_sample_size`` is the per-arm n of a two-sided, equal-allocation experiment
+    powered to detect the headline effect on the continuous outcome, sized from the outcome's
+    spread in the cohort's comparison arm (see :func:`_experiment_size`); ``None`` when that
+    cannot be measured, with the reason in ``assumptions``.
     """
 
     intervention_type: str
@@ -3062,7 +3066,6 @@ class _TargetedEffect(BaseModel):
     cohort_rows: int
     recommendation: str
     recommendation_rationale: str
-    recommended_sample_size: int
 
 
 def _targeted_effect(frame: Any, regions: List[str], *, baseline_rate: float) -> _TargetedEffect:
@@ -3072,9 +3075,11 @@ def _targeted_effect(frame: Any, regions: List[str], *, baseline_rate: float) ->
     alpha (``CohortCausalEstimator`` defaults), so its point estimate for a region is the
     engine's region effect; ``ate_interval`` over the targeted cohort rows gives the
     interval. The engine's DEPLOY / REFINE / SKIP policy (same minimum effect, power and
-    alpha) is then applied to it, with the targeted twins' mean baseline propensity — as the
-    engine does for the cohort with all twins. A region without a treated-vs-control contrast
-    in the cohort is refused.
+    alpha) is then applied to it. ``baseline_rate`` (the targeted twins' mean propensity) is
+    passed only because ``RecommendationPolicy.decide`` requires it: the decision reads the
+    interval alone, and the policy's sample size — a two-proportion n from that heuristic
+    propensity — is discarded (see :func:`_experiment_size`). A region without a
+    treated-vs-control contrast in the cohort is refused.
     """
     import numpy as np
 
@@ -3116,7 +3121,7 @@ def _targeted_effect(frame: Any, regions: List[str], *, baseline_rate: float) ->
         estimator_type="cohort_causal_forest_dml",
         data_provenance=PROVENANCE_COHORT,
     )
-    recommendation, rationale, recommended_n = RecommendationPolicy(
+    recommendation, rationale, _unused_propensity_based_n = RecommendationPolicy(
         PolicyThresholds(min_effect=SimulationEngine.DEFAULT_MIN_EFFECT_THRESHOLD)
     ).decide(estimate, baseline_rate=baseline_rate)
     return _TargetedEffect(
@@ -3127,7 +3132,55 @@ def _targeted_effect(frame: Any, regions: List[str], *, baseline_rate: float) ->
         cohort_rows=fit.target_n,
         recommendation=recommendation.value,
         recommendation_rationale=rationale,
-        recommended_sample_size=recommended_n,
+    )
+
+
+def _experiment_size(frame: Any, regions: List[str], effect: float) -> Tuple[Optional[int], str]:
+    """Per-arm n for an experiment powered to detect ``effect``, and how it was sized.
+
+    The engine's policy sizes from the twins' heuristic treatment propensity taken as a
+    conversion proportion; the outcome is a continuous per-HCP rate (live cohort: mean 1.18,
+    SD 0.64, range 0-4), so that figure answers nothing (codex whole-diff #3). This sizes a
+    two-sided, equal-allocation test of a continuous outcome with ``power_analysis_lib``, at
+    the policy's power and alpha: Cohen's d = |effect| / the outcome SD among the cohort rows
+    in the estimate's comparison arm (at or below the median intensity), within the targeted
+    regions when there are any. An unadjusted SD, so the size is conservative next to the
+    adjusted estimate. ``(None, reason)`` when the effect is zero or the SD is not measurable.
+    """
+    from src.digital_twin.effect.cohort_causal_estimator import control_outcome_sd
+    from src.digital_twin.effect.errors import EffectDataUnavailable
+    from src.digital_twin.effect.recommendation import PolicyThresholds
+    from src.utils.power_analysis_lib import continuous_outcome_power
+
+    policy = PolicyThresholds()
+    scope = f"the targeted regions {regions}" if regions else "the cohort"
+    if not math.isfinite(effect) or effect == 0:
+        return None, (
+            f"recommended_sample_size is not given: the effect is {effect:g}, and no "
+            "experiment can be powered to detect a zero effect."
+        )
+    try:
+        sd, n_rows = control_outcome_sd(
+            frame.df,
+            frame.treatment_var,
+            outcome_col=frame.outcome_var,
+            confounders=tuple(frame.confounders),
+            regions=regions,
+        )
+    except EffectDataUnavailable as exc:
+        return None, f"recommended_sample_size is not given: {exc}"
+    if not math.isfinite(sd) or sd <= 0:
+        return None, (
+            f"recommended_sample_size is not given: {frame.outcome_var} does not vary among "
+            f"the {n_rows} comparison-arm rows of {scope}."
+        )
+    d = abs(effect) / sd
+    per_arm = continuous_outcome_power(d, policy.alpha, policy.power).sample_size_per_arm
+    return per_arm, (
+        f"recommended_sample_size = {per_arm} per arm: a two-sided, equal-allocation test at "
+        f"power {policy.power:g} and alpha {policy.alpha:g} for Cohen's d = |effect| / SD of "
+        f"{frame.outcome_var} ({sd:.4g}, among the {n_rows} rows of {scope} at or below the "
+        f"median {frame.treatment_var}) = {d:.3g}."
     )
 
 
@@ -3220,9 +3273,6 @@ def _simulation_results(
     Region effects are reported only for regions the cohort covers: the estimator gives a
     twin in an uncovered region the cohort ATE, which is not that region's effect.
     """
-    from src.digital_twin.effect.recommendation import PolicyThresholds
-
-    policy = PolicyThresholds()
     if getattr(result.status, "value", result.status) != "completed":
         raise ToolRefusalError(
             f"counterfactual_simulator: the twin simulation for {intervention_type!r} on "
@@ -3246,7 +3296,6 @@ def _simulation_results(
         )
         recommendation = str(result.recommendation.value)
         rationale = str(result.recommendation_rationale)
-        recommended_n = result.recommended_sample_size
         scope_note = (
             "effect and its 95% interval are the engine's cohort-wide estimate, the numbers "
             "/digital-twin/simulate returns for this request."
@@ -3256,13 +3305,13 @@ def _simulation_results(
         effect, ci_lower, ci_upper = targeted.effect, targeted.ci_lower, targeted.ci_upper
         recommendation = targeted.recommendation
         rationale = targeted.recommendation_rationale
-        recommended_n = targeted.recommended_sample_size
         scope_note = (
             f"effect and its 95% interval are the causal forest's average effect over the "
             f"{targeted.cohort_rows} cohort rows in {target_regions}; cohort_effect and its "
             "interval are the engine's cohort-wide estimate, which a region filter does not "
             "change."
         )
+    recommended_n, size_note = _experiment_size(frame, target_regions, effect)
     assumptions = [
         f"Effect of {intervention_type} = high vs low {frame.treatment_var} (split at the "
         f"cohort median) on {frame.outcome_var}, estimated with a causal forest (DML) on "
@@ -3274,9 +3323,7 @@ def _simulation_results(
         f"region_effects are the per-region effects for the {result.twin_count} simulated "
         "twins' regions that the cohort covers: point estimates without an interval.",
         f"Recommendation policy (applied to effect): {rationale}",
-        f"recommended_sample_size is the policy's per-arm two-proportion n to detect effect at "
-        f"power {policy.power:g} and alpha {policy.alpha:g}, from the simulated twins' mean "
-        "baseline propensity.",
+        size_note,
     ]
     return SimulationResults(
         intervention_type=intervention_type,

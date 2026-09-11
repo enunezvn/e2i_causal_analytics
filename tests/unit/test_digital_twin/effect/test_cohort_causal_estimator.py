@@ -150,3 +150,24 @@ def test_a_target_region_without_a_contrast_is_refused():
     one_sided.loc[in_west, "engagement_score"] = median + 1.0  # every west row "treated"
     with pytest.raises(EffectDataUnavailable, match="west"):
         estimate_cohort_effect(one_sided, "engagement_score", target_regions=["west"])
+
+
+def test_control_outcome_sd_is_the_outcome_spread_of_the_low_intensity_rows():
+    """#2015: sizing an experiment on this contrast needs the outcome's spread in the
+    comparison arm — the rows at or below the median treatment intensity, the estimator's
+    own split — overall or within target regions."""
+    from src.digital_twin.effect.cohort_causal_estimator import control_outcome_sd
+
+    cohort = _make_confounded_cohort(n_per_region=300)
+    control = cohort[cohort["engagement_score"] <= cohort["engagement_score"].median()]
+    sd, n = control_outcome_sd(cohort, "engagement_score")
+    assert n == len(control)
+    assert sd == pytest.approx(control["conversion_rate"].std(ddof=1))
+
+    in_target = control[control["region"].isin(["northeast", "west"])]
+    sd_t, n_t = control_outcome_sd(cohort, "engagement_score", regions=["northeast", "west"])
+    assert n_t == len(in_target)
+    assert sd_t == pytest.approx(in_target["conversion_rate"].std(ddof=1))
+
+    with pytest.raises(EffectDataUnavailable, match="atlantis"):
+        control_outcome_sd(cohort, "engagement_score", regions=["atlantis"])

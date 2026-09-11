@@ -69,6 +69,86 @@ class CohortCausalEffect:
         return float(self.ate_ci_upper - self.ate_ci_lower)
 
 
+def _usable_rows(
+    cohort: pd.DataFrame,
+    treatment_col: str,
+    *,
+    outcome_col: str,
+    region_col: str,
+    confounders: Sequence[str],
+) -> pd.DataFrame:
+    """The rows every estimate on this cohort uses: required columns present (refusing an
+    under-adjusted estimate), numeric model inputs coerced, rows null in any of them dropped.
+    Columns: ``t_raw``, ``y``, ``region`` and one per confounder."""
+    if treatment_col not in cohort.columns:
+        raise EffectDataUnavailable(f"cohort missing treatment column '{treatment_col}'.")
+    if outcome_col not in cohort.columns or region_col not in cohort.columns:
+        raise EffectDataUnavailable(
+            f"cohort missing required column(s): need '{outcome_col}' and '{region_col}'."
+        )
+
+    # Require every REQUESTED confounder to be present — refuse to silently drop a known
+    # confounder and emit an under-adjusted (confounded) estimate that LOOKS adjusted.
+    # (An explicit empty `confounders` is allowed: it is the deliberate naive/unadjusted
+    # contrast used for de-confounding validation.)
+    missing = [c for c in confounders if c not in cohort.columns]
+    if missing:
+        raise EffectDataUnavailable(
+            f"cohort missing required confounder column(s) {missing}; refusing to "
+            "produce an under-adjusted estimate."
+        )
+
+    # Coerce + drop rows null in any model input (fail-honest, no NaN-as-0 fabrication).
+    work = pd.DataFrame(
+        {
+            "t_raw": pd.to_numeric(cohort[treatment_col], errors="coerce"),
+            "y": pd.to_numeric(cohort[outcome_col], errors="coerce"),
+            "region": cohort[region_col].astype(str),
+        }
+    )
+    for c in confounders:
+        work[c] = pd.to_numeric(cohort[c], errors="coerce")
+    work = work.dropna().reset_index(drop=True)
+
+    return work
+
+
+def control_outcome_sd(
+    cohort: pd.DataFrame,
+    treatment_col: str,
+    *,
+    outcome_col: str = _OUTCOME_COL,
+    region_col: str = _REGION_COL,
+    confounders: Sequence[str] = DEFAULT_CONFOUNDERS,
+    regions: Sequence[str] = (),
+) -> tuple[float, int]:
+    """Outcome SD in the comparison arm of :func:`estimate_cohort_effect`'s contrast (#2015).
+
+    The comparison arm is the usable rows at or below the cohort-median treatment intensity
+    (the estimator's split), restricted to ``regions`` when given. Returns ``(sd, n)`` with
+    ``sd`` the sample standard deviation (ddof=1). Raises ``EffectDataUnavailable`` with
+    fewer than two such rows.
+    """
+    work = _usable_rows(
+        cohort,
+        treatment_col,
+        outcome_col=outcome_col,
+        region_col=region_col,
+        confounders=confounders,
+    )
+    control = work[work["t_raw"] <= float(work["t_raw"].median())]
+    targets = [str(r) for r in regions]
+    if targets:
+        control = control[control["region"].isin(targets)]
+    if len(control) < 2:
+        scope = f"regions {targets}" if targets else "the cohort"
+        raise EffectDataUnavailable(
+            f"{scope} has {len(control)} usable comparison-arm rows for '{treatment_col}'; "
+            "the outcome spread cannot be measured."
+        )
+    return float(control["y"].std(ddof=1)), int(len(control))
+
+
 def estimate_cohort_effect(
     cohort: pd.DataFrame,
     treatment_col: str,
@@ -92,36 +172,14 @@ def estimate_cohort_effect(
     control rows; otherwise ``EffectDataUnavailable`` (a region the cohort does not cover
     would only get an extrapolated or fallback effect).
     """
-    if treatment_col not in cohort.columns:
-        raise EffectDataUnavailable(f"cohort missing treatment column '{treatment_col}'.")
-    if outcome_col not in cohort.columns or region_col not in cohort.columns:
-        raise EffectDataUnavailable(
-            f"cohort missing required column(s): need '{outcome_col}' and '{region_col}'."
-        )
-
-    # Require every REQUESTED confounder to be present — refuse to silently drop a known
-    # confounder and emit an under-adjusted (confounded) estimate that LOOKS adjusted.
-    # (An explicit empty `confounders` is allowed: it is the deliberate naive/unadjusted
-    # contrast used for de-confounding validation.)
-    missing = [c for c in confounders if c not in cohort.columns]
-    if missing:
-        raise EffectDataUnavailable(
-            f"cohort missing required confounder column(s) {missing}; refusing to "
-            "produce an under-adjusted estimate."
-        )
-    present_confounders = list(confounders)
-
-    # Coerce + drop rows null in any model input (fail-honest, no NaN-as-0 fabrication).
-    work = pd.DataFrame(
-        {
-            "t_raw": pd.to_numeric(cohort[treatment_col], errors="coerce"),
-            "y": pd.to_numeric(cohort[outcome_col], errors="coerce"),
-            "region": cohort[region_col].astype(str),
-        }
+    work = _usable_rows(
+        cohort,
+        treatment_col,
+        outcome_col=outcome_col,
+        region_col=region_col,
+        confounders=confounders,
     )
-    for c in present_confounders:
-        work[c] = pd.to_numeric(cohort[c], errors="coerce")
-    work = work.dropna().reset_index(drop=True)
+    present_confounders = list(confounders)
 
     if len(work) < _MIN_ROWS:
         raise EffectDataUnavailable(
