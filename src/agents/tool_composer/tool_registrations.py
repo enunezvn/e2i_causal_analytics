@@ -2135,8 +2135,16 @@ def _refuse_unless_binary_01(
             f"named {name!r} in the supplied DataFrame. Refusing to pick one."
         )
 
+    def _shown(value: Any) -> str:
+        # ``repr`` itself can raise (a 5,001-digit int exceeds Python's int-to-str
+        # limit), and nothing may escape this guard except the refusal.
+        try:
+            return _clip_name(repr(value))
+        except Exception:  # noqa: BLE001 - any repr failure renders as the type
+            return f"<{_clip_name(type(value).__name__)}>"
+
     def _render(values: Any) -> str:
-        return "[" + ", ".join(_clip_name(repr(v)) for v in values) + "]"
+        return "[" + ", ".join(_shown(v) for v in values) + "]"
 
     non_null = series.dropna()
     try:
@@ -2150,7 +2158,7 @@ def _refuse_unless_binary_01(
         try:
             ordered = sorted(values)
         except TypeError:
-            ordered = sorted(values, key=repr)
+            ordered = sorted(values, key=_shown)
         carries = (
             f"{len(observed)} distinct non-null values, including "
             f"{_render(ordered[:_BINARY_CHECK_SAMPLE])}"

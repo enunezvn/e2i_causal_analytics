@@ -153,6 +153,19 @@ def test_the_observed_values_in_a_refusal_are_bounded():
     assert len(reason) < 700, len(reason)
 
 
+@pytest.mark.parametrize("values", [[0, 1, 10**5000], ["a", 1, 10**5000]], ids=["int", "mixed"])
+def test_a_value_whose_repr_raises_is_still_refused_structurally(values):
+    """``repr`` of a 5,001-digit int raises ``ValueError`` (Python's int-to-str digit limit).
+
+    Rendering the observed values must not escape the guard as a retryable error
+    (codex r2 MEDIUM). The mixed case also reaches the sort fallback.
+    """
+    df = _cohort(n=3)
+    df["huge"] = pd.Series(values, dtype=object)
+    with pytest.raises(ToolRefusalError, match="'huge' is not a binary 0/1 column"):
+        _propensity(df, "huge")
+
+
 @pytest.mark.parametrize("tool", [_propensity, _cate], ids=["propensity", "cate"])
 def test_a_two_valued_treatment_that_is_not_0_1_is_refused(tool):
     """{1, 2} is 'binary' to the planner's column profile (2 distinct numeric values).
