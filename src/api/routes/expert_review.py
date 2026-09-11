@@ -61,10 +61,11 @@ logger = logging.getLogger(__name__)
 # HTTPException(503) pattern (routes/causal.py, routes/digital_twin.py). The
 # app's StarletteHTTPException handler MASKS a 503 detail unless it is marked
 # with errors.user_safe_503_detail(); this one names no internals, so it is
-# marked and reaches the client as the response ``message``. (The handler
-# builds its own JSONResponse, so an HTTPException ``Retry-After`` header
-# would be dropped -- its body already says "try again in 30 seconds".)
+# marked and reaches the client as the response ``message``. The handler
+# forwards HTTPException headers (#1999), so the 503 sends the ``Retry-After``
+# its DependencyError body already promises ("try again in 30 seconds").
 _STORE_UNAVAILABLE_DETAIL = "Expert-review store unavailable. Retry shortly."
+_STORE_UNAVAILABLE_RETRY_AFTER_SECONDS = 30
 
 # #1993: one LLM build per review id across BOTH gunicorn workers. Redis
 # ``SET NX PX`` with a process-local fallback. The TTL (120 s) tracks nginx's
@@ -106,6 +107,7 @@ def _store_unavailable(operation: str, exc: Exception) -> HTTPException:
     return HTTPException(
         status_code=503,
         detail=user_safe_503_detail(_STORE_UNAVAILABLE_DETAIL),
+        headers={"Retry-After": str(_STORE_UNAVAILABLE_RETRY_AFTER_SECONDS)},
     )
 
 
