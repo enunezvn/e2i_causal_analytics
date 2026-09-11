@@ -69,7 +69,11 @@ def test_nothing_imports_the_retired_category_names():
     for path in _python_files():
         rel = _rel(path)
         text = path.read_text(errors="replace")
-        if "get_tools_by_category" in text and not rel.startswith(GEPA_OWNERS):
+        if (
+            "get_tools_by_category" in text
+            and not rel.startswith(GEPA_OWNERS)
+            and "src.optimization.gepa" not in text  # a consumer of the GEPA helper
+        ):
             hits.append(f"{rel}: get_tools_by_category")
         if "ToolCategory" not in text:
             continue
