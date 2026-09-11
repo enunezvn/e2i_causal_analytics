@@ -39,8 +39,8 @@ Agent runs: 136 (`estimate_source = causal_impact_query`, one rcc row each). Sto
 | boot_sd / reported | n=29, median 1.103, min 0.824, max 1.495 |
 | boot_ci / reported | n=29, median 0.937, min 0.726, max 1.299 |
 | naive / reported | n=29, median 0.996, min 0.858, max 1.052 |
-| naive / evalue_inv | n=127, median 0.998, min 0.471, max 1.131 |
-| naive_2prop / evalue_inv (binary treatment & outcome) | n=121, median 0.999, min 0.854, max 1.131 |
+| naive / evalue_inv | n=127, median 0.997, min 0.471, max 1.131 |
+| naive_2prop / evalue_inv (binary treatment & outcome) | n=121, median 0.998, min 0.854, max 1.131 |
 | naive_ols / evalue_inv (continuous treatment) | n=6, median 0.471, min 0.471, max 0.482 |
 | naive / boot_sd | n=29, median 0.889, min 0.679, max 1.156 |
 | std_refits / se | n=133, median 0.351, min 0.007, max 27.123 |
@@ -71,20 +71,20 @@ Agent runs: 136 (`estimate_source = causal_impact_query`, one rcc row each). Sto
 | `e01727df` | <all> | treatment_initiated→persistent_180d | 1500 | 0.0722 | 0.0729 | 0.0007 | 1.0 / passed | reported | 0.0316 | 1.00 | 0.02 (0.02) | passed | proceed → proceed | 0.0007 | 0.15833 | 0.0316 / 0.0316 / 0.0265 / 0.0271 |
 | `d18b3d84` | <all> | treatment_initiated→persistent_180d | 1500 | 0.0722 | 0.0754 | 0.0033 | 4.5 / passed | reported | 0.0316 | 1.00 | 0.10 (0.10) | passed | proceed → proceed | 0.0027 | 0.11273 | 0.0316 / 0.0316 / 0.0291 / 0.0271 |
 | `9260ca38` | <all> | treatment_initiated→persistent_180d | 1500 | 0.0722 | 0.0711 | 0.0011 | 1.5 / passed | reported | 0.0316 | 1.00 | 0.03 (0.03) | passed | proceed → proceed | 0.0058 | 0.42852 | 0.0316 / 0.0316 / 0.0357 / 0.0271 |
-| `02546c65` | Fabhalta | acceptance_status→conversion_flag | 5000 | 0.0611 | 0.0612 | 0.0001 | 0.1 / passed | evalue_inv | 0.0110 | 1.00 | 0.01 (0.01) | passed | review → review | 0.0001 | 0.25402 | - / 0.0110 / - / 0.0109 |
-| `45b27347` | Fabhalta | control_group_flag→action_taken | 5000 | -0.0786 | -0.0785 | 0.0001 | 0.1 / passed | evalue_inv | 0.0147 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.36164 | - / 0.0147 / - / 0.0149 |
+| `02546c65` | Fabhalta | acceptance_status→conversion_flag | 5000 | 0.0611 | 0.0612 | 0.0001 | 0.1 / passed | evalue_inv | 0.0110 | 1.00 | 0.01 (0.01) | passed | review → review | 0.0001 | 0.25402 | - / 0.0110 / - / 0.0111 |
+| `45b27347` | Fabhalta | control_group_flag→action_taken | 5000 | -0.0786 | -0.0785 | 0.0001 | 0.1 / passed | evalue_inv | 0.0147 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.36164 | - / 0.0147 / - / 0.0146 |
 | `1849dea6` | Fabhalta | peer_influence_score→adopted | 5000 | 0.4212 | 0.4212 | 0.0000 | 0.0 / passed | evalue_inv | 0.0126 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0001 | 0.46582 | - / 0.0126 / - / 0.0060 |
 | `0fd3afe0` | Fabhalta | treatment_arm→adopted | 5000 | 0.1826 | 0.1867 | 0.0041 | 2.2 / passed | evalue_inv | 0.0133 | 1.00 | 0.31 (0.31) | passed | proceed → proceed | 0.0077 | 0.29716 | - / 0.0133 / - / 0.0132 |
-| `29d74728` | Kisqali | acceptance_status→conversion_flag | 5000 | 0.0743 | 0.0743 | 0.0000 | 0.0 / passed | evalue_inv | 0.0112 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.46187 | - / 0.0112 / - / 0.0112 |
-| `4e79867b` | Kisqali | acceptance_status→conversion_flag | 5000 | 0.0754 | 0.0755 | 0.0000 | 0.0 / passed | evalue_inv | 0.0113 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.43132 | - / 0.0113 / - / 0.0112 |
-| `db089904` | Kisqali | acceptance_status→conversion_flag | 1500 | 0.0350 | 0.0350 | 0.0001 | 0.1 / passed | naive | 0.0210 | 1.00 | 0.00 (0.00) | passed | review → review | 0.0004 | 0.44497 | - / - / - / 0.0210 |
-| `745e2359` | Kisqali | acceptance_status→conversion_flag | 5000 | 0.0587 | 0.0586 | 0.0001 | 0.1 / passed | evalue_inv | 0.0111 | 1.00 | 0.01 (0.01) | passed | review → review | 0.0001 | 0.33830 | - / 0.0111 / - / 0.0112 |
+| `29d74728` | Kisqali | acceptance_status→conversion_flag | 5000 | 0.0743 | 0.0743 | 0.0000 | 0.0 / passed | evalue_inv | 0.0112 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.46187 | - / 0.0112 / - / 0.0113 |
+| `4e79867b` | Kisqali | acceptance_status→conversion_flag | 5000 | 0.0754 | 0.0755 | 0.0000 | 0.0 / passed | evalue_inv | 0.0113 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.43132 | - / 0.0113 / - / 0.0113 |
+| `db089904` | Kisqali | acceptance_status→conversion_flag | 1500 | 0.0350 | 0.0350 | 0.0001 | 0.1 / passed | naive | 0.0200 | 1.00 | 0.00 (0.00) | passed | review → review | 0.0004 | 0.44497 | - / - / - / 0.0200 |
+| `745e2359` | Kisqali | acceptance_status→conversion_flag | 5000 | 0.0587 | 0.0586 | 0.0001 | 0.1 / passed | evalue_inv | 0.0111 | 1.00 | 0.01 (0.01) | passed | review → review | 0.0001 | 0.33830 | - / 0.0111 / - / 0.0113 |
 | `ca4e8529` | Kisqali | accepted→converted | 37371 (5000) | 0.0352 | 0.0395 | 0.0043 | 12.3 / passed | evalue_inv | 0.0041 | 2.73 | 0.39 (1.07) | passed | review → review | 0.0059 | 0.23149 | - / 0.0041 / - / - |
 | `39b03eeb` | Kisqali | accepted→converted | 37515 (5000) | 0.0392 | 0.0452 | 0.0060 | 15.4 / passed | evalue_inv | 0.0041 | 2.74 | 0.54 (1.48) | passed | review → review | 0.1103 | 0.47820 | - / 0.0041 / - / - |
 | `c3676bb0` | Kisqali | accepted→converted | 37515 (5000) | 0.0392 | 0.0454 | 0.0062 | 15.7 / passed | evalue_inv | 0.0041 | 2.74 | 0.55 (1.51) | passed | review → review | 0.0232 | 0.39526 | - / 0.0041 / - / - |
-| `61fa9429` | Kisqali | control_group_flag→action_taken | 5000 | -0.0710 | -0.0709 | 0.0001 | 0.1 / passed | evalue_inv | 0.0148 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0001 | 0.29199 | - / 0.0148 / - / 0.0149 |
-| `fa2c0fde` | Kisqali | control_group_flag→action_taken | 5000 | -0.0797 | -0.0796 | 0.0000 | 0.0 / passed | evalue_inv | 0.0147 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.43789 | - / 0.0147 / - / 0.0149 |
-| `2e1a77f5` | Kisqali | control_group_flag→action_taken | 5000 | -0.0635 | -0.0636 | 0.0000 | 0.0 / passed | evalue_inv | 0.0149 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.45096 | - / 0.0149 / - / 0.0149 |
+| `61fa9429` | Kisqali | control_group_flag→action_taken | 5000 | -0.0710 | -0.0709 | 0.0001 | 0.1 / passed | evalue_inv | 0.0148 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0001 | 0.29199 | - / 0.0148 / - / 0.0147 |
+| `fa2c0fde` | Kisqali | control_group_flag→action_taken | 5000 | -0.0797 | -0.0796 | 0.0000 | 0.0 / passed | evalue_inv | 0.0147 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.43789 | - / 0.0147 / - / 0.0147 |
+| `2e1a77f5` | Kisqali | control_group_flag→action_taken | 5000 | -0.0635 | -0.0636 | 0.0000 | 0.0 / passed | evalue_inv | 0.0149 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0002 | 0.45096 | - / 0.0149 / - / 0.0147 |
 | `930af2f5` | Kisqali | copay_support→adherent_180d | 5000 | 0.0998 | 0.0975 | 0.0023 | 2.3 / passed | evalue_inv | 0.0147 | 1.00 | 0.16 (0.16) | passed | proceed → proceed | 0.0031 | 0.23226 | - / 0.0147 / - / 0.0144 |
 | `fd0a46a2` | Kisqali | copay_support→adherent_180d | 5000 | 0.1023 | 0.1035 | 0.0012 | 1.2 / passed | evalue_inv | 0.0147 | 1.00 | 0.08 (0.08) | passed | proceed → proceed | 0.0063 | 0.42339 | - / 0.0147 / - / 0.0144 |
 | `a9798c98` | Kisqali | copay_support→low_gap_180d | 5000 | 0.0856 | 0.0856 | 0.0000 | 0.0 / passed | evalue_inv | 0.0141 | 1.00 | 0.00 (0.00) | passed | review → review | 0.0074 | 0.49957 | - / 0.0141 / - / 0.0139 |
@@ -111,10 +111,10 @@ Agent runs: 136 (`estimate_source = causal_impact_query`, one rcc row each). Sto
 | `b0a9dceb` | Kisqali | treatment_arm→treatment_initiated | 5000 | 0.1624 | 0.1602 | 0.0022 | 1.3 / passed | evalue_inv | 0.0165 | 1.00 | 0.13 (0.13) | passed | proceed → proceed | 0.0030 | 0.23499 | - / 0.0165 / - / 0.0187 |
 | `13ad2b2a` | Kisqali | trigger_accepted→treatment_initiated | 5000 | 0.0721 | 0.0741 | 0.0020 | 2.7 / passed | evalue_inv | 0.0132 | 1.00 | 0.15 (0.15) | passed | review → review | 0.0043 | 0.32453 | - / 0.0132 / - / 0.0132 |
 | `bfd26231` | Kisqali | trigger_accepted→treatment_initiated | 5000 | 0.0669 | 0.0706 | 0.0037 | 5.6 / passed | evalue_inv | 0.0129 | 1.00 | 0.29 (0.29) | passed | review → review | 0.0021 | 0.04050 | - / 0.0129 / - / 0.0132 |
-| `9a7dece1` | Remibrutinib | acceptance_status→conversion_flag | 5000 | 0.0764 | 0.0764 | 0.0000 | 0.0 / passed | evalue_inv | 0.0111 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0001 | 0.35395 | - / 0.0111 / - / 0.0113 |
-| `6321aa5a` | Remibrutinib | acceptance_status→conversion_flag | 5000 | 0.0726 | 0.0726 | 0.0000 | 0.0 / passed | evalue_inv | 0.0111 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0000 | 0.49925 | - / 0.0111 / - / 0.0113 |
-| `674b8506` | Remibrutinib | control_group_flag→action_taken | 5000 | -0.0909 | -0.0908 | 0.0000 | 0.0 / passed | evalue_inv | 0.0148 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0005 | 0.46603 | - / 0.0148 / - / 0.0149 |
-| `b9d646da` | Remibrutinib | control_group_flag→action_taken | 5000 | -0.0967 | -0.0968 | 0.0000 | 0.0 / passed | evalue_inv | 0.0147 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0001 | 0.42152 | - / 0.0147 / - / 0.0149 |
+| `9a7dece1` | Remibrutinib | acceptance_status→conversion_flag | 5000 | 0.0764 | 0.0764 | 0.0000 | 0.0 / passed | evalue_inv | 0.0111 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0001 | 0.35395 | - / 0.0111 / - / 0.0112 |
+| `6321aa5a` | Remibrutinib | acceptance_status→conversion_flag | 5000 | 0.0726 | 0.0726 | 0.0000 | 0.0 / passed | evalue_inv | 0.0111 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0000 | 0.49925 | - / 0.0111 / - / 0.0112 |
+| `674b8506` | Remibrutinib | control_group_flag→action_taken | 5000 | -0.0909 | -0.0908 | 0.0000 | 0.0 / passed | evalue_inv | 0.0148 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0005 | 0.46603 | - / 0.0148 / - / 0.0148 |
+| `b9d646da` | Remibrutinib | control_group_flag→action_taken | 5000 | -0.0967 | -0.0968 | 0.0000 | 0.0 / passed | evalue_inv | 0.0147 | 1.00 | 0.00 (0.00) | passed | proceed → proceed | 0.0001 | 0.42152 | - / 0.0147 / - / 0.0148 |
 | `daedc7ab` | Remibrutinib | copay_support→adherent_180d | 5000 | 0.0885 | 0.0964 | 0.0080 | 9.0 / passed | evalue_inv | 0.0148 | 1.00 | 0.54 (0.54) | passed | review → review | 0.0076 | 0.14811 | - / 0.0148 / - / 0.0143 |
 | `eac854c6` | Remibrutinib | copay_support→adherent_180d | 5000 | 0.1042 | 0.1013 | 0.0029 | 2.7 / passed | evalue_inv | 0.0148 | 1.00 | 0.19 (0.19) | passed | proceed → proceed | 0.0059 | 0.31241 | - / 0.0148 / - / 0.0143 |
 | `23a6fcb4` | Remibrutinib | copay_support→adherent_180d | 5000 | 0.1042 | 0.1040 | 0.0002 | 0.2 / passed | evalue_inv | 0.0148 | 1.00 | 0.01 (0.01) | passed | proceed → proceed | 0.0047 | 0.48552 | - / 0.0148 / - / 0.0143 |

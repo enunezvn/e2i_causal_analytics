@@ -649,7 +649,7 @@ async def main(out: Path) -> int:
         + (
             " — "
             + ", ".join(
-                f"`{x['eid'][:8]}` refit n={x['n_ref']} of n={x['n']} (shift {x['shift_se']:.2f}, {x['status_new']})"
+                f"`{x['eid'][:8]}` refit n={x['n_ref']} of n={x['n']} (shift {_fmt(x['shift_se'], 2)}, {x['status_new'] or '?'})"
                 for x in subsampled
             )
             if subsampled
@@ -753,7 +753,7 @@ async def main(out: Path) -> int:
         lines.append(
             f"The premise survives on the live rows. All {len(failed_rows)} rows FAILED under today's |Δ|/|ATE| rule move to "
             f"{dict(Counter(x['status_new'] for x in failed_rows))} under the shift-vs-SE rule, no PASSED row becomes FAILED, and the "
-            f"largest shift on any PASSED row is {max(shifts_passed):.2f} SE (p95 {_pct(shifts_passed, 0.95):.2f}). "
+            f"largest shift on any PASSED row is {_fmt(max(shifts_passed) if shifts_passed else None, 2)} SE (p95 {_fmt(_pct(shifts_passed, 0.95), 2)}). "
             f"What would reverse it: a PASSED row whose shift exceeded {WARN_SE:g} refit-scaled reference SEs (none here), a reported SE that the "
             "stored inversions mis-recover (the two exact inversions above agree wherever both exist), or a naive-proxy row "
             "whose true SE is far below the proxy (the calibration ratios bound that)."
@@ -764,7 +764,7 @@ async def main(out: Path) -> int:
             why.append(
                 "not every FAILED row moves to PASSED/WARNING: "
                 + ", ".join(
-                    f"`{x['eid'][:8]}` {x['brand'] or '<all>'} {x['t']}→{x['o']} → {x['status_new']} (se source {x['se_source']}/{x['naive_kind'] or '-'}, shift {x['shift_se']:.2f})"
+                    f"`{x['eid'][:8]}` {x['brand'] or '<all>'} {x['t']}→{x['o']} → {x['status_new'] or 'UNSCORED (no SE source)'} (se source {x['se_source']}/{x['naive_kind'] or '-'}, shift {_fmt(x['shift_se'], 2)})"
                     for x in stuck
                 )
             )
@@ -775,7 +775,7 @@ async def main(out: Path) -> int:
         lines.append(
             f"The premise does NOT fully survive as measured: {'; '.join(why)}. "
             f"{len(failed_rows) - len(stuck)} of the {len(failed_rows)} FAILED rows move to {dict(Counter(x['status_new'] for x in failed_rows if x['status_new'] in ('passed', 'warning')))}; "
-            f"no PASSED row becomes FAILED (max shift on a PASSED row {max(shifts_passed):.2f} SE, p95 {_pct(shifts_passed, 0.95):.2f}, p50 {_pct(shifts_passed, 0.50):.2f})."
+            f"no PASSED row becomes FAILED (max shift on a PASSED row {_fmt(max(shifts_passed) if shifts_passed else None, 2)} SE, p95 {_fmt(_pct(shifts_passed, 0.95), 2)}, p50 {_fmt(_pct(shifts_passed, 0.50), 2)})."
         )
         for x in stuck_on_proxy:
             # Same pair, same brand, rows carrying an exact inversion: scale their
