@@ -285,10 +285,11 @@ def test_the_recent_failures_are_the_newest_ones_not_the_first_by_id():
     now = datetime.now(timezone.utc)
     failures = [
         _episode(
-            # UUID order runs opposite to time order: oldest episode sorts first by id.
+            # UUID order runs OPPOSITE to time order: the lowest id is the OLDEST episode, so a
+            # sort that lost created_at would show exactly the wrong ten.
             episode_id=f"{n:08d}-1111-1111-1111-111111111111",
             composition_id=f"comp_{n}",
-            created_at=(now - timedelta(minutes=n)).isoformat(),
+            created_at=(now - timedelta(minutes=14 - n)).isoformat(),
             status="FAILED",
             outcome="failed",
         )
@@ -298,7 +299,7 @@ def test_the_recent_failures_are_the_newest_ones_not_the_first_by_id():
 
     shown = [row["composition_id"] for row in service.overview(30)["recent_failures"]]
 
-    assert shown == [f"comp_{n}" for n in range(10)]
+    assert shown == [f"comp_{n}" for n in range(13, 3, -1)]
 
 
 def test_steps_are_fetched_across_chunks_and_pages_exactly_once(monkeypatch):
