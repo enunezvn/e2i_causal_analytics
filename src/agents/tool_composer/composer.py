@@ -18,6 +18,7 @@ Observability:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -292,6 +293,12 @@ class ToolComposer:
             except Exception as e:
                 logger.warning(f"Failed to start audit workflow: {e}")
 
+        # Known to every exit below: the plan-cache eviction needs the plan and the steps that
+        # finished before an exception or a cancel.
+        plan: Optional[Any] = None
+        completed_results: List[Any] = []
+        current_phase = "decompose"
+
         try:
             # ================================================================
             # PHASE 1: DECOMPOSE
@@ -320,6 +327,7 @@ class ToolComposer:
             # PHASE 2: PLAN
             # ================================================================
             phase_start = datetime.now(timezone.utc)
+            current_phase = "plan"
             logger.info("Phase 2: Creating execution plan...")
 
             # F6(b): hand the planner a RICH column profile (dtype family,
@@ -367,9 +375,12 @@ class ToolComposer:
             # PHASE 3: EXECUTE
             # ================================================================
             phase_start = datetime.now(timezone.utc)
+            current_phase = "execute"
             logger.info("Phase 3: Executing tool chain...")
 
-            execution_trace = await self.executor.execute(plan, context)
+            execution_trace = await self.executor.execute(
+                plan, context, on_step_result=lambda _n, result: completed_results.append(result)
+            )
             self._after_execution(plan, execution_trace)
 
             phase_durations["execute"] = self._elapsed_ms(phase_start)
@@ -436,6 +447,7 @@ class ToolComposer:
             # PHASE 4: SYNTHESIZE
             # ================================================================
             phase_start = datetime.now(timezone.utc)
+            current_phase = "synthesize"
             logger.info("Phase 4: Synthesizing response...")
 
             synthesis_input = SynthesisInput(
@@ -502,6 +514,11 @@ class ToolComposer:
 
             return result
 
+        except asyncio.CancelledError:
+            # A cancel is not a verdict on the plan; a defect in a step that already finished is.
+            self._after_execution(plan, completed=completed_results)
+            raise
+
         except DecompositionError as e:
             return self._fail_closed(
                 audit_service,
@@ -525,6 +542,7 @@ class ToolComposer:
             )
 
         except ExecutionError as e:
+            self._after_execution(plan, completed=completed_results, raised=True)
             return self._fail_closed(
                 audit_service,
                 audit_workflow_id,
@@ -537,6 +555,8 @@ class ToolComposer:
 
         except Exception as e:
             logger.exception(f"Unexpected error during composition: {e}")
+            if current_phase == "execute":
+                self._after_execution(plan, completed=completed_results, raised=True)
             return self._fail_closed(
                 audit_service,
                 audit_workflow_id,
@@ -579,32 +599,45 @@ class ToolComposer:
     # Step classes that say the PLAN was wrong, not the data or the tool (spec §7.3).
     _PLAN_DEFECT_CLASSES = frozenset({"plan_defect", "not_registered"})
 
-    def _after_execution(self, plan: Any, execution_trace: Any) -> None:
+    def _after_execution(
+        self,
+        plan: Any,
+        execution_trace: Any = None,
+        *,
+        completed: Optional[List[Any]] = None,
+        raised: bool = False,
+    ) -> None:
         """Evict the plan-cache entry of a plan that just failed, so it is not reused as if it worked.
 
-        Evicts when every executed tool failed, or when any step was a plan defect or named an
-        unregistered tool. Success, and partial success without a defect, stay cached (G6: skip
-        planning for similar work). A plan with no cache key (LLM planning without the cache, the
-        deterministic KPI plan) has nothing to evict.
+        Evicts when every executed tool failed, when execution raised, or when any finished step
+        was a plan defect or named an unregistered tool. Success, partial success without a
+        defect, and a cancel by itself keep the entry (G6: skip planning for similar work). A plan
+        with no cache entry (planning without the cache, the deterministic KPI plan) has nothing
+        to evict.
         """
-        key = getattr(plan, "plan_cache_key", None)
-        if not key:
+        entry = getattr(plan, "plan_cache_key", None)
+        if not entry:
             return
-        results = list(getattr(execution_trace, "step_results", None) or [])
-        failed = execution_trace.tools_executed > 0 and execution_trace.tools_succeeded == 0
+        results = list(getattr(execution_trace, "step_results", None) or []) + list(completed or [])
+        total_failure = (
+            execution_trace is not None
+            and execution_trace.tools_executed > 0
+            and execution_trace.tools_succeeded == 0
+        )
         defect = any(
             getattr(r, "outcome_class", None) in self._PLAN_DEFECT_CLASSES for r in results
         )
-        if not (failed or defect):
+        if not (raised or total_failure or defect):
             return
+        reason = "raised" if raised else ("failed" if total_failure else "plan-defect")
         try:
             from .cache import get_cache_manager
 
-            evicted = get_cache_manager().evict_plan(key)
+            evicted = get_cache_manager().evict_plan(entry)
             logger.info(
-                "Plan cache: evicted entry %s after a %s composition (present=%s)",
-                key,
-                "failed" if failed else "plan-defect",
+                "Plan cache: evicted entry %s after a %s execution (removed=%s)",
+                entry,
+                reason,
                 evicted,
             )
         except Exception as e:  # noqa: BLE001 - eviction must never fail a composition

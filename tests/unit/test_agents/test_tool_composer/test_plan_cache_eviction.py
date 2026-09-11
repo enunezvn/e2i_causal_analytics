@@ -6,9 +6,11 @@ planner, for 15 minutes. It cached every plan at planning time, before execution
 composition then failed was served again. Now:
 
 - ``ExecutionPlan.plan_source`` says which path built the plan (``llm`` / ``plan_cache`` /
-  ``kpi_deterministic``) and ``plan_cache_key`` the signature it was stored or matched under;
-- after execution the composer evicts that key when every executed tool failed, or when any step
-  was a plan defect or named an unregistered tool;
+  ``kpi_deterministic``) and ``plan_cache_key`` the entry it was stored or matched under (the
+  signature key and that plan's id, so a newer plan cached under the same signature is spared);
+- after execution the composer evicts that entry when every executed tool failed, when execution
+  raised, or when any finished step was a plan defect or named an unregistered tool (a cancel
+  alone evicts nothing);
 - a successful plan, and a partial one without a defect, stay cached (G6's intent: skip planning
   for similar work);
 - the deterministic KPI plan never touches the cache.
@@ -19,8 +21,10 @@ cache's eligibility; no LLM call on the cached path.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import pandas as pd
 import pytest
@@ -40,6 +44,7 @@ from src.agents.tool_composer.models.composition_models import (
     ToolOutput,
 )
 from src.agents.tool_composer.planner import ToolPlanner
+from src.tool_registry.registry import ToolSchema
 
 
 def _decomposition(entities_first: List[str], extra: Optional[str] = None) -> DecompositionResult:
@@ -144,6 +149,10 @@ def _key(decomposition: DecompositionResult) -> str:
     return cache._hash_signature(cache._extract_signature(decomposition))
 
 
+def _entry(decomposition: DecompositionResult, plan: ExecutionPlan) -> str:
+    return f"{_key(decomposition)}/{plan.plan_id}"
+
+
 def test_fixture_decompositions_meet_the_cache_eligibility():
     # Precondition: without it every eviction assertion below would be vacuous.
     cache = get_cache_manager().plan_cache
@@ -159,7 +168,7 @@ def test_cached_adaptation_carries_matched_key(planner):
     adapted = planner._try_cached_plan(D2, None, None, None)
     assert adapted is not None
     assert adapted.plan_source == "plan_cache"
-    assert adapted.plan_cache_key == _key(D1)
+    assert adapted.plan_cache_key == _entry(D1, p1)
     assert [s.model_dump() for s in adapted.steps] == [s.model_dump() for s in p1.steps]
 
 
@@ -189,24 +198,35 @@ def test_success_or_partial_without_defect_keeps_cache(planner, composer, classe
     adapted = planner._try_cached_plan(D2, None, None, None)
     composer._after_execution(adapted, _trace(adapted, classes))
     kept = planner._try_cached_plan(D2, None, None, None)
-    assert kept is not None and kept.plan_cache_key == _key(D1)
+    assert kept is not None and kept.plan_cache_key == adapted.plan_cache_key
 
 
 def test_eviction_is_exact_and_idempotent(composer):
     other = _decomposition(["Fabhalta"])
-    get_cache_manager().cache_plan(D1, _plan(D1))
+    p1 = _plan(D1)
+    entry = get_cache_manager().cache_plan(D1, p1)
     get_cache_manager().cache_plan(other, _plan(other))
-    failed = _plan(D1).model_copy(update={"plan_source": "plan_cache", "plan_cache_key": _key(D1)})
+    failed = p1.model_copy(update={"plan_source": "plan_cache", "plan_cache_key": entry})
     composer._after_execution(failed, _trace(failed, ["error", "error"]))
     composer._after_execution(failed, _trace(failed, ["error", "error"]))
     assert get_cache_manager().get_similar_plan(D1) is None
     assert get_cache_manager().get_similar_plan(other) is not None
 
 
+def test_eviction_spares_a_newer_plan_cached_under_the_same_signature(planner, composer):
+    get_cache_manager().cache_plan(D1, _plan(D1))
+    adapted = planner._try_cached_plan(D2, None, None, None)  # matched the first plan
+    replacement = _plan(D1)
+    get_cache_manager().cache_plan(D1, replacement)  # a newer plan, same signature
+    composer._after_execution(adapted, _trace(adapted, ["error", "error"]))
+    matched = get_cache_manager().get_similar_plan(D1)
+    assert matched is not None and matched[0].plan_id == replacement.plan_id
+
+
 async def test_llm_plan_is_cached_under_its_key(planner, mock_llm_client, sample_decomposition):
     plan = await planner.plan(sample_decomposition)
     assert plan.plan_source == "llm"
-    assert plan.plan_cache_key == _key(sample_decomposition)
+    assert plan.plan_cache_key == _entry(sample_decomposition, plan)
     matched = get_cache_manager().get_similar_plan(sample_decomposition)
     assert matched is not None and matched[0].plan_id == plan.plan_id
 
@@ -245,3 +265,148 @@ def test_kpi_plan_is_deterministic_and_never_touches_the_cache(composer):
     get_cache_manager().cache_plan(D2, _plan(D2))
     composer._after_execution(plan, _trace(_plan(D1), ["error", "error"]))  # nothing to evict
     assert get_cache_manager().get_similar_plan(D2) is not None
+
+
+# ---------------------------------------------------------------------------
+# Through compose(): executions that raise or are cancelled
+# ---------------------------------------------------------------------------
+
+
+class _Exploding:
+    @property
+    def edge_list(self) -> Any:
+        raise TypeError("not subscriptable here")
+
+
+def _register_probes(registry, slow_started: Optional[asyncio.Event] = None) -> None:
+    async def producer(**_: Any) -> Any:
+        return {"graph": _Exploding()}
+
+    async def ok(**_: Any) -> Any:
+        return {"value": 1}
+
+    async def slow(**_: Any) -> Any:
+        if slow_started is not None:
+            slow_started.set()
+        await asyncio.sleep(30)
+        return {"late": True}
+
+    for name, fn in (("producer_probe", producer), ("ok_probe", ok), ("slow_probe", slow)):
+        registry.register(
+            schema=ToolSchema(
+                name=name,
+                description="plan-cache probe tool.",
+                source_agent="causal_impact",
+                tier=2,
+            ),
+            callable=fn,
+        )
+
+
+def _planning(steps: List[dict]) -> str:
+    return json.dumps(
+        {
+            "reasoning": "t",
+            "tool_mappings": [
+                {
+                    "sub_question_id": s["sub_question_id"],
+                    "tool_name": s["tool_name"],
+                    "confidence": 0.9,
+                }
+                for s in steps
+            ],
+            "execution_steps": steps,
+            "parallel_groups": [[s["step_id"]] for s in steps],
+        }
+    )
+
+
+async def test_compose_evicts_when_execution_raises(composer, mock_llm_client, mock_tool_registry):
+    _register_probes(mock_tool_registry)
+    mock_llm_client.set_planning_response(
+        _planning(
+            [
+                {
+                    "step_id": "step_1",
+                    "sub_question_id": "sq_1",
+                    "tool_name": "producer_probe",
+                    "input_mapping": {},
+                },
+                {
+                    "step_id": "step_2",
+                    "sub_question_id": "sq_2",
+                    "tool_name": "ok_probe",
+                    "input_mapping": {"g": "$step_1.graph.edge_list"},
+                    "depends_on_steps": ["step_1"],
+                },
+            ]
+        )
+    )
+    result = await composer.compose("what drove rx volume and how does it vary by region?")
+    assert result.success is False and "Execution failed" in (result.error or "")
+    # The planner cached the plan before executing it; the failed execution removed it.
+    decomposition = await composer.decomposer.decompose("what drove rx volume?")
+    assert get_cache_manager().get_similar_plan(decomposition) is None
+
+
+async def _cancel_during_slow_step(composer, mock_llm_client, mock_tool_registry, first_step: dict):
+    started = asyncio.Event()
+    _register_probes(mock_tool_registry, slow_started=started)
+    mock_llm_client.set_planning_response(
+        _planning(
+            [
+                first_step,
+                {
+                    "step_id": "step_2",
+                    "sub_question_id": "sq_2",
+                    "tool_name": "slow_probe",
+                    "input_mapping": {},
+                },
+            ]
+        )
+    )
+    task = asyncio.create_task(
+        composer.compose("what drove rx volume and how does it vary by region?")
+    )
+    await asyncio.wait_for(started.wait(), timeout=10)
+    assert (
+        get_cache_manager().get_similar_plan(await composer.decomposer.decompose("q")) is not None
+    )
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    return await composer.decomposer.decompose("q")
+
+
+async def test_compose_cancel_after_a_defect_step_evicts(
+    composer, mock_llm_client, mock_tool_registry
+):
+    decomposition = await _cancel_during_slow_step(
+        composer,
+        mock_llm_client,
+        mock_tool_registry,
+        {
+            "step_id": "step_1",
+            "sub_question_id": "sq_1",
+            "tool_name": "ok_probe",
+            "input_mapping": {"g": "$missing.field"},
+        },
+    )
+    assert get_cache_manager().get_similar_plan(decomposition) is None
+
+
+async def test_compose_plain_cancel_keeps_the_cached_plan(
+    composer, mock_llm_client, mock_tool_registry
+):
+    decomposition = await _cancel_during_slow_step(
+        composer,
+        mock_llm_client,
+        mock_tool_registry,
+        {
+            "step_id": "step_1",
+            "sub_question_id": "sq_1",
+            "tool_name": "ok_probe",
+            "input_mapping": {},
+        },
+    )
+    assert get_cache_manager().get_similar_plan(decomposition) is not None

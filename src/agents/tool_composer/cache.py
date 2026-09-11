@@ -301,10 +301,15 @@ class PlanSimilarityCache:
         match = self.get_similar_with_key(decomposition)
         return (match[0], match[1]) if match else None
 
-    def get_similar_with_key(self, decomposition: Any) -> Optional[Tuple[Any, float, str]]:
-        """Like :meth:`get_similar`, plus the signature key the match is stored under.
+    @staticmethod
+    def entry_token(key: str, plan: Any) -> str:
+        """An opaque handle on one cached plan: its signature key and the plan's id."""
+        return f"{key}/{getattr(plan, 'plan_id', '')}"
 
-        The key is what a composition that failed with the reused plan evicts (spec §7.3).
+    def get_similar_with_key(self, decomposition: Any) -> Optional[Tuple[Any, float, str]]:
+        """Like :meth:`get_similar`, plus the entry token of the match.
+
+        The token is what a composition that failed with the reused plan evicts (spec §7.3).
         """
         query_sig = self._extract_signature(decomposition)
 
@@ -328,20 +333,31 @@ class PlanSimilarityCache:
 
         if best_match and best_key and best_similarity >= self.similarity_threshold:
             logger.info(f"Plan similarity match found: {best_similarity:.2f}")
-            return best_match, best_similarity, best_key
+            return best_match, best_similarity, self.entry_token(best_key, best_match)
 
         return None
 
     def set(self, decomposition: Any, plan: Any) -> str:
-        """Cache plan with its decomposition signature; returns the signature key."""
+        """Cache plan with its decomposition signature; returns its entry token."""
         signature = self._extract_signature(decomposition)
         key = self._hash_signature(signature)
         self._cache.set(key, (signature, plan))
         logger.debug(f"Cached plan with signature key: {key}")
-        return key
+        return self.entry_token(key, plan)
 
-    def evict(self, key: str) -> bool:
-        """Drop the plan stored under ``key``; True when there was one."""
+    def evict(self, entry: str) -> bool:
+        """Drop the entry a failed composition used; True when it was removed.
+
+        ``entry`` is the token :meth:`set` / :meth:`get_similar_with_key` returned. A newer plan
+        cached under the same signature since then is spared: only the plan that failed goes.
+        """
+        key, _, plan_id = entry.partition("/")
+        cached = self._cache._cache.get(key)
+        if cached is None:
+            return False
+        _, cached_plan = cached.value
+        if plan_id and getattr(cached_plan, "plan_id", None) != plan_id:
+            return False
         return self._cache.invalidate(key)
 
     def get_stats(self) -> Dict[str, Any]:
@@ -503,16 +519,16 @@ class ToolComposerCacheManager:
         return self.plan_cache.get_similar(decomposition)
 
     def get_similar_plan_with_key(self, decomposition: Any) -> Optional[Tuple[Any, float, str]]:
-        """Get similar cached plan, its similarity and the key it is stored under."""
+        """Get similar cached plan, its similarity and its entry token."""
         return self.plan_cache.get_similar_with_key(decomposition)
 
     def cache_plan(self, decomposition: Any, plan: Any) -> str:
         """Cache execution plan; returns the key a failed composition evicts."""
         return self.plan_cache.set(decomposition, plan)
 
-    def evict_plan(self, key: str) -> bool:
-        """Evict the cached plan stored under ``key``."""
-        return self.plan_cache.evict(key)
+    def evict_plan(self, entry: str) -> bool:
+        """Evict the cached plan ``entry`` names (unless a newer plan replaced it)."""
+        return self.plan_cache.evict(entry)
 
     def get_tool_output(self, tool_name: str, inputs: Dict[str, Any]) -> Optional[Any]:
         """Get cached tool output."""
