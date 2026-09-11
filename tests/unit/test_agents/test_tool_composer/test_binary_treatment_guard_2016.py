@@ -214,6 +214,85 @@ def test_a_0_1_treatment_is_estimated_under_every_encoding(encoding):
     assert len(got_cate["effect_by_segment"]) == 3
 
 
+# ---------------------------------------------------------------------------
+# cate_analyzer's segment n counts the rows its estimate uses; the rest are disclosed
+# ---------------------------------------------------------------------------
+_ROWS_WITHOUT_VALUES = "rows_missing_treatment_or_outcome"
+
+
+def _assert_segment_accounting(df: pd.DataFrame, dumped: Dict[str, Any], treatment: str) -> None:
+    """Every estimated segment: n == rows in either arm with an outcome, CATE from them."""
+    partial = {
+        e["name"]: e for e in dumped["excluded_segments"] if e["reason"] == _ROWS_WITHOUT_VALUES
+    }
+    for seg in dumped["segments"]:
+        sub = df[df["age_group"] == seg["name"]]
+        used = sub[sub[treatment].notna() & sub["outcome"].notna()]
+        assert seg["n"] == len(used), (seg["name"], seg["n"], len(used), len(sub))
+        treated = used[used[treatment].astype(float) == 1]["outcome"]
+        control = used[used[treatment].astype(float) == 0]["outcome"]
+        assert seg["cate"] == pytest.approx(treated.mean() - control.mean(), rel=1e-12)
+        dropped = len(sub) - len(used)
+        if dropped:
+            entry = partial.pop(seg["name"])
+            assert entry["n"] == dropped
+            assert f"the other {len(used)} rows" in entry["detail"], entry["detail"]
+    assert partial == {}, f"disclosed rows for a segment that lost none: {partial}"
+
+
+def test_cate_segment_n_excludes_rows_without_an_outcome():
+    """The live shape: Kisqali ``days_to_treatment`` is null on 5,712 of 8,730 rows.
+
+    On the deployed image (main 56f8b8589, real frame) ``cate_analyzer(copay_support ->
+    days_to_treatment)`` reported midwest n=2239 while its CATE used 798 rows (321
+    treated, 477 control); likewise 2173/731, 2127/742 and 2191/747.
+    """
+    df = _cohort()
+    rng = np.random.default_rng(5712)
+    df.loc[rng.random(len(df)) < 0.65, "outcome"] = np.nan
+    dumped = _cate(df, "copay_support").model_dump()
+
+    assert len(dumped["segments"]) == 3
+    _assert_segment_accounting(df, dumped, "copay_support")
+    entries = [e for e in dumped["excluded_segments"] if e["reason"] == _ROWS_WITHOUT_VALUES]
+    assert len(entries) == 3
+    assert all("'outcome'" in e["detail"] for e in entries)
+
+
+@pytest.mark.parametrize("encoding", ["float", "Int64"])
+def test_cate_segment_n_excludes_rows_without_a_treatment_or_outcome(encoding):
+    """Null-treatment rows sit in neither arm; they leave ``n`` and are disclosed.
+
+    No binary column in the live patient_journeys has partial nulls (each is complete
+    or entirely null), so this pins the shape rather than a live incident.
+    """
+    df = _cohort()
+    df["copay_support"] = df["copay_support"].astype(float)
+    df.loc[::5, "copay_support"] = np.nan
+    df.loc[::7, "outcome"] = np.nan
+    if encoding == "Int64":
+        df["copay_support"] = df["copay_support"].astype("Int64")
+    dumped = _cate(df, "copay_support").model_dump()
+
+    _assert_segment_accounting(df, dumped, "copay_support")
+    for entry in (e for e in dumped["excluded_segments"] if e["reason"] == _ROWS_WITHOUT_VALUES):
+        sub = df[df["age_group"] == entry["name"]]
+        no_treatment = int(sub["copay_support"].isna().sum())
+        no_outcome = int((sub["copay_support"].notna() & sub["outcome"].isna()).sum())
+        assert entry["n"] == no_treatment + no_outcome
+        assert f"{no_treatment} rows have no 'copay_support' value" in entry["detail"]
+        assert f"{no_outcome} further rows have no 'outcome' value" in entry["detail"]
+
+
+def test_cate_segment_n_is_the_segment_size_when_nothing_is_missing():
+    dumped = _cate(_cohort(), "copay_support").model_dump()
+    assert dumped["excluded_segments"] == []
+    df = _cohort()
+    assert {s["name"]: s["n"] for s in dumped["segments"]} == df[
+        "age_group"
+    ].value_counts().to_dict()
+
+
 def test_cate_ignores_null_treatment_rows_under_nullable_int64_as_under_float():
     """Null treatment rows sit in neither arm, under ``Int64`` exactly as under float.
 
