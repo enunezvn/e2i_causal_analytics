@@ -83,10 +83,15 @@ async def _until(pred, what: str, timeout: float = GATE_TIMEOUT) -> None:
         await asyncio.sleep(0.01)
 
 
-async def _shutdown_with_a_disconnected_build(monkeypatch, **config_kwargs: Any) -> Dict[str, Any]:
+async def _shutdown_with_a_disconnected_build(
+    monkeypatch, *, release_gate_after_lifespan: bool = False, **config_kwargs: Any
+) -> Dict[str, Any]:
     """Start a build, drop its client, stop the server while the build is
-    gated, open the gate once the server is shutting down, and report what the
-    lifespan saw when uvicorn sent ``lifespan.shutdown``."""
+    gated, and report what the lifespan saw when uvicorn sent
+    ``lifespan.shutdown``. The gate opens only once shutdown has provably
+    started: its listeners are closed while the request task is still pending
+    (so uvicorn is in its task wait), or, with ``release_gate_after_lifespan``,
+    only after the lifespan snapshot was taken (codex round 1: no sleeps)."""
     repo = _Repo()
     started, gate = threading.Event(), threading.Event()
 
@@ -146,8 +151,16 @@ async def _shutdown_with_a_disconnected_build(monkeypatch, **config_kwargs: Any)
         writer.close()  # the client leaves mid-build (nginx 504, closed tab)
         await _until(lambda: not server.server_state.connections, "uvicorn saw the disconnect")
         server.should_exit = True
-        # Let shutdown reach its wait (or its graceful timeout) before the build ends.
-        await asyncio.sleep(0.5)
+        if release_gate_after_lifespan:
+            await _until(lambda: "inflight_builds" in seen, "the lifespan shutdown ran")
+        else:
+            await _until(
+                lambda: bool(server.servers)
+                and not any(s.is_serving() for s in server.servers)
+                and bool(server.server_state.tasks),
+                "shutdown closed its listeners and is waiting on the request task",
+            )
+            assert "inflight_builds" not in seen  # the lifespan has not run yet
         gate.set()
         await asyncio.wait_for(serve, timeout=GATE_TIMEOUT)
         seen["writes_after_exit"] = len(repo.writes)
@@ -155,10 +168,18 @@ async def _shutdown_with_a_disconnected_build(monkeypatch, **config_kwargs: Any)
     finally:
         gate.set()
         if not serve.done():
-            server.force_exit = True
-            await asyncio.gather(serve, return_exceptions=True)
+            # Both flags: the main loop exits on should_exit, force_exit skips the waits.
+            server.should_exit = server.force_exit = True
+            try:
+                await asyncio.wait_for(serve, timeout=GATE_TIMEOUT)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - cleanup must not mask the failure
+                serve.cancel()
+                await asyncio.gather(serve, return_exceptions=True)
         # An orphaned build (positive control) still finishes on this loop.
-        await asyncio.gather(*list(route_mod._INFLIGHT_BUILDS), return_exceptions=True)
+        await asyncio.wait_for(
+            asyncio.gather(*list(route_mod._INFLIGHT_BUILDS), return_exceptions=True),
+            timeout=GATE_TIMEOUT,
+        )
 
 
 @pytest.mark.unit
@@ -176,7 +197,9 @@ async def test_worker_shutdown_lets_a_disconnected_requests_build_persist_before
 async def test_positive_control_a_graceful_shutdown_timeout_orphans_the_build(monkeypatch):
     """The test can see the defect #1998 described: when uvicorn cancels the
     request task, the lifespan starts with the build unfinished and unpersisted."""
-    seen = await _shutdown_with_a_disconnected_build(monkeypatch, timeout_graceful_shutdown=0.1)
+    seen = await _shutdown_with_a_disconnected_build(
+        monkeypatch, release_gate_after_lifespan=True, timeout_graceful_shutdown=0.1
+    )
 
     assert seen["inflight_builds"] == 1, seen
     assert seen["persisted_writes"] == 0, seen
