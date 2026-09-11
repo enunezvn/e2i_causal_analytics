@@ -2333,9 +2333,10 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
       than a constant. The name states what it is: a sensitivity band, NOT a
       sampling confidence interval; ``assumptions`` spells out the semantics.
 
-    Fail-closed: no ``gap`` in ``gap_analysis``, or non-positive ``investment``
-    -> ``RuntimeError`` (an ROI is undefined without a real gap or a real
-    investment; we refuse to fabricate one).
+    Fail-closed: no ``gap`` in ``gap_analysis``, non-positive ``investment``, or a
+    supplied ``value_per_unit`` that is not a finite number > 0 -> ``RuntimeError``
+    (an ROI is undefined without a real gap, a real investment and a usable unit
+    value; we refuse to fabricate one).
 
     Args:
         gap_analysis: Output of ``gap_calculator`` (carries ``gap`` and,
@@ -2365,9 +2366,19 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     gap = float(gap_raw)
     entity_values = gap_analysis.get("entity_values")
     n_entities = len(entity_values) if isinstance(entity_values, dict) and entity_values else 1
-    value_per_unit = kwargs.get("value_per_unit", 1.0)
-    if not isinstance(value_per_unit, (int, float)) or not math.isfinite(float(value_per_unit)):
+    value_per_unit = kwargs.get("value_per_unit")
+    if value_per_unit is None:
         value_per_unit = 1.0
+    elif (
+        isinstance(value_per_unit, bool)
+        or not isinstance(value_per_unit, (int, float))
+        or not math.isfinite(float(value_per_unit))
+        or value_per_unit <= 0
+    ):
+        raise ToolRefusalError(
+            f"roi_estimator requires value_per_unit to be a finite number > 0; got "
+            f"{value_per_unit!r}. Refusing to substitute 1.0 for a value the caller supplied."
+        )
 
     opportunity_value = gap * n_entities * float(value_per_unit)
     estimated_roi = opportunity_value / float(investment)

@@ -445,10 +445,6 @@ BEGIN
           "type": "number",
           "description": "Significance level for CI tests",
           "default": 0.05
-        },
-        "max_k": {
-          "type": "integer",
-          "description": "Maximum conditioning set size (-1 for unlimited)"
         }
       },
       "required": []

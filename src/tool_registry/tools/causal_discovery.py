@@ -1293,12 +1293,6 @@ def register_discover_dag_tool() -> None:
                 required=False,
                 default=0.05,
             ),
-            ToolParameter(
-                name="max_k",
-                type="int",
-                description="Maximum conditioning set size (-1 for unlimited)",
-                required=False,
-            ),
         ],
         output_schema="DiscoverDagOutput",
         avg_execution_ms=5000,
