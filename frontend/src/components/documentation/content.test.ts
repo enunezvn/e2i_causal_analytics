@@ -154,9 +154,18 @@ describe('refutation documentation content (2026-09-10 sensitivity reading)', ()
     // Guard sanity: the same literal must reject the old copy.
     expect('E-value ≥ 2.0').toMatch(/2\.0/);
     expect(sens!.passRule).not.toMatch(/2\.0/);
-    // Both warning readings are pinned: the caveat and the null finding.
+    // All three warning readings are pinned: sensitive, null finding, not benchmarked
+    // (both sub-cases), plus the reading order and the minimum cell size.
     expect(sens!.failSign).toMatch(/could account for the whole effect/i);
     expect(sens!.failSign).toMatch(/null finding/i);
+    expect(sens!.failSign).toMatch(/not benchmarked|unbenchmarked/i);
+    expect(sens!.failSign).toMatch(/no measured confounders/i);
+    expect(sens!.failSign).toMatch(/collinear|could not be scored/i);
+    expect(sens!.passRule).toMatch(/randomized/i);
+    expect(sens!.passRule).toMatch(/null finding/i);
+    expect(sens!.passRule).toMatch(/benchmarked, non-null/i);
+    expect(sens!.defaults).toMatch(/naive-vs-adjusted risk ratio/i);
+    expect(sens!.defaults).toMatch(/fewer than 5 rows/i);
   });
 
   it('says two tests are critical', () => {

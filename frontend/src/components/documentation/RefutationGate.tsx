@@ -195,7 +195,8 @@ function EValueIllustration({ outcome }: { outcome: Outcome }) {
   const marker = ok ? 1.6 : 1.12; // the point-estimate risk ratio (rr_point), compared to the benchmark
   return (
     <>
-      <text x="120" y="14" fontSize="9" textAnchor="middle" className={MUTED}>point-estimate risk ratio vs the confounding the adjustment removed →</text>
+      <text x="120" y="14" fontSize="9" textAnchor="middle" className={MUTED}>point-estimate risk ratio vs measured confounding →</text>
+      <text x="120" y="26" fontSize="8" textAnchor="middle" className={MUTED}>shown for a benchmarked, non-null estimate</text>
       <rect x={px(1)} y={y - 9} width={px(benchmark) - px(1)} height="18" rx="3" fill={FAIL} fillOpacity="0.15" />
       <rect x={px(benchmark)} y={y - 9} width={px(2) - px(benchmark)} height="18" rx="3" fill={PASS} fillOpacity="0.15" />
       <line x1={x0} y1={y} x2={x1} y2={y} className={AXIS} strokeWidth="1" />
@@ -245,8 +246,8 @@ const ILLUSTRATION_ALT: Record<RefutationTestId, Record<Outcome, string>> = {
     fail: 'A flat, wide histogram of resampled effects whose interval is far wider than the original — the test fails.',
   },
   sensitivity_e_value: {
-    pass: 'A risk-ratio scale from 1 to 2 with the point-estimate risk ratio beyond the measured-confounding benchmark, in the robust zone.',
-    fail: 'A risk-ratio scale from 1 to 2 with the point-estimate risk ratio within the measured-confounding benchmark — a caveat, not a block.',
+    pass: 'A risk-ratio scale from 1 to 2 with the point-estimate risk ratio beyond the measured-confounding benchmark, in the robust zone. Shown for a benchmarked, non-null estimate; the null-finding and not-benchmarked readings are caveats without a marker.',
+    fail: 'A risk-ratio scale from 1 to 2 with the point-estimate risk ratio within the measured-confounding benchmark — a caveat, not a block. Shown for a benchmarked, non-null estimate; the null-finding and not-benchmarked readings are caveats without a marker.',
   },
 };
 
