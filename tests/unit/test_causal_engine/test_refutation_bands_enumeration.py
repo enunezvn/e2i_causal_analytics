@@ -8,7 +8,10 @@ where the PROCEED/REVIEW/BLOCK cuts fall. Sensitivity is non-critical with statu
 {PASSED, WARNING, SKIPPED}; the other four are given {PASSED, WARNING, FAILED,
 SKIPPED} minus what the criticals cannot carry (below).
 
-The OPERATIONAL space is what the five refuters can actually EMIT, declared in
+The OPERATIONAL space is what the five WEIGHTED refuters can actually EMIT (the
+sixth, ``negative_control_outcome``, carries weight 0 and is enumerated in its own
+space below -- it cannot move the gate, pinned by
+``test_negative_control_status_never_changes_confidence_or_gate``), declared in
 ``EMITTABLE`` with the function and branch behind every status. It is strictly
 smaller, and it is the space a leader's statement must be true in: with it, BLOCK
 is reachable ONLY through a FAILED placebo or random_common_cause, never by

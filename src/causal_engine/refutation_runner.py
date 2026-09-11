@@ -4,7 +4,8 @@ Version: 4.3
 Purpose: DoWhy-based refutation testing for causal estimate validation
 
 This module implements the Causal Validation Protocol's primary validation tier:
-- 5 refutation tests (placebo, random_common_cause, data_subset, bootstrap, sensitivity)
+- 6 refutation tests (placebo, random_common_cause, data_subset, bootstrap, sensitivity,
+  negative_control_outcome -- the sixth is a non-critical weight-0 READING, #2007)
 - Configurable thresholds for pass/fail criteria
 - Gate decision logic (proceed, review, block)
 - Database persistence integration
