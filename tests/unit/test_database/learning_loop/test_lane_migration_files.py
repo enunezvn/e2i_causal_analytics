@@ -37,6 +37,7 @@ def test_runner_detector_is_the_one_the_fixture_mirrors():
     [
         ("ml/039_tool_category_cohort.sql", True),
         ("ml/040_tool_registry_startup_sync.sql", False),
+        ("ml/041_composer_learning_loop_recording.sql", False),
     ],
 )
 def test_runner_branch(key, unwrapped):
@@ -46,7 +47,7 @@ def test_runner_branch(key, unwrapped):
     assert _pg.runner_unwraps(path.read_text()) is unwrapped
 
 
-@pytest.mark.parametrize("key", _pg.LANE_MIGRATIONS[:2])
+@pytest.mark.parametrize("key", _pg.LANE_MIGRATIONS)
 def test_no_script_level_transaction_control(key):
     path = ML / key
     if not path.exists():
@@ -56,7 +57,7 @@ def test_no_script_level_transaction_control(key):
 
 @pytest.mark.parametrize(
     "key",
-    ["ml/040_tool_registry_startup_sync.sql"],
+    ["ml/040_tool_registry_startup_sync.sql", "ml/041_composer_learning_loop_recording.sql"],
 )
 def test_wrapped_files_never_mention_the_unwrap_triggers(key):
     # Comments are stripped by the runner, but a mention in a comment invites a later edit that
