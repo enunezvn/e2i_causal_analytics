@@ -62,6 +62,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
+from src.causal_engine import evalue
 from src.causal_engine.pipeline import (
     PipelineInput,
     PipelineOutput,
@@ -1277,84 +1278,117 @@ def _run_dowhy_refutation(
     return refutation
 
 
-def _e_value_from_rr(rr: float) -> float:
-    """VanderWeele & Ding (2017) E-value for a risk-ratio ``rr``.
-
-    ``E = RR + sqrt(RR*(RR-1))`` for ``RR >= 1``; for a protective effect the
-    formula is applied to ``1/RR``. A bound whose RR crosses the null (RR == 1)
-    has E-value exactly 1.0 (no unmeasured confounding is required to explain it
-    away). Returns a value ``>= 1.0``.
-    """
-    if rr < 1.0:
-        rr = 1.0 / rr
-    if rr <= 1.0:
-        return 1.0
-    return rr + math.sqrt(rr * (rr - 1.0))
-
-
 @composable_tool(
     name="sensitivity_analyzer",
-    description="Compute E-values for sensitivity to unobserved confounding",
+    description=(
+        "Compute VanderWeele-Ding E-values and, when a naive contrast is given, the "
+        "measured-confounding reading (beyond / within / null finding) the refutation "
+        "gate uses"
+    ),
     source_agent="causal_impact",
     tier=2,
     input_parameters=[
         {"name": "ate", "type": "float", "description": "Estimated average treatment effect"},
         {"name": "ci_lower", "type": "float", "description": "Lower confidence bound"},
+        {
+            "name": "ci_upper",
+            "type": "float",
+            "description": "Upper confidence bound (optional; defaults to ate + (ate - ci_lower))",
+        },
+        {
+            "name": "baseline_risk",
+            "type": "float",
+            "description": (
+                "Control-arm outcome rate for a binary outcome (optional; enables the "
+                "risk-ratio path)"
+            ),
+        },
+        {
+            "name": "naive_ate",
+            "type": "float",
+            "description": (
+                "Unadjusted difference in means (optional; enables the measured-confounding "
+                "benchmark)"
+            ),
+        },
     ],
     output_schema="SensitivityReport",
     avg_execution_ms=1500,
 )
-def sensitivity_analyzer(ate: float, ci_lower: float, **kwargs) -> Dict[str, Any]:
-    """Compute VanderWeele & Ding (2017) E-values for unobserved confounding.
+def sensitivity_analyzer(
+    ate: float,
+    ci_lower: float,
+    ci_upper: Optional[float] = None,
+    baseline_risk: Optional[float] = None,
+    naive_ate: Optional[float] = None,
+    **kwargs,
+) -> Dict[str, Any]:
+    """E-values and the sensitivity READING from the shared ``evalue`` module.
 
-    REAL closed-form computation — no data required, no hardcoded constants.
-
-    Assumption (documented): ``ate`` and ``ci_lower`` are reported on a
-    standardized-mean-difference (SMD) scale. They are converted to an
-    approximate risk-ratio via ``RR = exp(0.91 * SMD)`` (VanderWeele & Ding
-    2017, the SMD->RR approximation). The E-value is then
-    ``E = RR + sqrt(RR*(RR-1))``; for the CI bound, if the converted RR crosses
-    the null (RR <= 1) the E-value is exactly 1.0.
-
-    Args:
-        ate: Estimated average treatment effect (SMD scale).
-        ci_lower: Lower confidence bound of the effect (SMD scale).
-
-    Returns:
-        Dict with ``e_value_point``, ``e_value_ci``, ``interpretation`` and a
-        ``robustness`` label DERIVED from the computed point E-value.
-
-    Raises:
-        RuntimeError: if ``ate`` or ``ci_lower`` is non-finite. The tool
-            refuses to emit a fabricated E-value.
+    Spec docs/superpowers/specs/2026-09-10-sensitivity-gate-calibration-design.md §4.7.
+    Without ``baseline_risk`` the inputs are taken on the standardized-mean-difference
+    scale (``RR = exp(0.91*d)``). Without ``naive_ate`` no benchmark exists and the
+    reading is ``unbenchmarked``: the E-value is reported with the statement that no
+    universal threshold exists. Refuses non-finite inputs (anti-mocking: never a
+    fabricated E-value). A ``ValueError`` from the classifier (a point estimate
+    outside its own CI) is surfaced as a structured ``ToolRefusalError``. A supplied
+    ``baseline_risk`` that cannot form risks in (0, 1) with the effect and CI is
+    refused rather than silently read on the standardized-difference scale. A CI
+    that includes zero is reported as a null finding regardless of the benchmark
+    (spec §4.4 precedence).
     """
-    if not (math.isfinite(ate) and math.isfinite(ci_lower)):
-        raise ToolRefusalError(
-            "sensitivity_analyzer requires finite `ate` and `ci_lower`; got "
-            f"ate={ate!r}, ci_lower={ci_lower!r}. Refusing to fabricate an "
-            "E-value — per anti-mocking discipline non-finite inputs surface "
-            "as a structured error."
+    for name, value in (
+        ("ate", ate),
+        ("ci_lower", ci_lower),
+        ("ci_upper", ci_upper),
+        ("baseline_risk", baseline_risk),
+        ("naive_ate", naive_ate),
+    ):
+        if value is not None and not math.isfinite(float(value)):
+            raise ToolRefusalError(
+                f"sensitivity_analyzer requires finite inputs; got {name}={value!r}. Refusing to "
+                "fabricate an E-value — per anti-mocking discipline non-finite inputs surface as "
+                "a structured error."
+            )
+    hi = float(ci_upper) if ci_upper is not None else float(ate) + (float(ate) - float(ci_lower))
+    try:
+        reading = evalue.classify(
+            float(ate),
+            (float(ci_lower), hi),
+            randomized=False,
+            baseline_risk=baseline_risk,
+            outcome_std=None,
+            naive_effect=naive_ate,
+            covariate_factors={},
+            n_rows=None,
         )
-    rr_point = math.exp(0.91 * ate)
-    rr_ci = math.exp(0.91 * ci_lower)
-    e_value_point = _e_value_from_rr(rr_point)
-    e_value_ci = _e_value_from_rr(rr_ci)
-    if e_value_point >= 3.0:
-        robustness = "strong"
-    elif e_value_point >= 1.5:
-        robustness = "moderate"
-    else:
-        robustness = "weak"
+    except ValueError as exc:
+        raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}") from exc
+    if baseline_risk is not None and reading.conversion != "risk_ratio":
+        raise ToolRefusalError(
+            f"sensitivity_analyzer: baseline_risk={baseline_risk!r} with ate={ate!r} and "
+            f"CI=({ci_lower!r}, {hi!r}) does not form valid risks in (0, 1), so no "
+            "risk-ratio E-value exists. Refusing to substitute a standardized-difference "
+            "scale for a caller who asked for the risk-ratio path."
+        )
+    interpretation = reading.message
+    if reading.reading == evalue.READING_UNBENCHMARKED:
+        interpretation = (
+            f"An unobserved confounder would need to be associated with both treatment and "
+            f"outcome by a risk ratio of at least {reading.e_value_point:.2f} (and the CI bound "
+            f"by {reading.e_value_ci:.2f}) to explain away the observed effect. There is no "
+            "universal E-value threshold: benchmark it against the confounding the measured "
+            "covariates carried (pass naive_ate and baseline_risk to get that reading)."
+        )
     return {
-        "e_value_point": e_value_point,
-        "e_value_ci": e_value_ci,
-        "interpretation": (
-            f"An unobserved confounder would need to be associated with both "
-            f"treatment and outcome by a risk-ratio of at least "
-            f"{e_value_point:.2f} (and the lower CI bound by {e_value_ci:.2f}) "
-            "to explain away the observed effect."
-        ),
-        "robustness": robustness,
+        "e_value_point": reading.e_value_point,
+        "e_value_ci": reading.e_value_ci,
+        "reading": reading.reading,
+        "headline": reading.headline,
+        "benchmark": reading.benchmark,
+        "benchmark_basis": reading.benchmark_basis,
+        "conversion": reading.conversion,
+        "interpretation": interpretation,
     }
 
 

@@ -30,7 +30,9 @@ class ValidationOutcomeType(str, Enum):
     """Type of validation outcome for pattern classification."""
 
     PASSED = "passed"  # All tests passed, proceed
-    FAILED_CRITICAL = "failed_critical"  # Critical test failed (placebo/sensitivity)
+    # Critical test failed (placebo / random_common_cause; derived from the runner
+    # config's ``critical`` flags -- see _critical_test_names)
+    FAILED_CRITICAL = "failed_critical"
     FAILED_MULTIPLE = "failed_multiple"  # Multiple tests failed
     NEEDS_REVIEW = "needs_review"  # Borderline results, expert review needed
     BLOCKED = "blocked"  # Blocked by gate decision
@@ -40,7 +42,8 @@ class FailureCategory(str, Enum):
     """Category of validation failure for learning."""
 
     INSUFFICIENT_SAMPLE = "insufficient_sample"  # Data subset/bootstrap failed
-    UNOBSERVED_CONFOUNDING = "unobserved_confounding"  # Sensitivity analysis failed
+    # Sensitivity reading within the measured confounding / unbenchmarked
+    UNOBSERVED_CONFOUNDING = "unobserved_confounding"
     SPURIOUS_CORRELATION = "spurious_correlation"  # Placebo treatment detected effect
     MODEL_MISSPECIFICATION = "model_misspecification"  # Random common cause failed
     EFFECT_INSTABILITY = "effect_instability"  # Bootstrap variance too high
@@ -265,9 +268,65 @@ def _categorize_failure(test) -> tuple:
         )
 
     elif test_name == RefutationTestType.SENSITIVITY_E_VALUE:
+        # 2026-09-10: the pattern follows the READING, never an E-value cutoff. The
+        # retired rule called any row with e_value < 1.5 critical unobserved
+        # confounding, which mislabels a null finding -- a precision result whose
+        # E-value is small by construction -- as a confounding result.
+        reading = test.details.get("reading")
+        if reading == "null_finding":
+            return (
+                FailureCategory.INSUFFICIENT_SAMPLE,
+                "low",
+                "Reported as a null finding: the 95 % CI includes zero at this "
+                "sample size. No unmeasured confounder is needed to explain it; a "
+                "larger sample, a longer window, or a more precise outcome measure "
+                "is needed to detect a smaller effect.",
+            )
+        if reading == "within_measured_confounding":
+            return (
+                FailureCategory.UNOBSERVED_CONFOUNDING,
+                "high",
+                "A confounder no stronger than the measured confounding could "
+                "account for the whole effect. Do not act on the size of this "
+                "effect, and treat its direction as unconfirmed against confounding "
+                "of that strength; add covariates or use a design that removes the "
+                "measured confounding.",
+            )
+        if reading == "unbenchmarked":
+            # The recommendation follows the BENCHMARK BASIS (whole-diff review
+            # F2). ``measured_unscoreable`` means confounders WERE measured and
+            # adjusted for but none could be scored on this frame; "no measured
+            # confounders exist" is false there and "add covariates" is the wrong
+            # instruction. ``none_measured`` (or a legacy row with no basis) keeps
+            # the original text.
+            if test.details.get("benchmark_basis") == "measured_unscoreable":
+                k = test.details.get("covariates_measured")
+                measured = (
+                    f"the {int(k)} measured confounder(s)"
+                    if isinstance(k, (int, float)) and not isinstance(k, bool) and k > 0
+                    else "the measured confounders"
+                )
+                return (
+                    FailureCategory.UNOBSERVED_CONFOUNDING,
+                    "medium",
+                    f"Robustness to confounding could not be benchmarked: {measured} "
+                    "could not be scored on this frame (no usable contrast — for "
+                    "example a covariate collinear with the treatment). Add a measured "
+                    "confounder that varies independently of the treatment, or use a "
+                    "design that removes the measured confounding.",
+                )
+            return (
+                FailureCategory.UNOBSERVED_CONFOUNDING,
+                "medium",
+                "Robustness to confounding could not be benchmarked: no measured "
+                "confounders exist for this design. Add covariates so the E-value "
+                "has a benchmark.",
+            )
+        # Legacy rows persisted before the reading existed; ``beyond_measured_
+        # confounding`` never reaches here (it is PASSED).
         return (
             FailureCategory.UNOBSERVED_CONFOUNDING,
-            "critical" if test.details.get("e_value", 0) < 1.5 else "high",
+            "high",
             "Effect is sensitive to unobserved confounding. Consider collecting "
             "additional covariates or using instrumental variables.",
         )
@@ -314,6 +373,19 @@ def _describe_failure(test) -> str:
         return f"Placebo treatment showed {abs(delta):.1f}% of original effect"
 
     elif test_name == RefutationTestType.SENSITIVITY_E_VALUE:
+        # 2026-09-10: the description follows the READING, so it cannot contradict
+        # the category stored beside it. The retired sentence asserted "sensitivity
+        # to unmeasured confounding" for every row, which is false for a null
+        # finding (a precision statement) and misleading for an unbenchmarked one.
+        reading = test.details.get("reading")
+        if reading:
+            from src.causal_engine import evalue
+
+            headline = test.details.get("headline") or evalue.HEADLINES.get(reading)
+            if headline:
+                message = test.details.get("message")
+                return f"{headline}: {message}" if message else str(headline)
+        # Legacy rows persisted before the reading existed.
         e_value = test.details.get("e_value", "N/A")
         return f"E-value of {e_value} indicates sensitivity to unmeasured confounding"
 
@@ -327,6 +399,23 @@ def _describe_failure(test) -> str:
         return f"Bootstrap variance: effect changed by {abs(delta):.1f}%"
 
     return f"Test {test_name.value} failed with {abs(delta):.1f}% change"
+
+
+def _critical_test_names() -> set[str]:
+    """The refutation tests whose FAILURE alone blocks an estimate.
+
+    Derived from the single source of truth -- ``RefutationRunner.DEFAULT_CONFIG``'s
+    ``critical`` flags -- rather than copied here, because a copy drifts silently:
+    the retired literal named ``sensitivity_e_value`` (which can no longer FAIL,
+    2026-09-10) and omitted ``random_common_cause`` (which is critical).
+    """
+    from .refutation_runner import RefutationRunner
+
+    return {
+        name
+        for name, cfg in RefutationRunner.DEFAULT_CONFIG.items()
+        if isinstance(cfg, dict) and cfg.get("critical")
+    }
 
 
 def create_validation_outcome(
@@ -358,10 +447,9 @@ def create_validation_outcome(
         outcome_type = ValidationOutcomeType.PASSED
     elif suite.gate_decision == GateDecision.BLOCK:
         # Check if critical test failed
+        critical = _critical_test_names()
         critical_failed = any(
-            t.test_name.value in ("placebo_treatment", "sensitivity_e_value")
-            and t.status.value == "failed"
-            for t in suite.tests
+            t.test_name.value in critical and t.status.value == "failed" for t in suite.tests
         )
         if critical_failed:
             outcome_type = ValidationOutcomeType.FAILED_CRITICAL

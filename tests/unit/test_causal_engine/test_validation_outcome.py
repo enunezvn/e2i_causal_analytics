@@ -300,6 +300,241 @@ class TestExtractFailurePatterns:
         rcc_pattern = next(p for p in patterns if p.test_name == "random_common_cause")
         assert rcc_pattern.category == FailureCategory.MODEL_MISSPECIFICATION
 
+    def test_sensitivity_readings_are_categorized_by_reading_not_by_a_cutoff(self):
+        """2026-09-10: the sensitivity pattern follows the READING, not an E-value.
+
+        The retired rule labelled any sensitivity row with ``e_value < 1.5`` a
+        CRITICAL unobserved-confounding pattern. Under the benchmarked reading a
+        null finding typically carries a small E-value and is a PRECISION finding,
+        not a confounding one -- storing it as critical confounding teaches the
+        Experiment Designer something false. Every row below carries the same
+        e_value=1.2 so only the reading can be doing the work.
+        """
+        readings = {
+            "null_finding": (FailureCategory.INSUFFICIENT_SAMPLE, "low", "null finding"),
+            "within_measured_confounding": (
+                FailureCategory.UNOBSERVED_CONFOUNDING,
+                "high",
+                "measured confounding",
+            ),
+            "unbenchmarked": (
+                FailureCategory.UNOBSERVED_CONFOUNDING,
+                "medium",
+                "no measured confounders",
+            ),
+        }
+
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                status=RefutationStatus.WARNING,
+                original_effect=0.50,
+                refuted_effect=0.50,
+                delta_percent=0.0,
+                details={"reading": reading, "e_value": 1.2, "message": "m"},
+            )
+            for reading in readings
+        ]
+
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=tests,
+        )
+
+        patterns = extract_failure_patterns(suite)
+
+        assert len(patterns) == len(readings)
+        for pattern, reading in zip(patterns, readings, strict=True):
+            category, severity, phrase = readings[reading]
+            assert pattern.category == category, reading
+            assert pattern.severity == severity, reading
+            assert phrase in pattern.recommendation.lower(), reading
+
+        by_reading = {p.test_name and r: p for r, p in zip(readings, patterns, strict=True)}
+
+        # Review round 1 (2026-09-10): for the `within` reading the E-value bound
+        # leaves the DIRECTION unestablished too, so the advice may not present it
+        # as the reliable half. And a null finding is not fixed only by more rows.
+        within = by_reading["within_measured_confounding"].recommendation
+        assert "more reliable than the size" not in within
+        assert (
+            "Do not act on the size of this effect, and treat its direction as "
+            "unconfirmed against confounding of that strength" in within
+        )
+
+        null = by_reading["null_finding"].recommendation
+        assert "the only way" not in null
+        assert (
+            "a larger sample, a longer window, or a more precise outcome measure "
+            "is needed to detect a smaller effect." in null
+        )
+
+    @staticmethod
+    def _unbenchmarked_pattern(details):
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.30,
+                    refuted_effect=0.30,
+                    delta_percent=0.0,
+                    details={"reading": "unbenchmarked", "e_value": 1.2, "message": "m", **details},
+                )
+            ],
+        )
+        (pattern,) = extract_failure_patterns(suite)
+        return pattern
+
+    def test_unbenchmarked_recommendation_follows_the_measured_unscoreable_basis(self):
+        """Whole-diff review F2: the persisted recommendation must follow the
+        benchmark basis. On ``measured_unscoreable`` the confounders WERE measured
+        (the live ``peer_influence_score -> adopted`` runs declared ``centrality_z``,
+        collinear with the treatment); "no measured confounders exist for this
+        design" is false there and "add covariates" is the wrong instruction."""
+        pattern = self._unbenchmarked_pattern(
+            {"benchmark_basis": "measured_unscoreable", "covariates_measured": 1}
+        )
+        assert pattern.category == FailureCategory.UNOBSERVED_CONFOUNDING
+        assert pattern.severity == "medium"
+        assert "the 1 measured confounder(s) could not be scored on this frame" in (
+            pattern.recommendation
+        )
+        assert "collinear with the treatment" in pattern.recommendation
+        assert "varies independently of the treatment" in pattern.recommendation
+        assert "no measured confounders exist" not in pattern.recommendation
+
+    def test_unbenchmarked_recommendation_without_a_count_still_names_the_measured_set(self):
+        pattern = self._unbenchmarked_pattern({"benchmark_basis": "measured_unscoreable"})
+        assert "the measured confounders could not be scored on this frame" in (
+            pattern.recommendation
+        )
+        assert "no measured confounders exist" not in pattern.recommendation
+
+    def test_unbenchmarked_recommendation_keeps_todays_text_on_none_measured(self):
+        for details in ({"benchmark_basis": "none_measured"}, {}):
+            pattern = self._unbenchmarked_pattern(details)
+            assert "no measured confounders exist for this design" in pattern.recommendation
+            assert "Add covariates so the E-value has a benchmark" in pattern.recommendation
+            assert "could not be scored" not in pattern.recommendation
+
+    def test_legacy_sensitivity_row_without_a_reading_is_never_critical(self):
+        """Rows persisted before 2026-09-10 carry an e_value and no ``reading``.
+
+        They must degrade to the generic confounding pattern -- the 1.5 cutoff that
+        used to make this row "critical" no longer exists anywhere.
+        """
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.50,
+                    refuted_effect=0.50,
+                    delta_percent=0.0,
+                    details={"e_value": 1.2},
+                )
+            ],
+        )
+
+        (pattern,) = extract_failure_patterns(suite)
+
+        assert pattern.category == FailureCategory.UNOBSERVED_CONFOUNDING
+        assert pattern.severity == "high"
+
+    def test_sensitivity_description_follows_the_reading(self):
+        """2026-09-10: the stored DESCRIPTION must match the stored category.
+
+        The retired sentence asserted "sensitivity to unmeasured confounding" for
+        every sensitivity row. On a ``null_finding`` -- categorized
+        insufficient_sample / low, with a recommendation saying no unmeasured
+        confounder is needed -- that made one record contradict itself.
+        """
+        headline = "No detectable effect at this sample size"
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.02,
+                    refuted_effect=0.02,
+                    delta_percent=0.0,
+                    details={
+                        "reading": "null_finding",
+                        "e_value": 1.2,
+                        "headline": headline,
+                        "message": "The 95 % CI includes zero at n=1500.",
+                    },
+                )
+            ],
+        )
+
+        (pattern,) = extract_failure_patterns(suite)
+
+        assert pattern.description.startswith(headline)
+        assert "unmeasured confounding" not in pattern.description
+        assert "The 95 % CI includes zero at n=1500." in pattern.description
+
+    def test_sensitivity_description_falls_back_to_the_canonical_headline(self):
+        """A row carrying a ``reading`` but no stored headline still reads right."""
+        from src.causal_engine import evalue
+
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.30,
+                    refuted_effect=0.30,
+                    delta_percent=0.0,
+                    details={"reading": "unbenchmarked", "e_value": 1.2, "message": "m"},
+                )
+            ],
+        )
+
+        (pattern,) = extract_failure_patterns(suite)
+
+        assert pattern.description.startswith(evalue.HEADLINES["unbenchmarked"])
+        assert "unmeasured confounding" not in pattern.description
+
+    def test_legacy_sensitivity_description_is_unchanged(self):
+        """Rows persisted before the reading existed keep today's sentence."""
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.55,
+            gate_decision=GateDecision.REVIEW,
+            tests=[
+                RefutationResult(
+                    test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                    status=RefutationStatus.WARNING,
+                    original_effect=0.30,
+                    refuted_effect=0.30,
+                    delta_percent=0.0,
+                    details={"e_value": 1.2},
+                )
+            ],
+        )
+
+        (pattern,) = extract_failure_patterns(suite)
+
+        assert pattern.description == (
+            "E-value of 1.2 indicates sensitivity to unmeasured confounding"
+        )
+
     def test_extract_patterns_all_passed(self):
         """Test that no patterns are extracted when all tests pass."""
         tests = [
@@ -400,6 +635,67 @@ class TestCreateValidationOutcome:
         assert outcome.agent_context["agent"] == "test"
         assert outcome.dag_hash == "abc123"
         assert outcome.sample_size == 1000
+
+    def test_random_common_cause_failed_block_is_failed_critical(self):
+        """random_common_cause IS a critical test; a BLOCK on it is FAILED_CRITICAL.
+
+        The retired hardcoded set was ``("placebo_treatment", "sensitivity_e_value")``:
+        it omitted random_common_cause, so this suite was stored as FAILED_MULTIPLE,
+        and it named sensitivity_e_value, which can no longer FAIL at all.
+        """
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.50,
+                refuted_effect=0.02,
+                delta_percent=4.0,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                status=RefutationStatus.FAILED,
+                original_effect=0.50,
+                refuted_effect=0.15,
+                delta_percent=70.0,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.BOOTSTRAP,
+                status=RefutationStatus.PASSED,
+                original_effect=0.50,
+                refuted_effect=0.48,
+                delta_percent=4.0,
+            ),
+        ]
+
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.35,
+            gate_decision=GateDecision.BLOCK,
+            tests=tests,
+        )
+
+        outcome = create_validation_outcome(suite)
+
+        assert outcome.outcome_type == ValidationOutcomeType.FAILED_CRITICAL
+
+    def test_critical_set_matches_the_runner_config(self):
+        """One source of truth: the runner config's ``critical`` flags.
+
+        A hardcoded copy in this module drifts the moment a test's criticality
+        changes -- which is exactly what happened to sensitivity_e_value on
+        2026-09-10.
+        """
+        from src.causal_engine.refutation_runner import RefutationRunner
+        from src.causal_engine.validation_outcome import _critical_test_names
+
+        expected = {
+            name
+            for name, cfg in RefutationRunner.DEFAULT_CONFIG.items()
+            if isinstance(cfg, dict) and cfg.get("critical")
+        }
+
+        assert _critical_test_names() == expected
+        assert expected == {"placebo_treatment", "random_common_cause"}
 
     def test_generated_outcome_id_is_a_bare_uuid(self):
         """The minted outcome_id must be UUID-coercible (#1611).

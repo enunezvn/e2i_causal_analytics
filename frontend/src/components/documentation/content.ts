@@ -746,7 +746,7 @@ export interface RefutationTestDef {
 }
 
 export const REFUTATION_INTRO =
-  'No causal estimate is reported until it survives five refutation tests — adversarial attacks that try to break it. Three are critical: a single failure blocks the estimate outright. All five feed a weighted confidence score that decides the gate.';
+  'No causal estimate is reported until it survives five refutation tests — adversarial attacks that try to break it. Two are critical: a single failure blocks the estimate outright. The E-value sensitivity test is a reading, not a gate: it says how strong a hidden confounder would have to be, benchmarked against the confounding the adjustment actually removed. All five feed a weighted confidence score that decides the gate.';
 
 export const REFUTATION_TESTS: RefutationTestDef[] = [
   {
@@ -797,12 +797,14 @@ export const REFUTATION_TESTS: RefutationTestDef[] = [
     id: 'sensitivity_e_value',
     name: 'Sensitivity (E-value)',
     action: 'How strong would a hidden confounder have to be to explain the effect away?',
-    mustHold: 'robustness to unmeasured confounding',
-    defaults: 'E-value on the point estimate and on the CI bound',
-    passRule: 'E-value ≥ 2.0',
-    critical: true,
+    mustHold: 'the effect outgrows the confounding we could measure',
+    defaults:
+      'E-value on the point estimate and on the CI bound. Benchmark = the naive-vs-adjusted risk ratio (the strongest covariate bias factor for a continuous treatment); categorical levels with fewer than 5 rows in either arm are not scored.',
+    passRule:
+      'Read in order: a randomized design is skipped (not applicable); a CI that includes zero is a null finding, even when the point risk ratio would clear the benchmark; no benchmark → not benchmarked. For a benchmarked, non-null estimate: point-estimate risk ratio above the measured confounding benchmark → "Robust to confounding at measured strength"; otherwise "Sensitive to confounding".',
+    critical: false,
     failSign:
-      'A weak unmeasured confounder could produce the whole effect — nothing in the data rules it out.',
+      'A caveat, never a block — three warning readings. "Sensitive to confounding": a confounder no stronger than the measured-confounding benchmark (defined above) could account for the whole effect. "No detectable effect at this sample size": a null finding, the CI includes zero. "Robustness not benchmarked": no measured confounders, or measured confounders that could not be scored (for example a covariate collinear with the treatment).',
   },
 ];
 

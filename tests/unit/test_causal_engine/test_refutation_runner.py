@@ -15,6 +15,7 @@ returns deterministic refutation results, or (b) assert that calling
 ``_run_*_test`` with ``causal_model=None`` raises ``RefutationError``.
 """
 
+import json
 from types import SimpleNamespace
 from typing import Callable, List, Optional
 
@@ -22,6 +23,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.causal_engine import evalue
 from src.causal_engine.errors import RefutationError
 from src.causal_engine.refutation_runner import (
     GateDecision,
@@ -871,88 +873,391 @@ class TestBootstrapTest:
 
 
 class TestSensitivityTest:
-    """Tests for sensitivity E-value test."""
+    """The sensitivity test is a READING, never a gate (spec §4.4, §4.5)."""
 
-    def test_run_sensitivity_test(self, runner):
-        """Test running sensitivity E-value test."""
+    def test_sensitivity_is_not_critical_and_has_no_threshold(self, runner):
+        assert runner.config["sensitivity_e_value"]["critical"] is False
+        assert "e_value_threshold" not in runner.config["sensitivity_e_value"]
+        assert "e_value_min" not in runner.thresholds
+
+    def test_beyond_reads_passed_with_the_benchmark_in_details(self, runner):
         result = runner._run_sensitivity_test(
             original_effect=0.15,
-            original_ci=(0.10, 0.20),
+            original_ci=(0.08, 0.22),
+            baseline_risk=0.30,
+            naive_effect=0.20,
         )
-
         assert result.test_name == RefutationTestType.SENSITIVITY_E_VALUE
-        assert result.status in [
-            RefutationStatus.PASSED,
-            RefutationStatus.WARNING,
-            RefutationStatus.FAILED,
-        ]
-        assert "e_value" in result.details
-
-    def test_run_sensitivity_test_high_e_value(self, runner):
-        """Test sensitivity test with high E-value (passes)."""
-        result = runner._run_sensitivity_test(
-            original_effect=0.50,  # Large effect → high E-value
-            original_ci=(0.40, 0.60),
-        )
-
         assert result.status == RefutationStatus.PASSED
-        assert result.details["e_value"] >= runner.thresholds["e_value_min"]["pass"]
+        d = result.details
+        assert d["reading"] == "beyond_measured_confounding"
+        assert d["benchmark_basis"] == "joint_naive_vs_adjusted"
+        assert d["rr_point"] == pytest.approx(1.5)
+        assert d["headline"] == "Robust to confounding at measured strength"
+        assert "stronger than all measured confounding" in d["message"]
+        assert d["e_value"] == pytest.approx(d["e_value_point"])  # legacy key kept
+        # the SERVED path must be persistable too, not only the error paths
+        json.dumps(d, allow_nan=False)
 
-    def test_run_sensitivity_test_low_e_value(self, runner):
-        """Test sensitivity test with low E-value (fails)."""
+    def test_within_reads_warning(self, runner):
         result = runner._run_sensitivity_test(
-            original_effect=0.05,  # Small effect → low E-value
-            original_ci=(0.01, 0.09),
+            original_effect=0.03,
+            original_ci=(0.01, 0.05),
+            baseline_risk=0.30,
+            naive_effect=0.10,
         )
+        assert result.status == RefutationStatus.WARNING
+        assert result.details["reading"] == "within_measured_confounding"
 
-        # Small effects typically have low E-values
-        assert result.details["e_value"] > 0
-
-    def test_run_sensitivity_test_null_crossing_ci_collapses_e_value_ci(self, runner):
-        """M-stat1: a CI straddling 0 makes the conservative e_value_ci == 1.0
-        instead of min(|lo|,|hi|) (which falsely reports > 1)."""
+    def test_null_crossing_ci_is_a_null_finding_not_a_failure(self, runner):
+        """Replaces M-stat2: a strong point effect with a null-crossing CI is served
+        as a null finding (WARNING), never FAILED, and e_value_ci collapses to 1.0."""
         result = runner._run_sensitivity_test(
             original_effect=0.5,
-            original_ci=(-0.3, 0.5),  # straddles 0
+            original_ci=(-0.3, 0.5),
+            baseline_risk=0.30,
+            naive_effect=0.6,
         )
+        assert result.status == RefutationStatus.WARNING
+        assert result.details["reading"] == "null_finding"
         assert result.details["e_value_ci"] == 1.0
+        assert result.details["e_value"] > 1.0  # point value still surfaced
+        assert "includes zero" in result.details["message"]
 
-    def test_run_sensitivity_test_one_sided_ci_e_value_ci_unchanged(self, runner):
-        """Guard must not affect a one-sided CI: ci_bound = min(|lo|,|hi|)."""
+    def test_smd_path_when_no_baseline_risk(self, runner):
         import numpy as np
 
         result = runner._run_sensitivity_test(
-            original_effect=0.5,
-            original_ci=(0.4, 0.6),  # entirely positive, ci_bound=0.4
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=1.0, naive_effect=0.55
         )
         rr_ci = np.exp(0.91 * 0.4)
-        expected = rr_ci + np.sqrt(rr_ci * (rr_ci - 1))
-        assert result.details["e_value_ci"] == pytest.approx(expected, rel=1e-6)
-        assert result.details["e_value_ci"] > 1.0
-
-    def test_run_sensitivity_status_uses_conservative_ci_bound(self, runner):
-        """M-stat2: a strong point effect with a null-crossing CI must FAIL the
-        sensitivity gate, because the conservative e_value_ci collapses to 1.0
-        (< warning threshold 1.5). Previously status keyed off the point
-        e_value (~2.53 >= pass 2.0 -> spurious PASSED)."""
-        result = runner._run_sensitivity_test(
-            original_effect=0.5,  # point e_value ~ 2.53 -> would PASS on point
-            original_ci=(-0.3, 0.5),  # straddles 0 -> e_value_ci == 1.0
+        assert result.details["conversion"] == "standardized_difference"
+        assert result.details["e_value_ci"] == pytest.approx(
+            rr_ci + np.sqrt(rr_ci * (rr_ci - 1)), rel=1e-6
         )
-        # Conservative bound drives the status.
-        assert result.details["e_value_ci"] == 1.0
-        assert result.status == RefutationStatus.FAILED
-        # Point e_value is still surfaced for transparency.
-        assert result.details["e_value"] > runner.thresholds["e_value_min"]["pass"]
 
-    def test_run_sensitivity_status_pass_on_strong_one_sided_ci(self, runner):
-        """A one-sided CI with a strong conservative bound still PASSES."""
+    @pytest.mark.parametrize("bad_sd", [0.0, -1.0, float("nan"), float("inf")])
+    def test_an_unusable_sd_fails_closed_rather_than_standardizing_by_nothing(self, runner, bad_sd):
+        """H3: a PRESENT but unusable SD (constant outcome, negative, NaN, inf) is a
+        failure, not a missing input. Sanitizing it to None would send the classifier
+        down the SMD path on the UNSTANDARDIZED effect — that changes the NUMBER a
+        leader reads, not a label — so it fails closed like every other unusable
+        sensitivity input (spec §5). ``None`` remains the served missing-input case."""
+        with pytest.raises(RefutationError) as ei:
+            runner._run_sensitivity_test(
+                original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=bad_sd
+            )
+        assert ei.value.details["reason"] == "sensitivity_outcome_std_unusable"
+        assert ei.value.details["outcome_std"] == repr(bad_sd)
+        json.dumps(ei.value.details, allow_nan=False)
+
+    def test_a_numpy_sd_is_served_as_a_native_float(self, runner):
+        """``np.float64`` subclasses ``float`` but ``np.float32`` does not, so a
+        finite positive numpy SD passes validation and then makes the whole served
+        details dict unserializable. Normalize once, at the boundary."""
         result = runner._run_sensitivity_test(
-            original_effect=0.50,
-            original_ci=(0.40, 0.60),  # ci_bound=0.4 -> e_value_ci ~ 2.234 >= 2.0
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=np.float32(1.0)
         )
-        assert result.status == RefutationStatus.PASSED
-        assert result.details["e_value_ci"] >= runner.thresholds["e_value_min"]["pass"]
+        assert type(result.details["outcome_std"]) is float
+        json.dumps(result.details, allow_nan=False)
+
+    def test_an_absent_sd_is_still_a_served_unstandardized_reading(self, runner):
+        """``None`` means no SD was available; the reading is served on the raw
+        effect with the flag honestly False."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=None
+        )
+        assert result.details["standardized"] is False
+        assert result.details["outcome_std"] is None
+
+    def test_a_usable_sd_reports_standardized(self, runner):
+        result = runner._run_sensitivity_test(
+            original_effect=0.5, original_ci=(0.4, 0.6), outcome_std=1.0
+        )
+        assert result.details["standardized"] is True
+        assert result.details["outcome_std"] == 1.0
+
+    def test_unbenchmarked_without_naive_or_covariates(self, runner):
+        result = runner._run_sensitivity_test(original_effect=0.15, original_ci=(0.08, 0.22))
+        assert result.status == RefutationStatus.WARNING
+        assert result.details["reading"] == "unbenchmarked"
+
+    def test_a_ci_that_excludes_the_estimate_raises_refutation_error(self, runner):
+        """``evalue.classify`` refuses an out-of-domain input with ValueError. The
+        runner must surface it the way every refit test does — as a structured
+        RefutationError — not leak a raw ValueError past ``_run_test_with_tracing``
+        (spec §5: a failed sensitivity computation fails closed, it is never served
+        as a reading)."""
+        with pytest.raises(RefutationError) as ei:
+            runner._run_sensitivity_test(
+                original_effect=0.1, original_ci=(0.8, 0.9), baseline_risk=0.3
+            )
+        assert ei.value.details["reason"] == "sensitivity_reading_failed"
+        assert ei.value.details["original_effect"] == repr(0.1)
+        assert ei.value.details["original_ci"] == [repr(0.8), repr(0.9)]
+        json.dumps(ei.value.details, allow_nan=False)
+
+    def test_reading_failure_details_stay_json_persistable(self, runner):
+        """The inputs ``classify`` rejects are precisely the non-finite ones, so raw
+        floats in ``details`` could be NaN/inf — which a JSONB writer rejects, losing
+        the very error record that explains the failure. Diagnostics go in as
+        strings."""
+        with pytest.raises(RefutationError) as ei:
+            runner._run_sensitivity_test(
+                original_effect=float("nan"), original_ci=(0.1, 0.2), baseline_risk=0.3
+            )
+        assert ei.value.details["reason"] == "sensitivity_reading_failed"
+        json.dumps(ei.value.details, allow_nan=False)
+
+    def test_benchmark_computation_failure_fails_closed_not_unbenchmarked(self):
+        """A covariate that perfectly separates treatment AND outcome is a positivity
+        violation and ``benchmark_inputs_from_frame`` raises for it. Swallowing that
+        into ``unbenchmarked`` would print "no measured confounders exist for this
+        design" — a fabricated statement about the data. It must fail closed."""
+        r = RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+        # treated units all c=0 (so the treated share of high-c is 0) while controls
+        # split on c, and among controls every high-c unit has y=1 and every low-c
+        # unit y=0: both Ding-VanderWeele limits fire at once, so the bias factor
+        # diverges rather than settling.
+        frame = pd.DataFrame(
+            {
+                "t": [1, 1, 1, 1, 0, 0, 0, 0],
+                "c": [0, 0, 0, 0, 1, 1, 0, 0],
+                "y": [1, 0, 1, 0, 1, 1, 0, 0],
+            }
+        )
+        model = SimpleNamespace(get_common_causes=lambda: ["c"])
+        with pytest.raises(RefutationError) as ei:
+            r.run_all_tests(
+                original_effect=0.15,
+                original_ci=(0.08, 0.22),
+                data=frame,
+                treatment="t",
+                outcome="y",
+                causal_model=model,
+                identified_estimand=object(),
+                estimate=_stub_estimate(),
+            )
+        assert ei.value.details["reason"] == "sensitivity_benchmark_failed"
+        json.dumps(ei.value.details, allow_nan=False)
+        assert ei.value.details["treatment"] == "t"
+        assert ei.value.details["outcome"] == "y"
+        assert ei.value.details["covariates"] == ["c"]
+
+    def _sensitivity_only_runner(self):
+        return RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+
+    def test_an_unusable_outcome_column_fails_closed_not_unstandardized(self):
+        """H3: a non-numeric outcome column makes the SD computation raise. Degrading
+        that to ``None`` would send the classifier down the SMD path on the
+        UNSTANDARDIZED effect — a scale-dependent, plausible-wrong number served as a
+        reading. Same rule as the benchmark block: a real failure fails closed."""
+        r = self._sensitivity_only_runner()
+        # ``treatment`` is left None so only the SD guard is under test; the
+        # benchmark block needs data AND treatment AND outcome to run at all.
+        frame = pd.DataFrame({"y": ["low", "high", "low", "high"]})
+        with pytest.raises(RefutationError) as ei:
+            r.run_all_tests(
+                original_effect=0.15,
+                original_ci=(0.08, 0.22),
+                data=frame,
+                outcome="y",
+                causal_model=_full_stub_causal_model(),
+                identified_estimand=object(),
+                estimate=_stub_estimate(),
+            )
+        assert ei.value.details["reason"] == "sensitivity_outcome_std_failed"
+        assert ei.value.details["outcome"] == "y"
+
+    def test_an_absent_outcome_column_is_still_a_served_reading(self):
+        """A MISSING column is not a failure: there is simply no SD to compute, so
+        the reading is served unstandardized with ``outcome_std`` reported None."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame({"something_else": [1.0, 2.0, 3.0, 4.0]})
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["outcome_std"] is None
+        assert sens.details["standardized"] is False
+        assert sens.details["reading"] == "unbenchmarked"
+
+    def test_an_absent_outcome_column_leaves_the_benchmark_unbenchmarked(self):
+        """An ABSENT column is a MISSING input, not a computation failure. The
+        benchmark block indexes ``data[outcome]``, so without this guard a caller
+        that names a column the refutation frame does not carry fails the whole
+        suite closed instead of reading ``unbenchmarked`` — the same distinction the
+        SD block above draws."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame({"t": [0, 1, 0, 1], "y": [0.0, 1.0, 0.0, 1.0]})
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="missing_col",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["reading"] == "unbenchmarked"
+        assert sens.details["benchmark"] is None
+
+    def test_an_absent_treatment_column_leaves_the_benchmark_unbenchmarked(self):
+        """Mirror of the above on the treatment side, where the outcome column IS
+        present and its SD is computed normally."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame({"t": [0, 1, 0, 1], "y": [0.0, 1.0, 0.0, 1.0]})
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="missing_col",
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["reading"] == "unbenchmarked"
+        assert sens.details["benchmark"] is None
+
+    def test_a_missing_frame_is_still_a_legitimate_unbenchmarked_fallback(self):
+        """The MISSING-input path is not a failure: with no data/treatment/outcome
+        there is nothing to benchmark against and ``unbenchmarked`` is honest."""
+        r = RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["reading"] == "unbenchmarked"
+
+    def test_sensitivity_never_fails(self, runner):
+        for effect, ci in [(0.001, (0.0005, 0.0015)), (0.5, (-0.3, 0.5)), (0.02, (0.01, 0.03))]:
+            result = runner._run_sensitivity_test(
+                original_effect=effect, original_ci=ci, baseline_risk=0.3
+            )
+            assert result.status != RefutationStatus.FAILED
+
+    def test_sensitivity_never_blocks_the_gate(self, runner):
+        tests = [
+            RefutationResult(
+                RefutationTestType.PLACEBO_TREATMENT, RefutationStatus.PASSED, 0.1, 0.1
+            ),
+            RefutationResult(
+                RefutationTestType.RANDOM_COMMON_CAUSE, RefutationStatus.PASSED, 0.1, 0.1
+            ),
+            RefutationResult(
+                RefutationTestType.SENSITIVITY_E_VALUE, RefutationStatus.WARNING, 0.1, 0.1
+            ),
+            RefutationResult(RefutationTestType.DATA_SUBSET, RefutationStatus.PASSED, 0.1, 0.1),
+            RefutationResult(RefutationTestType.BOOTSTRAP, RefutationStatus.PASSED, 0.1, 0.1),
+        ]
+        conf = runner._calculate_confidence_score(tests)
+        assert conf == pytest.approx(0.90)
+        assert runner._determine_gate_decision(tests, conf) == GateDecision.PROCEED
+
+    def test_n_rows_reports_the_full_frame_when_the_caller_overrides(self):
+        """#1419: ``data`` may be the refutation SUBSAMPLE while the effect and CI
+        are the FULL-frame estimate, so ``len(data)`` would name the wrong n in the
+        null-finding sentence a leader reads. ``n_rows`` lets the caller say so."""
+        r = RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+        subsample = pd.DataFrame({"t": [0, 1] * 20, "y": [0.0, 1.0] * 20})
+        suite = r.run_all_tests(
+            original_effect=0.05,
+            original_ci=(-0.02, 0.12),
+            data=subsample,
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            n_rows=1500,
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["reading"] == "null_finding"
+        assert sens.details["n_rows"] == 1500
+        assert "n = 1500" in sens.details["message"]
+
+    def test_n_rows_falls_back_to_the_passthrough_frame_length(self):
+        """Without the override the reading names ``len(data)`` — correct for a
+        caller that passed the full frame, and the reason the override exists for
+        one that passed a subsample."""
+        r = RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+        frame = pd.DataFrame({"t": [0, 1] * 20, "y": [0.0, 1.0] * 20})
+        suite = r.run_all_tests(
+            original_effect=0.05,
+            original_ci=(-0.02, 0.12),
+            data=frame,
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["n_rows"] == 40
+        assert "n = 40" in sens.details["message"]
+
+    def test_critical_set_comes_from_config(self):
+        r = RefutationRunner(config={"random_common_cause": {"critical": False}})
+        tests = [
+            RefutationResult(
+                RefutationTestType.PLACEBO_TREATMENT, RefutationStatus.PASSED, 0.1, 0.1
+            ),
+            RefutationResult(
+                RefutationTestType.RANDOM_COMMON_CAUSE, RefutationStatus.FAILED, 0.1, 0.1
+            ),
+            RefutationResult(
+                RefutationTestType.SENSITIVITY_E_VALUE, RefutationStatus.PASSED, 0.1, 0.1
+            ),
+        ]
+        conf = r._calculate_confidence_score(tests)
+        assert (
+            r._determine_gate_decision(tests, conf) == GateDecision.REVIEW
+        )  # 0.667, no critical failure
 
 
 # ============================================================================
@@ -1495,3 +1800,209 @@ class TestConvenienceFunctions:
         )
 
         assert is_estimate_valid(suite) is True
+
+
+class TestSensitivityOutcomeStdMasking:
+    """The refutation frame carries the NaN rows the estimation node masked before it
+    fit. ``np.std`` over the raw column is NaN, which ``classify`` refuses — so the
+    whole suite used to fail closed on a perfectly usable estimate."""
+
+    def _sensitivity_only_runner(self):
+        return RefutationRunner(
+            config={
+                "placebo_treatment": {"enabled": False},
+                "random_common_cause": {"enabled": False},
+                "data_subset": {"enabled": False},
+                "bootstrap": {"enabled": False},
+            }
+        )
+
+    def test_nan_outcome_rows_are_masked_out_of_the_sd(self):
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame(
+            {
+                "t": [1.0, 0.0, 1.0, 0.0, np.nan, 1.0],
+                "y": [1.0, 0.0, 1.0, np.nan, 0.0, 0.0],
+            }
+        )
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["outcome_std"] == pytest.approx(float(np.std([1.0, 0.0, 1.0, 0.0])))
+        assert np.isfinite(sens.details["e_value"])
+        # The benchmark-inputs branch ran on this frame (6 rows, 4 jointly usable
+        # after the treatment/outcome NaN mask) — the reading's n_rows must be the
+        # SAME 4 rows the SD and benchmark above describe, not the raw 6-row frame
+        # length. See ``BenchmarkInputs.n_rows`` (evalue.py) for why zero also
+        # counts as computed rather than falling back to ``len(data)``.
+        assert sens.details["n_rows"] == 4
+
+    def test_caller_n_rows_wins_over_the_computed_masked_count(self):
+        """#1419: the caller's explicit ``n_rows`` is the FULL estimation frame's
+        count (the runner's ``data`` may be a refutation subsample), so it must win
+        over the masked count this frame's own benchmark-inputs branch computes."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame(
+            {
+                "t": [1.0, 0.0, 1.0, 0.0, np.nan, 1.0],
+                "y": [1.0, 0.0, 1.0, np.nan, 0.0, 0.0],
+            }
+        )
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            n_rows=1500,
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["n_rows"] == 1500
+
+    def test_a_measured_but_unscoreable_covariate_is_named_in_the_unbenchmarked_reading(self):
+        """Live re-band 2026-09-10: ``peer_influence_score -> adopted`` declares ONE
+        covariate (``centrality_z``) collinear with the continuous treatment
+        (r = 0.9995). Its factor is skipped, the run reads ``unbenchmarked`` — and
+        the message used to claim "no measured confounders exist for this design".
+        The runner's fallback branch must count the covariates it measured and the
+        persisted details must carry the count and the truthful headline."""
+        r = self._sensitivity_only_runner()
+        rng = np.random.default_rng(3)
+        n = 600
+        t = rng.normal(0.0, 1.0, n)
+        frame = pd.DataFrame(
+            {
+                "t": t,
+                "y": (rng.random(n) < 0.30 + 0.10 * (t > 0)).astype(float),
+                "x": t + 1e-9 * rng.normal(0.0, 1.0, n),
+            }
+        )
+        model = _full_stub_causal_model()
+        model.get_common_causes = lambda: ["x"]
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="y",
+            causal_model=model,
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.status == RefutationStatus.WARNING
+        assert sens.details["reading"] == "unbenchmarked"
+        assert sens.details["covariate_bias_factors"] == {}
+        assert sens.details["covariates_measured"] == 1
+        assert sens.details["benchmark_basis"] == "measured_unscoreable"
+        assert sens.details["headline"] == evalue.HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE
+        assert (
+            "none of the 1 measured confounder(s) could be scored on this frame"
+            in sens.details["message"]
+        )
+        assert "no measured confounders exist" not in sens.details["message"]
+
+    def test_caller_covariates_measured_wins_over_the_runners_own_count(self):
+        """Same precedence as ``n_rows``: the agent node measures on the FULL frame and
+        passes its count; the runner's own (subsample) count is only the fallback."""
+        r = self._sensitivity_only_runner()
+        frame = pd.DataFrame(
+            {
+                "t": [1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+                "y": [1.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            }
+        )
+        suite = r.run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=frame,
+            treatment="t",
+            outcome="y",
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            baseline_risk=None,
+            naive_effect=None,
+            covariate_bias_factors={},
+            covariates_measured=2,
+        )
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        assert sens.details["covariates_measured"] == 2
+        assert sens.details["benchmark_basis"] == "measured_unscoreable"
+
+    @staticmethod
+    def _two_unscoreable_covariates_frame(n: int = 600, seed: int = 3) -> pd.DataFrame:
+        """A real frame on which the runner's OWN benchmark-inputs branch runs and
+        measures TWO covariates, both unscoreable: ``x`` collinear with the continuous
+        treatment (the live ``centrality_z`` shape) and ``w`` its mirror image, whose
+        median split puts every control in one stratum. Computed count 2, factors {}."""
+        rng = np.random.default_rng(seed)
+        t = rng.normal(0.0, 1.0, n)
+        return pd.DataFrame(
+            {
+                "t": t,
+                "y": (rng.random(n) < 0.30 + 0.10 * (t > 0)).astype(float),
+                "x": t + 1e-9 * rng.normal(0.0, 1.0, n),
+                "w": -t,
+            }
+        )
+
+    def _computed_branch_suite(self, **kwargs):
+        """No caller-supplied benchmark inputs, so the runner computes them from the
+        frame with the model's common causes (the branch at the top of the
+        sensitivity block in ``run_all_tests``)."""
+        model = _full_stub_causal_model()
+        model.get_common_causes = lambda: ["x", "w"]
+        return self._sensitivity_only_runner().run_all_tests(
+            original_effect=0.15,
+            original_ci=(0.08, 0.22),
+            data=self._two_unscoreable_covariates_frame(),
+            treatment="t",
+            outcome="y",
+            causal_model=model,
+            identified_estimand=object(),
+            estimate=_stub_estimate(),
+            **kwargs,
+        )
+
+    @staticmethod
+    def _sensitivity_details(suite) -> dict:
+        sens = next(t for t in suite.tests if t.test_name == RefutationTestType.SENSITIVITY_E_VALUE)
+        return sens.details
+
+    def test_computed_covariates_measured_is_the_number_of_covariates_present(self):
+        """No caller value: the count the runner's own branch measured on the frame."""
+        d = self._sensitivity_details(self._computed_branch_suite())
+        assert d["covariate_bias_factors"] == {}  # both were measured, neither scoreable
+        assert d["covariates_measured"] == 2
+        assert d["benchmark_basis"] == "measured_unscoreable"
+        assert d["headline"] == evalue.HEADLINE_UNBENCHMARKED_MEASURED_UNSCOREABLE
+
+    def test_caller_covariates_measured_wins_when_the_computed_branch_ran(self):
+        """The agent node measures on the FULL frame; the runner's ``data`` may be a
+        subsample. A conflicting caller value must win over the branch's own 2."""
+        d = self._sensitivity_details(self._computed_branch_suite(covariates_measured=5))
+        assert d["covariates_measured"] == 5
+        assert d["benchmark_basis"] == "measured_unscoreable"
+        assert "none of the 5 measured confounder(s) could be scored" in d["message"]
+
+    def test_caller_explicit_zero_covariates_measured_wins_over_the_computed_count(self):
+        """Zero is a VALUE, not an absence (same rule as ``n_rows``): an explicit 0
+        from the caller must not be replaced by the branch's computed 2, and the
+        reading then says nothing was measured."""
+        d = self._sensitivity_details(self._computed_branch_suite(covariates_measured=0))
+        assert d["covariates_measured"] == 0
+        assert d["benchmark_basis"] == "none_measured"
+        assert d["headline"] == evalue.HEADLINES["unbenchmarked"]
+        assert "no measured confounders exist for this design" in d["message"]

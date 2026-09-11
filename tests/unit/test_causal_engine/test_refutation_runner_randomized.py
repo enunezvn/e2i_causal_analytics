@@ -4,10 +4,18 @@
 The E-value (VanderWeele & Ding 2017) quantifies how strong UNMEASURED
 CONFOUNDING would have to be to explain away an effect — a threat model that
 does not apply to a genuinely randomized treatment (assignment is exogenous by
-construction). Yet ``sensitivity_e_value`` is a CRITICAL gate: an honest small
-standardized effect on an RCT fails ``e_value_min`` and hard-BLOCKs the whole
+construction). ``sensitivity_e_value`` USED to be a CRITICAL gate: an honest small
+standardized effect on an RCT failed ``e_value_min`` and hard-BLOCKed the whole
 estimate. Verified live on the nba_triggers RCT question: gate-block with
 confidence 0.67, with AND without baseline adjustment (documented in PR #1217).
+
+Since the 2026-09-10 calibration (spec §4.4/§4.5) the test is a non-critical
+READING with no FAILED outcome, so the observational path no longer BLOCKs on a
+weak E-value either. The randomized contract below is UNCHANGED and still needs
+its guards: ``randomized_design=True`` must produce SKIPPED (no confidence
+weight, omitted from ``individual_tests``) while the observational path produces
+a SCORED reading — the two must never collapse into each other, or the flag
+would be indistinguishable from doing nothing.
 
 Fix contract: callers declare ``randomized_design=True`` from DESIGN knowledge
 (the dataset spec — NEVER inferred from an empty discovered backdoor, which
@@ -16,6 +24,8 @@ The runner still computes the E-value for information but returns
 status=SKIPPED (excluded from confidence, never a critical failure) with the
 numbers preserved in details.
 """
+
+import pytest
 
 from src.causal_engine.refutation_runner import (
     GateDecision,
@@ -71,16 +81,24 @@ class TestSensitivityTestRandomizedDesign:
         assert randomized.details["e_value"] == observational.details["e_value"]
         assert randomized.details["e_value_ci"] == observational.details["e_value_ci"]
 
-    def test_observational_default_still_fails_weak_evalue(self):
-        """Guard: without the flag, the observational gate is unchanged — a
-        weak E-value still FAILS (the gate matters exactly there)."""
+    def test_observational_default_is_scored_not_skipped(self):
+        """Guard that the flag is not fail-open: without it the SAME weak effect
+        is SCORED (a reading that carries confidence weight), not SKIPPED.
+
+        Pre-2026-09-10 this asserted FAILED. The sensitivity test no longer has a
+        FAILED outcome (spec §4.4) — with no measured confounders supplied the
+        weak effect reads ``unbenchmarked`` → WARNING. What still distinguishes
+        the two paths, and what this guard exists for, is SKIPPED vs scored."""
         runner = RefutationRunner()
         result = runner._run_sensitivity_test(
             original_effect=_WEAK_EFFECT,
             original_ci=_WEAK_CI,
             outcome_std=_OUTCOME_STD,
         )
-        assert result.status == RefutationStatus.FAILED
+        assert result.status != RefutationStatus.SKIPPED
+        assert result.status == RefutationStatus.WARNING
+        assert result.details["reading"] == "unbenchmarked"
+        assert result.details["gate_applicable"] is True
 
 
 class TestRunAllTestsRandomizedDesign:
@@ -101,10 +119,16 @@ class TestRunAllTestsRandomizedDesign:
         assert by_name[RefutationTestType.SENSITIVITY_E_VALUE].status == RefutationStatus.SKIPPED
         assert suite.gate_decision == GateDecision.PROCEED
 
-    def test_observational_run_all_tests_still_blocks(self):
-        """Guard: the same suite WITHOUT the flag keeps the pre-fix behavior —
-        critical e-value failure → BLOCK (observational questions keep their
-        unmeasured-confounding gate)."""
+    def test_observational_run_all_tests_scores_the_reading_and_proceeds(self):
+        """The same suite WITHOUT the flag now scores the reading instead of
+        blocking on it (spec §4.4/§4.5).
+
+        Pre-2026-09-10 this asserted FAILED → BLOCK, which is the live-observed
+        defect the calibration removes: four refuters PASS and the estimate was
+        hard-BLOCKed by the E-value alone. The reading is now WARNING and
+        non-critical, so the gate is decided by confidence: 0.25 + 0.25 +
+        0.25*0.6 + 0.125 + 0.125 = 0.90 → PROCEED. The randomized path above
+        still differs — SKIPPED, confidence 1.0."""
         runner = RefutationRunner()
         suite = runner.run_all_tests(
             original_effect=0.15,
@@ -114,8 +138,11 @@ class TestRunAllTestsRandomizedDesign:
             estimate=_stub_estimate(),
         )
         by_name = {t.test_name: t for t in suite.tests}
-        assert by_name[RefutationTestType.SENSITIVITY_E_VALUE].status == RefutationStatus.FAILED
-        assert suite.gate_decision == GateDecision.BLOCK
+        sensitivity = by_name[RefutationTestType.SENSITIVITY_E_VALUE]
+        assert sensitivity.status == RefutationStatus.WARNING
+        assert sensitivity.status != RefutationStatus.FAILED
+        assert suite.confidence_score == pytest.approx(0.90)
+        assert suite.gate_decision == GateDecision.PROCEED
 
 
 class TestSkippedEvalueGateMechanics:

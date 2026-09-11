@@ -23,26 +23,44 @@ from src.agents.tool_composer import tool_registrations as tr
 
 
 # ---------------------------------------------------------------------------
-# Task 1 — sensitivity_analyzer: real VanderWeele E-value (F3)
+# Task 1 — sensitivity_analyzer: shared E-value module, benchmarked reading (2026-09-10)
 # ---------------------------------------------------------------------------
-def test_sensitivity_analyzer_varies_with_input_and_matches_hand_value():
-    # RR = exp(0.91*ate); for ate=0.5 -> RR = exp(0.455) ~= 1.57620.
-    # E = RR + sqrt(RR*(RR-1)) = 1.57620 + sqrt(1.57620*0.57620) ~= 2.53942.
-    out = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
-    rr = math.exp(0.91 * 0.5)
-    expected_point = rr + math.sqrt(rr * (rr - 1.0))
-    assert out["e_value_point"] == pytest.approx(expected_point, rel=1e-9)
+def test_sensitivity_analyzer_matches_the_shared_module_and_reads_unbenchmarked_without_a_naive():
+    from src.causal_engine import evalue
 
-    # A larger ate must yield a strictly larger point E-value (it VARIES).
+    out = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
+    assert out["e_value_point"] == pytest.approx(
+        evalue.e_value_from_rr(evalue.rr_from_smd(0.5)), rel=1e-9
+    )
+    assert out["e_value_ci"] == pytest.approx(
+        evalue.e_value_from_rr(evalue.rr_from_smd(0.1)), rel=1e-9
+    )
+    assert out["reading"] == "unbenchmarked"
+    assert "no universal" in out["interpretation"].lower()
+    assert "robustness" not in out  # the weak/moderate/strong verdict is gone
+
     out_big = tr.sensitivity_analyzer(ate=1.0, ci_lower=0.2)
     assert out_big["e_value_point"] > out["e_value_point"]
 
-    # CI bound whose RR crosses 1.0 -> e_value_ci == 1.0 (E-value floor).
-    out_cross = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.0)  # RR_ci = exp(0)=1.0
+    out_cross = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.0)
     assert out_cross["e_value_ci"] == pytest.approx(1.0, abs=1e-12)
 
-    # robustness derived from the computed E-value, NOT hardcoded "moderate".
-    assert out_big["robustness"] in {"weak", "moderate", "strong"}
+
+def test_sensitivity_analyzer_reads_beyond_or_within_with_a_naive_contrast_and_baseline_risk():
+    beyond = tr.sensitivity_analyzer(
+        ate=0.15, ci_lower=0.08, ci_upper=0.22, baseline_risk=0.30, naive_ate=0.20
+    )
+    assert beyond["reading"] == "beyond_measured_confounding"
+    assert beyond["headline"] == "Robust to confounding at measured strength"
+    assert beyond["benchmark"] == pytest.approx((0.50 / 0.30) / (0.45 / 0.30))
+    within = tr.sensitivity_analyzer(
+        ate=0.03, ci_lower=0.01, ci_upper=0.05, baseline_risk=0.30, naive_ate=0.10
+    )
+    assert within["reading"] == "within_measured_confounding"
+    null = tr.sensitivity_analyzer(
+        ate=0.05, ci_lower=-0.02, ci_upper=0.12, baseline_risk=0.30, naive_ate=0.10
+    )
+    assert null["reading"] == "null_finding" and null["e_value_ci"] == 1.0
 
 
 def test_sensitivity_analyzer_fail_closes_on_non_finite():
@@ -50,6 +68,37 @@ def test_sensitivity_analyzer_fail_closes_on_non_finite():
         tr.sensitivity_analyzer(ate=float("nan"), ci_lower=0.1)
     with pytest.raises(RuntimeError):
         tr.sensitivity_analyzer(ate=0.5, ci_lower=float("inf"))
+    with pytest.raises(RuntimeError):
+        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1, naive_ate=float("nan"))
+
+
+def test_sensitivity_analyzer_refuses_a_point_estimate_outside_its_own_ci():
+    # evalue.classify raises ValueError here; the tool must surface it as a
+    # structured refusal (RuntimeError subclass), never a bare crash.
+    with pytest.raises(RuntimeError, match="ci must contain the point estimate"):
+        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.6, ci_upper=0.9)
+
+
+def test_sensitivity_analyzer_refuses_a_supplied_baseline_risk_the_risk_ratio_path_cannot_use():
+    # A supplied baseline_risk is a contract: the caller asked for risk-ratio E-values.
+    # When effect/CI/baseline do not form risks in (0, 1) the tool must REFUSE rather
+    # than silently substitute the standardized-difference scale (codex round 1).
+    with pytest.raises(RuntimeError, match="risk-ratio"):
+        tr.sensitivity_analyzer(ate=-0.4, ci_lower=-0.5, ci_upper=-0.3, baseline_risk=0.3)
+    with pytest.raises(RuntimeError, match="risk-ratio"):
+        tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, baseline_risk=1.5)
+    valid = tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, baseline_risk=0.30)
+    assert valid["conversion"] == "risk_ratio"
+    no_baseline = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
+    assert no_baseline["conversion"] == "standardized_difference"
+
+
+def test_sensitivity_analyzer_null_finding_takes_precedence_over_unbenchmarked():
+    # Spec §4.4 precedence: a CI that includes zero IS a null finding whether or not a
+    # benchmark exists (the CI-bound E-value is 1.0); "unbenchmarked" would hide the null.
+    out = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.0)
+    assert out["reading"] == "null_finding"
+    assert "includes zero" in out["interpretation"]
 
 
 # ---------------------------------------------------------------------------
@@ -234,12 +283,12 @@ def test_module_docstring_documents_both_data_contracts():
 
 
 def test_sensitivity_analyzer_handles_protective_effect():
-    # Protective effect (ate < 0): RR = exp(0.91*ate) < 1.0, so _e_value_from_rr
-    # inverts it to 1/RR. By construction this is SYMMETRIC with the harmful
-    # +|ate| case — exercises the rr < 1.0 inversion branch.
+    # Protective effect (ate < 0): the shared evalue module orients the ratio to
+    # the harmful side (RR >= 1), so the reading is SYMMETRIC with the harmful
+    # +|ate| case. Exercises that orientation through the tool.
     out = tr.sensitivity_analyzer(ate=-0.5, ci_lower=-0.8)
     rr = 1.0 / math.exp(0.91 * 0.5)  # exp(-0.455) < 1.0
-    rr = 1.0 / rr  # the inversion _e_value_from_rr applies
+    rr = 1.0 / rr  # the orientation evalue applies
     expected_point = rr + math.sqrt(rr * (rr - 1.0))
     assert out["e_value_point"] == pytest.approx(expected_point, rel=1e-9)
 

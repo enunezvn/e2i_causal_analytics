@@ -213,6 +213,12 @@ class TestNodeFullFrameOutcomeStd:
         # And it is NOT the subsample's SD (the frames genuinely differ here).
         sub_std = float(np.std(captured["data"]["converted"].to_numpy(dtype=float)))
         assert sub_std != pytest.approx(expected)
+        # #1417/#1351: ``trigger_type`` is a raw STRING driver column in the
+        # adjustment set. It is measured confounding and must be SCORED (evalue
+        # scores it level by level), never dropped -- dropping it understates the
+        # fallback benchmark and reads 'beyond measured confounding' too easily.
+        assert "trigger_type" in captured["covariate_bias_factors"]
+        assert captured["n_rows"] == len(big)  # FULL-frame count, not the subsample
 
 
 class TestNodeCalibratedPerRefitHint:

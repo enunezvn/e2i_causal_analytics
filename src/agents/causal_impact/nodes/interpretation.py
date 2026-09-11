@@ -17,6 +17,7 @@ from src.agents.causal_impact.state import (
     NaturalLanguageInterpretation,
     spread_safe,
 )
+from src.causal_engine import evalue
 
 if TYPE_CHECKING:
     from src.services.clinical_context import ClinicalContextService
@@ -420,18 +421,21 @@ class InterpretationNode:
                 "robustness to unmeasured confounding is UNVERIFIED; do not rely on "
                 "any reported E-value."
             )
-        elif overall_robust:
-            strength = "strong" if e_value > 3 else "moderate" if e_value > 2 else "weak"
-            robustness_line += (
-                f"The E-value of {e_value:.2f} suggests {strength} robustness to "
-                "unmeasured confounding."
-            )
         else:
-            strength = "limited" if e_value < 2 else "moderate"
-            robustness_line += (
-                f"The E-value of {e_value:.2f} indicates {strength} robustness to "
-                "unmeasured confounding."
-            )
+            # 2026-09-10: the reading's headline first, then its one-sentence message
+            # with the numbers (spec §4.4 / §4.6). No fixed E-value bands: the
+            # benchmarked reading is the only verdict, so the narrative cannot
+            # contradict it.
+            headline = str(
+                sensitivity_analysis.get("headline")
+                or evalue.HEADLINES.get(str(sensitivity_analysis.get("reading", "")), "")
+            ).strip()
+            message = str(sensitivity_analysis.get("interpretation") or "").strip()
+            reading_parts = [p.rstrip(".") for p in (headline, message) if p]
+            if reading_parts:
+                robustness_line += ". ".join(reading_parts) + "."
+            else:
+                robustness_line = robustness_line.rstrip()
 
         narrative_parts.append(robustness_line)
 
@@ -479,7 +483,9 @@ class InterpretationNode:
             (
                 "E-value: unavailable (sensitivity analysis failed)"
                 if sensitivity_failed
-                else f"E-value: {e_value:.2f}"
+                else f"E-value: {e_value:.2f} — {sensitivity_analysis.get('headline', '')}".rstrip(
+                    " —"
+                )
             ),
         ]
 

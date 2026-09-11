@@ -29,6 +29,9 @@ from src.agents.causal_impact.nodes._compute_budget import (
     ComputeBudgetExpired,
     run_bounded_with_budget,
 )
+from src.agents.causal_impact.nodes.sensitivity_inputs import (
+    sensitivity_benchmark_inputs as _sensitivity_benchmark_inputs,
+)
 from src.agents.causal_impact.state import (
     CausalImpactState,
     RefutationResults,
@@ -40,10 +43,12 @@ from src.causal_engine import (
     RefutationError,
     RefutationRunner,
     RefutationSuite,
+    RefutationTestType,
     ReviewGateDecision,
     ValidationOutcome,
     # Phase 4: ValidationOutcome for Feedback Learner integration
     create_validation_outcome,
+    evalue,
     log_validation_outcome_with_status,
 )
 from src.repositories.causal_validation import (
@@ -214,6 +219,44 @@ def _effective_reconstruction_common_causes(
     if method in ("backdoor.linear_regression", "backdoor.propensity_score_weighting"):
         return common_causes
     return baselines
+
+
+def _outcome_std_full(estimation_data: Any, treatment: str, outcome: str) -> Optional[float]:
+    """FULL-frame outcome SD (σ_Y) for the sensitivity reading, or None when there is
+    no column to measure.
+
+    An ABSENT frame or outcome column is a legitimate "no SD available": the runner
+    falls back to its own data-derived SD. Anything else is left to
+    ``evalue.outcome_std_from_frame``, which drops the NaN treatment/outcome rows the
+    estimation node masked before it fit — the raw passthrough frame still carries
+    them, and an unmasked ``np.std`` returns NaN, which ``classify`` refuses.
+
+    A PRESENT but unusable column raises and the exception propagates to the node's
+    error mapping. That is the same verdict, reached earlier: handing the runner a
+    None for it would send the classifier down the SMD path on an UNSTANDARDIZED
+    effect, and the runner would itself raise ``sensitivity_outcome_std_unusable``
+    for the very same frame.
+    """
+    if (
+        estimation_data is None
+        or not hasattr(estimation_data, "columns")
+        or outcome not in estimation_data.columns
+    ):
+        return None
+    return evalue.outcome_std_from_frame(estimation_data, outcome, treatment=treatment)
+
+
+_NULL_CAVEAT_PREFIX = "No detectable effect at this sample size: "
+
+
+def _sensitivity_caveat_warnings(suite: RefutationSuite) -> List[str]:
+    """The null-finding caveat, once, for the ``warnings`` accumulator (spec §4.6)."""
+    for test in suite.tests:
+        if test.test_name != RefutationTestType.SENSITIVITY_E_VALUE:
+            continue
+        if test.details.get("reading") == evalue.READING_NULL:
+            return [_NULL_CAVEAT_PREFIX + str(test.details.get("message", "")).strip()]
+    return []
 
 
 def _resolve_dowhy_method(estimation_result: Dict[str, Any]) -> str:
@@ -1498,16 +1541,15 @@ class RefutationNode:
             # frame's outcome SD so the scale-sensitive critical gate is
             # standardized on the same frame as the effect it gates. ``None``
             # lets the runner fall back to its data-derived SD.
-            outcome_std_full: Optional[float] = None
-            try:
-                if (
-                    estimation_data is not None
-                    and hasattr(estimation_data, "columns")
-                    and outcome in estimation_data.columns
-                ):
-                    outcome_std_full = float(np.std(estimation_data[outcome].to_numpy(dtype=float)))
-            except Exception:  # noqa: BLE001 - non-numeric outcome → runner fallback
-                outcome_std_full = None
+            outcome_std_full: Optional[float] = _outcome_std_full(
+                estimation_data, treatment, outcome
+            )
+            benchmark_inputs = _sensitivity_benchmark_inputs(
+                estimation_data=estimation_data,
+                treatment=treatment,
+                outcome=outcome,
+                estimation_result=cast(Dict[str, Any], estimation_result),
+            )
             if data_disclosure["refutation_subsampled"]:
                 logger.info(
                     "Refutation subsampled estimation data %s -> %s rows (#1419); "
@@ -1621,9 +1663,23 @@ class RefutationNode:
                     per_refit_hint=per_refit_hint,
                     per_refit_hint_heavy=per_refit_hint_heavy,
                     outcome_std=outcome_std_full,
+                    baseline_risk=benchmark_inputs.baseline_risk,
+                    naive_effect=benchmark_inputs.naive_effect,
+                    covariate_bias_factors=benchmark_inputs.covariate_bias_factors,
+                    # FULL-frame row count for the reading's "n = …". Passed
+                    # VERBATIM: None only when no frame was read, which is what lets
+                    # the runner fall back to len(data) — the refutation subsample.
+                    # A computed 0 (frame present, no usable rows) must stay 0.
+                    n_rows=benchmark_inputs.n_rows,
+                    # How many backdoor covariates the FULL frame carried, scoreable
+                    # or not: with no factor and no naive contrast this is what makes
+                    # the reading say "measured confounders could not be scored"
+                    # rather than "no measured confounders" (live: centrality_z
+                    # collinear with peer_influence_score, r = 0.9995).
+                    covariates_measured=benchmark_inputs.covariates_measured,
                     # DESIGN declaration from the API layer (dataset spec): a
                     # genuinely randomized treatment reports the E-value as
-                    # information instead of an unmeasured-confounding BLOCK gate.
+                    # information (SKIPPED) instead of a benchmarked reading.
                     # Fail-closed: absent/False keeps the full observational gate.
                     randomized_design=bool(state.get("randomized_design")),
                 )
@@ -1755,6 +1811,10 @@ class RefutationNode:
                 "refutation_confidence": suite.confidence_score,
                 # H2: distinct REVIEW signal (default False for PROCEED/BLOCK)
                 "needs_review": suite.needs_review,
+                # 2026-09-10: a CI including zero is served as a null finding; the
+                # caveat rides the warnings accumulator so the API record and the
+                # drill-down show it (new entries only — the channel is additive).
+                "warnings": _sensitivity_caveat_warnings(suite),
                 # Persistence tracking
                 "validation_ids": validation_ids,
                 # #1352 item 3: the sole-promoter transition applied to a

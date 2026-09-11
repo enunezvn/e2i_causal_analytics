@@ -59,7 +59,7 @@ def _config(sensitivity_enabled: bool) -> dict:
         "random_common_cause": {"enabled": True, "num_simulations": 10},
         "data_subset": {"enabled": True, "num_subsets": 10, "subset_fraction": 0.8},
         "bootstrap": {"enabled": True, "num_bootstraps": 10},
-        "sensitivity_e_value": {"enabled": sensitivity_enabled, "e_value_threshold": 2.0},
+        "sensitivity_e_value": {"enabled": sensitivity_enabled},
     }
 
 
