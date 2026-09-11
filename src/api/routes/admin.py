@@ -58,7 +58,6 @@ def get_llm_observability_service() -> LLMObservabilityService:
 
 
 _tool_composer_obs_service: Optional[ToolComposerObservabilityService] = None
-_tool_composer_reader: Optional[Any] = None
 
 
 def get_tool_composer_observability_service() -> ToolComposerObservabilityService:
@@ -69,13 +68,14 @@ def get_tool_composer_observability_service() -> ToolComposerObservabilityServic
 
 
 def get_tool_composer_reliability_reader() -> Any:
-    """The SAME cached reader the planner uses, so both surfaces say the same word."""
-    global _tool_composer_reader
-    if _tool_composer_reader is None:
-        from src.agents.tool_composer.reliability import ToolReliabilityReader
+    """The SAME cached reader the planner uses, so both surfaces say the same word.
 
-        _tool_composer_reader = ToolReliabilityReader()
-    return _tool_composer_reader
+    Not a second instance: two readers would hold two readings for up to the cache TTL, and the
+    page could then contradict the planning prompt for the same window.
+    """
+    from src.agents.tool_composer.reliability import default_reliability_reader
+
+    return default_reliability_reader()
 
 
 def _audit(

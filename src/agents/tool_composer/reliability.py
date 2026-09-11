@@ -255,6 +255,22 @@ class ToolReliabilityReader:
         return verdicts
 
 
+_default_reader: Optional[ToolReliabilityReader] = None
+
+
+def default_reliability_reader() -> ToolReliabilityReader:
+    """The process-wide reader every consumer shares.
+
+    The planner and the admin surface must read the same cache: two readers would each hold
+    their own reading for up to the TTL, and the verdict word on the page could then disagree
+    with the verdict word in the planning prompt for the same window.
+    """
+    global _default_reader
+    if _default_reader is None:
+        _default_reader = ToolReliabilityReader()
+    return _default_reader
+
+
 def reliability_line(tool: Optional[ToolReliability]) -> Optional[str]:
     """The one line a caveated tool adds to the planning prompt, or ``None``.
 

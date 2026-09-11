@@ -230,6 +230,13 @@ async def test_reader_tolerates_a_malformed_payload():
     assert list(verdicts) == ["causal_effect_estimator"]
 
 
+def test_the_default_reader_is_one_process_wide_instance():
+    """Every consumer reads the same cache, so no two surfaces can disagree within a TTL."""
+    from src.agents.tool_composer.reliability import default_reliability_reader
+
+    assert default_reliability_reader() is default_reliability_reader()
+
+
 class HangingPort:
     def __init__(self) -> None:
         self.calls = 0

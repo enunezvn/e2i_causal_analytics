@@ -8,12 +8,14 @@ Sync methods by design: the route runs them via ``asyncio.to_thread``, like its 
 """
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _PAGE = 1000
+_IN_CHUNK = 100  # keep the .in_() URL length bounded, as llm_observability_service does
 _RECENT_FAILURES = 10
 _QUERY_PREVIEW_CHARS = 100
 
@@ -21,7 +23,9 @@ _QUERY_PREVIEW_CHARS = 100
 #: not slow, it is abandoned — its worker went away mid-composition.
 _ABANDONED_AFTER = timedelta(minutes=5)
 
-_TERMINAL = ("COMPLETED", "FAILED")
+#: Every status the composition_status enum treats as finished (ml/013). TIMEOUT belongs here:
+#: a timed-out episode is over, not still running and not abandoned.
+_TERMINAL = ("COMPLETED", "FAILED", "TIMEOUT")
 
 _EPISODE_COLUMNS = (
     "episode_id, composition_id, query_text, status, outcome, failed_phase, error_type, "
@@ -32,12 +36,22 @@ _STEP_COLUMNS = "episode_id, step_number, tool_name, outcome_class"
 
 
 def _percentile(values: List[float], fraction: float) -> Optional[float]:
-    """Nearest-rank percentile; ``None`` when nothing was measured."""
+    """Continuous percentile, matching Postgres ``percentile_cont``; ``None`` when empty.
+
+    The per-tool percentiles beside these come from ``get_tool_reliability``, which uses
+    ``percentile_cont``. A nearest-rank number here would read as the same statistic while
+    being a different one — on [100, 1000] it would say 100 where the database says 550.
+    """
     if not values:
         return None
     ordered = sorted(values)
-    index = max(0, min(len(ordered) - 1, int(round(fraction * (len(ordered) - 1)))))
-    return ordered[index]
+    if len(ordered) == 1:
+        return ordered[0]
+    position = fraction * (len(ordered) - 1)
+    lower, upper = math.floor(position), math.ceil(position)
+    if lower == upper:
+        return ordered[int(position)]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
 class ToolComposerObservabilityService:
@@ -54,15 +68,29 @@ class ToolComposerObservabilityService:
 
     # ------------------------------------------------------------- fetch ----
 
-    def _fetch_episodes(self, since_iso: str) -> List[Dict[str, Any]]:
+    def _fetch_episodes(self, since_iso: str, include_synthetic: bool) -> List[Dict[str, Any]]:
+        """Episodes STARTED in the window, newest first.
+
+        Membership is ``created_at``: a long composition belongs to the window it began in, and
+        a heartbeat on an old episode must not pull it back into a recent one. Paging orders by
+        ``episode_id`` as well, because ``created_at`` is neither unique nor, for the abandoned
+        reading, the only timestamp that moves — without a unique tiebreaker a row can cross a
+        page boundary and be counted twice or skipped.
+        """
         rows: List[Dict[str, Any]] = []
         start = 0
         while True:
-            page = (
+            query = (
                 self.client.table("composer_episodes")
                 .select(_EPISODE_COLUMNS)
-                .gte("last_activity_at", since_iso)
-                .order("last_activity_at", desc=True)
+                .gte("created_at", since_iso)
+            )
+            if not include_synthetic:
+                # The tool rows beside these exclude synthetic runs; one response, one population.
+                query = query.eq("is_synthetic", False)
+            page = (
+                query.order("created_at", desc=True)
+                .order("episode_id")
                 .range(start, start + _PAGE - 1)
                 .execute()
             )
@@ -73,17 +101,28 @@ class ToolComposerObservabilityService:
             start += _PAGE
 
     def _fetch_steps(self, episode_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
-        if not episode_ids:
-            return {}
-        result = (
-            self.client.table("composition_steps")
-            .select(_STEP_COLUMNS)
-            .in_("episode_id", episode_ids)
-            .execute()
-        )
         by_episode: Dict[str, List[Dict[str, Any]]] = {}
-        for row in result.data or []:
-            by_episode.setdefault(str(row.get("episode_id")), []).append(row)
+        for chunk_start in range(0, len(episode_ids), _IN_CHUNK):
+            chunk = episode_ids[chunk_start : chunk_start + _IN_CHUNK]
+            if not chunk:
+                continue
+            start = 0
+            while True:
+                page = (
+                    self.client.table("composition_steps")
+                    .select(_STEP_COLUMNS)
+                    .in_("episode_id", chunk)
+                    .order("episode_id")
+                    .order("step_number")
+                    .range(start, start + _PAGE - 1)
+                    .execute()
+                )
+                batch = list(page.data or [])
+                for row in batch:
+                    by_episode.setdefault(str(row.get("episode_id")), []).append(row)
+                if len(batch) < _PAGE:
+                    break
+                start += _PAGE
         for steps in by_episode.values():
             steps.sort(key=lambda s: s.get("step_number") or 0)
         return by_episode
@@ -205,11 +244,12 @@ class ToolComposerObservabilityService:
 
         now = datetime.now(timezone.utc)
         since_iso = (now - timedelta(days=days)).isoformat()
-        episodes = self._fetch_episodes(since_iso)
+        include_synthetic = deployment_includes_synthetic()
+        episodes = self._fetch_episodes(since_iso, include_synthetic)
 
         return {
             "window_days": days,
-            "include_synthetic": deployment_includes_synthetic(),
+            "include_synthetic": include_synthetic,
             "compositions": self._compositions(episodes, now),
             "tools": self._tools(verdicts),
             "recent_failures": self._recent_failures(episodes),

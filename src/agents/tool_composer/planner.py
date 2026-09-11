@@ -401,19 +401,26 @@ class ToolPlanner:
             logger.warning(f"Failed to check episodic memory: {e}")
             return []
 
+    def _resolve_reliability_reader(self) -> Any:
+        """The injected reader, or the process-wide one the admin surface also reads."""
+        from .reliability import default_reliability_reader
+
+        if self._reliability_reader is None:
+            self._reliability_reader = default_reliability_reader()
+        return self._reliability_reader
+
     async def _reliability_verdicts(self) -> Optional[Dict[str, Any]]:
         """Measured tool reliability for the prompt, or ``None`` while the flag is off.
 
-        The reader is fail-open (``{}`` on any error) and cached per process, so planning never
-        waits on a second read and never fails because reliability could not be read.
+        The reader is fail-open (``{}`` on any error) and shared per process, so planning never
+        waits on a second read, never fails because reliability could not be read, and never
+        reports a different verdict from the admin page for the same window.
         """
-        from .reliability import ToolReliabilityReader, reliability_in_planner_enabled
+        from .reliability import reliability_in_planner_enabled
 
         if not reliability_in_planner_enabled():
             return None
-        if self._reliability_reader is None:
-            self._reliability_reader = ToolReliabilityReader()
-        return await self._reliability_reader.get()
+        return await self._resolve_reliability_reader().get()
 
     def _format_tools_for_prompt(self, verdicts: Optional[Dict[str, Any]] = None) -> str:
         """Format available tools for the planning prompt.

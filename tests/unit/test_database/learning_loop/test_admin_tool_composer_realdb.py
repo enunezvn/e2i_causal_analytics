@@ -39,7 +39,7 @@ class PsycopgQuery:
         self.table = table
         self._where: List[str] = []
         self._params: List[Any] = []
-        self._order: Optional[str] = None
+        self._order: List[str] = []
         self._range: Optional[tuple] = None
 
     def select(self, *_columns: str) -> "PsycopgQuery":
@@ -50,13 +50,18 @@ class PsycopgQuery:
         self._params.append(value)
         return self
 
+    def eq(self, column: str, value: Any) -> "PsycopgQuery":
+        self._where.append(f"{column} = %s")
+        self._params.append(value)
+        return self
+
     def in_(self, column: str, values: List[Any]) -> "PsycopgQuery":
         self._where.append(f"{column}::text = ANY(%s)")
         self._params.append([str(v) for v in values])
         return self
 
     def order(self, column: str, desc: bool = False) -> "PsycopgQuery":
-        self._order = f"{column}{' DESC' if desc else ''}"
+        self._order.append(f"{column}{' DESC' if desc else ''}")
         return self
 
     def range(self, start: int, end: int) -> "PsycopgQuery":
@@ -68,7 +73,7 @@ class PsycopgQuery:
         if self._where:
             sql += " WHERE " + " AND ".join(self._where)
         if self._order:
-            sql += f" ORDER BY {self._order}"
+            sql += " ORDER BY " + ", ".join(self._order)
         if self._range:
             sql += f" OFFSET {self._range[0]} LIMIT {self._range[1]}"
         with self.conn.connect() as conn:
@@ -228,16 +233,17 @@ async def test_recent_failures_carry_the_phase_the_step_classes_and_a_bounded_pr
 async def test_tool_rows_carry_the_readers_verdict_worst_first(synced):
     port = _pg.PsycopgRpcPort(synced)
     await _seed_window(port)
-    # 28 succeeded + 12 health failures on one tool: enough evidence for a caveat.
+    # 28 succeeded + 12 health failures: enough evidence for a caveat. Planted on a tool the
+    # window above never touches, so the counts here are exactly the planted ones.
     caveat_steps = [
-        _step(n, "gap_calculator", "succeeded" if n < 28 else "error") for n in range(40)
+        _step(n, "sensitivity_analyzer", "succeeded" if n < 28 else "error") for n in range(40)
     ]
     await _record(port, "comp_caveat", steps=caveat_steps, final=_final())
     verdicts = await ToolReliabilityReader(port=port).get(30)
 
     tools = _service(synced).overview(30, verdicts)["tools"]
 
-    assert tools[0]["verdict"] == "caveat" and tools[0]["tool_name"] == "gap_calculator"
+    assert tools[0]["verdict"] == "caveat" and tools[0]["tool_name"] == "sensitivity_analyzer"
     assert tools[0]["n_health"] == 40 and tools[0]["n_health_failures"] == 12
     # Below 20 successful runs nothing measured is shown, and declared stays separate.
     quiet = [t for t in tools if t["tool_name"] == "cate_analyzer"][0]
@@ -245,14 +251,40 @@ async def test_tool_rows_carry_the_readers_verdict_worst_first(synced):
     assert quiet["declared_latency_ms"] is not None
 
 
-async def test_the_window_is_respected(synced):
+async def test_the_window_is_respected_by_when_the_composition_started(synced):
+    """Membership is `created_at`: a long-running episode still belongs to the day it began."""
     port = _pg.PsycopgRpcPort(synced)
     await _seed_window(port)
     old = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
     synced.execute(
-        "UPDATE composer_episodes SET last_activity_at = "
+        "UPDATE composer_episodes SET created_at = "
         f"'{old}'::timestamptz WHERE composition_id = 'comp_ok'"
     )
 
     assert _service(synced).overview(30)["compositions"]["total"] == 3
     assert _service(synced).overview(365)["compositions"]["total"] == 4
+
+    # Recent activity on an old episode does not pull it back into the window.
+    synced.execute(
+        "UPDATE composer_episodes SET last_activity_at = now() WHERE composition_id = 'comp_ok'"
+    )
+    assert _service(synced).overview(30)["compositions"]["total"] == 3
+
+
+async def test_synthetic_episodes_follow_the_deployment_provenance_flag(synced, monkeypatch):
+    """The tool rows exclude synthetic runs; the composition counts must agree with them."""
+    port = _pg.PsycopgRpcPort(synced)
+    await _seed_window(port)
+    synced.execute(
+        "UPDATE composer_episodes SET is_synthetic = true WHERE composition_id = 'comp_ok'"
+    )
+
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+    excluded = _service(synced).overview(30)
+    assert excluded["include_synthetic"] is False
+    assert excluded["compositions"]["total"] == 3 and excluded["compositions"]["success"] == 0
+
+    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "1")
+    included = _service(synced).overview(30)
+    assert included["include_synthetic"] is True
+    assert included["compositions"]["total"] == 4 and included["compositions"]["success"] == 1

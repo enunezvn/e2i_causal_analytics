@@ -104,6 +104,9 @@ def _planner(reader: ToolReliabilityReader, llm: MockLLMClient) -> ToolPlanner:
         llm_client=llm,
         tool_registry=get_registry(),
         use_episodic_memory=False,
+        # The plan cache is a process singleton: without this, the second test in this module
+        # is served the first one's plan and never reaches the prompt under test.
+        enable_caching=False,
         reliability_reader=reader,
     )
 

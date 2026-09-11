@@ -133,6 +133,21 @@ def test_the_service_provider_is_a_lazy_singleton(monkeypatch):
     assert first is second and built == [1]
 
 
+def test_the_route_and_the_planner_share_one_reader():
+    """Two readers would mean two caches, and two different verdict words for up to a TTL."""
+    from src.agents.tool_composer.planner import ToolPlanner
+    from src.agents.tool_composer.reliability import default_reliability_reader
+    from src.api.routes.admin import get_tool_composer_reliability_reader
+
+    shared = default_reliability_reader()
+
+    assert get_tool_composer_reliability_reader() is shared
+
+    planner = object.__new__(ToolPlanner)
+    planner._reliability_reader = None
+    assert planner._resolve_reliability_reader() is shared
+
+
 @pytest.mark.parametrize("days", [1, 365])
 def test_the_bounds_are_inclusive(days):
     parameters = inspect.signature(tool_composer_overview).parameters
