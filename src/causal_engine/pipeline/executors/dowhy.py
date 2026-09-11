@@ -320,15 +320,29 @@ class DoWhyExecutor(LibraryExecutor):
         # linear-regression method so we never trigger that bootstrap on the
         # production path; other methods simply contribute no SE (→ confidence
         # weighting), no latency hit.
+        #
+        # #2014: the SE is the heteroskedasticity-robust HC1 SE of DoWhy's own
+        # fit, not ``get_standard_error()``. Measured on the real cohort, DoWhy's
+        # value IS the statsmodels OLS treatment coefficient and its native SE is
+        # that fit's NONROBUST SE, which assumes constant variance — false for a
+        # binary outcome (a linear-probability model). HC1 re-weights the same
+        # residuals; no refit. The ATE is the coefficient only without effect
+        # modifiers (DoWhy raises NotImplementedError for its own SE then), and
+        # column 1 of DoWhy's design is the treatment (constant first).
         dowhy_se: Optional[float] = None
+        dowhy_se_method: Optional[str] = None
         if "linear_regression" in (dowhy_method or "").lower():
             try:
-                se_raw = estimate.get_standard_error()
-                se_val = float(np.ravel(se_raw)[0]) if se_raw is not None else None
-                if se_val is not None and np.isfinite(se_val) and se_val > 0:
-                    dowhy_se = se_val
+                estimator = estimate.estimator
+                if not getattr(estimator, "_effect_modifier_names", None):
+                    robust = estimator.model.get_robustcov_results(cov_type="HC1")
+                    se_val = float(np.ravel(robust.bse)[1])
+                    if np.isfinite(se_val) and se_val > 0:
+                        dowhy_se = se_val
+                        dowhy_se_method = "ols_hc1"
             except Exception:  # noqa: BLE001 - SE is method-dependent; absence is fine
                 dowhy_se = None
+                dowhy_se_method = None
 
         # === Step 10b: opt-in real refutation (R6-F1 / #740) ===
         # The RefutationRunner needs the LIVE DoWhy model/estimand/estimate
@@ -362,6 +376,8 @@ class DoWhyExecutor(LibraryExecutor):
         result_payload: Dict[str, Any] = {
             "causal_effect": causal_effect,
             "standard_error": dowhy_se,
+            # "ols_hc1" when ``standard_error`` is set, else None (#2014).
+            "standard_error_method": dowhy_se_method,
             "identified_estimand": estimand_label,
             "identified_estimand_repr": repr(identified_estimand),
             "dowhy_method": dowhy_method,

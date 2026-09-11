@@ -70,11 +70,17 @@ class TestInverseVarianceWeighting:
         from src.causal_engine.pipeline.executors import dowhy as dowhy_mod
 
         src = inspect.getsource(dowhy_mod)
-        idx = src.index("estimate.get_standard_error()")
-        preceding = src[max(0, idx - 400) : idx]
+        # #2014: the SE is now the HC1 SE of DoWhy's own OLS fit. get_standard_error()
+        # (whose non-linear fallback is the bootstrap) must not be called at all.
+        assert "get_standard_error(" not in src.replace("``get_standard_error()``", ""), (
+            "DoWhy's get_standard_error() falls back to a bootstrap for non-linear "
+            "methods (perf regression); the executor must not call it"
+        )
+        idx = src.index("get_robustcov_results(")
+        preceding = src[max(0, idx - 600) : idx]
         assert "linear_regression" in preceding, (
-            "get_standard_error() must be guarded by a linear_regression check to "
-            "avoid DoWhy's bootstrap fallback (perf regression)"
+            "the robust SE must be guarded by a linear_regression check: only that "
+            "estimator's value is an OLS coefficient"
         )
 
     def test_falls_back_to_confidence_when_se_unavailable(self):
