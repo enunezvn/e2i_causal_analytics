@@ -106,7 +106,8 @@ def test_no_size_is_given_when_it_cannot_be_computed(control_outcomes, effect, r
 
 def test_a_frame_without_the_cohort_columns_gives_no_size_not_a_propensity_size():
     """The synthetic uplift provider's frame has no region column: no size, with the reason,
-    and never the old two-proportion figure."""
+    and never the old two-proportion figure. That provider backs the dormant engine defaults
+    tracked in #2025 (not fixed here)."""
     from src.digital_twin.effect.provider import SyntheticEffectDataProvider
 
     frame = SyntheticEffectDataProvider(n=300, true_ate=0.2, seed=42).get_training_frame(

@@ -178,7 +178,8 @@ def test_a_targeted_request_is_answered_with_inference_on_the_targeted_regions(
     engine, whole_population, provider
 ):
     """codex iter-1 F1: the engine re-uses the cohort-wide interval and recommendation for a
-    region filter (measured), so a targeted question needs its own inference. Midwest's
+    region filter (measured; the Digital Twin page headline's side is #2023, not fixed here),
+    so a targeted question needs its own inference. Midwest's
     planted effect (0.02) is below the policy's 0.05 minimum while the cohort's is not."""
     frame = _frame(provider)
     targeted = tr._targeted_effect(frame, ["midwest"])
