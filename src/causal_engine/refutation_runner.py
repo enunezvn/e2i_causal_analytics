@@ -460,7 +460,7 @@ def _score_common_cause_shift(
         FAILED  otherwise
 
     Why SE units and not ``|delta| / |effect|`` (the rule this replaced):
-    measured 2026-09-11 on the 136 live agent runs, every one of the 7 FAILED
+    measured 2026-09-11 on the 136 live runs of the agent path, every one of the 7 FAILED
     rows had |ATE| <= 0.047 and an ABSOLUTE shift smaller than the PASSED rows'
     -- the percentage denominator made a small true effect fail on the same
     perturbation noise a large effect absorbs (a scale-dependent defect, the

@@ -48,10 +48,12 @@ from tests.unit.test_causal_engine.test_sensitivity_calibration import (  # noqa
 
 pytestmark = [
     pytest.mark.heavy_ml,
-    # 20 pairs x (LinearDML fit + reconstruction + 20 real refits) measured ~21 s
-    # per pair (2026-09-11): the module fixture needs ~7 min, far past the 30 s
-    # global safety net.
-    pytest.mark.timeout(1500),
+    # 20 pairs x (LinearDML fit + reconstruction + 20 real refits): the module
+    # fixture measured ~7 min on the droplet under memory pressure (2026-09-11)
+    # and 176 s on the CI heavy lane (run 34622580962), far past the lane's 60 s
+    # --timeout. 600 s is 1.4x the droplet and 3.4x CI; the heavy lane's stall
+    # watchdog is sized at 2x this marker (backend-tests.yml, #1655 rule).
+    pytest.mark.timeout(600),
 ]
 
 NUM_SIMULATIONS = 20  # the runner's production default for random_common_cause

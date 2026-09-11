@@ -405,8 +405,10 @@ jobs:
     # dirs are slow (test_digital_twin ~8min, test_causal_engine ~5min serial):
     # bundling them into unit-tests would blow its 30-min cap. They pass with no
     # service containers (verified serviceless, #555). 60s per-test timeout for
-    # the heavier ML/causal fits on slower CI runners.
-    timeout-minutes: 20
+    # the heavier ML/causal fits on slower CI runners. 35 min so the 1200 s stall
+    # watchdog below can fire (with a culprit) before the job is cancelled: the
+    # lane measured ~12 min end to end on 2026-09-11 (run 34622580962).
+    timeout-minutes: 35
     env:
       E2I_TESTING_MODE: 'true'
       SUPABASE_URL: 'http://localhost:54321'
@@ -419,11 +421,12 @@ jobs:
       # (see Unit Tests lane above; issue #952).
       OPIK_ENABLED: 'false'
       ANTHROPIC_API_KEY: 'test-key'
-      # #1655 session stall watchdog (see Unit Tests lane). 600 is 2x this
-      # lane's largest per-test budget of 300s (@pytest.mark.timeout in
-      # tests/unit/test_data_preparer/test_adaptive_validity_check.py;
-      # --timeout is 60s) and 18x its measured 32.4s startup.
-      E2I_PYTEST_STALL_TIMEOUT: '600'
+      # #1655 session stall watchdog (see Unit Tests lane). 1200 is 2x this
+      # lane's largest per-test budget of 600s (@pytest.mark.timeout in
+      # tests/unit/test_causal_engine/test_rcc_calibration_2005.py, whose
+      # module fixture fits 20 planted pairs; --timeout is 60s) and 37x its
+      # measured 32.4s startup.
+      E2I_PYTEST_STALL_TIMEOUT: '1200'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

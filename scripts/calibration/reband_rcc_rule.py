@@ -33,7 +33,7 @@ cross-checked against each other here:
 * ``reported``  — the ``bootstrap`` row's ``ci_ratio`` is ``bootstrap_ci_width /
   original_ci_width`` (``_run_bootstrap_test``), so ``original_ci_width =
   bootstrap_ci_width / ci_ratio``. Present on the rows that carry a bootstrap
-  interval (29 of 136 agent estimates on 2026-09-11).
+  interval (29 of the 136 estimates on the agent path, 2026-09-11).
 * ``evalue_inv`` — the ``sensitivity_e_value`` row's ``e_value_ci`` is the E-value at
   the reported CI bound nearest the null. Old-format rows (pre Lane D') invert
   through ``reband_sensitivity_readings._recover_ci`` (the 0.91-SMD conversion, with
