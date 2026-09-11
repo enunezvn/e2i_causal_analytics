@@ -310,6 +310,19 @@ class CausalImpactState(TypedDict):
     # observational questions where discovery simply found nothing). Declared
     # so LangGraph persists it (undeclared channels are dropped).
     randomized_design: NotRequired[bool]
+    # #2007: the declared NEGATIVE-CONTROL outcome column for this question —
+    # an outcome the treatment cannot causally affect that shares its
+    # confounders (Lipsitch, Tchetgen Tchetgen & Cohen 2010). Set by the API
+    # layer from ``_CAUSAL_NEGATIVE_CONTROL_OUTCOMES`` (declared per dataset +
+    # treatment, only for pairs MEASURED to respond to omitted confounding;
+    # never inferred from discovery); the column's values ride in
+    # ``data_cache["negative_control_data"]``, index-aligned with
+    # ``estimation_data`` (NOT a column of it — discovery and the estimator's
+    # no-backdoor fallback would otherwise adjust on it). Consumed by the
+    # refutation node, which re-fits the adjusted model on it; None = the
+    # runner emits SKIPPED ``no_negative_control_declared``. Declared so
+    # LangGraph persists it (undeclared channels are dropped).
+    negative_control_outcome: NotRequired[Optional[str]]
     # #1352 item 3: explicit causal_paths linkage for this run. When a caller
     # (dispatch parameters / API) ties the analysis to a specific causal_paths
     # row, the RefutationNode — the SOLE promoter of validation_status —
