@@ -233,3 +233,18 @@ async def test_an_overflowing_design_fails_the_planned_step_once(_fresh_bounded_
     result = trace.get_result("step_1")
     assert result.status == ExecutionStatus.FAILED and result.output.result is None
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"effect_size": 98, "outcome_type": "binary", "baseline_rate": 0.01, "power": 0.1},
+        {"effect_size": 1e-153, "design": "cluster", "icc": 0.5, "cluster_size": 100},
+        {"effect_size": 1, "outcome_type": "binary", "baseline_rate": 0.1, "alpha": 1e-200},
+    ],
+)
+def test_the_remaining_unusable_designs_are_refused(kwargs):
+    """codex whole-diff #6: 1 per arm for a binary design at low power, and overflows in the
+    cluster inflation and at an extreme alpha."""
+    with pytest.raises(ToolInputError):
+        tr.power_calculator(**kwargs)

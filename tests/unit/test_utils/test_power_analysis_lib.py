@@ -350,3 +350,21 @@ class TestUnusableDesignsAreRefused:
     def test_a_time_to_event_design_needs_two_events(self):
         with pytest.raises(PowerCalculationError, match="events"):
             time_to_event_power(1e100, 0.05, 0.80, 1.0)
+
+    def test_a_binary_design_needs_two_per_arm_too(self):
+        # codex whole-diff #6: at low power the lower bound (z_a + z_b)^2 / 2 is below 2.
+        with pytest.raises(PowerCalculationError, match="per arm"):
+            binary_outcome_power(98, 0.05, 0.10, 0.01)
+
+    @pytest.mark.parametrize(
+        ("call", "args"),
+        [
+            (cluster_rct_power, (1e-153, 0.05, 0.80, 0.5, 100)),
+            (binary_outcome_power, (1, 1e-200, 0.80, 0.1)),
+            (continuous_outcome_power, (0.2, 1e-200, 0.80)),
+            (time_to_event_power, (0.7, 1e-200, 0.80, 0.5)),
+        ],
+    )
+    def test_every_overflow_is_a_power_calculation_error(self, call, args):
+        with pytest.raises(PowerCalculationError):
+            call(*args)

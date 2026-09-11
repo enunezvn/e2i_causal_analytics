@@ -2750,7 +2750,9 @@ def power_calculator(
             forward = time_to_event_power(effect, alpha_value, power_value, rate)
         else:
             forward = continuous_outcome_power(effect, alpha_value, power_value)
-    except PowerCalculationError as exc:
+    except (PowerCalculationError, ArithmeticError) as exc:
+        # ArithmeticError (an overflow the library did not anticipate) is as deterministic
+        # over the inputs as a PowerCalculationError, so it is not retried either.
         raise ToolInputError(f"power_calculator: {exc}") from exc
 
     assumptions = [
@@ -3177,7 +3179,7 @@ def _experiment_size(frame: Any, regions: List[str], effect: float) -> Tuple[Opt
     d = abs(effect) / sd
     try:
         per_arm = continuous_outcome_power(d, policy.alpha, policy.power).sample_size_per_arm
-    except PowerCalculationError as exc:
+    except (PowerCalculationError, ArithmeticError) as exc:
         return None, f"recommended_sample_size is not given: Cohen's d = {d:.3g}: {exc}."
     return per_arm, (
         f"recommended_sample_size = {per_arm} per arm: a two-sided, equal-allocation test at "

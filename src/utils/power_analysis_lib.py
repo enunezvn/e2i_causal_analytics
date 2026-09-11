@@ -57,7 +57,13 @@ def _z_scores(alpha: float, power: float) -> tuple[float, float]:
         raise PowerCalculationError(f"alpha must be in (0, 1); got {alpha}")
     if not 0.0 < power < 1.0:
         raise PowerCalculationError(f"power must be in (0, 1); got {power}")
-    return float(stats.norm.ppf(1 - alpha / 2)), float(stats.norm.ppf(power))
+    z_alpha, z_beta = float(stats.norm.ppf(1 - alpha / 2)), float(stats.norm.ppf(power))
+    if not (math.isfinite(z_alpha) and math.isfinite(z_beta)):
+        # 1 - alpha / 2 rounds to 1.0 for alpha below ~1e-16 (#2015).
+        raise PowerCalculationError(
+            f"alpha={alpha} and power={power} are too extreme for a finite z-score"
+        )
+    return z_alpha, z_beta
 
 
 def _whole_count(compute: Callable[[], float], what: str) -> int:
@@ -87,8 +93,8 @@ def _two_per_arm(per_arm: int, effect_size: float) -> int:
     if per_arm < 2:
         raise PowerCalculationError(
             f"effect_size {effect_size} gives {per_arm} per arm, below the two per arm a "
-            "two-arm test needs; the effect is too large for this approximation (is it in "
-            "outcome units rather than standardised?)"
+            "two-arm test needs; the effect is too large, or alpha/power too lax, for this "
+            "approximation (is the effect in outcome units rather than standardised?)"
         )
     return per_arm
 
@@ -158,7 +164,13 @@ def binary_outcome_power(
     diff = abs(p2 - p1)
     if diff < 1e-9:
         raise PowerCalculationError("Effect size produces zero risk difference")
-    n_per_arm = int(np.ceil(2 * p_bar * (1 - p_bar) * ((z_alpha + z_beta) / diff) ** 2))
+    n_per_arm = _two_per_arm(
+        _whole_count(
+            lambda: 2 * p_bar * (1 - p_bar) * ((z_alpha + z_beta) / diff) ** 2,
+            "the per-arm sample size",
+        ),
+        effect_size,
+    )
     return PowerResult(
         sample_size=n_per_arm * 2,
         sample_size_per_arm=n_per_arm,
@@ -204,7 +216,9 @@ def cluster_rct_power(
 
     base = continuous_outcome_power(effect_size, alpha, power)
     design_effect = 1 + (cluster_size - 1) * icc
-    adjusted_n = int(np.ceil(base.sample_size * design_effect))
+    adjusted_n = _whole_count(
+        lambda: base.sample_size * design_effect, "the design-effect-adjusted sample size"
+    )
     per_arm = -(-adjusted_n // 2)
     clusters_per_arm = -(-per_arm // cluster_size)
 
