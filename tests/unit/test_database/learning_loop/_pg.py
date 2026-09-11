@@ -115,8 +115,12 @@ class ProdReadOnly:
 
     @staticmethod
     def check_read_only(sql: str) -> None:
+        # Quoted identifiers, comments, dollar quoting and backslash escapes can all hide a name
+        # from the word checks ("pg_terminate_backend"(1), pg_terminate_backend/**/(1)), and no
+        # approved catalog query needs them, so they are refused outright.
         if (
             ";" in sql
+            or any(token in sql for token in ('"', "/*", "*/", "--", "$", "\\"))
             or not _READ_START.match(sql)
             or _WRITE_WORDS.search(sql)
             or _SIDE_EFFECT_FUNCTIONS.search(sql)
@@ -174,13 +178,21 @@ class ProdReadOnly:
 # ---------------------------------------------------------------------------
 
 
-def _process_start_ticks(pid: int) -> Optional[str]:
+_GONE = "gone"
+_UNKNOWN = "unknown"
+
+
+def _process_start_ticks(pid: int) -> str:
+    """The process start time in clock ticks, ``"gone"`` when no such process, ``"unknown"`` otherwise."""
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return _GONE
     except OSError:
-        return None
+        return _UNKNOWN
     # Field 22 (starttime) counted after the ")" that closes the command name.
-    return stat.rsplit(")", 1)[1].split()[19]
+    fields = stat.rsplit(")", 1)[-1].split()
+    return fields[19] if len(fields) > 19 and fields[19].isdigit() else _UNKNOWN
 
 
 def owner_identity(pid: Optional[int] = None) -> str:
@@ -216,13 +228,18 @@ def owner_is_gone(owner: str) -> bool:
     belong to a live session this process cannot see.
     """
     parts = owner.split("/")
-    if len(parts) != 5 or not parts[3].isdigit():
+    if len(parts) != 5 or not all(parts[:3]) or not parts[2].isdigit():
         return False
     host, boot_id, pid_ns, pid, start = parts
+    if not pid.isdigit() or not start.isdigit():
+        return False
     here = owner_identity().split("/")
     if (host, boot_id, pid_ns) != tuple(here[:3]):
         return False
-    return _process_start_ticks(int(pid)) != start
+    now = _process_start_ticks(int(pid))
+    if now == _UNKNOWN:
+        return False
+    return now == _GONE or now != start
 
 
 def reap_orphans() -> List[str]:
@@ -512,16 +529,18 @@ PROD_QUERIES = (
 
 
 def acl_text(acl_expr: str) -> str:
-    """SQL rendering an aclitem[] as sorted, de-duplicated ``grantee=privilege[*]/grantor`` items.
+    """SQL rendering an aclitem[] as sorted, merged ``grantee=privilege[*]/grantor`` items.
 
-    ``*`` marks WITH GRANT OPTION. De-duplication matters only for concatenated arrays (the
+    ``*`` marks WITH GRANT OPTION. Merging matters only for concatenated arrays (the
     effective-default-ACL model); a real object ACL never repeats an item.
     """
+    # Items are merged the way PostgreSQL merges ACLs: one privilege per (grantee, privilege,
+    # grantor), grantable if any merged item was.
     return (
-        "(select string_agg(i.item, ',' order by i.item) from (select distinct "
-        "a.grantee::regrole::text || '=' || a.privilege_type "
-        "|| case when a.is_grantable then '*' else '' end || '/' || a.grantor::regrole::text as item "
-        f"from aclexplode({acl_expr}) a) i)"
+        "(select string_agg(i.item, ',' order by i.item) from (select e.g || '=' || e.p "
+        "|| case when bool_or(e.gr) then '*' else '' end || '/' || e.gto as item from (select "
+        "a.grantee::regrole::text as g, a.privilege_type as p, a.is_grantable as gr, "
+        f"a.grantor::regrole::text as gto from aclexplode({acl_expr}) a) e group by e.g, e.p, e.gto) i)"
     )
 
 

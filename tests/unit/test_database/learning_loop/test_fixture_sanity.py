@@ -255,6 +255,10 @@ def test_container_is_throwaway_capped_and_local(pg_container):
         "select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid()",
         "select nextval('some_seq')",
         "select pg_advisory_lock(1)",
+        'select "pg_terminate_backend"(123)',
+        "select pg_terminate_backend/**/(123)",
+        "select 1 -- ; commit",
+        "select $$x$$",
     ],
 )
 def test_prod_access_refuses_anything_but_approved_side_effect_free_reads(sql):
@@ -449,6 +453,20 @@ def test_owner_is_gone_needs_the_same_host_boot_and_pid_namespace():
     assert _pg.owner_is_gone(f"{host}/{boot_id}/1/{pid}/0") is False
     assert _pg.owner_is_gone("12345") is False
     assert _pg.owner_is_gone("") is False
+    # A live PID with a malformed start field is uncertain, never proof of death.
+    assert _pg.owner_is_gone(f"{host}/{boot_id}/{pid_ns}/{pid}/") is False
+    assert _pg.owner_is_gone(f"{host}/{boot_id}/{pid_ns}/{pid}/abc") is False
+    assert _pg.owner_is_gone(f"{host}/{boot_id}//{pid}/{start}") is False
+
+
+def test_acl_rendering_merges_grant_options_like_postgres(base_db):
+    # The same (grantee, privilege, grantor) once plain and once WITH GRANT OPTION renders as one
+    # grantable item, as PostgreSQL's ACL merge would produce.
+    rendered = base_db.rows(
+        "select "
+        + _pg.acl_text("array['anon=r/postgres'::aclitem] || array['anon=r*/postgres'::aclitem]")
+    )
+    assert rendered == ["anon=SELECT*/postgres"]
 
 
 def test_reap_removes_only_containers_whose_owner_is_provably_gone(prod_readonly):
