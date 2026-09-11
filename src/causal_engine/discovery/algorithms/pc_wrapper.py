@@ -156,7 +156,37 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
         data: pd.DataFrame,
         config: DiscoveryConfig,
     ) -> str:
-        """Select appropriate independence test based on data characteristics.
+        """Select the causal-learn conditional-independence test for ``data``.
+
+        Every live frame is MIXED — 0/1 treatment and outcome flags next to
+        continuous covariates — and every such frame selects ``fisherz``
+        (all columns numeric -> ``is_continuous``). That is a MEASURED choice,
+        not an oversight; the selection is pinned by
+        ``tests/unit/test_causal_engine/test_discovery/test_structural_recovery.py``
+        (``TestBinaryFramesGetAGaussianTest``, module docstring items 5 and 7):
+
+        - 2026-09-11 (#2009, ``docs/demos/results/2026-09-11_pc_indep_test/``):
+          on the structural-recovery DGP (binary T/Y, continuous covariates),
+          n in {500, 2000} x seeds 1-10, guided production shape at B=20,
+          driven through the real ``GraphBuilderNode`` — fisherz mean F1 0.933 /
+          recall 0.929 / wall 1.15 s per point, versus ``chisq`` on 10-level
+          quantile-binned covariates 0.832 / 0.764 / 3.7 s and ``gsq`` 0.872 /
+          0.843 / 3.9 s. Paired per (n, seed) on SHD of the shipped DAG,
+          fisherz is better on 10 points, tied on 9, worse on 1 against either
+          alternative; the loss sits at n=500, where binning turns each
+          conditional test into a sparse contingency table and PC drops true
+          conf->T / conf->Y edges. ``kci`` converged on a single unbootstrapped
+          frame in 83 s, i.e. ~29 min per production-shape point (1 + B=20
+          fits) — ~1500x fisherz, out of bounds on time alone. No alternative
+          beat fisherz on any recovery number or on wall-clock.
+        - 2026-09-02 (item 5): on an ALL-binary variant of the same DGP, chisq
+          F1 0.943 vs fisherz 0.953 — no gain either.
+
+        The ``chisq`` branch below is unreachable for any frame PC can run on
+        (it needs a non-numeric dtype, which the ``data.values`` path cannot
+        consume). It is documented as a dead branch in item 5 and is left as
+        is on purpose: removing or "fixing" it is a separate decision from
+        pinning the measured selection.
 
         Args:
             data: Input data

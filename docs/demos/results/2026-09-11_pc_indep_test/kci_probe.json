@@ -1,0 +1,8 @@
+{
+  "seconds": 82.66,
+  "converged": true,
+  "n_edges": 8,
+  "indep_test": "kci",
+  "error": null,
+  "within_limit": true
+}

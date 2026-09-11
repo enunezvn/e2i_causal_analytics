@@ -1,0 +1,82 @@
+{
+  "started_utc": "2026-09-11T08:48:50Z",
+  "budget_min": 40.0,
+  "point_timeout_s": 1800.0,
+  "pins": {
+    "causal-learn": "0.1.4.3",
+    "numpy": "2.3.5",
+    "pandas": "2.3.3",
+    "networkx": "3.6.1"
+  },
+  "kci_probe": {
+    "seconds": 82.66,
+    "converged": true,
+    "n_edges": 8,
+    "indep_test": "kci",
+    "error": null,
+    "within_limit": true
+  },
+  "kci_not_attempted": [
+    {
+      "n": 500,
+      "seed": 1,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 2,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 3,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 4,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 5,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 6,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 7,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 8,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 9,
+      "expected_s": 1909,
+      "window_s": 1800
+    },
+    {
+      "n": 500,
+      "seed": 10,
+      "expected_s": 1909,
+      "window_s": 1800
+    }
+  ],
+  "elapsed_min": 2.9
+}

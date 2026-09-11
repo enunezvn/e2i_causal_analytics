@@ -15,22 +15,75 @@ Two variants:
 1. DirectLiNGAM: Iteratively identifies root variables via regression
 2. ICA-LiNGAM: Uses Independent Component Analysis for unmixing
 
+Both refuse a frame with a binary column (``refuse_binary_columns``, #2009):
+the platform's treatment and outcome flags are 0/1, which LiNGAM's
+continuous non-Gaussian error model does not cover.
+
 Author: E2I Causal Analytics Team
 """
 
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Hashable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+from ...errors import DiscoveryError
 from ..base import (
     AlgorithmResult,
     BaseDiscoveryAlgorithm,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
 )
+
+
+def binary_columns(data: pd.DataFrame) -> List[Hashable]:
+    """Columns with at most two distinct NON-NULL values, in frame order.
+
+    A 0/1 flag is the canonical case; a constant column also qualifies (it is
+    degenerate for LiNGAM's regression-on-residuals in any case). An all-null
+    column has zero distinct non-null values and is NOT counted — the base
+    class's missing-values check refuses such a frame before any guard runs.
+    """
+    return [col for col in data.columns if 1 <= data[col].nunique(dropna=True) <= 2]
+
+
+def refuse_binary_columns(data: pd.DataFrame, algorithm: DiscoveryAlgorithmType) -> None:
+    """Refuse a LiNGAM fit on a frame with a binary column (#2009).
+
+    LiNGAM assumes linear relationships with non-Gaussian CONTINUOUS errors;
+    a Bernoulli column violates that model, and ``lingam`` fits it anyway and
+    returns a plausible-looking DAG. Every platform outcome is a 0/1 flag, so
+    a LiNGAM run on a live frame would be silently mis-specified.
+
+    Seam: called from each wrapper's ``discover`` — after ``_validate_data``
+    and BEFORE the ``try`` whose ``except Exception`` turns every failure into
+    a ``converged=False`` result. ``discover`` is the one seam every caller
+    passes through: the runner's sequential, traced, process-pool (which
+    instantiates the class inside the worker, so a runner-side check would not
+    reach it), bootstrap-resample and latent-diagnostic paths all end in
+    ``algorithm.discover(data, config)``, and so do direct wrapper callers.
+    The runner records the exception on a FAILED result whose error text is
+    this message (its #1978 timeout policy) — never a silent drop, never a
+    fallback to PC.
+
+    Raises:
+        DiscoveryError: naming the algorithm and the binary columns.
+    """
+    columns = binary_columns(data)
+    if not columns:
+        return
+    # Labels may be non-str (an unnamed frame has integer columns): stringify
+    # only for the message, keep the original labels in ``details``.
+    raise DiscoveryError(
+        f"{algorithm.value} refused: LiNGAM assumes non-Gaussian continuous "
+        f"variables, but {len(columns)} column(s) are binary (<= 2 distinct "
+        f"non-null values): {', '.join(str(col) for col in columns)}. Use a "
+        f"constraint-based algorithm (PC/FCI) for frames with binary treatment "
+        f"or outcome flags.",
+        details={"algorithm": algorithm.value, "binary_columns": columns},
+    )
 
 
 class DirectLiNGAMAlgorithm(BaseDiscoveryAlgorithm):
@@ -77,8 +130,16 @@ class DirectLiNGAMAlgorithm(BaseDiscoveryAlgorithm):
 
         Returns:
             AlgorithmResult with discovered DAG structure
+
+        Raises:
+            ValueError: empty frame, missing values, or fewer than 2 columns.
+            DiscoveryError: a binary column is present (#2009; see
+                ``refuse_binary_columns``). Raised before the fit, outside the
+                ``except Exception`` below, so it is never folded into a
+                ``converged=False`` result here.
         """
         self._validate_data(data)
+        refuse_binary_columns(data, self.algorithm_type)
         start_time = time.time()
 
         try:
@@ -253,8 +314,16 @@ class ICALiNGAMAlgorithm(BaseDiscoveryAlgorithm):
 
         Returns:
             AlgorithmResult with discovered DAG structure
+
+        Raises:
+            ValueError: empty frame, missing values, or fewer than 2 columns.
+            DiscoveryError: a binary column is present (#2009; see
+                ``refuse_binary_columns``). Raised before the fit, outside the
+                ``except Exception`` below, so it is never folded into a
+                ``converged=False`` result here.
         """
         self._validate_data(data)
+        refuse_binary_columns(data, self.algorithm_type)
         start_time = time.time()
 
         try:
