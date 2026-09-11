@@ -279,9 +279,10 @@ class SimulationResults(BaseModel):
 class SensitivityReport(BaseModel):
     """Output from ``sensitivity_analyzer``: E-values and the shared ``evalue`` reading.
 
-    Without a confidence interval (#2014) the report is point-only: ``e_value_ci`` and
-    ``benchmark`` are None, ``reading`` is ``interval_unavailable`` and
-    ``benchmark_basis`` is ``not_assessed``.
+    Without a confidence interval (#2014) the report is point-only: ``e_value_ci`` is
+    None and ``reading`` is ``interval_unavailable``. ``benchmark`` is still the
+    confounding the adjustment removed when a naive contrast is given (a point
+    quantity), else None with basis ``none_measured``.
     """
 
     e_value_point: float
@@ -1710,8 +1711,9 @@ def sensitivity_analyzer(
     Without an interval (#2014: ``causal_effect_estimator`` returns ``ci_lower`` /
     ``ci_upper`` = None when no sampling uncertainty was measured, and the planner maps
     those fields here by name) the report is point-only: the point E-value under the
-    same conversion rule, no CI E-value, no benchmark, and reading
-    ``interval_unavailable`` — null / beyond / within all need the interval. An upper
+    same conversion rule, no CI E-value, the measured-confounding benchmark when
+    ``naive_ate`` is given, and reading ``interval_unavailable`` — no verdict, because
+    the null-finding check that precedes beyond / within needs the interval. An upper
     bound without a lower one is refused rather than mirrored into an invented bound.
     """
     for name, value in (
@@ -1783,11 +1785,24 @@ _READING_INTERVAL_UNAVAILABLE = "interval_unavailable"
 def _point_only_sensitivity(
     ate: float, *, baseline_risk: Optional[float], naive_ate: Optional[float]
 ) -> Dict[str, Any]:
-    """``sensitivity_analyzer``'s report when the estimate has no confidence interval (#2014)."""
+    """``sensitivity_analyzer``'s report when the estimate has no confidence interval (#2014).
+
+    The point E-value and, with a naive contrast, the measured-confounding benchmark
+    (both point quantities — spec §2.5 benchmarks the point estimate and states
+    precision separately). No reading: ``classify`` checks "the CI includes zero" before
+    beyond / within, and that check cannot be made.
+    """
     try:
         e_point, _, conversion = evalue.point_e_value(
             float(ate), baseline_risk=baseline_risk, outcome_std=None, naive_effect=naive_ate
         )
+        joint = evalue.joint_confounding_benchmark(
+            naive_ate,
+            float(ate),
+            baseline_risk=baseline_risk if conversion == "risk_ratio" else None,
+            outcome_std=None,
+        )
+        benchmark, basis = evalue.measured_confounding_benchmark(joint, {})
     except ValueError as exc:
         raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}") from exc
     if baseline_risk is not None and conversion != "risk_ratio":
@@ -1797,13 +1812,20 @@ def _point_only_sensitivity(
             "substitute a standardized-difference scale for a caller who asked for the "
             "risk-ratio path."
         )
+    benchmark_sentence = (
+        f" The confounding the measured adjustment removed corresponds to a risk ratio of "
+        f"{benchmark:.2f} ({evalue.BASIS_IN_WORDS[basis]}); no reading against it is given "
+        "without the interval."
+        if benchmark is not None
+        else ""
+    )
     return SensitivityReport(
         e_value_point=e_point,
         e_value_ci=None,
         reading=_READING_INTERVAL_UNAVAILABLE,
         headline="Robustness not assessed: the estimate has no confidence interval",
-        benchmark=None,
-        benchmark_basis="not_assessed",
+        benchmark=benchmark,
+        benchmark_basis=basis,
         conversion=conversion,
         interpretation=(
             f"No confidence interval exists for this estimate, so only the point E-value is "
@@ -1811,7 +1833,7 @@ def _point_only_sensitivity(
             f"{e_point:.2f} with both treatment and outcome to explain away the point "
             "estimate. Without the interval it is unknown whether the effect is "
             "distinguishable from zero, so no robustness reading (null finding, or beyond / "
-            "within measured confounding) is given."
+            "within measured confounding) is given." + benchmark_sentence
         ),
     ).model_dump()
 

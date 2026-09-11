@@ -111,3 +111,17 @@ def test_a_real_interval_still_gives_the_full_reading() -> None:
 
     assert report["e_value_ci"] is not None
     assert report["reading"] != "interval_unavailable"
+
+
+def test_no_interval_still_reports_the_measured_confounding_benchmark() -> None:
+    # The benchmark is a point quantity (spec 2.5: benchmark the point estimate, state
+    # precision separately), so a naive contrast still yields it; only the verdict, which
+    # needs the interval to rule out a null finding, is withheld.
+    report = tr.sensitivity_analyzer(ate=0.1, ci_lower=None, baseline_risk=0.3, naive_ate=0.2)
+
+    expected = evalue.joint_confounding_benchmark(0.2, 0.1, baseline_risk=0.3, outcome_std=None)
+    assert expected is not None
+    assert report["benchmark"] == pytest.approx(expected, rel=1e-12)
+    assert report["benchmark_basis"] == "joint_naive_vs_adjusted"
+    assert report["reading"] == "interval_unavailable"
+    assert f"{expected:.2f}" in report["interpretation"]
