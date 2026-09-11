@@ -19,7 +19,7 @@
 
 ```
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv
+Claude-Session: https://claude.ai/code/session_01BmAgCFKeEsiRbFNofRPZP8
 ```
 
 - Nothing is pushed until Task 12. Never squash.
@@ -1605,6 +1605,15 @@ git -C $W commit -m "feat(sensitivity-node): delegate to the shared E-value modu
 
 ---
 
+### Task 5b: Minimum cell size for categorical covariate levels (owner-decided 2026-09-10)
+
+`MIN_CELL_SIZE = 5`: a categorical covariate level with fewer than 5 rows in either arm is skipped as a
+sparse cell before it can inflate the fallback covariate benchmark. Measured on 30 levels / n = 200 / no
+planted confounding: median factor 5.71 → 1.81, max 12.75 → 3.00. Live cardinality unaffected. Commits
+`f21209834` (skip logic) / `f637521dd` (spec record).
+
+---
+
 ### Task 6: The interpretation node narrates the reading
 
 **Files:**
@@ -1842,6 +1851,10 @@ def sensitivity_analyzer(
 
 Add `from src.causal_engine import evalue` to the module imports and make sure `Optional` is imported from `typing` (check the header). In `tool_registry.py:394` change the description to `"Computes E-values and the measured-confounding sensitivity reading for causal estimates"`. Leave its `input_schema`/`output_schema` untouched (the mismatch with the function is filed as an issue in Task 12).
 
+**Decision (2026-09-10):** a CI including zero is a null finding regardless of the benchmark (spec §4.4
+precedence); a supplied `baseline_risk` the risk-ratio path cannot use is refused; the output carries
+`conversion` (commit `04162aa8c`).
+
 - [ ] **Step 4: Run, lint, type-check, commit**
 
 Run: `(cd $W && $PY -m pytest tests/unit/test_agents/test_tool_composer/test_tools_fail_closed.py -q -p no:cacheprovider -n 0 2>&1 | tail -3)`
@@ -1903,6 +1916,22 @@ NULL_PAIRS = [
     ("rep_detailing_high", "adherent_180d"),
     ("trigger_accepted", "adherent_180d"),
 ]
+```
+
+**Correction (2026-09-11):** the dictated list above wrongly included `treatment_arm →
+persistent_180d` — it is a real indirect effect (spec §2.3; `cohort_outcomes.py` feeds
+`treatment_arm` into the discontinuation logit's `arm_core`), not a structural null. The
+shipped test uses nine structurally null pairs verified against the generator code —
+`("copay_support", "treatment_initiated")`, `("psp_enrolled", "treatment_initiated")`,
+`("rep_detailing_high", "adherent_180d")`, `("trigger_accepted", "adherent_180d")`,
+`("rep_detailing_high", "low_gap_180d")`, `("trigger_accepted", "low_gap_180d")`,
+`("rep_detailing_high", "persistent_180d")`, `("sample_dropped", "persistent_180d")`,
+`("trigger_accepted", "persistent_180d")` — plus a separate detection-limit pin
+(`test_persistence_indirect_effect_is_below_detection_at_the_live_cap`) for the persistence
+pair. The dictated code block below is left as the historical record of what was first
+proposed.
+
+```python
 
 
 def _fit(df, treatment, outcome, covariates):
@@ -2256,6 +2285,10 @@ Before running: read `src/memory/services/factories.py` for the exact name of th
 Run: `(cd $W && $PY scripts/calibration/reband_sensitivity_readings.py --out docs/demos/results/$(date +%F)_sensitivity_calibration/reband.md 2>&1 | tail -30)`
 Expected: the readings table (beyond ≈ 91, within ≈ 6, null_finding ≈ 5, not_applicable_randomized 6, the 13 continuous-treatment runs now benchmarked by covariate factors, unmapped 3) and the moves table (BLOCK → PROCEED ≈ 56, BLOCK → BLOCK 6 on random-common-cause failures), plus the frame perturbation line (expected 0 frame-sensitive runs; any listed pair is re-run live in Task 12). If any pair reads `frame_error`, print the exception and fix the loader call, never the mapping by guess.
 
+See the reconciliation appendix in `reband.md` for the `acceptance_status → conversion_flag` dropna vs
+fill-to-zero comparison, and commit `2db7c5f2c` for the four codex findings folded into the script
+(comparison coverage, cap completeness, the unstandardized-SD branch, preview reconciliation).
+
 - [ ] **Step 4: Lint, commit the script and the table**
 
 ```bash
@@ -2266,6 +2299,15 @@ git -C $W commit -m "chore(calibration): re-band the live agent runs under the s
 ```
 
 Then STOP and show the owner the table (this is the pre-merge review point of spec §7). Post it as a comment on #1988 and #1991 only after the owner has seen it.
+
+---
+
+### Task 9b: The unbenchmarked reading distinguishes measured-but-unscoreable confounders (2026-09-11)
+
+Basis `measured_unscoreable`, from `BenchmarkInputs.covariates_measured` and `classify(covariates_measured=…)`,
+threaded through the runner, both agent nodes, the re-band script and the calibration test. Live cause: 6
+`peer_influence_score → adopted` runs, `centrality_z` collinear with the treatment (r = 0.9995). Commits
+`50547c566` / `30c4deb14` / `f011dc8d4`.
 
 ---
 
@@ -2522,7 +2564,7 @@ gh pr create --repo enunezvn/e2i-causal-analytics --base main --head claude/1991
 ```
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
-https://claude.ai/code/session_01XBPxeAJJVgMnskP6jw6cPv
+https://claude.ai/code/session_01BmAgCFKeEsiRbFNofRPZP8
 ```
 
 Watch CI: `gh pr checks <n> --watch`. Before merging run `gh pr update-branch <n>` (PR CI reuses the original merge SHA). Ask the owner for the merge go; merge with `--merge`, never squash.
@@ -2567,6 +2609,6 @@ Write `cert.md` in the results dir with every command and its output; commit it 
 
 ## Self-review against the spec
 
-- §4.1 module and every function → Task 1. §4.2 conversion table → Task 1 (`_rr_of_effect`, `benchmark_inputs_from_frame`) and Task 8 exercises the binary path. §4.3 full-frame inputs threaded like `outcome_std` → Task 4 (node) and Task 2 (runner kwargs + fallback). §4.4 five readings, statuses, headlines, messages → Task 1; the tie rule → `test_tie_reads_within`. §4.5 config, thresholds deletion, critical-from-config, #1989 pin, #1994 comment, YAML + residue → Tasks 2 and 3. §4.6 refutation node caveat, sensitivity node, interpretation node, state TypedDict → Tasks 4, 5, 6. §4.7 chat tool + registry description + filed mismatch → Tasks 7 and 12. §4.8 lineage page and documentation page → Tasks 10 and 11. §4.9 no migration / no OpenAPI change → no task adds either; Task 12 step 1 lint/mypy only. §5 error handling → `evalue` raises `ValueError` (Task 1 test), nodes fail open to empty inputs (Task 4/5 tests). §6 tests → Tasks 1, 2, 4, 5, 6, 7, 8, 11. §7 re-band before merge → Task 9 with the explicit STOP for the owner. §8 live verification → Task 12 step 5. §9 rollout → conventions block + Task 12. §10 known limits → Task 8's pinned limit test and Task 10's callout. §11 issues → Task 12 step 6.
+- §4.1 module and every function → Task 1. §4.2 conversion table → Task 1 (`_rr_of_effect`, `benchmark_inputs_from_frame`) and Task 8 exercises the binary path. §4.3 full-frame inputs threaded like `outcome_std` → Task 4 (node) and Task 2 (runner kwargs + fallback). §4.4 five readings, statuses, headlines, messages → Task 1; the tie rule → `test_tie_reads_within`. §4.5 config, thresholds deletion, critical-from-config, #1989 pin, #1994 comment, YAML + residue → Tasks 2 and 3. §4.6 refutation node caveat, sensitivity node, interpretation node, state TypedDict → Tasks 4, 5, 6. §4.7 chat tool + registry description + filed mismatch → Tasks 7 and 12. §4.8 lineage page and documentation page → Tasks 10 and 11. §4.9 no migration / no OpenAPI change → no task adds either; Task 12 step 1 lint/mypy only. §5 error handling → `evalue` raises `ValueError` (Task 1 test); a MISSING input (no frame / column absent) is a legitimate fallback (SMD path / no benchmark); a PRESENT-but-unusable input surfaces as `RefutationError` on the runner and `sensitivity_error` on the node, never a fabricated reading (settled in the Task 2 and Task 4/5 reviews). §6 tests → Tasks 1, 2, 4, 5, 6, 7, 8, 11. §7 re-band before merge → Task 9 with the explicit STOP for the owner. §8 live verification → Task 12 step 5. §9 rollout → conventions block + Task 12. §10 known limits → Task 8's pinned limit test and Task 10's callout. §11 issues → Task 12 step 6.
 - Placeholders: `<run-date>` is a naming convention, not a gap; the executor substitutes today's date. No "TBD"/"add validation" anywhere.
 - Type consistency: `evalue.classify(effect, ci, *, randomized, baseline_risk, outcome_std, naive_effect, covariate_factors, n_rows)` is called with those exact keyword names in Tasks 2, 5, 7, 8, 9. `BenchmarkInputs(baseline_risk, naive_effect, covariate_bias_factors, treatment_is_binary, outcome_is_binary, n_rows)` is used identically in Tasks 1, 4, 5, 9. Reading constants `READING_BEYOND` / `READING_WITHIN` / `READING_NULL` / `READING_UNBENCHMARKED` / `READING_RANDOMIZED` and `HEADLINES` are referenced in Tasks 4, 5, 6, 7. `_run_sensitivity_test(original_effect, original_ci, outcome_std, randomized_design, baseline_risk, naive_effect, covariate_bias_factors, n_rows)` matches its callers in Task 2. `RefutationResult(test_name, status, original_effect, refuted_effect, ...)` positional order matches the dataclass.
