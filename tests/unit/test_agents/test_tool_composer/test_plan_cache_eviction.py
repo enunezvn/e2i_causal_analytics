@@ -459,7 +459,6 @@ def _race_a_replacement(cache: Any, key: str, paused: threading.Event, release: 
     or has already finished, so the outcome never depends on scheduling: without the lock the
     replacement lands inside the paused operation, with it the replacement waits its turn.
     """
-    assert paused.wait(10)
     lock = cache._lock
     replacement = _plan(D1)
     replaced = threading.Event()
@@ -469,9 +468,12 @@ def _race_a_replacement(cache: Any, key: str, paused: threading.Event, release: 
         cache.set(D1, replacement)
         replaced.set()
 
-    replacer = _start("replacer", replace, errors)
-    assert _wait_any(lock.contended, replaced)
-    release.set()
+    try:
+        assert paused.wait(10)
+        replacer = _start("replacer", replace, errors)
+        assert _wait_any(lock.contended, replaced)
+    finally:
+        release.set()  # a failed coordinator never leaves the paused thread waiting
     return replacer, replacement, errors
 
 
@@ -492,15 +494,19 @@ def test_eviction_and_a_concurrent_replacement_are_atomic():
             value = super().get(k, default)
             if k == key and threading.current_thread().name == "evictor" and not release.is_set():
                 paused.set()
-                release.wait(10)
+                # A timed-out pause is a worker error, never a delete that silently went first.
+                assert release.wait(10), "the evictor was never released"
             return value
 
     cache._cache._cache = PauseAfterRead(cache._cache._cache)
     errors: List[BaseException] = []
     evictor = _start("evictor", lambda: cache.evict(token), errors)
-    replacer, replacement, replacer_errors = _race_a_replacement(cache, key, paused, release)
-    evictor.join(10)
-    replacer.join(10)
+    try:
+        replacer, replacement, replacer_errors = _race_a_replacement(cache, key, paused, release)
+        replacer.join(10)
+    finally:
+        release.set()
+        evictor.join(10)
 
     assert not evictor.is_alive() and not replacer.is_alive()
     assert errors == [] and replacer_errors == []
@@ -521,16 +527,19 @@ def test_expiry_cleanup_and_a_concurrent_replacement_are_atomic():
         def __delitem__(self, k: Any) -> None:
             if k == key and threading.current_thread().name == "cleaner" and not release.is_set():
                 paused.set()
-                release.wait(10)
+                assert release.wait(10), "the cleaner was never released"
             super().__delitem__(k)
 
     cache._cache._cache = PauseBeforeDelete(cache._cache._cache)
     errors: List[BaseException] = []
     counts: List[Any] = []
     cleaner = _start("cleaner", lambda: counts.append(manager.cleanup()), errors)
-    replacer, replacement, replacer_errors = _race_a_replacement(cache, key, paused, release)
-    cleaner.join(10)
-    replacer.join(10)
+    try:
+        replacer, replacement, replacer_errors = _race_a_replacement(cache, key, paused, release)
+        replacer.join(10)
+    finally:
+        release.set()
+        cleaner.join(10)
 
     assert not cleaner.is_alive() and not replacer.is_alive()
     assert errors == [] and replacer_errors == []
