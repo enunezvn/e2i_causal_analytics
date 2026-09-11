@@ -123,6 +123,13 @@ regexes = [
   # merge sha of main (989eec83d…), not a key. The generic-api-key rule fires
   # on `api:<hex>`. Verified non-secret: a commit id anyone can `git show`.
   '''989eec83d4334d0fd7447d7805c36272baac3286''',
+
+  # CausalPFN trial evidence (docs/demos/results/2026-09-11_causalpfn_trial/
+  # container.txt, PR #2004) records the scratch container's image
+  # `ghcr.io/enunezvn/e2i-api:<40-hex>`; the tag IS the public git merge sha of
+  # main (f4940c97a…, PR #2002's merge), not a key. Same false-positive class as
+  # the lane-1 tag above. Verified non-secret: `git show f4940c97a` is a commit.
+  '''f4940c97a43dad22bf556b89bcce459afdc7c246''',
 ]
 
 # Stopwords — a finding whose captured secret CONTAINS any of these is
