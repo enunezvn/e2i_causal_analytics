@@ -474,18 +474,39 @@ def _fresh_bounded_pool():
     _reset_limiter_cache_for_tests()
 
 
+async def _run_probe(budget_s, loading_s, envelope_s, simulation):
+    from src.agents.tool_composer.executor import PlanExecutor
+    from tests.unit.test_agents.test_tool_composer.test_sync_tool_bounded_timeout_1592 import (
+        _registry_with,
+        _single_step_plan,
+    )
+
+    async def probe(**_kwargs):
+        # The tool's shape: the budget starts at entry, then the async lookups, then the
+        # pool offload.
+        deadline = tr._simulation_deadline(budget_s)
+        await asyncio.sleep(loading_s)
+        return await tr._offload_within_budget(simulation, deadline=deadline, budget_s=budget_s)
+
+    executor = PlanExecutor(
+        tool_registry=_registry_with("counterfactual_probe", probe),
+        enable_caching=False,
+        max_retries=2,
+        timeout_seconds=envelope_s,
+        backoff_base_delay=0.01,
+    )
+    trace = await executor.execute(_single_step_plan("counterfactual_probe"), context={})
+    return trace.get_result("step_1")
+
+
 async def test_an_expired_compute_budget_fails_the_step_once(_fresh_bounded_pool):
     """The simulation runs in a pool thread that a timeout cannot cancel (#1592). Before
     this, the executor's own envelope fired around the async tool and the generic retry arm
     queued a second ~50 s simulation behind the abandoned one."""
     import threading
 
-    from src.agents.tool_composer.executor import PlanExecutor, SyncToolTimeout
+    from src.agents.tool_composer.executor import SyncToolTimeout
     from src.agents.tool_composer.models.composition_models import ExecutionStatus
-    from tests.unit.test_agents.test_tool_composer.test_sync_tool_bounded_timeout_1592 import (
-        _registry_with,
-        _single_step_plan,
-    )
 
     release = threading.Event()
     calls = []
@@ -495,20 +516,10 @@ async def test_an_expired_compute_budget_fails_the_step_once(_fresh_bounded_pool
         release.wait(timeout=10)
         return "late"
 
-    async def probe(**_kwargs):
-        return await tr._offload_within_budget(slow_simulation, budget_s=0.3)
-
-    executor = PlanExecutor(
-        tool_registry=_registry_with("counterfactual_probe", probe),
-        enable_caching=False,
-        max_retries=2,
-        timeout_seconds=30,
-    )
     try:
-        trace = await executor.execute(_single_step_plan("counterfactual_probe"), context={})
+        result = await _run_probe(0.3, 0.0, 30, slow_simulation)
     finally:
         release.set()
-    result = trace.get_result("step_1")
     assert result.status == ExecutionStatus.FAILED
     assert "timed out after 0.3s" in (result.output.error or "")
     assert len(calls) == 1, "an expired simulation must not be re-dispatched"
@@ -517,14 +528,41 @@ async def test_an_expired_compute_budget_fails_the_step_once(_fresh_bounded_pool
         raise TimeoutError("the tool's own timeout")
 
     with pytest.raises(TimeoutError) as own:
-        await tr._offload_within_budget(raises_its_own_timeout, budget_s=5)
+        await tr._offload_within_budget(
+            raises_its_own_timeout, deadline=tr._simulation_deadline(5), budget_s=5
+        )
     assert not isinstance(own.value, SyncToolTimeout)
 
 
-def test_the_compute_budget_fires_before_the_executor_envelope():
+async def test_the_budget_covers_the_lookups_before_the_offload(_fresh_bounded_pool):
+    """codex iter-4: a budget that started AFTER slow lookups could outlast the executor's
+    envelope, which then cancelled the tool and retried it. Scaled: 0.4 s of lookups, a
+    0.6 s budget, a 0.8 s envelope — the budget must expire first, once."""
+    import threading
+
+    from src.agents.tool_composer.models.composition_models import ExecutionStatus
+
+    release = threading.Event()
+    calls = []
+
+    def slow_simulation():
+        calls.append(1)
+        release.wait(timeout=10)
+        return "late"
+
+    try:
+        result = await _run_probe(0.6, 0.4, 0.8, slow_simulation)
+    finally:
+        release.set()
+    assert result.status == ExecutionStatus.FAILED
+    assert "timed out after 0.6s" in (result.output.error or "")
+    assert len(calls) == 1
+
+
+def test_the_budget_expires_before_the_executor_envelope():
     import inspect as _inspect
 
     from src.agents.tool_composer.executor import PlanExecutor
 
     envelope = _inspect.signature(PlanExecutor.__init__).parameters["timeout_seconds"].default
-    assert tr._COUNTERFACTUAL_COMPUTE_BUDGET_S < envelope
+    assert tr._COUNTERFACTUAL_BUDGET_S < envelope

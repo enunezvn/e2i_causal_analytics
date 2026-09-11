@@ -2823,6 +2823,7 @@ async def counterfactual_simulator(
     intervention_type, brand_value, regions = _counterfactual_inputs(
         intervention, brand, target_entities
     )
+    deadline = _simulation_deadline(_COUNTERFACTUAL_BUDGET_S)
 
     from src.digital_twin.twin_repository import TwinRepository
     from src.memory.services.factories import get_async_supabase_client
@@ -2848,7 +2849,8 @@ async def counterfactual_simulator(
         intervention_type,
         brand_value,
         regions,
-        budget_s=_COUNTERFACTUAL_COMPUTE_BUDGET_S,
+        deadline=deadline,
+        budget_s=_COUNTERFACTUAL_BUDGET_S,
     )
     return _simulation_results(
         result,
@@ -2869,26 +2871,42 @@ async def counterfactual_simulator(
 #: standard deviations above the floor, for ~47 s of generation.
 _COUNTERFACTUAL_TWIN_COUNT = 700
 
-#: Seconds the pool offload (hydrate, generate, simulate, targeted fit) may take, queueing
-#: included. It must expire before the executor's 120 s step envelope: that envelope
-#: cancels the coroutine but not the pool thread, and the executor's generic retry arm
-#: would then queue a second simulation behind the abandoned one (codex iter-3). Measured
-#: runs take 47-52 s, so this is about twice the observed cost.
-_COUNTERFACTUAL_COMPUTE_BUDGET_S = 100.0
+#: Seconds the whole tool call may take — lookups, queueing on the pool and the offload
+#: (hydrate, generate, simulate, targeted fit). It must expire before the executor's 120 s
+#: step envelope: that envelope cancels the coroutine but not the pool thread, and the
+#: executor's generic retry arm would then queue a second simulation behind the abandoned
+#: one (codex iter-3; the clock starts at tool entry so slow lookups count, iter-4).
+#: Measured runs take 47-52 s, so this is about twice the observed cost. No config
+#: overrides the composer's envelope (``phases.execute.max_execution_time_seconds``); one
+#: set below this budget would reopen the retry.
+_COUNTERFACTUAL_BUDGET_S = 100.0
 
 
-async def _offload_within_budget(func: Any, *args: Any, budget_s: float) -> Any:
-    """Run ``func`` on the bounded heavy-compute pool, failing once if ``budget_s`` expires.
+def _simulation_deadline(budget_s: float) -> float:
+    """The event-loop time at which a simulation started now exhausts ``budget_s``."""
+    return asyncio.get_running_loop().time() + budget_s
+
+
+async def _offload_within_budget(func: Any, *args: Any, deadline: float, budget_s: float) -> Any:
+    """Run ``func`` on the bounded heavy-compute pool, failing once at ``deadline``.
 
     The executor's sync-tool envelope (#1592) applied to this async tool's offload: an
     expired budget raises ``SyncToolTimeout``, which the executor records against the
     circuit breaker and does not retry, because the thread keeps running and a retry would
     queue the same work behind it. An exception raised by ``func`` — including its own
-    ``TimeoutError`` — propagates unchanged.
+    ``TimeoutError`` — propagates unchanged. ``budget_s`` is the whole budget the deadline
+    was set from, named in the error.
     """
     from src.api.dependencies.compute import run_in_bounded_executor
 
     from .executor import SyncToolTimeout
+
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise SyncToolTimeout(
+            f"counterfactual_simulator timed out after {budget_s:g}s before the twin "
+            "simulation started (the model and cohort lookups used the budget); not retried"
+        )
 
     async def bounded_call() -> Tuple[Any, Optional[Exception]]:
         try:
@@ -2897,7 +2915,7 @@ async def _offload_within_budget(func: Any, *args: Any, budget_s: float) -> Any:
             return None, exc
 
     try:
-        value, error = await asyncio.wait_for(bounded_call(), timeout=budget_s)
+        value, error = await asyncio.wait_for(bounded_call(), timeout=remaining)
     except asyncio.TimeoutError as exc:
         raise SyncToolTimeout(
             f"counterfactual_simulator timed out after {budget_s:g}s (the twin simulation is "
