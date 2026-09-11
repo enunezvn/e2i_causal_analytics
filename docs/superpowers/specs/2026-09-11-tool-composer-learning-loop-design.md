@@ -339,7 +339,7 @@ The classes come from the exception type already caught at each site, never from
     from `intent_classifier.py:72/834`.
   - A failure logs one WARNING and never raises into `compose()`.
 - **Composition latency.** Added latency is zero by construction, because nothing is awaited on the
-  compose path. The live cert measures it (§10).
+  compose path. The live cert measures it (§9).
 - **Unknown tools.** `composer_record_finish` returns `unknown_tools`: steps whose tool has no registry
   row. Rehearsed: a `cohort_builder` step was reported and the other 3 steps were recorded.
   - On a non-empty list the recorder runs the lazy sync once for the process.
@@ -405,7 +405,7 @@ an ordering and staleness problem for no measurable gain.
   - **It has never had a caller.**
 - **Untouched:** `v_classification_accuracy` (#1341) and `get_tool_execution_order()`. The latter has
   no consumer; the executor orders with `ExecutionPlan.get_execution_order()`. Its `{NULL}` defect is
-  listed in §11.
+  listed in §10.
 
 ## 7. Feedback into behaviour
 
