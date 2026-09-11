@@ -82,6 +82,10 @@ INTERNAL_INPUTS: Dict[str, Dict[str, str]] = {
         # never appear. Implementing or removing it is an open decision.
         "node_names": "accepted but never applied — CausalDiscoveryTool.invoke builds "
         "the frame from `data` and ignores it (since b23c17355)",
+        # Not offered to the planner: its meaning differs per algorithm, so a planned
+        # value does not do what the description says. Normalizing it is an open decision.
+        "max_k": "algorithm-dependent — GES reads it as max parents (-1 gives an empty "
+        "graph), FCI as depth (0 means unlimited), PC ignores it",
     },
     "rank_drivers": {"trace_context": "Opik trace plumbing for agent callers"},
     "detect_structural_drift": {"trace_context": "Opik trace plumbing for agent callers"},
