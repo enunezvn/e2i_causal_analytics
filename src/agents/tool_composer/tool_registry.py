@@ -212,8 +212,8 @@ class ToolRegistry:
 # output it can consume -- and DERIVES everything else from the live registry, so its
 # input/output schemas cannot drift from the registered callables again (#2003: the
 # hand-written copies had drifted on 14 of 16 tools). The DB ``tool_registry`` /
-# ``tool_dependencies`` rows are synced from these definitions by
-# ``scripts/generate_tool_registry_sync_migration.py``.
+# ``tool_dependencies`` rows are synced from these definitions at API startup by
+# ``registry_sync.sync_tool_registry_once()`` (ml/040).
 
 # name -> (category, tools whose output it can consume). Covers every live tool.
 TOOL_METADATA: dict[str, tuple[ToolCategory, list[str]]] = {

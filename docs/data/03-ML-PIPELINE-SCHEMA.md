@@ -432,24 +432,32 @@ Supports multi-faceted query handling with dependency-aware tool composition. Th
 |------|--------|
 | `routing_pattern` | `SINGLE_AGENT`, `PARALLEL_DELEGATION`, `TOOL_COMPOSER`, `CLARIFICATION_NEEDED` |
 | `dependency_type` | `REFERENCE_CHAIN`, `CONDITIONAL`, `LOGICAL_SEQUENCE`, `ENTITY_TRANSFORMATION` |
-| `tool_category` | `CAUSAL`, `SEGMENTATION`, `GAP`, `EXPERIMENT`, `PREDICTION`, `MONITORING` |
+| `tool_category` | `CAUSAL`, `SEGMENTATION`, `GAP`, `EXPERIMENT`, `PREDICTION`, `MONITORING`, `COHORT` (ml/039) |
 | `composition_status` | `PENDING`, `DECOMPOSING`, `PLANNING`, `EXECUTING`, `SYNTHESIZING`, `COMPLETED`, `FAILED`, `TIMEOUT` |
 
 ### 4.1 `tool_registry`
 
-Central registry of composable tools exposed by Tier 2--4 agents. Seeded with **13** default tools. The count is the `INSERT INTO tool_registry (...) VALUES` block in `database/ml/013_tool_composer_tables.sql`: 3 for `causal_impact` and 2 each for `heterogeneous_optimizer`, `gap_analyzer`, `experiment_designer`, `prediction_synthesizer` and `drift_monitor`. Rows are seeded by migration, never registered at runtime, so that block is the authority for the count.
+Central registry of composable tools exposed by agents. **The rows describe the code that is running.** At API startup `registry_sync.sync_tool_registry_once()` (`src/agents/tool_composer/registry_sync.py`) calls `sync_tool_registry(p_tools, p_dependencies, p_max_deprecations)` (ml/040) with every tool in the live registry (20 as of 2026-09-11):
+
+- rows are upserted by `name`, and an unchanged row is not rewritten;
+- a tool the code no longer registers gets `deprecated_at = now()` and `composable = false`; it is never deleted, because `composition_steps` reference it;
+- `tool_dependencies` becomes exactly `DEPENDENCY_FIELD_MAPPINGS`;
+- a payload that would deprecate more than 3 active tools is refused before any write, and an advisory lock serialises the API workers.
+
+ml/013 and ml/027 seeded the first 16 rows. ml/037 is applied history of the retired migration-per-schema-change regime (#2003); no migration is needed when a tool's inputs or output model change.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `tool_id` | UUID PK | Tool identifier |
 | `name` | VARCHAR(100) UNIQUE | Tool name (e.g., `causal_effect_estimator`) |
 | `category` | tool_category | Capability domain |
-| `source_agent` | VARCHAR(50) | Owning agent |
+| `source_agent` | VARCHAR(50) | Owning agent (CHECK: a value of the `e2i_agent_name` enum, ml/040) |
 | `input_schema` | JSONB | JSON Schema for inputs |
 | `output_schema` | JSONB | JSON Schema for outputs |
 | `composable` | BOOLEAN | Whether Tool Composer can use it |
-| `avg_latency_ms` | FLOAT | Rolling average latency |
-| `success_rate` | FLOAT | Rolling success rate (0--1) |
+| `avg_latency_ms` | FLOAT | **Declared** latency baseline of the registered tool, written by the sync. Measured latency comes from `get_tool_reliability()` (ml/041) |
+| `version` | VARCHAR(20) | Registered tool version |
+| `deprecated_at` | TIMESTAMPTZ | Set when the running code no longer registers the tool |
 
 ### 4.2 `tool_dependencies`
 
