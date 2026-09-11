@@ -3044,17 +3044,12 @@ def _run_twin_simulation(
     brand_value: str,
     regions: List[str],
 ) -> Tuple[Any, Optional[_TargetedEffect]]:
-    """Hydrate the twin model, generate twins and simulate — the route's inline path — then,
-    for a targeted request, the inference on the targeted regions."""
+    """Hydrate the brand's twin model and generate the twins — the route's inline path —
+    then simulate them (:func:`_simulate_population`)."""
     from uuid import UUID
 
-    import numpy as np
-
     from src.digital_twin import twin_persistence
-    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
-    from src.digital_twin.models.simulation_models import InterventionConfig, PopulationFilter
     from src.digital_twin.models.twin_models import Brand, TwinType
-    from src.digital_twin.simulation_engine import SimulationEngine
     from src.digital_twin.twin_generator import TwinGenerator
 
     generator = TwinGenerator(twin_type=TwinType.HCP, brand=Brand(brand_value))
@@ -3066,12 +3061,40 @@ def _run_twin_simulation(
             f"{brand_value}/hcp could not be loaded from the model registry."
         )
     population = generator.generate(n=_COUNTERFACTUAL_TWIN_COUNT)
+    return _simulate_population(
+        population,
+        provider=provider,
+        frame=frame,
+        intervention_type=intervention_type,
+        regions=regions,
+        model_id=UUID(str(model_row["model_id"])),
+    )
+
+
+def _simulate_population(
+    population: Any,
+    *,
+    provider: Any,
+    frame: Any,
+    intervention_type: str,
+    regions: List[str],
+    model_id: Any,
+) -> Tuple[Any, Optional[_TargetedEffect]]:
+    """Run the engine on a twin population and, for a targeted request that completed, the
+    inference on the targeted regions with the targeted twins' mean baseline propensity."""
+    import numpy as np
+
+    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+    from src.digital_twin.models.simulation_models import InterventionConfig, PopulationFilter
+    from src.digital_twin.simulation_engine import SimulationEngine
+
     engine = SimulationEngine(
         population=population,
         effect_provider=provider,
         effect_estimator=CohortCausalEstimator(),
     )
-    engine.model_id = UUID(str(model_row["model_id"]))
+    # Pin the model id the way the route does (the engine derives it from the population).
+    engine.model_id = model_id
     result = engine.simulate(
         intervention_config=InterventionConfig(
             intervention_type=intervention_type, target_regions=regions

@@ -367,3 +367,94 @@ def test_the_planner_is_offered_exactly_the_catalog_brands_and_regions():
         assert brand.value in params["brand"]
     for region in Region:
         assert region.value in params["target_entities"]
+
+
+# ---------------------------------------------------------------------------
+# The orchestration after twin generation (codex iter-2 F2)
+# ---------------------------------------------------------------------------
+
+
+def _population_with_regional_baselines() -> TwinPopulation:
+    """Twins whose baseline propensity depends on region, so a policy fed the whole
+    population's baseline gives a different sample size than one fed the targeted twins'."""
+    baselines = {"northeast": 0.10, "west": 0.60, "south": 0.35, "midwest": 0.35}
+    twins = [
+        DigitalTwin(
+            twin_type=TwinType.HCP,
+            brand=Brand.KISQALI,
+            features={"region": region},
+            baseline_outcome=0.2,
+            baseline_propensity=baselines[region],
+        )
+        for region in PLANTED
+        for _ in range(130)
+    ]
+    return TwinPopulation(twin_type=TwinType.HCP, brand=Brand.KISQALI, twins=twins, size=len(twins))
+
+
+def test_simulating_a_targeted_population_applies_the_policy_to_the_targeted_twins(provider):
+    from uuid import uuid4
+
+    from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
+    from src.digital_twin.effect.recommendation import PolicyThresholds, RecommendationPolicy
+
+    frame = _frame(provider)
+    model_id = uuid4()
+    result, targeted = tr._simulate_population(
+        _population_with_regional_baselines(),
+        provider=provider,
+        frame=frame,
+        intervention_type="email_campaign",
+        regions=["northeast"],
+        model_id=model_id,
+    )
+    assert result.status.value == "completed" and str(result.model_id) == str(model_id)
+    assert targeted is not None and targeted.regions == ["northeast"]
+
+    def policy_n(baseline):
+        estimate = EffectEstimate(
+            ate=targeted.effect,
+            ate_ci_lower=targeted.ci_lower,
+            ate_ci_upper=targeted.ci_upper,
+            att=None,
+            atc=None,
+            per_twin_uplift=np.array([targeted.effect]),
+            auuc=None,
+            qini=None,
+            feature_importances=None,
+            n_train=targeted.cohort_rows,
+            estimator_type="cohort_causal_forest_dml",
+            data_provenance=PROVENANCE_COHORT,
+        )
+        return RecommendationPolicy(PolicyThresholds(min_effect=0.05)).decide(
+            estimate, baseline_rate=baseline
+        )
+
+    decision, rationale, n_targeted = policy_n(0.10)
+    assert targeted.recommended_sample_size == n_targeted
+    assert (targeted.recommendation, targeted.recommendation_rationale) == (
+        decision.value,
+        rationale,
+    )
+    assert policy_n(float(np.mean([0.10, 0.60, 0.35, 0.35])))[2] != n_targeted
+
+    out = tr._simulation_results(
+        result, brand="Kisqali", intervention_type="email_campaign", frame=frame, targeted=targeted
+    )
+    assert out.effect == targeted.effect and out.recommended_sample_size == n_targeted
+    assert out.effect_scope == "targeted regions ['northeast']"
+    assert out.model_id == str(model_id)
+
+
+def test_simulating_the_whole_population_has_no_targeted_inference(provider):
+    from uuid import uuid4
+
+    result, targeted = tr._simulate_population(
+        _population_with_regional_baselines(),
+        provider=provider,
+        frame=_frame(provider),
+        intervention_type="email_campaign",
+        regions=[],
+        model_id=uuid4(),
+    )
+    assert targeted is None and result.twin_count == 520
