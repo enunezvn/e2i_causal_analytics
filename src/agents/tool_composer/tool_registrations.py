@@ -1650,7 +1650,7 @@ def _run_dowhy_refutation(
         {"name": "ate", "type": "float", "description": "Estimated average treatment effect"},
         {
             "name": "ci_lower",
-            "type": "float",
+            "type": "Optional[float]",
             "description": (
                 "Lower confidence bound (optional; null when the estimate has no interval, "
                 "which makes the report point-only)"
@@ -1659,7 +1659,7 @@ def _run_dowhy_refutation(
         },
         {
             "name": "ci_upper",
-            "type": "float",
+            "type": "Optional[float]",
             "description": "Upper confidence bound (optional; defaults to ate + (ate - ci_lower))",
             "required": False,
         },

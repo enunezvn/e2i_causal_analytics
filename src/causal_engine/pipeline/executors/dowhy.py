@@ -42,6 +42,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from src.causal.stats import z_score_for_confidence
+
 from ...refutation_runner import RefutationRunner
 from ..data_resolver import resolve_estimation_dataframe
 from ..router import CausalLibrary
@@ -445,7 +447,7 @@ class DoWhyExecutor(LibraryExecutor):
         sensitivity gate). The DoWhy pipeline executor only has a native standard
         error for the linear-regression estimator, so:
 
-        - SE available (linear_regression) → CI = ``(effect ± 1.96·SE)`` and run
+        - SE available (linear_regression) → CI = ``(effect ± z·SE)`` and run
           the full suite. Return ``RefutationSuite.to_legacy_format()`` (which
           already includes ``gate_decision``/``needs_review``/``overall_robust``).
         - SE absent (any non-linear method) → return an HONEST skip dict. We do
@@ -468,8 +470,12 @@ class DoWhyExecutor(LibraryExecutor):
             }
 
         try:
-            ci_lower = causal_effect - 1.96 * dowhy_se
-            ci_upper = causal_effect + 1.96 * dowhy_se
+            # The exact 95 % quantile, as the estimator tool and the API routes use
+            # (#2014): with 1.96 a z-ratio between the two read "null" here and not
+            # on the estimate the leader was shown.
+            z = z_score_for_confidence(0.95)
+            ci_lower = causal_effect - z * dowhy_se
+            ci_upper = causal_effect + z * dowhy_se
             runner = RefutationRunner()
             suite = runner.run_all_tests(
                 original_effect=causal_effect,
