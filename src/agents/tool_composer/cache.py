@@ -368,6 +368,16 @@ class PlanSimilarityCache:
                 return False
             return self._cache.invalidate(key)
 
+    def cleanup_expired(self) -> int:
+        """Remove expired entries under the lock, so a replacement cached meanwhile is not removed."""
+        with self._lock:
+            return self._cache.cleanup_expired()
+
+    def clear(self) -> None:
+        """Remove every entry under the lock."""
+        with self._lock:
+            self._cache.clear()
+
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
         return {
@@ -554,14 +564,14 @@ class ToolComposerCacheManager:
         """Cleanup expired entries from all caches."""
         return {
             "decomposition": self.decomposition_cache._cache.cleanup_expired(),
-            "plan": self.plan_cache._cache.cleanup_expired(),
+            "plan": self.plan_cache.cleanup_expired(),
             "output": self.output_cache._cache.cleanup_expired(),
         }
 
     def clear_all(self) -> None:
         """Clear all caches."""
         self.decomposition_cache._cache.clear()
-        self.plan_cache._cache.clear()
+        self.plan_cache.clear()
         self.output_cache._cache.clear()
         logger.info("All caches cleared")
 

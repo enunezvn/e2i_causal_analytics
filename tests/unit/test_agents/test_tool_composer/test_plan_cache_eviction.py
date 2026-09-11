@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 import pandas as pd
 import pytest
@@ -412,40 +414,126 @@ async def test_compose_plain_cancel_keeps_the_cached_plan(
     assert get_cache_manager().get_similar_plan(decomposition) is not None
 
 
+class _ContendedLock:
+    """The cache's real lock, reporting the moment another thread has to wait for it."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.contended = threading.Event()
+
+    def __enter__(self) -> "_ContendedLock":
+        if not self._inner.acquire(blocking=False):
+            self.contended.set()
+            self._inner.acquire()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self._inner.release()
+
+
+def _start(name: str, action: Callable[[], Any], errors: List[BaseException]) -> threading.Thread:
+    def target() -> None:
+        try:
+            action()
+        except BaseException as exc:  # noqa: BLE001 - surfaced by the test's assertion
+            errors.append(exc)
+
+    thread = threading.Thread(target=target, name=name, daemon=True)
+    thread.start()
+    return thread
+
+
+def _wait_any(*events: threading.Event, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if any(event.is_set() for event in events):
+            return True
+        events[0].wait(0.01)
+    return False
+
+
+def _race_a_replacement(cache: Any, key: str, paused: threading.Event, release: threading.Event):
+    """Replace the D1 entry while another thread is paused mid-operation on it.
+
+    The paused thread is released only once the replacer is provably waiting on the cache's lock
+    or has already finished, so the outcome never depends on scheduling: without the lock the
+    replacement lands inside the paused operation, with it the replacement waits its turn.
+    """
+    assert paused.wait(10)
+    lock = cache._lock
+    replacement = _plan(D1)
+    replaced = threading.Event()
+    errors: List[BaseException] = []
+
+    def replace() -> None:
+        cache.set(D1, replacement)
+        replaced.set()
+
+    replacer = _start("replacer", replace, errors)
+    assert _wait_any(lock.contended, replaced)
+    release.set()
+    return replacer, replacement, errors
+
+
 def test_eviction_and_a_concurrent_replacement_are_atomic():
-    """The entry check and the delete happen under the cache's lock.
+    """The entry check and the delete happen under the lock ``set`` takes.
 
     The evicting thread pauses right after reading the entry it is about to delete; a replacement
-    under the same signature must not slip in between (it would be deleted instead of the plan
-    that failed). Deterministic: events, not sleeps, order the two threads.
+    under the same signature must not be deleted in place of the plan that failed.
     """
-    import threading
-
     cache = get_cache_manager().plan_cache
-    old = _plan(D1)
-    token = cache.set(D1, old)
+    token = cache.set(D1, _plan(D1))
     key = token.partition("/")[0]
-    evictor_read = threading.Event()
-    release = threading.Event()
+    cache._lock = _ContendedLock(cache._lock)
+    paused, release = threading.Event(), threading.Event()
 
-    class PausingEntries(dict):
-        def get(self, k, default=None):
+    class PauseAfterRead(dict):
+        def get(self, k: Any, default: Any = None) -> Any:
             value = super().get(k, default)
             if k == key and threading.current_thread().name == "evictor" and not release.is_set():
-                evictor_read.set()
-                release.wait(5)
+                paused.set()
+                release.wait(10)
             return value
 
-    cache._cache._cache = PausingEntries(cache._cache._cache)
-    replacement = _plan(D1)
-    evictor = threading.Thread(target=lambda: cache.evict(token), name="evictor")
-    replacer = threading.Thread(target=lambda: cache.set(D1, replacement), name="replacer")
-    evictor.start()
-    assert evictor_read.wait(5)
-    replacer.start()
-    replacer.join(0.5)  # without the lock it finishes here, inside the evictor's check
-    release.set()
-    evictor.join(5)
-    replacer.join(5)
+    cache._cache._cache = PauseAfterRead(cache._cache._cache)
+    errors: List[BaseException] = []
+    evictor = _start("evictor", lambda: cache.evict(token), errors)
+    replacer, replacement, replacer_errors = _race_a_replacement(cache, key, paused, release)
+    evictor.join(10)
+    replacer.join(10)
+
+    assert not evictor.is_alive() and not replacer.is_alive()
+    assert errors == [] and replacer_errors == []
+    stored = dict.get(cache._cache._cache, key)
+    assert stored is not None and stored.value[1].plan_id == replacement.plan_id
+
+
+def test_expiry_cleanup_and_a_concurrent_replacement_are_atomic():
+    """Cleanup's expiry check and its delete hold the same lock, through the manager facade."""
+    manager = get_cache_manager()
+    cache = manager.plan_cache
+    key = cache.set(D1, _plan(D1)).partition("/")[0]
+    dict.get(cache._cache._cache, key).created_at -= 10 * cache._cache.default_ttl_seconds
+    cache._lock = _ContendedLock(cache._lock)
+    paused, release = threading.Event(), threading.Event()
+
+    class PauseBeforeDelete(dict):
+        def __delitem__(self, k: Any) -> None:
+            if k == key and threading.current_thread().name == "cleaner" and not release.is_set():
+                paused.set()
+                release.wait(10)
+            super().__delitem__(k)
+
+    cache._cache._cache = PauseBeforeDelete(cache._cache._cache)
+    errors: List[BaseException] = []
+    counts: List[Any] = []
+    cleaner = _start("cleaner", lambda: counts.append(manager.cleanup()), errors)
+    replacer, replacement, replacer_errors = _race_a_replacement(cache, key, paused, release)
+    cleaner.join(10)
+    replacer.join(10)
+
+    assert not cleaner.is_alive() and not replacer.is_alive()
+    assert errors == [] and replacer_errors == []
+    assert counts[0]["plan"] == 1  # the expired plan went
     stored = dict.get(cache._cache._cache, key)
     assert stored is not None and stored.value[1].plan_id == replacement.plan_id
