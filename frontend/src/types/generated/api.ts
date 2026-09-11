@@ -4654,6 +4654,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/observability/tool-composer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tool Composer Overview
+         * @description Tool composer observability (spec 2026-09-11 §8): how the window's compositions
+         *     ended, one row per tool with its reliability verdict first and the counts behind it,
+         *     and the recent failures with the step classes that caused them. Verdicts come from
+         *     the same cached reader the planner uses, so the page and the planning prompt cannot
+         *     disagree; measured latency is null until 20 successful runs and never replaces the
+         *     declared number.
+         */
+        get: operations["tool_composer_overview_api_admin_observability_tool_composer_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/audit": {
         parameters: {
             query?: never;
@@ -8406,6 +8431,60 @@ export interface components {
          * @enum {string}
          */
         ComponentStatus: "healthy" | "degraded" | "unhealthy" | "unknown";
+        /**
+         * CompositionCounts
+         * @description How the window's compositions ended.
+         */
+        CompositionCounts: {
+            /**
+             * Total
+             * @description Episodes started in the window
+             */
+            total: number;
+            /**
+             * Success
+             * @default 0
+             */
+            success: number;
+            /**
+             * Partial
+             * @default 0
+             */
+            partial: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Cancelled
+             * @default 0
+             */
+            cancelled: number;
+            /**
+             * Unfinished
+             * @description No terminal outcome recorded yet
+             * @default 0
+             */
+            unfinished: number;
+            /**
+             * Abandoned
+             * @description Unfinished and silent past the heartbeat window: the worker went away
+             * @default 0
+             */
+            abandoned: number;
+            /**
+             * By Plan Source
+             * @description llm / plan_cache / kpi_deterministic
+             */
+            by_plan_source?: {
+                [key: string]: number;
+            };
+            /** P50 Latency Ms */
+            p50_latency_ms?: number | null;
+            /** P95 Latency Ms */
+            p95_latency_ms?: number | null;
+        };
         /**
          * ConfidenceInterval
          * @description Bootstrap confidence interval for ROI estimates.
@@ -15931,6 +16010,46 @@ export interface components {
             search_term?: string | null;
         };
         /**
+         * RecentFailure
+         * @description A composition that failed or only partly succeeded.
+         */
+        RecentFailure: {
+            /** Composition Id */
+            composition_id: string;
+            /** Outcome */
+            outcome?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Failed Phase */
+            failed_phase?: string | null;
+            /**
+             * Error Type
+             * @description The exception class; never its message (spec §5.5)
+             */
+            error_type?: string | null;
+            /** Entry Point */
+            entry_point?: string | null;
+            /** Plan Source */
+            plan_source?: string | null;
+            /**
+             * Query Preview
+             * @description Redacted, at most 100 characters
+             * @default
+             */
+            query_preview: string;
+            /**
+             * Step Classes
+             * @description The steps that did not succeed, with their classes
+             */
+            step_classes?: {
+                [key: string]: unknown;
+            }[];
+            /** Last Activity At */
+            last_activity_at?: string | null;
+            /** Total Latency Ms */
+            total_latency_ms?: number | null;
+        };
+        /**
          * RecentWorkflowResponse
          * @description Response model for recent workflow listing.
          */
@@ -18659,6 +18778,94 @@ export interface components {
             value: number;
             /** Label */
             label?: string | null;
+        };
+        /**
+         * ToolComposerObservability
+         * @description The Observability tab's tool-composer section.
+         */
+        ToolComposerObservability: {
+            /** Window Days */
+            window_days: number;
+            /**
+             * Include Synthetic
+             * @description Whether synthetic-substrate runs are counted in this deployment
+             */
+            include_synthetic: boolean;
+            compositions: components["schemas"]["CompositionCounts"];
+            /** Tools */
+            tools?: components["schemas"]["ToolReliabilityRow"][];
+            /** Recent Failures */
+            recent_failures?: components["schemas"]["RecentFailure"][];
+        };
+        /**
+         * ToolReliabilityRow
+         * @description One tool's evidence in the window, verdict first.
+         */
+        ToolReliabilityRow: {
+            /** Tool Name */
+            tool_name: string;
+            /**
+             * Verdict
+             * @description no_runs | too_few_runs | caveat | reliable | inconclusive (spec §7.1)
+             */
+            verdict: string;
+            /** Category */
+            category?: string | null;
+            /** Source Agent */
+            source_agent?: string | null;
+            /**
+             * N Invoked
+             * @default 0
+             */
+            n_invoked: number;
+            /**
+             * N Succeeded
+             * @default 0
+             */
+            n_succeeded: number;
+            /**
+             * N Refused
+             * @description Declining to answer; never a health failure
+             * @default 0
+             */
+            n_refused: number;
+            /**
+             * N Health Failures
+             * @default 0
+             */
+            n_health_failures: number;
+            /**
+             * N Health
+             * @description succeeded + health failures: the denominator
+             * @default 0
+             */
+            n_health: number;
+            /**
+             * N Retried
+             * @default 0
+             */
+            n_retried: number;
+            /**
+             * N Synthetic
+             * @default 0
+             */
+            n_synthetic: number;
+            /**
+             * P50 Latency Ms
+             * @description Measured; null below 20 successful runs
+             */
+            p50_latency_ms?: number | null;
+            /** P95 Latency Ms */
+            p95_latency_ms?: number | null;
+            /**
+             * Declared Latency Ms
+             * @description The registry's declared number, never a measurement
+             */
+            declared_latency_ms?: number | null;
+            /** Most Common Health Error */
+            most_common_health_error?: string | null;
+            /** Last Executed At */
+            last_executed_at?: string | null;
         };
         /**
          * TraceFeedbackRequest
@@ -29471,6 +29678,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tool_composer_overview_api_admin_observability_tool_composer_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolComposerObservability"];
                 };
             };
             /** @description Validation Error */

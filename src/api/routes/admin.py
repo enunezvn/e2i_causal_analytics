@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from src.api.dependencies.auth import require_admin
+from src.api.schemas.admin_tool_composer import ToolComposerObservability
 from src.services.admin_user_service import (
     AdminConflictError,
     AdminGuardError,
@@ -24,6 +25,7 @@ from src.services.admin_user_service import (
     AdminValidationError,
 )
 from src.services.llm_observability_service import LLMObservabilityService
+from src.services.tool_composer_observability_service import ToolComposerObservabilityService
 from src.utils.security_audit import (
     SecurityAuditEvent,
     SecurityEventSeverity,
@@ -53,6 +55,27 @@ def get_llm_observability_service() -> LLMObservabilityService:
     if _obs_service is None:
         _obs_service = LLMObservabilityService()
     return _obs_service
+
+
+_tool_composer_obs_service: Optional[ToolComposerObservabilityService] = None
+_tool_composer_reader: Optional[Any] = None
+
+
+def get_tool_composer_observability_service() -> ToolComposerObservabilityService:
+    global _tool_composer_obs_service
+    if _tool_composer_obs_service is None:
+        _tool_composer_obs_service = ToolComposerObservabilityService()
+    return _tool_composer_obs_service
+
+
+def get_tool_composer_reliability_reader() -> Any:
+    """The SAME cached reader the planner uses, so both surfaces say the same word."""
+    global _tool_composer_reader
+    if _tool_composer_reader is None:
+        from src.agents.tool_composer.reliability import ToolReliabilityReader
+
+        _tool_composer_reader = ToolReliabilityReader()
+    return _tool_composer_reader
 
 
 def _audit(
@@ -362,6 +385,23 @@ async def llm_usage_overview(
         return obs.llm_usage(days, users)
 
     return await asyncio.to_thread(_query)
+
+
+@router.get("/observability/tool-composer", response_model=ToolComposerObservability)
+async def tool_composer_overview(
+    days: int = Query(default=30, ge=1, le=365),
+    admin: Dict[str, Any] = Depends(require_admin),
+    service: ToolComposerObservabilityService = Depends(get_tool_composer_observability_service),
+    reader: Any = Depends(get_tool_composer_reliability_reader),
+) -> Dict[str, Any]:
+    """Tool composer observability (spec 2026-09-11 §8): how the window's compositions
+    ended, one row per tool with its reliability verdict first and the counts behind it,
+    and the recent failures with the step classes that caused them. Verdicts come from
+    the same cached reader the planner uses, so the page and the planning prompt cannot
+    disagree; measured latency is null until 20 successful runs and never replaces the
+    declared number."""
+    verdicts = await reader.get(days)
+    return await asyncio.to_thread(service.overview, days, verdicts)
 
 
 @router.get("/audit")
