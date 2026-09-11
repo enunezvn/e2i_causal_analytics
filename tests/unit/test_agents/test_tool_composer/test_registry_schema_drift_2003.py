@@ -507,7 +507,6 @@ def test_db_sync_rows_match_the_live_registry():
 
 def test_db_sync_dependencies_match_the_default_tool_mappings():
     from scripts.generate_tool_registry_sync_migration import NOT_SEEDED_IN_DB
-
     from src.agents.tool_composer.tool_registry import DEPENDENCY_FIELD_MAPPINGS
 
     rows = _sync_payloads()["tool_dependencies_sync"]
@@ -518,3 +517,19 @@ def test_db_sync_dependencies_match_the_default_tool_mappings():
         if not set(pair) & set(NOT_SEEDED_IN_DB)
     }
     assert got == expected
+
+
+def test_generator_output_is_what_the_drift_parser_reads():
+    from scripts.generate_tool_registry_sync_migration import SYNC_MARKER as GENERATOR_MARKER
+    from scripts.generate_tool_registry_sync_migration import render_sql
+
+    payloads = _sync_payloads()
+    sql = render_sql(
+        payloads["tool_registry_sync"], payloads["tool_dependencies_sync"], "999_x.sql"
+    )
+    assert GENERATOR_MARKER == SYNC_MARKER and SYNC_MARKER in sql
+    reparsed = {tag: json.loads(body) for tag, body in _PAYLOAD_RE.findall(sql)}
+    assert reparsed == payloads
+    # The row-count guards are sized to the payload the migration carries.
+    assert f"v_expected := {len(payloads['tool_registry_sync'])};" in sql
+    assert f"v_expected := {len(payloads['tool_dependencies_sync'])};" in sql
