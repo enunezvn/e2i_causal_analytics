@@ -23,11 +23,13 @@ RUNNER = _pg.REPO_ROOT / "scripts" / "run_migrations.sh"
 def test_runner_detector_is_the_one_the_fixture_mirrors():
     script = RUNNER.read_text()
     assert re.search(
-        r"sed 's/--\.\*\$//' \"\$migration_file\" \| grep -qiE \\\s*\n\s*"
+        r"grep -qiE \\\s*\n\s*"
         + re.escape(
             '"ALTER[[:space:]]+TYPE[[:space:]].*ADD[[:space:]]+VALUE|CONCURRENTLY|'
             '^[[:space:]]*COMMIT[[:space:]]*;"'
-        ),
+        )
+        + r" \\\s*\n\s*"
+        + re.escape('<<< "$(sed \'s/--.*$//\' "$migration_file")"; then'),
         script,
     )
 
@@ -72,3 +74,4 @@ def test_039_is_one_idempotent_statement():
         line for line in (re.sub(r"--.*$", "", raw).strip() for raw in text.splitlines()) if line
     ]
     assert code == ["ALTER TYPE tool_category ADD VALUE IF NOT EXISTS 'COHORT';"]
+
