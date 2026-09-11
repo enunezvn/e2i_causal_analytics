@@ -410,3 +410,42 @@ async def test_compose_plain_cancel_keeps_the_cached_plan(
         },
     )
     assert get_cache_manager().get_similar_plan(decomposition) is not None
+
+
+def test_eviction_and_a_concurrent_replacement_are_atomic():
+    """The entry check and the delete happen under the cache's lock.
+
+    The evicting thread pauses right after reading the entry it is about to delete; a replacement
+    under the same signature must not slip in between (it would be deleted instead of the plan
+    that failed). Deterministic: events, not sleeps, order the two threads.
+    """
+    import threading
+
+    cache = get_cache_manager().plan_cache
+    old = _plan(D1)
+    token = cache.set(D1, old)
+    key = token.partition("/")[0]
+    evictor_read = threading.Event()
+    release = threading.Event()
+
+    class PausingEntries(dict):
+        def get(self, k, default=None):
+            value = super().get(k, default)
+            if k == key and threading.current_thread().name == "evictor" and not release.is_set():
+                evictor_read.set()
+                release.wait(5)
+            return value
+
+    cache._cache._cache = PausingEntries(cache._cache._cache)
+    replacement = _plan(D1)
+    evictor = threading.Thread(target=lambda: cache.evict(token), name="evictor")
+    replacer = threading.Thread(target=lambda: cache.set(D1, replacement), name="replacer")
+    evictor.start()
+    assert evictor_read.wait(5)
+    replacer.start()
+    replacer.join(0.5)  # without the lock it finishes here, inside the evictor's check
+    release.set()
+    evictor.join(5)
+    replacer.join(5)
+    stored = dict.get(cache._cache._cache, key)
+    assert stored is not None and stored.value[1].plan_id == replacement.plan_id

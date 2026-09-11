@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -237,6 +238,8 @@ class PlanSimilarityCache:
     ):
         self._cache = LRUCache(max_size=max_size, default_ttl_seconds=ttl_seconds)
         self.similarity_threshold = similarity_threshold
+        # Guards lookup, write and eviction together: eviction compares and deletes in one step
+        self._lock = threading.RLock()
 
     def _extract_signature(self, decomposition: Any) -> Tuple[frozenset, int]:
         """Extract signature from decomposition for matching."""
@@ -317,19 +320,20 @@ class PlanSimilarityCache:
         best_similarity = 0.0
         best_key: Optional[str] = None
 
-        # Check all cached entries for similarity
-        for key in list(self._cache._cache.keys()):
-            entry = self._cache._cache.get(key)
-            if entry is None or entry.is_expired():
-                continue
+        with self._lock:
+            # Check all cached entries for similarity
+            for key in list(self._cache._cache.keys()):
+                entry = self._cache._cache.get(key)
+                if entry is None or entry.is_expired():
+                    continue
 
-            cached_sig, cached_plan = entry.value
-            similarity = self._compute_similarity(query_sig, cached_sig)
+                cached_sig, cached_plan = entry.value
+                similarity = self._compute_similarity(query_sig, cached_sig)
 
-            if similarity > best_similarity:
-                best_similarity = similarity
-                best_match = cached_plan
-                best_key = key
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = cached_plan
+                    best_key = key
 
         if best_match and best_key and best_similarity >= self.similarity_threshold:
             logger.info(f"Plan similarity match found: {best_similarity:.2f}")
@@ -341,7 +345,8 @@ class PlanSimilarityCache:
         """Cache plan with its decomposition signature; returns its entry token."""
         signature = self._extract_signature(decomposition)
         key = self._hash_signature(signature)
-        self._cache.set(key, (signature, plan))
+        with self._lock:
+            self._cache.set(key, (signature, plan))
         logger.debug(f"Cached plan with signature key: {key}")
         return self.entry_token(key, plan)
 
@@ -350,15 +355,18 @@ class PlanSimilarityCache:
 
         ``entry`` is the token :meth:`set` / :meth:`get_similar_with_key` returned. A newer plan
         cached under the same signature since then is spared: only the plan that failed goes.
+        The check and the delete hold the lock :meth:`set` takes, so a replacement cannot land
+        between them.
         """
         key, _, plan_id = entry.partition("/")
-        cached = self._cache._cache.get(key)
-        if cached is None:
-            return False
-        _, cached_plan = cached.value
-        if plan_id and getattr(cached_plan, "plan_id", None) != plan_id:
-            return False
-        return self._cache.invalidate(key)
+        with self._lock:
+            cached = self._cache._cache.get(key)
+            if cached is None:
+                return False
+            _, cached_plan = cached.value
+            if plan_id and getattr(cached_plan, "plan_id", None) != plan_id:
+                return False
+            return self._cache.invalidate(key)
 
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
