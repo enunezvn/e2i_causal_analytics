@@ -27,13 +27,17 @@ from __future__ import annotations
 import asyncio
 import socket
 import time
+from typing import List
 
 import pytest
+from tenacity import stop_after_attempt
 
 from src.api.dependencies import redis_client
 
 # Generous against a 16 s backoff, tight against any retry wait (min 2 s).
 FAST_SECONDS = 1.0
+# Socket timeout for the hung-server tests: how long a parked PING lasts.
+HUNG_TIMEOUT_SECONDS = 1.5
 
 
 def _refused_url() -> str:
@@ -120,37 +124,105 @@ async def test_inflight_lock_degrades_to_local_without_waiting(redis_down):
     assert elapsed < FAST_SECONDS
 
 
-@pytest.mark.unit
-async def test_a_degraded_call_schedules_one_background_reconnect_per_process(redis_down):
-    """Recovery is not lost: the first degraded call starts ONE ``init_redis()``
-    in the background; further degraded calls while it runs start no other."""
-    from src.api.dependencies.durable_job_store import DurableJobStore
-    from src.api.schemas.causal import DiscoverEffectsResponse
+@pytest.fixture
+async def redis_hung(monkeypatch):
+    """Lifespan started degraded, and Redis now ACCEPTS connections but never
+    answers (a hung server): a reconnect round parks inside its PING until the
+    socket timeout, which lets a test act while the round is provably in flight.
+    A real TCP peer, not a Redis double: it never sends a byte."""
+    accepted: List[asyncio.StreamWriter] = []
 
-    store = DurableJobStore("test:1999", DiscoverEffectsResponse)
-    await store.get("a")
-    task = redis_client._reconnect_task
-    assert task is not None
+    async def _accept(reader, writer):
+        accepted.append(writer)
 
-    await store.get("b")
-    await store.get("c")
-    assert redis_client._reconnect_task is task
+    server = await asyncio.start_server(_accept, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setattr(redis_client, "REDIS_URL", f"redis://127.0.0.1:{port}")
+    monkeypatch.setattr(redis_client, "REDIS_SOCKET_TIMEOUT", HUNG_TIMEOUT_SECONDS)
+    monkeypatch.setattr(redis_client, "_redis_client", None)
+    try:
+        yield accepted
+    finally:
+        await redis_client.close_redis()
+        for writer in accepted:
+            writer.close()
+        server.close()
+        await server.wait_closed()
 
 
-@pytest.mark.unit
-async def test_close_redis_cancels_a_pending_reconnect(redis_down):
-    """Shutdown must not leave a reconnect that would install a client after
-    ``close_redis()`` (a leaked pool on a closing loop)."""
+async def _reconnect_inside_ping(accepted) -> "asyncio.Task[None]":
+    """Trigger a degraded call and return the reconnect task once the hung
+    server has accepted its connection (the round is now awaiting PING)."""
     with pytest.raises(RuntimeError):
         await redis_client.request_path_client()
     task = redis_client._reconnect_task
-    assert task is not None and not task.done()
+    assert task is not None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + FAST_SECONDS
+    while not accepted:
+        assert loop.time() < deadline, "the reconnect never connected"
+        await asyncio.sleep(0.01)
+    assert not task.done()
+    return task
+
+
+@pytest.mark.unit
+async def test_a_reconnect_in_flight_publishes_nothing_and_requests_still_degrade_at_once(
+    redis_hung,
+):
+    """Codex round 1 MED: an unverified client must not be visible. While the
+    round waits on PING, request paths see no client, degrade immediately and
+    report non-durable, and further degraded calls start no second round."""
+    from src.api.dependencies.durable_job_store import DurableJobStore
+    from src.api.schemas.causal import DiscoverEffectsResponse
+
+    task = await _reconnect_inside_ping(redis_hung)
+    store = DurableJobStore("test:1999", DiscoverEffectsResponse)
+
+    assert redis_client.current_client() is None
+    result, elapsed = await _timed(store.get("missing"))
+    assert result is None and elapsed < 0.5, elapsed
+    durable, elapsed = await _timed(store.is_durable())
+    assert durable is False and elapsed < 0.5, elapsed
+    assert redis_client._reconnect_task is task  # single-flight while in flight
+    assert len(redis_hung) == 1
+
+
+@pytest.mark.unit
+async def test_close_redis_cancels_a_reconnect_that_is_inside_its_ping(redis_hung):
+    """Shutdown cancels an IN-FLIGHT round (not one that never started), and no
+    client appears afterwards."""
+    task = await _reconnect_inside_ping(redis_hung)
 
     await redis_client.close_redis()
 
     assert task.cancelled()
     assert redis_client._reconnect_task is None
+    await asyncio.sleep(HUNG_TIMEOUT_SECONDS + 0.2)  # past the ping's own timeout
     assert redis_client.current_client() is None
+
+
+@pytest.mark.unit
+async def test_a_failed_attempt_does_not_clear_a_client_published_during_its_ping(redis_hung):
+    """Codex round 1 MED: two initialisers (the background round and /ready's
+    ``get_redis()``) must not undo each other. A client published while this
+    attempt waits on PING survives the attempt's failure, and the attempt's own
+    candidate is never published."""
+    attempt = asyncio.create_task(redis_client.init_redis.retry_with(stop=stop_after_attempt(1))())
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + FAST_SECONDS
+    while not redis_hung:
+        assert loop.time() < deadline, "the attempt never connected"
+        await asyncio.sleep(0.01)
+
+    winner = redis_client.aioredis.from_url(_refused_url())  # published by "another initialiser"
+    redis_client._redis_client = winner
+
+    with pytest.raises(ConnectionError):
+        await asyncio.wait_for(attempt, timeout=HUNG_TIMEOUT_SECONDS + FAST_SECONDS)
+    assert redis_client.current_client() is winner
+    redis_client._redis_client = None  # never connected; nothing to close
+    await winner.aclose()
 
 
 @pytest.mark.unit

@@ -44,6 +44,14 @@ _health_circuit_breaker = CircuitBreaker(
 )
 
 
+async def _discard(client: Redis) -> None:
+    """Close a client that was never published (best effort)."""
+    try:
+        await client.aclose()
+    except Exception as e:  # noqa: BLE001 - the attempt is already over
+        logger.debug(f"Closing an unpublished Redis client failed: {e}")
+
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -64,17 +72,27 @@ async def init_redis() -> Redis:
     global _redis_client
 
     # Reset stale reference so retries don't short-circuit
-    if _redis_client is not None:
+    existing = _redis_client
+    if existing is not None:
         try:
-            await _redis_client.ping()  # type: ignore[misc]
-            return _redis_client
+            await existing.ping()  # type: ignore[misc]
+            return existing
         except Exception:
-            _redis_client = None
+            # #1999: clear only the client this call found; another initialiser
+            # may have published a working one during the ping.
+            if _redis_client is existing:
+                _redis_client = None
 
     logger.info(f"Initializing Redis connection to {REDIS_URL}")
 
+    # #1999: the candidate is published only after its ping succeeds. Request
+    # paths read the module client concurrently (current_client(), and the
+    # background reconnect runs while requests are served), so an unverified
+    # client must never be visible, and a failed or cancelled attempt must not
+    # clear a client someone else published meanwhile.
+    candidate: Optional[Redis] = None
     try:
-        _redis_client = aioredis.from_url(
+        candidate = aioredis.from_url(
             REDIS_URL,
             decode_responses=True,
             socket_timeout=REDIS_SOCKET_TIMEOUT,
@@ -82,15 +100,22 @@ async def init_redis() -> Redis:
         )
 
         # Verify connection
-        await _redis_client.ping()  # type: ignore[misc]
-        logger.info("Redis connection established successfully")
-
-        return _redis_client
-
-    except Exception as e:
-        _redis_client = None
+        await candidate.ping()  # type: ignore[misc]
+    except BaseException as e:
+        if candidate is not None:
+            await _discard(candidate)
+        if not isinstance(e, Exception):
+            raise  # cancellation: nothing was published
         logger.error(f"Failed to connect to Redis: {e}")
         raise ConnectionError(f"Redis connection failed: {e}") from e
+
+    if _redis_client is not None:
+        # Another initialiser published first; keep one pool.
+        await _discard(candidate)
+        return _redis_client
+    _redis_client = candidate
+    logger.info("Redis connection established successfully")
+    return _redis_client
 
 
 async def get_redis() -> Redis:
@@ -182,8 +207,8 @@ async def close_redis() -> None:
     """Close Redis connection pool."""
     global _redis_client, _reconnect_task, _reconnect_failed_at
 
-    # Cancel a pending background reconnect FIRST: it could otherwise install
-    # a client after this close (init_redis assigns the client before its ping).
+    # Cancel a pending background reconnect FIRST: one whose ping succeeds after
+    # this close would otherwise publish a new client on a shutting-down worker.
     task = _reconnect_task
     _reconnect_task = None
     _reconnect_failed_at = None
