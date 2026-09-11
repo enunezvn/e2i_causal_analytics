@@ -401,18 +401,21 @@ def _node_state(frame: pd.DataFrame, ate: float = 0.05, **overrides) -> dict:
 
 
 def _wire(node: RefutationNode, monkeypatch, nc_return):
-    seen: dict = {}
+    seen: dict = {"order": []}
 
     def fake_recon(**kwargs):
         seen["recon"] = kwargs
+        seen["order"].append("recon")
         return (SimpleNamespace(), object(), object())
 
     async def fake_fit(**kwargs):
         seen["fit"] = kwargs
+        seen["order"].append("fit")
         return nc_return
 
     def spy_run_all_tests(**kwargs):
         seen["runner"] = kwargs
+        seen["order"].append("suite")
         return _proceed_suite()
 
     async def _no_signal(outcome):
@@ -457,9 +460,18 @@ class TestExecuteWiring:
         assert fit["deadline"] == deadline
         # The measured reconstruction cost is what the fit budgets one more build on.
         assert fit["per_refit_hint_heavy"] == runner["per_refit_hint_heavy"]
-        assert runner["negative_control"] == nc_tuple
-        assert runner["negative_control_skip_reason"] is None
         assert runner["data"] is recon["data"]
+        # The primary suite runs FIRST with the control deferred (no row, no
+        # tuple), the control is fitted on what remains, then the row is
+        # attached through the runner's own path.
+        assert seen["order"] == ["recon", "suite", "fit"]
+        assert runner["negative_control_deferred"] is True
+        assert "negative_control" not in runner and "negative_control_skip_reason" not in runner
+        row = _nc_row(result)
+        assert row["status"] == "passed"
+        assert row["details"]["nc_effect"] == 0.01 and row["details"]["nc_n"] == 290
+        assert row["details"]["refutation_subsampled"] is False  # disclosure stamped
+        assert result["refutation_suite"]["confidence_score"] == 1.0
 
     @pytest.mark.asyncio
     async def test_a_skip_reason_reaches_the_runner_with_no_tuple(self, frames, monkeypatch):
@@ -467,7 +479,7 @@ class TestExecuteWiring:
         node = RefutationNode()
         seen = _wire(node, monkeypatch, (None, "negative_control_too_few_rows"))
 
-        await node.execute(
+        result = await node.execute(
             _node_state(
                 frame,
                 negative_control_outcome=NC,
@@ -475,8 +487,11 @@ class TestExecuteWiring:
             )
         )
 
-        assert seen["runner"]["negative_control"] is None
-        assert seen["runner"]["negative_control_skip_reason"] == "negative_control_too_few_rows"
+        assert seen["runner"]["negative_control_deferred"] is True
+        assert "negative_control" not in seen["runner"]
+        row = _nc_row(result)
+        assert row["status"] == "skipped"
+        assert row["details"]["skip_reason"] == "negative_control_too_few_rows"
 
     @pytest.mark.asyncio
     async def test_no_room_after_reconstruction_skips_the_control_and_runs_the_suite(
@@ -498,6 +513,7 @@ class TestExecuteWiring:
 
         def spy_run_all_tests(**kwargs):
             seen.update(kwargs)
+            clock["now"] += 3.0  # the suite itself spends part of what is left
             return _proceed_suite()
 
         async def _no_signal(outcome):
@@ -520,9 +536,11 @@ class TestExecuteWiring:
         )
 
         assert result["gate_decision"] == "proceed"
-        assert seen["negative_control"] is None
-        assert seen["negative_control_skip_reason"] == "negative_control_budget_exhausted"
+        assert seen["negative_control_deferred"] is True
         assert seen["per_refit_hint_heavy"] == pytest.approx(10.0)
+        row = _nc_row(result)
+        assert row["status"] == "skipped"
+        assert row["details"]["skip_reason"] == "negative_control_budget_exhausted"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("state_extra", [{}, {"negative_control_outcome": None}])
@@ -534,6 +552,7 @@ class TestExecuteWiring:
         await node.execute(_node_state(frame, **state_extra))
 
         assert "fit" not in seen
+        assert not seen["runner"].get("negative_control_deferred")
         assert seen["runner"].get("negative_control") is None
         assert seen["runner"].get("negative_control_skip_reason") is None
 
@@ -574,6 +593,53 @@ async def _run_real(node: RefutationNode, state: dict, monkeypatch) -> dict:
 
 
 class TestRealRunnerEndToEnd:
+    @pytest.mark.asyncio
+    async def test_budget_that_covers_the_suite_but_not_the_control(
+        self, frames, linear_dml_fit, monkeypatch
+    ):
+        """Deadline boundary (codex whole-diff HIGH): the real reconstruction
+        and the real suite run on a fake clock that leaves less than one more
+        build; the primary suite completes with its real bands and the
+        control row is SKIPPED negative_control_budget_exhausted -- the
+        control never fits and never fails the primary."""
+        frame, nc_df = frames
+        ate = float(linear_dml_fit[2].value)
+        clock = {"now": 5000.0}
+        monkeypatch.setattr(_ref_mod.time, "monotonic", lambda: clock["now"])
+        real_recon = _ref_mod._reconstruct_dowhy_artifacts
+
+        def timed_recon(**kwargs):
+            out = real_recon(**kwargs)
+            clock["now"] += 10.0  # the measured build cost
+            return out
+
+        monkeypatch.setattr(_ref_mod, "_reconstruct_dowhy_artifacts", timed_recon)
+        monkeypatch.setattr(
+            _ref_mod, "_negative_control_fit_sync", lambda **_k: pytest.fail("must not fit")
+        )
+        node = RefutationNode(config=DETERMINISTIC_CONFIG)
+        result = await _run_real(
+            node,
+            _node_state(
+                frame,
+                ate=ate,
+                negative_control_outcome=NC,
+                data_cache={"negative_control_data": nc_df},
+                compute_deadline=5000.0 + 15.0,  # covers the suite, not one more build
+            ),
+            monkeypatch,
+        )
+        row = _nc_row(result)
+        assert row["status"] == "skipped"
+        assert row["details"]["skip_reason"] == "negative_control_budget_exhausted"
+        sens = [
+            t
+            for t in result["refutation_suite"]["tests"]
+            if t["test_name"] == RefutationTestType.SENSITIVITY_E_VALUE.value
+        ]
+        assert len(sens) == 1 and sens[0]["status"] != "skipped"
+        assert result["gate_decision"] in {"proceed", "review"}
+
     @pytest.mark.asyncio
     async def test_declared_control_is_read_and_persistable(
         self, frames, linear_dml_fit, monkeypatch

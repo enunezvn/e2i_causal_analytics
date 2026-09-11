@@ -2005,51 +2005,17 @@ class RefutationNode:
                         cal_err,
                     )
 
-            # #2007: the negative-control reading -- the SAME frame, adjustment
-            # set and estimator spec as the primary reconstruction above, with
-            # the declared control as the outcome. Only when the API declared
-            # one (``negative_control_outcome``); with no key the runner emits
-            # its own ``no_negative_control_declared`` SKIPPED row. The tuple /
-            # skip reason go to ``run_all_tests`` as-is: a caller reason wins
-            # over a tuple there, and an unknown token raises. The fit never
-            # raises for budget: a lapsed deadline is the SKIPPED reason
-            # ``negative_control_budget_exhausted`` (the reconstruction cost is
-            # the honest estimate of one more build), and the primary suite
-            # still runs under its own deadline.
-            negative_control_kwargs: Dict[str, Any] = {}
+            # #2007: when the API declared a negative control the suite is run
+            # with the control DEFERRED (no row emitted) and the control is
+            # fitted AFTER it, on whatever budget remains -- the primary suite's
+            # deadline is never spent on a weight-0 reading (codex whole-diff
+            # HIGH: a slow control fit before the suite could push the critical
+            # refuters into a budget skip or the fail-closed timeout). The row
+            # is attached below through the runner's own path.
             nc_key = state.get("negative_control_outcome")
-            if nc_key:
-                nc_data = (state.get("data_cache") or {}).get("negative_control_data")
-                nc_tuple, nc_skip_reason = await _fit_negative_control(
-                    refutation_data=refutation_data,
-                    negative_control_data=nc_data,
-                    treatment=treatment,
-                    nc_outcome=str(nc_key),
-                    common_causes=common_causes,
-                    estimation_result=cast(Dict[str, Any], estimation_result),
-                    deadline=deadline,
-                    per_refit_hint_heavy=per_refit_hint_heavy,
-                )
-                negative_control_kwargs = {
-                    "negative_control": nc_tuple,
-                    "negative_control_skip_reason": nc_skip_reason,
-                }
-                if nc_tuple is not None:
-                    logger.info(
-                        "Negative-control outcome %s: effect %+.4f [%+.4f, %+.4f] on "
-                        "n = %d rows (#2007).",
-                        nc_tuple[0],
-                        nc_tuple[1],
-                        nc_tuple[2][0],
-                        nc_tuple[2][1],
-                        nc_tuple[3],
-                    )
-                else:
-                    logger.info(
-                        "Negative-control outcome %s not read: %s (#2007).",
-                        nc_key,
-                        nc_skip_reason,
-                    )
+            negative_control_kwargs: Dict[str, Any] = (
+                {"negative_control_deferred": True} if nc_key else {}
+            )
 
             # Run all refutation tests
             try:
@@ -2108,9 +2074,56 @@ class RefutationNode:
             except ComputeBudgetExpired as be:
                 raise _queued_budget_error() from be
 
+            if nc_key:
+                # The control: the SAME frame, adjustment set and estimator
+                # spec as the primary reconstruction, with the declared control
+                # as the outcome, on the budget the suite left. The fit never
+                # raises for budget -- no room for one more build (the measured
+                # reconstruction cost) or a lapsed deadline is the SKIPPED
+                # reason ``negative_control_budget_exhausted``. The runner's
+                # ``attach_negative_control`` produces the row through the same
+                # path as the inline one (caller reason wins over a tuple; an
+                # unknown token raises) and recomputes the suite's verdict --
+                # unchanged at weight 0.
+                nc_data = (state.get("data_cache") or {}).get("negative_control_data")
+                nc_tuple, nc_skip_reason = await _fit_negative_control(
+                    refutation_data=refutation_data,
+                    negative_control_data=nc_data,
+                    treatment=treatment,
+                    nc_outcome=str(nc_key),
+                    common_causes=common_causes,
+                    estimation_result=cast(Dict[str, Any], estimation_result),
+                    deadline=deadline,
+                    per_refit_hint_heavy=per_refit_hint_heavy,
+                )
+                if nc_tuple is not None:
+                    logger.info(
+                        "Negative-control outcome %s: effect %+.4f [%+.4f, %+.4f] on "
+                        "n = %d rows (#2007).",
+                        nc_tuple[0],
+                        nc_tuple[1],
+                        nc_tuple[2][0],
+                        nc_tuple[2][1],
+                        nc_tuple[3],
+                    )
+                else:
+                    logger.info(
+                        "Negative-control outcome %s not read: %s (#2007).",
+                        nc_key,
+                        nc_skip_reason,
+                    )
+                suite = self.runner.attach_negative_control(
+                    suite,
+                    original_ate,
+                    negative_control=nc_tuple,
+                    negative_control_skip_reason=nc_skip_reason,
+                )
+
             # #1419: stamp subsample provenance onto every test's details so
             # each persisted evidence row (details_json) records
             # validated-on-subsample — never presented as a full-frame result.
+            # Runs AFTER the negative-control row is attached, so that row
+            # carries the disclosure like every other evidence row.
             for _suite_test in suite.tests:
                 _suite_test.details.update(data_disclosure)
 

@@ -714,6 +714,17 @@ class RefutationTestType(str, Enum):
 NEGATIVE_CONTROL_SKIP_REASONS: frozenset = frozenset(_NEGATIVE_CONTROL_SKIP_EXPLANATIONS)
 
 
+def _validate_negative_control_skip_reason(reason: Optional[str]) -> None:
+    """``None`` or a token of ``NEGATIVE_CONTROL_SKIP_REASONS``; anything else is a
+    call-site bug, raised before any row is emitted (and before the enabled check,
+    so a mistyped reason is caught even on a disabled test)."""
+    if reason is not None and reason not in NEGATIVE_CONTROL_SKIP_REASONS:
+        raise ValueError(
+            "negative_control_skip_reason must be one of "
+            f"{sorted(NEGATIVE_CONTROL_SKIP_REASONS)}, got {reason!r}"
+        )
+
+
 # ============================================================================
 # DATACLASSES
 # ============================================================================
@@ -1139,6 +1150,7 @@ class RefutationRunner:
         refit_n: Optional[int] = None,
         negative_control: Optional[Tuple[str, float, Tuple[float, float], int]] = None,
         negative_control_skip_reason: Optional[str] = None,
+        negative_control_deferred: bool = False,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -1253,6 +1265,14 @@ class RefutationRunner:
                 ``negative_control_skip_reason``) so ``skipped_tests`` says why
                 the reading is absent. The comparison costs nothing, so it is
                 never budget-skipped and never feeds the per-refit average.
+            negative_control_deferred: #2007 (codex whole-diff HIGH). ``True``
+                emits NO negative-control row at all: the caller promises to
+                fit the control AFTER this suite -- with whatever budget is
+                left, so a slow control fit can never push the critical
+                refuters into a budget skip or the fail-closed timeout -- and
+                to attach the row with ``attach_negative_control``. Passing a
+                tuple or a reason alongside it is a call-site bug
+                (``ValueError``).
             negative_control_skip_reason: #2007. Why the caller could not
                 produce ``negative_control`` -- one of
                 ``NEGATIVE_CONTROL_SKIP_REASONS`` (``negative_control_column_missing``,
@@ -1260,7 +1280,8 @@ class RefutationRunner:
                 ``negative_control_ci_unavailable``,
                 ``negative_control_budget_exhausted``; ``no_negative_control_declared``
                 is the default when both are ``None``). The runner is the one
-                place that emits the SKIPPED row, with THAT reason. An unknown
+                place that emits the SKIPPED row, with THAT reason
+                (``_negative_control_row``, shared with ``attach_negative_control``). An unknown
                 token is a ``ValueError`` (a call-site bug, not a data
                 condition). When a tuple is ALSO given the reason WINS and the
                 tuple is discarded with a warning: the caller saw something
@@ -1687,16 +1708,19 @@ class RefutationRunner:
 
         # #2007: the negative-control reading. Validated before the enabled
         # check so a mistyped reason is caught even on a disabled test.
-        if (
-            negative_control_skip_reason is not None
-            and negative_control_skip_reason not in NEGATIVE_CONTROL_SKIP_REASONS
-        ):
-            raise ValueError(
-                "negative_control_skip_reason must be one of "
-                f"{sorted(NEGATIVE_CONTROL_SKIP_REASONS)}, got "
-                f"{negative_control_skip_reason!r}"
-            )
-        if self.config["negative_control_outcome"]["enabled"]:
+        _validate_negative_control_skip_reason(negative_control_skip_reason)
+        if negative_control_deferred:
+            if negative_control is not None or negative_control_skip_reason is not None:
+                raise ValueError(
+                    "negative_control_deferred=True emits no negative-control row; "
+                    "pass the tuple / skip reason to attach_negative_control instead "
+                    f"(got negative_control={negative_control!r}, "
+                    f"negative_control_skip_reason={negative_control_skip_reason!r})"
+                )
+            # The caller fits the control AFTER this suite, on the budget that
+            # remains, and attaches the row through the same code path
+            # (``attach_negative_control`` -> ``_negative_control_row``).
+        elif self.config["negative_control_outcome"]["enabled"]:
             # NOT budget-gated, deliberately: the test does no refit -- it is
             # arithmetic on a tuple the caller already computed -- so
             # ``_budget_allows`` (a per-refit cost model) does not apply and a
@@ -1707,36 +1731,16 @@ class RefutationRunner:
             # refuters that actually ``ran``, and its ~us elapsed is never
             # ``_record``-ed (the same reason the analytic E-value is kept out
             # of the average).
-            if negative_control is not None and negative_control_skip_reason is not None:
-                # Codex round 1 (MED): contradictory inputs. The caller's reason
-                # wins -- it disowned the numbers -- so the tuple is discarded
-                # rather than scored; the row below carries the caller's reason.
-                logger.warning(
-                    "negative_control tuple %r given alongside "
-                    "negative_control_skip_reason=%r; the tuple is discarded and the "
-                    "caller's SKIPPED reason is emitted (neither input is authoritative).",
+            tests.append(
+                self._negative_control_row(
+                    original_effect,
                     negative_control,
                     negative_control_skip_reason,
-                )
-                negative_control = None
-            if negative_control is not None:
-                test_result = self._run_test_with_tracing(
-                    test_name="negative_control_outcome",
-                    test_func=self._run_negative_control_test,
                     opik=opik,
                     trace_id=trace_id,
                     estimate_id=estimate_id,
-                    original_effect=original_effect,
-                    negative_control=negative_control,
                 )
-                tests.append(test_result)
-            else:
-                tests.append(
-                    _negative_control_skip_result(
-                        negative_control_skip_reason or "no_negative_control_declared",
-                        original_effect,
-                    )
-                )
+            )
 
         total_time = (time.time() - start_time) * 1000
 
@@ -1780,6 +1784,93 @@ class RefutationRunner:
             f"confidence={confidence_score:.2f}, gate={gate_decision.value}"
         )
 
+        return suite
+
+    def _negative_control_row(
+        self,
+        original_effect: float,
+        negative_control: Optional[Tuple[str, float, Tuple[float, float], int]],
+        negative_control_skip_reason: Optional[str],
+        *,
+        opik: Any,
+        trace_id: Optional[str] = None,
+        estimate_id: Optional[str] = None,
+    ) -> RefutationResult:
+        """The ONE producer of the negative-control row (#2007): a scored
+        reading from a tuple, or the SKIPPED row with the caller's reason
+        (``no_negative_control_declared`` when neither is given). Shared by
+        ``run_all_tests`` and ``attach_negative_control`` so the deferred path
+        cannot drift from the inline one. The reason must already be validated.
+        """
+        if negative_control is not None and negative_control_skip_reason is not None:
+            # Codex round 1 (MED): contradictory inputs. The caller's reason
+            # wins -- it disowned the numbers -- so the tuple is discarded
+            # rather than scored; the row below carries the caller's reason.
+            logger.warning(
+                "negative_control tuple %r given alongside "
+                "negative_control_skip_reason=%r; the tuple is discarded and the "
+                "caller's SKIPPED reason is emitted (neither input is authoritative).",
+                negative_control,
+                negative_control_skip_reason,
+            )
+            negative_control = None
+        if negative_control is not None:
+            return self._run_test_with_tracing(
+                test_name="negative_control_outcome",
+                test_func=self._run_negative_control_test,
+                opik=opik,
+                trace_id=trace_id,
+                estimate_id=estimate_id,
+                original_effect=original_effect,
+                negative_control=negative_control,
+            )
+        return _negative_control_skip_result(
+            negative_control_skip_reason or "no_negative_control_declared",
+            original_effect,
+        )
+
+    def attach_negative_control(
+        self,
+        suite: RefutationSuite,
+        original_effect: float,
+        negative_control: Optional[Tuple[str, float, Tuple[float, float], int]] = None,
+        negative_control_skip_reason: Optional[str] = None,
+    ) -> RefutationSuite:
+        """Attach the negative-control row to a suite run with
+        ``negative_control_deferred=True`` (#2007, codex whole-diff HIGH).
+
+        The row is produced through the SAME path as the inline one
+        (``_negative_control_row``: caller reason wins over a tuple, ``None`` /
+        ``None`` is ``no_negative_control_declared``, an unknown reason is a
+        ``ValueError``), appended to ``suite.tests``, and the suite's
+        ``confidence_score`` / ``gate_decision`` / ``passed`` are recomputed
+        through the existing functions -- which, at weight 0 and non-critical,
+        leaves them IDENTICAL (pinned per band); ``tests_passed`` /
+        ``tests_failed`` / ``total_tests`` are properties over ``tests`` and so
+        count the reading like the inline path does. A disabled test attaches
+        nothing (the inline gate); a suite that already carries the row refuses
+        a second one. Returns the same (mutated) suite object.
+        """
+        _validate_negative_control_skip_reason(negative_control_skip_reason)
+        if not self.config["negative_control_outcome"]["enabled"]:
+            return suite
+        if any(t.test_name == RefutationTestType.NEGATIVE_CONTROL_OUTCOME for t in suite.tests):
+            raise ValueError(
+                "the suite already carries a negative_control_outcome row; "
+                "attach_negative_control is for suites run with negative_control_deferred=True"
+            )
+        suite.tests.append(
+            self._negative_control_row(
+                original_effect,
+                negative_control,
+                negative_control_skip_reason,
+                opik=get_opik_connector(),
+                estimate_id=suite.estimate_id,
+            )
+        )
+        suite.confidence_score = self._calculate_confidence_score(suite.tests)
+        suite.gate_decision = self._determine_gate_decision(suite.tests, suite.confidence_score)
+        suite.passed = suite.gate_decision != GateDecision.BLOCK
         return suite
 
     def _run_test_with_tracing(

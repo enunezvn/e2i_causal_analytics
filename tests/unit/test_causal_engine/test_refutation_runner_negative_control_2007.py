@@ -507,3 +507,144 @@ def test_legacy_counts_include_the_reading_but_the_score_does_not():
     legacy = RefutationSuite(True, 1.0, skipped, GateDecision.PROCEED).to_legacy_format()
     assert legacy["total_tests"] == 5
     assert legacy["skipped_tests"] == {"negative_control_outcome": "m"}
+
+
+# --- deferred + attach (codex whole-diff HIGH: the control must not spend the
+# primary suite's deadline; the caller fits it AFTER the suite and attaches) ---
+
+
+def _strip_time(details: dict) -> dict:
+    return {k: v for k, v in details.items() if k != "execution_time_ms"}
+
+
+def test_deferred_emits_no_row_and_attach_produces_it_through_the_same_path():
+    runner = RefutationRunner()
+    suite = _run(runner, negative_control_deferred=True)
+    assert NC not in _by_name(suite)
+    before = (suite.confidence_score, suite.gate_decision, suite.passed, suite.total_tests)
+
+    inline = _by_name(_run(RefutationRunner(), negative_control=PASSED_NC))[NC]
+    attached = runner.attach_negative_control(suite, 0.15, negative_control=PASSED_NC)
+    assert attached is suite
+    nc = _by_name(suite)[NC]
+    assert nc.status == inline.status == P
+    assert _strip_time(nc.details) == _strip_time(inline.details)
+    assert nc.refuted_effect == inline.refuted_effect
+    assert nc.delta_percent == inline.delta_percent
+    assert (suite.confidence_score, suite.gate_decision, suite.passed) == before[:3]
+    assert suite.total_tests == before[3] + 1
+    assert "negative_control_outcome" in suite.to_legacy_format()["individual_tests"]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "negative_control_column_missing",
+        "negative_control_too_few_rows",
+        "negative_control_ci_unavailable",
+        "negative_control_budget_exhausted",
+    ],
+)
+def test_attach_with_a_reason_is_the_runner_skipped_row(reason):
+    runner = RefutationRunner()
+    suite = _run(runner, negative_control_deferred=True)
+    inline = _by_name(_run(RefutationRunner(), negative_control_skip_reason=reason))[NC]
+    runner.attach_negative_control(suite, 0.15, negative_control_skip_reason=reason)
+    nc = _by_name(suite)[NC]
+    assert nc.status == S
+    assert nc.details["skip_reason"] == reason
+    assert _strip_time(nc.details) == _strip_time(inline.details)
+    assert suite.to_legacy_format()["skipped_tests"]["negative_control_outcome"].startswith(
+        "negative_control_outcome skipped:"
+    )
+
+
+def test_attach_with_nothing_is_no_negative_control_declared_and_reason_wins_over_tuple(caplog):
+    runner = RefutationRunner()
+    suite = _run(runner, negative_control_deferred=True)
+    runner.attach_negative_control(suite, 0.15)
+    assert _by_name(suite)[NC].details["skip_reason"] == "no_negative_control_declared"
+
+    suite = _run(runner, negative_control_deferred=True)
+    with caplog.at_level("WARNING", logger="src.causal_engine.refutation_runner"):
+        runner.attach_negative_control(
+            suite,
+            0.15,
+            negative_control=PASSED_NC,
+            negative_control_skip_reason="negative_control_too_few_rows",
+        )
+    nc = _by_name(suite)[NC]
+    assert nc.status == S and nc.details["skip_reason"] == "negative_control_too_few_rows"
+    assert any("discard" in r.getMessage() for r in caplog.records)
+
+
+def test_attach_refusals_and_the_disabled_gate():
+    runner = RefutationRunner()
+    with pytest.raises(ValueError, match="negative_control_deferred=True"):
+        _run(runner, negative_control_deferred=True, negative_control=PASSED_NC)
+    with pytest.raises(ValueError, match="negative_control_deferred=True"):
+        _run(
+            runner,
+            negative_control_deferred=True,
+            negative_control_skip_reason="negative_control_too_few_rows",
+        )
+    suite = _run(runner, negative_control_deferred=True)
+    with pytest.raises(ValueError, match="negative_control_skip_reason"):
+        runner.attach_negative_control(suite, 0.15, negative_control_skip_reason="because")
+    runner.attach_negative_control(suite, 0.15, negative_control=PASSED_NC)
+    with pytest.raises(ValueError, match="already carries"):
+        runner.attach_negative_control(suite, 0.15, negative_control=PASSED_NC)
+    # An inline suite already carries the row too.
+    with pytest.raises(ValueError, match="already carries"):
+        runner.attach_negative_control(_run(runner), 0.15, negative_control=PASSED_NC)
+    # Disabled: neither path emits a row; attach returns the suite unchanged.
+    disabled = RefutationRunner(config={"negative_control_outcome": {"enabled": False}})
+    suite = _run(disabled, negative_control_deferred=True)
+    n = len(suite.tests)
+    assert disabled.attach_negative_control(suite, 0.15, negative_control=PASSED_NC) is suite
+    assert len(suite.tests) == n and NC not in _by_name(suite)
+
+
+def test_attach_never_changes_confidence_or_gate_for_any_band():
+    """Weight 0, non-critical: for every reachable five-test combination and
+    every control outcome (three bands + a skip), attaching leaves the
+    recomputed confidence, gate and ``passed`` IDENTICAL and adds exactly one
+    row to the counts."""
+    from tests.unit.test_causal_engine.test_refutation_bands_enumeration import (
+        _all_combos,
+        _suite,
+    )
+
+    runner = RefutationRunner()
+    controls = [
+        {"negative_control": PASSED_NC},
+        {"negative_control": WARNING_NC},
+        {"negative_control": FAILED_NC},
+        {"negative_control_skip_reason": "negative_control_budget_exhausted"},
+    ]
+    bands_seen = set()
+    for combo in _all_combos():
+        for kwargs in controls:
+            tests = _suite(*combo)
+            conf = runner._calculate_confidence_score(tests)
+            gate = runner._determine_gate_decision(tests, conf)
+            suite = RefutationSuite(
+                passed=gate != GateDecision.BLOCK,
+                confidence_score=conf,
+                tests=tests,
+                gate_decision=gate,
+            )
+            counts = (suite.tests_passed, suite.tests_failed, suite.total_tests)
+            runner.attach_negative_control(suite, ORIGINAL, **kwargs)
+            nc = _by_name(suite)[NC]
+            assert suite.confidence_score == conf, (combo, kwargs)
+            assert suite.gate_decision == gate, (combo, kwargs)
+            assert suite.passed == (gate != GateDecision.BLOCK)
+            expected = (
+                counts[0] + (nc.status == P),
+                counts[1] + (nc.status == F),
+                counts[2] + (nc.status != S),
+            )
+            assert (suite.tests_passed, suite.tests_failed, suite.total_tests) == expected
+            bands_seen.add(gate)
+    assert bands_seen == {GateDecision.PROCEED, GateDecision.REVIEW, GateDecision.BLOCK}
