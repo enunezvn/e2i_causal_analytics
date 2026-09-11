@@ -2738,7 +2738,8 @@ def power_calculator(
         "engine behind /digital-twin/simulate): a causal-forest estimate of the "
         "intervention's effect on HCP conversion_rate in the brand's synthetic-gold per-HCP "
         "cohort, with its 95% interval, per-region effects and a DEPLOY / REFINE / SKIP "
-        "recommendation. Estimates the effect itself; it does not take an upstream effect."
+        "recommendation. Estimates the effect itself, so it takes no upstream effect and needs no "
+        "prior step unless target_entities come from one."
     ),
     source_agent="experiment_designer",
     tier=3,
