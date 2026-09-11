@@ -2779,9 +2779,9 @@ def risk_scorer(
       feature set (reproducible provenance, not a fabricated ``v2.3.1``).
     - ``scored_at`` is the real UTC timestamp of this scoring run.
 
-    Fail-closed: no DataFrame, missing outcome column, fewer than 2 outcome
-    classes, or no usable numeric features -> ``RuntimeError`` (we refuse to
-    fabricate scores).
+    Fail-closed: no DataFrame, missing outcome column, an outcome that is not a
+    0/1 event column, fewer than 2 outcome classes, or no usable numeric features
+    -> ``RuntimeError`` (we refuse to fabricate scores).
 
     Args:
         entity_type: Logical entity type (echoed for provenance only).
@@ -2839,6 +2839,13 @@ def risk_scorer(
             f"(numeric columns minus outcome were empty; columns={list(work.columns)!r})."
         )
 
+    observed = set(work[outcome].dropna().unique())
+    if not observed <= {0, 1}:
+        raise ToolRefusalError(
+            f"risk_scorer: outcome column {outcome!r} is not a binary 0/1 event column "
+            f"(observed values include {sorted(map(str, observed))[:6]!r}). Refusing to "
+            "cast it to classes and report a class probability as a risk score."
+        )
     y = work[outcome].astype(int)
     if y.nunique() < 2:
         raise ToolRefusalError(
