@@ -14,7 +14,9 @@
 -- agent outside the six: the runtime sync writes cohort_constructor / cohort_profiler tools.
 -- Deprecate or delete those rows (composition_steps may reference them), then re-run.
 --
+-- Also deletes the ml/040 ledger row, so re-deploying the learning-loop code re-applies it.
 -- ml/039 has no rollback: a value cannot be removed from an enum, and COHORT is harmless.
+-- Always apply with --single-transaction and ON_ERROR_STOP (a partial rollback otherwise).
 -- Idempotent: a second run on an already rolled-back database changes nothing.
 -- ============================================================================
 
@@ -31,6 +33,10 @@ BEGIN
     END IF;
 END
 $guard$;
+
+-- The ledger row, so a later deploy of the learning-loop code re-applies ml/040. ml/039 stays
+-- recorded: it has no rollback.
+DELETE FROM public.schema_migrations WHERE filename = 'ml/040_tool_registry_startup_sync.sql';
 
 DROP FUNCTION IF EXISTS sync_tool_registry(jsonb, jsonb, integer);
 
@@ -51,9 +57,12 @@ BEGIN
         ALTER TABLE tool_registry ADD COLUMN success_rate FLOAT DEFAULT 0.95;
         ALTER TABLE tool_registry ADD CONSTRAINT tool_registry_success_rate_check
             CHECK (success_rate >= 0 AND success_rate <= 1);
-        -- Seed values of ml/027 (every other seeded row carries the 0.95 default).
+        -- Seed values of ml/027 (every other seeded row carries the 0.95 default). The
+        -- updated_at trigger is held off so restoring a dropped column does not stamp the rows.
+        ALTER TABLE tool_registry DISABLE TRIGGER trg_tool_registry_updated;
         UPDATE tool_registry SET success_rate = 0.92 WHERE name = 'discover_dag';
         UPDATE tool_registry SET success_rate = 0.98 WHERE name = 'detect_structural_drift';
+        ALTER TABLE tool_registry ENABLE TRIGGER trg_tool_registry_updated;
     END IF;
 END
 $restore$;

@@ -19,7 +19,14 @@ import shutil
 import pytest
 
 from tests.unit.test_database.learning_loop import _pg
-from tests.unit.test_database.learning_loop.test_fixture_sanity import EQUIVALENCE_QUERIES
+from tests.unit.test_database.learning_loop.test_fixture_sanity import (
+    _PUBLIC_REL,
+    EQUIVALENCE_QUERIES,
+    LANE_FUNCTIONS,
+    LANE_TABLES,
+    LANE_VIEWS,
+    _in,
+)
 
 pytestmark = [
     pytest.mark.skipif(
@@ -50,7 +57,7 @@ ROLLBACK_ASPECTS = (
 )
 REGISTRY_ROWS = (
     "select name || '|' || coalesce(success_rate::text, '') || '|' || coalesce(avg_latency_ms::text, '') "
-    "|| '|' || source_agent from tool_registry order by name"
+    "|| '|' || source_agent || '|' || updated_at::text from tool_registry order by name"
 )
 
 
@@ -188,29 +195,59 @@ def test_direct_reapply_is_a_no_op_for_data(clone_db):
     assert db.rows(SNAPSHOT) == before
 
 
+COMMENTS = (
+    "select 'rel:' || c.relname || ':' || coalesce(obj_description(c.oid, 'pg_class'), '') "
+    f"from pg_class c where {_PUBLIC_REL} and c.relname in {_in(LANE_TABLES + LANE_VIEWS)} "
+    "union all select 'col:' || c.relname || '.' || a.attname || ':' "
+    "|| coalesce(col_description(c.oid, a.attnum), '') from pg_attribute a "
+    f"join pg_class c on c.oid = a.attrelid where {_PUBLIC_REL} and c.relname in {_in(LANE_TABLES)} "
+    "and a.attnum > 0 and not a.attisdropped "
+    "union all select 'fn:' || p.oid::regprocedure::text || ':' "
+    "|| coalesce(obj_description(p.oid, 'pg_proc'), '') from pg_proc p "
+    f"where p.pronamespace = 'public'::regnamespace and p.proname in {_in(LANE_FUNCTIONS)} order by 1"
+)
+
+
 def _aspects(conn: _pg.PgConn) -> dict:
-    return {aspect: conn.rows(EQUIVALENCE_QUERIES[aspect][0]) for aspect in ROLLBACK_ASPECTS}
+    got = {aspect: conn.rows(EQUIVALENCE_QUERIES[aspect][0]) for aspect in ROLLBACK_ASPECTS}
+    got["comments"] = conn.rows(COMMENTS)
+    return got
 
 
 def _enums(conn: _pg.PgConn) -> list:
     return conn.rows(EQUIVALENCE_QUERIES["enums"][0])
 
 
-def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, clone_db):
+def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, clone_db, tmp_path):
     db = clone_db("rollbacks")
-    _pg.migrate(db, "ml/041_composer_learning_loop_recording.sql")
+    shims = tmp_path / "shims"
+    # Migrated the way a deploy does, so the ledger rows the rollbacks must remove exist.
+    forward = _pg.run_runner(db, _pg.REPO_ROOT, shims)
+    assert forward.returncode == 0 and "Applied 3 migration(s)" in _out(forward), _out(forward)
     expected = _aspects(base_db)
+    for aspect in ROLLBACK_ASPECTS:
+        if not EQUIVALENCE_QUERIES[aspect][1]:
+            assert expected[aspect], (
+                f"{aspect} is empty on the base copy; the comparison would be vacuous"
+            )
+    assert expected["comments"]
     assert _aspects(db) != expected  # the migrations changed something to roll back
+    registry_before = base_db.rows(REGISTRY_ROWS)
+    stamps = "select name || '|' || updated_at::text from tool_registry order by name"
+    stamps_migrated = db.rows(stamps)
 
     for attempt in ("first", "second"):
         for name in ("rollback_041.sql", "rollback_040.sql"):
             proc = _pg.apply_rollback(db, name)
             assert proc.returncode == 0, (attempt, name, proc.stderr.decode())
         got = _aspects(db)
-        for aspect in ROLLBACK_ASPECTS:
+        for aspect in (*ROLLBACK_ASPECTS, "comments"):
             assert got[aspect] == expected[aspect], (attempt, aspect)
         assert db.rows(NEW_FUNCTIONS) == ["none"], attempt
-        assert db.rows(REGISTRY_ROWS) == base_db.rows(REGISTRY_ROWS), attempt
+        # Restored seed values; updated_at untouched by the rollback (equal to before 040/041,
+        # which did not change these rows either).
+        assert db.rows(REGISTRY_ROWS) == registry_before, attempt
+        assert db.rows(stamps) == stamps_migrated == base_db.rows(stamps), attempt
         # ml/039 has no rollback: COHORT stays (an enum value cannot be removed).
         assert _enums(db) == [
             line.replace("MONITORING", "MONITORING,COHORT")
@@ -218,6 +255,16 @@ def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, clone_d
             else line
             for line in _enums(base_db)
         ]
+        assert db.rows(LEDGER) == ["ml/039_tool_category_cohort.sql"], attempt
+
+    # The ledger no longer claims 040/041: re-deploying the learning-loop code re-applies them.
+    replay = _pg.run_runner(db, _pg.REPO_ROOT, shims)
+    assert replay.returncode == 0, _out(replay)
+    assert "Applied 2 migration(s) successfully." in _out(replay)
+    assert db.rows(
+        "select (to_regprocedure('sync_tool_registry(jsonb,jsonb,integer)') is not null)::text"
+        " || ',' || (to_regprocedure('composer_record_steps(jsonb,jsonb)') is not null)::text"
+    ) == ["true,true"]
 
 
 def test_rollback_040_refuses_rows_the_six_agent_check_would_reject(clone_db):
@@ -251,7 +298,8 @@ def test_rollback_041_refuses_unfinished_episodes(clone_db):
     )
     proc = _pg.apply_rollback(db, "rollback_041.sql")
     assert proc.returncode != 0
-    assert "1 episode(s) have no total_latency_ms" in proc.stderr.decode()
+    assert "have no total_latency_ms" in proc.stderr.decode()
+    assert "open_one" in proc.stderr.decode()
     assert db.rows("select to_regprocedure('composer_record_steps(jsonb,jsonb)') is not null") == [
         "t"
     ]

@@ -15,23 +15,32 @@
 -- total_latency_ms: ml/013 declares it NOT NULL, and unfinished or abandoned compositions
 -- recorded by the learning loop have none. Delete or complete those rows, then re-run.
 --
+-- Also deletes the ml/041 ledger row, so re-deploying the learning-loop code re-applies it.
 -- Idempotent: every drop is IF EXISTS and every recreation replaces or checks first, so a
--- second run on an already rolled-back database changes nothing.
+-- second run on an already rolled-back database changes nothing. Without --single-transaction
+-- and ON_ERROR_STOP a failure part-way would leave a partial rollback: always use both.
 -- ============================================================================
 
 DO $guard$
 DECLARE
     v_open bigint;
+    v_ids text;
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'composer_episodes'::regclass
                    AND attname = 'total_latency_ms' AND NOT attnotnull) THEN
-        SELECT count(*) INTO v_open FROM composer_episodes WHERE total_latency_ms IS NULL;
+        SELECT count(*), string_agg(composition_id, ', ' ORDER BY composition_id)
+        INTO v_open, v_ids
+        FROM (SELECT composition_id FROM composer_episodes WHERE total_latency_ms IS NULL
+              ORDER BY composition_id LIMIT 50) AS o;
         IF v_open > 0 THEN
-            RAISE EXCEPTION 'rollback_041: % episode(s) have no total_latency_ms (unfinished or abandoned compositions); ml/013 requires it. Delete or complete them, then re-run.', v_open;
+            RAISE EXCEPTION 'rollback_041: episode(s) have no total_latency_ms (unfinished or abandoned compositions; ml/013 requires it), first 50 by composition_id: %. Delete or complete them, then re-run.', v_ids;
         END IF;
     END IF;
 END
 $guard$;
+
+-- 0. The ledger row, so a later deploy of the learning-loop code re-applies ml/041.
+DELETE FROM public.schema_migrations WHERE filename = 'ml/041_composer_learning_loop_recording.sql';
 
 -- 1. Views and functions created by ml/041 (views first: they read the functions and columns).
 DROP VIEW IF EXISTS v_tool_reliability;
