@@ -121,6 +121,54 @@ class TestLingamRefusesBinaryColumns:
             ICALiNGAMAlgorithm().discover(frame, _lingam_config(DiscoveryAlgorithmType.ICA_LINGAM))
 
 
+class TestGuardFormatsNonStringColumnLabels:
+    """Codex MED on 209cd9516: integer column labels broke the exception
+    contract — ``', '.join(columns)`` raised ``TypeError`` instead of
+    ``DiscoveryError``, so the runner recorded an error naming neither the
+    algorithm nor the columns. The message stringifies the labels; ``details``
+    keeps the ORIGINAL labels (the int ``0``, not ``"0"``)."""
+
+    @pytest.mark.parametrize(
+        ("algorithm", "algo_type"),
+        [
+            (DirectLiNGAMAlgorithm(), DiscoveryAlgorithmType.DIRECT_LINGAM),
+            (ICALiNGAMAlgorithm(), DiscoveryAlgorithmType.ICA_LINGAM),
+        ],
+        ids=["direct_lingam", "ica_lingam"],
+    )
+    def test_integer_labels_raise_discovery_error_with_original_labels_in_details(
+        self,
+        algorithm: DirectLiNGAMAlgorithm | ICALiNGAMAlgorithm,
+        algo_type: DiscoveryAlgorithmType,
+    ) -> None:
+        frame = pd.DataFrame({0: [0.0, 1.0, 0.0], 1: [0.1, 0.2, 0.3]})
+        assert binary_columns(frame) == [0]
+        with pytest.raises(DiscoveryError) as excinfo:
+            algorithm.discover(frame, _lingam_config(algo_type))
+
+        message = str(excinfo.value)
+        assert algo_type.value in message
+        assert "1 column(s) are binary" in message
+        assert ": 0." in message  # the label, stringified, in the column list
+
+        details = excinfo.value.details
+        assert details["algorithm"] == algo_type.value
+        assert details["binary_columns"] == [0]
+        assert type(details["binary_columns"][0]) is int
+
+    def test_mixed_int_and_str_labels_are_all_named(self) -> None:
+        frame = pd.DataFrame({0: [0.0, 1.0, 0.0], "flag": [1.0, 1.0, 0.0], "x": [0.1, 0.2, 0.3]})
+        with pytest.raises(DiscoveryError) as excinfo:
+            DirectLiNGAMAlgorithm().discover(
+                frame, _lingam_config(DiscoveryAlgorithmType.DIRECT_LINGAM)
+            )
+        message = str(excinfo.value)
+        assert "2 column(s) are binary" in message
+        assert ": 0, flag." in message
+        assert "x" not in message.split(":")[-1].split(".")[0]
+        assert excinfo.value.details["binary_columns"] == [0, "flag"]
+
+
 class TestGuardLeavesOtherPathsAlone:
     """(c)/(d): the guard is specific to LiNGAM on binary columns."""
 

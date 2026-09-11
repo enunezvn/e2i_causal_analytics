@@ -23,7 +23,7 @@ Author: E2I Causal Analytics Team
 """
 
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Hashable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -38,7 +38,7 @@ from ..base import (
 )
 
 
-def binary_columns(data: pd.DataFrame) -> List[str]:
+def binary_columns(data: pd.DataFrame) -> List[Hashable]:
     """Columns with at most two distinct NON-NULL values, in frame order.
 
     A 0/1 flag is the canonical case; a constant column also qualifies (it is
@@ -74,11 +74,14 @@ def refuse_binary_columns(data: pd.DataFrame, algorithm: DiscoveryAlgorithmType)
     columns = binary_columns(data)
     if not columns:
         return
+    # Labels may be non-str (an unnamed frame has integer columns): stringify
+    # only for the message, keep the original labels in ``details``.
     raise DiscoveryError(
         f"{algorithm.value} refused: LiNGAM assumes non-Gaussian continuous "
         f"variables, but {len(columns)} column(s) are binary (<= 2 distinct "
-        f"non-null values): {', '.join(columns)}. Use a constraint-based "
-        f"algorithm (PC/FCI) for frames with binary treatment or outcome flags.",
+        f"non-null values): {', '.join(str(col) for col in columns)}. Use a "
+        f"constraint-based algorithm (PC/FCI) for frames with binary treatment "
+        f"or outcome flags.",
         details={"algorithm": algorithm.value, "binary_columns": columns},
     )
 
