@@ -75,3 +75,11 @@ def test_039_is_one_idempotent_statement():
     ]
     assert code == ["ALTER TYPE tool_category ADD VALUE IF NOT EXISTS 'COHORT';"]
 
+
+@pytest.mark.parametrize("name", ["rollback_040.sql", "rollback_041.sql"])
+def test_rollbacks_are_never_auto_applied_and_hold_no_transaction_control(name):
+    path = ML / "ml" / name
+    assert path.exists()
+    assert not [k for k in _pg.runner_migration_keys() if k.endswith(name)]
+    # Applied by hand with psql --single-transaction (runbook); its own BEGIN/COMMIT would end it.
+    assert _scan_for_bare_txn(path) == []

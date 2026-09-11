@@ -50,7 +50,7 @@ LANE_MIGRATIONS = (
 )
 
 # The runner's un-wrap detector (scripts/run_migrations.sh), applied per line after stripping
-# ``--`` comments, exactly like its ``sed 's/--.*$//' | grep -qiE``.
+# ``--`` comments, exactly like its ``grep -qiE … <<< "$(sed 's/--.*$//' …)"``.
 _RUNNER_UNWRAP = re.compile(
     r"ALTER[ \t]+TYPE[ \t].*ADD[ \t]+VALUE|CONCURRENTLY|^[ \t]*COMMIT[ \t]*;", re.IGNORECASE
 )
@@ -432,6 +432,47 @@ def apply_migration(conn: PgConn, path: Path, *, user: str = "postgres") -> str:
     if proc.returncode != 0:
         raise DbFixtureError(f"applying {path.name} failed: {proc.stderr.decode()}")
     return "unwrapped" if unwrapped else "wrapped"
+
+
+def run_runner(
+    conn: PgConn, project_root: Path, shim_dir: Path, *args: str, timeout: int = 600
+) -> subprocess.CompletedProcess:
+    """Run ``<project_root>/scripts/run_migrations.sh`` against one throwaway database.
+
+    The runner's URL mode (``SUPABASE_DB_URL``) is used so it can target a clone, but ``psql``
+    is a shim that execs the container's own psql (the server's version, like the deploy's
+    ``docker exec supabase-db psql``) and connects over the container's loopback. The password
+    reaches the shim through the environment only.
+    """
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    shim = shim_dir / "psql"
+    shim.write_text(f'#!/bin/sh\nexec docker exec -i -e PGPASSWORD {conn.pg.name} psql "$@"\n')
+    shim.chmod(0o755)
+    env = {
+        **conn.pg.client_env(),
+        "PATH": f"{shim_dir}:{os.environ.get('PATH', '')}",
+        "SUPABASE_DB_URL": f"postgresql://postgres@127.0.0.1:5432/{conn.db}",
+    }
+    try:
+        return subprocess.run(
+            ["bash", str(project_root / "scripts" / "run_migrations.sh"), *args],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise DbFixtureError(f"run_migrations.sh timed out after {timeout}s") from None
+
+
+def apply_rollback(conn: PgConn, name: str, *, project_root: Path = REPO_ROOT):
+    """Apply a rollback file the way the runbook says: psql as postgres, one transaction."""
+    return conn.pg.run_script(
+        conn.db,
+        (project_root / "database" / "ml" / name).read_bytes(),
+        single_transaction=True,
+        user="postgres",
+    )
 
 
 def migrate(conn: PgConn, upto: Optional[str]) -> List[str]:
