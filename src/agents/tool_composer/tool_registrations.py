@@ -258,20 +258,42 @@ class PowerAnalysis(BaseModel):
 
 
 class SimulatorInput(BaseModel):
-    """Input for counterfactual simulation"""
+    """Input for counterfactual simulation (#2015): what the digital-twin engine can use.
+
+    The previous model declared ``expected_effect`` and ``duration_weeks``. The engine
+    estimates the effect itself from the brand's cohort, so an upstream effect has no role
+    in it, and ``duration_weeks`` never reached the tool.
+    """
 
     intervention: str
-    target_entities: List[str]
-    expected_effect: float
-    duration_weeks: int = 12
+    brand: str
+    target_entities: List[str] = []
 
 
 class SimulationResults(BaseModel):
-    """Output from counterfactual simulation"""
+    """Output from ``counterfactual_simulator``: one digital-twin simulation (#2015).
 
-    predicted_lift: float
-    confidence: str  # low, medium, high
-    uncertainty_range: List[float]
+    ``simulated_ate`` / ``ci_lower`` / ``ci_upper`` are the engine's cohort-wide effect and
+    its 95% DML interval — the same numbers ``/digital-twin/simulate`` returns for the same
+    request, and unchanged by ``target_regions`` (measured). ``region_effects`` are the
+    per-region effects over the simulated (target-filtered) twins: point estimates with no
+    interval. ``recommendation*`` are the engine's CI-based DEPLOY / REFINE / SKIP policy.
+    """
+
+    intervention_type: str
+    brand: str
+    target_regions: List[str]
+    simulated_ate: float
+    ci_lower: float
+    ci_upper: float
+    region_effects: Dict[str, float]
+    twin_count: int
+    recommendation: str
+    recommendation_rationale: str
+    recommended_sample_size: Optional[int]
+    model_id: str
+    data_provenance: str
+    assumptions: List[str]
 
 
 # The four models below are the output contracts of the tools that return a plain dict
@@ -2711,52 +2733,301 @@ def power_calculator(
 
 @composable_tool(
     name="counterfactual_simulator",
-    description="Simulate intervention outcomes using the causal model",
+    description=(
+        "Simulate a commercial intervention for a brand with the digital-twin engine (the "
+        "engine behind /digital-twin/simulate): a causal-forest estimate of the "
+        "intervention's effect on HCP conversion_rate in the brand's synthetic-gold per-HCP "
+        "cohort, with its 95% interval, per-region effects and a DEPLOY / REFINE / SKIP "
+        "recommendation. Estimates the effect itself; it does not take an upstream effect."
+    ),
     source_agent="experiment_designer",
     tier=3,
     input_parameters=[
-        {"name": "intervention", "type": "str", "description": "Intervention to simulate"},
+        {
+            "name": "intervention",
+            "type": "str",
+            "description": (
+                "One of: email_campaign, call_frequency_increase, speaker_program_invitation, "
+                "sample_distribution, peer_influence_activation, digital_engagement, "
+                "patient_support_program, rep_training_quality"
+            ),
+        },
+        {
+            "name": "brand",
+            "type": "str",
+            "description": "Remibrutinib, Fabhalta or Kisqali (use $context.brand when set)",
+        },
         {
             "name": "target_entities",
             "type": "List[str]",
-            "description": "Entities to apply intervention to",
-        },
-        {
-            "name": "expected_effect",
-            "type": "float",
-            "description": "Expected effect from prior analysis",
+            "description": (
+                "Optional regions to simulate on: northeast, south, midwest, west. Effects "
+                "vary only by region in the twin model, so other entity kinds are refused."
+            ),
+            "required": False,
+            "default": None,
         },
     ],
     output_schema="SimulationResults",
-    avg_execution_ms=3000,
+    avg_execution_ms=60000,
     input_model=SimulatorInput,
     output_model=SimulationResults,
 )
-def counterfactual_simulator(
-    intervention: str, target_entities: List[str], expected_effect: Optional[float], **kwargs
+async def counterfactual_simulator(
+    intervention: str,
+    brand: str,
+    target_entities: Optional[List[str]] = None,
+    **kwargs,
 ) -> SimulationResults:
-    """Simulate intervention outcomes.
+    """Simulate an intervention with the digital-twin engine (#2015).
 
-    Null-guard (#1573): a ``None`` / non-numeric ``expected_effect`` means no
-    upstream effect estimate was actually supplied (live q08: the planner
-    referenced fields the CATE output does not carry, which degraded to
-    ``None`` and crashed here with ``NoneType * float`` three times). The
-    tool declines with a stated reason — a deterministic
-    :class:`ToolInputError` the executor does NOT retry — instead of
-    fabricating a lift or raising a bare ``TypeError``.
+    Replaces ``predicted_lift = expected_effect * 0.85`` with a hard-coded "medium"
+    confidence, which ignored ``intervention`` and ``target_entities``. Runs the path the
+    live ``/digital-twin/simulate`` route runs (``src/api/routes/digital_twin.py``): the
+    brand's active HCP twin model, the cohort identification gate, MLflow hydration, twin
+    generation, and ``SimulationEngine`` with the cohort provider and
+    ``CohortCausalEstimator`` — so the chat answer and the Digital Twin page state the
+    same effect for the same request.
+
+    Why the contract changed (measured 2026-09-11, Kisqali ``email_campaign``, 1,000
+    twins): the engine serves a catalog intervention on a brand; it estimates the effect
+    from the cohort, so an upstream ``expected_effect`` has no role (dropped); a region
+    filter leaves the ATE and its interval unchanged (0.135 [0.092, 0.178] for all twins
+    and for the 274 northeast twins) while the per-region effect responds (northeast
+    0.258), so ``target_entities`` are regions and are reported as ``region_effects``.
+
+    Refusals:
+
+    * :class:`ToolInputError` (not retried) — the #1573 null-guard generalised: a missing
+      or non-catalog intervention, a brand without a twin model, a target that is not a
+      region. Raised before any lookup.
+    * :class:`ToolRefusalError` (not retried) — the intervention is not identified in the
+      brand's cohort, or the engine run failed (e.g. under 100 twins after filtering).
+    * ``RuntimeError`` (retried) — no active twin model could be read or loaded; the route
+      answers the same condition with a 503 + Retry-After.
+
+    Heavy work (MLflow hydration, generating 1,000 twins — ~54 s measured — and the
+    causal-forest fit) runs on the executor's bounded compute pool, never on the event loop.
     """
-    if not isinstance(expected_effect, (int, float)) or isinstance(expected_effect, bool):
-        raise ToolInputError(
-            "counterfactual_simulator declined: expected_effect is "
-            f"{expected_effect!r} — no usable effect estimate was supplied "
-            "(an upstream step likely failed or its output lacked the "
-            "referenced field). Refusing to simulate a lift from a missing "
-            "effect."
+    intervention_type, brand_value, regions = _counterfactual_inputs(
+        intervention, brand, target_entities
+    )
+
+    from src.api.dependencies.compute import run_in_bounded_executor
+    from src.digital_twin.effect.cohort_loader import build_cohort_provider_or_none
+    from src.digital_twin.twin_repository import TwinRepository
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    repo = TwinRepository(supabase_client=client)
+    actives = await repo.list_active_models(twin_type=_twin_type_hcp(), brand=brand_value)
+    if not actives:
+        raise RuntimeError(
+            f"counterfactual_simulator: no active trained HCP digital-twin model could be read "
+            f"for {brand_value}; the simulation cannot run until one is trained and active."
         )
+    model_row = actives[0]
+    provider = await build_cohort_provider_or_none(repo.client, intervention_type, brand_value)
+    if provider is None:
+        raise ToolRefusalError(
+            f"counterfactual_simulator: no effect data for intervention {intervention_type!r} "
+            f"and brand {brand_value!r} — the intervention is not identified in the brand's "
+            "per-HCP cohort (or the cohort has too few usable rows), so a causal effect cannot "
+            "be estimated. No effect is returned."
+        )
+    frame = provider.get_training_frame(intervention_type, brand=brand_value, twin_type="hcp")
+    result = await run_in_bounded_executor(
+        _run_twin_simulation, model_row, provider, intervention_type, brand_value, regions
+    )
+    return _simulation_results(
+        result,
+        brand=brand_value,
+        intervention_type=intervention_type,
+        target_regions=regions,
+        frame=frame,
+    )
+
+
+#: Twins generated per simulation: the ``/digital-twin/simulate`` request default, so both
+#: surfaces simulate the same population size. The twins do not enter the ATE or its
+#: interval (those come from the cohort fit); they carry the per-region effects, the
+#: engine's 100-twin floor after filtering (a single region holds ~230-270 of 1,000,
+#: measured) and the recommendation's baseline rate.
+_COUNTERFACTUAL_TWIN_COUNT = 1000
+
+
+def _twin_type_hcp() -> Any:
+    from src.digital_twin.models.twin_models import TwinType
+
+    return TwinType.HCP
+
+
+def _counterfactual_inputs(
+    intervention: Any, brand: Any, target_entities: Any
+) -> Tuple[str, str, List[str]]:
+    """Normalise the simulator inputs to (catalog intervention, brand, regions) or refuse.
+
+    Matching is case-insensitive; an intervention may be given as its catalog value or
+    label, with spaces or hyphens for underscores. Nothing is guessed beyond that: a
+    free-text intervention ("increase rep visits") has no twin treatment channel.
+    """
+    from src.digital_twin.effect.provider import INTERVENTION_CATALOG
+    from src.digital_twin.models.twin_models import Brand, Region
+
+    catalog = [value for value, _label in INTERVENTION_CATALOG]
+    if not isinstance(intervention, str) or not intervention.strip():
+        raise ToolInputError(
+            f"counterfactual_simulator declined: intervention is {intervention!r} — no "
+            f"intervention was supplied. It must be one of {catalog}."
+        )
+    wanted = re.sub(r"[\s\-]+", "_", intervention.strip().lower())
+    by_key = {value: value for value, _label in INTERVENTION_CATALOG}
+    by_key.update(
+        {re.sub(r"[\s\-]+", "_", label.lower()): value for value, label in INTERVENTION_CATALOG}
+    )
+    intervention_type = by_key.get(wanted)
+    if intervention_type is None:
+        raise ToolInputError(
+            f"counterfactual_simulator: intervention {intervention!r} is not a digital-twin "
+            f"intervention; the twin engine simulates only {catalog}."
+        )
+
+    brands = {b.value.lower(): b.value for b in Brand}
+    if not isinstance(brand, str) or brand.strip().lower() not in brands:
+        raise ToolInputError(
+            f"counterfactual_simulator: brand {brand!r} has no digital-twin model; it must be "
+            f"one of {sorted(brands.values())}."
+        )
+    brand_value = brands[brand.strip().lower()]
+
+    regions_known = [r.value for r in Region]
+    if target_entities is None:
+        return intervention_type, brand_value, []
+    if not isinstance(target_entities, list) or not all(
+        isinstance(entity, str) for entity in target_entities
+    ):
+        raise ToolInputError(
+            f"counterfactual_simulator: target_entities must be a list of region names; got "
+            f"{target_entities!r}."
+        )
+    regions: List[str] = []
+    for entity in target_entities:
+        region = entity.strip().lower()
+        if region not in regions_known:
+            raise ToolInputError(
+                f"counterfactual_simulator: target entity {entity!r} is not a region. The twin "
+                f"model's effects vary only by region ({regions_known}), so a simulation "
+                "targeted at any other entity would report an effect that does not depend on it."
+            )
+        if region not in regions:
+            regions.append(region)
+    return intervention_type, brand_value, regions
+
+
+def _run_twin_simulation(
+    model_row: Dict[str, Any],
+    provider: Any,
+    intervention_type: str,
+    brand_value: str,
+    regions: List[str],
+) -> Any:
+    """Hydrate the twin model, generate twins and simulate — the route's inline path."""
+    from uuid import UUID
+
+    from src.digital_twin import twin_persistence
+    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+    from src.digital_twin.models.simulation_models import InterventionConfig, PopulationFilter
+    from src.digital_twin.models.twin_models import Brand, TwinType
+    from src.digital_twin.simulation_engine import SimulationEngine
+    from src.digital_twin.twin_generator import TwinGenerator
+
+    generator = TwinGenerator(twin_type=TwinType.HCP, brand=Brand(brand_value))
+    if not twin_persistence.hydrate_generator(
+        generator, model_row.get("mlflow_model_uri"), model_row.get("mlflow_run_id")
+    ):
+        raise RuntimeError(
+            f"counterfactual_simulator: trained twin model {model_row.get('model_id')} for "
+            f"{brand_value}/hcp could not be loaded from the model registry."
+        )
+    population = generator.generate(n=_COUNTERFACTUAL_TWIN_COUNT)
+    engine = SimulationEngine(
+        population=population,
+        effect_provider=provider,
+        effect_estimator=CohortCausalEstimator(),
+    )
+    engine.model_id = UUID(str(model_row["model_id"]))
+    return engine.simulate(
+        intervention_config=InterventionConfig(
+            intervention_type=intervention_type, target_regions=regions
+        ),
+        population_filter=PopulationFilter(regions=regions) if regions else None,
+        use_cache=False,
+    )
+
+
+def _simulation_results(
+    result: Any,
+    *,
+    brand: str,
+    intervention_type: str,
+    target_regions: List[str],
+    frame: Any,
+) -> SimulationResults:
+    """Report one engine ``SimulationResult`` as the tool output, or refuse a failed run.
+
+    ``frame`` is the provider's ``TrainingFrame`` for this intervention; the contrast it
+    describes is stated in ``assumptions`` so the effect cannot be read as anything else.
+    """
+    from src.digital_twin.effect.recommendation import PolicyThresholds
+
+    policy = PolicyThresholds()
+    if getattr(result.status, "value", result.status) != "completed":
+        raise ToolRefusalError(
+            f"counterfactual_simulator: the twin simulation for {intervention_type!r} on "
+            f"{brand!r} did not complete: {result.error_message}. No effect is returned."
+        )
+
+    region_effects = {
+        region: float(stats["ate"])
+        for region, stats in result.effect_heterogeneity.by_region.items()
+        if "ate" in stats
+    }
+    scope = (
+        f"the {len(target_regions)} targeted region(s) {target_regions}"
+        if target_regions
+        else "all regions"
+    )
+    assumptions = [
+        f"Effect of {intervention_type} = high vs low {frame.treatment_var} (split at the "
+        f"cohort median) on {frame.outcome_var}, estimated with a causal forest (DML) on "
+        f"{brand}'s per-HCP cohort, adjusting for {', '.join(frame.confounders)} with "
+        f"{', '.join(frame.effect_modifiers)} as the effect modifier.",
+        f"Data provenance: {result.data_provenance} — a synthetic-gold cohort, not "
+        "real-world data.",
+        "simulated_ate and its interval [ci_lower, ci_upper] (95%) are cohort-wide: the twin "
+        "engine does not re-estimate them for targeted regions.",
+        f"region_effects are the simulated effects over {result.twin_count} twins in {scope}: "
+        "point estimates with no interval.",
+        f"Recommendation policy: {result.recommendation_rationale}",
+        f"recommended_sample_size is the engine's per-arm two-proportion n to detect "
+        f"simulated_ate at power {policy.power:g} and alpha {policy.alpha:g}, from the "
+        "simulated twins' mean baseline propensity.",
+    ]
     return SimulationResults(
-        predicted_lift=expected_effect * 0.85,  # Adjusted for real-world factors
-        confidence="medium",
-        uncertainty_range=[expected_effect * 0.6, expected_effect * 1.1],
+        intervention_type=intervention_type,
+        brand=brand,
+        target_regions=list(target_regions),
+        simulated_ate=float(result.simulated_ate),
+        ci_lower=float(result.simulated_ci_lower),
+        ci_upper=float(result.simulated_ci_upper),
+        region_effects=region_effects,
+        twin_count=int(result.twin_count),
+        recommendation=str(result.recommendation.value),
+        recommendation_rationale=str(result.recommendation_rationale),
+        recommended_sample_size=result.recommended_sample_size,
+        model_id=str(result.model_id),
+        data_provenance=str(result.data_provenance),
+        assumptions=assumptions,
     )
 
 

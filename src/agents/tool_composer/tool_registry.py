@@ -235,10 +235,9 @@ TOOL_METADATA: dict[str, tuple[ToolCategory, list[str]]] = {
     "roi_estimator": (ToolCategory.GAP, ["gap_calculator"]),
     # Experiment designer
     "power_calculator": (ToolCategory.EXPERIMENT, ["causal_effect_estimator", "cate_analyzer"]),
-    "counterfactual_simulator": (
-        ToolCategory.EXPERIMENT,
-        ["causal_effect_estimator", "cate_analyzer", "gap_calculator"],
-    ),
+    # #2015: no longer consumes causal_effect_estimator -- the twin engine estimates the
+    # effect from the brand's cohort, so an upstream effect is not an input.
+    "counterfactual_simulator": (ToolCategory.EXPERIMENT, ["cate_analyzer", "gap_calculator"]),
     # Prediction synthesizer
     "risk_scorer": (ToolCategory.PREDICTION, []),
     "propensity_estimator": (ToolCategory.PREDICTION, []),
@@ -272,7 +271,6 @@ DEPENDENCY_FIELD_MAPPINGS: dict[tuple[str, str], tuple[Optional[str], Optional[s
     # No direct field: effect_by_segment is a per-segment dict and effect_size one number,
     # so the planner has to pick the segment's effect.
     ("power_calculator", "cate_analyzer"): (None, None),
-    ("counterfactual_simulator", "causal_effect_estimator"): ("ate", "expected_effect"),
     ("counterfactual_simulator", "cate_analyzer"): ("high_responders", "target_entities"),
     # No direct field: bottom_performer is one entity name and target_entities a list,
     # so the planner has to build the list.

@@ -211,10 +211,17 @@ def _dump(result: Any) -> Dict[str, Any]:
     return result.model_dump() if hasattr(result, "model_dump") else result
 
 
+# Tools whose computation sits behind a service a unit test cannot reach, checked
+# structurally instead of called: ``model_inference`` calls a BentoML endpoint;
+# ``counterfactual_simulator`` reads the twin model and cohort from Supabase and MLflow
+# (#2015 — its output builder runs on a real engine result in
+# test_counterfactual_simulator_2015.py).
+NOT_CALLED = frozenset({"model_inference", "counterfactual_simulator"})
+
+
 def _call_every_tool() -> Dict[str, Dict[str, Any]]:
     """Call each live tool on real inputs, chaining real upstream outputs where a tool
-    consumes one. ``model_inference`` is excluded: its only computation is a network call
-    to a BentoML endpoint (checked structurally instead)."""
+    consumes one. The ``NOT_CALLED`` tools are excluded."""
     registry = _registry()
     df = _frame()
     call = lambda name, **kw: _dump(registry.get_callable(name)(**kw))  # noqa: E731
@@ -233,7 +240,6 @@ def _call_every_tool() -> Dict[str, Dict[str, Any]]:
         confounders=["x1", "x2"],
         estimation_data=df,
     )
-    estimate = out["causal_effect_estimator"]
     out["refutation_runner"] = call(
         "refutation_runner",
         estimate_id="est-2003",
@@ -268,12 +274,6 @@ def _call_every_tool() -> Dict[str, Dict[str, Any]]:
         "roi_estimator", gap_analysis=out["gap_calculator"], investment=1000.0
     )
     out["power_calculator"] = call("power_calculator", effect_size=0.3)
-    out["counterfactual_simulator"] = call(
-        "counterfactual_simulator",
-        intervention="rep call frequency",
-        target_entities=list(out["cate_analyzer"]["high_responders"]) or ["south"],
-        expected_effect=float(estimate["ate"]),
-    )
     out["psi_calculator"] = call(
         "psi_calculator",
         feature="x1",
@@ -362,10 +362,6 @@ def test_every_accepted_input_is_declared_or_documented_internal(name):
 # offered a knob that changes nothing). Listed so no NEW unread declaration can land.
 PREEXISTING_UNREAD_INPUTS: Dict[str, Dict[str, str]] = {
     "cohort_builder": {"indication": "never applied to the cohort"},
-    "counterfactual_simulator": {
-        "intervention": "lift is expected_effect * 0.85 regardless of the intervention",
-        "target_entities": "lift is expected_effect * 0.85 regardless of the entities",
-    },
     "risk_scorer": {
         "entity_type": "documented as provenance but not echoed",
         "risk_type": "documented as provenance but not echoed",
@@ -457,11 +453,11 @@ def test_every_tool_registers_its_output_model(name):
     assert model.__name__ == registered.schema.output_schema
 
 
-def test_every_tool_but_model_inference_is_called(returned_by_tool):
-    assert set(returned_by_tool) == LIVE_TOOLS - {"model_inference"}
+def test_every_tool_but_the_not_called_ones_is_called(returned_by_tool):
+    assert set(returned_by_tool) == LIVE_TOOLS - NOT_CALLED
 
 
-@pytest.mark.parametrize("name", sorted(LIVE_TOOLS - {"model_inference"}))
+@pytest.mark.parametrize("name", sorted(LIVE_TOOLS - NOT_CALLED))
 def test_returned_keys_are_the_output_model_fields(name, returned_by_tool):
     model = _registry().get(name).pydantic_output_model
     assert model is not None, f"{name}: no output model registered"
@@ -501,6 +497,35 @@ def test_model_inference_returns_its_output_model_dump():
     call = assigned[0].value
     assert isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
     assert call.func.attr == "invoke"
+
+
+def test_counterfactual_simulator_returns_its_output_builder():
+    """Structural check for the twin-backed simulator (#2015).
+
+    Its single ``return`` is ``_simulation_results(...)``, which is annotated to return the
+    registered output model and builds it by keyword from the engine result.
+    """
+    from src.agents.tool_composer import tool_registrations as tr
+
+    registered = _registry().get("counterfactual_simulator")
+    assert get_type_hints(tr._simulation_results)["return"] is registered.pydantic_output_model
+    node = _function_def(registered.callable)
+    returns = [n for n in ast.walk(node) if isinstance(n, ast.Return)]
+    assert len(returns) == 1
+    value = returns[0].value
+    assert isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+    assert value.func.id == "_simulation_results"
+    builder = _function_def(tr._simulation_results)
+    built = [
+        n.value
+        for n in ast.walk(builder)
+        if isinstance(n, ast.Return) and isinstance(n.value, ast.Call)
+    ]
+    assert len(built) == 1 and isinstance(built[0].func, ast.Name)
+    assert built[0].func.id == registered.pydantic_output_model.__name__
+    assert {kw.arg for kw in built[0].keywords} == set(
+        registered.pydantic_output_model.model_fields
+    )
 
 
 # ---------------------------------------------------------------------------
