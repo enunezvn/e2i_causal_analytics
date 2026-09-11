@@ -168,7 +168,7 @@ describe('RefutationTests — negative-control outcome (#2007)', () => {
         method: 'negative_control_outcome',
         originalEstimate: 0.0879,
         refutedEstimate: 0.0047, // the control stayed null (CI includes 0)
-        pValue: 0, // the verdict is an interval rule; the backend sends p_value null
+        pValue: null, // the verdict is an interval rule; the backend sends p_value null
         passed: true,
         status: 'passed',
         description:
@@ -179,5 +179,44 @@ describe('RefutationTests — negative-control outcome (#2007)', () => {
     expect(screen.getByText('Negative-Control Outcome')).toBeInTheDocument();
     expect(screen.queryByText('negative_control_outcome')).not.toBeInTheDocument();
     expect(screen.queryByText('Random Common Cause')).not.toBeInTheDocument();
+  });
+});
+
+// A reading with no p-value (the negative control and the E-value reading are
+// interval rules) must render an honest "—", never a fabricated "< 0.001" —
+// which is exactly what formatPValue(0) printed when the adapter coerced null
+// to 0 (#2007 codex round on 0c80e1562).
+describe('RefutationTests — nullable p-value (#2007)', () => {
+  const mixed: RefutationResult[] = [
+    {
+      id: 'nco',
+      method: 'negative_control_outcome',
+      originalEstimate: 0.0879,
+      refutedEstimate: 0.0047,
+      pValue: null,
+      passed: true,
+      status: 'passed',
+    },
+    {
+      id: 'plc',
+      method: 'placebo_treatment',
+      originalEstimate: 0.0879,
+      refutedEstimate: 0.0001,
+      pValue: 0.0001,
+      passed: true,
+      status: 'passed',
+    },
+  ];
+
+  it('renders "—" with an explanatory label for a null p-value, and formats a numeric one as before', () => {
+    render(<RefutationTests results={mixed} />);
+    const dash = screen.getByTitle(/no p-value/i);
+    expect(dash).toHaveTextContent('—');
+    expect(dash).toHaveAttribute('aria-label', expect.stringMatching(/interval-based reading/i));
+    // The numeric row keeps the existing precision rule.
+    expect(screen.getByText('< 0.001')).toBeInTheDocument();
+    // Exactly one "< 0.001": the null row must not have become one.
+    expect(screen.getAllByText('< 0.001')).toHaveLength(1);
+    expect(screen.queryByText('NaN')).not.toBeInTheDocument();
   });
 });

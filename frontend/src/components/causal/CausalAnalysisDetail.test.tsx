@@ -49,6 +49,11 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
           ?.map((r) => r.method)
           .join(',') ?? ''
       }
+      data-refutation-pvalues={
+        (refutationResults as Array<{ pValue: number | null }> | undefined)
+          ?.map((r) => (r.pValue === null ? 'null' : String(r.pValue)))
+          .join(',') ?? ''
+      }
     />
   ),
 }));
@@ -185,6 +190,29 @@ describe('CausalAnalysisDetail', () => {
     expect(screen.getByTestId('causal-dag')).toHaveAttribute(
       'data-refutation-methods',
       'random_common_cause,negative_control_outcome'
+    );
+  });
+
+  it('keeps a null p-value null through the adapter — never 0, which the viz would print as "< 0.001" (#2007)', () => {
+    // The negative-control reading and the E-value reading are interval rules,
+    // not test statistics: the backend sends p_value null for both. The old
+    // adapter coerced null to 0, and formatPValue(0) renders "< 0.001" — a
+    // fabricated significant p-value on a user-facing drill-down.
+    const withReadings: AgentCausalAnalysisResponse = {
+      ...RESULT,
+      refutation: {
+        ...RESULT.refutation!,
+        tests: [
+          { test_name: 'placebo_treatment', passed: true, status: 'passed', original_effect: 0.0875, new_effect: 0.001, p_value: 0.6 },
+          { test_name: 'unobserved_common_cause', passed: true, status: 'passed', original_effect: 0.0875, new_effect: 0.0875, p_value: null },
+          { test_name: 'negative_control_outcome', passed: true, status: 'passed', original_effect: 0.0875, new_effect: 0.0047, p_value: null },
+        ],
+      },
+    };
+    renderWithProviders(<CausalAnalysisDetail result={withReadings} />);
+    expect(screen.getByTestId('causal-dag')).toHaveAttribute(
+      'data-refutation-pvalues',
+      '0.6,null,null'
     );
   });
 
