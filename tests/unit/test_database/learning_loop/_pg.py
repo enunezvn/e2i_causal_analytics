@@ -61,6 +61,23 @@ _RUNNER_UNWRAP = re.compile(
 # no function with a side effect a READ ONLY transaction does not block (backend signalling,
 # advisory locks, sequence advance, notifications, file/large-object access, config, stats reset).
 _READ_START = re.compile(r"^\s*(select|show|with)\b", re.IGNORECASE)
+# Positive allowlist of what may stand before "(" in an approved query: the catalog functions the
+# fixture reads with, and the SQL keywords that take a parenthesis. A denylist cannot be complete
+# (query_to_xml('select pg_' || 'terminate_backend(1)', …) executes SQL from a string), so any
+# other function name is refused. Extend this list only with side-effect-free functions.
+_ALLOWED_BEFORE_PAREN = frozenset(
+    {
+        # functions
+        "acldefault", "aclexplode", "array_to_string", "bool_or", "coalesce", "count",
+        "current_database", "format_type", "md5", "pg_get_constraintdef", "pg_get_expr",
+        "pg_get_functiondef", "pg_get_indexdef", "pg_get_triggerdef", "pg_get_userbyid",
+        "pg_get_viewdef", "string_agg",
+        # keywords
+        "all", "and", "any", "as", "exists", "from", "in", "not", "on", "or", "select", "union",
+        "where",
+    }
+)  # fmt: skip
+_CALLED = re.compile(r"([A-Za-z_][A-Za-z0-9_.]*)\s*\(")
 _SIDE_EFFECT_FUNCTIONS = re.compile(
     r"\b(pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|pg_advisory\w*|"
     r"pg_try_advisory\w*|nextval|setval|set_config|pg_notify|lo_\w+|dblink\w*|pg_read_\w*file|"
@@ -124,6 +141,11 @@ class ProdReadOnly:
             or not _READ_START.match(sql)
             or _WRITE_WORDS.search(sql)
             or _SIDE_EFFECT_FUNCTIONS.search(sql)
+            or any(
+                name.lower().rsplit(".", 1)[-1] not in _ALLOWED_BEFORE_PAREN
+                or ("." in name and not name.lower().startswith("pg_catalog."))
+                for name in _CALLED.findall(re.sub(r"'[^']*'", "''", sql))
+            )
         ):
             raise ValueError(
                 f"not a single side-effect-free read, refused before reaching prod: {sql[:80]!r}"

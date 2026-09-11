@@ -259,6 +259,10 @@ def test_container_is_throwaway_capped_and_local(pg_container):
         "select pg_terminate_backend/**/(123)",
         "select 1 -- ; commit",
         "select $$x$$",
+        "select query_to_xml('select pg_' || 'terminate_backend(123)', false, false, '')",
+        "select cursor_to_xml(null, 1, false, false, '')",
+        "select public.some_function(1)",
+        "select lower(relname) from pg_class",
     ],
 )
 def test_prod_access_refuses_anything_but_approved_side_effect_free_reads(sql):
