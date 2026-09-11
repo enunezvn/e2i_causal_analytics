@@ -119,6 +119,22 @@ Nothing stays blocked on the E-value. The six WARNINGs sit on one question famil
 remaining effect — a caveat a decision maker should see. Five percent of runs carry a WARNING, against
 the 34 percent that would carry one under #1988 option 2.
 
+**Measured at merge time (2026-09-11, `docs/demos/results/2026-09-10_sensitivity_calibration/reband.md`)**:
+the live re-band reads `beyond_measured_confounding` 104, `not_applicable_randomized` 6, `unbenchmarked` 6,
+`null_finding` 5, `unmapped` 3 (benchmark basis `joint_naive_vs_adjusted` 108, `measured_unscoreable` 7).
+Gate moves: BLOCK → PROCEED 56, PROCEED → PROCEED 59, BLOCK → BLOCK 6 (all on a random-common-cause
+FAILED). WARNING reads on 11 of 124 runs (9 percent).
+
+The preview's six `within` readings on `acceptance_status → conversion_flag` were an artefact of the
+preview script's `dropna`, which removed every trigger whose `conversion_flag` is a designed NULL. The
+route's loader fills that NULL to 0 (`_CAUSAL_FILL_ZERO_OUTCOMES['nba_triggers']`) before estimating, so
+the route's baseline risk and naive contrast are the ones the stored ATE was computed on — and on those
+inputs the same runs read `beyond` (one `null_finding`).
+
+The 13 continuous-treatment runs resolved to 7 `beyond` (`urticaria_severity_uas7`, `disease_stage`) and 6
+`unbenchmarked` / `measured_unscoreable` (`peer_influence_score`, collinear with the treatment via
+`centrality_z`, r = 0.9995).
+
 ### 2.7 Conversion defect
 
 The runner converts a risk difference on a 0/1 outcome with the continuous-outcome approximation
@@ -354,9 +370,13 @@ the lineage page callout.
 
 **Calibration, heavy lane** (`tests/unit/test_causal_engine/test_sensitivity_calibration.py`,
 `heavy_ml`): LinearDML on the seed-21 Remibrutinib frame at n = 1,500 (21 s, ~400 MiB measured): all 11
-planted truths read `beyond_measured_confounding`; the five null pairs of §2.3 read `null_finding`; and, as
-a pinned known limit, the omitted-confounder fits read the same as the correct fits on at least 9 of 11
-pairs, so nobody re-adds a cutoff gate believing the E-value detects confounding.
+planted truths read `beyond_measured_confounding`; nine STRUCTURALLY null pairs verified from the generator
+code read `null_finding`; `treatment_arm → persistent_180d` is a real indirect effect (the arm enters the
+discontinuation logit) pinned separately as a detection-limit observation; `sample_dropped → adherent_180d`
+and `sample_dropped → low_gap_180d` are the known chance positives at n = 1,500 and are documented, not
+asserted; and, as a pinned known limit, the omitted-confounder fits read the same as the correct fits on at
+least 9 of 11 pairs (measured 10/11), so nobody re-adds a cutoff gate believing the E-value detects
+confounding.
 
 **Nodes** (`test_sensitivity*.py`, `test_interpretation*.py`, `test_latent_warning_policy.py`,
 `test_refutation*.py` under `test_agents/test_causal_impact/`): the reading and headline in state, the
