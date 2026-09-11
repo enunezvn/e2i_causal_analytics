@@ -85,6 +85,17 @@ RECORDED_OMITTED_EFFECT = {
 RECORD_TOL = 0.01
 MAX_ADJUSTED_WARNINGS = 1  # alpha = 0.05 chance positive across 3 distinct controls
 EXPECTED_ROWS_PER_ARM = {"copay_support": 3, "psp_enrolled": 2, "rep_detailing_high": 1}
+# Under the OMITTED fit the runner's FAILED boundary is |control| >= |claimed|.
+# Measured 2026-09-11: exactly these two truth rows cross it (control +0.0895 >=
+# claimed +0.0879; control +0.0577 >= claimed +0.0522); the other four read
+# WARNING (the leaked control is smaller than the claim). Pinned exactly so a
+# runner regression that read every leak as WARNING (or every leak as FAILED)
+# cannot pass on "not PASSED" alone.
+EXPECTED_OMITTED_FAILED = {
+    ("psp_enrolled", "persistent_180d"),
+    ("rep_detailing_high", "treatment_initiated"),
+}
+EXPECTED_OMITTED_WARNING_COUNT = 4
 
 
 def fit_omitted(df, treatment, outcome, seed=42):
@@ -244,14 +255,38 @@ def test_each_declared_control_leaves_its_ci_under_omitted_confounding(scored):
         assert abs(eff - recorded) < RECORD_TOL, (key, eff, recorded)
 
 
+def _boundary(r: Dict[str, Any]) -> str:
+    """The FAILED-boundary arithmetic for one row, for assertion messages."""
+    nc = abs(r["omitted"][0])
+    claimed = abs(r["original"])
+    op = ">=" if nc >= claimed else "<"
+    return f"{r['arm']}->{r['outcome']}: |control| {nc:.4f} {op} |claimed| {claimed:.4f}"
+
+
 def test_the_runner_reads_the_omitted_fit_as_a_leak_never_passed(scored):
     rows = scored["controls"]
     assert len(rows) == 6
     passed = [r for r in rows if r["omitted_status"] == RefutationStatus.PASSED]
     assert not passed, "omitted-confounder control read PASSED:\n" + _table(passed)
-    assert all(
-        r["omitted_status"] in (RefutationStatus.WARNING, RefutationStatus.FAILED) for r in rows
-    ), _table(rows)
+    by_status = Counter(r["omitted_status"] for r in rows)
+    assert by_status == {
+        RefutationStatus.WARNING: EXPECTED_OMITTED_WARNING_COUNT,
+        RefutationStatus.FAILED: len(EXPECTED_OMITTED_FAILED),
+    }, "omitted-fit verdict split drifted:\n" + "\n".join(
+        f"{_boundary(r)} -> {r['omitted_status'].value}" for r in rows
+    )
+    failed = {
+        (r["arm"], r["outcome"]) for r in rows if r["omitted_status"] == RefutationStatus.FAILED
+    }
+    assert failed == EXPECTED_OMITTED_FAILED, (
+        "FAILED rows are not the measured boundary crossers:\n"
+        + "\n".join(f"{_boundary(r)} -> {r['omitted_status'].value}" for r in rows)
+    )
+    # The verdict must agree with the boundary arithmetic row by row.
+    for r in rows:
+        crosses = abs(r["omitted"][0]) >= abs(r["original"])
+        expected = RefutationStatus.FAILED if crosses else RefutationStatus.WARNING
+        assert r["omitted_status"] == expected, _boundary(r) + f" -> {r['omitted_status'].value}"
 
 
 def test_undeclared_arms_are_absent_because_their_controls_do_not_respond(scored):
