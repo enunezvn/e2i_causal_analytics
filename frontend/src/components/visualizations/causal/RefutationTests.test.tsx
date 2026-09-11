@@ -219,4 +219,25 @@ describe('RefutationTests — nullable p-value (#2007)', () => {
     expect(screen.getAllByText('< 0.001')).toHaveLength(1);
     expect(screen.queryByText('NaN')).not.toBeInTheDocument();
   });
+
+  it('routes a NaN p-value through the same labelled dash path as null (codex round 3)', () => {
+    // A NaN can arrive from arithmetic upstream of the adapter; it must not
+    // render an unlabelled dash (or "NaN") while null gets the explanation.
+    const nan: RefutationResult[] = [
+      {
+        id: 'nan',
+        method: 'negative_control_outcome',
+        originalEstimate: 0.0879,
+        refutedEstimate: 0.0047,
+        pValue: Number.NaN,
+        passed: true,
+        status: 'passed',
+      },
+    ];
+    render(<RefutationTests results={nan} />);
+    const dash = screen.getByTitle(/no p-value/i);
+    expect(dash).toHaveTextContent('—');
+    expect(dash).toHaveAttribute('aria-label', expect.stringMatching(/interval-based reading/i));
+    expect(screen.queryByText('NaN')).not.toBeInTheDocument();
+  });
 });

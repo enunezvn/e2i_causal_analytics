@@ -141,10 +141,22 @@ function formatNumber(value: number, decimals: number): string {
 /**
  * Formats a p-value with appropriate precision
  */
+/**
+ * True when the row carries no usable p-value: null (an interval-based reading —
+ * the negative control, the E-value) or NaN (arithmetic upstream). Both take the
+ * same labelled dash path in the cell; the check lives here so formatPValue and
+ * the cell cannot disagree (#2007, codex round 3).
+ */
+function isReadingWithoutP(pValue: number | null): boolean {
+  return pValue === null || Number.isNaN(pValue);
+}
+
 function formatPValue(pValue: number | null): string {
   // A reading without a test statistic: an honest dash. Coercing null to 0
   // would print "< 0.001" — a fabricated significant p-value (#2007).
-  if (pValue === null || Number.isNaN(pValue)) return '—';
+  // `pValue === null` only narrows the type for the formatting below; the
+  // helper is the rule.
+  if (isReadingWithoutP(pValue) || pValue === null) return '—';
   if (pValue < 0.001) return '< 0.001';
   if (pValue < 0.01) return pValue.toFixed(3);
   return pValue.toFixed(2);
@@ -733,7 +745,7 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
                           {changePercent.toFixed(1)}%
                         </TableCell>
                         <TableCell className="text-right font-mono text-xs">
-                          {result.pValue === null ? (
+                          {isReadingWithoutP(result.pValue) ? (
                             <span
                               title="no p-value: an interval-based reading"
                               aria-label="no p-value: an interval-based reading"
