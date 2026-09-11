@@ -339,6 +339,124 @@ async def test_find_similar_compositions_drops_before_limiting(monkeypatch):
     }
 
 
+async def test_hydration_survives_a_malformed_payload_for_one_composition():
+    """A per-composition value that is not a list, and steps whose order keys do not compare."""
+
+    class Port:
+        async def call(self, name: str, params: Dict[str, Any]) -> Any:
+            return {
+                "comp_9aa4c262": 7,
+                "comp_016c9c4b": [
+                    {
+                        "step_number": "x",
+                        "tool_name": "cohort_builder",
+                        "outcome_class": "succeeded",
+                    },
+                    _step(0, "cohort_statistics", "succeeded"),
+                ],
+            }
+
+    rows = [_reference(LIVE_PARTIAL_1_OF_6), _reference(LIVE_ALL_SUCCESS)]
+
+    hydrated = await hooks_module.hydrate_reference_steps(rows, port=Port())
+
+    assert hydrated[0]["recorded_steps"] == []
+    # The comparable key sorts first; the unusable one keeps its place rather than raising.
+    assert [s["tool_name"] for s in hydrated[1]["recorded_steps"]] == [
+        "cohort_statistics",
+        "cohort_builder",
+    ]
+
+
+async def test_a_malformed_hydration_payload_does_not_lose_the_other_references(monkeypatch):
+    candidates = [{"memory_id": "4", "raw_content": dict(LIVE_ALL_SUCCESS)}]
+
+    async def fake_search(**_: Any) -> List[Dict[str, Any]]:
+        return [dict(row) for row in candidates]
+
+    async def fake_hydrate_raw(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return results
+
+    monkeypatch.setattr("src.memory.episodic_memory.search_episodic_by_text", fake_search)
+    monkeypatch.setattr("src.memory.episodic_memory.hydrate_raw_content", fake_hydrate_raw)
+
+    class NonsensePort:
+        async def call(self, name: str, params: Dict[str, Any]) -> Any:
+            return {"comp_016c9c4b": 7}
+
+    real_hydrate = hooks_module.hydrate_reference_steps
+
+    async def hydrate_with_port(references: List[Dict[str, Any]], **_: Any):
+        return await real_hydrate(references, port=NonsensePort())
+
+    monkeypatch.setattr(hooks_module, "hydrate_reference_steps", hydrate_with_port)
+
+    kept = await hooks_module.ToolComposerMemoryHooks().find_similar_compositions("q", limit=3)
+
+    # It falls back to the legacy reading (all tools worked), rather than losing the reference.
+    assert [r["raw_content"]["composition_id"] for r in kept] == ["comp_016c9c4b"]
+
+
+# ---------------------------------------------------------------------------
+# Only a usable tool name can be recommended
+# ---------------------------------------------------------------------------
+
+
+def test_a_worked_step_without_a_usable_name_is_not_recommended():
+    reference = {
+        "memory_id": "m",
+        "raw_content": {},
+        "recorded_steps": [
+            {"step_number": 0, "tool_name": None, "outcome_class": "succeeded"},
+            {"step_number": 1, "tool_name": {"a": 1}, "outcome_class": "succeeded"},
+            _step(2, "cate_analyzer", "succeeded"),
+        ],
+    }
+
+    worked = _worked_line(_formatter()._format_episodic_context([reference]))
+
+    assert "cate_analyzer" in worked
+    assert "None" not in worked and "{" not in worked
+
+
+def test_a_reference_whose_worked_steps_have_no_usable_name_is_dropped():
+    reference = {
+        "memory_id": "m",
+        "raw_content": {},
+        "recorded_steps": [{"step_number": 0, "tool_name": None, "outcome_class": "succeeded"}],
+    }
+
+    assert _formatter()._format_episodic_context([reference]) == ""
+    assert select_renderable([reference], 3) == []
+
+
+def test_an_unregistered_tool_is_not_recommended():
+    """A tool that no longer exists cannot be reused; recommending it plans a failing step."""
+    import src.agents.tool_composer.composer  # noqa: F401 - registers the real tools
+
+    reference = {
+        "memory_id": "m",
+        "raw_content": {},
+        "recorded_steps": [
+            _step(0, "retired_tool", "succeeded"),
+            _step(1, "cate_analyzer", "succeeded"),
+        ],
+    }
+
+    worked = _worked_line(_formatter()._format_episodic_context([reference]))
+
+    assert "cate_analyzer" in worked and "retired_tool" not in worked
+
+
+def test_a_legacy_sequence_of_unusable_names_is_dropped():
+    broken = _reference(
+        {"tools_executed": 2, "tools_succeeded": 2, "tool_sequence": [None, {"a": 1}]}
+    )
+
+    assert select_renderable([broken], 3) == []
+    assert _formatter()._format_episodic_context([broken]) == ""
+
+
 async def test_check_episodic_memory_survives_a_malformed_confidence():
     """The debug log must not format a caller's value numerically: it would discard every row."""
     rows = [

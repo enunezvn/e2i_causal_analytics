@@ -21,7 +21,7 @@ import logging
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -621,12 +621,54 @@ async def hydrate_reference_steps(
 
     by_id = result if isinstance(result, dict) else {}
     for row in rows:
-        steps = by_id.get(composition_id(row) or "") or []
-        row["recorded_steps"] = sorted(
-            (s for s in steps if isinstance(s, dict)),
-            key=lambda s: s.get("step_number", 0),
+        recorded = by_id.get(composition_id(row) or "")
+        # The payload for one composition is validated on its own: a value that is not a list,
+        # or step numbers that do not compare, must not raise past this row and lose every
+        # reference to the hook's outer handler.
+        steps = (
+            [s for s in recorded if isinstance(s, dict)]
+            if isinstance(recorded, (list, tuple))
+            else []
         )
+        row["recorded_steps"] = sorted(steps, key=_step_order)
     return rows
+
+
+def _step_order(step: Dict[str, Any]) -> Tuple[int, int]:
+    """Sort key for recorded steps: real step numbers first, anything else left in place."""
+    number = step.get("step_number")
+    if isinstance(number, int) and not isinstance(number, bool):
+        return (0, number)
+    return (1, 0)
+
+
+def _registered_tool_names() -> Optional[frozenset]:
+    """The tools this process can actually plan, or ``None`` when the registry cannot say."""
+    try:
+        from src.tool_registry.registry import get_registry
+
+        names = frozenset(get_registry().list_tools())
+    except Exception:  # noqa: BLE001 - an unreadable registry judges nothing
+        return None
+    return names or None
+
+
+def _usable_tool_names(names: Iterable[Any]) -> List[str]:
+    """The names worth recommending: real strings, and tools this process still has.
+
+    A reference exists to recommend a sequence someone can reuse. A stored value that is not a
+    name cannot be reused, and neither can a tool that no longer exists — planning it would only
+    produce a ``not_registered`` step. When the registry cannot answer, names are kept.
+    """
+    registered = _registered_tool_names()
+    usable: List[str] = []
+    for name in names:
+        if not isinstance(name, str) or not name:
+            continue
+        if registered is not None and name not in registered:
+            continue
+        usable.append(name)
+    return usable
 
 
 def reference_raw_content(reference: Dict[str, Any]) -> Dict[str, Any]:
@@ -664,13 +706,17 @@ def reference_tools(
             outcome = step.get("outcome_class")
             return outcome if isinstance(outcome, str) else None
 
-        worked = [str(s.get("tool_name")) for s in steps if outcome_of(s) in WORKED_OUTCOME_CLASSES]
+        worked = _usable_tool_names(
+            s.get("tool_name") for s in steps if outcome_of(s) in WORKED_OUTCOME_CLASSES
+        )
         if not worked:
             return None
         did_not_work = [
-            (str(s.get("tool_name")), outcome_of(s))
+            (s["tool_name"], outcome_of(s))
             for s in steps
             if outcome_of(s) not in WORKED_OUTCOME_CLASSES
+            and isinstance(s.get("tool_name"), str)
+            and s["tool_name"]
         ]
         return worked, did_not_work, True
 
@@ -684,7 +730,9 @@ def reference_tools(
         and executed == succeeded
         and isinstance(sequence, (list, tuple))
     ):
-        return [str(t) for t in sequence], [], False
+        usable = _usable_tool_names(sequence)
+        # A sequence with nothing recommendable left is not a reference worth rendering.
+        return (usable, [], False) if usable else None
     return None
 
 
