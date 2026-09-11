@@ -187,8 +187,9 @@ def test_reference_se_is_not_scaled_without_both_counts_or_when_refit_is_not_sma
     )
     assert details["reference_se_scale"] == 1.0
     assert details["reference_se"] == pytest.approx(details["reported_se"], rel=1e-12)
-    assert details["reference_n"] == reference_n
-    assert details["refit_n"] == refit_n
+    # a computed 0 is not a count: it is persisted as unknown (None)
+    assert details["reference_n"] == (reference_n or None)
+    assert details["refit_n"] == (refit_n or None)
 
 
 # --- (c) degenerate / non-finite reference, decided BEFORE any refit -------------
@@ -519,3 +520,89 @@ def test_cutoffs_are_inclusive_at_exactly_one_and_two_se(refuted, expected):
     )
     assert details["reported_se"] == 0.5
     assert status == expected
+
+
+# --- unusable counts never weaken the verdict (whole-diff codex F2) ---------------
+
+
+@pytest.mark.parametrize(
+    "reference_n, refit_n",
+    [
+        (float("inf"), 5000),
+        (37515, float("nan")),
+        (37515.5, 5000),  # fractional
+        ("37515", 5000),  # string
+        (True, 5000),  # bool is an int subclass
+        (-37515, 5000),
+        (37515, -1),
+    ],
+)
+def test_unusable_counts_keep_scale_one_and_persist_as_unknown(reference_n, refit_n):
+    """effect 0.30, CI [0.25, 0.35], refuted 0.36 is FAILED at 2.35 SE; an inf,
+    NaN, fractional, string, bool or negative count must not scale it to PASSED."""
+    status, details = _score_common_cause_shift(
+        original_effect=0.30,
+        refuted_effect=0.36,
+        original_ci=(0.25, 0.35),
+        reference_n=reference_n,
+        refit_n=refit_n,
+        thresholds=THRESHOLDS,
+    )
+    assert status == RefutationStatus.FAILED
+    assert details["reference_se_scale"] == 1.0
+    assert details["reference_n"] is None or isinstance(details["reference_n"], int)
+    assert details["refit_n"] is None or isinstance(details["refit_n"], int)
+    assert not (
+        details["reference_n"]
+        and details["refit_n"]
+        and details["refit_n"] < details["reference_n"]
+    )
+
+
+def test_integral_float_counts_are_accepted_as_counts():
+    """Counts round-trip through JSON as floats on some paths; 37515.0 is a count."""
+    _status, details = _score_common_cause_shift(
+        original_effect=0.039,
+        refuted_effect=0.045,
+        original_ci=(0.031, 0.047),
+        reference_n=37515.0,
+        refit_n=5000.0,
+        thresholds=THRESHOLDS,
+    )
+    assert details["reference_n"] == 37515 and details["refit_n"] == 5000
+    assert details["reference_se_scale"] == pytest.approx(math.sqrt(37515 / 5000), rel=1e-9)
+
+
+# --- a SKIPPED critical test is forwarded with criticality-neutral wording (F4) ----
+
+
+def test_skipped_rcc_is_forwarded_to_legacy_skipped_tests_without_non_critical_wording():
+    runner = RefutationRunner(
+        config={
+            "data_subset": {"enabled": False},
+            "bootstrap": {"enabled": False},
+            "sensitivity_e_value": {"enabled": False},
+        }
+    )
+    frame = pd.DataFrame({"t": [0, 1] * 50, "y": np.linspace(0, 1, 100)})
+    suite = runner.run_all_tests(
+        original_effect=0.039,
+        original_ci=(0.039, 0.039),
+        data=frame,
+        causal_model=_full_stub(0.045),
+        identified_estimand=object(),
+        estimate=_stub_estimate(value=0.039),
+        treatment="t",
+        outcome="y",
+    )
+    rcc = _rcc_of(suite)
+    assert rcc.status == RefutationStatus.SKIPPED
+    legacy = suite.to_legacy_format()
+    assert "random_common_cause" not in legacy["individual_tests"]
+    forwarded = legacy["skipped_tests"]["random_common_cause"]
+    assert forwarded == rcc.details["message"]
+    assert "non-critical" not in forwarded
+    assert "non-critical" not in rcc.details["reason"]
+    assert "random_common_cause skipped" in forwarded
+    # the placebo PASSED alone decides the suite: no confidence-only BLOCK
+    assert suite.gate_decision.value == "proceed"

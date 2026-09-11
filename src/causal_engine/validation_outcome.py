@@ -276,11 +276,17 @@ def _random_common_cause_severity(test) -> str:
     shift = details.get("shift_se_units")
     if shift is not None:
         try:
+            # The cutoff that PRODUCED the verdict: the runner persists its (possibly
+            # overridden) thresholds beside the shift; the class default is only
+            # for a row that carries the shift without them.
+            persisted = details.get("thresholds_se")
             warning_cutoff = float(
-                RefutationRunner.PASS_THRESHOLDS["common_cause_shift_se"]["warning"]
+                persisted["warning"]
+                if isinstance(persisted, dict) and persisted.get("warning") is not None
+                else RefutationRunner.PASS_THRESHOLDS["common_cause_shift_se"]["warning"]
             )
             return "high" if float(shift) > warning_cutoff else "medium"
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, KeyError):
             pass  # a non-numeric persisted value: fall through to the status
     status = getattr(test, "status", None)
     if status == RefutationStatus.FAILED:

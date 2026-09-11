@@ -1057,6 +1057,24 @@ class TestRandomCommonCauseSeverityFollowsTheSeUnitsRule:
         p = self._rcc(RefutationStatus.FAILED, 300.0, {"shift_se_units": 0.9})
         assert p.severity == "medium"
 
+    def test_the_persisted_cutoff_that_produced_the_verdict_wins(self):
+        """A runner with overridden thresholds persists them as ``thresholds_se``;
+        severity follows THAT cutoff, not the class default (whole-diff codex F1)."""
+        p = self._rcc(
+            RefutationStatus.WARNING,
+            5.0,
+            {"shift_se_units": 2.35, "thresholds_se": {"pass": 3.0, "warning": 4.0}},
+        )
+        assert p.severity == "medium"  # 2.35 is inside the overridden warning band
+        p = self._rcc(
+            RefutationStatus.FAILED,
+            5.0,
+            {"shift_se_units": 1.57, "thresholds_se": {"pass": 0.5, "warning": 1.0}},
+        )
+        assert p.severity == "high"  # 1.57 is FAILED under the overridden cutoff
+        # a row carrying the shift but no thresholds: the class default (2.0)
+        assert self._rcc(RefutationStatus.WARNING, 5.0, {"shift_se_units": 2.35}).severity == "high"
+
     def test_the_cutoff_is_inclusive_at_exactly_two_se(self):
         assert (
             self._rcc(RefutationStatus.WARNING, 5.0, {"shift_se_units": 2.0}).severity == "medium"

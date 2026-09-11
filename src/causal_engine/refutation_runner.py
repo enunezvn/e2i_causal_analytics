@@ -390,15 +390,19 @@ def _degenerate_ci_skip_result(
         original_effect=original_effect,
         refuted_effect=original_effect,
         details={
+            # Criticality-neutral wording: this helper serves the two non-critical
+            # tests AND random_common_cause (critical, #2005); a SKIPPED result of
+            # either kind is excluded from the confidence average and the
+            # remaining tests decide the suite. ``to_legacy_format`` forwards this
+            # message verbatim into ``skipped_tests``.
             "reason": (
                 "original_ci_degenerate — the reported interval has no width, so "
-                f"{unscorable} cannot be scored; the critical gates decide "
-                "the suite"
+                f"{unscorable} cannot be scored; the remaining tests decide the suite"
             ),
             "message": (
                 f"{name} skipped: original_ci={tuple(original_ci)!r} has width "
                 f"{float(original_ci[1] - original_ci[0]):.6g}; no re-fit was run; "
-                "non-critical, degraded honestly"
+                "excluded from the confidence average, not scored as a failure"
             ),
             "original_ci": (float(original_ci[0]), float(original_ci[1])),
             "resamples_completed": 0,
@@ -410,6 +414,24 @@ def _degenerate_ci_skip_result(
 
 
 _Z975 = 1.959964  # two-sided 95 % normal quantile: half-width / SE of a reported interval
+
+
+def _usable_count(value: Any) -> Optional[int]:
+    """A row count usable for SE scaling: a finite, positive, integral number.
+
+    ``bool`` is excluded (it is an ``int`` subclass), as are strings, fractions
+    and non-finite floats. Returns ``None`` for anything unusable so the caller
+    keeps scale 1.0 and persists the count as unknown.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, np.integer)):
+        return int(value) if value > 0 else None
+    if isinstance(value, (float, np.floating)):
+        if not np.isfinite(value) or value <= 0 or float(value) != int(value):
+            return None
+        return int(value)
+    return None
 
 
 def _score_common_cause_shift(
@@ -459,9 +481,15 @@ def _score_common_cause_shift(
     """
     lo, hi = float(original_ci[0]), float(original_ci[1])
     reported_se = (hi - lo) / (2.0 * _Z975)
+    # Only a usable row count may scale the SE: a finite positive integer (an
+    # integral float is accepted, since counts round-trip through JSON). Anything
+    # else -- None, 0, negative, fractional, inf/NaN, a string, a bool -- is
+    # recorded as None and leaves the scale at 1.0, never a weaker verdict.
+    reference_n = _usable_count(reference_n)
+    refit_n = _usable_count(refit_n)
     scale = 1.0
-    if reference_n and refit_n and 0 < refit_n < reference_n:
-        scale = float(np.sqrt(float(reference_n) / float(refit_n)))
+    if reference_n is not None and refit_n is not None and refit_n < reference_n:
+        scale = float(np.sqrt(reference_n / refit_n))
     reference_se = reported_se * scale
     shift = abs(float(refuted_effect) - float(original_effect))
     shift_se = shift / reference_se
