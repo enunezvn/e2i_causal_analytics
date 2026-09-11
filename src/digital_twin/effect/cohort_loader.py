@@ -84,12 +84,25 @@ async def build_cohort_provider_or_none(
     """
     if intervention_type not in COHORT_ESTIMABLE_INTERVENTIONS:
         return None
-    treatment_col = INTERVENTION_TREATMENT_MAP[intervention_type]
     try:
         df = await load_cohort_frame(client, brand)
     except Exception as e:  # DB unreachable / query error → honest unavailable
         logger.warning("cohort load failed for %s/%s: %s", brand, intervention_type, e)
         return None
+    return cohort_provider_from_frame(df, intervention_type)
+
+
+def cohort_provider_from_frame(
+    df: pd.DataFrame, intervention_type: str
+) -> Optional[CohortEffectDataProvider]:
+    """The usability check behind :func:`build_cohort_provider_or_none`, on a loaded frame.
+
+    Split out (#2015) so a caller that must tell an unreachable database (retry) from an
+    unusable cohort (refuse) can load the frame itself and still apply the same rule.
+    """
+    if intervention_type not in COHORT_ESTIMABLE_INTERVENTIONS:
+        return None
+    treatment_col = INTERVENTION_TREATMENT_MAP[intervention_type]
     if df.empty or treatment_col not in df.columns:
         return None
     # Usable rows must have the treatment, outcome, region AND the required confounders
@@ -101,8 +114,7 @@ async def build_cohort_provider_or_none(
     usable = df.dropna(subset=required)
     if len(usable) < COHORT_MIN_ROWS:
         logger.info(
-            "cohort for %s/%s has %d usable rows (< %d) — unavailable",
-            brand,
+            "cohort for %s has %d usable rows (< %d) — unavailable",
             intervention_type,
             len(usable),
             COHORT_MIN_ROWS,

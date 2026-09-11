@@ -273,19 +273,26 @@ class SimulatorInput(BaseModel):
 class SimulationResults(BaseModel):
     """Output from ``counterfactual_simulator``: one digital-twin simulation (#2015).
 
-    ``simulated_ate`` / ``ci_lower`` / ``ci_upper`` are the engine's cohort-wide effect and
-    its 95% DML interval — the same numbers ``/digital-twin/simulate`` returns for the same
-    request, and unchanged by ``target_regions`` (measured). ``region_effects`` are the
-    per-region effects over the simulated (target-filtered) twins: point estimates with no
-    interval. ``recommendation*`` are the engine's CI-based DEPLOY / REFINE / SKIP policy.
+    ``effect`` / ``ci_lower`` / ``ci_upper`` answer the question asked, on ``effect_scope``:
+    the cohort when no regions are targeted, else the targeted regions (the causal forest's
+    average effect over the cohort rows in them, with its 95% interval over those rows).
+    ``cohort_effect`` / ``cohort_ci_*`` are always the engine's cohort-wide numbers — the
+    ones ``/digital-twin/simulate`` returns, which a region filter does not change
+    (measured). ``region_effects`` are per-region effects for the simulated twins' regions
+    that the cohort covers: point estimates. ``recommendation*`` apply the engine's CI-based
+    DEPLOY / REFINE / SKIP policy to the headline effect.
     """
 
     intervention_type: str
     brand: str
     target_regions: List[str]
-    simulated_ate: float
+    effect_scope: str
+    effect: float
     ci_lower: float
     ci_upper: float
+    cohort_effect: float
+    cohort_ci_lower: float
+    cohort_ci_upper: float
     region_effects: Dict[str, float]
     twin_count: int
     recommendation: str
@@ -2787,40 +2794,44 @@ async def counterfactual_simulator(
     live ``/digital-twin/simulate`` route runs (``src/api/routes/digital_twin.py``): the
     brand's active HCP twin model, the cohort identification gate, MLflow hydration, twin
     generation, and ``SimulationEngine`` with the cohort provider and
-    ``CohortCausalEstimator`` — so the chat answer and the Digital Twin page state the
-    same effect for the same request.
+    ``CohortCausalEstimator`` — so the cohort-wide numbers are the ones the Digital Twin
+    page states for the same request.
 
     Why the contract changed (measured 2026-09-11, Kisqali ``email_campaign``, 1,000
     twins): the engine serves a catalog intervention on a brand; it estimates the effect
-    from the cohort, so an upstream ``expected_effect`` has no role (dropped); a region
-    filter leaves the ATE and its interval unchanged (0.135 [0.092, 0.178] for all twins
-    and for the 274 northeast twins) while the per-region effect responds (northeast
-    0.258), so ``target_entities`` are regions and are reported as ``region_effects``.
+    from the cohort, so an upstream ``expected_effect`` has no role (dropped). A region
+    filter leaves the engine's ATE, interval and recommendation unchanged (0.135 [0.092,
+    0.178] for all twins and for the 274 northeast twins) while the region's effect is
+    0.258. So ``target_entities`` are regions, and a targeted request is answered with the
+    same causal forest's inference on the targeted regions (:func:`_targeted_effect`), not
+    with the cohort-wide numbers.
 
     Refusals:
 
     * :class:`ToolInputError` (not retried) — the #1573 null-guard generalised: a missing
       or non-catalog intervention, a brand without a twin model, a target that is not a
       region. Raised before any lookup.
-    * :class:`ToolRefusalError` (not retried) — the intervention is not identified in the
-      brand's cohort, or the engine run failed (e.g. under 100 twins after filtering).
-    * ``RuntimeError`` (retried) — no active twin model could be read or loaded; the route
-      answers the same condition with a 503 + Retry-After.
+    * :class:`ToolRefusalError` (not retried) — the loaded cohort cannot identify the
+      intervention, a targeted region has no treated-vs-control contrast in it, or the
+      engine run failed (e.g. under 100 twins after filtering).
+    * any other exception (retried) — no active twin model could be read or loaded (the
+      route's 503 + Retry-After), or the cohort could not be loaded.
 
     Heavy work (MLflow hydration, generating the twins — ~67 ms each, measured — and the
-    causal-forest fit) runs on the executor's bounded compute pool, never on the event loop.
+    causal-forest fits) runs on the executor's bounded compute pool, never on the event loop.
     """
     intervention_type, brand_value, regions = _counterfactual_inputs(
         intervention, brand, target_entities
     )
 
     from src.api.dependencies.compute import run_in_bounded_executor
-    from src.digital_twin.effect.cohort_loader import build_cohort_provider_or_none
     from src.digital_twin.twin_repository import TwinRepository
     from src.memory.services.factories import get_async_supabase_client
 
     client = await get_async_supabase_client()
     repo = TwinRepository(supabase_client=client)
+    # list_active_models logs and returns [] on a database error, so an empty result is
+    # either "no model" or "unreadable" — both are the route's retryable 503.
     actives = await repo.list_active_models(twin_type=_twin_type_hcp(), brand=brand_value)
     if not actives:
         raise RuntimeError(
@@ -2828,24 +2839,17 @@ async def counterfactual_simulator(
             f"for {brand_value}; the simulation cannot run until one is trained and active."
         )
     model_row = actives[0]
-    provider = await build_cohort_provider_or_none(repo.client, intervention_type, brand_value)
-    if provider is None:
-        raise ToolRefusalError(
-            f"counterfactual_simulator: no effect data for intervention {intervention_type!r} "
-            f"and brand {brand_value!r} — the intervention is not identified in the brand's "
-            "per-HCP cohort (or the cohort has too few usable rows), so a causal effect cannot "
-            "be estimated. No effect is returned."
-        )
+    provider = await _load_cohort_provider(repo.client, intervention_type, brand_value)
     frame = provider.get_training_frame(intervention_type, brand=brand_value, twin_type="hcp")
-    result = await run_in_bounded_executor(
-        _run_twin_simulation, model_row, provider, intervention_type, brand_value, regions
+    result, targeted = await run_in_bounded_executor(
+        _run_twin_simulation, model_row, provider, frame, intervention_type, brand_value, regions
     )
     return _simulation_results(
         result,
         brand=brand_value,
         intervention_type=intervention_type,
-        target_regions=regions,
         frame=frame,
+        targeted=targeted,
     )
 
 
@@ -2864,6 +2868,31 @@ def _twin_type_hcp() -> Any:
     from src.digital_twin.models.twin_models import TwinType
 
     return TwinType.HCP
+
+
+async def _load_cohort_provider(client: Any, intervention_type: str, brand_value: str) -> Any:
+    """The brand's cohort provider for this intervention, or a refusal.
+
+    Loads the frame itself rather than calling ``build_cohort_provider_or_none``, which
+    turns a database error into ``None``: here an unreachable database must propagate (the
+    executor retries it) and only an unusable cohort is refused.
+    """
+    from src.digital_twin.effect.cohort_loader import (
+        cohort_provider_from_frame,
+        load_cohort_frame,
+    )
+
+    cohort = await load_cohort_frame(client, brand_value)
+    provider = cohort_provider_from_frame(cohort, intervention_type)
+    if provider is None:
+        raise ToolRefusalError(
+            f"counterfactual_simulator: no effect data for intervention {intervention_type!r} "
+            f"and brand {brand_value!r} — the brand's per-HCP cohort ({len(cohort)} rows) does "
+            "not carry enough usable rows for this intervention's treatment channel, outcome, "
+            "region and confounders, so a causal effect cannot be estimated. No effect is "
+            "returned."
+        )
+    return provider
 
 
 def _counterfactual_inputs(
@@ -2928,15 +2957,98 @@ def _counterfactual_inputs(
     return intervention_type, brand_value, regions
 
 
+class _TargetedEffect(BaseModel):
+    """Inference on the targeted regions (see :func:`_targeted_effect`)."""
+
+    regions: List[str]
+    effect: float
+    ci_lower: float
+    ci_upper: float
+    cohort_rows: int
+    recommendation: str
+    recommendation_rationale: str
+    recommended_sample_size: int
+
+
+def _targeted_effect(frame: Any, regions: List[str], *, baseline_rate: float) -> _TargetedEffect:
+    """The causal forest's effect on the targeted regions, its interval and the policy.
+
+    A second fit of ``estimate_cohort_effect`` on the same frame with the engine's seed and
+    alpha (``CohortCausalEstimator`` defaults), so its point estimate for a region is the
+    engine's region effect; ``ate_interval`` over the targeted cohort rows gives the
+    interval. The engine's DEPLOY / REFINE / SKIP policy (same minimum effect, power and
+    alpha) is then applied to it, with the targeted twins' mean baseline propensity — as the
+    engine does for the cohort with all twins. A region without a treated-vs-control contrast
+    in the cohort is refused.
+    """
+    import numpy as np
+
+    from src.digital_twin.effect.cohort_causal_estimator import (
+        CohortCausalEstimator,
+        estimate_cohort_effect,
+    )
+    from src.digital_twin.effect.errors import EffectDataUnavailable
+    from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
+    from src.digital_twin.effect.recommendation import PolicyThresholds, RecommendationPolicy
+    from src.digital_twin.simulation_engine import SimulationEngine
+
+    defaults = CohortCausalEstimator()
+    try:
+        fit = estimate_cohort_effect(
+            frame.df,
+            frame.treatment_var,
+            outcome_col=frame.outcome_var,
+            confounders=tuple(frame.confounders),
+            alpha=defaults.alpha,
+            seed=defaults.seed,
+            target_regions=regions,
+        )
+    except EffectDataUnavailable as exc:
+        raise ToolRefusalError(f"counterfactual_simulator: {exc} No effect is returned.") from exc
+    assert fit.target_ate is not None
+    assert fit.target_ci_lower is not None and fit.target_ci_upper is not None
+    estimate = EffectEstimate(
+        ate=fit.target_ate,
+        ate_ci_lower=fit.target_ci_lower,
+        ate_ci_upper=fit.target_ci_upper,
+        att=None,
+        atc=None,
+        per_twin_uplift=np.array([fit.target_ate]),
+        auuc=None,
+        qini=None,
+        feature_importances=None,
+        n_train=fit.target_n,
+        estimator_type="cohort_causal_forest_dml",
+        data_provenance=PROVENANCE_COHORT,
+    )
+    recommendation, rationale, recommended_n = RecommendationPolicy(
+        PolicyThresholds(min_effect=SimulationEngine.DEFAULT_MIN_EFFECT_THRESHOLD)
+    ).decide(estimate, baseline_rate=baseline_rate)
+    return _TargetedEffect(
+        regions=list(fit.target_regions),
+        effect=fit.target_ate,
+        ci_lower=fit.target_ci_lower,
+        ci_upper=fit.target_ci_upper,
+        cohort_rows=fit.target_n,
+        recommendation=recommendation.value,
+        recommendation_rationale=rationale,
+        recommended_sample_size=recommended_n,
+    )
+
+
 def _run_twin_simulation(
     model_row: Dict[str, Any],
     provider: Any,
+    frame: Any,
     intervention_type: str,
     brand_value: str,
     regions: List[str],
-) -> Any:
-    """Hydrate the twin model, generate twins and simulate — the route's inline path."""
+) -> Tuple[Any, Optional[_TargetedEffect]]:
+    """Hydrate the twin model, generate twins and simulate — the route's inline path — then,
+    for a targeted request, the inference on the targeted regions."""
     from uuid import UUID
+
+    import numpy as np
 
     from src.digital_twin import twin_persistence
     from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
@@ -2960,13 +3072,18 @@ def _run_twin_simulation(
         effect_estimator=CohortCausalEstimator(),
     )
     engine.model_id = UUID(str(model_row["model_id"]))
-    return engine.simulate(
+    result = engine.simulate(
         intervention_config=InterventionConfig(
             intervention_type=intervention_type, target_regions=regions
         ),
         population_filter=PopulationFilter(regions=regions) if regions else None,
         use_cache=False,
     )
+    if not regions or getattr(result.status, "value", result.status) != "completed":
+        return result, None
+    targeted_twins = [t for t in population.twins if t.features.get("region") in regions]
+    baseline = float(np.mean([t.baseline_propensity for t in targeted_twins]))
+    return result, _targeted_effect(frame, regions, baseline_rate=baseline)
 
 
 def _simulation_results(
@@ -2974,13 +3091,16 @@ def _simulation_results(
     *,
     brand: str,
     intervention_type: str,
-    target_regions: List[str],
     frame: Any,
+    targeted: Optional[_TargetedEffect],
 ) -> SimulationResults:
-    """Report one engine ``SimulationResult`` as the tool output, or refuse a failed run.
+    """Report one engine ``SimulationResult`` (plus the targeted inference, when the request
+    targeted regions) as the tool output, or refuse a failed run.
 
     ``frame`` is the provider's ``TrainingFrame`` for this intervention; the contrast it
     describes is stated in ``assumptions`` so the effect cannot be read as anything else.
+    Region effects are reported only for regions the cohort covers: the estimator gives a
+    twin in an uncovered region the cohort ATE, which is not that region's effect.
     """
     from src.digital_twin.effect.recommendation import PolicyThresholds
 
@@ -2991,16 +3111,40 @@ def _simulation_results(
             f"{brand!r} did not complete: {result.error_message}. No effect is returned."
         )
 
+    modifier = frame.effect_modifiers[0] if frame.effect_modifiers else "region"
+    covered = set(frame.df[modifier].astype(str)) if modifier in frame.df.columns else set()
     region_effects = {
         region: float(stats["ate"])
         for region, stats in result.effect_heterogeneity.by_region.items()
-        if "ate" in stats
+        if "ate" in stats and region in covered
     }
-    scope = (
-        f"the {len(target_regions)} targeted region(s) {target_regions}"
-        if target_regions
-        else "all regions"
-    )
+    target_regions = list(targeted.regions) if targeted is not None else []
+    if targeted is None:
+        scope = "cohort"
+        effect, ci_lower, ci_upper = (
+            float(result.simulated_ate),
+            float(result.simulated_ci_lower),
+            float(result.simulated_ci_upper),
+        )
+        recommendation = str(result.recommendation.value)
+        rationale = str(result.recommendation_rationale)
+        recommended_n = result.recommended_sample_size
+        scope_note = (
+            "effect and its 95% interval are the engine's cohort-wide estimate, the numbers "
+            "/digital-twin/simulate returns for this request."
+        )
+    else:
+        scope = f"targeted regions {target_regions}"
+        effect, ci_lower, ci_upper = targeted.effect, targeted.ci_lower, targeted.ci_upper
+        recommendation = targeted.recommendation
+        rationale = targeted.recommendation_rationale
+        recommended_n = targeted.recommended_sample_size
+        scope_note = (
+            f"effect and its 95% interval are the causal forest's average effect over the "
+            f"{targeted.cohort_rows} cohort rows in {target_regions}; cohort_effect and its "
+            "interval are the engine's cohort-wide estimate, which a region filter does not "
+            "change."
+        )
     assumptions = [
         f"Effect of {intervention_type} = high vs low {frame.treatment_var} (split at the "
         f"cohort median) on {frame.outcome_var}, estimated with a causal forest (DML) on "
@@ -3008,27 +3152,30 @@ def _simulation_results(
         f"{', '.join(frame.effect_modifiers)} as the effect modifier.",
         f"Data provenance: {result.data_provenance} — a synthetic-gold cohort, not "
         "real-world data.",
-        "simulated_ate and its interval [ci_lower, ci_upper] (95%) are cohort-wide: the twin "
-        "engine does not re-estimate them for targeted regions.",
-        f"region_effects are the simulated effects over {result.twin_count} twins in {scope}: "
-        "point estimates with no interval.",
-        f"Recommendation policy: {result.recommendation_rationale}",
-        f"recommended_sample_size is the engine's per-arm two-proportion n to detect "
-        f"simulated_ate at power {policy.power:g} and alpha {policy.alpha:g}, from the "
-        "simulated twins' mean baseline propensity.",
+        scope_note,
+        f"region_effects are the per-region effects for the {result.twin_count} simulated "
+        "twins' regions that the cohort covers: point estimates without an interval.",
+        f"Recommendation policy (applied to effect): {rationale}",
+        f"recommended_sample_size is the policy's per-arm two-proportion n to detect effect at "
+        f"power {policy.power:g} and alpha {policy.alpha:g}, from the simulated twins' mean "
+        "baseline propensity.",
     ]
     return SimulationResults(
         intervention_type=intervention_type,
         brand=brand,
-        target_regions=list(target_regions),
-        simulated_ate=float(result.simulated_ate),
-        ci_lower=float(result.simulated_ci_lower),
-        ci_upper=float(result.simulated_ci_upper),
+        target_regions=target_regions,
+        effect_scope=scope,
+        effect=effect,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        cohort_effect=float(result.simulated_ate),
+        cohort_ci_lower=float(result.simulated_ci_lower),
+        cohort_ci_upper=float(result.simulated_ci_upper),
         region_effects=region_effects,
         twin_count=int(result.twin_count),
-        recommendation=str(result.recommendation.value),
-        recommendation_rationale=str(result.recommendation_rationale),
-        recommended_sample_size=result.recommended_sample_size,
+        recommendation=recommendation,
+        recommendation_rationale=rationale,
+        recommended_sample_size=recommended_n,
         model_id=str(result.model_id),
         data_provenance=str(result.data_provenance),
         assumptions=assumptions,

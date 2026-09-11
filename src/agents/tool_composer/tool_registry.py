@@ -271,7 +271,9 @@ DEPENDENCY_FIELD_MAPPINGS: dict[tuple[str, str], tuple[Optional[str], Optional[s
     # No direct field: effect_by_segment is a per-segment dict and effect_size one number,
     # so the planner has to pick the segment's effect.
     ("power_calculator", "cate_analyzer"): (None, None),
-    ("counterfactual_simulator", "cate_analyzer"): ("high_responders", "target_entities"),
+    # Ordering only (#2015): high_responders are values of whatever column CATE segmented
+    # by, and the simulator takes region names only, so the planner passes the regions.
+    ("counterfactual_simulator", "cate_analyzer"): (None, None),
     # No direct field: bottom_performer is one entity name and target_entities a list,
     # so the planner has to build the list.
     ("counterfactual_simulator", "gap_calculator"): (None, None),

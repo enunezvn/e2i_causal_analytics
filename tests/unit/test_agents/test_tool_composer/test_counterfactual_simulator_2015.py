@@ -125,21 +125,32 @@ def _frame(provider):
 # ---------------------------------------------------------------------------
 
 
+def _baseline(engine, regions):
+    twins = [t for t in engine.population.twins if not regions or t.features["region"] in regions]
+    return float(np.mean([t.baseline_propensity for t in twins]))
+
+
 def test_the_result_is_the_engine_estimate_not_a_scaled_constant(whole_population, provider):
     out = tr._simulation_results(
         whole_population,
         brand="Kisqali",
         intervention_type="email_campaign",
-        target_regions=[],
         frame=_frame(provider),
+        targeted=None,
     )
-    assert out.simulated_ate == pytest.approx(whole_population.simulated_ate)
+    assert out.effect == pytest.approx(whole_population.simulated_ate)
     assert (out.ci_lower, out.ci_upper) == pytest.approx(
         (whole_population.simulated_ci_lower, whole_population.simulated_ci_upper)
     )
-    assert out.ci_lower < out.simulated_ate < out.ci_upper
+    assert (out.cohort_effect, out.cohort_ci_lower, out.cohort_ci_upper) == (
+        out.effect,
+        out.ci_lower,
+        out.ci_upper,
+    )
+    assert out.ci_lower < out.effect < out.ci_upper
+    assert out.effect_scope == "cohort"
     # The planted cohort-wide effect is the mean of the per-region effects (equal regions).
-    assert out.simulated_ate == pytest.approx(np.mean(list(PLANTED.values())), abs=0.05)
+    assert out.effect == pytest.approx(np.mean(list(PLANTED.values())), abs=0.05)
     assert set(out.region_effects) == set(PLANTED)
     for region, tau in PLANTED.items():
         assert out.region_effects[region] == pytest.approx(tau, abs=0.07)
@@ -149,25 +160,63 @@ def test_the_result_is_the_engine_estimate_not_a_scaled_constant(whole_populatio
     assert out.recommended_sample_size == whole_population.recommended_sample_size
 
 
-def test_target_regions_narrow_the_region_effects_but_not_the_cohort_interval(
-    whole_population, northeast_only, provider
+def test_a_targeted_request_is_answered_with_inference_on_the_targeted_regions(
+    engine, whole_population, provider
 ):
+    """codex iter-1 F1: the engine re-uses the cohort-wide interval and recommendation for a
+    region filter (measured), so a targeted question needs its own inference. Midwest's
+    planted effect (0.02) is below the policy's 0.05 minimum while the cohort's is not."""
+    frame = _frame(provider)
+    targeted = tr._targeted_effect(frame, ["midwest"], baseline_rate=_baseline(engine, ["midwest"]))
+    midwest_run = _simulate(engine, ["midwest"])
     out = tr._simulation_results(
-        northeast_only,
+        midwest_run,
         brand="Kisqali",
         intervention_type="email_campaign",
-        target_regions=["northeast"],
-        frame=_frame(provider),
+        frame=frame,
+        targeted=targeted,
     )
-    assert set(out.region_effects) == {"northeast"}
-    assert out.region_effects["northeast"] == pytest.approx(PLANTED["northeast"], abs=0.07)
-    assert out.target_regions == ["northeast"]
+    assert out.effect_scope == "targeted regions ['midwest']"
+    assert out.target_regions == ["midwest"]
+    assert out.effect == pytest.approx(PLANTED["midwest"], abs=0.07)
+    assert out.ci_lower < out.effect < out.ci_upper
+    assert out.ci_lower < PLANTED["midwest"] < out.ci_upper
+    # Same forest (same seed and frame) as the engine's fit: the targeted point estimate
+    # is the engine's region effect, now with an interval.
+    assert out.effect == pytest.approx(out.region_effects["midwest"], abs=1e-9)
+    assert whole_population.recommendation.value == "deploy"
+    assert out.recommendation != "deploy"
+    assert out.cohort_effect == pytest.approx(whole_population.simulated_ate)
     assert out.twin_count == 130
-    # Measured engine behaviour the output must not hide: the cohort ATE and its interval
-    # do not depend on the region filter, so the assumptions say which number is which.
-    assert out.simulated_ate == pytest.approx(whole_population.simulated_ate)
-    text = " ".join(out.assumptions)
-    assert "cohort-wide" in text and "no interval" in text
+
+
+def test_a_multi_region_target_is_the_average_effect_over_those_regions(engine, provider):
+    frame = _frame(provider)
+    targeted = tr._targeted_effect(
+        frame, ["northeast", "west"], baseline_rate=_baseline(engine, ["northeast", "west"])
+    )
+    assert targeted.effect == pytest.approx((PLANTED["northeast"] + PLANTED["west"]) / 2, abs=0.07)
+    assert targeted.ci_lower < targeted.effect < targeted.ci_upper
+    assert targeted.recommendation == "deploy"
+    assert targeted.cohort_rows == 600
+
+
+def test_a_target_region_the_cohort_does_not_cover_is_refused(engine):
+    """codex iter-1 F3: ``CohortCausalEstimator`` gives a twin whose region is absent from
+    the cohort the COHORT ATE; that must never be reported as the region's effect."""
+    no_west = CohortEffectDataProvider(_cohort().query("region != 'west'"))
+    frame = _frame(no_west)
+    with pytest.raises(ToolRefusalError, match="west"):
+        tr._targeted_effect(frame, ["west"], baseline_rate=0.3)
+    run = SimulationEngine(
+        population=_population(), effect_provider=no_west, effect_estimator=CohortCausalEstimator()
+    ).simulate(InterventionConfig(intervention_type="email_campaign"), use_cache=False)
+    assert run.effect_heterogeneity.by_region["west"]["ate"] == pytest.approx(run.simulated_ate)
+    out = tr._simulation_results(
+        run, brand="Kisqali", intervention_type="email_campaign", frame=frame, targeted=None
+    )
+    assert "west" not in out.region_effects
+    assert set(out.region_effects) == {"northeast", "south", "midwest"}
 
 
 def test_the_assumptions_name_the_contrast_the_estimate_answers(whole_population, provider):
@@ -175,8 +224,8 @@ def test_the_assumptions_name_the_contrast_the_estimate_answers(whole_population
         whole_population,
         brand="Kisqali",
         intervention_type="email_campaign",
-        target_regions=[],
         frame=_frame(provider),
+        targeted=None,
     )
     text = " ".join(out.assumptions)
     for fragment in ("email_campaign_count", "conversion_rate", "median", "market_share"):
@@ -202,9 +251,46 @@ def test_a_failed_engine_run_is_refused_not_reported(engine, provider):
             failed,
             brand="Kisqali",
             intervention_type="email_campaign",
-            target_regions=[],
             frame=_frame(provider),
+            targeted=None,
         )
+
+
+# ---------------------------------------------------------------------------
+# Unreachable services are retried, not refused (codex iter-1 F2)
+# ---------------------------------------------------------------------------
+
+
+async def test_an_unreachable_database_is_not_a_refusal():
+    """The unit tree pins Supabase to a dead port (#1420). A real client against it must
+    surface as a retryable failure: neither the model lookup nor the cohort load may turn a
+    connection error into 'not identified'."""
+    from src.memory.services.factories import get_async_supabase_client
+
+    with pytest.raises(RuntimeError) as model_lookup:
+        await tr.counterfactual_simulator(intervention="email_campaign", brand="Kisqali")
+    assert not isinstance(model_lookup.value, (ToolRefusalError, ToolInputError))
+    assert "could be read" in str(model_lookup.value)
+
+    load = tr._load_cohort_provider
+    client = await get_async_supabase_client()
+    with pytest.raises(Exception) as cohort_load:
+        await load(client, "email_campaign", "Kisqali")
+    assert not isinstance(cohort_load.value, (ToolRefusalError, ToolInputError))
+    assert "connect" in f"{type(cohort_load.value).__name__} {cohort_load.value}".lower()
+
+
+def test_the_route_loader_still_degrades_to_none(provider):
+    """The route keeps its contract: ``build_cohort_provider_or_none`` never raises. The
+    shared usability check is the same function the tool uses."""
+    from src.digital_twin.effect.cohort_loader import cohort_provider_from_frame
+
+    cohort = _cohort()
+    built = cohort_provider_from_frame(cohort, "email_campaign")
+    assert built is not None and len(built._cohort) == len(cohort)
+    assert cohort_provider_from_frame(cohort.head(100), "email_campaign") is None
+    assert cohort_provider_from_frame(cohort.drop(columns="market_share"), "email_campaign") is None
+    assert cohort_provider_from_frame(pd.DataFrame(), "email_campaign") is None
 
 
 # ---------------------------------------------------------------------------
