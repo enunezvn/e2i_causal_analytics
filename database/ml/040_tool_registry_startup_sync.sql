@@ -83,7 +83,9 @@ BEGIN
 
     IF EXISTS (
         SELECT 1 FROM jsonb_array_elements(p_tools) AS t
-        WHERE jsonb_typeof(t) <> 'object' OR COALESCE(t->>'name', '') = ''
+        WHERE jsonb_typeof(t) <> 'object'
+           OR jsonb_typeof(t->'name') IS DISTINCT FROM 'string'
+           OR t->>'name' = ''
     ) THEN
         RAISE EXCEPTION 'sync_tool_registry: tool entry without a name refused';
     END IF;
@@ -99,21 +101,29 @@ BEGIN
 
     v_names := ARRAY(SELECT t->>'name' FROM jsonb_array_elements(p_tools) AS t);
 
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(p_dependencies) AS d
+        WHERE jsonb_typeof(d) <> 'object'
+           OR jsonb_typeof(d->'consumer') IS DISTINCT FROM 'string'
+           OR jsonb_typeof(d->'producer') IS DISTINCT FROM 'string'
+    ) THEN
+        RAISE EXCEPTION 'sync_tool_registry: dependency entry without a consumer and producer name refused';
+    END IF;
+
     SELECT string_agg(DISTINCT e.endpoint, ', ' ORDER BY e.endpoint) INTO v_bad
     FROM jsonb_array_elements(p_dependencies) AS d
-    CROSS JOIN LATERAL (
-        VALUES (COALESCE(d->>'consumer', '<null>')), (COALESCE(d->>'producer', '<null>'))
-    ) AS e(endpoint)
+    CROSS JOIN LATERAL (VALUES (d->>'consumer'), (d->>'producer')) AS e(endpoint)
     WHERE NOT (e.endpoint = ANY (v_names));
     IF v_bad IS NOT NULL THEN
         RAISE EXCEPTION 'sync_tool_registry: dependency endpoint(s) not in the tool payload: %', v_bad;
     END IF;
 
-    SELECT string_agg(p.pair, ', ' ORDER BY p.pair) INTO v_bad
+    SELECT string_agg(format('%s<-%s', p.consumer, p.producer), ', ' ORDER BY p.consumer, p.producer)
+    INTO v_bad
     FROM (
-        SELECT (d->>'consumer') || '<-' || (d->>'producer') AS pair
+        SELECT d->>'consumer' AS consumer, d->>'producer' AS producer
         FROM jsonb_array_elements(p_dependencies) AS d
-        GROUP BY 1 HAVING count(*) > 1
+        GROUP BY 1, 2 HAVING count(*) > 1
     ) AS p;
     IF v_bad IS NOT NULL THEN
         RAISE EXCEPTION 'sync_tool_registry: duplicate dependency pair(s) refused: %', v_bad;

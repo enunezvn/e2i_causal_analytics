@@ -343,6 +343,88 @@ def test_sync_refuses_dependency_endpoint_not_in_payload(migrated):
             _sync(conn, tools, orphan)
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"producer": "gap_calculator"},
+        {"consumer": None, "producer": "gap_calculator"},
+        {"consumer": 5, "producer": "gap_calculator"},
+        {"consumer": "roi_estimator"},
+        "roi_estimator<-gap_calculator",
+    ],
+)
+def test_sync_refuses_dependency_without_endpoint_names(migrated, entry):
+    import psycopg
+
+    with migrated.rolled_back() as conn:
+        tools, deps = _current_payload(conn)
+        # A tool whose name is what a NULL endpoint used to be coerced to must not let a
+        # nameless endpoint through.
+        placeholder = {**NEW_TOOLS[0], "name": "<null>"}
+        with pytest.raises(psycopg.errors.RaiseException, match="without a consumer and producer"):
+            _sync(conn, tools + [placeholder], deps + [entry])
+
+
+@pytest.mark.parametrize("name", [None, 5, ""])
+def test_sync_refuses_tool_without_a_string_name(migrated, name):
+    import psycopg
+
+    with migrated.rolled_back() as conn:
+        tools, deps = _current_payload(conn)
+        with pytest.raises(psycopg.errors.RaiseException, match="without a name"):
+            _sync(conn, tools + [{**NEW_TOOLS[0], "name": name}], deps)
+
+
+def test_sync_duplicate_pair_detection_keeps_fields_apart(migrated):
+    # (consumer 'a<-b', producer 'c') and (consumer 'a', producer 'b<-c') are different pairs
+    # that a concatenated key would collide.
+    with migrated.rolled_back() as conn:
+        tools, deps = _current_payload(conn)
+        names = ["a<-b", "c", "a", "b<-c"]
+        odd = [{**NEW_TOOLS[3], "name": n} for n in names]
+        pairs = [
+            {"consumer": "a<-b", "producer": "c", "output_field": "x", "input_field": "y"},
+            {"consumer": "a", "producer": "b<-c", "output_field": "x", "input_field": "y"},
+        ]
+        assert _sync(conn, tools + odd, deps + pairs) == {
+            **ZERO,
+            "inserted": 4,
+            "dependencies_upserted": 2,
+        }
+
+
+WRITE_TRAP = """
+create function pg_temp.learning_loop_write_trap() returns trigger language plpgsql as $t$
+begin
+    raise exception 'write trap: % reached %', tg_op, tg_table_name;
+end $t$;
+create trigger learning_loop_write_trap before insert or update or delete on tool_registry
+    for each statement execute function pg_temp.learning_loop_write_trap();
+create trigger learning_loop_write_trap before insert or update or delete on tool_dependencies
+    for each statement execute function pg_temp.learning_loop_write_trap();
+"""
+
+
+def test_deprecation_guard_raises_before_any_dml(migrated):
+    import psycopg
+
+    with migrated.rolled_back() as conn:
+        tools, _ = _current_payload(conn)
+        conn.execute(WRITE_TRAP)
+        with pytest.raises(psycopg.errors.RaiseException) as refused:
+            _sync(conn, tools[:2], [])
+    assert "would deprecate 14" in str(refused.value)
+    assert "write trap" not in str(refused.value)
+
+    # Positive control: the trap does fire on a payload that passes the guard, so the
+    # assertion above cannot pass vacuously.
+    with migrated.rolled_back() as conn:
+        tools, deps = _current_payload(conn)
+        conn.execute(WRITE_TRAP)
+        with pytest.raises(psycopg.errors.RaiseException, match="write trap: INSERT reached"):
+            _sync(conn, tools, deps)
+
+
 def test_sync_refuses_more_than_max_deprecations_before_any_write(fresh):
     import psycopg
 
@@ -470,6 +552,61 @@ def test_sync_concurrent_calls_serialize(fresh):
         after_tools, after_deps = _current_payload(conn)
     assert after_tools == sorted(payload, key=lambda t: t["name"])
     assert after_deps == deps
+
+
+def test_deprecation_guard_counts_after_the_lock(fresh):
+    """The waiting caller's guard sees what the lock holder committed.
+
+    The holder inserts 4 tools; the waiter's payload lacks them. Counted after the lock, the
+    waiter would deprecate 4 > limit 3 and is refused. Counted before the lock, it would see 0
+    and deprecate all 4 anyway.
+    """
+    import psycopg
+
+    with fresh.connect() as conn:
+        tools, deps = _current_payload(conn)
+
+    holder = fresh.connect()
+    waiter = fresh.connect()
+    try:
+        assert _sync(holder, tools + NEW_TOOLS, deps) == {**ZERO, "inserted": 4}
+        (waiter_pid,) = waiter.execute("select pg_backend_pid()").fetchone()
+        outcome: Dict[str, Any] = {}
+
+        def run_waiter() -> None:
+            try:
+                outcome["result"] = _sync(waiter, tools, deps, max_deprecations=3)
+            except Exception as exc:
+                outcome["error"] = exc
+            finally:
+                waiter.rollback()
+
+        thread = threading.Thread(target=run_waiter)
+        thread.start()
+        with fresh.connect(autocommit=True) as watcher:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                (n,) = watcher.execute(
+                    "select count(*) from pg_locks where pid = %s and locktype = 'advisory' "
+                    "and not granted",
+                    (waiter_pid,),
+                ).fetchone()
+                if n == 1:
+                    break
+                time.sleep(0.1)
+            else:
+                pytest.fail("waiter did not wait on the advisory lock")
+        holder.commit()
+        thread.join(timeout=60)
+        assert not thread.is_alive()
+    finally:
+        holder.close()
+        waiter.close()
+
+    assert "result" not in outcome, outcome.get("result")
+    assert isinstance(outcome["error"], psycopg.errors.RaiseException)
+    assert "would deprecate 4 active tools, limit 3" in str(outcome["error"])
+    assert fresh.rows("select count(*) from tool_registry where deprecated_at is null") == ["20"]
 
 
 # ---------------------------------------------------------------------------
