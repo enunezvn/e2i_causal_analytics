@@ -254,23 +254,68 @@ def test_skip_reason_vocabulary_is_closed():
             "negative_control_column_missing",
             "negative_control_too_few_rows",
             "negative_control_ci_unavailable",
+            "negative_control_reference_effect_non_finite",
         }
     )
     with pytest.raises(ValueError, match="negative_control_skip_reason"):
         _run(RefutationRunner(), negative_control_skip_reason="because")
 
 
-def test_a_tuple_wins_over_a_skip_reason(caplog):
-    """The tuple is evidence; a reason beside it is a caller contradiction that is
-    logged, not honoured (the numbers are real, the reason cannot be)."""
+@pytest.mark.parametrize(
+    "reason", ["negative_control_too_few_rows", "negative_control_ci_unavailable"]
+)
+def test_a_caller_skip_reason_wins_over_a_tuple(caplog, reason):
+    """Codex round 1 (MED): a tuple beside an explicit caller reason is a
+    contradiction and NEITHER input is authoritative -- the caller saw
+    something the tuple hides (a fit on too few rows, an interval the backend
+    could not vouch for). The runner must not score a PASSED from numbers the
+    caller itself disowned: it emits the caller's SKIPPED reason and logs that
+    the tuple was discarded."""
     with caplog.at_level("WARNING", logger="src.causal_engine.refutation_runner"):
         suite = _run(
             RefutationRunner(),
             negative_control=PASSED_NC,
-            negative_control_skip_reason="negative_control_too_few_rows",
+            negative_control_skip_reason=reason,
         )
-    assert _by_name(suite)[NC].status == P
-    assert any("negative_control_too_few_rows" in r.getMessage() for r in caplog.records)
+    nc = _by_name(suite)[NC]
+    assert nc.status == S
+    assert nc.details["skip_reason"] == reason
+    assert nc.details["nc_effect"] is None and nc.details["nc_ci"] is None
+    assert any(reason in r.getMessage() and "discard" in r.getMessage() for r in caplog.records)
+    assert "negative_control_outcome" in suite.to_legacy_format()["skipped_tests"]
+
+
+@pytest.mark.parametrize("bad_n", [None, 0, -1, 2.5, float("nan"), "12"])
+def test_invalid_or_zero_row_count_is_skipped_too_few_rows(bad_n):
+    """Codex round 1 (MED): a count that is not a finite positive integer means
+    the fit's row basis is unknown or empty; a zero-row tuple with a
+    zero-containing interval must not read PASSED."""
+    result = RefutationRunner()._run_negative_control_test(
+        ORIGINAL, (NC_OUTCOME, 0.017, (-0.031, 0.065), bad_n)
+    )
+    assert result.status == S
+    assert result.details["skip_reason"] == "negative_control_too_few_rows"
+    assert result.details["reason"].startswith("negative_control_too_few_rows")
+    assert result.details["nc_n"] is None
+    assert result.details["nc_effect"] is None and result.details["nc_ci"] is None
+    assert result.details["received"]["nc_n"] == repr(bad_n)
+    assert result.refuted_effect == ORIGINAL
+    assert result.delta_percent == 0.0
+
+
+@pytest.mark.parametrize("bad_claim", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_claimed_effect_is_skipped_with_its_own_reason(bad_claim):
+    """Codex round 1 (MED): a NaN / infinite claimed effect cannot be compared
+    to anything; scoring it would fabricate PASSED and delta_percent = 0.0.
+    The reason names the reference effect, not the control's interval."""
+    result = RefutationRunner()._run_negative_control_test(bad_claim, PASSED_NC)
+    assert result.status == S
+    assert result.details["skip_reason"] == "negative_control_reference_effect_non_finite"
+    assert "claimed effect is not a finite number" in result.details["reason"]
+    assert result.details["received"]["original_effect"] == repr(bad_claim)
+    assert result.details["nc_effect"] is None and result.details["nc_ci"] is None
+    assert result.details["nc_outcome"] == NC_OUTCOME
+    assert result.delta_percent == 0.0
 
 
 def test_disabled_test_emits_no_row_at_all():

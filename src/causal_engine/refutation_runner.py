@@ -430,6 +430,9 @@ _NEGATIVE_CONTROL_SKIP_EXPLANATIONS: Dict[str, str] = {
         "the negative-control fit gave no usable interval (non-finite or inverted "
         "endpoints); the test cannot be scored"
     ),
+    "negative_control_reference_effect_non_finite": (
+        "the claimed effect is not a finite number; the negative control cannot be compared to it"
+    ),
 }
 
 
@@ -693,6 +696,10 @@ class RefutationTestType(str, Enum):
 #   negative_control_ci_unavailable  the fit gave no usable interval, or the
 #                                    backend cannot provide one -- never a
 #                                    fabricated interval
+#   negative_control_reference_effect_non_finite
+#                                    the claimed (primary) effect is NaN / inf,
+#                                    so there is nothing to compare the
+#                                    control to (runner-emitted only)
 NEGATIVE_CONTROL_SKIP_REASONS: frozenset = frozenset(_NEGATIVE_CONTROL_SKIP_EXPLANATIONS)
 
 
@@ -1243,8 +1250,11 @@ class RefutationRunner:
                 is the default when both are ``None``). The runner is the one
                 place that emits the SKIPPED row, with THAT reason. An unknown
                 token is a ``ValueError`` (a call-site bug, not a data
-                condition). Ignored, with a warning, when a tuple is also given:
-                the numbers are evidence, the reason cannot be.
+                condition). When a tuple is ALSO given the reason WINS and the
+                tuple is discarded with a warning: the caller saw something
+                the numbers hide (a fit on too few rows, an interval the
+                backend could not vouch for), and neither contradictory input
+                is authoritative enough to score a PASSED from.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -1685,14 +1695,19 @@ class RefutationRunner:
             # refuters that actually ``ran``, and its ~us elapsed is never
             # ``_record``-ed (the same reason the analytic E-value is kept out
             # of the average).
+            if negative_control is not None and negative_control_skip_reason is not None:
+                # Codex round 1 (MED): contradictory inputs. The caller's reason
+                # wins -- it disowned the numbers -- so the tuple is discarded
+                # rather than scored; the row below carries the caller's reason.
+                logger.warning(
+                    "negative_control tuple %r given alongside "
+                    "negative_control_skip_reason=%r; the tuple is discarded and the "
+                    "caller's SKIPPED reason is emitted (neither input is authoritative).",
+                    negative_control,
+                    negative_control_skip_reason,
+                )
+                negative_control = None
             if negative_control is not None:
-                if negative_control_skip_reason is not None:
-                    logger.warning(
-                        "negative_control tuple given alongside "
-                        "negative_control_skip_reason=%r; scoring the tuple (it is "
-                        "evidence) and ignoring the reason.",
-                        negative_control_skip_reason,
-                    )
                 test_result = self._run_test_with_tracing(
                     test_name="negative_control_outcome",
                     test_func=self._run_negative_control_test,
@@ -2471,10 +2486,18 @@ class RefutationRunner:
             WARNING  CI excludes 0, |nc| <  |orig|  moved, less than the claim
             FAILED   CI excludes 0, |nc| >= |orig|  moved at least as much as
                                                     the claimed effect
-            SKIPPED  non-finite effect / endpoint, or lo > hi
-                     (``negative_control_ci_unavailable``) -- never a
-                     placeholder number, the same fail-honest class as
-                     ``_require_finite_ci`` / ``_degenerate_ci_skip_result``
+            SKIPPED  the claimed effect is not finite
+                     (``negative_control_reference_effect_non_finite``); the
+                     row count is not a finite positive integer
+                     (``negative_control_too_few_rows`` -- a zero-row or
+                     unknown-basis fit must not read PASSED on a
+                     zero-containing interval); non-finite effect / endpoint,
+                     or lo > hi (``negative_control_ci_unavailable``) -- never
+                     a placeholder number, the same fail-honest class as
+                     ``_require_finite_ci`` / ``_degenerate_ci_skip_result``.
+                     Checked in that order: nothing can be compared without a
+                     reference, and an unusable row basis explains an
+                     unusable interval.
 
         ``refuted_effect`` is the control's effect; ``p_value`` is ``None`` (the
         verdict is an interval rule, not a test statistic); ``delta_percent`` is
@@ -2489,6 +2512,33 @@ class RefutationRunner:
         nc_outcome, nc_effect, nc_ci, nc_n = negative_control
         outcome_name = str(nc_outcome)
         usable_n = _usable_count(nc_n)
+        try:
+            claimed_finite = bool(np.isfinite(float(original_effect)))
+        except (TypeError, ValueError):
+            claimed_finite = False
+        if not claimed_finite:
+            # Codex round 1 (MED): a NaN / inf claim would score PASSED against a
+            # zero-containing interval and fabricate delta_percent = 0.0.
+            return _negative_control_skip_result(
+                "negative_control_reference_effect_non_finite",
+                original_effect,
+                nc_outcome=outcome_name,
+                nc_n=usable_n,
+                received={"original_effect": repr(original_effect)},
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+        if usable_n is None:
+            # Codex round 1 (MED): ``_usable_count`` maps None / 0 / negative /
+            # fractional / non-finite / non-numeric to None; a fit with no known
+            # positive row basis is not evidence the control stayed null.
+            return _negative_control_skip_result(
+                "negative_control_too_few_rows",
+                original_effect,
+                nc_outcome=outcome_name,
+                nc_n=None,
+                received={"nc_n": repr(nc_n)},
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
         try:
             eff = float(nc_effect)
             lo, hi = float(nc_ci[0]), float(nc_ci[1])
@@ -2512,7 +2562,7 @@ class RefutationRunner:
 
         includes_zero = lo <= 0.0 <= hi
         claimed = abs(float(original_effect))
-        on_n = f" on n = {usable_n}" if usable_n is not None else ""
+        on_n = f" on n = {usable_n}"
         subject = f"A negative-control outcome the treatment cannot affect ({outcome_name})"
         interval = f"{eff:+.3f} [{lo:+.3f}, {hi:+.3f}]"
         if includes_zero:
