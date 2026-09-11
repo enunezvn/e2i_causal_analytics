@@ -73,7 +73,9 @@ def _build_real_dataframe(*, n: int = 400, true_ate: float = 1.5, seed: int = 13
     """
     rng = np.random.default_rng(seed)
     confounder_a = rng.normal(0.0, 1.0, n)
-    treatment = 0.5 * confounder_a + rng.normal(0.0, 1.0, n)
+    # Binary (#2014): the mocked outputs below name EconML/CausalML among the libraries
+    # used, and the tool refuses a non-binary treatment on any non-DoWhy route.
+    treatment = (0.5 * confounder_a + rng.normal(0.0, 1.0, n) > 0).astype(int)
     outcome = true_ate * treatment + 0.7 * confounder_a + rng.normal(0.0, 1.0, n)
     return pd.DataFrame({"treatment": treatment, "outcome": outcome, "confounder_a": confounder_a})
 

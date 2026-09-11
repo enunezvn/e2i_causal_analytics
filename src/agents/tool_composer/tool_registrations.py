@@ -1041,6 +1041,20 @@ def causal_effect_estimator(
     primary_result = pipeline_output.get("primary_result") or {}
     libraries_used = list(pipeline_output.get("libraries_used") or [])
     errors = list(pipeline_output.get("errors") or [])
+    provenance = _estimate_provenance(
+        ate=ate_value, primary_result=primary_result, libraries_used=libraries_used, errors=errors
+    )
+    non_dowhy = [lib for lib in provenance.effect_libraries if lib != "dowhy"]
+    if non_dowhy and not _is_binary_01(df.get(treatment)):
+        # Deterministic over the inputs and the routing their wording selects.
+        raise ToolRefusalError(
+            f"causal_effect_estimator: the pipeline routed {treatment!r} -> {outcome!r} to "
+            f"{', '.join(non_dowhy)}, and {treatment!r} is not a binary 0/1 treatment. Those "
+            "libraries do not estimate a per-unit effect of a non-binary treatment (EconML "
+            "binarizes a non-integer treatment at its median; on a 0-5 count treatment with a "
+            "per-unit effect of 0.4 it returned 0.894), so no estimate with a truthful label "
+            "exists on this route (#2014). Refusing rather than reporting a mislabelled effect."
+        )
     uncertainty = _derive_uncertainty(
         ate=ate_value, primary_result=primary_result, libraries_used=libraries_used, errors=errors
     )
@@ -1339,10 +1353,12 @@ def _describe_estimate(
 
     DoWhy's linear regression reports ``E[Y | T=1] - E[Y | T=0]`` from the fitted model,
     which is the treatment coefficient: for a binary treatment a regression-adjusted
-    1-vs-0 difference, for any other numeric treatment the change per ONE UNIT. With an
-    additive treatment term and effects that vary with the confounders, OLS weights
-    each confounder profile by its treatment variance (Angrist 1998); the wording gives
-    the sufficient conditions under which that is the average treatment effect.
+    1-vs-0 difference, for any other numeric treatment the change per ONE UNIT. The
+    wording gives SUFFICIENT conditions for that coefficient to be the average treatment
+    effect: treatment independent of the confounders (the linear adjustment then only
+    adds precision), or an outcome linear in the confounders as modelled with a constant
+    effect. A constant effect alone is not enough: confounding that is non-linear in the
+    confounders biases the linear adjustment.
     """
     prov = _estimate_provenance(
         ate=ate, primary_result=primary_result, libraries_used=libraries_used, errors=errors
@@ -1376,9 +1392,9 @@ def _describe_estimate(
                 f"Regression-adjusted difference in {outcome} {contrast} (OLS with an "
                 f"additive treatment term, {adjusted}"
                 + ("" if binary else f"; assumes the effect is linear in {treatment}")
-                + "). It is the average treatment effect when the effect is constant or "
-                "treatment does not depend on the confounders; otherwise a "
-                "treatment-variance-weighted average of the confounder-specific effects."
+                + "). It is the average treatment effect when treatment does not depend on "
+                "the confounders, or when the outcome is linear in them as modelled and the "
+                "effect is constant; otherwise it can differ from the average treatment effect."
             )
         else:
             estimand = f"Effect on {outcome} {contrast}, {adjusted} (DoWhy {dowhy_method})."

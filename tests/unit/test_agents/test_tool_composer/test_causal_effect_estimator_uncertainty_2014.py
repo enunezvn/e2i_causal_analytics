@@ -259,11 +259,24 @@ def test_the_estimand_states_sufficient_conditions_not_a_false_necessary_one() -
     result = _estimate(_frame("continuous"))
 
     assert "only if" not in result.estimand
+    # A constant effect alone is not enough: with confounding that is non-linear in the
+    # confounders, the linear adjustment is biased even for a constant effect.
     assert (
-        "average treatment effect when the effect is constant or treatment does not depend "
-        "on the confounders" in result.estimand
+        "average treatment effect when treatment does not depend on the confounders, or when "
+        "the outcome is linear in them as modelled and the effect is constant" in result.estimand
     )
-    assert "treatment-variance-weighted average" in result.estimand
+    assert "variance-weighted" not in result.estimand
+
+
+def test_a_non_binary_treatment_routed_away_from_dowhy_is_refused() -> None:
+    # Heterogeneity wording routes EconML + CausalML. EconML binarizes a non-integer
+    # treatment at its median and measured 0.894 on this 0-5 count treatment whose per-unit
+    # effect is 0.4; CausalML returned a zero-width interval. Neither is a per-unit effect,
+    # and no label can make it one.
+    from src.agents.tool_composer.errors import ToolRefusalError
+
+    with pytest.raises(ToolRefusalError, match="per-unit"):
+        _estimate(_frame("count", n=400), query="How does the treatment effect vary by segment?")
 
 
 def test_method_is_not_offered_to_the_planner() -> None:
