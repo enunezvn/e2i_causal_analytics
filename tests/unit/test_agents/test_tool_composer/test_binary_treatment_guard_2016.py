@@ -112,6 +112,48 @@ def test_a_rate_treatment_is_refused_for_being_non_binary_not_single_class(tool)
 
 
 @pytest.mark.parametrize("tool", [_propensity, _cate], ids=["propensity", "cate"])
+def test_a_rate_that_reaches_exactly_0_and_1_is_refused(tool):
+    """The live shape: Kisqali ``adherence_rate`` holds exact 0 and 1 among 6,121 values.
+
+    Pre-fix this was not refused at all. On the deployed image (main 56f8b8589) over the
+    real 8,730-row frame, propensity_estimator returned mean_propensity 0.038 (every rate
+    below 1 cast to 0), and cate_analyzer returned effects for 3 regions from only the
+    rows at exactly 1 vs exactly 0.
+    """
+    df = _cohort()
+    df.loc[: len(df) // 3, "adherence_rate"] = 1.0
+    df.loc[len(df) // 3 : len(df) // 2, "adherence_rate"] = 0.0
+    with pytest.raises(ToolRefusalError, match="'adherence_rate' is not a binary 0/1 column"):
+        tool(df, "adherence_rate")
+
+
+@pytest.mark.parametrize("tool", [_propensity, _cate], ids=["propensity", "cate"])
+def test_a_duplicated_treatment_column_name_is_refused_structurally(tool):
+    """``df[name]`` on a duplicated name is a DataFrame, whose ``unique()`` does not exist.
+
+    The guard must refuse the ambiguous column rather than raise ``AttributeError`` into
+    the executor's retrying arm (codex r1 MEDIUM).
+    """
+    base = _cohort()
+    df = pd.concat([base, base[["visits"]].rename(columns={"visits": "copay_support"})], axis=1)
+    assert list(df.columns).count("copay_support") == 2
+    with pytest.raises(ToolRefusalError, match="2 columns are named 'copay_support'"):
+        tool(df, "copay_support")
+
+
+def test_the_observed_values_in_a_refusal_are_bounded():
+    """Each rendered value is clipped, so a long value cannot push the reason past the
+    composer's 2000-char carry limit, which truncates from the END (codex r1 LOW)."""
+    df = _cohort(n=60)
+    df["dose"] = [tuple(range(i, i + 2000)) for i in range(len(df))]
+    with pytest.raises(ToolRefusalError) as excinfo:
+        _cate(df, "dose")
+    reason = str(excinfo.value)
+    assert "treatment column 'dose' is not a binary 0/1 column" in reason
+    assert len(reason) < 700, len(reason)
+
+
+@pytest.mark.parametrize("tool", [_propensity, _cate], ids=["propensity", "cate"])
 def test_a_two_valued_treatment_that_is_not_0_1_is_refused(tool):
     """{1, 2} is 'binary' to the planner's column profile (2 distinct numeric values).
 

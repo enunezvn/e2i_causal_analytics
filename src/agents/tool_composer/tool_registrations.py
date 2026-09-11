@@ -2114,21 +2114,35 @@ def _refuse_unless_binary_01(
     ``propensity_estimator`` and ``cate_analyzer`` (#2016). Each tool cast or split
     the column as binary without checking. A count became a multi-class target
     whose P(class == 1) was reported as a score or propensity, or an "exactly 1 vs
-    exactly 0" contrast that ignored every other value. A 0-1 rate truncated to one
-    class and was refused for the wrong reason.
+    exactly 0" contrast that ignored every other value. A 0-1 rate was either
+    truncated to one class and refused for the wrong reason or, when it reaches
+    exactly 0 and 1 as the live ``adherence_rate`` does, estimated from those rows
+    alone.
 
     bool, int, float and nullable ``Int64`` encodings pass: ``True == 1`` and
     ``1.0 == 1`` hash equal, and ``dropna`` removes ``NaN`` and ``pd.NA``. Nulls are
     the caller's decision, since the tools disagree on what a null row means.
-    List- or dict-valued cells make ``unique()`` raise ``TypeError``, so they are
-    refused here rather than escaping into the executor's retrying arm.
+    Shapes that would otherwise raise out of this check into the executor's
+    retrying arm are refused instead: a duplicated column name (``df[name]`` is a
+    DataFrame) and list- or dict-valued cells (``unique()`` raises ``TypeError``).
+    Each rendered value is clipped, because the composer truncates a carried
+    reason from the END.
     """
+    name = _clip_name(column)
+    if getattr(series, "ndim", 1) != 1:
+        raise ToolRefusalError(
+            f"{tool}: {role} column {name!r} is ambiguous: {series.shape[1]} columns are "
+            f"named {name!r} in the supplied DataFrame. Refusing to pick one."
+        )
+
+    def _render(values: Any) -> str:
+        return "[" + ", ".join(_clip_name(repr(v)) for v in values) + "]"
+
     non_null = series.dropna()
     try:
         observed = set(non_null.unique())
     except TypeError:
-        sample = [_clip_name(str(v)) for v in non_null.head(_BINARY_CHECK_SAMPLE)]
-        carries = f"non-scalar values such as {sample!r}"
+        carries = f"non-scalar values such as {_render(non_null.head(_BINARY_CHECK_SAMPLE))}"
     else:
         if observed <= {0, 1}:
             return
@@ -2136,13 +2150,13 @@ def _refuse_unless_binary_01(
         try:
             ordered = sorted(values)
         except TypeError:
-            ordered = sorted(values, key=str)
-        sample = [_clip_name(v) if isinstance(v, str) else v for v in ordered]
+            ordered = sorted(values, key=repr)
         carries = (
-            f"{len(observed)} distinct non-null values, including {sample[:_BINARY_CHECK_SAMPLE]!r}"
+            f"{len(observed)} distinct non-null values, including "
+            f"{_render(ordered[:_BINARY_CHECK_SAMPLE])}"
         )
     raise ToolRefusalError(
-        f"{tool}: {role} column {_clip_name(column)!r} is not a binary 0/1 column: its "
+        f"{tool}: {role} column {name!r} is not a binary 0/1 column: its "
         "non-null values must be a subset of {0, 1} (bool, int, float or nullable Int64), "
         f"but it carries {carries}. {consequence}"
     )
