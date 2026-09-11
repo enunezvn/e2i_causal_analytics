@@ -40,9 +40,12 @@ class PsycopgQuery:
         self._where: List[str] = []
         self._params: List[Any] = []
         self._order: List[str] = []
+        self._columns: Optional[List[str]] = None
         self._range: Optional[tuple] = None
 
-    def select(self, *_columns: str) -> "PsycopgQuery":
+    def select(self, *columns: str) -> "PsycopgQuery":
+        # Honour the projection, so a column the service forgot to request is missing here too.
+        self._columns = [c.strip() for spec in columns for c in spec.split(",") if c.strip()]
         return self
 
     def gte(self, column: str, value: Any) -> "PsycopgQuery":
@@ -69,7 +72,14 @@ class PsycopgQuery:
         return self
 
     def execute(self) -> Any:
-        sql = f"SELECT row_to_json(t)::text FROM {self.table} t"
+        projection = (
+            "row_to_json(t)::text"
+            if self._columns is None
+            else "json_build_object("
+            + ", ".join(f"'{c}', t.{c}" for c in self._columns)
+            + ")::text"
+        )
+        sql = f"SELECT {projection} FROM {self.table} t"
         if self._where:
             sql += " WHERE " + " AND ".join(self._where)
         if self._order:

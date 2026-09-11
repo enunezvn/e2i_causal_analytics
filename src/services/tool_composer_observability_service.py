@@ -28,9 +28,9 @@ _ABANDONED_AFTER = timedelta(minutes=5)
 _TERMINAL = ("COMPLETED", "FAILED", "TIMEOUT")
 
 _EPISODE_COLUMNS = (
-    "episode_id, composition_id, query_text, status, outcome, failed_phase, error_type, "
-    "plan_source, entry_point, total_latency_ms, last_activity_at, tools_executed, "
-    "tools_succeeded, is_synthetic"
+    "episode_id, composition_id, created_at, query_text, status, outcome, failed_phase, "
+    "error_type, plan_source, entry_point, total_latency_ms, last_activity_at, "
+    "tools_executed, tools_succeeded, is_synthetic"
 )
 _STEP_COLUMNS = "episode_id, step_number, tool_name, outcome_class"
 

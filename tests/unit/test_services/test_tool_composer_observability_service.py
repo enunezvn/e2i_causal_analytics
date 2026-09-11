@@ -31,10 +31,14 @@ class FakeQuery:
         self.table = table
         self.filters: List[tuple] = []
         self.orders: List[tuple] = []
+        self.columns: Optional[set] = None
         # Not ``self.range``: that would shadow the range() method this double must expose.
         self.window: Optional[tuple] = None
 
-    def select(self, *_columns: str) -> "FakeQuery":
+    def select(self, *columns: str) -> "FakeQuery":
+        # Honour the projection: a double that returned columns the query never asked for would
+        # hide a missing one, which is exactly how the created_at ordering defect escaped.
+        self.columns = {c.strip() for spec in columns for c in spec.split(",") if c.strip()}
         return self
 
     def gte(self, column: str, value: Any) -> "FakeQuery":
@@ -83,6 +87,8 @@ class FakeQuery:
         rows = [row for row in self.client.rows.get(self.table, []) if self._matches(row)]
         for column, desc in reversed(self.orders):
             rows.sort(key=lambda r: str(r.get(column) or ""), reverse=desc)
+        if self.columns is not None:
+            rows = [{k: v for k, v in row.items() if k in self.columns} for row in rows]
         if self.window is not None:
             start, end = self.window
             rows = rows[start : end + 1]
@@ -272,6 +278,27 @@ def test_a_composition_started_mid_read_is_neither_counted_twice_nor_lost(monkey
     ids = [row["episode_id"] for row in fetched]
     assert len(ids) == len(set(ids)), "an episode was read twice across a page boundary"
     assert len(ids) in (25, 26), f"an episode was lost across a page boundary: {len(ids)}"
+
+
+def test_the_recent_failures_are_the_newest_ones_not_the_first_by_id():
+    """The ten shown are the ten most recent, so the id order must not decide the ordering."""
+    now = datetime.now(timezone.utc)
+    failures = [
+        _episode(
+            # UUID order runs opposite to time order: oldest episode sorts first by id.
+            episode_id=f"{n:08d}-1111-1111-1111-111111111111",
+            composition_id=f"comp_{n}",
+            created_at=(now - timedelta(minutes=n)).isoformat(),
+            status="FAILED",
+            outcome="failed",
+        )
+        for n in range(14)
+    ]
+    service = _service({"composer_episodes": failures, "composition_steps": []})
+
+    shown = [row["composition_id"] for row in service.overview(30)["recent_failures"]]
+
+    assert shown == [f"comp_{n}" for n in range(10)]
 
 
 def test_steps_are_fetched_across_chunks_and_pages_exactly_once(monkeypatch):
