@@ -130,3 +130,70 @@ def test_inputs_no_sample_size_can_be_computed_from_are_refused(kwargs, reason):
 
 def test_an_explicit_null_alpha_or_power_is_the_documented_default():
     assert tr.power_calculator(effect_size=0.2, alpha=None, power=None).required_n_per_arm == 393
+
+
+# ---------------------------------------------------------------------------
+# A design the library cannot compute is refused, not answered as another design
+# (codex whole-diff F2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    [
+        ({"ratio": 2}, "ratio"),
+        ({"ratio": 0.5}, "ratio"),
+        ({"ratio": "2:1"}, "ratio"),
+        ({"alternative": "larger"}, "alternative"),
+        ({"alternative": "smaller"}, "alternative"),
+    ],
+)
+def test_an_allocation_or_sidedness_the_library_cannot_honour_is_refused(kwargs, reason):
+    """``**kwargs`` absorbed ``ratio=2`` and returned the equal-allocation answer. Both names
+    are statsmodels' power-API arguments, the vocabulary a planner reaches for."""
+    with pytest.raises(ToolInputError, match=reason):
+        tr.power_calculator(effect_size=0.2, **kwargs)
+
+
+@pytest.mark.parametrize("kwargs", [{"ratio": 1}, {"ratio": 1.0}, {"alternative": "two-sided"}])
+def test_the_design_the_library_computes_may_be_stated(kwargs):
+    assert tr.power_calculator(effect_size=0.2, **kwargs).required_n_per_arm == 393
+
+
+@pytest.fixture
+def _fresh_bounded_pool():
+    from src.api.dependencies.compute import _reset_limiter_cache_for_tests
+
+    _reset_limiter_cache_for_tests()
+    yield
+    _reset_limiter_cache_for_tests()
+
+
+async def test_an_unequal_allocation_fails_the_planned_step_once(_fresh_bounded_pool):
+    from src.agents.tool_composer.executor import PlanExecutor
+    from src.agents.tool_composer.models.composition_models import ExecutionStatus
+    from tests.unit.test_agents.test_tool_composer.test_sync_tool_bounded_timeout_1592 import (
+        _registry_with,
+        _single_step_plan,
+    )
+
+    calls = []
+
+    def counted_power_calculator(**kwargs):
+        calls.append(1)
+        return tr.power_calculator(**kwargs)
+
+    executor = PlanExecutor(
+        tool_registry=_registry_with("power_calculator", counted_power_calculator),
+        enable_caching=False,
+        max_retries=2,
+        backoff_base_delay=0.01,
+    )
+    trace = await executor.execute(
+        _single_step_plan("power_calculator", {"effect_size": 0.2, "ratio": 2}), context={}
+    )
+    result = trace.get_result("step_1")
+    assert result.status == ExecutionStatus.FAILED
+    assert result.output.result is None
+    assert "ratio" in (result.output.error or "")
+    assert len(calls) == 1

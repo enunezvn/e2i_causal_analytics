@@ -2512,6 +2512,37 @@ def _power_number(name: str, value: Any, default: Optional[float] = None) -> Opt
     return float(value)
 
 
+def _refuse_unhonoured_power_design(kwargs: Dict[str, Any]) -> None:
+    """Refuse a design argument the library cannot compute instead of absorbing it.
+
+    ``power_calculator`` takes ``**kwargs`` (the executor injects ``estimation_data`` into
+    every tool), so an undeclared ``ratio=2`` used to be dropped and the equal-allocation n
+    returned as if it answered the unequal design (codex whole-diff F2). ``ratio`` and
+    ``alternative`` are statsmodels' power-API arguments, the names a planner reaches for;
+    every ``power_analysis_lib`` formula is equal allocation and two-sided, so only those
+    values are accepted. Other unknown kwargs stay ignored, as for every composer tool.
+    """
+    if "ratio" in kwargs:
+        ratio = kwargs["ratio"]
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio != 1:
+            raise ToolInputError(
+                f"power_calculator: ratio={ratio!r} asks for unequal allocation, which the "
+                "power library cannot compute (every formula assumes equal arms); refusing "
+                "to return the equal-allocation sample size for a different design."
+            )
+    if "alternative" in kwargs:
+        alternative = kwargs["alternative"]
+        if not isinstance(alternative, str) or alternative.strip().lower() not in (
+            "two-sided",
+            "two_sided",
+        ):
+            raise ToolInputError(
+                f"power_calculator: alternative={alternative!r} asks for a one-sided test, "
+                "which the power library cannot compute (every formula is two-sided); "
+                "refusing to return the two-sided sample size for a different design."
+            )
+
+
 @composable_tool(
     name="power_calculator",
     description=(
@@ -2637,6 +2668,7 @@ def power_calculator(
             "power_calculator: effect_size is None — no effect to detect was supplied (an "
             "upstream step likely failed or lacked the referenced field)."
         )
+    _refuse_unhonoured_power_design(kwargs)
     alpha_value = _power_number("alpha", alpha, default=0.05)
     power_value = _power_number("power", power, default=0.8)
     assert alpha_value is not None and power_value is not None
