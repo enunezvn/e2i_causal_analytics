@@ -78,7 +78,7 @@ class ToolComposerObservabilityService:
         page boundary and be counted twice or skipped.
         """
         rows: List[Dict[str, Any]] = []
-        start = 0
+        cursor: Optional[str] = None
         while True:
             query = (
                 self.client.table("composer_episodes")
@@ -88,17 +88,16 @@ class ToolComposerObservabilityService:
             if not include_synthetic:
                 # The tool rows beside these exclude synthetic runs; one response, one population.
                 query = query.eq("is_synthetic", False)
-            page = (
-                query.order("created_at", desc=True)
-                .order("episode_id")
-                .range(start, start + _PAGE - 1)
-                .execute()
-            )
+            if cursor is not None:
+                query = query.gt("episode_id", cursor)
+            page = query.order("episode_id").range(0, _PAGE - 1).execute()
             batch = list(page.data or [])
             rows.extend(batch)
             if len(batch) < _PAGE:
+                # Newest first is a presentation concern, applied once the whole window is in hand.
+                rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
                 return rows
-            start += _PAGE
+            cursor = str(batch[-1].get("episode_id"))
 
     def _fetch_steps(self, episode_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
         by_episode: Dict[str, List[Dict[str, Any]]] = {}
