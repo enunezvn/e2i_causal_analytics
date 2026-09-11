@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
-"""Re-band every live agent ``random_common_cause`` row under a scale-free rule (#2005).
+"""Re-band every live agent ``random_common_cause`` row under the scale-free rule (#2005).
 
-Today the runner scores the random-common-cause refutation as
-``delta_percent = |refuted - original| / max(|original|, 1e-10) * 100`` with
-PASSED <= 20 %, WARNING <= 30 %, else FAILED (``refutation_runner.py``
-``_run_random_common_cause_test`` / ``PASS_THRESHOLDS["common_cause_delta"]``). The
-denominator is the effect itself, so a null-ish effect fails on perturbation noise
-that a larger effect absorbs. The rule under test measures the SAME shift against
-the reported interval's standard error instead::
+The stored rows were scored by the retired rule, ``delta_percent = |refuted -
+original| / max(|original|, 1e-10) * 100`` with PASSED <= 20 %, WARNING <= 30 %,
+else FAILED (``PASS_THRESHOLDS["common_cause_delta"]``, deleted 2026-09-11). The
+denominator was the effect itself, so a null-ish effect failed on perturbation
+noise that a larger effect absorbs. The runner now scores the SAME shift against
+the reported interval's standard error, and this script re-bands every stored row
+through the runner's OWN scoring helper, ``refutation_runner._score_common_cause_shift``
+(the cutoffs are read from ``PASS_THRESHOLDS["common_cause_shift_se"]``, never
+restated here)::
 
-    se       = (ci_upper - ci_lower) / (2 * 1.959964)      # from the REPORTED interval
-    shift_se = |refuted - original| / se
-    PASSED <= 1.0, WARNING <= 2.0, else FAILED               # provisional cutoffs
+    reported_se  = (ci_upper - ci_lower) / (2 * 1.959964)   # from the REPORTED interval
+    scale        = sqrt(n / refit_n)  when the refutation ran on a #1419 SUBSAMPLE
+                                      (refit_n < n), else 1.0
+    shift_se     = |refuted - original| / (reported_se * scale)
+    PASSED <= thresholds["pass"], WARNING <= thresholds["warning"], else FAILED
+    # thresholds = PASS_THRESHOLDS["common_cause_shift_se"], read at run time
+
+``n`` is the stored ``refutation_n_rows_total`` (the estimation frame the reported
+interval came from) and ``refit_n`` the stored ``refutation_n_rows`` (the frame the
+refits ran on) -- the same two counts the node now passes to the runner. The
+UNSCALED shift is reported beside the scaled one so the disproof re-band (commit
+792490184, which scored ``|delta| / reported_se`` without the scale) stays
+comparable.
 
 The reported interval is what ``original_ci`` was on the runner call — on the agent
 path the estimator's own ``ate_ci_lower / ate_ci_upper`` (``nodes/refutation.py``).
@@ -89,13 +101,18 @@ assert _SRC_FILE.is_relative_to(REPO), f"src resolves outside the checkout under
 
 import reband_sensitivity_readings as pattern  # noqa: E402  (same directory)
 
-from src.causal_engine.refutation_runner import RefutationRunner  # noqa: E402
+from src.causal_engine.refutation_runner import (  # noqa: E402
+    RefutationRunner,
+    _score_common_cause_shift,
+)
 
 Z975 = 1.959964  # the rule's constant; the agent CI was built by the estimator
 P_DECIMALS = 5  # causal_validations.p_value is numeric(6,5)
 P_FLOOR = 0.5 * 10 ** (-P_DECIMALS)  # a stored 0.00000 means p < this
-PASS_SE, WARN_SE = 1.0, 2.0  # provisional cutoffs under test
-PASS_PCT, WARN_PCT = 20.0, 30.0  # today's cutoffs (PASS_THRESHOLDS["common_cause_delta"])
+# The runner's cutoffs, read from the source of truth (asserted below, never restated).
+SE_THRESHOLDS = RefutationRunner.PASS_THRESHOLDS["common_cause_shift_se"]
+PASS_SE, WARN_SE = float(SE_THRESHOLDS["pass"]), float(SE_THRESHOLDS["warning"])
+PASS_PCT, WARN_PCT = 20.0, 30.0  # the RETIRED rule's cutoffs (the stored statuses)
 
 TESTS = (
     "random_common_cause",
@@ -301,14 +318,30 @@ def _status_today(delta_percent: float) -> str:
     return "failed"
 
 
-def _status_new(shift_se: Optional[float]) -> Optional[str]:
-    if shift_se is None:
-        return None
-    if shift_se <= PASS_SE:
-        return "passed"
-    if shift_se <= WARN_SE:
-        return "warning"
-    return "failed"
+def _score_new(
+    ate: float, ref: float, se: float, n: int, n_ref: int
+) -> Tuple[str, float, float, float]:
+    """(status, shift_se scaled, shift_se unscaled, scale) through the runner's own
+    ``_score_common_cause_shift``. The helper takes the reported INTERVAL; the stored
+    sources give its SE, so the interval is rebuilt symmetric about the effect
+    (``ate +/- 1.959964 * se``) -- the helper's ``(hi - lo) / (2 * 1.959964)`` then
+    returns ``se`` within floating-point rounding (relative ~1e-15; e.g. ate 1.0,
+    se 0.01 comes back as 0.010000000000000014). A stored count of 0 means unknown
+    and is passed as None."""
+    status, d = _score_common_cause_shift(
+        original_effect=ate,
+        refuted_effect=ref,
+        original_ci=(ate - Z975 * se, ate + Z975 * se),
+        reference_n=n or None,
+        refit_n=n_ref or None,
+        thresholds=SE_THRESHOLDS,
+    )
+    return (
+        status.value,
+        float(d["shift_se_units"]),
+        abs(ref - ate) / se,
+        float(d["reference_se_scale"]),
+    )
 
 
 def _fmt(v: Any, nd: int = 4) -> str:
@@ -415,8 +448,17 @@ async def main(out: Path) -> int:
                 break
         else:
             e["se_source"], e["se"] = "NONE", None
-        e["shift_se"] = delta / e["se"] if e["se"] else None
-        e["status_new"] = _status_new(e["shift_se"])
+        if e["se"]:
+            e["status_new"], e["shift_se"], e["shift_se_unscaled"], e["se_scale"] = _score_new(
+                ate, ref, e["se"], e["n"], e["n_ref"]
+            )
+        else:
+            e["status_new"], e["shift_se"], e["shift_se_unscaled"], e["se_scale"] = (
+                None,
+                None,
+                None,
+                None,
+            )
         z, z_is_bound = _z_from_p(e["p"])
         e["std_refits"] = (delta / z) if z else None
         e["std_refits_is_upper_bound"] = z_is_bound
@@ -460,6 +502,12 @@ async def main(out: Path) -> int:
     shifts_passed = [
         x["shift_se"] for x in runs if x["status_today"] == "passed" and x["shift_se"] is not None
     ]
+    shifts_passed_unscaled = [
+        x["shift_se_unscaled"]
+        for x in runs
+        if x["status_today"] == "passed" and x["shift_se_unscaled"] is not None
+    ]
+    scaled_rows = [x for x in runs if x["se_scale"] not in (None, 1.0)]
 
     # --- calibration: cross-checks between sources on rows carrying both
     cal = {
@@ -507,12 +555,25 @@ async def main(out: Path) -> int:
     naive_kinds = Counter(x["naive_kind"] for x in runs if x["naive_kind"])
 
     lines = [
-        f"# Live re-band of `random_common_cause` under the shift-vs-reported-SE rule ({date.today().isoformat()})",
+        f"# Live re-band of `random_common_cause` under the shift-vs-reported-SE rule as implemented ({date.today().isoformat()})",
         "",
         f"Agent runs: {len(runs)} (`estimate_source = causal_impact_query`, one rcc row each). "
-        f"Today: {dict(Counter(x['status_today'] for x in runs))}. "
-        f"Rule under test: `shift_se = |refuted − original| / se`, PASSED ≤ {PASS_SE}, WARNING ≤ {WARN_SE}, else FAILED; "
-        f"`se = (ci_hi − ci_lo) / (2 × {Z975})` from the reported interval.",
+        f"Stored (the retired |Δ|/|ATE| rule): {dict(Counter(x['status_today'] for x in runs))}. "
+        f"Rule as implemented, scored through the runner's own `_score_common_cause_shift`: "
+        f"`shift_se = |refuted − original| / (se × scale)`, PASSED ≤ {PASS_SE:g}, WARNING ≤ {WARN_SE:g}, else FAILED "
+        f'(`PASS_THRESHOLDS["common_cause_shift_se"]`); `se = (ci_hi − ci_lo) / (2 × {Z975})` from the reported interval; '
+        f"`scale = sqrt(n / refit n)` when the refutation ran on a #1419 subsample (refit n < n), else 1.0. "
+        f"Rows scaled: {len(scaled_rows)}"
+        + (
+            " — "
+            + ", ".join(
+                f"`{x['eid'][:8]}` n={x['n']} refit n={x['n_ref']} scale {x['se_scale']:.2f} (unscaled {x['shift_se_unscaled']:.2f} → {x['shift_se']:.2f} SE, {x['status_new']})"
+                for x in scaled_rows
+            )
+            if scaled_rows
+            else ""
+        )
+        + ".",
         "",
         "## Status moves (today → new)",
         "",
@@ -547,7 +608,9 @@ async def main(out: Path) -> int:
             else "."
         ),
         f"- shift_se on today's PASSED rows (n={len(shifts_passed)}): max {_fmt(max(shifts_passed) if shifts_passed else None, 3)}, "
-        f"p95 {_fmt(_pct(shifts_passed, 0.95), 3)}, p50 {_fmt(_pct(shifts_passed, 0.50), 3)}.",
+        f"p95 {_fmt(_pct(shifts_passed, 0.95), 3)}, p50 {_fmt(_pct(shifts_passed, 0.50), 3)} "
+        f"(unscaled, as in the disproof re-band: max {_fmt(max(shifts_passed_unscaled) if shifts_passed_unscaled else None, 3)}, "
+        f"p95 {_fmt(_pct(shifts_passed_unscaled, 0.95), 3)}).",
         f"- SE source used, by fidelity: {dict(sources)}. E-value inversion branches: {dict(branches)}. Naive proxy kinds: {dict(naive_kinds)}.",
         f"- Rows with NO SE source: {len(no_se)}"
         + (
@@ -609,8 +672,8 @@ async def main(out: Path) -> int:
         "",
         "## Per run",
         "",
-        "| estimate | brand | pair | n (refit n if subsampled) | original | refuted | Δ | today % / status | se source | se | shift_se | new status | gate today → new | std_refits (rcc noise) | p | reported / inv / boot_sd / naive |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| estimate | brand | pair | n (refit n if subsampled) | original | refuted | Δ | today % / status | se source | se | scale | shift_se (unscaled) | new status | gate today → new | std_refits (rcc noise) | p | reported / inv / boot_sd / naive |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for x in runs:
         sr = x["std_refits"]
@@ -620,7 +683,7 @@ async def main(out: Path) -> int:
         lines.append(
             f"| `{x['eid'][:8]}` | {x['brand'] or '<all>'} | {x['t']}→{x['o']} | {x['n']}{' (' + str(x['n_ref']) + ')' if x['subsampled'] else ''} | {_fmt(x['ate'])} | {_fmt(x['ref'])} | "
             f"{_fmt(x['delta'])} | {x['pct']:.1f} / {x['status_today']} | {x['se_source']} | {_fmt(x['se'])} | "
-            f"{_fmt(x['shift_se'], 2)} | {x['status_new'] or '?'} | {x['gate_today']} → {x['gate_new']} | {sr_txt} | "
+            f"{_fmt(x['se_scale'], 2)} | {_fmt(x['shift_se'], 2)} ({_fmt(x['shift_se_unscaled'], 2)}) | {x['status_new'] or '?'} | {x['gate_today']} → {x['gate_new']} | {sr_txt} | "
             f"{_fmt(x['p'], 5)} | {_fmt(x['se_reported'])} / {_fmt(x['se_inv'])} / {_fmt(x['se_boot_sd'])} / {_fmt(x['se_naive'])} |"
         )
 
@@ -681,7 +744,7 @@ async def main(out: Path) -> int:
         f"- SE constants: the rule's {Z975}. The reported interval on the agent path is the estimator's own `ate_ci_lower / ate_ci_upper`; on the pipeline path it is `effect ± 1.96·se`, a 0.002 % difference from the rule's constant.",
         "- `std_refits` is recovered from DoWhy's one-tailed normal p (`z = |Δ| / std_refits`, `np.std` ddof=0 over 20 refits). A stored `p = 0.00000` means p < 5e-6 (z > 4.42) and the column shows an upper bound.",
         "- `std_refits` is a ratio of two small numbers when p is near 0.5 (z near 0); read it as an order of magnitude there.",
-        "- Nothing was tuned: the cutoffs 1.0 / 2.0 are the provisional ones from #2005, applied as given.",
+        f"- Nothing is restated: the cutoffs {PASS_SE:g} / {WARN_SE:g} are read from the runner's `PASS_THRESHOLDS` and the verdict comes from its `_score_common_cause_shift`; the refit-frame scale is the runner's, applied from the stored `refutation_n_rows_total` / `refutation_n_rows`.",
         "",
         "## Reading",
         "",
@@ -691,7 +754,7 @@ async def main(out: Path) -> int:
             f"The premise survives on the live rows. All {len(failed_rows)} rows FAILED under today's |Δ|/|ATE| rule move to "
             f"{dict(Counter(x['status_new'] for x in failed_rows))} under the shift-vs-SE rule, no PASSED row becomes FAILED, and the "
             f"largest shift on any PASSED row is {max(shifts_passed):.2f} SE (p95 {_pct(shifts_passed, 0.95):.2f}). "
-            "What would reverse it: a PASSED row whose Δ exceeded 2 reported SEs (none here), a reported SE that the "
+            f"What would reverse it: a PASSED row whose shift exceeded {WARN_SE:g} refit-scaled reference SEs (none here), a reported SE that the "
             "stored inversions mis-recover (the two exact inversions above agree wherever both exist), or a naive-proxy row "
             "whose true SE is far below the proxy (the calibration ratios bound that)."
         )
@@ -729,7 +792,7 @@ async def main(out: Path) -> int:
             hyp = (
                 f"the same pair's {len(peers)} exact inversions at n={sorted({y['n'] for y in peers})} scale by √(n_i/{x['n']}) to "
                 f"se ≈ {statistics.median(scaled):.4f}, i.e. shift ≈ {x['delta'] / statistics.median(scaled):.2f} SE "
-                f"({_status_new(x['delta'] / statistics.median(scaled)).upper()})"
+                f"({_score_new(x['ate'], x['ref'], statistics.median(scaled), x['n'], x['n_ref'])[0].upper()})"
                 if scaled
                 else "no same-pair exact inversion exists to scale from"
             )
@@ -752,7 +815,7 @@ async def main(out: Path) -> int:
                     for x in passed_to_warning
                 )
                 + (
-                    ". All of them are SUBSAMPLED refutations: the estimate and its reported SE come from the full frame (n="
+                    ". All of them are SUBSAMPLED refutations even after the refit-frame scale: the estimate and its reported SE come from the full frame (n="
                     + "/".join(sorted({str(y["n"]) for y in passed_to_warning}))
                     + ") while the random-common-cause refits ran on "
                     + "/".join(sorted({str(y["n_ref"]) for y in passed_to_warning}))
@@ -761,14 +824,12 @@ async def main(out: Path) -> int:
                         f"{math.sqrt(y['n'] / y['n_ref']):.1f}"
                         for y in sorted(passed_to_warning, key=lambda y: y["n"])
                     )
-                    + "× the reported one. Measured against the refit-scale SE the shifts are "
+                    + "× the reported one. Against the refit-scale SE (the scale the runner applies, already in `shift_se`) the shifts are "
                     + ", ".join(
-                        f"{y['shift_se'] / math.sqrt(y['n'] / y['n_ref']):.2f}"
+                        f"{y['shift_se']:.2f} (unscaled {y['shift_se_unscaled']:.2f})"
                         for y in passed_to_warning
                     )
-                    + " SE (all PASSED). The rule as written divides by the REPORTED interval, so on a subsampled refutation it compares a "
-                    "subsample refit against a full-frame SE and over-flags; a rule that divides by the SE of the frame the refit ran on would not. "
-                    "Design input for #2005, not a cutoff change."
+                    + " SE: still WARNING after the scale, so the scale did not explain them."
                     if all(
                         y["subsampled"] and y["n_ref"] and y["n_ref"] < y["n"]
                         for y in passed_to_warning
@@ -778,7 +839,7 @@ async def main(out: Path) -> int:
             )
         inv_dev = [abs(a / b - 1.0) for a, b in cal["evalue_inv / reported"] if b]
         lines.append(
-            "What would reverse the reading: a PASSED row with Δ > 2 reported SE (none), or the two exact inversions of the reported interval disagreeing "
+            f"What would reverse the reading: a PASSED row whose shift exceeds {WARN_SE:g} refit-scaled reference SE (none), or the two exact inversions of the reported interval disagreeing "
             + (
                 f"(max |ratio − 1| = {max(inv_dev):.2e} over {len(inv_dev)} rows carrying both)."
                 if inv_dev
