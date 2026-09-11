@@ -32,9 +32,7 @@ def _counts(
     n_refused: int = 0,
     n_invoked: Optional[int] = None,
 ) -> Dict[str, int]:
-    total = (
-        n_invoked if n_invoked is not None else n_succeeded + n_health_failures + n_refused
-    )
+    total = n_invoked if n_invoked is not None else n_succeeded + n_health_failures + n_refused
     return {
         "n_invoked": total,
         "n_succeeded": n_succeeded,
@@ -230,3 +228,61 @@ async def test_reader_tolerates_a_malformed_payload():
     reader = ToolReliabilityReader(port=RecordingPort(rows=[{"nonsense": True}, _row()]))
     verdicts = await reader.get(30)
     assert list(verdicts) == ["causal_effect_estimator"]
+
+
+class HangingPort:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def call(self, name: str, params: Dict[str, Any]) -> Any:
+        self.calls += 1
+        await asyncio.sleep(30)
+        return []
+
+
+async def test_reader_bounds_the_read_so_planning_cannot_wait_on_it():
+    """The production client allows a 30 s network timeout; planning must not inherit it."""
+    port = HangingPort()
+    reader = ToolReliabilityReader(port=port, read_timeout_s=0.05)
+
+    started = time.monotonic()
+    assert await reader.get(30) == {}
+    assert time.monotonic() - started < 5.0
+
+    # A timed-out read is not a reading: the next call tries again rather than serving {}.
+    assert await reader.get(30) == {}
+    assert port.calls == 2
+
+
+class FlakyPort:
+    """One unusable payload, then a good one."""
+
+    def __init__(self, first: Any) -> None:
+        self.payloads: List[Any] = [first, [_row()]]
+        self.calls = 0
+
+    async def call(self, name: str, params: Dict[str, Any]) -> Any:
+        payload = self.payloads[min(self.calls, len(self.payloads) - 1)]
+        self.calls += 1
+        return payload
+
+
+@pytest.mark.parametrize("bad", [{"not": "a list"}, None, "rows"])
+async def test_a_payload_that_is_not_rows_is_not_cached(bad):
+    port = FlakyPort(bad)
+    reader = ToolReliabilityReader(port=port)
+
+    assert await reader.get(30) == {}
+    assert list(await reader.get(30)) == ["causal_effect_estimator"]
+    assert port.calls == 2
+
+
+async def test_a_reading_that_dropped_a_row_is_not_cached():
+    """A partial decode still serves this call, but must not suppress caveats for 300 s."""
+    port = RecordingPort(rows=[{"nonsense": True}, _row()])
+    reader = ToolReliabilityReader(port=port)
+
+    assert list(await reader.get(30)) == ["causal_effect_estimator"]
+    await reader.get(30)
+
+    assert len(port.calls) == 2

@@ -21,6 +21,7 @@ substituted into them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -43,6 +44,11 @@ CAVEAT_RATE = 0.10
 
 #: Default cache lifetime of one reliability read, in seconds.
 CACHE_TTL_S = 300.0
+
+#: Deadline for one reliability read. The Supabase client's own timeout is tens of seconds, which
+#: is a sensible ceiling for a request that matters and far too long for one that does not: this
+#: read is optional, so planning gives it a short deadline and proceeds without it.
+READ_TIMEOUT_S = 5.0
 
 #: Default window, in days, that the planner integration reads.
 DEFAULT_DAYS = 30
@@ -176,13 +182,22 @@ class ToolReliabilityReader:
 
     Cached for ``ttl_s`` per ``(days, include_synthetic)``: the planner and the admin surface ask
     for different windows, and the provenance flag decides whether synthetic-substrate runs count
-    at all, so both belong in the key. Fail-open: any error returns ``{}`` and is not cached, so a
-    transient outage cannot pin an empty reading for the whole TTL.
+    at all, so both belong in the key.
+
+    Only a COMPLETE reading is cached. An error, a timeout, a payload that is not rows, or a
+    reading that had to drop a row all return what they have without caching it — otherwise one
+    bad response would suppress every caveat for the whole TTL, long after the database recovered.
     """
 
-    def __init__(self, port: Optional[RpcPort] = None, ttl_s: float = CACHE_TTL_S) -> None:
+    def __init__(
+        self,
+        port: Optional[RpcPort] = None,
+        ttl_s: float = CACHE_TTL_S,
+        read_timeout_s: float = READ_TIMEOUT_S,
+    ) -> None:
         self._port = port
         self._ttl_s = ttl_s
+        self._read_timeout_s = read_timeout_s
         self._cache: Dict[Tuple[int, bool], Tuple[float, Dict[str, ToolReliability]]] = {}
 
     @property
@@ -205,26 +220,38 @@ class ToolReliabilityReader:
             return cached[1]
 
         try:
-            rows = await self.port.call(
-                "get_tool_reliability",
-                {"p_days": int(days), "p_include_synthetic": include_synthetic},
+            rows = await asyncio.wait_for(
+                self.port.call(
+                    "get_tool_reliability",
+                    {"p_days": int(days), "p_include_synthetic": include_synthetic},
+                ),
+                timeout=self._read_timeout_s,
             )
         except Exception as e:  # noqa: BLE001 - a missing reading is not a planning failure
             logger.warning(f"Tool reliability read failed ({type(e).__name__}: {e})")
             return {}
 
+        if not isinstance(rows, list):
+            logger.warning("Tool reliability read returned no rows; not cached")
+            return {}
+
         verdicts: Dict[str, ToolReliability] = {}
-        for row in rows if isinstance(rows, list) else []:
+        dropped = False
+        for row in rows:
             if not isinstance(row, Mapping):
+                dropped = True
                 continue
             try:
                 tool = ToolReliability.from_row(row)
             except Exception:  # noqa: BLE001 - one unusable row never loses the rest
                 logger.warning("skipped an unusable tool reliability row")
+                dropped = True
                 continue
             verdicts[tool.tool_name] = tool
 
-        self._cache[key] = (now + self._ttl_s, verdicts)
+        # An incomplete reading serves this call but is never held: the next caller reads again.
+        if not dropped:
+            self._cache[key] = (now + self._ttl_s, verdicts)
         return verdicts
 
 
