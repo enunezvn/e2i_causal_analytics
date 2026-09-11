@@ -837,7 +837,7 @@ BEGIN
       ]
     },
     "output_schema": {
-      "description": "Output from power analysis, computed by ``src/utils/power_analysis_lib`` (#2015).\n\n``required_n_per_arm`` and ``required_n_total`` are the library's own figures (for the\ncluster and time-to-event designs the library floors the per-arm figure, as the\nexperiment-designer agent reports it). ``alpha`` and ``power`` are the design targets\nthe sample size was solved for. ``minimum_detectable_effect`` is on\n``minimum_detectable_effect_scale``, which differs from the input ``effect_size`` for a\nbinary design (relative change in, absolute risk difference out — #1639).",
+      "description": "Output from power analysis, computed by ``src/utils/power_analysis_lib`` (#2015).\n\n``required_n_per_arm`` and ``required_n_total`` are the library's own figures: two equal\narms, and for a cluster design whole clusters per arm (``design_details``), the same\nfigures the experiment-designer agent reports. ``alpha`` and ``power`` are the design targets\nthe sample size was solved for. ``minimum_detectable_effect`` is on\n``minimum_detectable_effect_scale``, which differs from the input ``effect_size`` for a\nbinary design (relative change in, absolute risk difference out — #1639).",
       "properties": {
         "required_n_per_arm": {
           "title": "Required N Per Arm",
