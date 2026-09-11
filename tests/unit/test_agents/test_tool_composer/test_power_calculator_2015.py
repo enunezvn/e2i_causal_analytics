@@ -199,7 +199,7 @@ async def test_an_unequal_allocation_fails_the_planned_step_once(_fresh_bounded_
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("effect_size", [4.0, 1e200, 1e-200])
+@pytest.mark.parametrize("effect_size", [4.0, -4.0, 1e200, 1e-200])
 def test_an_unusable_or_unrepresentable_design_is_refused(effect_size):
     """codex whole-diff #5: 1 or 0 per arm is not a design, and an overflow must not escape
     as an OverflowError the executor retries."""
@@ -241,6 +241,8 @@ async def test_an_overflowing_design_fails_the_planned_step_once(_fresh_bounded_
         {"effect_size": 98, "outcome_type": "binary", "baseline_rate": 0.01, "power": 0.1},
         {"effect_size": 1e-153, "design": "cluster", "icc": 0.5, "cluster_size": 100},
         {"effect_size": 1, "outcome_type": "binary", "baseline_rate": 0.1, "alpha": 1e-200},
+        {"effect_size": 100, "outcome_type": "time_to_event", "event_rate": 1.0},
+        {"effect_size": 1e100, "outcome_type": "time_to_event", "event_rate": 1.0},
     ],
 )
 def test_the_remaining_unusable_designs_are_refused(kwargs):

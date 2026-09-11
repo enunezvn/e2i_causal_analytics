@@ -2751,9 +2751,26 @@ def power_calculator(
         else:
             forward = continuous_outcome_power(effect, alpha_value, power_value)
     except (PowerCalculationError, ArithmeticError) as exc:
-        # ArithmeticError (an overflow the library did not anticipate) is as deterministic
-        # over the inputs as a PowerCalculationError, so it is not retried either.
+        # ArithmeticError (the library raises OverflowError for an unrepresentable size) is
+        # as deterministic over the inputs as a PowerCalculationError, so it is not retried.
         raise ToolInputError(f"power_calculator: {exc}") from exc
+    # Minimum usable design, enforced here rather than in the shared library: the library's
+    # normal-approximation arithmetic is also an INPUT to the data-preparer sufficiency gate
+    # (multiplied by the observational inflation), where refusing it dropped a requirement
+    # (codex whole-diff #8). A recommended design needs two per arm to estimate a variance,
+    # and a log-rank comparison two events.
+    if forward.sample_size_per_arm < 2:
+        raise ToolInputError(
+            f"power_calculator: effect_size {effect} gives {forward.sample_size_per_arm} per "
+            "arm, below the two per arm a two-arm test needs; the effect is too large, or "
+            "alpha/power too lax, for this approximation (is the effect in outcome units "
+            "rather than standardised?)"
+        )
+    if int(forward.extra.get("required_events", 2)) < 2:
+        raise ToolInputError(
+            f"power_calculator: hazard ratio {effect} needs {forward.extra['required_events']} "
+            "event(s); a log-rank comparison needs at least two."
+        )
 
     assumptions = [
         f"Solved for alpha={alpha_value:g} (two-sided) and power={power_value:g} with equal "
@@ -3181,6 +3198,11 @@ def _experiment_size(frame: Any, regions: List[str], effect: float) -> Tuple[Opt
         per_arm = continuous_outcome_power(d, policy.alpha, policy.power).sample_size_per_arm
     except (PowerCalculationError, ArithmeticError) as exc:
         return None, f"recommended_sample_size is not given: Cohen's d = {d:.3g}: {exc}."
+    if per_arm < 2:
+        return None, (
+            f"recommended_sample_size is not given: Cohen's d = {d:.3g} gives {per_arm} per "
+            "arm, below the two per arm a two-arm test needs."
+        )
     return per_arm, (
         f"recommended_sample_size = {per_arm} per arm: a two-sided, equal-allocation test at "
         f"power {policy.power:g} and alpha {policy.alpha:g} for Cohen's d = |effect| / SD of "

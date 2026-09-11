@@ -82,22 +82,6 @@ def _whole_count(compute: Callable[[], float], what: str) -> int:
     return int(math.ceil(value))
 
 
-def _two_per_arm(per_arm: int, effect_size: float) -> int:
-    """Refuse a design with fewer than two subjects per arm (#2015).
-
-    A two-arm test needs at least two per arm to estimate a variance; a smaller normal-
-    approximation figure means the effect is too large for the approximation (often an
-    effect in outcome units passed as a standardised one).
-    """
-    if per_arm < 2:
-        raise PowerCalculationError(
-            f"effect_size {effect_size} gives {per_arm} per arm, below the two per arm a "
-            "two-arm test needs; the effect is too large, or alpha/power too lax, for this "
-            "approximation (is the effect in outcome units rather than standardised?)"
-        )
-    return per_arm
-
-
 def continuous_outcome_power(effect_size: float, alpha: float, power: float) -> PowerResult:
     """Two-sample t-test power calculation.
 
@@ -111,11 +95,8 @@ def continuous_outcome_power(effect_size: float, alpha: float, power: float) -> 
     if effect_size == 0:
         raise PowerCalculationError("effect_size must be non-zero for power calculation")
     z_alpha, z_beta = _z_scores(alpha, power)
-    n_per_arm = _two_per_arm(
-        _whole_count(
-            lambda: 2 * ((z_alpha + z_beta) / abs(effect_size)) ** 2, "the per-arm sample size"
-        ),
-        effect_size,
+    n_per_arm = _whole_count(
+        lambda: 2 * ((z_alpha + z_beta) / abs(effect_size)) ** 2, "the per-arm sample size"
     )
     return PowerResult(
         sample_size=n_per_arm * 2,
@@ -163,12 +144,9 @@ def binary_outcome_power(
     diff = abs(p2 - p1)
     if diff < 1e-9:
         raise PowerCalculationError("Effect size produces zero risk difference")
-    n_per_arm = _two_per_arm(
-        _whole_count(
-            lambda: 2 * p_bar * (1 - p_bar) * ((z_alpha + z_beta) / diff) ** 2,
-            "the per-arm sample size",
-        ),
-        effect_size,
+    n_per_arm = _whole_count(
+        lambda: 2 * p_bar * (1 - p_bar) * ((z_alpha + z_beta) / diff) ** 2,
+        "the per-arm sample size",
     )
     return PowerResult(
         sample_size=n_per_arm * 2,
@@ -274,15 +252,7 @@ def time_to_event_power(
     required_events = _whole_count(
         lambda: 4 * ((z_alpha + z_beta) / log_hr) ** 2, "the required number of events"
     )
-    if required_events < 2:
-        raise PowerCalculationError(
-            f"hazard_ratio {hazard_ratio} needs {required_events} event(s); a log-rank "
-            "comparison needs at least two events"
-        )
-    per_arm = _two_per_arm(
-        -(-_whole_count(lambda: required_events / event_rate, "the total sample size") // 2),
-        hazard_ratio,
-    )
+    per_arm = -(-_whole_count(lambda: required_events / event_rate, "the total sample size") // 2)
     return PowerResult(
         sample_size=2 * per_arm,
         sample_size_per_arm=per_arm,
