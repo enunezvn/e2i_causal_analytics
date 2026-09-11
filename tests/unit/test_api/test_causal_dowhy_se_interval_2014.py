@@ -76,16 +76,26 @@ def test_dowhy_interval_helper_returns_nothing_without_an_se() -> None:
     assert causal_routes._dowhy_interval({"causal_effect": 0.3, "standard_error": 0.0}) is None
 
 
-def test_treatment_effects_dowhy_fallback_uses_the_same_interval() -> None:
-    _, state = _run_dowhy()
-    dowhy = state["dowhy_result"]["result"]
+def test_treatment_effects_dowhy_fallback_reports_the_interval() -> None:
+    # A frame with no confounders: EconML fails closed (no covariates), DoWhy estimates.
+    rng = np.random.default_rng(5)
+    n = 300
+    t = (rng.normal(0.0, 1.0, n) > 0).astype(int)
+    y = 0.5 * t + rng.normal(0.0, 1.0, n) * (1.0 + t)
+    spec = causal_routes._TEFrameSpec(
+        frame=pd.DataFrame({"t": t, "y": y}), treatment_var="t", outcome_var="y", confounders=[]
+    )
+    x = np.column_stack([np.ones(n), t]).astype(float)
+    xtx_inv = np.linalg.inv(x.T @ x)
+    resid = y - x @ (xtx_inv @ x.T @ y)
+    hc1 = xtx_inv @ ((x * (resid**2)[:, None]).T @ x) @ xtx_inv * n / (n - 2)
     z = z_score_for_confidence(0.95)
 
-    interval = causal_routes._dowhy_interval(dowhy)
+    response = asyncio.run(
+        causal_routes._run_treatment_effect_estimate("initiation", "Kisqali", spec)
+    )
 
-    assert interval is not None
-    lower, upper = interval
-    assert lower == pytest.approx(dowhy["causal_effect"] - z * dowhy["standard_error"], rel=1e-12)
-    assert upper == pytest.approx(dowhy["causal_effect"] + z * dowhy["standard_error"], rel=1e-12)
-    source = causal_routes._run_treatment_effect_estimate.__code__.co_names
-    assert "_dowhy_interval" in source
+    assert response.estimator == "backdoor.linear_regression"  # the DoWhy fallback ran
+    assert response.std_error == pytest.approx(float(np.sqrt(hc1[1, 1])), rel=1e-9)
+    assert response.ci_lower == pytest.approx(response.ate - z * response.std_error, rel=1e-12)
+    assert response.ci_upper == pytest.approx(response.ate + z * response.std_error, rel=1e-12)
