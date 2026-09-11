@@ -579,3 +579,9 @@ def test_the_budget_expires_before_the_executor_envelope():
 
     envelope = _inspect.signature(PlanExecutor.__init__).parameters["timeout_seconds"].default
     assert tr._COUNTERFACTUAL_BUDGET_S < envelope
+
+
+def test_no_size_is_recommended_when_the_effect_dwarfs_the_outcome_spread(provider):
+    """codex whole-diff #5: d so large the design would have fewer than two per arm."""
+    size, note = tr._experiment_size(_frame(provider), [], 1e6)
+    assert size is None and "per arm" in note

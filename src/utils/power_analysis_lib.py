@@ -23,8 +23,9 @@ Diagnostics:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 from scipy import stats
@@ -59,6 +60,39 @@ def _z_scores(alpha: float, power: float) -> tuple[float, float]:
     return float(stats.norm.ppf(1 - alpha / 2)), float(stats.norm.ppf(power))
 
 
+def _whole_count(compute: Callable[[], float], what: str) -> int:
+    """``ceil`` of a sample-size expression, refused when it is not a finite number.
+
+    A float ``**`` that leaves the float range raises ``OverflowError`` rather than
+    returning ``inf``; either way the result is not a sample size (#2015).
+    """
+    try:
+        value = float(compute())
+    except OverflowError:
+        value = float("inf")
+    if not math.isfinite(value):
+        raise PowerCalculationError(
+            f"{what} is not a finite number for these inputs; check the effect size and rates"
+        )
+    return int(math.ceil(value))
+
+
+def _two_per_arm(per_arm: int, effect_size: float) -> int:
+    """Refuse a design with fewer than two subjects per arm (#2015).
+
+    A two-arm test needs at least two per arm to estimate a variance; a smaller normal-
+    approximation figure means the effect is too large for the approximation (often an
+    effect in outcome units passed as a standardised one).
+    """
+    if per_arm < 2:
+        raise PowerCalculationError(
+            f"effect_size {effect_size} gives {per_arm} per arm, below the two per arm a "
+            "two-arm test needs; the effect is too large for this approximation (is it in "
+            "outcome units rather than standardised?)"
+        )
+    return per_arm
+
+
 def continuous_outcome_power(effect_size: float, alpha: float, power: float) -> PowerResult:
     """Two-sample t-test power calculation.
 
@@ -72,7 +106,12 @@ def continuous_outcome_power(effect_size: float, alpha: float, power: float) -> 
     if effect_size == 0:
         raise PowerCalculationError("effect_size must be non-zero for power calculation")
     z_alpha, z_beta = _z_scores(alpha, power)
-    n_per_arm = int(np.ceil(2 * ((z_alpha + z_beta) / abs(effect_size)) ** 2))
+    n_per_arm = _two_per_arm(
+        _whole_count(
+            lambda: 2 * ((z_alpha + z_beta) / abs(effect_size)) ** 2, "the per-arm sample size"
+        ),
+        effect_size,
+    )
     return PowerResult(
         sample_size=n_per_arm * 2,
         sample_size_per_arm=n_per_arm,
@@ -219,8 +258,15 @@ def time_to_event_power(
             f"hazard_ratio too close to 1.0 ({hazard_ratio}); no detectable effect"
         )
     z_alpha, z_beta = _z_scores(alpha, power)
-    required_events = int(np.ceil(4 * ((z_alpha + z_beta) / log_hr) ** 2))
-    per_arm = -(-int(np.ceil(required_events / event_rate)) // 2)
+    required_events = _whole_count(
+        lambda: 4 * ((z_alpha + z_beta) / log_hr) ** 2, "the required number of events"
+    )
+    if required_events < 2:
+        raise PowerCalculationError(
+            f"hazard_ratio {hazard_ratio} needs {required_events} event(s); a log-rank "
+            "comparison needs at least two events"
+        )
+    per_arm = -(-_whole_count(lambda: required_events / event_rate, "the total sample size") // 2)
     return PowerResult(
         sample_size=2 * per_arm,
         sample_size_per_arm=per_arm,

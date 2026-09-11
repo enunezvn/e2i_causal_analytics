@@ -319,3 +319,34 @@ class TestEqualAllocationDesignsAreRecruitable:
         # 247 events / 0.33 = 748.5 -> 749 -> 375 per arm (was 374, i.e. 748 < 749).
         assert result.extra["required_events"] == 247
         assert (result.sample_size, result.sample_size_per_arm) == (750, 375)
+
+
+class TestUnusableDesignsAreRefused:
+    """#2015 (codex whole-diff #5): a two-arm test needs at least two subjects per arm to
+    estimate a variance, and a calculation that leaves the float range is not a sample size.
+    Before: d=4 gave 1 per arm, d=1e200 gave 0, d=1e-200 raised OverflowError (which the
+    composer executor retries), HR=1e100 gave a design with 1 event."""
+
+    @pytest.mark.parametrize("d", [4.0, -4.0, 1e200])
+    def test_an_effect_too_large_for_two_per_arm_is_refused(self, d):
+        with pytest.raises(PowerCalculationError, match="per arm"):
+            continuous_outcome_power(d, 0.05, 0.80)
+
+    def test_the_smallest_usable_design_is_two_per_arm(self):
+        # 2 x (2.8016 / 2.8)^2 = 2.002 -> 3; at d=3.9, 1.03 -> 2.
+        assert continuous_outcome_power(3.9, 0.05, 0.80).sample_size_per_arm == 2
+
+    @pytest.mark.parametrize(
+        ("call", "args"),
+        [
+            (continuous_outcome_power, (1e-200, 0.05, 0.80)),
+            (cluster_rct_power, (1e-200, 0.05, 0.80, 0.05, 20)),
+        ],
+    )
+    def test_a_calculation_outside_the_float_range_is_refused(self, call, args):
+        with pytest.raises(PowerCalculationError, match="finite"):
+            call(*args)
+
+    def test_a_time_to_event_design_needs_two_events(self):
+        with pytest.raises(PowerCalculationError, match="events"):
+            time_to_event_power(1e100, 0.05, 0.80, 1.0)

@@ -197,3 +197,39 @@ async def test_an_unequal_allocation_fails_the_planned_step_once(_fresh_bounded_
     assert result.output.result is None
     assert "ratio" in (result.output.error or "")
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("effect_size", [4.0, 1e200, 1e-200])
+def test_an_unusable_or_unrepresentable_design_is_refused(effect_size):
+    """codex whole-diff #5: 1 or 0 per arm is not a design, and an overflow must not escape
+    as an OverflowError the executor retries."""
+    with pytest.raises(ToolInputError):
+        tr.power_calculator(effect_size=effect_size)
+
+
+async def test_an_overflowing_design_fails_the_planned_step_once(_fresh_bounded_pool):
+    from src.agents.tool_composer.executor import PlanExecutor
+    from src.agents.tool_composer.models.composition_models import ExecutionStatus
+    from tests.unit.test_agents.test_tool_composer.test_sync_tool_bounded_timeout_1592 import (
+        _registry_with,
+        _single_step_plan,
+    )
+
+    calls = []
+
+    def counted_power_calculator(**kwargs):
+        calls.append(1)
+        return tr.power_calculator(**kwargs)
+
+    executor = PlanExecutor(
+        tool_registry=_registry_with("power_calculator", counted_power_calculator),
+        enable_caching=False,
+        max_retries=2,
+        backoff_base_delay=0.01,
+    )
+    trace = await executor.execute(
+        _single_step_plan("power_calculator", {"effect_size": 1e-200}), context={}
+    )
+    result = trace.get_result("step_1")
+    assert result.status == ExecutionStatus.FAILED and result.output.result is None
+    assert len(calls) == 1

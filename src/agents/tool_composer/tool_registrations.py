@@ -3150,7 +3150,7 @@ def _experiment_size(frame: Any, regions: List[str], effect: float) -> Tuple[Opt
     from src.digital_twin.effect.cohort_causal_estimator import control_outcome_sd
     from src.digital_twin.effect.errors import EffectDataUnavailable
     from src.digital_twin.effect.recommendation import PolicyThresholds
-    from src.utils.power_analysis_lib import continuous_outcome_power
+    from src.utils.power_analysis_lib import PowerCalculationError, continuous_outcome_power
 
     policy = PolicyThresholds()
     scope = f"the targeted regions {regions}" if regions else "the cohort"
@@ -3175,7 +3175,10 @@ def _experiment_size(frame: Any, regions: List[str], effect: float) -> Tuple[Opt
             f"the {n_rows} comparison-arm rows of {scope}."
         )
     d = abs(effect) / sd
-    per_arm = continuous_outcome_power(d, policy.alpha, policy.power).sample_size_per_arm
+    try:
+        per_arm = continuous_outcome_power(d, policy.alpha, policy.power).sample_size_per_arm
+    except PowerCalculationError as exc:
+        return None, f"recommended_sample_size is not given: Cohen's d = {d:.3g}: {exc}."
     return per_arm, (
         f"recommended_sample_size = {per_arm} per arm: a two-sided, equal-allocation test at "
         f"power {policy.power:g} and alpha {policy.alpha:g} for Cohen's d = |effect| / SD of "
