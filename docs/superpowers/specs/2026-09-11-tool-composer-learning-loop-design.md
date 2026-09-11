@@ -136,9 +136,16 @@ weeks, and zero since 2026-08-16.** Per-tool samples are in single digits.
 ## 3. Goal: what a leader notices when the loop works
 
 1. **Every composition is accounted for, including the ones that fail.** Each run has one row with its
-   outcome (success / partial / failed / timeout), the phase it failed in and per-phase latency. Runs
-   abandoned mid-flight (worker killed, client timeout) show as abandoned, not missing. Today 12 of 19
-   planned runs vanish without a reason.
+   outcome (success / partial / failed / cancelled), the phase it failed in and per-phase latency. The
+   steps that finished before a failure or a cancel are kept. Runs abandoned mid-flight (worker killed)
+   show as abandoned, not missing. Today 12 of 19 planned runs vanish without a reason.
+
+   Recording is best-effort by design, because it must never fail a user's answer. The loss is
+   *measured*, not assumed:
+   - the start write is awaited (≤ 2 s) before decomposition;
+   - every write failure is counted;
+   - the cert reconciles episodes against the audit chain's `workflow_start` rows over the same window
+     (§5.4, §9).
 2. **Per-tool reliability separates three kinds of non-success:**
    - **health failures:** exception after retries, timeout;
    - **honest refusals:** `ToolRefusalError` / `ToolInputError`, meaning the data could not answer, which
@@ -148,8 +155,12 @@ weeks, and zero since 2026-08-16.** Per-tool samples are in single digits.
    Only health failures count against a tool.
 3. **Verdict word first, then the numbers,** on an admin surface: "Too few runs to judge (n=3)",
    "Caveat: 6 of 24 runs failed (timeout)", "Reliable (n=52)".
-4. **Similar-composition references name what failed** in the reference run, instead of presenting a
-   partial run as a clean "successful composition".
+4. **A plan that failed is not reused as if it had worked.**
+   - Today the in-process plan cache (`cache.py:228–330`, 15-minute TTL) hands a similar decomposition
+     the identical steps of a plan whose execution failed, and skips the LLM planner to do it.
+   - Episodic references present a PARTIAL run as a clean "successful composition".
+   - With the loop, a plan whose composition failed, or had a plan defect, is evicted from the plan
+     cache. Episodic references recommend only the steps that succeeded and list what did not work (§7.3).
 5. **The planner sees measured latency and a reliability caveat only when the evidence clears a
    calibrated bar** (§7). At today's volume the bar is not reached, and the planner prompt is unchanged.
    That silence is the correct behaviour, and a test pins it.
@@ -184,15 +195,31 @@ p_max_deprecations int DEFAULT 3)`, called by a Python sync client:
 - Rehearsed: the first call inserted/updated, and a second identical call returned all-zero counts.
 
 **Multi-worker race.** `pg_advisory_xact_lock(hashtext('sync_tool_registry'))` inside the function
-serialises the two gunicorn workers (and any lazy call). The second caller sees no changes.
+serialises the two gunicorn workers (and any lazy call). The second caller sees no changes. Both
+workers run the same image, so their payloads are identical.
+
+**Mixed code versions.** Old and new code cannot sync at the same time:
+- The API is a single container with a fixed name (`container_name: e2i_api`,
+  `docker/docker-compose.yml:896`).
+- Deploys and rollbacks recreate it with `up -d --no-deps --force-recreate` (`.github/workflows/deploy.yml`
+  L480/485/490/1065), which stops the old container before the new one starts.
+- Celery containers share the image but run no lifespan and no composer (§5.4), so they never sync.
+
+A rollback to an older image re-syncs the registry to that image's tools. That is the intended
+semantics: **the DB describes the code that is running.** No generation or ordering check is added,
+because nothing can produce two live payloads at once.
 
 **Failure behaviour.**
 - The Python client builds the payload only when `create_default_tools()` resolves every
   `TOOL_METADATA` entry. It raises `LookupError` otherwise, so a partially imported registry never syncs.
-- The function refuses:
+- The function validates before any write and raises (no partial state) on:
   - an empty payload (rehearsed: raises);
-  - a payload that would deprecate more than `p_max_deprecations` tools. In rehearsal a 2-tool payload
-    deprecated 15 tools and deleted all 11 dependencies, which is exactly the hazard the guard exists for.
+  - a payload that would deprecate more than `p_max_deprecations` currently active tools. The count is
+    computed first, before any mutation. In rehearsal an unguarded 2-tool payload deprecated 15 tools and
+    deleted all 11 dependencies, which is exactly the hazard. The rehearsal draft did not yet carry the
+    guard; the migration task adds it red-first.
+  - a dependency whose consumer or producer is not in the tool payload;
+  - a duplicate tool name in the payload.
 - The function is atomic, so a bad row (unknown agent) rejects the whole sync (rehearsed) and leaves the
   previous state.
 - Any failure is logged at WARNING with the error, and the API keeps running. Recording then reports
@@ -254,9 +281,15 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 
 **`composer_episodes`:**
 - Add:
-  - `outcome text CHECK IN ('success','partial','failed','timeout')`, because `composition_status` has
-    no PARTIAL and `status` keeps the terminal enum value;
+  - `outcome text CHECK IN ('success','partial','failed','cancelled')`, because `composition_status` has
+    no PARTIAL and `status` keeps the terminal enum value (COMPLETED / FAILED / TIMEOUT).
+    - A cancel is `cancelled`, not `timeout`: `CancelledError` alone does not prove a deadline expired.
+    - The orchestrator's 180 s SLA (`router.py:298`) is one cause; a client disconnect or a shutdown are
+      others.
+    - The enum value `TIMEOUT` stays unused until a caller passes an explicit deadline reason.
   - `failed_phase text`;
+  - `plan_source text CHECK IN ('llm','plan_cache','kpi_deterministic')`: whether the plan came from the
+    LLM planner, the in-process plan cache or `_build_kpi_causal_plan` (§7.3);
   - `entry_point text` (`chat_tool` / `orchestrator_agent` / `direct`);
   - `brand`, `region`;
   - `is_synthetic boolean NOT NULL DEFAULT false`;
@@ -272,7 +305,11 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
   - `outcome_class text CHECK IN ('succeeded','cache_hit','refused','input_rejected','timeout','error',
     'plan_defect','dependency_unmet','circuit_open','not_registered')`;
   - `attempts int`;
-  - `cache_hit boolean NOT NULL DEFAULT false`.
+  - `cache_hit boolean NOT NULL DEFAULT false`;
+  - `error_type text`: the exception class name, for aggregation. The message is redacted (§5.5).
+- `step_number` is the step's index in `plan.steps`, fixed at plan time, so it does not depend on
+  completion order. It makes `(episode_id, step_number)` a stable idempotency key (the existing
+  `unique_step_in_episode`).
 - Widen `serves_sub_question` to `varchar(100)`, because planner sub-question ids are free text.
 - `status` uses the existing enum: COMPLETED for succeeded/cache_hit, FAILED otherwise.
 
@@ -280,13 +317,18 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 - Add:
   - `outcome_class text CHECK IN ('succeeded','refused','input_rejected','timeout','error')`;
   - `attempts int`;
+  - `is_synthetic boolean NOT NULL DEFAULT false`, copied from the episode (§6);
+  - `tool_version text`, copied from `tool_registry.version` at insert;
   - a unique partial index on `step_id`, so one performance row per step.
 - Rows are written only for steps where the tool was **invoked**. A cache hit, a plan defect, an unmet
   dependency, an open circuit or an unregistered tool never ran the tool and says nothing about its
   health.
+- **Unit of measurement: the step's final outcome.** A step that failed twice and then succeeded is one
+  `succeeded` row with `attempts = 3`. Retries are exposed as `n_retried` (§6), not hidden, but they do
+  not count as failures.
 
-**Replace the trigger** with an explicit insert inside the finish function. `trg_log_step_performance`
-and `trigger_log_step_performance()` are dropped:
+**Replace the trigger** with an explicit insert inside the step-recording function.
+`trg_log_step_performance` and `trigger_log_step_performance()` are dropped:
 - the trigger fires on UPDATE only, so terminal-state inserts are lost;
 - it double-counts COMPLETED→FAILED;
 - the designed intent, "a performance row per finished step", is kept, but in one visible statement.
@@ -296,56 +338,93 @@ and `trigger_log_step_performance()` are dropped:
 1. **`compose()` start.**
    - Generate `composition_id` up front and pass it into every `CompositionResult` built later,
      including `_create_error_result` and `_create_total_failure_result`.
-   - Enqueue `composer_record_start` with the redacted query, session_id, user_id, entry_point
-     (`context["entry_point"]`, set by the two entry points), brand, region, and
-     `is_synthetic = deployment_includes_synthetic()` (`src/repositories/provenance.py:95`).
-2. **After decompose / plan / execute**, enqueue `composer_record_phase` with the new status, phase
-   latency, `sub_questions` (id, intent, question text redacted to 200 chars) and `tool_plan` (steps:
-   step_id, tool_name, depends_on, input_mapping keys and `$step` references). Execute also sends
-   `parallelizable_groups`.
-3. **Terminal**, enqueue `composer_record_finish` with outcome, status, failed_phase, error (≤2000
-   chars), per-phase and total latency, counts, and the steps built from `ExecutionTrace.step_results`.
-   The terminal paths are:
+   - **Await** `composer_record_start` with a 2 s timeout, fail-open. It carries the redacted query,
+     session_id, user_id, entry_point (`context["entry_point"]`, set by the two entry points), brand,
+     region, and `is_synthetic = deployment_includes_synthetic()` (`src/repositories/provenance.py:95`).
+   - This one write is awaited so a composition exists durably before 13 s of decomposition. One
+     PostgREST round trip is milliseconds against a 45 s pipeline, and the cert measures it.
+2. **After decompose / plan / execute**, enqueue `composer_record_phase` with:
+   - the new status and the phase latency;
+   - `sub_questions`: id, intent, question text redacted to 200 chars;
+   - `tool_plan`: steps with step_id, step_number, tool_name, depends_on, input_mapping keys and `$step`
+     references;
+   - `plan_source`;
+   - `parallelizable_groups`, sent by execute.
+3. **Per finished step, during execution.** `PlanExecutor.execute` gains an optional
+   `on_step_result(step_number, StepResult)` callback, invoked as each step's result is added to the
+   trace (`executor.py:458, 472`). The recorder enqueues `composer_record_steps` for it.
+   - A cancel or a crash in a later group leaves the earlier steps recorded.
+   - A step that was still running when a cancel arrived has no result and is not recorded. The episode
+     says `cancelled` in phase `execute`.
+4. **Terminal**, enqueue `composer_record_finish` with outcome, status, failed_phase, redacted error,
+   per-phase and total latency, and counts. The terminal paths are:
    - success or partial (end of `compose`);
    - `_create_total_failure_result`;
    - `_fail_closed` (Decomposition / Planning / Execution / unexpected);
-   - `asyncio.CancelledError`, recorded as `timeout` and then re-raised. This is the orchestrator's 180 s
-     SLA cancel (`router.py:298`).
+   - `asyncio.CancelledError`: recorded as `cancelled`, then re-raised.
 
-**Executor change (`executor.py`).** `StepResult` gains `outcome_class`, `attempts` and `cache_hit`
-(`models/composition_models.py:204`). Each existing return site sets them:
+   Finish also re-sends the full step list. `composer_record_steps` is idempotent, so a step whose
+   per-step write was lost is recovered here.
 
-| Site | Value |
-|---|---|
-| L522 | `dependency_unmet` |
-| L549 | `plan_defect` |
-| L611 | `cache_hit` |
-| L631 | `circuit_open` |
-| L652 | `not_registered` |
-| L703 | `succeeded` |
-| L753 | `input_rejected` / `refused` |
-| L788 | `timeout` |
-| L816 | `error`, attempts = max_retries + 1 |
+**Executor change (`executor.py`).** `StepResult` gains `outcome_class`, `attempts`, `cache_hit` and
+`error_type` (`models/composition_models.py:204`). Each existing return site sets them:
 
-The classes come from the exception type already caught at each site, never from error text.
+| Site | outcome_class | attempts |
+|---|---|---|
+| L522 | `dependency_unmet` | 0 |
+| L549 | `plan_defect` | 0 |
+| L611 | `cache_hit` | 0 |
+| L631 | `circuit_open` | 0 |
+| L652 | `not_registered` | 0 |
+| L703 | `succeeded` | attempt + 1 |
+| L753 | `input_rejected` / `refused` | attempt + 1 |
+| L788 | `timeout` (`SyncToolTimeout`) | attempt + 1 |
+| L816 | `timeout` if the **last** attempt raised `asyncio.TimeoutError` (the async `wait_for` at L673), else `error` | max_retries + 1 |
+
+- The classes come from the exception type already caught at each site, never from error text.
+- The generic arm (L803) keeps the last exception object, not only its string, so the final class and
+  `error_type` are exact.
+- Today an async timeout lands in the generic arm and would read as `error`. That is the gap codex
+  iteration 1 found.
 
 ### 5.4 Asynchronous and fail-open
 
-- **Write path.** A new `CompositionRecorder` (`src/agents/tool_composer/learning_recorder.py`) chains
-  its RPCs on a single background task per composition, so order is kept (start < phase < finish).
-- **Bookkeeping.**
-  - Each write has a 5 s timeout.
-  - Tasks live in a module-level set with a `discard` done-callback, the `_pending_log_tasks` pattern
-    from `intent_classifier.py:72/834`.
-  - A failure logs one WARNING and never raises into `compose()`.
-- **Composition latency.** Added latency is zero by construction, because nothing is awaited on the
-  compose path. The live cert measures it (§9).
-- **Unknown tools.** `composer_record_finish` returns `unknown_tools`: steps whose tool has no registry
-  row. Rehearsed: a `cohort_builder` step was reported and the other 3 steps were recorded.
-  - On a non-empty list the recorder runs the lazy sync once for the process.
-  - It then re-sends only the missing steps through `composer_record_steps(p_composition_id, p_steps)`,
-    which inserts steps plus performance rows for an already-finished episode and is idempotent on
-    `(episode_id, step_number)`.
+A new `CompositionRecorder` (`src/agents/tool_composer/learning_recorder.py`) owns every write.
+
+**Four RPCs, each idempotent so a lost response can be re-sent:**
+
+| RPC | Behaviour |
+|---|---|
+| `composer_record_start(p_episode)` | `INSERT … ON CONFLICT (composition_id) DO NOTHING`; returns the episode_id either way |
+| `composer_record_phase(p_composition_id, p_status, p_patch)` | Updates only a non-terminal episode |
+| `composer_record_steps(p_composition_id, p_steps)` | `INSERT … ON CONFLICT (episode_id, step_number) DO NOTHING` for steps; performance rows for invoked classes only, `ON CONFLICT (step_id) DO NOTHING`. It works whether the episode is open or finished. It returns a stable receipt `{recorded, already_present, unknown_tools}`. |
+| `composer_record_finish(p_composition_id, p_episode)` | Upserts: when start never landed, it inserts the episode from the start fields it also carries, then sets the terminal state. A second finish on a terminal episode returns `{recorded:false, already_terminal:true}` and changes nothing. |
+
+**Ordering.**
+- After the awaited start, the recorder chains phase, steps and finish writes on one background task per
+  composition, so start < phase < steps < finish.
+- Each write has a 5 s timeout.
+- Tasks live in a module-level set with a `discard` done-callback, the `_pending_log_tasks` pattern from
+  `intent_classifier.py:72/834`.
+- The API `lifespan` shutdown awaits the pending set for up to 5 s before closing clients, so a graceful
+  deploy drains its in-flight records.
+
+**Failure accounting.**
+- A failed write logs one structured WARNING (rpc, composition_id, error class).
+- It increments a Prometheus counter `composer_record_failures_total{rpc}`, following
+  `src/api/routes/metrics.py`'s optional-client pattern.
+- It never raises into `compose()`.
+- Coverage is measured in the cert (§9): episodes against audit-chain `workflow_start` rows, and steps
+  against `ExecutionTrace` counts.
+
+**Composition latency.** Only the start write is awaited, with a 2 s cap. The live cert measures the
+start write's duration and compares compose wall time with the pre-deploy baseline (§9).
+
+**Unknown tools.** `composer_record_steps` reports steps whose tool has no registry row in
+`unknown_tools`. Rehearsed with the draft finish function: a `cohort_builder` step was reported, and the
+other 3 steps were recorded.
+- On a non-empty list the recorder runs the lazy sync once for the process.
+- It then re-sends the same steps. Idempotency makes that safe.
 - **Transport.** The recorder and sync client call a small `rpc(name, params)` port.
   - Production: the service-role `get_async_supabase_client().rpc(...).execute()`.
   - Real-DB tests: a psycopg connection to a throwaway database calling `SELECT name(...)`. That is a
@@ -357,15 +436,26 @@ The classes come from the exception type already caught at each site, never from
 
 ### 5.5 PII and retention
 
-- **Stored:**
-  - **Query text:** `redact_query(query, max_len=500)` (`src/utils/redaction.py`), the same 500-char cap
-    as the episodic `raw_content` (`memory_hooks.py`). `classification_logs` already keeps the full text
-    in the same schema.
-  - **Input params:** scalars (str ≤200 chars, numbers, bools), lists as `{"type":"list","len":n}`,
-    dicts as `{"type":"dict","keys":[…]}`, DataFrames as `{"type":"frame","rows":r,"columns":c}`.
-    Planner-bound column names are kept, because they are the plan. Entity id lists (for example
-    `target_entities`) are never stored element-wise.
-  - **Output:** keys only (`output_result = {"keys":[…]}`) plus the error message.
+- **Every persisted free-text string goes through `redact_query`** (`src/utils/redaction.py`), which
+  the module documents as "the single hook for any future PII scrubbing of query text". It covers the
+  query, sub-question text, scalar parameter values and error messages. SQL `left()` is only a second
+  bound.
+  - Today that hook only truncates, and the repo has no content scrubber. This design claims bounded
+    length and one scrubbing point, not scrubbing.
+  - **Query text:** `redact_query(query, max_len=500)`, the same 500-char cap as the episodic
+    `raw_content` (`memory_hooks.py`). `classification_logs` already keeps the full text in the same
+    schema.
+  - **Input params:** string scalars `redact_query(v, 120)`, numbers and bools as-is, lists as
+    `{"type":"list","len":n}`, dicts as `{"type":"dict","keys":[…]}`, DataFrames as
+    `{"type":"frame","rows":r,"columns":c}`. Planner-bound column names are kept, because they are the
+    plan. Entity id lists (for example `target_entities`) are never stored element-wise.
+  - **Errors:** `error_type` (exception class) is the aggregation key. `error_message` is
+    `redact_query(msg, 300)`.
+    - Refusal messages are designed to be read (#1574 scope disclosures) and already reach the audit
+      chain and synthesis.
+    - The cap bounds what an exception could echo from its inputs.
+    - A test feeds real tool exceptions whose text carries an input value, and pins the stored form.
+  - **Output:** keys only (`output_result = {"keys":[…]}`).
 - **Not stored:** `synthesized_response` and `tool_outputs` stay NULL / `{}`. They can carry
   patient-level numbers, and learning does not need them.
 - **Access:** `service_role` only. There are no `anon`/`authenticated` grants, and a real-DB test pins
@@ -380,21 +470,35 @@ The classes come from the exception type already caught at each site, never from
 filtered by `executed_at` is sub-millisecond. There is no `pg_cron`, and a Celery beat entry would add
 an ordering and staleness problem for no measurable gain.
 
-- **`get_tool_reliability(p_days int DEFAULT 30)`**, SQL `STABLE`, `service_role` only. One row per
-  active tool:
-  - declared latency;
+- **`get_tool_reliability(p_days int DEFAULT 30, p_include_synthetic boolean DEFAULT true)`**, SQL
+  `STABLE`, `service_role` only. One row per active tool:
+  - declared latency and current `version`;
   - `n_invoked`, `n_succeeded`;
   - `n_refused` (refused + input_rejected);
   - `n_health_failures` (timeout + error);
+  - `n_health = n_succeeded + n_health_failures`, the denominator of the reliability rule (§7.1);
+  - `n_retried` (succeeded with attempts > 1);
+  - `n_synthetic`;
   - p50 / p95 latency of **succeeded** invocations;
-  - `last_executed_at`, most common health error.
+  - `last_executed_at`, most common health `error_type`.
 
-  Rehearsed on a recorded episode: `causal_effect_estimator 1/1/0/0 p50 900`,
-  `gap_calculator 1/0/1/0` (refused, not failed).
-- **`v_tool_reliability`** is recreated as `SELECT * FROM get_tool_reliability(30)`. That keeps the
-  designed name, with the 30-day window the reliability rule in §7 uses.
-- **`v_composition_success_rate`** is recreated without the fan-out: daily counts by `outcome`,
-  unfinished, and p50/p95 total latency. Rehearsed: 1 episode gives 1.
+  Rehearsed with the draft (before `n_health` / provenance were added): `causal_effect_estimator 1/1/0/0
+  p50 900`, `gap_calculator 1/0/1/0` (refused, not failed).
+- **Provenance.** `p_include_synthetic = false` excludes rows whose episode ran under a deployment that
+  includes synthetic substrate. Callers pass `deployment_includes_synthetic()`, the rule every
+  provenance-gated reader follows (`src/repositories/provenance.py:95–110`):
+  - On this showcase deployment (`E2I_INCLUDE_SYNTHETIC=true`, measured in `e2i_api`) the synthetic runs
+    *are* the operational runs, so they count.
+  - On a real-RWD deployment they are excluded from the planner signal and still shown as `n_synthetic`.
+- **Versions.** `tool_version` is recorded on every performance row. It does not filter the rule,
+  because versions are not bumped today (every live row is `1.0.0` or `4.4.0`), so a version split would
+  be a label with nothing behind it. The 30-day window bounds how long a replaced implementation's
+  history can count.
+- **`v_tool_reliability`** is recreated as `SELECT * FROM get_tool_reliability(30, true)`. That keeps
+  the designed name, with the 30-day window the reliability rule in §7 uses.
+- **`v_composition_success_rate`** is recreated without the fan-out: daily counts by `outcome` (success,
+  partial, failed, cancelled), unfinished, by `plan_source`, and p50/p95 total latency. Rehearsed:
+  1 episode gives 1.
 - **`v_active_compositions`** is recreated for runs not yet in a terminal status: `elapsed_ms` and
   `abandoned = last_phase_at < now() - interval '10 minutes'`. The composer SLA is 180 s, so 10 minutes
   cannot be a live run.
@@ -414,18 +518,25 @@ an ordering and staleness problem for no measurable gain.
 The rule is a pure function in the new `src/agents/tool_composer/reliability.py`. It is the one place
 that turns counts into a verdict; the planner and the admin API both call it.
 
+**Denominator.** `n_health = n_succeeded + n_health_failures`. Refusals never enter it, so twenty
+refusals cannot qualify a tool for a verdict. The health-failure rate is `n_health_failures / n_health`.
+
 | Verdict | Condition |
 |---|---|
 | `no_runs` | n_invoked = 0 |
-| `too_few_runs` | 0 < n_invoked < 20 |
-| `caveat` | n ≥ 20 and Wilson 95% **lower** bound of health-failure rate ≥ 10% |
-| `reliable` | n ≥ 20 and Wilson 95% **upper** bound < 10% |
+| `too_few_runs` | n_health < 20. It covers tools that only refused: "no health evidence yet". |
+| `caveat` | n_health ≥ 20 and Wilson 95% **lower** bound of the health-failure rate ≥ 10% |
+| `reliable` | n_health ≥ 20 and Wilson 95% **upper** bound < 10% |
 | `inconclusive` | otherwise |
 
-Refusals are reported next to the verdict ("5 refused: data could not answer") and never enter the rate.
+- Refusals are reported next to the verdict ("5 refused: data could not answer") and never enter the rate.
+- **Measured latency is eligible only at `n_succeeded` ≥ 20.** A tool that mostly fails keeps its
+  declared latency.
 
-**Calibration** (scratch simulation, 20,000 Bernoulli draws per cell, seed 7). A healthy tool is
-p = 0.02 or 0.05; a failing tool is p = 0.20 or 0.30.
+**Calibration** (scratch simulation, 20,000 Bernoulli draws per cell, seed 7; n here is `n_health`).
+A healthy tool is p = 0.02 or 0.05; a failing tool is p = 0.20 or 0.30. **The n = 5 row is the
+*ungated* Wilson rule, shown only to justify the floor. The shipped rule returns `too_few_runs` at
+n = 5.**
 
 | n | P(caveat), p=0.02 | P(caveat), p=0.05 | P(caveat), p=0.20 | P(caveat), p=0.30 | P(reliable), p=0.02 |
 |---|---|---|---|---|---|
@@ -449,10 +560,12 @@ p = 0.02 or 0.05; a failing tool is p = 0.20 or 0.30.
 - **Planner prompt** (`planner.py:371`) and **DSPy formatter** (`dspy_integration.py:189–225`) both go
   through one shared formatter:
   - Declared latency is labelled "(declared)".
-  - At n ≥ 20 the measured median replaces it: "Measured median 1.8 s over 24 runs (30 days)".
+  - At `n_succeeded` ≥ 20 the measured median replaces it: "Measured median 1.8 s over 24 successful
+    runs (30 days)".
   - On `caveat` a line is added: "Reliability caveat: 6 of 24 runs failed on tool errors (timeout)".
     Refusals are shown only as a count.
-- **`_estimate_duration`** (`planner.py:955`) uses the measured median at n ≥ 20.
+- **`_estimate_duration`** (`planner.py:955`) uses the measured median at `n_succeeded` ≥ 20.
+- **Reader population.** The reader passes `p_include_synthetic = deployment_includes_synthetic()` (§6).
 - **Deliberately not done (feedback-loop guards):**
   - no automatic removal of a tool from the offer;
   - no reranking;
@@ -472,13 +585,59 @@ p = 0.02 or 0.05; a failing tool is p = 0.20 or 0.30.
 dropped, because their design intent (reuse a successful plan for a similar query) is served by the
 live episodic path. The SQL function has never had a caller, and the column has never held a row.
 
-**New behaviour.**
-- `memory_hooks.find_similar_compositions` hydrates each reference with its recorded steps: one
-  `composition_steps` read by `composition_id` for the ≤ 3 references.
-- `planner._format_episodic_context` (`planner.py:539`) renders "Tools used: causal_effect_estimator
-  (succeeded), gap_calculator (refused: single-brand frame), rank_drivers (skipped: dependency unmet)".
-- A reference with no recorded steps (the 2 pre-loop rows) renders exactly as today.
-- Selection is unchanged. PARTIAL references stay eligible, but their failures are now visible.
+**Intent of the reuse paths (verified).**
+- G1/G2 (`fee8bc3e0`: "episodic memory for plan reuse") and #889 (the reference context "never
+  fired") both intend to hand the planner **tool sequences that worked** for a similar question. The
+  planner's own header reads: "The following successful compositions may inform your planning"
+  (`planner.py:555`).
+- G6 (`fee8bc3e0`: "plan similarity matching") intends to **skip planning** for a structurally similar
+  decomposition.
+
+Two measured defects break that intent. The loop fixes both.
+
+**1. The plan cache reuses plans that failed.**
+
+`ToolPlanner.plan` (`planner.py:212–228`):
+- calls `get_similar_plan`: intent-set Jaccard plus dependency similarity ≥ 0.8, 15-minute TTL, process
+  singleton;
+- returns `_adapt_cached_plan`, which copies the cached **steps verbatim**, input mappings included
+  (`planner.py:303–332`), and bypasses the LLM planner;
+- caches every plan at planning time (`planner.py:293`), before execution, whatever happens next.
+
+A plan that then failed (0 tools succeeded, a `plan_defect`, a `not_registered` step) is served again to
+the next similar question in that worker for 15 minutes.
+
+**New behaviour:**
+- `PlanSimilarityCache` gets `evict(signature_key)`.
+- `ExecutionPlan` carries the `plan_cache_key` it was stored or matched under.
+- After execution, the composer evicts that key when the composition fails, or when any step's class is
+  `plan_defect` / `not_registered`.
+- `plan_source = 'plan_cache'` on the episode makes cache reuse, and its outcomes, visible in the admin
+  surface.
+- **Deterministic and testable without an LLM:** a real planner with a real cache, a failed trace, then
+  the next `plan()` must not return the cached steps.
+
+**2. Episodic references recommend failed sequences.**
+
+`memory_hooks.find_similar_compositions` keeps rows where `raw_content.success`, and `success` is true for
+PARTIAL (`composer.py:488`). The rendered "Tools used" list therefore includes the tools that failed. The
+two live rows repeat `gap_calculator`.
+
+**New behaviour:**
+- The hook hydrates each reference with its recorded steps: one `composition_steps` read by
+  `composition_id` for the ≤ 3 references.
+- `_format_episodic_context` renders:
+  - "Tools that worked: causal_effect_estimator, cate_analyzer" as the recommended sequence, made only of
+    `succeeded` / `cache_hit` steps in step order;
+  - "Did not work for that question: gap_calculator (refused: data could not answer), rank_drivers
+    (skipped: dependency unmet)".
+- A reference with zero succeeded steps is dropped from the context.
+- A reference with no recorded steps (the 2 pre-loop rows) renders as today.
+- **Test:** a real hydrated PARTIAL reference yields a recommended sequence without the refused tool, and
+  a zero-success reference yields no context.
+- **Unverified assumption (labelled):** that the LLM planner avoids the listed "did not work" tools. As in
+  §7.2, only a paired LLM measurement would prove it. The deterministic part (what the planner is told to
+  reuse) is what this lane guarantees.
 
 ### 7.4 In-memory G8
 
@@ -499,7 +658,8 @@ live episodic path. The SQL function has never had a caller, and the column has 
 - Its API sits next to `GET /api/admin/observability/llm-usage` (`src/api/routes/admin.py:349`).
 
 **API.** `GET /api/admin/observability/tool-composer?days=30` (`require_admin`) returns:
-- `compositions`: counts by outcome, unfinished, abandoned, p50/p95 total latency;
+- `compositions`: counts by outcome (success, partial, failed, cancelled), unfinished, abandoned, by
+  `plan_source`, and p50/p95 total latency;
 - `tools[]`: name, category, verdict word, n_invoked, n_succeeded, n_refused, n_health_failures,
   p50/p95, declared latency, most common health error;
 - `recent_failures[]`: last 10 failed or partial compositions with failed_phase and the failing step
@@ -519,14 +679,28 @@ per-tool drill-down there would split one reading across two surfaces.
 
 ## 9. Verification
 
-- **Red first, real database, no mocks.**
-  - Migrations 039/040 and every SQL function are tested against a throwaway database on the droplet's
-    own Postgres. This is the `scripts/test_migration_idempotency.sh` precedent: `DROP/CREATE DATABASE`
-    as `supabase_admin`, `vector` extension, `e2i_agent_name` created with the values read (read-only) from the live enum, ml/013 → 027 → 037 →
-    039 → 040, then re-apply 039/040 for idempotency.
-  - The prod `postgres` database is never written by tests.
+- **Red first, real database, no mocks.** The prod `postgres` database is never written by tests.
+  Everything runs against throwaway databases on the droplet's own Postgres 15.8, the
+  `scripts/test_migration_idempotency.sh` precedent (`DROP/CREATE DATABASE` as `supabase_admin`).
+  - **Upgrade path, exactly as a deploy runs it.**
+    1. `pg_dump --schema-only` of prod (a read-only dump) plus a data copy of `public.schema_migrations`,
+       `tool_registry` and `tool_dependencies`, restored into `learning_loop_upgrade`. Every historical
+       enum, CHECK, grant, default ACL, ml/036 object and the ledger arrive as prod has them.
+    2. Run the **real** `scripts/run_migrations.sh` in URL mode (`SUPABASE_DB_URL` pointing at the
+       throwaway database). It must report exactly 039 and 040 pending and apply them with its own
+       `--single-transaction` wrapper, in its own directory order.
+    3. Run it again: 0 pending.
+    4. Apply 039/040 directly a second time with `psql --single-transaction`: idempotent re-apply.
+    5. Assert objects, grants and the sync results.
+  - **Functional SQL tests** (sync guards, idempotent step/finish receipts, the dependency-endpoint
+    check, `RETURNING (xmax = 0)` counts, reliability denominators, provenance filter) run on that
+    upgraded database through psycopg transactions.
+  - **Concurrency test:** two connections call `sync_tool_registry` at the same time. Both succeed, one
+    reports all-zero changes, and the final rows equal the payload.
   - Opt-in through `E2I_DB_INTEGRATION=1`, as in `tests/integration/test_issue_825_schema_drift_realdb.py`,
     so CI (no DB) skips the tests.
+  - **Not provable in a throwaway database:** PostgREST's schema-cache discovery of the new RPCs.
+    PostgREST serves only the prod database. That is live-cert step 1.
 - **Executor outcome classes.** Tested by running the real `PlanExecutor` on real registered tools and
   real frames:
   - a single-brand frame for a `gap_calculator` refusal;
@@ -534,7 +708,16 @@ per-tool drill-down there would split one reading across two surfaces.
   - a failing upstream for dependency unmet;
   - a second identical run for a cache hit;
   - an unregistered name;
-  - a registered slow sync callable for a timeout (registered through `snapshot`/`restore_snapshot`).
+  - a registered slow sync callable for `SyncToolTimeout`, and a registered slow async callable for the
+    `wait_for` timeout, both classed `timeout`;
+  - a callable that fails once and then succeeds: `succeeded`, attempts = 2.
+
+  Test tools are registered through `snapshot`/`restore_snapshot`.
+- **Per-step persistence under cancel.** A real two-group plan whose second group runs a slow tool. The
+  test cancels the execute task during group 2 and asserts that group 1's steps are recorded and the
+  episode is `cancelled` in phase `execute`.
+- **Plan-cache eviction.** A real `ToolPlanner` and a real cache: a failed composition evicts, and the next
+  similar decomposition does not get the cached steps. A succeeded composition keeps them.
 - **Composer wiring.** An opt-in real-LLM run (`E2I_LIVE_LLM=1`) records to the throwaway database
   through the psycopg transport, plus the live cert.
 - **Reliability rule.** The planted-truth test reproduces the §7.1 table bounds: false caveat ≤ 1% at
@@ -542,17 +725,31 @@ per-tool drill-down there would split one reading across two surfaces.
 - **Grants.** For every created or recreated object, `has_table_privilege` /
   `has_function_privilege('anon'|'authenticated', …)` is false, and service_role is true.
 - **Live cert on the deployed image** (record `image_sha: <sha>`):
-  1. Boot logs show a sync with inserted=4 (`cohort_builder`, `cohort_validator`, `cohort_statistics`,
-     `model_inference`) and the second worker with all-zero changes. DB: 20 active tools, 13 dependencies.
-  2. A real chat composition produces one terminal `composer_episodes` row, steps equal to the plan's
-     step count, and `tool_performance` rows equal to the invoked steps.
-  3. A refusal-producing composition is recorded as `refused` and counted in `n_refused`, not
-     `n_health_failures`.
-  4. The admin endpoint and tab show "Too few runs to judge".
-  5. The planner prompt log shows the declared latency: the gate is silent.
-  6. PostgREST with the anon key: the RPCs and views are refused.
-  7. Compose wall time within noise of the pre-deploy baseline, and recorder write durations logged
-     at DEBUG are ≤ 5 s.
+  1. **Sync.**
+     - Boot logs show a sync with inserted=4 (`cohort_builder`, `cohort_validator`, `cohort_statistics`,
+       `model_inference`) and the second worker with all-zero changes. That also proves PostgREST
+       discovered the RPC.
+     - DB: 20 active tools, 13 dependencies.
+  2. **Recording.** A real chat composition produces one terminal `composer_episodes` row, steps equal to
+     the trace's step count, and `tool_performance` rows equal to the invoked steps.
+  3. **Refusals.** A refusal-producing composition is recorded as `refused` and counted in `n_refused`,
+     not `n_health_failures`.
+  4. **Admin surface.** The endpoint and tab show "Too few runs to judge".
+  5. **Dormant gate.** The planner prompt log shows the declared latency.
+  6. **Access.** PostgREST with the anon key refuses the RPCs and views.
+  7. **Latency.**
+     - The awaited start write takes ≤ 2 s, logged at DEBUG, with p50 and max reported.
+     - Compose wall time is within noise of the pre-deploy baseline for the same question.
+  8. **Coverage.**
+     - Over the cert window, `count(composer_episodes)` equals `count(audit_chain_entries WHERE
+       agent_name='tool_composer' AND action_type='workflow_start')`.
+     - Any difference is reported with `composer_record_failures_total`.
+  9. **Plan-cache eviction.** The cache is per worker, so both requests in a pair must be served by the
+     same worker process (pid in the composer log line). Repeat until they are, or the result proves
+     nothing.
+     - **Positive control:** ask a succeeding question twice. The second episode has
+       `plan_source = 'plan_cache'`.
+     - **The fix:** ask a failing question twice. The second episode has `plan_source = 'llm'`.
 - **Rollback.**
   - Code: revert the PR. The recorder and sync are fail-open, so a code-only revert is safe with the
     migrations left in place.
@@ -567,8 +764,8 @@ per-tool drill-down there would split one reading across two surfaces.
 
 - **Linking `classification_logs.classification_id` to episodes.** The classifier writes fire-and-forget
   and returns no id to the dispatcher (`intent_classifier.py:826`). The column stays NULL.
-- **Live per-step progress rows** (PENDING→EXECUTING updates per step). Steps are written once at
-  terminal state, and phase status covers abandoned-run diagnosis.
+- **"Running" rows per step** (PENDING→EXECUTING updates). Each step is written once, when its result
+  exists. Phase status and `abandoned` cover in-flight diagnosis.
 - **A circuit breaker shared across requests or workers.**
 - **`chatbot_analytics.tools_succeeded` / `tools_failed` / `tool_composer_used`,** which the chat writer
   never fills (`copilotkit.py:1859–1905`). That is a chat-analytics defect, separate from this loop.
