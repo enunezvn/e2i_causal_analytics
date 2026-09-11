@@ -259,16 +259,14 @@ async def test_only_transport_failures_are_retried(exc, attempts, metrics_regist
     assert _failures(metrics_registry, "composer_record_start") == 1.0
 
 
-def test_failure_counter_helper_is_a_no_op_before_metrics_init():
+def test_failure_counter_helper_is_a_no_op_before_metrics_init(metrics_registry):
     import src.api.routes.metrics as metrics
 
-    saved = {name: getattr(metrics, name) for name in METRIC_GLOBALS}
-    metrics._metrics_initialized = False
-    try:
-        metrics.inc_composer_record_failure("composer_record_start")
-    finally:
-        for name, value in saved.items():
-            setattr(metrics, name, value)
+    metrics.inc_composer_record_failure("composer_record_start")
+    assert _failures(metrics_registry, "composer_record_start") == 1.0
+    metrics._metrics_initialized = False  # restored by the fixture
+    metrics.inc_composer_record_failure("composer_record_start")
+    assert _failures(metrics_registry, "composer_record_start") == 1.0  # unchanged
 
 
 # ---------------------------------------------------------------------------
