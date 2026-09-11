@@ -44,12 +44,24 @@ _health_circuit_breaker = CircuitBreaker(
 )
 
 
-async def _discard(client: Redis) -> None:
-    """Close a client that was never published (best effort)."""
+async def _close_quietly(client: Redis) -> None:
     try:
         await client.aclose()
     except Exception as e:  # noqa: BLE001 - the attempt is already over
         logger.debug(f"Closing an unpublished Redis client failed: {e}")
+
+
+async def _discard(client: Redis) -> None:
+    """Close a client that was never published, even if the caller is cancelled
+    meanwhile (``close_redis()`` cancelling a reconnect at shutdown): the close
+    runs in its own task and is awaited to completion before the cancellation
+    propagates, so its socket is not left open."""
+    closing = asyncio.ensure_future(_close_quietly(client))
+    try:
+        await asyncio.shield(closing)
+    except asyncio.CancelledError:
+        await closing
+        raise
 
 
 async def _connect_once() -> Redis:

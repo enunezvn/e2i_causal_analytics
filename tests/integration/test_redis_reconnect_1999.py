@@ -139,3 +139,36 @@ async def test_get_redis_does_not_overwrite_a_client_published_during_cleanup(mo
         redis_client._redis_client = None
         await winner.aclose()
         await replacement.aclose()
+
+
+async def test_a_cancelled_attempt_still_closes_the_candidate_it_lost_with(monkeypatch):
+    """Codex round 3: an attempt whose candidate pinged OK but lost publication
+    is cancelled (close_redis() at shutdown) WHILE it closes that candidate. The
+    close must still complete: the candidate's connection ends disconnected."""
+    monkeypatch.setattr(redis_client, "REDIS_URL", REAL_REDIS_URL)
+    monkeypatch.setattr(redis_client, "_redis_client", None)
+    winner = aioredis.from_url(REAL_REDIS_URL)
+    real_discard = redis_client._discard
+    lost: list = []
+
+    async def _discard_cancelled_midway(client):
+        lost.append(client)
+        asyncio.current_task().cancel()  # delivered at the first await inside the close
+        await real_discard(client)
+
+    monkeypatch.setattr(redis_client, "_discard", _discard_cancelled_midway)
+    task = asyncio.create_task(redis_client._connect_once())
+    await asyncio.sleep(0)  # the attempt is now inside its candidate's PING (socket I/O)
+    redis_client._redis_client = winner
+    try:
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=10)
+        assert task.cancelled()
+        assert redis_client.current_client() is winner
+        (candidate,) = lost
+        pool = candidate.connection_pool
+        connections = list(pool._available_connections) + list(pool._in_use_connections)
+        assert connections, "the candidate never connected (interleaving not exercised)"
+        assert not any(c.is_connected for c in connections)
+    finally:
+        redis_client._redis_client = None
+        await winner.aclose()
