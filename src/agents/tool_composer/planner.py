@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -21,7 +21,11 @@ from src.tool_registry.registry import ToolRegistry
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 
 from .cache import get_cache_manager
-from .memory_hooks import ToolComposerMemoryHooks, get_tool_composer_memory_hooks
+from .memory_hooks import (
+    WORKED_OUTCOME_CLASSES,
+    ToolComposerMemoryHooks,
+    get_tool_composer_memory_hooks,
+)
 from .models.composition_models import (
     DecompositionResult,
     DependencyType,
@@ -555,6 +559,57 @@ class ToolPlanner:
         )
         return "\n".join(lines)
 
+    #: What a step's outcome class says happened to it, for the "did not work" list. The text
+    #: comes from the class the executor recorded, never from a tool's error message (§5.5).
+    _OUTCOME_PHRASES = {
+        "refused": "refused",
+        "input_rejected": "input rejected",
+        "timeout": "timed out",
+        "error": "error",
+        "plan_defect": "skipped: plan defect",
+        "dependency_unmet": "skipped: dependency unmet",
+        "circuit_open": "skipped: circuit open",
+        "not_registered": "skipped: tool not registered",
+    }
+
+    def _reference_tools(
+        self, reference: Dict[str, Any]
+    ) -> Optional[Tuple[List[str], List[str], bool]]:
+        """``(worked, did_not_work, hydrated)`` for one reference, or ``None`` to drop it.
+
+        A reference is only worth recommending if it can say which tools worked (spec §7.3).
+        With recorded steps that is the succeeded / cache_hit ones in step order. Without them
+        — the pre-loop rows, and any row whose step writes were lost — the only honest reading
+        is the counts: every tool worked, or the reference cannot name the ones that failed.
+        """
+        steps = reference.get("recorded_steps") or []
+        if steps:
+            worked = [
+                str(s.get("tool_name"))
+                for s in steps
+                if s.get("outcome_class") in WORKED_OUTCOME_CLASSES
+            ]
+            if not worked:
+                return None
+            did_not_work = [
+                f"{s.get('tool_name')} "
+                f"({self._OUTCOME_PHRASES.get(str(s.get('outcome_class')), 'did not succeed')})"
+                for s in steps
+                if s.get("outcome_class") not in WORKED_OUTCOME_CLASSES
+            ]
+            return worked, did_not_work, True
+
+        raw = reference.get("raw_content") or {}
+        executed, succeeded = raw.get("tools_executed"), raw.get("tools_succeeded")
+        if (
+            isinstance(executed, int)
+            and isinstance(succeeded, int)
+            and executed > 0
+            and executed == succeeded
+        ):
+            return [str(t) for t in raw.get("tool_sequence") or []], [], False
+        return None
+
     def _format_episodic_context(self, similar_compositions: List[Dict[str, Any]]) -> str:
         """Format similar compositions as context for the LLM.
 
@@ -565,30 +620,51 @@ class ToolPlanner:
         zeros into the prompt. The ``.get(..., {})`` stays as tolerance for
         rows whose stored content is missing/unparseable (hydration yields
         ``{}`` for those — never fabricated values).
+
+        Each row also carries ``recorded_steps`` (``hydrate_reference_steps``). ``success`` is
+        true for a PARTIAL composition, so rendering its whole tool sequence recommended tools
+        that had failed — both live pre-loop rows repeat ``gap_calculator``, which succeeded in
+        neither. A reference now recommends only the steps that worked, names what did not, and
+        is dropped when it cannot tell the two apart (spec §7.3).
         """
         if not similar_compositions:
             return ""
 
-        lines = [
-            "## Similar Past Compositions (Use as Reference)",
-            "The following successful compositions may inform your planning:",
-            "",
-        ]
-
-        for i, comp in enumerate(similar_compositions, 1):
+        blocks: List[str] = []
+        for comp in similar_compositions:
+            tools = self._reference_tools(comp)
+            if tools is None:
+                continue
+            worked, did_not_work, hydrated = tools
             raw = comp.get("raw_content", {})
-            tool_seq = raw.get("tool_sequence", [])
             confidence = raw.get("confidence", 0)
             duration = raw.get("total_duration_ms", 0)
 
-            lines.append(f"### Reference {i}")
-            lines.append(f"- Tools used: {', '.join(tool_seq)}")
+            lines = [f"### Reference {len(blocks) + 1}"]
+            if hydrated:
+                lines.append(f"- Tools that worked: {', '.join(worked)}")
+                if did_not_work:
+                    lines.append(f"- Did not work for that question: {', '.join(did_not_work)}")
+            else:
+                lines.append(f"- Tools used: {', '.join(worked)}")
             lines.append(f"- Success confidence: {confidence:.2f}")
             lines.append(f"- Execution time: {duration}ms")
             lines.append("")
+            blocks.append("\n".join(lines))
 
-        lines.append("Consider similar tool sequences if they match the current query's intent.")
-        return "\n".join(lines)
+        if not blocks:
+            return ""
+
+        return "\n".join(
+            [
+                "## Similar Past Compositions (Use as Reference)",
+                "The following compositions may inform your planning. Reuse the tools that "
+                "worked; avoid the ones listed as not working for that question:",
+                "",
+                *blocks,
+                "Consider similar tool sequences if they match the current query's intent.",
+            ]
+        )
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse the planning JSON from the LLM response.

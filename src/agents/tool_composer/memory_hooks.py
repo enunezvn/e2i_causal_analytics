@@ -565,10 +565,65 @@ class ToolComposerMemoryHooks:
             # Filter to successful compositions only — on the HYDRATED content
             successful = [r for r in results if r.get("raw_content", {}).get("success", False)]
 
-            return successful[:limit]
+            # ``success`` is true for a PARTIAL run, so a kept row can name tools that failed.
+            # Hydrate each reference with its recorded steps so the planner's context can
+            # recommend only what worked (spec §7.3); fail-open, see below.
+            return await hydrate_reference_steps(successful[:limit])
         except Exception as e:
             logger.warning(f"Failed to find similar compositions: {e}")
             return []
+
+
+# =============================================================================
+# REFERENCE STEP HYDRATION (spec §7.3)
+# =============================================================================
+
+#: Step outcome classes that mean the tool did its job. A cache hit is a step that worked.
+WORKED_OUTCOME_CLASSES = frozenset({"succeeded", "cache_hit"})
+
+
+async def hydrate_reference_steps(
+    references: List[Dict[str, Any]],
+    port: Any = None,
+) -> List[Dict[str, Any]]:
+    """Attach each reference's recorded steps as ``recorded_steps``, in step order.
+
+    One ``composer_steps_for`` read (ml/041) covers every reference, keyed by the
+    ``composition_id`` the episodic row already carries. Fail-open: a reference whose steps
+    cannot be read keeps an empty list, which the formatter treats as "no recorded steps" —
+    the legacy shape, rendered only when every tool worked. Nothing here can fail a plan.
+    """
+    rows = list(references)
+    for row in rows:
+        row.setdefault("recorded_steps", [])
+
+    def composition_id(row: Dict[str, Any]) -> Optional[str]:
+        raw = row.get("raw_content")
+        value = raw.get("composition_id") if isinstance(raw, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    wanted = sorted({cid for cid in (composition_id(row) for row in rows) if cid})
+    if not wanted:
+        return rows
+
+    try:
+        if port is None:
+            from .rpc_port import SupabaseRpcPort
+
+            port = SupabaseRpcPort()
+        result = await port.call("composer_steps_for", {"p_composition_ids": wanted})
+    except Exception as e:
+        logger.warning(f"Failed to hydrate reference steps: {e}")
+        return rows
+
+    by_id = result if isinstance(result, dict) else {}
+    for row in rows:
+        steps = by_id.get(composition_id(row) or "") or []
+        row["recorded_steps"] = sorted(
+            (s for s in steps if isinstance(s, dict)),
+            key=lambda s: s.get("step_number", 0),
+        )
+    return rows
 
 
 # =============================================================================
