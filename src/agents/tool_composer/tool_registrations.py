@@ -874,13 +874,9 @@ def causal_effect_estimator(
       kwargs keys (``data`` / ``dataframe`` / ``estimation_data``). The tool
       does NOT fabricate synthetic data; absent a DataFrame it raises
       ``RuntimeError``.
-    - The DataFrame is conveyed to the pipeline via
-      ``PipelineInput.filters`` populated with the keys all Wave-1 executors
-      look at (``estimation_data`` for DoWhy/EconML, ``dataframe`` for
-      CausalML), plus a top-level ``data_cache`` mirror for forward-compat
-      with C-6's ``data_resolver`` canonical path. Wave-1 executors keep
-      reading their per-executor keys; the new ``data_resolver`` helper
-      reads ``data_cache.estimation_data`` first.
+    - The DataFrame is conveyed to the pipeline via the first-class
+      ``PipelineInput.estimation_data`` field (#458); every executor reads it
+      through ``data_resolver.resolve_estimation_dataframe``.
 
     Fail-closed semantics (per CLAUDE.md anti-mocking discipline + dispatch
     plan R2/R9):
