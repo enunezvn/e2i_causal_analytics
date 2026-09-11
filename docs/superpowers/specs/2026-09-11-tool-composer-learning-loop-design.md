@@ -520,12 +520,19 @@ on truncation to hide them.
       names are caller-authored.
       - The allowlist is the catalog: the column names of relations in schema `public`, developer-authored
         DDL.
-      - The check runs **inside the recording RPCs**:
-        `EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE
-        c.relnamespace = 'public'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped AND a.attname = …)`.
-        No frame is needed, and the plan snapshot gets the same treatment as finished steps.
-      - A name that is not in the catalog becomes `{"type":"str","len":n}`. That covers derived feature
-        columns, pivoted value-columns, and caller-authored names.
+      - **The check runs in the serializer, before anything leaves the process.**
+        - The recorder fetches the allowlist once per process, then hourly, through an RPC
+          `composer_public_column_names()` (service_role only). It returns the distinct `attname` of
+          `pg_attribute ⋈ pg_class` where `relnamespace = 'public'::regnamespace`, `attnum > 0` and
+          `NOT attisdropped`. Measured as service_role on 2026-09-11: the catalog is readable, and
+          `treatment` / `region` / `brand` are in it while `PT-0001` is not.
+        - **While the allowlist is unavailable** (not yet fetched, or the fetch failed), no string is kept
+          as a name. Privacy fails closed.
+        - No frame is needed, so the plan snapshot gets the same treatment as finished steps.
+      - A name that is not in the catalog becomes `{"type":"str","len":n}` in the payload itself. That
+        covers derived feature columns, pivoted value-columns, and caller-authored names.
+      - The recording RPCs repeat the same catalog check on every `{"type":"column"}` entry they receive
+        (defence in depth). A name that fails there is stored as `{"type":"str","len":n}`.
     - a `$step` reference → `{"type":"ref","step":n,"field":f}`, where `f` is kept only if it is a
       field of the producer's registered output model, else `null`;
     - any other string → `{"type":"str","len":n}`, without the value;
@@ -547,16 +554,18 @@ on truncation to hide them.
       *why*. Structured refusal reason codes would restore that safely. They need changes in
       `tool_registrations.py`, which LANE-2015 and LANE-2016 are editing now, so they are a §10
       follow-up.
-  - **The single serializer** (`learning_recorder.to_record()`) plus the RPC-side catalog check are the
-    only path to storage. The test plants a sentinel string in every LLM- and data-authored position:
+  - **The single serializer** (`learning_recorder.to_record()`) is the only path to the RPCs, and the
+    RPC-side re-check is a second guard. The test plants a sentinel string in every LLM- and data-authored
+    position:
     - question text, intent, sub_question_id, step_id;
     - a frame column name that is also used as a parameter value;
     - an undeclared parameter key, a string value, a dict key, a `$step` field;
     - a dynamic output key;
     - refusal, input-error and generic exception messages.
 
-    It asserts the sentinel is absent from the serialized payload and from every persisted column after
-    a real-DB round trip.
+    It asserts the sentinel is absent from the serialized payload (what crosses the network) and from
+    every persisted column after a real-DB round trip. A second case sends a hand-built payload whose
+    `{"type":"column"}` entry names the sentinel, and asserts the RPC stores it as length-only.
 - **Query text is stored, `redact_query(query, 500)`.** This is a deliberate decision, not a redaction
   claim.
   - The query is needed for the admin failure list and the reuse audit.
@@ -743,8 +752,9 @@ n = 5.**
    - **Cost.** Planner calls: P + 2K ≥ 70, thinking disabled, about 1,000 output tokens each
      (`composer.py:71–90`).
      - Plan executions run on the droplet against local services only. `model_inference` calls the local
-       BentoML container (`bentoml_base_url` default `http://localhost:3000`, `model_inference.py:147`;
-       `e2i_bentoml`), which is no external spend.
+       BentoML container: `BENTOML_SERVICE_URL=http://bentoml:3000` (`docker/docker-compose.yml:72`,
+       read by `src/api/dependencies/bentoml_client.py:60`; measured in `e2i_api`). That is no external
+       spend.
      - Executions are sequential, and `free -m` is checked before each item. The run stops below
        1500 MiB available.
      - Plans are neither restricted nor filtered: both arms offer the production tool set.
@@ -894,7 +904,8 @@ unchanged. A test pins that.
 - It mutates the process-wide `ToolSchema.avg_execution_ms` from one executor's EMA. Wired in, one
   request's stats would leak into every later plan.
 - Its intent (learned latency) is partly served: measured latency per tool is recorded and shown on the
-  admin surface (§6, §8). Feeding it into planning waits for a planning consumer of latency (§7.2, §10).
+  admin surface (§6, §8). Substituting it into the planning prompt is deferred until its own experiment
+  arm shows it changes the LLM's choice (§7.2, §10).
 
 `ToolFailureTracker` stays. It drives the in-request circuit breaker and retry policy.
 
