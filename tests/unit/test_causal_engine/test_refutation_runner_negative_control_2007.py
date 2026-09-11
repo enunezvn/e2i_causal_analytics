@@ -648,3 +648,24 @@ def test_attach_never_changes_confidence_or_gate_for_any_band():
             assert (suite.tests_passed, suite.tests_failed, suite.total_tests) == expected
             bands_seen.add(gate)
     assert bands_seen == {GateDecision.PROCEED, GateDecision.REVIEW, GateDecision.BLOCK}
+
+
+# --- delta_percent fits the DECIMAL(8,4) column (codex whole-diff HIGH) ---------
+
+
+def test_delta_percent_is_clamped_to_the_column_range_and_the_exact_ratio_is_kept():
+    """causal_validations.delta_percent is DECIMAL(8,4) (max 9999.9999); a
+    claimed 0.0001 against a control of 0.05 is a ratio of 50000, which
+    failed the bulk save_suite insert and lost the whole suite's persistence."""
+    result = RefutationRunner()._run_negative_control_test(
+        0.0001, (NC_OUTCOME, 0.05, (0.04, 0.06), 1500)
+    )
+    assert result.status == F
+    assert result.delta_percent == 9999.9999
+    assert result.details["control_to_claimed_ratio"] == 50000.0
+    # Below the cap the column value IS the exact ratio.
+    result = RefutationRunner()._run_negative_control_test(ORIGINAL, FAILED_NC)
+    assert result.status == F
+    assert result.delta_percent == pytest.approx(100.0 * 0.130 / ORIGINAL)
+    assert result.delta_percent == result.details["control_to_claimed_ratio"]
+    assert result.delta_percent < 9999.9999
