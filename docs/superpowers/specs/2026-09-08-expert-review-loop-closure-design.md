@@ -439,6 +439,29 @@ synthetic priors may look best on this synthetic substrate and say less about Op
 data when they arrive; the recovery benchmark is still the right first test, and the
 shadow period on live runs is the second.
 
+**Trial result (2026-09-11) — FAIL, item 5 applies.** Run as designed (60 DGP frames = 3 brands ×
+20 seeds at n = 3,000, plus the two §2 live pairs; `causalpfn 0.1.4` in a capped scratch container from
+the deployed `e2i_api` image, 2 CPUs; full record in `docs/demos/results/2026-09-11_causalpfn_trial/`):
+
+| criterion | uncalibrated (T = 1) | calibrated (paper's temperature scaling) |
+|---|---|---|
+| \|ATE − truth\| < 0.15, every frame | PASS 60/60 (max 0.067; LinearDML max 0.070) | PASS 3/3 |
+| segment order high > medium > low, every brand | FAIL 46/60 (Kisqali 11/20) | 2/3 |
+| 95 % interval covers truth in ≥ 18/20 seeds | FAIL 10 / 13 / 11 of 20 (LinearDML 18 / 16 / 19) | FAIL 0/3 |
+| < 10 s per frame | FAIL median 60 s (23 s CATE passes + 36 s interval draws) | FAIL ≈ 470 s |
+| peak RSS < 1 GiB | FAIL 2.4 GiB | FAIL 1.8–2.0 GiB |
+
+The coverage collapse named above is what the sweep measured: intervals half the analytic width
+(0.05 vs 0.10) with one-sided high misses. Calibration selects the floor temperature (0.001) on every
+frame, DGP or live, and yields a 0.002-wide interval that excludes its own point estimate. Two package
+findings: `CATEEstimator.estimate_ate_CI` raises `KeyError('ate')` in 0.1.4 (the helper omits the key),
+and the interval samples use the calibrated `temperature` while the point estimate uses
+`prediction_temperature`. On the live pairs the uncalibrated point estimates fall inside the reported
+intervals (0.062 in [0.019, 0.152]; 0.156 in [0.117, 0.236]). Consequence for §10 debt 1: the
+amortized-estimator route to retiring the reconstruction path is closed; debt 1 is a refactor question.
+Not integrated, no shadow candidate, `causalpfn` not added to the image. Reopens only with a continuous
+outcome on this platform or a release whose calibration gives non-degenerate intervals on a binary one.
+
 Sources: https://github.com/vdblm/CausalPFN , https://arxiv.org/abs/2506.07918 ,
 https://arxiv.org/html/2506.07918v2 , https://pypi.org/project/causalpfn/ .
 

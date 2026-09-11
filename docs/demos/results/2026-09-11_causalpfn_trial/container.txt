@@ -1,0 +1,1 @@
+image=ghcr.io/enunezvn/e2i-api:f4940c97a43dad22bf556b89bcce459afdc7c246 mem=2684354560 cpus=2000000000 user=1000:1000
