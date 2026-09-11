@@ -325,7 +325,8 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
   - `brand`, `region`;
   - `is_synthetic boolean NOT NULL DEFAULT false`;
   - `tools_executed`, `tools_succeeded`;
-  - `last_phase_at timestamptz NOT NULL DEFAULT now()`.
+  - `last_activity_at timestamptz NOT NULL DEFAULT now()`, bumped by every recording RPC and by the
+    liveness heartbeat (§5.4).
 - `total_latency_ms DROP NOT NULL`. The row is inserted at start, before the total is known.
 - `success`, `user_rating`, `feedback_text`, `feedback_at` keep their designed meaning: *user feedback*,
   NULL until a feedback link exists (owner decision O1).
@@ -442,7 +443,7 @@ The stores join on `composition_id`, which episodic `raw_content` already carrie
 
 A new `CompositionRecorder` (`src/agents/tool_composer/learning_recorder.py`) owns every write.
 
-**Four RPCs. Every one carries the episode seed and begins with
+**Five RPCs. Every one carries the episode seed and begins with
 `INSERT … ON CONFLICT (composition_id) DO NOTHING`,** so whichever write lands first creates the episode.
 A failed start therefore never orphans later phase, step or finish data. Each RPC is idempotent, so a lost
 response can be re-sent.
@@ -452,6 +453,7 @@ response can be re-sent.
 | `composer_record_start(p_seed)` | Nothing more; returns the episode_id |
 | `composer_record_phase(p_seed, p_status, p_patch)` | Updates status and phase fields only while the episode is non-terminal |
 | `composer_record_steps(p_seed, p_steps)` | `INSERT … ON CONFLICT (episode_id, step_number) DO NOTHING` for steps; performance rows for invoked classes only, `ON CONFLICT (step_id) DO NOTHING`. It works whether the episode is open or finished, and returns a stable receipt `{recorded, already_present, unknown_tools}`. |
+| `composer_record_heartbeat(p_seed)` | Bumps `last_activity_at` only while the episode is non-terminal |
 | `composer_record_finish(p_seed, p_final)` | Sets the terminal state and **all** phase latencies. The recorder keeps them in memory, so phase fields lost with a failed phase write are restored here. A second finish on a terminal episode returns `{recorded:false, already_terminal:true}` and changes nothing. |
 
 **Ordering and retry.**
@@ -579,7 +581,7 @@ on truncation to hide them.
     - episodic `raw_content.query`, 500 chars;
     - `chatbot_messages.content` for user turns, up to 2,590 chars.
   - `composer_episodes` adds no new exposure class, and access is the same (service_role only).
-  - A platform PII scrubber would change all five stores at the single hook. That is recorded in §10.
+  - A platform PII scrubber is recorded in §10.
 - **Not stored:** `synthesized_response` and `tool_outputs` stay NULL / `{}`. They can carry
   patient-level numbers, and learning does not need them.
 - **Access:** `service_role` only. There are no `anon`/`authenticated` grants, and a real-DB test pins
@@ -624,8 +626,18 @@ an ordering and staleness problem for no measurable gain.
   partial, failed, cancelled), unfinished, by `plan_source`, and p50/p95 total latency. Rehearsed:
   1 episode gives 1.
 - **`v_active_compositions`** is recreated for runs not yet in a terminal status: `elapsed_ms` and
-  `abandoned = last_phase_at < now() - interval '10 minutes'`. The composer SLA is 180 s, so 10 minutes
-  cannot be a live run.
+  `abandoned = last_activity_at < now() - interval '5 minutes'`.
+  - **Why a heartbeat, not a deadline.** No deadline bounds every entry point. `compose_query()` awaits
+    `compose()` directly (`composer.py:1118`), the executor's 120 s timeout applies per attempt
+    (`executor.py:669–674`), and groups run sequentially (`:449–457`), so a legitimate composition can
+    run past any fixed age. The 180 s SLA exists only on the orchestrator path (`router.py:298`).
+  - **Heartbeat.** While a composition is in flight, the recorder runs a heartbeat task that calls
+    `composer_record_heartbeat(p_seed)` every 60 s. The task starts with the start write and stops at
+    finish or cancel.
+  - `abandoned` therefore means **five missed heartbeats**: the worker died, or its event loop was
+    blocked for five minutes. A slow but live run is never marked.
+  - A late heartbeat or finish on an `abandoned` run simply bumps `last_activity_at` again. `abandoned`
+    is derived, never stored.
 - **Dropped:** `update_tool_registry_metrics()`.
   - **Intent:** planner-visible reliability. That is now served by `get_tool_reliability` with n and
     failure classes.
@@ -1009,7 +1021,10 @@ per-tool drill-down there would split one reading across two surfaces.
     run's real id, never the stale one;
   - a lost response re-sent: identical receipts, no duplicate rows;
   - finish twice: `already_terminal`;
-  - shutdown drain: the pending set is flushed within 5 s.
+  - shutdown drain: the pending set is flushed within 5 s;
+  - liveness: with a test heartbeat period of 1 s and a 5-period window, a composition whose step runs
+    10 s is never `abandoned`. A composition whose heartbeat task is cancelled mid-flight (the worker-death
+    stand-in) is `abandoned` after the window.
 - **No latency on the user path.** An unreachable transport (connection refused and a 10 s hang, both
   cases) under a composer call with a 1 s deadline. Composition time is unchanged against a no-recorder
   run within 50 ms, and no exception reaches the caller.
@@ -1107,8 +1122,13 @@ per-tool drill-down there would split one reading across two surfaces.
 - **Measured latency in the planning prompt or plan estimates.** The only planning consumer of latency is
   the LLM reading the declared "Avg execution" line. Its effect is unmeasured (§7.2). It needs its own
   experiment arm, or a deadline-aware planner, first.
-- **A platform PII scrubber for query text.** Query text is already persisted in four stores (§5.5). A
-  scrubber belongs at `redact_query`, the platform's single hook, and would cover all five stores at once.
+- **A platform PII scrubber for query text.** Query text is already persisted in four stores (§5.5).
+  - Changing `redact_query` alone would **not** cover them. Three of the four bypass it:
+    - `audit_chain_entries` receives `query_text=query` (`composer.py:286`);
+    - `classification_logs` receives the raw query (`intent_classifier.py:115`);
+    - episodic memory slices `query[:500]` (`memory_hooks.py:408`).
+  - The follow-up must both implement scrubbing and wire it into each persistence path. This lane's
+    composer_episodes writer goes through `redact_query`, so it needs no change then.
   This lane stores no raw parameter values and no generic exception text, so it adds no exposure class.
 
 ## 11. Decisions that need the OWNER
