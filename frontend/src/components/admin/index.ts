@@ -11,3 +11,4 @@ export { LinkDialog } from './LinkDialog';
 export { ActivityTab } from './ActivityTab';
 export { RoleLegend } from './RoleLegend';
 export { ObservabilityTab } from './ObservabilityTab';
+export { ToolComposerSection } from './ToolComposerSection';

@@ -583,6 +583,7 @@ export const queryKeys = {
     auditFeed: (days: number) =>
       [...queryKeys.admin.all(), 'audit-feed', days] as const,
     llmUsage: (days: number) => [...queryKeys.admin.all(), 'llm-usage', days] as const,
+    toolComposer: (days: number) => [...queryKeys.admin.all(), 'tool-composer', days] as const,
   },
 
   /**

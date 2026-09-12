@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -237,6 +238,8 @@ class PlanSimilarityCache:
     ):
         self._cache = LRUCache(max_size=max_size, default_ttl_seconds=ttl_seconds)
         self.similarity_threshold = similarity_threshold
+        # Guards lookup, write and eviction together: eviction compares and deletes in one step
+        self._lock = threading.RLock()
 
     def _extract_signature(self, decomposition: Any) -> Tuple[frozenset, int]:
         """Extract signature from decomposition for matching."""
@@ -298,36 +301,82 @@ class PlanSimilarityCache:
         Returns:
             Tuple of (cached_plan, similarity_score) if found, None otherwise
         """
+        match = self.get_similar_with_key(decomposition)
+        return (match[0], match[1]) if match else None
+
+    @staticmethod
+    def entry_token(key: str, plan: Any) -> str:
+        """An opaque handle on one cached plan: its signature key and the plan's id."""
+        return f"{key}/{getattr(plan, 'plan_id', '')}"
+
+    def get_similar_with_key(self, decomposition: Any) -> Optional[Tuple[Any, float, str]]:
+        """Like :meth:`get_similar`, plus the entry token of the match.
+
+        The token is what a composition that failed with the reused plan evicts (spec §7.3).
+        """
         query_sig = self._extract_signature(decomposition)
 
         best_match = None
         best_similarity = 0.0
+        best_key: Optional[str] = None
 
-        # Check all cached entries for similarity
-        for key in list(self._cache._cache.keys()):
-            entry = self._cache._cache.get(key)
-            if entry is None or entry.is_expired():
-                continue
+        with self._lock:
+            # Check all cached entries for similarity
+            for key in list(self._cache._cache.keys()):
+                entry = self._cache._cache.get(key)
+                if entry is None or entry.is_expired():
+                    continue
 
-            cached_sig, cached_plan = entry.value
-            similarity = self._compute_similarity(query_sig, cached_sig)
+                cached_sig, cached_plan = entry.value
+                similarity = self._compute_similarity(query_sig, cached_sig)
 
-            if similarity > best_similarity:
-                best_similarity = similarity
-                best_match = cached_plan
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = cached_plan
+                    best_key = key
 
-        if best_match and best_similarity >= self.similarity_threshold:
+        if best_match and best_key and best_similarity >= self.similarity_threshold:
             logger.info(f"Plan similarity match found: {best_similarity:.2f}")
-            return best_match, best_similarity
+            return best_match, best_similarity, self.entry_token(best_key, best_match)
 
         return None
 
-    def set(self, decomposition: Any, plan: Any) -> None:
-        """Cache plan with its decomposition signature."""
+    def set(self, decomposition: Any, plan: Any) -> str:
+        """Cache plan with its decomposition signature; returns its entry token."""
         signature = self._extract_signature(decomposition)
         key = self._hash_signature(signature)
-        self._cache.set(key, (signature, plan))
+        with self._lock:
+            self._cache.set(key, (signature, plan))
         logger.debug(f"Cached plan with signature key: {key}")
+        return self.entry_token(key, plan)
+
+    def evict(self, entry: str) -> bool:
+        """Drop the entry a failed composition used; True when it was removed.
+
+        ``entry`` is the token :meth:`set` / :meth:`get_similar_with_key` returned. A newer plan
+        cached under the same signature since then is spared: only the plan that failed goes.
+        The check and the delete hold the lock :meth:`set` takes, so a replacement cannot land
+        between them.
+        """
+        key, _, plan_id = entry.partition("/")
+        with self._lock:
+            cached = self._cache._cache.get(key)
+            if cached is None:
+                return False
+            _, cached_plan = cached.value
+            if plan_id and getattr(cached_plan, "plan_id", None) != plan_id:
+                return False
+            return self._cache.invalidate(key)
+
+    def cleanup_expired(self) -> int:
+        """Remove expired entries under the lock, so a replacement cached meanwhile is not removed."""
+        with self._lock:
+            return self._cache.cleanup_expired()
+
+    def clear(self) -> None:
+        """Remove every entry under the lock."""
+        with self._lock:
+            self._cache.clear()
 
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
@@ -487,9 +536,17 @@ class ToolComposerCacheManager:
         """Get similar cached plan."""
         return self.plan_cache.get_similar(decomposition)
 
-    def cache_plan(self, decomposition: Any, plan: Any) -> None:
-        """Cache execution plan."""
-        self.plan_cache.set(decomposition, plan)
+    def get_similar_plan_with_key(self, decomposition: Any) -> Optional[Tuple[Any, float, str]]:
+        """Get similar cached plan, its similarity and its entry token."""
+        return self.plan_cache.get_similar_with_key(decomposition)
+
+    def cache_plan(self, decomposition: Any, plan: Any) -> str:
+        """Cache execution plan; returns the key a failed composition evicts."""
+        return self.plan_cache.set(decomposition, plan)
+
+    def evict_plan(self, entry: str) -> bool:
+        """Evict the cached plan ``entry`` names (unless a newer plan replaced it)."""
+        return self.plan_cache.evict(entry)
 
     def get_tool_output(self, tool_name: str, inputs: Dict[str, Any]) -> Optional[Any]:
         """Get cached tool output."""
@@ -507,14 +564,14 @@ class ToolComposerCacheManager:
         """Cleanup expired entries from all caches."""
         return {
             "decomposition": self.decomposition_cache._cache.cleanup_expired(),
-            "plan": self.plan_cache._cache.cleanup_expired(),
+            "plan": self.plan_cache.cleanup_expired(),
             "output": self.output_cache._cache.cleanup_expired(),
         }
 
     def clear_all(self) -> None:
         """Clear all caches."""
         self.decomposition_cache._cache.clear()
-        self.plan_cache._cache.clear()
+        self.plan_cache.clear()
         self.output_cache._cache.clear()
         logger.info("All caches cleared")
 

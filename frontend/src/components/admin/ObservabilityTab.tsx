@@ -21,6 +21,8 @@ import {
 } from 'recharts';
 import { useLlmUsage } from '@/hooks/api/use-admin';
 
+import { ToolComposerSection } from './ToolComposerSection';
+
 const fmtInt = (n: number) => n.toLocaleString();
 const fmtCost = (n: number | null | undefined) => {
   if (n == null) return '—';
@@ -61,16 +63,32 @@ export function ObservabilityTab() {
   const [expandedUser, setExpandedUser] = useState<string | null>(null);
   const { data, isLoading, isError } = useLlmUsage(days);
 
-  if (isLoading) {
+  // The LLM usage and tool-composer surfaces read different endpoints. When this one is loading
+  // or down, say so in place and keep the rest of the tab — the window selector and the composer
+  // section, which fetches independently — rather than blanking the whole tab.
+  if (isLoading || isError || !data) {
     return (
-      <p className="p-6 text-sm text-[var(--color-muted-foreground)]">Loading LLM usage…</p>
-    );
-  }
-  if (isError || !data) {
-    return (
-      <p className="p-6 text-sm text-[var(--color-muted-foreground)]">
-        Failed to load LLM usage.
-      </p>
+      <div className="space-y-8">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="text-lg font-semibold text-[var(--color-foreground)]">
+            LLM observability
+          </h2>
+          <select
+            aria-label="Time range"
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+            className="rounded-md border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)]"
+          >
+            <option value={7}>7 days</option>
+            <option value={30}>30 days</option>
+            <option value={90}>90 days</option>
+          </select>
+        </div>
+        <p className="p-6 text-sm text-[var(--color-muted-foreground)]">
+          {isLoading ? 'Loading LLM usage…' : 'Failed to load LLM usage.'}
+        </p>
+        <ToolComposerSection days={days} />
+      </div>
     );
   }
 
@@ -279,6 +297,10 @@ export function ObservabilityTab() {
           </section>
         </>
       )}
+
+      {/* The tool composer reads its own endpoint, so it renders whether or not there was LLM
+          usage to show above: the two surfaces answer different questions about the same window. */}
+      <ToolComposerSection days={days} />
     </div>
   );
 }

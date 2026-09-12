@@ -17,7 +17,6 @@ import functools
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel
@@ -51,17 +50,6 @@ class ToolNotFoundError(ToolRegistryError):
     def __init__(self, tool_name: str):
         self.tool_name = tool_name
         super().__init__(f"Tool '{tool_name}' not found in registry")
-
-
-class ToolCategory(str, Enum):
-    """Tool category enum matching database constraint."""
-
-    CAUSAL = "causal"
-    COMPARATIVE = "comparative"
-    PREDICTIVE = "predictive"
-    DESCRIPTIVE = "descriptive"
-    EXPERIMENTAL = "experimental"
-    MONITORING = "monitoring"
 
 
 # Type variable for tool functions
@@ -429,192 +417,6 @@ class ToolRegistry:
         )
         return True
 
-    async def register_from_database(
-        self,
-        db_client,
-        table_name: str = "tool_registry",
-        category_filter: Optional[ToolCategory] = None,
-    ) -> int:
-        """
-        Load and register tools from database.
-
-        Args:
-            db_client: Supabase client with execute method
-            table_name: Name of the tool registry table
-            category_filter: Optional filter by tool category
-
-        Returns:
-            Number of tools registered
-
-        Note:
-            This registers tool metadata only. Actual callables must be
-            provided separately via register() or @composable_tool decorator.
-        """
-        if not table_name.isidentifier():
-            raise ToolRegistryError(f"Invalid table name: {table_name}")
-
-        # Build query using Supabase PostgREST builder
-        try:
-            query = db_client.table(table_name).select("*").eq("composable", True)
-            if category_filter:
-                query = query.eq("category", category_filter.value)
-            result = query.execute()
-            rows = result.data if hasattr(result, "data") else result
-
-            registered_count = 0
-            for row in rows:
-                # Convert DB row to ToolSchema
-                schema = ToolSchema(
-                    name=row["name"],
-                    description=row.get("description", ""),
-                    source_agent=row.get("source_agent", "unknown"),
-                    tier=row.get("tier", 0),
-                    avg_execution_ms=row.get("avg_latency_ms", 1000),
-                    version=row.get("version", "1.0.0"),
-                )
-
-                # Store schema without callable (placeholder)
-                # Actual callable must be registered separately
-                if schema.name not in self._tools:
-                    self._tools[schema.name] = RegisteredTool(
-                        schema=schema,
-                        callable=self._create_placeholder_callable(schema.name),
-                    )
-
-                    # Index by agent
-                    if schema.source_agent not in self._by_agent:
-                        self._by_agent[schema.source_agent] = []
-                    if schema.name not in self._by_agent[schema.source_agent]:
-                        self._by_agent[schema.source_agent].append(schema.name)
-
-                    # Index by tier
-                    if schema.tier not in self._by_tier:
-                        self._by_tier[schema.tier] = []
-                    if schema.name not in self._by_tier[schema.tier]:
-                        self._by_tier[schema.tier].append(schema.name)
-
-                    registered_count += 1
-                    logger.info(f"Registered tool from DB: {schema.name}")
-
-            logger.info(f"Registered {registered_count} tools from database")
-            return registered_count
-
-        except Exception as e:
-            logger.error(f"Failed to register tools from database: {e}")
-            raise ToolRegistryError(f"Database sync failed: {e}") from e
-
-    def _create_placeholder_callable(self, tool_name: str) -> Callable[..., Any]:
-        """Create a placeholder callable for DB-registered tools."""
-
-        def placeholder(*args, **kwargs):
-            raise ToolNotFoundError(
-                f"Tool '{tool_name}' was loaded from database but has no implementation. "
-                "Register the actual callable using registry.register() or @composable_tool."
-            )
-
-        return placeholder
-
-    async def sync_to_database(
-        self,
-        db_client,
-        table_name: str = "tool_registry",
-        update_existing: bool = True,
-    ) -> Dict[str, int]:
-        """
-        Sync registered tools to database.
-
-        Args:
-            db_client: Supabase client with execute method
-            table_name: Name of the tool registry table
-            update_existing: If True, update existing records; if False, skip
-
-        Returns:
-            Dict with counts: {"inserted": N, "updated": N, "skipped": N}
-        """
-        if not table_name.isidentifier():
-            raise ToolRegistryError(f"Invalid table name: {table_name}")
-
-        stats = {"inserted": 0, "updated": 0, "skipped": 0}
-
-        for _tool_name, registered_tool in self._tools.items():
-            schema = registered_tool.schema
-
-            # Prepare record
-            record = {
-                "name": schema.name,
-                "description": schema.description,
-                "source_agent": schema.source_agent,
-                "tier": schema.tier,
-                "input_schema": {"parameters": [p.__dict__ for p in schema.input_parameters]},
-                "output_schema": {"type": schema.output_schema},
-                "composable": True,
-                "avg_latency_ms": schema.avg_execution_ms,
-                "version": schema.version,
-            }
-
-            try:
-                # Check if exists
-                result = (
-                    db_client.table(table_name).select("tool_id").eq("name", schema.name).execute()
-                )
-                exists = bool(result.data if hasattr(result, "data") else result)
-
-                if exists:
-                    if update_existing:
-                        # Update existing
-                        db_client.table(table_name).update(
-                            {
-                                "description": schema.description,
-                                "source_agent": schema.source_agent,
-                                "tier": schema.tier,
-                                "avg_latency_ms": schema.avg_execution_ms,
-                                "version": schema.version,
-                            }
-                        ).eq("name", schema.name).execute()
-                        stats["updated"] += 1
-                        logger.debug(f"Updated tool in DB: {schema.name}")
-                    else:
-                        stats["skipped"] += 1
-                else:
-                    # Insert new
-                    db_client.table(table_name).insert(
-                        {
-                            "name": schema.name,
-                            "description": schema.description,
-                            "source_agent": schema.source_agent,
-                            "tier": schema.tier,
-                            "input_schema": record["input_schema"],
-                            "output_schema": record["output_schema"],
-                            "composable": True,
-                            "avg_latency_ms": schema.avg_execution_ms,
-                            "version": schema.version,
-                        }
-                    ).execute()
-                    stats["inserted"] += 1
-                    logger.debug(f"Inserted tool to DB: {schema.name}")
-
-            except Exception as e:
-                logger.error(f"Failed to sync tool '{schema.name}' to database: {e}")
-                stats["skipped"] += 1
-
-        logger.info(
-            f"Database sync complete: {stats['inserted']} inserted, "
-            f"{stats['updated']} updated, {stats['skipped']} skipped"
-        )
-        return stats
-
-    def get_tools_by_category(self, category: ToolCategory) -> List[str]:
-        """
-        Get tools filtered by category.
-
-        Note: This requires tools to have category metadata set.
-        For now, returns empty list as category is not in ToolSchema.
-        """
-        # Category filtering would require schema enhancement
-        # This is a placeholder for future enhancement
-        logger.warning("Category filtering not yet implemented in ToolSchema")
-        return []
-
 
 # ============================================================================
 # DECORATOR FOR TOOL REGISTRATION
@@ -774,8 +576,6 @@ __all__ = [
     "ToolRegistryError",
     "ToolValidationError",
     "ToolNotFoundError",
-    # Enums
-    "ToolCategory",
     # Schema classes
     "ToolParameter",
     "ToolSchema",

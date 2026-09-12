@@ -1,0 +1,21 @@
+-- ============================================================================
+-- E2I Causal Analytics - Migration ml/039_tool_category_cohort.sql
+-- Tool-composer learning loop, part 1 of 3 (spec
+-- docs/superpowers/specs/2026-09-11-tool-composer-learning-loop-design.md §4)
+-- ============================================================================
+--
+-- The code registers three cohort tools (cohort_builder, cohort_validator,
+-- cohort_statistics) in category COHORT, which the tool_category enum from ml/013 lacks
+-- (measured 2026-09-11: "invalid input value for enum tool_category"). The registry
+-- startup sync (ml/040) writes them, so the value must exist first.
+--
+-- This file is deliberately ONE statement and nothing else. scripts/run_migrations.sh
+-- (L157-190) applies a file containing an enum value addition WITHOUT --single-transaction,
+-- statement by statement, and records its ledger row only after a clean exit: PostgreSQL
+-- cannot use a new enum value in the transaction that added it. A single idempotent
+-- statement cannot leave a partial state, and re-running it is a no-op.
+--
+-- No rollback: a value cannot be removed from an enum, and an unused value is harmless.
+-- ============================================================================
+
+ALTER TYPE tool_category ADD VALUE IF NOT EXISTS 'COHORT';

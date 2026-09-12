@@ -136,7 +136,10 @@ apply_dir() {
     esac
     key="${prefix}${filename}"
 
-    if echo "$APPLIED" | grep -qxF "$key"; then
+    # Here-string, not `echo | grep -q`: under pipefail, grep -q exiting at its first match can
+    # SIGPIPE the writer, the pipeline fails, and an applied migration reads as pending
+    # (tests/unit/test_database/test_run_migrations_pipefail_race.py).
+    if grep -qxF "$key" <<< "$APPLIED"; then
       continue
     fi
 
@@ -172,8 +175,11 @@ apply_dir() {
     # (harmless on idempotent files), whereas a false NEGATIVE would wrap a
     # non-transactional statement and abort the deploy, so we err toward un-wrap.
     tracked_inline=true
-    if sed 's/--.*$//' "$migration_file" | grep -qiE \
-         "ALTER[[:space:]]+TYPE[[:space:]].*ADD[[:space:]]+VALUE|CONCURRENTLY|^[[:space:]]*COMMIT[[:space:]]*;"; then
+    # The stripped text is captured first and fed as a here-string, for the same pipefail +
+    # grep -q SIGPIPE reason as the ledger lookup above (a large file would read as "no match").
+    if grep -qiE \
+         "ALTER[[:space:]]+TYPE[[:space:]].*ADD[[:space:]]+VALUE|CONCURRENTLY|^[[:space:]]*COMMIT[[:space:]]*;" \
+         <<< "$(sed 's/--.*$//' "$migration_file")"; then
       tracked_inline=false
     fi
 

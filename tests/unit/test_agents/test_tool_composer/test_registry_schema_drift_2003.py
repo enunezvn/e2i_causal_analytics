@@ -15,12 +15,15 @@ Three surfaces describe a tool's inputs and outputs (measured 2026-09-11):
    imports it at runtime; its hand-written schemas had drifted on 14 of its 16 tools, which
    is how #2003 came to be filed against a copy the planner never reads.
 3. The ``tool_registry`` / ``tool_dependencies`` rows seeded by ``database/ml/013`` and
-   ``027``. No code reads them either; all 16 rows and 8 of 11 dependency mappings had drifted.
+   ``027``. All 16 rows and 8 of 11 dependency mappings had drifted. They are no longer checked
+   here: ml/040's ``sync_tool_registry`` makes them equal to the live registry at every API
+   startup (``src/agents/tool_composer/registry_sync.py``; the real-DB round trip is
+   ``tests/unit/test_database/learning_loop/test_registry_sync_client.py``).
 
 The live registry is the single source of truth. The callable itself is the ground truth
 the registry is checked against: its signature (and the literal ``kwargs`` keys its body
 reads) for inputs, and the keys it really returns — each tool is CALLED on real minimal
-inputs — for outputs. The copy and the DB rows are then checked against the registry.
+inputs — for outputs. The copy is then checked against the registry.
 """
 
 from __future__ import annotations
@@ -28,12 +31,10 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
-import json
-import re
 import textwrap
 import types
 from pathlib import Path
-from typing import Any, Dict, List, Set, Union, get_args, get_origin, get_type_hints
+from typing import Any, Dict, Set, Union, get_args, get_origin, get_type_hints
 
 import numpy as np
 import pandas as pd
@@ -632,80 +633,3 @@ def test_default_tool_dependencies_carry_values_the_consumer_can_take():
             if not _assignable(source, target)
         ]
     assert not incompatible, incompatible
-
-
-# ---------------------------------------------------------------------------
-# 3. The DB rows (tool_registry / tool_dependencies) against the live registry
-# ---------------------------------------------------------------------------
-
-SYNC_MARKER = "tool-registry-schema-sync"
-_PAYLOAD_RE = re.compile(r"\$(tool_registry_sync|tool_dependencies_sync)\$(.*?)\$\1\$", re.DOTALL)
-
-
-def _latest_sync_migration() -> Path:
-    candidates = sorted(
-        path
-        for path in (REPO_ROOT / "database" / "ml").glob("[0-9][0-9][0-9]_*.sql")
-        if SYNC_MARKER in path.read_text()
-    )
-    assert candidates, f"no database/ml migration carries the {SYNC_MARKER!r} payload"
-    return candidates[-1]
-
-
-def _sync_payloads() -> Dict[str, List[Dict[str, Any]]]:
-    text = _latest_sync_migration().read_text()
-    payloads = {tag: json.loads(body) for tag, body in _PAYLOAD_RE.findall(text)}
-    assert set(payloads) == {"tool_registry_sync", "tool_dependencies_sync"}, set(payloads)
-    return payloads
-
-
-def test_db_sync_covers_every_seeded_tool():
-    from scripts.generate_tool_registry_sync_migration import NOT_SEEDED_IN_DB
-
-    rows = _sync_payloads()["tool_registry_sync"]
-    names = [row["name"] for row in rows]
-    assert len(names) == len(set(names))
-    assert set(names) == LIVE_TOOLS - set(NOT_SEEDED_IN_DB)
-
-
-def test_db_sync_rows_match_the_live_registry():
-    registry = _registry()
-    for row in _sync_payloads()["tool_registry_sync"]:
-        registered = registry.get(row["name"])
-        declared = {p.name for p in registered.schema.input_parameters}
-        required = {p.name for p in registered.schema.input_parameters if p.required}
-        assert set(row["input_schema"]["properties"]) == declared, row["name"]
-        assert set(row["input_schema"].get("required", [])) == required, row["name"]
-        assert set(row["output_schema"]["properties"]) == set(
-            registered.pydantic_output_model.model_fields
-        ), row["name"]
-
-
-def test_db_sync_dependencies_match_the_default_tool_mappings():
-    from scripts.generate_tool_registry_sync_migration import NOT_SEEDED_IN_DB
-    from src.agents.tool_composer.tool_registry import DEPENDENCY_FIELD_MAPPINGS
-
-    rows = _sync_payloads()["tool_dependencies_sync"]
-    got = {(r["consumer"], r["producer"]): (r["output_field"], r["input_field"]) for r in rows}
-    expected = {
-        pair: fields
-        for pair, fields in DEPENDENCY_FIELD_MAPPINGS.items()
-        if not set(pair) & set(NOT_SEEDED_IN_DB)
-    }
-    assert got == expected
-
-
-def test_generator_output_is_what_the_drift_parser_reads():
-    from scripts.generate_tool_registry_sync_migration import SYNC_MARKER as GENERATOR_MARKER
-    from scripts.generate_tool_registry_sync_migration import render_sql
-
-    payloads = _sync_payloads()
-    sql = render_sql(
-        payloads["tool_registry_sync"], payloads["tool_dependencies_sync"], "999_x.sql"
-    )
-    assert GENERATOR_MARKER == SYNC_MARKER and SYNC_MARKER in sql
-    reparsed = {tag: json.loads(body) for tag, body in _PAYLOAD_RE.findall(sql)}
-    assert reparsed == payloads
-    # The row-count guards are sized to the payload the migration carries.
-    assert f"v_expected := {len(payloads['tool_registry_sync'])};" in sql
-    assert f"v_expected := {len(payloads['tool_dependencies_sync'])};" in sql

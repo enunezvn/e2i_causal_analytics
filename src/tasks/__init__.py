@@ -42,6 +42,13 @@ from src.tasks.ab_testing_tasks import (
 # unless CHATBOT_OPT_DRAIN_ENABLED is set.
 from src.tasks.chatbot_optimization_tasks import drain_chatbot_optimization_queue
 
+# Tool-composer feedback linker (spec 2026-09-11 §5): importing the module fires
+# the @celery_app.task decorator so the "composition-feedback-linker" beat entry
+# is discoverable by the Celery worker + beat. Without this line the beat entry
+# would dead-letter. It labels composer_episodes.success from chat thumbs and
+# changes no behaviour.
+from src.tasks.composition_feedback_tasks import link_composition_feedback
+
 # Operational KPI corpus sync (audit F3b): importing the module registers the
 # Celery task so the worker discovers it for the beat schedule. sync_chunk_corpus
 # (#1373) syncs the chat-RAG chunk substrate (text-embedding-3-small).
@@ -165,6 +172,8 @@ __all__ = [
     "run_dspy_prompt_optimization",
     # Routing-label loop (#1341 Phase 1)
     "run_routing_label_cycle",
+    # Tool-composer feedback linker (spec 2026-09-11 §5)
+    "link_composition_feedback",
     # Chatbot DSPy optimization queue drainer (#1515)
     "drain_chatbot_optimization_queue",
     # NPPES NPI taxonomy cache (issue #154)

@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ============================================================================
 # ENUMS
@@ -130,6 +130,21 @@ class ExecutionStep(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
 
+# Where a plan came from: the LLM planner, the in-process plan cache, or the deterministic KPI
+# causal builder. Recorded with every composition (spec §7.3).
+PlanSource = Literal["llm", "plan_cache", "kpi_deterministic"]
+
+# The condition ExecutionPlan.get_execution_order() found violated, in the order it checks them.
+# ml/041 keeps only these values in a recorded plan.
+ORDER_REPAIR_REASONS: Tuple[str, ...] = (
+    "no_groups",
+    "unknown_step_in_groups",
+    "step_repeated_in_groups",
+    "step_missing_from_groups",
+    "dependency_not_in_earlier_group",
+)
+
+
 class ExecutionPlan(BaseModel):
     """Result of Phase 2: Planning"""
 
@@ -145,6 +160,40 @@ class ExecutionPlan(BaseModel):
     )
     planning_reasoning: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Provenance: which path built the plan, and the plan-cache signature it was stored or
+    # matched under (the key a failed composition evicts).
+    plan_source: Optional[PlanSource] = None
+    plan_cache_key: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _steps_form_a_dag(self) -> "ExecutionPlan":
+        """Reject a plan whose steps cannot all run: every plan-building path passes here.
+
+        Duplicate ids made ``get_step`` return the first of two different steps; an unknown
+        dependency or a cycle leaves a step that can never become ready.
+        """
+        problem = self._graph_problem()
+        if problem:
+            raise ValueError(problem)
+        return self
+
+    def _graph_problem(self) -> Optional[str]:
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for step in self.steps:
+            if step.step_id in seen:
+                duplicates.add(step.step_id)
+            seen.add(step.step_id)
+        if duplicates:
+            return f"duplicate step id(s) in plan: {sorted(duplicates)}"
+        for step in self.steps:
+            unknown = [d for d in step.depends_on_steps if d not in seen]
+            if unknown:
+                return f"step {step.step_id} depends on unknown step(s) {unknown}"
+        if self._topological_levels() is None:
+            return "dependency cycle among plan steps"
+        return None
 
     @property
     def step_count(self) -> int:
@@ -165,11 +214,63 @@ class ExecutionPlan(BaseModel):
         ]
 
     def get_execution_order(self) -> List[List[str]]:
-        """Get steps grouped by execution wave (parallel groups)"""
-        if self.parallel_groups:
-            return self.parallel_groups
-        # Fallback: sequential execution
-        return [[step.step_id] for step in self.steps]
+        """Step ids grouped into waves; every step appears once, after all its dependencies.
+
+        The planner's ``parallel_groups`` are used as given only when they are a valid schedule
+        (every step exactly once, no unknown ids, every dependency in a strictly earlier group).
+        Otherwise the waves are the topological levels of ``depends_on_steps`` in plan order, and
+        :attr:`execution_order_repaired` names the violated condition.
+
+        Raises ``ValueError`` when the steps no longer form a valid graph (a duplicate id, an
+        unknown dependency or a cycle introduced after construction).
+        """
+        return self._execution_order()[0]
+
+    @property
+    def execution_order_repaired(self) -> Optional[str]:
+        """``None`` when the given groups were used; else one of ``ORDER_REPAIR_REASONS``."""
+        return self._execution_order()[1]
+
+    def _topological_levels(self) -> Optional[List[List[str]]]:
+        done: set[str] = set()
+        remaining = list(self.steps)
+        levels: List[List[str]] = []
+        while remaining:
+            level = [s.step_id for s in remaining if all(d in done for d in s.depends_on_steps)]
+            if not level:
+                return None  # a cycle (or a dependency on a missing step)
+            levels.append(level)
+            done.update(level)
+            remaining = [s for s in remaining if s.step_id not in done]
+        return levels
+
+    def _execution_order(self) -> Tuple[List[List[str]], Optional[str]]:
+        # Recomputed from the current steps and groups on every call, so a later assignment to
+        # either can never leave a stale schedule.
+        if not self.steps:
+            return [], None
+        # Re-checked on every call: steps mutated after construction must fail before any tool
+        # runs, never fall back to list order.
+        problem = self._graph_problem()
+        if problem:
+            raise ValueError(problem)
+        levels = self._topological_levels() or []
+        groups = self.parallel_groups
+        if not groups:
+            return levels, "no_groups"
+        known = {s.step_id for s in self.steps}
+        flat = [sid for group in groups for sid in group]
+        if any(sid not in known for sid in flat):
+            return levels, "unknown_step_in_groups"
+        if len(flat) != len(set(flat)):
+            return levels, "step_repeated_in_groups"
+        if set(flat) != known:
+            return levels, "step_missing_from_groups"
+        wave = {sid: index for index, group in enumerate(groups) for sid in group}
+        for step in self.steps:
+            if any(wave[d] >= wave[step.step_id] for d in step.depends_on_steps):
+                return levels, "dependency_not_in_earlier_group"
+        return [list(group) for group in groups], None
 
 
 # ============================================================================
@@ -201,6 +302,20 @@ class ToolOutput(BaseModel):
         return self.success and self.result is not None
 
 
+StepOutcomeClass = Literal[
+    "succeeded",
+    "cache_hit",
+    "refused",
+    "input_rejected",
+    "timeout",
+    "error",
+    "plan_defect",
+    "dependency_unmet",
+    "circuit_open",
+    "not_registered",
+]
+
+
 class StepResult(BaseModel):
     """Result of executing a single step"""
 
@@ -217,6 +332,14 @@ class StepResult(BaseModel):
     started_at: datetime
     completed_at: datetime
     duration_ms: int = 0
+
+    # What happened, set by the executor from the exception type it caught (never from error
+    # text), so the learning loop can count health failures apart from refusals and plan defects
+    # (spec §5.3). ``attempts`` counts tool invocations: 0 when the tool never ran.
+    outcome_class: Optional[StepOutcomeClass] = None
+    attempts: int = 0
+    cache_hit: bool = False
+    error_type: Optional[str] = None
 
     @field_validator("duration_ms", mode="before")
     @classmethod

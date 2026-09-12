@@ -1695,6 +1695,23 @@ def _resolve_cohort_frame(
     return cohort_resolution.resolve_cohort_frame(brand, region, data_source=data_source)
 
 
+def _composer_context(
+    *,
+    brand: Optional[str],
+    region: Optional[str],
+    session_id: Optional[str],
+    max_parallel: int,
+) -> Dict[str, Any]:
+    """The context the chat tool hands the Tool Composer, marked with who called (spec §5.3)."""
+    return {
+        "brand": brand,
+        "region": region,
+        "session_id": session_id or f"composer-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        "max_parallel": max_parallel,
+        "entry_point": "chat_tool",
+    }
+
+
 @tool(args_schema=ToolComposerToolInput)
 async def tool_composer_tool(
     query: str,
@@ -1738,12 +1755,9 @@ async def tool_composer_tool(
 
     try:
         # Build context for Tool Composer
-        context: Dict[str, Any] = {
-            "brand": brand,
-            "region": region,
-            "session_id": session_id or f"composer-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-            "max_parallel": max_parallel,
-        }
+        context: Dict[str, Any] = _composer_context(
+            brand=brand, region=region, session_id=session_id, max_parallel=max_parallel
+        )
 
         # Issue #810: KPI-aware data resolution. When the query targets a defined
         # KPI (e.g. "what drove <brand> conversion ..."), resolve the KPI's REAL
