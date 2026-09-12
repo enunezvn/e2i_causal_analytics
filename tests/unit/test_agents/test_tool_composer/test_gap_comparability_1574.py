@@ -301,7 +301,17 @@ def test_unresolvable_grouping_column_guard_unchanged():
 # `ToolOutput.error` and hand the user a less informative answer than the
 # fabricated comparison it replaced.
 # ---------------------------------------------------------------------------
-def _failed_trace(plan_id: str, *, tool_name: str, error: str) -> ExecutionTrace:
+def _failed_trace(
+    plan_id: str,
+    *,
+    tool_name: str,
+    error: str,
+    outcome_class: str = "refused",
+    reason_code: str = "coverage_gap",
+    error_type: str = "ToolRefusalError",
+) -> ExecutionTrace:
+    # The defaults are what the executor records for the real site: `gap_calculator` raises
+    # ToolRefusalError(..., reason_code=COVERAGE_GAP), caught by the executor's refusal arm.
     now = datetime.now(timezone.utc)
     return ExecutionTrace(
         plan_id=plan_id,
@@ -315,6 +325,9 @@ def _failed_trace(plan_id: str, *, tool_name: str, error: str) -> ExecutionTrace
                 status=ExecutionStatus.FAILED,
                 started_at=now,
                 completed_at=now,
+                outcome_class=outcome_class,
+                error_type=error_type,
+                reason_code=reason_code,
             )
         ],
         tools_executed=1,
@@ -482,4 +495,4 @@ async def test_step_with_success_flag_but_no_result_is_reported_failed():
 
     assert result.response is not None
     assert result.response.failed_components == ["gap_calculator"]
-    assert "gap_calculator: empty result" in result.response.answer
+    assert "gap_calculator: the tool failed to complete [tool_error]" in result.response.answer
