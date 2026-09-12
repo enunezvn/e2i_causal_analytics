@@ -91,6 +91,11 @@ def test_no_interval_on_the_risk_ratio_path() -> None:
     assert report["e_value_ci"] is None
     assert report["reading"] == "interval_unavailable"
     assert report["conversion"] == "risk_ratio"
+    # The prose half of ``_assert_point_only``, kept: only its ``benchmark is None``
+    # assertion stops applying here, because the frame now yields a naive contrast.
+    # Without these a binary point-only report could carry interval prose and still pass.
+    assert "interval" in report["headline"].lower()
+    assert "no confidence interval" in report["interpretation"].lower()
 
 
 def test_no_interval_with_a_supplied_baseline_risk_is_refused() -> None:

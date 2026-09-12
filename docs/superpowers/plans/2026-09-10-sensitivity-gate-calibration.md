@@ -1771,6 +1771,17 @@ Expected: `KeyError: 'reading'` / unexpected keyword `ci_upper`.
 
 - [ ] **Step 3: Rewrite the tool**
 
+> **SUPERSEDED by #2022 (2026-09-12) — this section is historical; do not copy the signature or the
+> guidance below.** The registered parameters `baseline_risk` and `naive_ate` are gone and are REFUSED
+> when supplied, and the interpretation text further down no longer tells the caller to "pass naive_ate
+> and baseline_risk". No composable tool output carries either field (`EffectEstimate` has neither), so
+> every value the planner bound to them was invented — live on the Kisqali cohort that meant
+> `baseline_risk=0.5` on a continuous outcome and `naive_ate` = the adjusted ate, pinning the benchmark
+> to 1.00 while `refutation_runner` reported 1.03 for the same estimate. The tool now derives the naive
+> contrast, the baseline risk (binary outcome only) and the outcome SD from the in-context frame with the
+> same `evalue` helpers the runner uses, and REFUSES when no usable frame supplies that scale. See
+> `docs/superpowers/specs/2026-09-10-sensitivity-gate-calibration-design.md` §4.7 for the current contract.
+
 Delete `_e_value_from_rr` (lines 1280–1293) and replace the `sensitivity_analyzer` registration + function with:
 
 ```python

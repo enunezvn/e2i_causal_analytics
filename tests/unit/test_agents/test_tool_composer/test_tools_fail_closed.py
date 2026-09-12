@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 
 from src.agents.tool_composer import tool_registrations as tr
+from src.agents.tool_composer.errors import ToolRefusalError
 
 
 # ---------------------------------------------------------------------------
@@ -107,14 +108,37 @@ def test_sensitivity_analyzer_reads_beyond_or_within_against_the_frames_own_cont
     assert within["benchmark_basis"] == "joint_naive_vs_adjusted"
 
 
-def test_sensitivity_analyzer_fail_closes_on_non_finite():
-    with pytest.raises(RuntimeError):
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"ate": float("nan"), "ci_lower": 0.1},
+        {"ate": float("inf"), "ci_lower": 0.1},
+        {"ate": 0.5, "ci_lower": float("inf")},
+        {"ate": 0.5, "ci_lower": float("-inf")},
+        {"ate": 0.5, "ci_lower": 0.1, "ci_upper": float("nan")},
+    ],
+)
+def test_sensitivity_analyzer_fail_closes_on_non_finite(bad):
+    # A USABLE frame is supplied and the refusal must NAME the offending input. Without
+    # both, #2022's missing-frame refusal satisfies a bare ``pytest.raises(RuntimeError)``
+    # and this test would stay green even if the non-finite guard were deleted — passing
+    # for a reason unrelated to what it is named after.
+    offender = next(name for name, value in bad.items() if not math.isfinite(value))
+    with pytest.raises(ToolRefusalError, match=rf"{offender}=.*(nan|inf)"):
+        tr.sensitivity_analyzer(
+            treatment="dose",
+            outcome="response",
+            estimation_data=_continuous_treatment_frame(),
+            **bad,
+        )
+
+
+def test_the_non_finite_guard_runs_before_the_frame_is_looked_at():
+    # Guard PRECEDENCE, tested separately from the guard itself: a non-finite input is a
+    # property of the caller's arguments, so it is reported as such even when the frame
+    # that #2022 requires is missing too. Two defects, and the caller's own is named first.
+    with pytest.raises(ToolRefusalError, match="ate=nan"):
         tr.sensitivity_analyzer(ate=float("nan"), ci_lower=0.1)
-    with pytest.raises(RuntimeError):
-        tr.sensitivity_analyzer(ate=0.5, ci_lower=float("inf"))
-    # #2022: naive_ate is gone, so the third finite input to guard is the upper bound.
-    with pytest.raises(RuntimeError, match="ci_upper"):
-        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1, ci_upper=float("nan"))
 
 
 def test_sensitivity_analyzer_refuses_a_point_estimate_outside_its_own_ci():
