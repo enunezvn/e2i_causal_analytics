@@ -226,20 +226,25 @@ async def test_the_rating_labels_the_composition_it_followed_not_an_earlier_one(
     assert _episode(synced, "comp_older")["success"] is None
 
 
-async def test_one_rating_labels_one_composition(synced):
-    """Two compositions minutes apart, one rating: it belongs to the one it followed.
+async def test_one_rating_labels_one_composition_however_often_the_beat_runs(synced):
+    """Two compositions minutes apart, one rating: it belongs to the one it followed — and it
+    stays spent.
 
-    The earlier regression put the other composition two hours away, outside the window, so it
-    proved nothing about the case that actually happens — a user asking twice, then rating.
+    Claiming once within a pass is not enough: the beat runs nightly. If the labelled composition
+    drops out of the candidate set while its rating stays eligible, tomorrow's run hands the same
+    rating to the older composition. The earlier regression linked once and put the other
+    composition two hours away, so it caught neither case.
     """
     port = _pg.PsycopgRpcPort(synced)
     await _record_episode(port, "comp_first", minutes_ago=11)
     await _record_episode(port, "comp_second", minutes_ago=1)
     _feedback(synced, "thumbs_up", minutes_ago=0)
 
-    result = _link(synced)
+    first = _link(synced)
+    second = _link(synced)
 
-    assert result["labelled"] == 1
+    assert first["labelled"] == 1
+    assert second["labelled"] == 0, "the rating was spent; a rerun must not re-use it"
     assert _episode(synced, "comp_second")["success"] is True
     assert _episode(synced, "comp_first")["success"] is None
 
@@ -259,7 +264,10 @@ async def test_a_rating_never_labels_another_users_composition(synced):
 
 
 async def test_running_it_again_changes_nothing(synced):
-    await _record_episode(_pg.PsycopgRpcPort(synced), "comp_idem")
+    # Two compositions, so a rerun has somewhere wrong to put the rating if it is not spent.
+    port = _pg.PsycopgRpcPort(synced)
+    await _record_episode(port, "comp_idem_older", minutes_ago=12)
+    await _record_episode(port, "comp_idem", minutes_ago=1)
     _feedback(synced, "thumbs_up")
 
     first = _link(synced)
@@ -268,3 +276,4 @@ async def test_running_it_again_changes_nothing(synced):
 
     assert first["labelled"] == 1 and second["labelled"] == 0
     assert _episode(synced, "comp_idem") == before
+    assert _episode(synced, "comp_idem_older")["success"] is None

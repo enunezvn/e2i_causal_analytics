@@ -150,7 +150,8 @@ def link_composition_feedback(
         )
         return {"labelled": 0, "considered": 0}
 
-    # Already labelled episodes are skipped here, which is what makes a re-run a no-op.
+    # Only unlabelled episodes are WRITTEN. Matching still sees every episode (below), because a
+    # rating already spent on a labelled composition must not become available again tomorrow.
     pending = [
         episode
         for episode in episodes
@@ -171,8 +172,12 @@ def link_composition_feedback(
         logger.warning(f"composition feedback linker: rating read failed ({type(e).__name__}: {e})")
         return {"labelled": 0, "considered": len(pending)}
 
-    # One pass over the ratings, so no rating labels two compositions.
-    claimed = match_episodes(pending, ratings)
+    # Matched against EVERY recent episode, not just the unlabelled ones: a rating that already
+    # labelled a composition is spent, and stays spent. Matching only the unlabelled ones made
+    # attribution hold within a pass but not across them — the nightly rerun then handed the same
+    # rating to the next-oldest composition, which is both a wrong label and a rerun that changed
+    # something it promised not to.
+    claimed = match_episodes(episodes, ratings)
 
     labelled = 0
     failed = 0
