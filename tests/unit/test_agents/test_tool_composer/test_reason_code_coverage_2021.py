@@ -10,16 +10,20 @@ from pathlib import Path
 
 import pytest
 
-from src.agents.tool_composer.reason_codes import ReasonCode
+from src.agents.tool_composer.reason_codes import EXECUTOR_ASSIGNED, ReasonCode
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 _TARGETS = {"ToolRefusalError", "ToolInputError"}
 _SOURCES = [
-    Path("src/agents/tool_composer/tool_registrations.py"),
+    REPO_ROOT / "src/agents/tool_composer/tool_registrations.py",
 ]
 
+# Codes a tool may raise with: every member except those only the executor assigns.
+_TOOL_MEMBERS = {c.name for c in ReasonCode} - {c.name for c in EXECUTOR_ASSIGNED}
 
-def _raise_sites(path: Path):
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+def _raise_sites_in(tree: ast.AST):
     for node in ast.walk(tree):
         if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
             continue
@@ -29,10 +33,14 @@ def _raise_sites(path: Path):
             yield node.lineno, name, node.exc
 
 
+def _parse(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
 @pytest.mark.parametrize("path", _SOURCES, ids=lambda p: p.name)
 def test_every_raise_site_names_a_reason_code(path: Path):
     uncoded = []
-    for lineno, name, call in _raise_sites(path):
+    for lineno, name, call in _raise_sites_in(_parse(path)):
         keywords = {kw.arg for kw in call.keywords}
         if "reason_code" not in keywords:
             uncoded.append(f"{path}:{lineno} {name}")
@@ -71,36 +79,39 @@ def _threaded_params(tree: ast.Module) -> dict:
     return threaded
 
 
-@pytest.mark.parametrize("path", _SOURCES, ids=lambda p: p.name)
-def test_every_reason_code_is_a_member_of_the_closed_set(path: Path):
-    """A literal string or an unknown ReasonCode attribute is a drift vector."""
-    members = {c.name for c in ReasonCode}
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _raise_site_violations(tree: ast.Module, label: str) -> list:
+    """Raise sites whose ``reason_code`` is not a literal tool-legal member."""
     threaded = _threaded_params(tree)
     # the line span of each function that legitimately raises with its parameter
     spans = [(f.lineno, f.end_lineno) for f in threaded.values()]
     bad = []
-    for lineno, name, call in _raise_sites(path):
+    for lineno, _name, call in _raise_sites_in(tree):
         for kw in call.keywords:
             if kw.arg != "reason_code":
                 continue
             value = kw.value
-            if _literal_member(value, members):
+            if _literal_member(value, _TOOL_MEMBERS):
                 continue
             inside_threaded = any(start <= lineno <= end for start, end in spans)
             if inside_threaded and isinstance(value, ast.Name) and value.id == "reason_code":
                 continue
-            bad.append(f"{path}:{lineno} {ast.unparse(value)} (not ReasonCode.MEMBER)")
+            bad.append(f"{label}:{lineno} {ast.unparse(value)} (not a tool ReasonCode.MEMBER)")
+    return bad
+
+
+@pytest.mark.parametrize("path", _SOURCES, ids=lambda p: p.name)
+def test_every_reason_code_is_a_member_of_the_closed_set(path: Path):
+    """A literal string or an unknown ReasonCode attribute is a drift vector."""
+    bad = _raise_site_violations(_parse(path), str(path))
     assert bad == [], "reason_code values outside the closed set:\n  " + "\n  ".join(bad)
 
 
 def _threaded_call_violations(tree: ast.Module, label: str) -> tuple:
-    """Calls to a threaded guard that do not supply a literal ``ReasonCode.MEMBER``.
+    """Calls to a threaded guard that do not supply a literal tool-legal member.
 
     Returns ``(bad, seen)``: the offending call sites, and how many calls each
     threaded guard received.
     """
-    members = {c.name for c in ReasonCode}
     threaded = _threaded_params(tree)
     bad = []
     seen = dict.fromkeys(threaded, 0)
@@ -121,7 +132,7 @@ def _threaded_call_violations(tree: ast.Module, label: str) -> tuple:
         value = supplied.get("reason_code")
         if value is None:
             bad.append(f"{label}:{node.lineno} {name}(...) supplies no reason_code")
-        elif not _literal_member(value, members):
+        elif not _literal_member(value, _TOOL_MEMBERS):
             bad.append(f"{label}:{node.lineno} {name}(reason_code={ast.unparse(value)})")
     return bad, seen
 
@@ -133,7 +144,7 @@ def test_a_threaded_reason_code_is_literal_at_every_call_site(path: Path):
     Without this, threading the code through a parameter would be an unchecked
     hole: a caller could pass a string, a variable, or nothing at all.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = _parse(path)
     assert _threaded_params(tree), "no threaded guard found — delete this test if that is intended"
     bad, seen = _threaded_call_violations(tree, str(path))
     assert bad == [], "threaded reason_code not a literal member:\n  " + "\n  ".join(bad)
@@ -155,6 +166,8 @@ def _guard(value, *, reason_code: ReasonCode):
         pytest.param("tr._guard(1)", id="attribute-no-code"),
         pytest.param("tr._guard(1, reason_code=ReasonCode.NOT_A_MEMBER)", id="attribute-unknown"),
         pytest.param("a.b._guard(1, reason_code=code)", id="nested-attribute-variable"),
+        pytest.param("_guard(1, reason_code=ReasonCode.TOOL_ERROR)", id="name-executor-code"),
+        pytest.param("tr._guard(1, reason_code=ReasonCode.CIRCUIT_OPEN)", id="attr-executor-code"),
     ],
 )
 def test_the_call_site_guard_flags_a_bad_call_however_the_guard_is_reached(call):
@@ -180,25 +193,31 @@ def test_the_call_site_guard_accepts_a_literal_member_however_the_guard_is_reach
     assert seen == {"_guard": 1}
 
 
+@pytest.mark.parametrize(
+    ("code", "flagged"),
+    [
+        pytest.param("TOOL_ERROR", True, id="tool-error"),
+        pytest.param("TOOL_TIMEOUT", True, id="tool-timeout"),
+        pytest.param("PLAN_DEFECT", True, id="plan-defect"),
+        pytest.param("REFERENCE_UNRESOLVABLE", True, id="reference-unresolvable"),
+        pytest.param("DEPENDENCY_UNMET", True, id="dependency-unmet"),
+        pytest.param("CIRCUIT_OPEN", True, id="circuit-open"),
+        pytest.param("TOOL_NOT_REGISTERED", True, id="tool-not-registered"),
+        pytest.param("NO_USABLE_ROWS", False, id="tool-code"),
+    ],
+)
+def test_a_tool_raise_site_may_not_use_an_executor_assigned_code(code, flagged):
+    """M6: those codes describe what the EXECUTOR observed; a tool claiming one would be
+    counted as a timeout, an open circuit or a plan defect that never happened."""
+    source = f'def tool():\n    raise ToolRefusalError("x", reason_code=ReasonCode.{code})\n'
+    bad = _raise_site_violations(ast.parse(source), "synthetic")
+    assert bool(bad) is flagged, bad
+
+
 def test_the_site_count_is_what_the_lane_measured():
-    """A floor, not a ceiling: new sites are fine, a silent drop to zero is not.
+    """A floor, not a ceiling: new sites are fine, a silent drop is not.
 
-    87, measured by AST on this lane's base ``0a16e9c18``: 66 ``ToolRefusalError``
-    plus 21 ``ToolInputError``. The plan's 94 was wrong for TWO independent reasons,
-    and neither alone explains the gap.
-
-    * **Method.** ``grep -c "ToolRefusalError\\|ToolInputError"`` counts LINES that
-      mention either name, and collapses several matches on one line to one. Many of
-      those lines are prose — the module and tool docstrings, the comments explaining
-      the #1600 split, the ``from .errors import``. On the lane base that is 103
-      matching lines against 87 real ``raise`` statements.
-    * **Base drift.** The 94 was measured on ``6c6a6a0ae``, which predates PR #2059
-      (``8bb85a772``, ``772733dc2`` — the #2022 sensitivity work). That commit added
-      five ``ToolRefusalError`` sites. On ``6c6a6a0ae`` grep says 94 and the AST says
-      82; on the lane base grep says 103 and the AST says 87.
-
-    The AST on the branch you are actually on is the measure; a line count against a
-    stale base is not.
+    Measured by AST, not grep (a line count also matches docstrings and imports).
     """
-    total = sum(1 for path in _SOURCES for _ in _raise_sites(path))
-    assert total >= 87, f"expected at least the 87 sites measured for #2021, found {total}"
+    total = sum(1 for path in _SOURCES for _ in _raise_sites_in(_parse(path)))
+    assert total >= 88, f"expected at least the 88 sites measured for #2021, found {total}"

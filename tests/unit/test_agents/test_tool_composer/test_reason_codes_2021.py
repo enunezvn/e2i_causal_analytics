@@ -1,5 +1,9 @@
 """#2021: refusals carry a closed reason code and a data-free canonical sentence."""
 
+import copy
+import logging
+import pickle
+
 import pytest
 
 from src.agents.tool_composer.errors import ToolInputError, ToolRefusalError
@@ -7,7 +11,10 @@ from src.agents.tool_composer.reason_codes import (
     CANONICAL_SENTENCES,
     ReasonCode,
     canonical_sentence,
+    validate_details,
 )
+
+_ERRORS_LOGGER = "src.agents.tool_composer.errors"
 
 
 def test_every_code_has_a_canonical_sentence():
@@ -23,6 +30,63 @@ def test_canonical_sentences_carry_no_interpolation():
         assert "%s" not in sentence, code
         assert sentence and sentence[0].islower(), code
         assert len(sentence) <= 160, code
+
+
+# The wire values as of the #2021 lane. Once codes are persisted, removing or renaming a
+# member orphans stored rows and needs a data migration; adding one does not.
+_WIRE_VALUES_2021 = frozenset(
+    {
+        "non_binary_treatment",
+        "single_class_treatment",
+        "non_binary_outcome",
+        "single_class_outcome",
+        "no_usable_rows",
+        "no_usable_columns",
+        "non_finite_input",
+        "insufficient_groups",
+        "insufficient_sample",
+        "coverage_gap",
+        "unknown_column",
+        "non_numeric_column",
+        "ambiguous_column",
+        "ambiguous_group_label",
+        "missing_dataframe",
+        "ci_outside_estimate",
+        "point_estimate_only",
+        "upstream_step_failed",
+        "unsupported_request",
+        "degenerate_design",
+        "simulation_incomplete",
+        "effect_not_estimable",
+        "missing_required_input",
+        "invalid_input_type",
+        "invalid_input_value",
+        "unexpected_input",
+        "tool_error",
+        "tool_timeout",
+        "plan_defect",
+        "reference_unresolvable",
+        "dependency_unmet",
+        "circuit_open",
+        "tool_not_registered",
+    }
+)
+
+
+def test_wire_values_may_grow_but_never_shrink_or_rename():
+    """Removing or renaming a member needs a data migration once codes are persisted."""
+    assert len(_WIRE_VALUES_2021) == 33
+    current = {c.value for c in ReasonCode}
+    assert current >= _WIRE_VALUES_2021, sorted(_WIRE_VALUES_2021 - current)
+    for member in ReasonCode:
+        assert member.value == member.name.lower(), member
+
+
+def test_a_code_formats_as_its_wire_value():
+    """A ``(str, Enum)`` formats as ``ReasonCode.NO_USABLE_ROWS`` on 3.12; the wire value
+    is what a log line, an f-string or a database parameter must carry."""
+    assert f"{ReasonCode.NO_USABLE_ROWS}" == "no_usable_rows"
+    assert str(ReasonCode.NO_USABLE_ROWS) == "no_usable_rows"
 
 
 def test_refusal_carries_code_and_details():
@@ -52,54 +116,137 @@ def test_code_is_required():
         ToolRefusalError("no code given")  # type: ignore[call-arg]
 
 
+# --- details: the validator is strict ----------------------------------------------
+
+
 def test_details_must_be_structure_only():
     """details is persisted; it may not smuggle free text back in."""
     with pytest.raises(ValueError, match="details"):
-        ToolRefusalError(
-            "x",
-            reason_code=ReasonCode.NO_USABLE_ROWS,
-            details={"message": "a sentence that is really free text " * 5},
-        )
+        validate_details({"n_message": "a sentence that is really free text " * 5})
 
 
 @pytest.mark.parametrize(
     "details",
     [
-        pytest.param({"brand": "Kisqali"}, id="short-string"),
-        pytest.param({"column": ""}, id="empty-string"),
+        pytest.param({"n_brand": "Kisqali"}, id="short-string"),
+        pytest.param({"n_column": ""}, id="empty-string"),
         pytest.param({"n_rows": None}, id="none"),
-        pytest.param({"cols": ["free text" * 5]}, id="list"),
-        pytest.param({"scope": {"n": 1}}, id="dict"),
-        pytest.param({"ratio": float("nan")}, id="nan"),
-        pytest.param({"ratio": float("inf")}, id="inf"),
-        pytest.param({"ratio": float("-inf")}, id="neg-inf"),
+        pytest.param({"n_cols": ["free text" * 5]}, id="list"),
+        pytest.param({"n_scope": {"n": 1}}, id="dict"),
+        pytest.param({"share_x": float("nan")}, id="nan"),
+        pytest.param({"share_x": float("inf")}, id="inf"),
+        pytest.param({"share_x": float("-inf")}, id="neg-inf"),
+        pytest.param({"n_rows": 2**53 + 1}, id="int-beyond-js-safe"),
+        pytest.param({"n_rows": -(2**53) - 1}, id="negative-int-beyond-js-safe"),
+        pytest.param({"rows": 1}, id="no-prefix-key"),
+        pytest.param({"count_rows": 1}, id="unknown-prefix-key"),
+        pytest.param({"n_": 1}, id="bare-prefix-key"),
         pytest.param({"NRows": 1}, id="camel-key"),
-        pytest.param({"1_rows": 1}, id="digit-first-key"),
+        pytest.param({"n_Rows": 1}, id="upper-after-prefix"),
         pytest.param({"n rows": 1}, id="space-key"),
         pytest.param({"": 1}, id="empty-key"),
         pytest.param({1: 1}, id="non-string-key"),
+        pytest.param([("n_rows", 1)], id="not-a-mapping"),
     ],
 )
-def test_details_values_are_finite_numbers_or_booleans_under_snake_case_keys(details):
-    """L1: a string of any length fits a column or brand name — the data the lane keeps
-    out of the database — so details carries numbers and booleans only."""
+def test_details_values_are_finite_numbers_or_booleans_under_prefixed_keys(details):
+    """L1/M5/M7: a string of any length fits a column or brand name — the data the lane
+    keeps out of the database — so details carries numbers and booleans only, ints within
+    JavaScript's safe range (the admin page reads them), under ``n_``/``is_``/``has_``/
+    ``share_`` keys."""
     with pytest.raises(ValueError, match="details"):
-        ToolRefusalError("x", reason_code=ReasonCode.NO_USABLE_ROWS, details=details)
+        validate_details(details)
 
 
 def test_details_accepts_ints_finite_floats_and_booleans():
-    details = {"n_rows": 0, "share": 0.25, "is_binary": False, "n_2": -3}
-    err = ToolRefusalError("x", reason_code=ReasonCode.NO_USABLE_ROWS, details=details)
-    assert err.details == details
+    details = {"n_rows": 0, "share_kept": 0.25, "is_binary": False, "has_gaps": True, "n_2": -3}
+    out = validate_details(details)
+    assert out == details
+    assert out is not details, "the validator returns a new dict"
+    assert validate_details({"n_rows": 2**53}) == {"n_rows": 2**53}
 
 
 def test_details_key_count_is_still_bounded():
     with pytest.raises(ValueError, match="details"):
-        ToolRefusalError(
-            "x",
+        validate_details({f"n_{i}": i for i in range(9)})
+
+
+def test_numpy_scalars_are_normalized_to_builtins():
+    """A count is often ``int(mask.sum())`` — or, without the cast, an ``np.int64`` that
+    neither JSON nor a database driver takes."""
+    np = pytest.importorskip("numpy")
+    out = validate_details(
+        {"n_rows": np.int64(3), "share_kept": np.float64(0.5), "is_binary": np.bool_(True)}
+    )
+    assert out == {"n_rows": 3, "share_kept": 0.5, "is_binary": True}
+    assert type(out["n_rows"]) is int
+    assert type(out["share_kept"]) is float
+    assert type(out["is_binary"]) is bool
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("nan", id="float64-nan"),
+        pytest.param("str", id="numpy-str"),
+        pytest.param("array", id="multi-element-array"),
+    ],
+)
+def test_numpy_values_are_checked_after_normalization(value):
+    np = pytest.importorskip("numpy")
+    concrete = {
+        "nan": np.float64("nan"),
+        "str": np.str_("Kisqali"),
+        "array": np.array([1, 2]),
+    }[value]
+    with pytest.raises(ValueError, match="details"):
+        validate_details({"n_x": concrete})
+
+
+# --- details and codes: the constructor fails SOFT (I1) ------------------------------
+
+
+def test_a_refusal_with_bad_details_still_refuses(caplog):
+    """A raise from the constructor would escape the executor's refusal arm into its
+    generic ``except Exception``: retried, charged to the circuit breaker, and the
+    refusal message lost (#1600). The refusal is kept; only the details are dropped."""
+    with caplog.at_level(logging.ERROR, logger=_ERRORS_LOGGER):
+        err = ToolRefusalError(
+            "gap_calculator: refusing",
             reason_code=ReasonCode.NO_USABLE_ROWS,
-            details={f"k_{i}": i for i in range(9)},
+            details={"n_brand": "Kisqali-secret"},
         )
+    assert str(err) == "gap_calculator: refusing"
+    assert err.reason_code is ReasonCode.NO_USABLE_ROWS
+    assert err.details == {}
+    records = [r for r in caplog.records if r.name == _ERRORS_LOGGER]
+    assert [r.levelno for r in records] == [logging.ERROR]
+    assert "no_usable_rows" in records[0].getMessage()
+    assert "Kisqali-secret" not in caplog.text, "the offending value may be data"
+
+
+def test_an_unknown_code_is_recorded_as_a_tool_error_not_raised(caplog):
+    with caplog.at_level(logging.ERROR, logger=_ERRORS_LOGGER):
+        err = ToolInputError("bad input", reason_code="not_a_real_code")  # type: ignore[arg-type]
+    assert str(err) == "bad input"
+    assert err.reason_code is ReasonCode.TOOL_ERROR
+    assert isinstance(err, ValueError)
+    records = [r for r in caplog.records if r.name == _ERRORS_LOGGER]
+    assert [r.levelno for r in records] == [logging.ERROR]
+
+
+def test_a_valid_code_string_is_still_accepted():
+    err = ToolRefusalError("x", reason_code="no_usable_rows")  # type: ignore[arg-type]
+    assert err.reason_code is ReasonCode.NO_USABLE_ROWS
+
+
+def test_the_stored_details_are_the_normalized_copy():
+    np = pytest.importorskip("numpy")
+    supplied = {"n_rows": np.int64(4)}
+    err = ToolRefusalError("x", reason_code=ReasonCode.NO_USABLE_ROWS, details=supplied)
+    assert err.details == {"n_rows": 4}
+    assert type(err.details["n_rows"]) is int
+    assert err.details is not supplied
 
 
 # --- R1 recodes: each pin fails on the code the site carried before the review
@@ -121,6 +268,34 @@ def test_roi_estimator_without_a_gap_is_a_missing_input_not_a_failed_upstream():
     with pytest.raises(ToolRefusalError) as caught:
         roi_estimator(gap_analysis={}, investment=1.0)
     assert caught.value.reason_code is ReasonCode.MISSING_REQUIRED_INPUT
+
+
+@pytest.mark.parametrize(
+    ("gap", "code"),
+    [
+        pytest.param("0.4", ReasonCode.INVALID_INPUT_TYPE, id="string"),
+        pytest.param(None, ReasonCode.INVALID_INPUT_TYPE, id="none"),
+        pytest.param([0.4], ReasonCode.INVALID_INPUT_TYPE, id="list"),
+        pytest.param(float("nan"), ReasonCode.NON_FINITE_INPUT, id="nan"),
+        pytest.param(float("-inf"), ReasonCode.NON_FINITE_INPUT, id="neg-inf"),
+    ],
+)
+def test_roi_estimator_tells_a_wrong_type_gap_from_a_non_finite_one(gap, code):
+    """M11: the same split as ``_power_number``, with the message unchanged."""
+    from src.agents.tool_composer.tool_registrations import roi_estimator
+
+    with pytest.raises(ToolRefusalError) as caught:
+        roi_estimator(gap_analysis={"gap": gap}, investment=1.0)
+    assert caught.value.reason_code is code
+    assert str(caught.value) == f"roi_estimator: gap value is not a finite number (got {gap!r})."
+
+
+def test_roi_estimator_still_accepts_a_boolean_gap():
+    """``True`` passed the isinstance check before the split, and must still."""
+    from src.agents.tool_composer.tool_registrations import roi_estimator
+
+    out = roi_estimator(gap_analysis={"gap": True}, investment=1.0)
+    assert out.estimated_roi == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize(
@@ -156,24 +331,20 @@ def test_canonical_sentence_accepts_a_raw_string_code():
 def test_a_coded_error_survives_pickle_and_deepcopy():
     """Making reason_code keyword-only must not cost picklability.
 
-    ``BaseException.__reduce__`` replays ``self.args`` POSITIONALLY, so a
-    keyword-only required argument turns any pickle or deepcopy of the error into
-    a confusing ``TypeError: missing 1 required keyword-only argument`` far from
-    the raise site. These errors crossed a process boundary fine before #2021 and
-    must keep doing so — pytest-xdist, multiprocessing and any task queue reduce
-    exceptions this way.
+    ``BaseException.__reduce__`` replays ``self.args`` POSITIONALLY, so a required
+    keyword-only argument turns any pickle or deepcopy of the error into a
+    ``TypeError``. Notes and any other instance attributes must survive too.
     """
-    import copy
-    import pickle
-
     err = ToolRefusalError(
         "gap_calculator: refusing",
         reason_code=ReasonCode.NO_USABLE_ROWS,
         details={"n_rows": 0},
     )
+    err.add_note("n")
     for clone in (pickle.loads(pickle.dumps(err)), copy.deepcopy(err)):
         assert type(clone) is ToolRefusalError
         assert str(clone) == "gap_calculator: refusing"
         assert clone.reason_code is ReasonCode.NO_USABLE_ROWS
         assert clone.details == {"n_rows": 0}
+        assert clone.__notes__ == ["n"]
         assert isinstance(clone, RuntimeError)

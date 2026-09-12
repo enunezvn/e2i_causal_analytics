@@ -50,6 +50,7 @@ import pytest
 
 from src.agents.tool_composer import tool_registrations as tr
 from src.agents.tool_composer.errors import ToolRefusalError
+from src.agents.tool_composer.reason_codes import ReasonCode
 
 # ---------------------------------------------------------------------------
 # Frames
@@ -149,6 +150,8 @@ def test_null_segment_key_is_not_promoted_to_a_high_responder():
     reason = str(excinfo.value)
     assert "age_group" in reason
     assert "cate_estimation_scope=" in reason
+    assert excinfo.value.reason_code is ReasonCode.INSUFFICIENT_GROUPS
+    assert set(excinfo.value.details) == {"n_segments_named", "n_no_contrast", "n_non_finite"}
 
 
 # ---------------------------------------------------------------------------

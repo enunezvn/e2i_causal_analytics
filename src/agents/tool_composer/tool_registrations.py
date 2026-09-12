@@ -2359,9 +2359,9 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
             f"were never estimated. cate_estimation_scope={scope!r}",
             reason_code=ReasonCode.INSUFFICIENT_GROUPS,
             details={
-                "segments_named": len(named_groups),
-                "no_contrast": no_contrast,
-                "non_finite": non_finite,
+                "n_segments_named": len(named_groups),
+                "n_no_contrast": no_contrast,
+                "n_non_finite": non_finite,
             },
         )
 
@@ -2613,7 +2613,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             "comparing the surviving labels would silently drop a real group and report "
             "a spread over the wrong basis.",
             reason_code=ReasonCode.AMBIGUOUS_GROUP_LABEL,
-            details={"raw_groups": raw_in_basis, "labels": len(selected)},
+            details={"n_raw_groups": raw_in_basis, "n_labels": len(selected)},
         )
 
     # ``_coerce_finite`` funnels every "not a usable number" shape to ``None``:
@@ -3120,7 +3120,12 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
             reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
     gap_raw = gap_analysis.get("gap")
-    if not isinstance(gap_raw, (int, float)) or not math.isfinite(float(gap_raw)):
+    if not isinstance(gap_raw, (int, float)):
+        raise ToolRefusalError(
+            f"roi_estimator: gap value is not a finite number (got {gap_raw!r}).",
+            reason_code=ReasonCode.INVALID_INPUT_TYPE,
+        )
+    if not math.isfinite(float(gap_raw)):
         raise ToolRefusalError(
             f"roi_estimator: gap value is not a finite number (got {gap_raw!r}).",
             reason_code=ReasonCode.NON_FINITE_INPUT,
@@ -4164,7 +4169,7 @@ def psi_calculator(
             f"{len(current)} rows in column {period_column!r}; both must be "
             "non-empty to compute a PSI. Refusing to fabricate a result.",
             reason_code=ReasonCode.NO_USABLE_ROWS,
-            details={"baseline_rows": len(baseline), "current_rows": len(current)},
+            details={"n_baseline_rows": len(baseline), "n_current_rows": len(current)},
         )
     psi_value, buckets = _psi(baseline.to_numpy(), current.to_numpy())
     threshold = 0.1
@@ -4247,7 +4252,10 @@ def distribution_comparator(
             f"{int(p2_mask.sum())} rows in column {period_column!r}; both must "
             "be non-empty. Refusing to fabricate a result.",
             reason_code=ReasonCode.NO_USABLE_ROWS,
-            details={"period_1_rows": int(p1_mask.sum()), "period_2_rows": int(p2_mask.sum())},
+            details={
+                "n_period_1_rows": int(p1_mask.sum()),
+                "n_period_2_rows": int(p2_mask.sum()),
+            },
         )
     comparisons: List[Dict[str, Any]] = []
     any_drift = False
@@ -4515,7 +4523,7 @@ def risk_scorer(
             "left to fit a risk model on. Refusing to impute values for the missing "
             "entries and report the result as a measured risk score.",
             reason_code=ReasonCode.NO_USABLE_COLUMNS,
-            details={"numeric_features": len(feature_cols), "rows": len(work)},
+            details={"n_numeric_features": len(feature_cols), "n_rows": len(work)},
         )
 
     # The population the CALLER asked about, captured before the complete-case filter.
@@ -4545,7 +4553,7 @@ def risk_scorer(
             f"{outcome!r} — every row is missing at least one value, so no row can be "
             "fit. Refusing to fabricate scores.",
             reason_code=ReasonCode.NO_USABLE_ROWS,
-            details={"rows": len(work), "usable_features": len(usable_features)},
+            details={"n_rows": len(work), "n_usable_features": len(usable_features)},
         )
     # AGGREGATE ADEQUACY. Per-column limits cannot see what the fit ends up standing on:
     # five retained features each missing 19% on DISJOINT rows are individually fine and
@@ -4564,7 +4572,10 @@ def risk_scorer(
             f"Gaps are spread across {', '.join(sorted(c for c in usable_features if int(nan_counts[c])))}. "
             "Refusing to present scores for that subset as the cohort's risk.",
             reason_code=ReasonCode.INSUFFICIENT_SAMPLE,
-            details={"complete_rows": int(complete.sum()), "rows_in_scope": n_in_scope},
+            details={
+                "n_complete_rows": int(complete.sum()),
+                "n_rows_in_scope": n_in_scope,
+            },
         )
     work = work[complete]
     feature_cols = usable_features

@@ -21,6 +21,7 @@ import pytest
 
 from src.agents.tool_composer import tool_registrations as tr
 from src.agents.tool_composer.errors import ToolRefusalError
+from src.agents.tool_composer.reason_codes import ReasonCode
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +284,34 @@ def test_distribution_comparator_matches_scipy_and_fail_closes():
     assert by_feature["x"]["p_value"] == pytest.approx(ks_x.pvalue, rel=1e-6)
     assert by_feature["x"]["drift_detected"] is True  # genuine shift
     assert by_feature["y"]["drift_detected"] is False  # same distribution
+
+
+def test_psi_calculator_refuses_a_period_that_matches_no_rows():
+    df = pd.DataFrame({"period": ["baseline"] * 5, "score": [0.1, 0.2, 0.3, 0.4, 0.5]})
+    with pytest.raises(ToolRefusalError, match="both must be non-empty") as exc:
+        tr.psi_calculator(
+            feature="score",
+            baseline_period="baseline",
+            current_period="current",
+            estimation_data=df,
+            period_column="period",
+        )
+    assert exc.value.reason_code is ReasonCode.NO_USABLE_ROWS
+    assert exc.value.details == {"n_baseline_rows": 5, "n_current_rows": 0}
+
+
+def test_distribution_comparator_refuses_a_period_that_matches_no_rows():
+    df = pd.DataFrame({"period": ["p1"] * 4, "x": [0.1, 0.2, 0.3, 0.4]})
+    with pytest.raises(ToolRefusalError, match="both must") as exc:
+        tr.distribution_comparator(
+            features=["x"],
+            period_1="p1",
+            period_2="p2",
+            estimation_data=df,
+            period_column="period",
+        )
+    assert exc.value.reason_code is ReasonCode.NO_USABLE_ROWS
+    assert exc.value.details == {"n_period_1_rows": 4, "n_period_2_rows": 0}
 
 
 def test_distribution_comparator_fail_closes_on_string_input():

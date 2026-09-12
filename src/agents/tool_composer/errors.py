@@ -9,9 +9,13 @@ the other needs.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Union
+import logging
+from typing import Any, Dict, Optional
 
-from .reason_codes import ReasonCode, canonical_sentence, validate_details
+from .reason_codes import ReasonCode, validate_details
+from .reason_codes import canonical_sentence as _sentence_for
+
+logger = logging.getLogger(__name__)
 
 
 class _CodedError(Exception):
@@ -27,16 +31,34 @@ class _CodedError(Exception):
         self,
         message: str,
         *,
-        reason_code: Union[ReasonCode, str],
+        reason_code: ReasonCode,
         details: Optional[Dict[str, Any]] = None,
     ):
-        self.reason_code = ReasonCode(reason_code)
-        self.details: Dict[str, Any] = validate_details(dict(details or {}))
         super().__init__(message)
+        # Neither check may raise. A raise here escapes the executor's refusal arm into its
+        # generic ``except Exception``: the step is retried, charged to the circuit breaker,
+        # and the refusal's message is lost (#1600). Keep the refusal, log the defect.
+        try:
+            self.reason_code = ReasonCode(reason_code)
+        except ValueError:
+            logger.error(
+                "%s raised with a reason_code outside ReasonCode; recorded as %s",
+                type(self).__name__,
+                ReasonCode.TOOL_ERROR,
+            )
+            self.reason_code = ReasonCode.TOOL_ERROR
+        self.details: Dict[str, Any] = {}
+        try:
+            self.details = validate_details(details or {})
+        except ValueError as exc:
+            # The rejection reason is data-free by construction; the values are not logged.
+            logger.error(
+                "%s (%s) dropped its details: %s", type(self).__name__, self.reason_code, exc
+            )
 
     @property
     def canonical_sentence(self) -> str:
-        return canonical_sentence(self.reason_code)
+        return _sentence_for(self.reason_code)
 
     def __reduce__(self) -> Any:
         """Rebuild through the keyword contract, so the error stays picklable.
@@ -46,7 +68,13 @@ class _CodedError(Exception):
         ``pickle`` or ``copy.deepcopy``, so anything that reduces the error turns a
         refusal into a crash.
         """
-        return (_rebuild_coded_error, (type(self), self.args, self.reason_code, self.details))
+        # A subclass whose __init__ takes a different signature must override __reduce__.
+        # The third element restores __dict__, so __notes__ and extra attributes survive.
+        return (
+            _rebuild_coded_error,
+            (type(self), self.args, self.reason_code, self.details),
+            self.__dict__,
+        )
 
 
 def _rebuild_coded_error(

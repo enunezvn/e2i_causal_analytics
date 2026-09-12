@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import math
 import re
-from enum import Enum
-from typing import Dict, Union
+from enum import StrEnum
+from typing import Dict, Mapping, Union
 
 
-class ReasonCode(str, Enum):
+class ReasonCode(StrEnum):
     """Why a step did not produce a result. Closed set; stable wire values."""
 
     # --- Tool-authored refusals: the inputs are legal but cannot answer the question
@@ -98,12 +98,27 @@ CANONICAL_SENTENCES: Dict[ReasonCode, str] = {
     ReasonCode.TOOL_NOT_REGISTERED: "the plan named a tool that is not registered",
 }
 
+#: Codes that describe what the executor observed. A tool raise site may not use them
+#: (the coverage tests enforce it); the constructor's fail-soft TOOL_ERROR is runtime only.
+EXECUTOR_ASSIGNED = frozenset(
+    {
+        ReasonCode.TOOL_ERROR,
+        ReasonCode.TOOL_TIMEOUT,
+        ReasonCode.PLAN_DEFECT,
+        ReasonCode.REFERENCE_UNRESOLVABLE,
+        ReasonCode.DEPENDENCY_UNMET,
+        ReasonCode.CIRCUIT_OPEN,
+        ReasonCode.TOOL_NOT_REGISTERED,
+    }
+)
+
 # Bounds on the structured ``details`` payload. It is persisted, so it must stay
-# structure: counts and flags under snake_case keys. No strings at any length — a
-# short one still fits a column or brand name, the data this module keeps out of the
-# database.
+# structure: counts, shares and flags under prefixed snake_case keys. No strings at any
+# length — a short one still fits a column or brand name, the data this module keeps out
+# of the database. Ints stay within JavaScript's safe range: the admin page reads them.
 _MAX_DETAIL_KEYS = 8
-_DETAIL_KEY = re.compile(r"[a-z][a-z0-9_]*")
+_MAX_DETAIL_INT = 2**53
+_DETAIL_KEY = re.compile(r"(n|is|has|share)_[a-z0-9_]+")
 
 
 def canonical_sentence(code: Union[ReasonCode, str, None]) -> str:
@@ -122,20 +137,45 @@ def canonical_sentence(code: Union[ReasonCode, str, None]) -> str:
     return CANONICAL_SENTENCES[ReasonCode.TOOL_ERROR]
 
 
-def validate_details(details: Dict[str, object]) -> Dict[str, object]:
-    """Reject a ``details`` payload that is really free text. Returns it unchanged."""
+def validate_details(details: Mapping[str, object]) -> Dict[str, object]:
+    """Reject a ``details`` payload that is really free text; return a normalized copy.
+
+    The copy holds builtin ``bool`` / ``int`` / ``float`` only: a numpy scalar is unwrapped
+    first (without importing numpy) and then checked like any other value. Rejection
+    messages carry no values, and name a key only once it has passed the key rule, because
+    the error constructor logs them.
+    """
+    if not isinstance(details, Mapping):
+        raise ValueError(f"details is a {type(details).__name__}, not a mapping")
     if len(details) > _MAX_DETAIL_KEYS:
         raise ValueError(f"details carries {len(details)} keys; at most {_MAX_DETAIL_KEYS}")
+    normalized: Dict[str, object] = {}
     for key, value in details.items():
         # The key is persisted too, so it gets the same rule as the value.
         if not isinstance(key, str) or not _DETAIL_KEY.fullmatch(key):
-            raise ValueError(f"details key {key!r} is not a snake_case identifier")
+            raise ValueError("details key is not an n_/is_/has_/share_ snake_case identifier")
+        item = getattr(value, "item", None)
+        if type(value).__module__ == "numpy" and callable(item):
+            try:
+                value = item()
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"details[{key!r}] is a numpy value that is not a scalar"
+                ) from None
         # bool is an int subclass, so this admits booleans; str, None and containers fail.
         if not isinstance(value, (int, float)):
             raise ValueError(
                 f"details[{key!r}] is a {type(value).__name__}; details holds numbers and "
                 "booleans only"
             )
-        if isinstance(value, float) and not math.isfinite(value):
+        if isinstance(value, bool):
+            normalized[key] = bool(value)
+        elif isinstance(value, int):
+            if abs(value) > _MAX_DETAIL_INT:
+                raise ValueError(f"details[{key!r}] is outside JavaScript's safe integer range")
+            normalized[key] = int(value)
+        elif not math.isfinite(value):
             raise ValueError(f"details[{key!r}] is not a finite number")
-    return details
+        else:
+            normalized[key] = float(value)
+    return normalized
