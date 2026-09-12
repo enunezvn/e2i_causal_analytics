@@ -305,11 +305,24 @@ async def test_plan_defect_class(registry):
 
 
 async def test_dependency_unmet_class(registry):
+    """``dependency_unmet`` is recorded for a step that CONSUMES a failed upstream.
+
+    The ``$a.gap`` binding is load-bearing since #2024: ``depends_on_steps`` alone no
+    longer skips a step, because an entry the step never binds is ordering-only and
+    the step needed nothing from it (measured: ``counterfactual_simulator``'s three
+    registry pairs are all ordering-only). What still skips — and what this probe
+    pins — is a step that would otherwise run on a silently-None upstream output.
+    The ordering-only half is pinned in ``test_plan_defect_taxonomy.py``.
+    """
     calls: List[int] = []
     _register(registry, "gap_calculator", _refusing_gap_calculator)
     _register(registry, "ok_tool", lambda **_: calls.append(1) or {"ok": True})
     plan = _plan(
-        [_step("a", "gap_calculator"), _step("b", "ok_tool", depends_on=["a"])], [["a"], ["b"]]
+        [
+            _step("a", "gap_calculator"),
+            _step("b", "ok_tool", depends_on=["a"], input_mapping={"gap_analysis": "$a.gap"}),
+        ],
+        [["a"], ["b"]],
     )
     trace = await _executor(registry).execute(plan)
     assert [r.outcome_class for r in trace.step_results] == ["refused", "dependency_unmet"]

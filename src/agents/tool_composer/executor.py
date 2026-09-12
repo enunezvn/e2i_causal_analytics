@@ -12,6 +12,7 @@ Implements:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from dataclasses import dataclass, field
@@ -27,7 +28,12 @@ from src.tool_registry.registry import ToolRegistry
 # The @composable_tool decorators register tools when the module is imported
 from . import tool_registrations as _tool_registrations  # noqa: F401
 from .cache import get_cache_manager
-from .errors import ReferenceResolutionError, ToolInputError, ToolRefusalError
+from .errors import (
+    PlanArgumentError,
+    ReferenceResolutionError,
+    ToolInputError,
+    ToolRefusalError,
+)
 from .models.composition_models import (
     ExecutionPlan,
     ExecutionStatus,
@@ -515,22 +521,45 @@ class PlanExecutor:
     ) -> StepResult:
         """Execute a single step with circuit breaker and exponential backoff.
 
-        F5: if any of this step's ``depends_on_steps`` is in
-        ``failed_step_ids`` (an upstream step that already failed), the step
-        is SKIPPED — its tool is NOT invoked — and a clear dependency-unmet
+        F5: if this step BINDS the output of a ``depends_on_steps`` entry that
+        is in ``failed_step_ids`` (an upstream step that already failed), the
+        step is SKIPPED — its tool is NOT invoked — and a clear dependency-unmet
         error is recorded. This prevents dependents from crashing on a None
         upstream output (which never lands in ``prior_outputs``).
+
+        #2024: "binds" is the whole test, and it is a property of THIS plan, not
+        of the registry. An upstream step's output reaches a downstream step
+        through exactly one channel — a ``$<step_id>`` reference in
+        ``input_mapping``, resolved against ``prior_outputs`` by
+        :meth:`_resolve_inputs` (there is no other read of ``prior_outputs``).
+        A ``depends_on_steps`` entry with no such reference is ordering-only:
+        the step consumed nothing from it and is not doomed by its failure, so
+        skipping it discards work that would have succeeded. Measured on the
+        live registry (2026-09-12): ``counterfactual_simulator`` takes
+        ``brand`` / ``intervention`` / ``target_entities``, none of which is an
+        output field of ``causal_effect_estimator``, ``cate_analyzer`` or
+        ``gap_calculator`` — its three declared pairs are ordering-only, and the
+        #2015 lane saw this skip fire in 2 of 2 real-LLM planner checks.
+
+        Why not read the registry's ``DEPENDENCY_FIELD_MAPPINGS`` instead (the
+        alternative in #2024): it cannot tell the two apart. It encodes all
+        three ordering-only ``counterfactual_simulator`` pairs as ``(None,
+        None)`` — and encodes ``sensitivity_analyzer <- causal_effect_estimator``,
+        a genuine data dependency that carries ``ate``/``ci_lower``/``ci_upper``
+        by name, as ``(None, None)`` too. Stripping ``(None, None)`` pairs would
+        strip a real data dependency.
         """
         started_at = datetime.now(timezone.utc)
 
         logger.debug(f"Executing step {step.step_id}: {step.tool_name}")
 
-        # F5: short-circuit dependents of failed upstream steps.
+        # F5: short-circuit dependents that actually CONSUME a failed upstream.
         unmet = sorted(set(step.depends_on_steps) & (failed_step_ids or set()))
-        if unmet:
+        blocking = [dep for dep in unmet if self._binds_step_output(step.input_mapping, dep)]
+        if blocking:
             logger.warning(
                 f"Skipping step {step.step_id} ({step.tool_name}): "
-                f"dependency unmet: {', '.join(unmet)}"
+                f"dependency unmet: {', '.join(blocking)}"
             )
             completed_at = datetime.now(timezone.utc)
             return StepResult(
@@ -541,13 +570,25 @@ class PlanExecutor:
                 output=ToolOutput(
                     tool_name=step.tool_name,
                     success=False,
-                    error=f"dependency unmet: {', '.join(unmet)}",
+                    error=f"dependency unmet: {', '.join(blocking)}",
                 ),
                 status=ExecutionStatus.SKIPPED,
                 outcome_class="dependency_unmet",
                 attempts=0,
                 started_at=started_at,
                 completed_at=completed_at,
+            )
+
+        ordering_only = [dep for dep in unmet if dep not in blocking]
+        if ordering_only:
+            # Proceed, and say so. The upstream failures are not swallowed: each
+            # failed step keeps its own StepResult in the trace, and the
+            # synthesizer reads those into ``failed_components`` and renders
+            # their ``output.error``, so the composed answer still reports them.
+            logger.warning(
+                f"Step {step.step_id} ({step.tool_name}) proceeding despite "
+                f"unmet ORDERING-ONLY dependency: {', '.join(ordering_only)} — the step's "
+                f"input_mapping binds no output of those steps (#2024)"
             )
 
         # Resolve input parameters.
@@ -611,7 +652,13 @@ class PlanExecutor:
 
         # F2-core: thread a context-carried DataFrame into tool kwargs under
         # the canonical ``estimation_data`` key (only when the caller did not
-        # already supply one). All composable tools accept **kwargs.
+        # already supply one). NOT every composable tool accepts **kwargs:
+        # measured over all 20 registered tools (2026-09-12),
+        # ``detect_structural_drift`` and ``model_inference`` do not, so Gate 0
+        # of the hook declines to inject into a tool that cannot bind the
+        # keyword. Any future autopopulate hook needs the same gate — injecting
+        # an unbindable kwarg raises ``TypeError`` from the executor's own doing,
+        # which #2045 would then report as a PLAN defect (#2061).
         autopop_dataframe = self._maybe_autopopulate_dataframe(step, resolved_inputs, context)
         if autopop_dataframe is not None:
             resolved_inputs = {**resolved_inputs, "estimation_data": autopop_dataframe}
@@ -686,6 +733,41 @@ class PlanExecutor:
                 status=ExecutionStatus.FAILED,
                 outcome_class="not_registered",
                 attempts=0,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+
+        # #2045: the planner omitted (or misnamed) arguments this tool's signature
+        # requires. That is deterministic over the step's resolved inputs — every
+        # retry rebuilds the identical call — and it is a PLAN defect, so it lands
+        # in the same arm as #1573's unresolvable reference: fail once, name the
+        # parameters, never dispatch, never charge the circuit breaker. Left to the
+        # call, it arrives as a bare ``TypeError`` in the generic arm below and is
+        # retried ``max_retries`` more times; the recorded failures then open the
+        # breaker and block OTHER, well-formed steps using the same healthy tool
+        # (observed live on image dde03e0b9: three defective gap_calculator steps,
+        # nine doomed dispatches, breaker OPENED).
+        #
+        # Checked AFTER the auto-population hooks so the kwargs validated are
+        # exactly the kwargs called with, and it fails OPEN on a callable whose
+        # signature cannot be read — the guard must never reject a call that works.
+        try:
+            self._validate_call_arguments(tool_callable, resolved_inputs, step.tool_name)
+        except PlanArgumentError as e:
+            logger.warning(
+                f"Step {step.step_id} not dispatched to '{step.tool_name}': {e} "
+                f"— not retrying (a plan defect is deterministic over the step's inputs)"
+            )
+            return StepResult(
+                step_id=step.step_id,
+                sub_question_id=step.sub_question_id,
+                tool_name=step.tool_name,
+                input=tool_input,
+                output=ToolOutput(tool_name=step.tool_name, success=False, error=str(e)),
+                status=ExecutionStatus.FAILED,
+                outcome_class="plan_defect",
+                attempts=0,
+                error_type=type(e).__name__,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
             )
@@ -977,6 +1059,140 @@ class PlanExecutor:
 
         tasks = [execute_with_semaphore(step) for step in steps]
         return await asyncio.gather(*tasks, return_exceptions=False)
+
+    @classmethod
+    def _binds_step_output(cls, value: Any, step_id: str) -> bool:
+        """True iff ``value`` carries a ``$<step_id>`` reference at ANY depth (#2024).
+
+        The whole ``input_mapping`` is walked, not just its top level, because a
+        reference nested in a dict or list still BINDS the upstream output — it
+        just degrades to ``None`` instead of raising
+        (:meth:`_resolve_reference_lenient`), which is precisely the silently-None
+        upstream F5 exists to prevent. Conservative by construction: anything that
+        might be a binding counts as one, so the guard can only ever let a step
+        through that references nothing.
+        """
+        if isinstance(value, str):
+            return value.startswith("$") and value[1:].split(".", 1)[0] == step_id
+        if isinstance(value, dict):
+            return any(cls._binds_step_output(v, step_id) for v in value.values())
+        if isinstance(value, (list, tuple, set)):
+            return any(cls._binds_step_output(v, step_id) for v in value)
+        return False
+
+    @staticmethod
+    def _dispatch_signature(tool_callable: Any) -> Optional[inspect.Signature]:
+        """The signature of what the executor will ACTUALLY call, or ``None``.
+
+        ``None`` means "cannot be established" and every caller must then fail
+        OPEN — dispatch the call and let the real invocation decide, which is
+        exactly today's behavior. A guard that exists to save doomed retries must
+        never suppress work that would have succeeded: the bug it replaces wasted
+        attempts on calls that could not work, whereas a false refusal destroys a
+        result and evicts a valid cached plan.
+
+        Two ways the advertised signature can lie about the call (codex r1):
+
+        * ``inspect.signature`` follows ``__wrapped__`` by DEFAULT, so a
+          ``functools.wraps`` decorator that SUPPLIES a required argument
+          advertises the inner function's parameters while accepting
+          ``(**kwargs)``. Reproduced: the wrapper call succeeds, yet binding
+          against the advertised signature reports the injected argument missing.
+        * A decorator may set ``__signature__`` outright, which
+          ``inspect.signature`` honors over the real parameters at any
+          ``follow_wrapped``.
+
+        So: refuse to judge a callable carrying either marker, and otherwise read
+        the dispatch boundary itself with ``follow_wrapped=False``. Measured over
+        all 20 registered tools (2026-09-12): NONE carries ``__wrapped__`` or
+        ``__signature__``, and NONE has a different signature under
+        ``follow_wrapped=False`` — this costs the guard no coverage today, and
+        the tools it cannot judge are exactly the ones it could get wrong.
+        """
+        if hasattr(tool_callable, "__wrapped__") or hasattr(tool_callable, "__signature__"):
+            return None
+        try:
+            return inspect.signature(tool_callable, follow_wrapped=False)
+        except (TypeError, ValueError):
+            # Some C callables expose no signature. Not evidence of a defect.
+            return None
+
+    @classmethod
+    def _accepts_keyword(cls, tool_callable: Any, name: str) -> bool:
+        """True iff ``tool_callable`` can be passed ``name=`` as a keyword.
+
+        Fails OPEN (``True``) when the dispatch signature cannot be established,
+        so such a callable keeps whatever behavior it has today.
+        """
+        signature = cls._dispatch_signature(tool_callable)
+        if signature is None:
+            return True
+        parameters = signature.parameters
+        return any(
+            p.kind is inspect.Parameter.VAR_KEYWORD
+            or (
+                p.name == name
+                and p.kind
+                in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            )
+            for p in parameters.values()
+        )
+
+    @classmethod
+    def _validate_call_arguments(
+        cls, tool_callable: Any, resolved_inputs: Dict[str, Any], tool_name: str
+    ) -> None:
+        """Raise :class:`PlanArgumentError` if ``tool_callable(**resolved_inputs)`` cannot bind.
+
+        Predicts exactly the ``TypeError`` the call would raise, from the dispatch
+        signature alone. Verified against the live registry (2026-09-12, all 20
+        registered composable tools): every callable exposes a readable signature,
+        none is ``(*args, **kwargs)``-opaque, none carries wrapper metadata, and
+        binding each tool's complete required set succeeds — so the guard produces
+        no false positives on the shipped tools.
+
+        Fails OPEN whenever :meth:`_dispatch_signature` cannot establish what the
+        call requires. Refusing a call that would have worked is strictly worse
+        than the defect this guard removes, so an unjudgeable callable is
+        dispatched exactly as it is today.
+
+        Raises:
+            PlanArgumentError: on a missing required parameter, or — for a tool
+                with no ``**kwargs`` — an argument the signature does not declare.
+        """
+        signature = cls._dispatch_signature(tool_callable)
+        if signature is None:
+            return
+        parameters = signature.parameters
+
+        empty = inspect.Parameter.empty
+        missing = tuple(
+            name
+            for name, p in parameters.items()
+            if p.default is empty
+            and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+            # A POSITIONAL_ONLY parameter can never be satisfied here: the
+            # executor only ever calls with keywords.
+            and (p.kind is inspect.Parameter.POSITIONAL_ONLY or name not in resolved_inputs)
+        )
+        accepts_var_keyword = any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+        )
+        by_keyword = {
+            name
+            for name, p in parameters.items()
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        unexpected = (
+            () if accepts_var_keyword else tuple(k for k in resolved_inputs if k not in by_keyword)
+        )
+        if missing or unexpected:
+            raise PlanArgumentError(
+                tool_name=tool_name,
+                missing=missing,
+                unexpected=unexpected,
+                supplied=tuple(resolved_inputs),
+            )
 
     @staticmethod
     def _safe_callback(
@@ -1327,9 +1543,26 @@ class PlanExecutor:
 
         Returns the frame to inject (under the canonical ``estimation_data``
         key — NOT ``data``, since ``discover_dag``'s ``DiscoverDagInput.data``
-        is a Dict), or ``None`` to skip injection entirely. All composable
-        tools accept ``**kwargs`` so an unused ``estimation_data`` is harmless.
+        is a Dict), or ``None`` to skip injection entirely.
+
+        Gate 0 (#2045) is why this no longer says "all composable tools accept
+        ``**kwargs`` so an unused ``estimation_data`` is harmless": measured over
+        all 20 registered tools on 2026-09-12, ``detect_structural_drift`` and
+        ``model_inference`` declare NO ``**kwargs``. Injecting into one of those
+        makes the call raise ``TypeError: unexpected keyword argument`` — which,
+        before #2045, the executor retried three times and charged to the tool's
+        circuit breaker. The ``experiment_id`` hook has always gated this way
+        ("we don't inject a kwarg the tool can't accept"); this one now does too,
+        so an unbindable argument can only ever come from the PLAN.
         """
+        # Gate 0: never inject a kwarg the tool cannot accept.
+        if not self._accepts_keyword(self.registry.get_callable(step.tool_name), "estimation_data"):
+            logger.debug(
+                f"Tool '{step.tool_name}' accepts no 'estimation_data' keyword; "
+                "skipping DataFrame auto-injection."
+            )
+            return None
+
         # Gate 1: caller-explicit wins — but ONLY for a GENUINE explicit frame
         # or valid data dict. A present-but-unusable value (the planner's
         # column->reference dict for discover_dag) does NOT block injection.

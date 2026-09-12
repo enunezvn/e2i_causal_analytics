@@ -72,3 +72,55 @@ class ToolRefusalError(RuntimeError):
     stochastic (bootstrap resampling, placebo simulations, no pinned
     ``random_state``), so a second attempt is not futile by construction.
     """
+
+
+class PlanArgumentError(TypeError):
+    """A step's PLANNED arguments cannot be bound to its tool's signature (#2045).
+
+    The sibling of :class:`ReferenceResolutionError`: there the planner named a
+    source that does not exist, here it omitted (or misnamed) arguments the tool
+    declares as required. Both are defects of the PLAN, detectable from the plan
+    and the signature alone, before the tool is ever called — so the executor
+    fails the step once with an explicit reason, does not retry, and does not
+    charge the tool's circuit breaker.
+
+    Before this type existed the mismatch surfaced as the plain ``TypeError``
+    CPython raises at call time, which is indistinguishable from a tool's own
+    internal ``TypeError``. It therefore landed in the executor's generic retry
+    arm: measured live on image ``dde03e0b9`` (Kisqali, tool_composer path),
+    three ``gap_calculator`` steps each missing ``metric``/``entity_type``/
+    ``entities`` were re-dispatched three times apiece — nine doomed calls, each
+    holding a bounded heavy-compute slot for a sync tool — and the nine recorded
+    failures opened the breaker, which then blocked a LATER, well-formed
+    ``gap_calculator`` step that would have succeeded.
+
+    Subclasses ``TypeError`` deliberately: it IS the failure Python would raise,
+    just raised earlier, with the missing parameters named, and off the retry
+    path. Anything that already handles the call-time ``TypeError`` keeps working.
+    """
+
+    def __init__(
+        self,
+        tool_name: str,
+        missing: tuple[str, ...] = (),
+        unexpected: tuple[str, ...] = (),
+        supplied: tuple[str, ...] = (),
+    ):
+        self.tool_name = tool_name
+        self.missing = missing
+        self.unexpected = unexpected
+        self.supplied = supplied
+        problems = []
+        if missing:
+            problems.append(f"missing required argument(s) {_quoted(missing)}")
+        if unexpected:
+            problems.append(f"unexpected argument(s) {_quoted(unexpected)}")
+        super().__init__(
+            f"plan defect: tool '{tool_name}' cannot be called with the planned "
+            f"arguments — {'; '.join(problems)}. The plan supplied: "
+            f"{_quoted(supplied) if supplied else 'no arguments'}"
+        )
+
+
+def _quoted(names: tuple[str, ...]) -> str:
+    return ", ".join(f"'{n}'" for n in names)
