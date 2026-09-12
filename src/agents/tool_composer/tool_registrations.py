@@ -2420,7 +2420,7 @@ def segment_ranker(cate_results: Dict[str, Any], **kwargs) -> SegmentRanking:
             f"gap_calculator); got {cate_results!r}. Refusing to fabricate a "
             "ranking — per anti-mocking discipline, missing upstream data must "
             "surface as a structured error.",
-            reason_code=ReasonCode.UPSTREAM_STEP_FAILED,
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
 
     # Sort descending by effect; non-finite effects sort last.
@@ -3117,7 +3117,7 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
             f"value (from gap_calculator); got {gap_analysis!r}. Refusing to "
             "fabricate an ROI — per anti-mocking discipline, missing upstream "
             "data must surface as a structured error.",
-            reason_code=ReasonCode.UPSTREAM_STEP_FAILED,
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
     gap_raw = gap_analysis.get("gap")
     if not isinstance(gap_raw, (int, float)) or not math.isfinite(float(gap_raw)):
@@ -3220,7 +3220,13 @@ def _power_number(name: str, value: Any, default: Optional[float] = None) -> Opt
     """
     if value is None:
         return default
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ToolInputError(
+            f"power_calculator: {name} must be a finite number; got {value!r}. No sample "
+            "size can be computed from it.",
+            reason_code=ReasonCode.INVALID_INPUT_TYPE,
+        )
+    if not math.isfinite(value):
         raise ToolInputError(
             f"power_calculator: {name} must be a finite number; got {value!r}. No sample "
             "size can be computed from it.",
@@ -3744,7 +3750,7 @@ async def _load_cohort_provider(client: Any, intervention_type: str, brand_value
             "not carry enough usable rows for this intervention's treatment channel, outcome, "
             "region and confounders, so a causal effect cannot be estimated. No effect is "
             "returned.",
-            reason_code=ReasonCode.NO_USABLE_ROWS,
+            reason_code=ReasonCode.EFFECT_NOT_ESTIMABLE,
         )
     return provider
 
@@ -3864,7 +3870,7 @@ def _targeted_effect(frame: Any, regions: List[str]) -> _TargetedEffect:
     except EffectDataUnavailable as exc:
         raise ToolRefusalError(
             f"counterfactual_simulator: {exc} No effect is returned.",
-            reason_code=ReasonCode.NO_USABLE_ROWS,
+            reason_code=ReasonCode.EFFECT_NOT_ESTIMABLE,
         ) from exc
     assert fit.target_ate is not None
     assert fit.target_ci_lower is not None and fit.target_ci_upper is not None
@@ -3987,7 +3993,7 @@ def _simulation_results(
         raise ToolRefusalError(
             f"counterfactual_simulator: the twin simulation for {intervention_type!r} on "
             f"{brand!r} did not complete: {result.error_message}. No effect is returned.",
-            reason_code=ReasonCode.UPSTREAM_STEP_FAILED,
+            reason_code=ReasonCode.SIMULATION_INCOMPLETE,
         )
 
     modifier = frame.effect_modifiers[0] if frame.effect_modifiers else "region"

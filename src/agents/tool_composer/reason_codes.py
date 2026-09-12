@@ -13,6 +13,8 @@ Adding a member REQUIRES adding its canonical sentence in the same edit —
 
 from __future__ import annotations
 
+import math
+import re
 from enum import Enum
 from typing import Dict, Union
 
@@ -41,6 +43,8 @@ class ReasonCode(str, Enum):
     UPSTREAM_STEP_FAILED = "upstream_step_failed"
     UNSUPPORTED_REQUEST = "unsupported_request"
     DEGENERATE_DESIGN = "degenerate_design"
+    SIMULATION_INCOMPLETE = "simulation_incomplete"
+    EFFECT_NOT_ESTIMABLE = "effect_not_estimable"
 
     # --- Tool-authored input rejections: the value is not a legal input
     MISSING_REQUIRED_INPUT = "missing_required_input"
@@ -79,6 +83,8 @@ CANONICAL_SENTENCES: Dict[ReasonCode, str] = {
     ReasonCode.UPSTREAM_STEP_FAILED: "an earlier step this one depends on did not produce a result",
     ReasonCode.UNSUPPORTED_REQUEST: "the tool cannot answer a question of this shape",
     ReasonCode.DEGENERATE_DESIGN: "the study design the inputs imply is too small to support a valid comparison",
+    ReasonCode.SIMULATION_INCOMPLETE: "the twin simulation did not complete",
+    ReasonCode.EFFECT_NOT_ESTIMABLE: "the cohort data cannot support a causal effect estimate for this intervention",
     ReasonCode.MISSING_REQUIRED_INPUT: "a required input was not provided",
     ReasonCode.INVALID_INPUT_TYPE: "an input was of the wrong type",
     ReasonCode.INVALID_INPUT_VALUE: "an input value was outside what the tool accepts",
@@ -93,9 +99,11 @@ CANONICAL_SENTENCES: Dict[ReasonCode, str] = {
 }
 
 # Bounds on the structured ``details`` payload. It is persisted, so it must stay
-# structure: short scalar values, never a sentence smuggled back in as a string.
+# structure: counts and flags under snake_case keys. No strings at any length — a
+# short one still fits a column or brand name, the data this module keeps out of the
+# database.
 _MAX_DETAIL_KEYS = 8
-_MAX_DETAIL_STR = 64
+_DETAIL_KEY = re.compile(r"[a-z][a-z0-9_]*")
 
 
 def canonical_sentence(code: Union[ReasonCode, str, None]) -> str:
@@ -119,9 +127,15 @@ def validate_details(details: Dict[str, object]) -> Dict[str, object]:
     if len(details) > _MAX_DETAIL_KEYS:
         raise ValueError(f"details carries {len(details)} keys; at most {_MAX_DETAIL_KEYS}")
     for key, value in details.items():
-        if isinstance(value, str) and len(value) > _MAX_DETAIL_STR:
+        # The key is persisted too, so it gets the same rule as the value.
+        if not isinstance(key, str) or not _DETAIL_KEY.fullmatch(key):
+            raise ValueError(f"details key {key!r} is not a snake_case identifier")
+        # bool is an int subclass, so this admits booleans; str, None and containers fail.
+        if not isinstance(value, (int, float)):
             raise ValueError(
-                f"details[{key!r}] is {len(value)} characters; details is structure, not prose "
-                f"(at most {_MAX_DETAIL_STR})"
+                f"details[{key!r}] is a {type(value).__name__}; details holds numbers and "
+                "booleans only"
             )
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"details[{key!r}] is not a finite number")
     return details

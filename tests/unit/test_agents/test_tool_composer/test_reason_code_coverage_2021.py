@@ -94,6 +94,38 @@ def test_every_reason_code_is_a_member_of_the_closed_set(path: Path):
     assert bad == [], "reason_code values outside the closed set:\n  " + "\n  ".join(bad)
 
 
+def _threaded_call_violations(tree: ast.Module, label: str) -> tuple:
+    """Calls to a threaded guard that do not supply a literal ``ReasonCode.MEMBER``.
+
+    Returns ``(bad, seen)``: the offending call sites, and how many calls each
+    threaded guard received.
+    """
+    members = {c.name for c in ReasonCode}
+    threaded = _threaded_params(tree)
+    bad = []
+    seen = dict.fromkeys(threaded, 0)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        # ``_guard(...)`` and ``module._guard(...)`` reach the same guard.
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        else:
+            continue
+        if name not in threaded:
+            continue
+        seen[name] += 1
+        supplied = {kw.arg: kw.value for kw in node.keywords}
+        value = supplied.get("reason_code")
+        if value is None:
+            bad.append(f"{label}:{node.lineno} {name}(...) supplies no reason_code")
+        elif not _literal_member(value, members):
+            bad.append(f"{label}:{node.lineno} {name}(reason_code={ast.unparse(value)})")
+    return bad, seen
+
+
 @pytest.mark.parametrize("path", _SOURCES, ids=lambda p: p.name)
 def test_a_threaded_reason_code_is_literal_at_every_call_site(path: Path):
     """The one hop the closed-set check allows must itself end in a literal.
@@ -101,28 +133,51 @@ def test_a_threaded_reason_code_is_literal_at_every_call_site(path: Path):
     Without this, threading the code through a parameter would be an unchecked
     hole: a caller could pass a string, a variable, or nothing at all.
     """
-    members = {c.name for c in ReasonCode}
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    threaded = _threaded_params(tree)
-    assert threaded, "no threaded guard found — delete this test if that is intended"
-
-    bad = []
-    seen = dict.fromkeys(threaded, 0)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-            continue
-        if node.func.id not in threaded:
-            continue
-        seen[node.func.id] += 1
-        supplied = {kw.arg: kw.value for kw in node.keywords}
-        value = supplied.get("reason_code")
-        if value is None:
-            bad.append(f"{path}:{node.lineno} {node.func.id}(...) supplies no reason_code")
-        elif not _literal_member(value, members):
-            bad.append(f"{path}:{node.lineno} {node.func.id}(reason_code={ast.unparse(value)})")
+    assert _threaded_params(tree), "no threaded guard found — delete this test if that is intended"
+    bad, seen = _threaded_call_violations(tree, str(path))
     assert bad == [], "threaded reason_code not a literal member:\n  " + "\n  ".join(bad)
     uncalled = [name for name, count in seen.items() if count == 0]
     assert uncalled == [], f"threaded guard is never called, so nothing pins it: {uncalled}"
+
+
+_SYNTHETIC_GUARD = """
+def _guard(value, *, reason_code: ReasonCode):
+    raise ToolRefusalError("x", reason_code=reason_code)
+"""
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param('_guard(1, reason_code="oops")', id="name-string"),
+        pytest.param('tr._guard(1, reason_code="oops")', id="attribute-string"),
+        pytest.param("tr._guard(1)", id="attribute-no-code"),
+        pytest.param("tr._guard(1, reason_code=ReasonCode.NOT_A_MEMBER)", id="attribute-unknown"),
+        pytest.param("a.b._guard(1, reason_code=code)", id="nested-attribute-variable"),
+    ],
+)
+def test_the_call_site_guard_flags_a_bad_call_however_the_guard_is_reached(call):
+    """Proof of teeth: a green run on the real file proves nothing about a call shape it
+    does not contain, such as ``tr._refuse_unless_binary_01(..., reason_code="oops")``."""
+    tree = ast.parse(_SYNTHETIC_GUARD + f"\ndef caller():\n    {call}\n")
+    bad, seen = _threaded_call_violations(tree, "synthetic")
+    assert len(bad) == 1, bad
+    assert seen == {"_guard": 1}
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param("_guard(1, reason_code=ReasonCode.NON_BINARY_TREATMENT)", id="name"),
+        pytest.param("tr._guard(1, reason_code=ReasonCode.NON_BINARY_OUTCOME)", id="attribute"),
+    ],
+)
+def test_the_call_site_guard_accepts_a_literal_member_however_the_guard_is_reached(call):
+    tree = ast.parse(_SYNTHETIC_GUARD + f"\ndef caller():\n    {call}\n")
+    bad, seen = _threaded_call_violations(tree, "synthetic")
+    assert bad == []
+    assert seen == {"_guard": 1}
 
 
 def test_the_site_count_is_what_the_lane_measured():

@@ -41,11 +41,10 @@ class _CodedError(Exception):
     def __reduce__(self) -> Any:
         """Rebuild through the keyword contract, so the error stays picklable.
 
-        ``BaseException.__reduce__`` replays ``self.args`` POSITIONALLY, which for
-        a keyword-only ``reason_code`` raises a ``TypeError`` from deep inside
-        ``pickle`` instead of re-raising the refusal. These errors crossed process
-        boundaries before #2021 (pytest-xdist and multiprocessing both reduce
-        exceptions this way) and must keep doing so.
+        ``BaseException.__reduce__`` replays ``self.args`` POSITIONALLY. With a
+        required keyword-only ``reason_code`` that replay raises ``TypeError`` on
+        ``pickle`` or ``copy.deepcopy``, so anything that reduces the error turns a
+        refusal into a crash.
         """
         return (_rebuild_coded_error, (type(self), self.args, self.reason_code, self.details))
 
