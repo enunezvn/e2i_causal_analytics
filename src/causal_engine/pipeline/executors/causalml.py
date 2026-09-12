@@ -85,6 +85,7 @@ def _extract_uplift_inputs_from_state(
     """
     # Local imports keep module import cheap when callers don't use this
     # executor; uplift wrapper itself imports causalml lazily.
+    import numpy as np
     import pandas as pd
 
     df = resolve_estimation_dataframe(state)
@@ -166,6 +167,62 @@ def _extract_uplift_inputs_from_state(
     X_df = df[feature_names].copy()
     treatment_arr = df[treatment_var].to_numpy()
     y_arr = df[outcome_var].to_numpy().astype(float)
+
+    # Fail closed when CausalML's internal binarization collapses the outcome
+    # to a single class (#2063).
+    #
+    # CausalML binarizes ANY outcome at zero before fitting --
+    # `causalml/inference/tree/uplift.pyx:459` runs
+    # `y = (y > 0).astype(Y_TYPE)` with `Y_TYPE = np.int8` (:44). For a
+    # strictly-positive continuous outcome such as `adherence_rate`
+    # (measured `frac(y > 0) = 1.0000` on the live Kisqali frame) every
+    # label becomes 1, so `P(Y=1|T=1) - P(Y=1|T=0)` is 0 exactly. The fit
+    # still "succeeds", and the executor would report `ate = 0.0` with
+    # `ate_std = 0`, a zero-width CI, and an all-zero uplift summary --
+    # while `_confidence_from_uplift_result` scores that zero-width CI as
+    # MAXIMAL precision, so the fabricated zero arrives carrying the
+    # highest confidence of the three libraries. AUUC/Qini computed over
+    # all-zero scores rank by DataFrame row order and are noise.
+    #
+    # This is not a general failure of the estimator: on a genuinely binary
+    # outcome CausalML recovers a planted ATE about as well as DoWhy (MAE
+    # 0.069 vs 0.054 at n=8,730). Only the collapse case is refused, and
+    # only the EXACT collapse -- there is no measurement of where a useful
+    # cut for near-degenerate fractions would lie, so no threshold is
+    # invented here.
+    #
+    # Cost: measured 0.04 ms on the raw array, before any fit.
+    binarized = (y_arr > 0).astype(float)
+    if binarized.all() or not binarized.any():
+        positive_fraction = float(binarized.mean())
+        distinct_outcomes = int(len(np.unique(y_arr)))
+        information_lost = float(np.abs(y_arr - binarized).mean())
+        # A genuinely binary 0/1 outcome NEVER reaches this branch -- its
+        # positive fraction is strictly between 0 and 1 -- so the
+        # distinct-value count says which of three different problems the
+        # caller actually has.
+        if distinct_outcomes == 1:
+            shape = "the outcome is constant"
+        elif distinct_outcomes == 2:
+            shape = (
+                "the outcome has 2 distinct values but both lie on the same "
+                "side of zero, so binarization maps them to the same class -- "
+                "recode it to 0/1"
+            )
+        else:
+            shape = "the outcome is continuous (a genuinely binary 0/1 outcome would not collapse)"
+        raise ExecutorDataUnavailable(
+            f"CausalMLExecutor: outcome '{outcome_var}' collapses to a single "
+            f"class under CausalML's internal binarization "
+            f"(causalml/inference/tree/uplift.pyx:459 runs `y = (y > 0)`), so "
+            f"the estimated ATE would be exactly 0.0 with a zero-width CI -- a "
+            f"fabricated zero carrying maximal confidence. "
+            f"frac(y > 0) = {positive_fraction:.4f} (must be strictly between 0 "
+            f"and 1); distinct outcome values = {distinct_outcomes}, i.e. "
+            f"{shape}; mean|y - (y > 0)| = {information_lost:.4f} (the "
+            f"information binarization would destroy). Estimate this outcome "
+            f"with DoWhy/EconML, or supply a genuinely binary outcome column."
+        )
 
     treatment_groups = sorted({str(t) for t in treatment_arr})
 

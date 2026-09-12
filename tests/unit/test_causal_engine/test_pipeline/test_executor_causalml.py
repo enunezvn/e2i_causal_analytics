@@ -37,6 +37,8 @@ import pytest
 
 from src.causal_engine.pipeline.executors.causalml import (
     CausalMLExecutor,
+    ExecutorDataUnavailable,
+    _extract_uplift_inputs_from_state,
     _resolve_control_name,
 )
 from src.causal_engine.pipeline.router import CausalLibrary
@@ -737,3 +739,202 @@ class TestCausalMLExecutorExceptionHandling:
         assert "uplift fit failed" in (result["error"] or "")
         assert result["result"] is None
         assert result["confidence"] == 0.0
+
+
+# =============================================================================
+# Binarization collapse (#2063) — fail closed BEFORE fitting
+# =============================================================================
+
+
+def _make_continuous_positive_outcome_frame(n: int = 240, seed: int = 11) -> pd.DataFrame:
+    """A frame whose outcome is continuous and STRICTLY POSITIVE.
+
+    This mirrors the shape of the live `adherence_rate` outcome (measured
+    `frac(y > 0) = 1.0000` on the Kisqali frame). CausalML binarizes ANY
+    outcome at zero — `causalml/inference/tree/uplift.pyx:459` runs
+    `y = (y > 0).astype(np.int8)` — so every label here becomes 1,
+    `P(Y=1|T=1) - P(Y=1|T=0)` is 0 exactly, and the executor would report
+    `ate=0.0` with a zero-width CI and `confidence=1.0`.
+    """
+    rng = np.random.default_rng(seed)
+    treatment = rng.integers(0, 2, size=n)
+    age = rng.normal(50.0, 10.0, size=n)
+    income = rng.normal(60000.0, 15000.0, size=n)
+    # Adherence-rate-like: continuous, bounded, never <= 0.
+    adherence = np.clip(0.62 + 0.05 * treatment + rng.normal(0.0, 0.12, size=n), 0.05, 0.99)
+    return pd.DataFrame(
+        {
+            "marketing_spend": treatment,
+            "sales": adherence,
+            "age": age,
+            "income": income,
+        }
+    )
+
+
+class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
+    """#2063: refuse outcomes that CausalML's `y = (y > 0)` collapses to one class.
+
+    The defect this pins is NOT a general failure of the estimator — on a
+    genuinely binary outcome CausalML recovers a planted ATE about as well as
+    DoWhy. It is specific to outcomes that binarization destroys, and its
+    signature is the worst possible one for a decision-support tool: `ate=0.0`
+    carried by the HIGHEST confidence of the three libraries, because
+    `_confidence_from_uplift_result` scores a zero-width CI as maximal
+    precision. Fail closed at the producer, before any fit.
+    """
+
+    @pytest.mark.asyncio
+    async def test_execute_fails_closed_on_strictly_positive_continuous_outcome(self):
+        executor = CausalMLExecutor()
+        df = _make_continuous_positive_outcome_frame()
+        # Sanity: this fixture really does trip the collapse condition.
+        assert float((df["sales"].to_numpy() > 0).mean()) == 1.0
+
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+        result = await executor.execute(state, _make_pipeline_config())
+
+        assert result["success"] is False
+        assert result["result"] is None
+        # The failure mode being prevented is a CONFIDENT zero, so the
+        # refusal must never carry confidence forward.
+        assert result["confidence"] == 0.0
+        assert result["error"] is not None
+        assert "sales" in result["error"]
+        assert "binariz" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_execute_fails_closed_on_all_nonpositive_outcome(self):
+        """The other side of the collapse: `y > 0` is False everywhere."""
+        executor = CausalMLExecutor()
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = 0.0
+        assert float((df["sales"].to_numpy() > 0).mean()) == 0.0
+
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+        result = await executor.execute(state, _make_pipeline_config())
+
+        assert result["success"] is False
+        assert result["result"] is None
+        assert result["confidence"] == 0.0
+        assert "binariz" in (result["error"] or "").lower()
+
+    def test_extract_raises_executor_data_unavailable_with_diagnostic_numbers(self):
+        """The refusal must explain WHY, with the three measured numbers.
+
+        - `frac(y > 0)` — the collapse condition itself.
+        - distinct outcome values — separates a genuinely binary outcome (2)
+          from a continuous one, so the reader knows which problem they have.
+        - `mean|y - (y > 0)|` — the information binarization would destroy.
+          This is the honest number; it is 0.0 for a binary outcome.
+        """
+        df = _make_continuous_positive_outcome_frame()
+        y = df["sales"].to_numpy().astype(float)
+        expected_loss = float(np.abs(y - (y > 0).astype(float)).mean())
+        expected_distinct = int(len(np.unique(y)))
+        assert expected_loss > 0.0, "fixture must actually lose information"
+
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _extract_uplift_inputs_from_state(state)
+
+        msg = str(excinfo.value)
+        assert "1.0000" in msg, f"frac(y>0) not reported: {msg!r}"
+        assert str(expected_distinct) in msg, f"distinct-value count not reported: {msg!r}"
+        assert f"{expected_loss:.4f}" in msg, f"information loss not reported: {msg!r}"
+
+    def test_genuinely_binary_outcome_is_not_refused(self):
+        """POSITIVE CONTROL — the gate must not fire on the case that works.
+
+        On a genuinely binary outcome CausalML is fine (measured MAE 0.069 vs
+        DoWhy's 0.054 at n=8,730). A gate that also refused this would be a
+        regression, not a fix.
+        """
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = (df["sales"] > df["sales"].median()).astype(int)
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        X_df, treatment_arr, y_arr, feature_names, treatment_groups = (
+            _extract_uplift_inputs_from_state(state)
+        )
+
+        assert len(X_df) == len(df)
+        assert feature_names == ["age", "income"]
+        assert sorted(np.unique(y_arr).tolist()) == [0.0, 1.0]
+        assert treatment_groups == ["0", "1"]
+
+    def test_continuous_outcome_spanning_zero_is_not_refused(self):
+        """A continuous outcome with values on BOTH sides of zero is not the
+        collapse case, so this gate stays out of its way.
+
+        Binarization still discards magnitude there, but that is a different
+        (and unmeasured) problem. #2063 handles the EXACT collapse only — no
+        invented threshold for near-degenerate fractions.
+        """
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = df["sales"] - df["sales"].median()
+        frac = float((df["sales"].to_numpy() > 0).mean())
+        assert 0.0 < frac < 1.0
+
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        _X_df, _t, y_arr, _names, _groups = _extract_uplift_inputs_from_state(state)
+
+        assert len(np.unique(y_arr)) > 2
+
+    def test_two_valued_same_side_outcome_is_diagnosed_as_recodable(self):
+        """A 2-valued outcome that collapses is NOT a genuinely binary one.
+
+        A real 0/1 outcome never reaches this gate — its positive fraction is
+        strictly between 0 and 1. Two distinct values that BOTH sit on the
+        same side of zero (here {1.0, 2.0}) do collapse, and the refusal must
+        say so rather than call the column "binary", which would read as the
+        gate misfiring.
+        """
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = np.where(df["age"].to_numpy() > 50.0, 2.0, 1.0)
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _extract_uplift_inputs_from_state(state)
+
+        msg = str(excinfo.value)
+        assert "2 distinct values" in msg, msg
+        assert "same" in msg and "side of zero" in msg, msg
+        assert "recode it to 0/1" in msg, msg
+
+    def test_constant_outcome_is_diagnosed_as_constant(self):
+        """`sales` all-zero is a constant outcome, not a continuous one."""
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = 0.0
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _extract_uplift_inputs_from_state(state)
+
+        msg = str(excinfo.value)
+        assert "distinct outcome values = 1" in msg, msg
+        assert "the outcome is constant" in msg, msg
+        assert "frac(y > 0) = 0.0000" in msg, msg
