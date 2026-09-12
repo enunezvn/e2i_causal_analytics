@@ -97,6 +97,7 @@ export function ToolComposerSection({ days }: { days: number }) {
         <StatCard label="Success" value={fmtInt(compositions.success)} />
         <StatCard label="Partial" value={fmtInt(compositions.partial)} />
         <StatCard label="Failed" value={fmtInt(compositions.failed)} />
+        <StatCard label="Cancelled" value={fmtInt(compositions.cancelled)} />
         <StatCard label="Abandoned" value={fmtInt(compositions.abandoned)} />
       </div>
 

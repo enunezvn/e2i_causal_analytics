@@ -15,7 +15,33 @@ vi.mock('@/hooks/api/use-admin', () => ({
   useToolComposerObservability: vi.fn(() => ({ data: undefined, isLoading: true, isError: false })),
 }));
 
+// Two endpoints, two failures: one going down must not take the other's surface with it.
+vi.mock('./ToolComposerSection', () => ({
+  ToolComposerSection: ({ days }: { days: number }) => (
+    <div data-testid="tool-composer-section">composer {days}</div>
+  ),
+}));
+
 import * as adminHooks from '@/hooks/api/use-admin';
+import { ToolComposerSection } from './ToolComposerSection';
+
+void ToolComposerSection; // imported so the stub above is type-checked against the real export
+
+describe('ObservabilityTab — the two endpoints fail independently', () => {
+  // Two endpoints answer two different questions about the same window. One of them being down
+  // must not hide the other's surface, and the window selector must stay usable either way.
+  it.each([
+    ['fails', { data: undefined, isLoading: false, isError: true }],
+    ['is still loading', { data: undefined, isLoading: true, isError: false }],
+  ])('still shows the tool composer when the LLM usage query %s', (_label, state) => {
+    vi.mocked(adminHooks.useLlmUsage).mockReturnValue(state as never);
+
+    render(<ObservabilityTab />);
+
+    expect(screen.getByTestId('tool-composer-section')).toBeInTheDocument();
+    expect(screen.getByLabelText('Time range')).toBeInTheDocument();
+  });
+});
 import { ObservabilityTab } from './ObservabilityTab';
 
 const U1 = '11111111-1111-1111-1111-111111111111';

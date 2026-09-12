@@ -64,10 +64,12 @@ describe('ToolComposerSection', () => {
     expect(within(unmeasured).getByText(/declared/i)).toBeInTheDocument();
   });
 
-  it('renders the composition stat cards', () => {
+  it('renders the composition stat cards, cancelled runs included', () => {
     render(<ToolComposerSection days={30} />);
 
-    for (const label of ['Compositions', 'Success', 'Partial', 'Failed', 'Abandoned']) {
+    // Cancelled is one of the four outcomes the recorder writes; a card set that omits it
+    // silently drops compositions from the reader's arithmetic.
+    for (const label of ['Compositions', 'Success', 'Partial', 'Failed', 'Cancelled', 'Abandoned']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     expect(screen.getByText('5')).toBeInTheDocument(); // compositions.total
