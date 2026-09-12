@@ -55,9 +55,56 @@ def test_adds_each_scope_column_nullable_without_a_default(column, sql_type):
 
 
 @pytest.mark.unit
-def test_does_not_backfill_legacy_rows():
+def test_adds_no_default_and_no_not_null():
+    """A default would stamp every legacy row, filtered or not, with a scope nobody recorded."""
     code = _code(MIGRATION)
-    assert not re.search(r"\bUPDATE\b|\bDEFAULT\b|\bNOT\s+NULL\b", code, flags=re.IGNORECASE)
+    assert not re.search(r"\bDEFAULT\b|\bNOT\s+NULL\b", code, flags=re.IGNORECASE)
+
+
+# Filters that narrowed the effect in some pre-#2023 engine: before 2026-06-04 the ATE was the
+# mean over the FILTERED twins, so any of these set means the row is not known to be cohort-wide.
+_FILTER_KEYS = (
+    "regions",
+    "specialties",
+    "deciles",
+    "adoption_stages",
+    "min_baseline_outcome",
+    "max_baseline_outcome",
+)
+
+
+def _updates() -> list[str]:
+    return re.findall(r"\bUPDATE\b.*?;", _code(MIGRATION), flags=re.IGNORECASE | re.DOTALL)
+
+
+@pytest.mark.unit
+def test_backfills_only_unrecorded_unfiltered_rows_to_cohort_wide():
+    """Legacy rows with no population filter were cohort-wide in every era (#2053): nothing
+    estimated on a region subset for them. Rows with a filter stay NULL (unknown)."""
+    updates = _updates()
+    assert len(updates) == 1, updates
+    stmt = " ".join(updates[0].split())
+    assert re.match(r"UPDATE (public\.)?twin_simulations SET ", stmt, re.IGNORECASE), stmt
+
+    set_clause = re.search(r"\bSET\b(.*?)\bWHERE\b", stmt, re.IGNORECASE)
+    assert set_clause, "the backfill must be guarded by a WHERE clause"
+    # Only effect_scope_regions, only to the empty array: never cohort_*, never a region list.
+    assert re.fullmatch(r"\s*effect_scope_regions\s*=\s*'\{\}'\s*", set_clause.group(1)), (
+        set_clause.group(1)
+    )
+
+    where = stmt[set_clause.end() :]
+    assert re.search(r"\beffect_scope_regions\s+IS\s+NULL\b", where, re.IGNORECASE)
+    for key in _FILTER_KEYS:
+        assert f"population_filters->'{key}'" in where, f"backfill guard ignores {key}"
+
+
+@pytest.mark.unit
+def test_backfill_runs_after_the_columns_exist():
+    code = _code(MIGRATION)
+    last_add = max(m.end() for m in re.finditer(r"ADD\s+COLUMN", code, re.IGNORECASE))
+    update = re.search(r"\bUPDATE\b", code, re.IGNORECASE)
+    assert update and update.start() > last_add
 
 
 @pytest.mark.unit

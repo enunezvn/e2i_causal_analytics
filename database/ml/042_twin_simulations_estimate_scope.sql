@@ -10,15 +10,19 @@
 -- region-scoped ATE was indistinguishable from a cohort-wide one.
 --
 -- effect_scope_regions is a tri-state, and the reads depend on all three values:
---   NULL       scope NOT RECORDED: every row written before this migration. Unknown, never
---              cohort-wide. Before #2023 a regions filter sat over a cohort-wide ATE; after it
---              the same filter scopes the ATE; the row alone cannot say which code wrote it.
+--   NULL       scope NOT RECORDED: a pre-042 row that had a population filter. Unknown, never
+--              cohort-wide. A regions filter sat over a cohort-wide ATE from 2026-06-04 until
+--              #2023, scoped the ATE through the filtered twins before that, and scopes it
+--              again after #2023; the row alone cannot say which code wrote it.
 --   '{}'       estimated on the whole cohort.
 --   non-empty  estimated on these regions; cohort_ate / cohort_ci_lower / cohort_ci_upper hold
 --              the cohort-wide estimate it was narrowed from.
 --
--- No default and no backfill, on purpose: either would stamp legacy rows with a scope nobody
--- recorded. Scope is never derived from population_filters (the request, not the result).
+-- No default: it would stamp filtered legacy rows with a scope nobody recorded. The one
+-- backfill is narrow: a pre-042 row with NO population filter at all was cohort-wide in every
+-- era (no engine narrowed an unfiltered effect), so it becomes '{}'. Every filter key is
+-- checked, not only regions, because before 2026-06-04 the ATE was the mean over the filtered
+-- twins, so a specialty or decile filter narrowed it too. Filtered rows stay NULL.
 --
 -- Additive + idempotent. scripts/run_migrations.sh applies it inside --single-transaction with
 -- its ledger row, BEFORE the deploy flips the app services, so the code that writes these
@@ -31,6 +35,19 @@ ALTER TABLE twin_simulations
     ADD COLUMN IF NOT EXISTS cohort_ate double precision,
     ADD COLUMN IF NOT EXISTS cohort_ci_lower double precision,
     ADD COLUMN IF NOT EXISTS cohort_ci_upper double precision;
+
+-- Backfill: unrecorded rows with no population filter are cohort-wide (see header). A missing
+-- population_filters, a missing key, an empty array and a JSON null all mean "not filtered".
+-- Idempotent: it only touches rows whose scope is still NULL, and never sets cohort_*.
+UPDATE twin_simulations
+SET effect_scope_regions = '{}'
+WHERE effect_scope_regions IS NULL
+    AND COALESCE(population_filters->'regions', 'null'::jsonb) IN ('[]'::jsonb, 'null'::jsonb)
+    AND COALESCE(population_filters->'specialties', 'null'::jsonb) IN ('[]'::jsonb, 'null'::jsonb)
+    AND COALESCE(population_filters->'deciles', 'null'::jsonb) IN ('[]'::jsonb, 'null'::jsonb)
+    AND COALESCE(population_filters->'adoption_stages', 'null'::jsonb) IN ('[]'::jsonb, 'null'::jsonb)
+    AND COALESCE(population_filters->'min_baseline_outcome', 'null'::jsonb) = 'null'::jsonb
+    AND COALESCE(population_filters->'max_baseline_outcome', 'null'::jsonb) = 'null'::jsonb;
 
 -- A cohort-wide comparator exists only for an estimate that was narrowed to regions; on a
 -- cohort-wide or unrecorded row it would be a second headline nobody can place.

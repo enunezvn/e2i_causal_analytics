@@ -176,9 +176,10 @@ class SimulationResult(BaseModel):
     # Persisted by migration 042 (#2053) as twin_simulations.effect_scope_regions and
     # cohort_ate / cohort_ci_lower / cohort_ci_upper — never folded into population_filters,
     # which is the REQUEST (re-merging request and result is what caused #2023). A row
-    # written before 042 has no recorded scope and reads back as EstimateScope.UNKNOWN; it
-    # is not inferred from population_filters, because pre-#2023 rows carry the same filter
-    # over a cohort-wide ATE and would be relabelled with a scope that is false for them.
+    # written before 042 with a population filter has no recorded scope and reads back as
+    # EstimateScope.UNKNOWN; its scope is not inferred from population_filters, because
+    # pre-#2023 rows carry the same filter over a cohort-wide ATE and would be relabelled
+    # with a scope that is false for them. 042 backfills only unfiltered rows as cohort-wide.
     target_regions: List[str] = Field(default_factory=list)
     cohort_ate: Optional[float] = None
     cohort_ci_lower: Optional[float] = None
