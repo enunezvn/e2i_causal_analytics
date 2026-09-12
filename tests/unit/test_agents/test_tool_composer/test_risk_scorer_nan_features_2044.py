@@ -128,6 +128,55 @@ def test_a_complete_cohort_reports_no_drops():
 
 
 # ============================================================================
+# The denominator is the population the CALLER asked about (#2044).
+#
+# ``entity_ids`` narrows ``work`` before any of this runs. Reporting the scored
+# count against the whole frame turns a complete answer over 100 requested
+# patients into "scored 100 of 8730" -- a fabricated 98.9% data loss in the one
+# field whose job is to stop a caller mistaking a partial cohort for the whole.
+# ============================================================================
+
+
+def _complete_ids(df: pd.DataFrame, k: int = 100) -> list[str]:
+    """``k`` entity IDs whose rows survive the NaN triage untouched."""
+    return df.loc[df["gap_days"].notna(), "patient_id"].astype(str).tolist()[:k]
+
+
+def test_the_disclosure_counts_requested_rows_not_the_whole_frame():
+    df = _kisqali_shaped_cohort()
+    ids = _complete_ids(df)
+    out = tr.risk_scorer(
+        entity_type="patient",
+        risk_type="discontinuation",
+        estimation_data=df,
+        outcome="discontinued_180d",
+        entity_ids=ids,
+    )
+    assert out.n_scored == len(ids)
+    assert out.n_rows_dropped == 0
+    disclosure = out.missing_data_disclosure
+    # The full-frame row count must not appear as the denominator.
+    assert str(len(df)) not in disclosure, disclosure
+    assert "requested" in disclosure, disclosure
+
+
+def test_entity_ids_that_match_nothing_are_reported_not_silently_narrowed():
+    """A partial ID match is a silent narrowing unless the tool says so."""
+    df = _kisqali_shaped_cohort()
+    ids = _complete_ids(df)
+    absent = [f"absent-{i:03d}" for i in range(40)]
+    out = tr.risk_scorer(
+        entity_type="patient",
+        risk_type="discontinuation",
+        estimation_data=df,
+        outcome="discontinued_180d",
+        entity_ids=ids + absent,
+    )
+    assert out.n_scored == len(ids)
+    assert f"{len(ids)} of {len(ids) + len(absent)}" in out.missing_data_disclosure
+
+
+# ============================================================================
 # Fail-closed backstops: when nothing usable survives, refuse with the numbers.
 # ============================================================================
 

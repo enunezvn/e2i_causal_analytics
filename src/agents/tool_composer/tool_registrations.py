@@ -4172,6 +4172,24 @@ def risk_scorer(
             "for the missing entries and report the result as a measured risk score."
         )
 
+    # The population the CALLER asked about, captured before the complete-case filter.
+    # NOT ``len(df)``: ``entity_ids`` has already narrowed ``work`` above, and reporting
+    # against the whole frame turns a complete answer over 100 requested patients into
+    # "scored 100 of 8730" — a fabricated 98.9% loss in the very field that exists to
+    # stop a caller reading a partial cohort as the whole one.
+    n_in_scope = len(work)
+    scope_note = f"scored {{n}} of {n_in_scope} supplied row(s)"
+    if entity_ids:
+        # A partial ID match narrows the answer just as silently as a NaN drop does:
+        # only a ZERO match refuses above, so 60 of 100 requested IDs would otherwise
+        # score 60 patients with nothing saying the other 40 were never in the frame.
+        n_requested = len({str(e) for e in entity_ids})
+        n_matched = int(work[id_column].astype(str).nunique())
+        scope_note = (
+            f"scored {{n}} of {n_in_scope} requested row(s) "
+            f"({n_matched} of {n_requested} requested entity ID(s) matched)"
+        )
+
     complete = work[usable_features + [outcome]].notna().all(axis=1)
     n_rows_dropped = int((~complete).sum())
     if not bool(complete.any()):
@@ -4198,9 +4216,7 @@ def risk_scorer(
         if n_rows_dropped
         else "no row dropped for missing values"
     )
-    missing_data_disclosure = (
-        f"{excluded_note}; {rows_note}; scored {len(work)} of {len(df)} supplied rows."
-    )
+    missing_data_disclosure = f"{excluded_note}; {rows_note}; {scope_note.format(n=len(work))}."
 
     y = work[outcome].astype(int)
     if y.nunique() < 2:
