@@ -799,6 +799,12 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 
 > **Corrected 2026-09-12, before dispatch.** The first draft built `StepResult(status="FAILED")` — `ExecutionStatus` values are lowercase, so that fails validation — and called `_create_total_failure_result` with `decomposition=None, plan=None`, which `CompositionResult` rejects because both fields are required. Either would make the red-first run fail for the wrong reason. The builders below follow `test_fail_closed_zero_tools_f6.py`, the existing test of this path. **This task depends on Task 3**: only after Task 3 does a real refused step carry a code.
 
+> **Pre-dispatch findings (lead, 2026-09-12, verified against the tests after Task 3 landed).** Read these before Step 5; they decide which existing test changes are faithful and which would be weakening.
+> 1. **`test_gap_comparability_1574.py`'s `_failed_trace` builds a `StepResult` with no `outcome_class` and no `reason_code`.** Since Task 3 the executor never produces that for a tool refusal: the real site (`tool_registrations.py` ~2648, `_gap_comparability_reason`) raises `ToolRefusalError(..., reason_code=ReasonCode.COVERAGE_GAP)`, so the executor sets `outcome_class="refused"`, `reason_code="coverage_gap"`, `error_type="ToolRefusalError"`. Give `_failed_trace` those as keyword defaults. The three scope and length tests that use it (`test_total_failure_result_preserves_the_tool_reason`, `test_total_failure_reason_is_length_bounded`, `test_pathological_gap_reason_still_carries_the_scope`) then keep EVERY assertion unchanged. That is the proof #1574's verbatim disclosure survives. Changing any of their assertions instead is weakening.
+> 2. **`test_step_with_success_flag_but_no_result_is_reported_failed` asserts `"gap_calculator: empty result"` in the answer**, from a step with no code and no tool-authored class. That asserts the defect #2020 removes. Change only that one line to the canonical rendering, `"gap_calculator: the tool failed to complete [tool_error]"`, and leave its `failed_components` assertion (the point of the test) unchanged. Say so in the commit body.
+> 3. **Empty-text rule (lead call).** `test_total_failure_result_without_a_reason_is_unchanged` pins that a failed step with NO error text adds no reason fragment. Keep that contract: a step with neither raw text nor a code contributes nothing to `reasons`, because there is nothing to withhold and nothing to say. The Step 3 loop below encodes it; add one new test for it to the Task 4 test file.
+> 4. **The Step 5 grep finds three files.** `test_composer_recording_wiring.py` calls `_create_total_failure_result` and asserts only `composition_id`, so it is unaffected. `test_chatbot_tools.py` mocks the answer string, so it is also unaffected. `test_gap_comparability_1574.py` is items 1–2 above. Also run `test_fail_closed_zero_tools_f6.py` and `test_binary_treatment_guard_2016.py`; the latter drives real refusals through a real executor.
+
 **Files:**
 - Modify: `src/agents/tool_composer/composer.py` — one module-level constant, and the reason loop in `_create_total_failure_result` (the method starts at about line 1217)
 - Test: `tests/unit/test_agents/test_tool_composer/test_fail_closed_answer_sanitization_2020.py` (new)
@@ -1015,6 +1021,9 @@ In `_create_total_failure_result`, replace the whole `for step in getattr(execut
             failed_tools.append(tool_name)
             raw = str(getattr(output, "error", None) or "").strip()
             reason_code = getattr(step, "reason_code", None)
+            if not raw and not reason_code:
+                # Nothing to withhold and nothing to say: no reason fragment, as before #2020.
+                continue
             if getattr(step, "outcome_class", None) in _TOOL_AUTHORED_CLASSES and reason_code:
                 if raw:
                     reasons.append(f"{tool_name}: {raw}")
