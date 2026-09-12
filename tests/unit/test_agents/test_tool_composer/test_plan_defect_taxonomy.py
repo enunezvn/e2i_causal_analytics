@@ -217,6 +217,7 @@ async def test_missing_required_arguments_never_invoke_the_tool() -> None:
     assert result.outcome_class == "plan_defect", (
         f"a planner-omitted argument is a plan defect, got {result.outcome_class!r}"
     )
+    assert result.reason_code == ReasonCode.PLAN_DEFECT.value
     assert result.attempts == 0, f"no attempt was made against the tool, got {result.attempts}"
 
 

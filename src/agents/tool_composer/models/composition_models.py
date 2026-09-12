@@ -340,6 +340,11 @@ class StepResult(BaseModel):
     attempts: int = 0
     cache_hit: bool = False
     error_type: Optional[str] = None
+    # #2021: the closed reason code for this step's failure. Tool-authored when a
+    # ToolRefusalError/ToolInputError was caught, executor-assigned on every other failure arm,
+    # None on success. The aggregation key the learning loop stores; the raw message never is.
+    reason_code: Optional[str] = None
+    reason_details: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("duration_ms", mode="before")
     @classmethod
