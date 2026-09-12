@@ -1663,7 +1663,16 @@ flowchart TD
     CS1 -->|Phase 4: Synthesize| R[Synthesized Response]
     CS2 --> R
     CS3 --> R
+    R -->|user rates the answer| FB[chatbot_message_feedback]
+    FB -->|nightly linker, same session + window| CE
+    TP -->|get_tool_reliability| RV["Reliability verdict\n(admin surface)"]
 ```
+
+The last two edges close the loop: `composer_episodes.success` is filled from the user's own
+thumbs by `src.tasks.link_composition_feedback`, and `tool_performance` is what
+`get_tool_reliability` reads. Neither changes planning behaviour — the reliability caveat in the
+planning prompt stays behind `TOOL_COMPOSER_RELIABILITY_IN_PLANNER`, which is off by default
+pending its experiment (see `docs/runbooks/tool-composer-learning-loop.md`).
 
 ---
 
