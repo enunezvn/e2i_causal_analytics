@@ -204,6 +204,7 @@ celery_app.conf.task_routes = {
     # force=True) which would otherwise land on the default queue and run the
     # LLM-expensive GEPA executor on worker_light (codex #1515 iter-2 LOW).
     "src.tasks.drain_chatbot_optimization_queue": {"queue": "analytics"},
+    "src.tasks.link_composition_feedback": {"queue": "analytics"},
     # -------------------------------------------------------------------------
     # ETL Tasks (Block 6B-infra-2*: per-HCP business_metrics, per-patient
     # adherence, territory rollup). Beat schedules already pin these to
@@ -530,6 +531,16 @@ celery_app.conf.beat_schedule = {
     "routing-label-nightly": {
         "task": "src.tasks.run_routing_label_cycle",
         "schedule": crontab(hour=4, minute=30),
+        "options": {"queue": "analytics"},
+    },
+    # Tool-composer feedback linker (spec 2026-09-11 §5). Carries the thumbs a user already gave
+    # a chat answer onto the composition behind it: composer_episodes.success has meant user
+    # feedback since ml/013 and stayed NULL. It labels only — nothing reads this column to change
+    # behaviour. A plain table read and update, so 05:00 keeps it clear of the 02:00 backup, the
+    # Monday 03:00 reseed, the 04:30 labeler and the 05:30 GEPA drain.
+    "composition-feedback-linker": {
+        "task": "src.tasks.link_composition_feedback",
+        "schedule": crontab(hour=5, minute=0),
         "options": {"queue": "analytics"},
     },
     # Chatbot DSPy optimization queue drainer (#1515) — nightly. Polls the 035

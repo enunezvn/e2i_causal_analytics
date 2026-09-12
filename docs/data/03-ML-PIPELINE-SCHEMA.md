@@ -488,6 +488,26 @@ Audit trail of Orchestrator query classification decisions with feedback trackin
 | `used_llm_layer` | BOOLEAN | Whether the LLM classifier was invoked |
 | `was_correct` | BOOLEAN | Feedback: NULL = pending |
 
+### 4.3b Learning-loop functions (ml/040, ml/041)
+
+The composer records what it actually did, so reliability is measured rather than declared. All of
+these are `SECURITY INVOKER` and executable by `service_role` only; `anon` and `authenticated` have
+no privileges on them.
+
+| Function | Migration | What it does |
+|---|---|---|
+| `sync_tool_registry(jsonb, jsonb, integer)` | ml/040 | Makes `tool_registry` and `tool_dependencies` equal to the running code's registered tools. Called at API startup, under an advisory lock, and refuses to deprecate more tools than its cap. It replaced the previous regime of generating a migration per schema change. |
+| `composer_record_start(jsonb)` | ml/041 | Seeds the episode. Every recording RPC carries the same seed and begins `INSERT … ON CONFLICT (composition_id) DO NOTHING`, so whichever write lands first creates the episode and a failed start never orphans later data. |
+| `composer_record_phase(jsonb, text, jsonb)` | ml/041 | Updates status and that phase's fields, only while the episode is non-terminal. |
+| `composer_record_steps(jsonb, jsonb)` | ml/041 | Inserts `composition_steps` and the `tool_performance` rows for invoked classes. Idempotent per `(episode_id, step_number)` and per `step_id`, and returns a receipt naming unknown or schema-mismatched tools. |
+| `composer_record_heartbeat(jsonb)` | ml/041 | Bumps `last_activity_at` while the episode is non-terminal, so an abandoned composition is distinguishable from a slow one. |
+| `composer_record_finish(jsonb, jsonb)` | ml/041 | Writes the terminal state and every phase latency from the recorder's in-memory snapshot, so a lost phase write is recovered. A second finish changes nothing. |
+| `composer_steps_for(text[])` | ml/041 | The recorded steps of the given compositions, for the planner's episodic references. |
+| `get_tool_reliability(integer, boolean)` | ml/041 | Per-tool counts and latency percentiles over a window. `n_health = succeeded + timeout + error` is the denominator; refusals are counted separately and never enter it. The verdict itself is computed in `src/agents/tool_composer/reliability.py`, not in SQL. |
+
+Rollback: `database/ml/rollback_041.sql` then `database/ml/rollback_040.sql`, by hand and newest
+first — see `docs/runbooks/tool-composer-learning-loop.md`.
+
 ### 4.4 `composer_episodes`
 
 Episodic memory for tool compositions. Stores vector embeddings for similarity search to optimize future plans.

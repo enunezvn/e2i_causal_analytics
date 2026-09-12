@@ -67,6 +67,9 @@ class PsycopgQuery:
         self._order.append(f"{column}{' DESC' if desc else ''}")
         return self
 
+    def update(self, values: Dict[str, Any]) -> "PsycopgUpdate":
+        return PsycopgUpdate(self.conn, self.table, values)
+
     def range(self, start: int, end: int) -> "PsycopgQuery":
         self._range = (start, end - start + 1)
         return self
@@ -89,6 +92,34 @@ class PsycopgQuery:
         with self.conn.connect() as conn:
             rows = conn.execute(sql, self._params).fetchall()
         return type("Result", (), {"data": [json.loads(r[0]) for r in rows]})()
+
+
+class PsycopgUpdate:
+    """``table(...).update({...}).eq(...).execute()``, over psycopg."""
+
+    def __init__(self, conn: _pg.PgConn, table: str, values: Dict[str, Any]):
+        self.conn = conn
+        self.table = table
+        self.values = values
+        self._where: List[str] = []
+        self._params: List[Any] = []
+
+    def eq(self, column: str, value: Any) -> "PsycopgUpdate":
+        self._where.append(f"{column} = %s")
+        self._params.append(value)
+        return self
+
+    def execute(self) -> Any:
+        assignments = ", ".join(f"{column} = %s" for column in self.values)
+        sql = f"UPDATE {self.table} SET {assignments}"
+        params: List[Any] = list(self.values.values())
+        if self._where:
+            sql += " WHERE " + " AND ".join(self._where)
+            params += self._params
+        with self.conn.connect() as conn:
+            cursor = conn.execute(sql, params)
+            conn.commit()
+        return type("Result", (), {"data": [], "count": cursor.rowcount})()
 
 
 class PsycopgSupabase:

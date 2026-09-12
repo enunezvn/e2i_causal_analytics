@@ -41,6 +41,24 @@ def _rel(path: Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
 
 
+def test_the_schema_doc_and_runbook_describe_what_shipped():
+    """A reader reaching for these tables must find the RPCs and the rollback path documented.
+
+    The learning loop added recording RPCs, a reliability function and a startup sync; none of
+    them is discoverable from the schema doc alone unless it names them, and an operator cannot
+    roll the migrations back from a doc that does not name the rollback files.
+    """
+    schema_doc = (REPO_ROOT / "docs/data/03-ML-PIPELINE-SCHEMA.md").read_text(errors="replace")
+    for symbol in ("composer_record_steps", "get_tool_reliability", "sync_tool_registry"):
+        assert symbol in schema_doc, f"{symbol} is not described in the ML pipeline schema doc"
+
+    runbook = REPO_ROOT / "docs/runbooks/tool-composer-learning-loop.md"
+    assert runbook.exists(), "the learning-loop runbook is missing"
+    text = runbook.read_text(errors="replace")
+    for rollback in ("rollback_041.sql", "rollback_040.sql"):
+        assert rollback in text, f"the runbook does not name {rollback}"
+
+
 def test_g8_in_memory_latency_writer_is_gone():
     """``update_tool_performance`` wrote measured latency back into the in-memory registry only.
 

@@ -67,15 +67,17 @@ describe('ToolComposerSection', () => {
   it('renders every composition count, so the cards account for the total', () => {
     // Values, not just labels: a card bound to the wrong field, or a label with nothing behind
     // it, is exactly how a composition goes missing from the reader's arithmetic.
+    // Every count distinct, so a card bound to the wrong field cannot coincide with the right
+    // value. Abandoned is a subset of unfinished, not another additive outcome.
     const counts = {
       ...payload.compositions,
-      total: 9,
-      success: 2,
-      partial: 1,
-      failed: 3,
-      cancelled: 1,
-      unfinished: 2,
-      abandoned: 1,
+      total: 25,
+      success: 11,
+      partial: 7,
+      failed: 4,
+      cancelled: 2,
+      unfinished: 1,
+      abandoned: 3,
     };
     mockData({ ...payload, compositions: counts });
 
@@ -83,16 +85,17 @@ describe('ToolComposerSection', () => {
 
     const shown = (label: string) =>
       screen.getByText(label).parentElement?.textContent?.replace(label, '').trim();
-    expect(shown('Compositions')).toBe('9');
-    expect(shown('Success')).toBe('2');
-    expect(shown('Partial')).toBe('1');
-    expect(shown('Failed')).toBe('3');
-    expect(shown('Cancelled')).toBe('1');
-    expect(shown('Unfinished')).toBe('2');
-    expect(shown('Abandoned')).toBe('1');
+    expect(shown('Compositions')).toBe('25');
+    expect(shown('Success')).toBe('11');
+    expect(shown('Partial')).toBe('7');
+    expect(shown('Failed')).toBe('4');
+    expect(shown('Cancelled')).toBe('2');
+    expect(shown('Unfinished')).toBe('1');
+    expect(shown('Abandoned')).toBe('3');
     // The four outcomes plus the unfinished ones account for every composition counted.
-    expect(counts.success + counts.partial + counts.failed + counts.cancelled + counts.unfinished)
-      .toBe(counts.total);
+    expect(
+      counts.success + counts.partial + counts.failed + counts.cancelled + counts.unfinished,
+    ).toBe(counts.total);
   });
 
   it('lists each recent failure with its phase, step classes and bounded preview', () => {
