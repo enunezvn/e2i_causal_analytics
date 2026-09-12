@@ -29,7 +29,8 @@ Verified 2026-09-12 against `origin/main` `0a16e9c18`. **Read this section befor
 3. **The `NULL` is very likely deliberate.** ml/041's header (line 27) states the recording contract: *"identifiers are positional, intents are normalized, and **no error text is stored**."* `RecentFailure.error_type` in `src/api/schemas/admin_tool_composer.py:73` documents the same rule: *"The exception class; never its message (spec §5.5)."* Refusal messages interpolate data — `{list(df.columns)!r}`, `{cohort_result!r}`, `{sorted(kwargs.keys())!r}` — so persisting them wholesale would put column names and value reprs into a table designed to hold none.
    **Owner decision (2026-09-12): persist the `reason_code` and a fixed catalogue sentence derived from it, plus bounded structured `details`. The raw message is never persisted.** That satisfies #2050's operator need ("an operator sees `refused` with no why") without breaking ml/041's invariant.
 4. **`get_tool_reliability` reads `tool_performance`, not `composition_steps`** (ml/041:806). So a per-tool `most_common_refusal_reason` needs `reason_code` on **both** tables.
-5. **Scope is 94 raise sites, all in one file.** `grep -c "ToolRefusalError\|ToolInputError" src/agents/tool_composer/tool_registrations.py` → 94; `src/tool_registry/` → 0.
+5. **Scope is 87 raise sites, all in one file.** Measured by `ast.walk` for `raise ToolRefusalError(...)` / `raise ToolInputError(...)` on the lane base `0a16e9c18`: `ToolRefusalError` 66 + `ToolInputError` 21 = 87. `src/tool_registry/` → 0.
+   **This plan first said 94, which was wrong for two independent reasons** (caught by the Task 1/2 implementer, corrected 2026-09-12): (a) the figure came from `grep -c`, which counts LINES mentioning either name and dedupes multiple matches per line — 16 of the 103 matching lines are docstrings, comments and the import; (b) it was measured on `6c6a6a0ae`, three commits behind the lane base, before PR #2059 (`8bb85a772`, `772733dc2`, the #2022 sensitivity work) added 5 more `ToolRefusalError` sites. Method alone gives 82 on that stale base; base drift takes it to 87. **The AST test is the only count that governs — do not re-derive this number with grep.**
 6. **96 existing assertions pin refusal prose** across 17 test files. Task 2 must not reword a single message.
 
 ## Owner decisions (2026-09-12)
@@ -37,7 +38,7 @@ Verified 2026-09-12 against `origin/main` `0a16e9c18`. **Read this section befor
 | # | Decision |
 |---|----------|
 | D1 | `composition_steps.error_message` receives the **canonical catalogue sentence** derived from the code, never the tool's raw message. Structured `details` carry the specifics. |
-| D2 | **All 94 raise sites** get a code in this lane, enforced by an AST test that fails if any raise site lacks one. |
+| D2 | **All 87 raise sites** get a code in this lane, enforced by an AST test that fails if any raise site lacks one. |
 | D3 | The admin observability route **does** surface the codes (per-tool `most_common_refusal_reason`, per-step `reason_code`). |
 
 ## File structure
@@ -46,7 +47,7 @@ Verified 2026-09-12 against `origin/main` `0a16e9c18`. **Read this section befor
 |---|---|---|
 | `src/agents/tool_composer/reason_codes.py` *(new)* | `ReasonCode` closed set + canonical sentence catalogue + `canonical_sentence()` | 1 |
 | `src/agents/tool_composer/errors.py` | `ToolRefusalError` / `ToolInputError` carry `reason_code` + `details` | 1 |
-| `src/agents/tool_composer/tool_registrations.py` | 94 raise sites get codes | 2 |
+| `src/agents/tool_composer/tool_registrations.py` | 87 raise sites get codes | 2 |
 | `src/agents/tool_composer/models/composition_models.py` | `StepResult.reason_code`, `StepResult.reason_details` | 3 |
 | `src/agents/tool_composer/executor.py` | assign a code on every failure arm | 3 |
 | `src/agents/tool_composer/composer.py` | fail-closed answer: verbatim for refusals, canonical for everything else | 4 |
@@ -149,8 +150,8 @@ def test_canonical_sentence_accepts_a_raw_string_code():
 
 ```bash
 cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes
-.venv/bin/python -c "import src.agents.tool_composer.errors" 2>/dev/null || true
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=120
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -c "import src.agents.tool_composer.errors" 2>/dev/null || true
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=120
 ```
 
 Expected: collection error — `ModuleNotFoundError: No module named 'src.agents.tool_composer.reason_codes'`.
@@ -337,25 +338,25 @@ class ToolRefusalError(_CodedError, RuntimeError):
 
 ```bash
 cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=120
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=120
 ```
 
 Expected: `7 passed`.
 
-- [ ] **Step 6: Confirm the 94 existing raise sites are now broken, and that this is the only breakage**
+- [ ] **Step 6: Confirm the 87 existing raise sites are now broken, and that this is the only breakage**
 
 ```bash
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_nonretryable_refusals_1600.py -n 0 -p no:cacheprovider -q --timeout=300 2>&1 | tail -15
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_nonretryable_refusals_1600.py -n 0 -p no:cacheprovider -q --timeout=300 2>&1 | tail -15
 ```
 
 Expected: failures with `TypeError: __init__() missing 1 required keyword-only argument: 'reason_code'`. That is Task 2's work. **Do not commit Task 1 alone if the suite is red** — commit Task 1 and Task 2 together at the end of Task 2.
 
 ---
 
-## Task 2: Give all 94 raise sites a code, and enforce it
+## Task 2: Give all 87 raise sites a code, and enforce it
 
 **Files:**
-- Modify: `src/agents/tool_composer/tool_registrations.py` (94 sites)
+- Modify: `src/agents/tool_composer/tool_registrations.py` (87 sites)
 - Test: `tests/unit/test_agents/test_tool_composer/test_reason_code_coverage_2021.py`
 
 **Hard rule: do not change a single character of any message string.** 96 assertions pin that prose (`grep -rn "ToolRefusalError\|ToolInputError" tests/ | wc -l` → 96), and #1574's scope disclosure rides the text. The only edit at each site is adding the `reason_code=` keyword (and `details=` where a scalar is already in hand).
@@ -429,22 +430,22 @@ def test_every_reason_code_is_a_member_of_the_closed_set(path: Path):
 def test_the_site_count_is_what_the_lane_measured():
     """A floor, not a ceiling: new sites are fine, a silent drop to zero is not."""
     total = sum(1 for path in _SOURCES for _ in _raise_sites(path))
-    assert total >= 94, f"expected at least the 94 sites measured for #2021, found {total}"
+    assert total >= 87, f"expected at least the 87 sites measured for #2021, found {total}"
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
 cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_reason_code_coverage_2021.py -n 0 -p no:cacheprovider -q --timeout=120
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_reason_code_coverage_2021.py -n 0 -p no:cacheprovider -q --timeout=120
 ```
 
-Expected: FAIL listing ~94 uncoded sites.
+Expected: FAIL listing ~87 uncoded sites.
 
 - [ ] **Step 3: Enumerate the sites**
 
 ```bash
-.venv/bin/python - <<'PY'
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python - <<'PY'
 import ast
 from pathlib import Path
 p = Path("src/agents/tool_composer/tool_registrations.py")
@@ -509,9 +510,9 @@ Add `details` only where a scalar is already computed at the site (`n_distinct`,
 
 ```bash
 cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_reason_code_coverage_2021.py \
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_reason_code_coverage_2021.py \
   tests/unit/test_agents/test_tool_composer/test_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=300
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/ -n 0 -p no:cacheprovider -q --timeout=900 2>&1 | tail -15
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/ -n 0 -p no:cacheprovider -q --timeout=900 2>&1 | tail -15
 ```
 
 Expected: the two new files all pass; `tests/unit/test_agents/test_tool_composer/` is green with the same counts as before the lane (record the baseline first with `git stash`-free means: run it on `origin/main` in a scratch clone if the number is disputed).
@@ -529,8 +530,8 @@ Expected: **no output.** Any removed line that is not a pure re-indent of an unc
 - [ ] **Step 7: Lint and commit Tasks 1 + 2 together**
 
 ```bash
-.venv/bin/ruff check --no-cache src/agents/tool_composer/ tests/unit/test_agents/test_tool_composer/
-.venv/bin/ruff format --check src/agents/tool_composer/reason_codes.py src/agents/tool_composer/errors.py
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff check --no-cache src/agents/tool_composer/ tests/unit/test_agents/test_tool_composer/
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff format --check src/agents/tool_composer/reason_codes.py src/agents/tool_composer/errors.py
 git add src/agents/tool_composer/reason_codes.py src/agents/tool_composer/errors.py \
         src/agents/tool_composer/tool_registrations.py \
         tests/unit/test_agents/test_tool_composer/test_reason_codes_2021.py \
@@ -538,7 +539,7 @@ git add src/agents/tool_composer/reason_codes.py src/agents/tool_composer/errors
 git commit -m "feat(tool-composer): closed reason-code vocabulary on every tool refusal (#2021)
 
 ToolRefusalError/ToolInputError now require a ReasonCode from a closed set with a
-data-free canonical sentence. All 94 raise sites in tool_registrations.py carry one,
+data-free canonical sentence. All 87 raise sites in tool_registrations.py carry one,
 enforced by an AST test. No message text changed: 96 assertions pin that prose and
  #1574's estimation_data_scope disclosure rides it into the fail-closed answer.
 
@@ -641,7 +642,7 @@ The `executor_with_tool` fixture belongs in this file. Build it by copying the e
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_executor_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=300
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_executor_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=300
 ```
 
 Expected: FAIL — `AttributeError: 'StepResult' object has no attribute 'reason_code'`.
@@ -684,7 +685,7 @@ The last arm's `outcome_class` already branches on `isinstance(last_exc, ...)`; 
 - [ ] **Step 5: Run the test to verify it passes**
 
 ```bash
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_executor_reason_codes_2021.py \
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_executor_reason_codes_2021.py \
   tests/unit/test_agents/test_tool_composer/test_executor_outcome_classes.py \
   tests/unit/test_agents/test_tool_composer/test_executor.py -n 0 -p no:cacheprovider -q --timeout=600
 ```
@@ -694,7 +695,7 @@ Expected: all pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-.venv/bin/ruff check --no-cache src/agents/tool_composer/ tests/unit/test_agents/test_tool_composer/
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff check --no-cache src/agents/tool_composer/ tests/unit/test_agents/test_tool_composer/
 git add src/agents/tool_composer/models/composition_models.py src/agents/tool_composer/executor.py \
         tests/unit/test_agents/test_tool_composer/test_executor_reason_codes_2021.py
 git commit -m "feat(tool-composer): carry the reason code out of every executor failure arm (#2021)
@@ -834,7 +835,7 @@ The `composer` fixture builds a `ToolComposer` without network dependencies — 
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_fail_closed_answer_sanitization_2020.py -n 0 -p no:cacheprovider -q --timeout=300
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_fail_closed_answer_sanitization_2020.py -n 0 -p no:cacheprovider -q --timeout=300
 ```
 
 Expected: the internals tests FAIL — `'DoWhy' leaked into the user-facing answer`.
@@ -903,7 +904,7 @@ Replace the reason-collection loop inside `_create_total_failure_result` (curren
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_fail_closed_answer_sanitization_2020.py -n 0 -p no:cacheprovider -q --timeout=300
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_fail_closed_answer_sanitization_2020.py -n 0 -p no:cacheprovider -q --timeout=300
 ```
 
 Expected: `6 passed`.
@@ -911,7 +912,7 @@ Expected: `6 passed`.
 - [ ] **Step 5: Confirm no existing fail-closed expectation regressed**
 
 ```bash
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/ -n 0 -p no:cacheprovider -q --timeout=900 2>&1 | tail -12
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/ -n 0 -p no:cacheprovider -q --timeout=900 2>&1 | tail -12
 grep -rln "Unable to complete analysis\|Reason(s):" tests/ | head
 ```
 
@@ -920,7 +921,7 @@ Run every file that grep names. A test that asserted raw exception text in the a
 - [ ] **Step 6: Commit**
 
 ```bash
-.venv/bin/ruff check --no-cache src/agents/tool_composer/ tests/unit/test_agents/test_tool_composer/
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff check --no-cache src/agents/tool_composer/ tests/unit/test_agents/test_tool_composer/
 git add src/agents/tool_composer/composer.py \
         tests/unit/test_agents/test_tool_composer/test_fail_closed_answer_sanitization_2020.py
 git commit -m "fix(tool-composer): keep library internals out of the fail-closed answer (#2020)
@@ -1028,7 +1029,7 @@ Check `step_record`'s real signature before writing the calls — read `src/agen
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_learning_recorder_reason_code_2050.py -n 0 -p no:cacheprovider -q --timeout=300
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_learning_recorder_reason_code_2050.py -n 0 -p no:cacheprovider -q --timeout=300
 ```
 
 Expected: FAIL — `KeyError: 'reason_code'`.
@@ -1058,7 +1059,7 @@ from .reason_codes import canonical_sentence
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_learning_recorder_reason_code_2050.py \
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/test_learning_recorder_reason_code_2050.py \
   tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializer.py -n 0 -p no:cacheprovider -q --timeout=300
 ```
 
@@ -1067,7 +1068,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-.venv/bin/ruff check --no-cache src/agents/tool_composer/ tests/unit/test_agents/test_tool_composer/
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff check --no-cache src/agents/tool_composer/ tests/unit/test_agents/test_tool_composer/
 git add src/agents/tool_composer/learning_recorder.py \
         tests/unit/test_agents/test_tool_composer/test_learning_recorder_reason_code_2050.py
 git commit -m "fix(tool-composer): recorder emits reason_code and a canonical sentence (#2050 cause 1)
@@ -1196,7 +1197,7 @@ def test_reliability_reports_the_most_common_refusal_reason(db, seed):
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-.venv/bin/pytest tests/unit/test_database/learning_loop/test_042_reason_codes.py -n 0 -p no:cacheprovider -q --timeout=600
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_database/learning_loop/test_042_reason_codes.py -n 0 -p no:cacheprovider -q --timeout=600
 ```
 
 Expected: FAIL on the column and persistence assertions. If every test SKIPS, the database is unreachable — fix that before continuing; a skipped migration test is not evidence.
@@ -1334,7 +1335,7 @@ Expected: `NOTICE:  REHEARSAL OK` followed by `ROLLBACK`. Save the full transcri
 - [ ] **Step 6: Run the migration test**
 
 ```bash
-.venv/bin/pytest tests/unit/test_database/learning_loop/test_042_reason_codes.py \
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_database/learning_loop/test_042_reason_codes.py \
   tests/unit/test_database/learning_loop/test_041_recording.py -n 0 -p no:cacheprovider -q --timeout=900
 ```
 
@@ -1422,7 +1423,7 @@ def test_service_maps_reason_code_onto_each_failed_step(observability_service_wi
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-.venv/bin/pytest tests/unit/test_api/test_admin_tool_composer_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=300
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_api/test_admin_tool_composer_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=300
 ```
 
 Expected: FAIL — `TypeError: ToolReliability() got an unexpected keyword argument` / `Extra inputs are not permitted` (the schemas use `extra="forbid"`).
@@ -1500,8 +1501,8 @@ Lines 223-231 — add the code to each step class:
 - [ ] **Step 6: Run the test to verify it passes**
 
 ```bash
-.venv/bin/pytest tests/unit/test_api/test_admin_tool_composer_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=300
-.venv/bin/pytest tests/unit/test_api/ -k "observability or tool_composer" -n 0 -p no:cacheprovider -q --timeout=600 2>&1 | tail -10
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_api/test_admin_tool_composer_reason_codes_2021.py -n 0 -p no:cacheprovider -q --timeout=300
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_api/ -k "observability or tool_composer" -n 0 -p no:cacheprovider -q --timeout=600 2>&1 | tail -10
 ```
 
 - [ ] **Step 7: Regenerate the frontend types**
@@ -1524,7 +1525,7 @@ Expected: only `most_common_refusal_reason` (and the `step_classes` description)
 - [ ] **Step 8: Commit**
 
 ```bash
-.venv/bin/ruff check --no-cache src/ tests/unit/test_api/
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff check --no-cache src/ tests/unit/test_api/
 git add src/agents/tool_composer/reliability.py src/api/schemas/admin_tool_composer.py \
         src/services/tool_composer_observability_service.py \
         tests/unit/test_api/test_admin_tool_composer_reason_codes_2021.py \
@@ -1552,9 +1553,9 @@ Every run `-n 0` — the repo's `addopts` is `-n 4`, and four ~800 MiB workers f
 
 ```bash
 cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes
-.venv/bin/pytest tests/unit/test_agents/test_tool_composer/ -n 0 -p no:cacheprovider -q --timeout=1800 2>&1 | tail -20
-.venv/bin/pytest tests/unit/test_database/learning_loop/ -n 0 -p no:cacheprovider -q --timeout=900 2>&1 | tail -20
-.venv/bin/pytest tests/unit/test_api/ -n 0 -p no:cacheprovider -q --timeout=900 2>&1 | tail -20
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_agents/test_tool_composer/ -n 0 -p no:cacheprovider -q --timeout=1800 2>&1 | tail -20
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_database/learning_loop/ -n 0 -p no:cacheprovider -q --timeout=900 2>&1 | tail -20
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/pytest tests/unit/test_api/ -n 0 -p no:cacheprovider -q --timeout=900 2>&1 | tail -20
 ```
 
 Do **not** pipe a pytest run through a pager — `pytest | tail` returns the pager's exit code and a suite that died mid-run reads as green. Read the printed summary line.
@@ -1562,8 +1563,8 @@ Do **not** pipe a pytest run through a pager — `pytest | tail` returns the pag
 - [ ] **Step 2: Lint**
 
 ```bash
-.venv/bin/ruff check --no-cache src/ tests/
-.venv/bin/ruff format --check src/agents/tool_composer/ src/services/ src/api/
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff check --no-cache src/ tests/
+/home/enunez/Projects/e2i_causal_analytics/.venv/bin/ruff format --check src/agents/tool_composer/ src/services/ src/api/
 ```
 
 `--no-cache` is not optional: ruff's cache can print "All checks passed!" on a file that fails on a fresh checkout, which is what CI does.
@@ -1639,7 +1640,7 @@ Write `docs/demos/results/2026-09-12_lane_refusal_codes_cert/cert.md` with the v
 - [ ] **Step 8: Close out**
 
 ```bash
-gh issue comment 2021 --body "..."   # the vocabulary, the 94 sites, the observability surface
+gh issue comment 2021 --body "..."   # the vocabulary, the 87 sites, the observability surface
 gh issue comment 2050 --body "..."   # both causes, and the correction to cause 1 as filed
 gh issue comment 2020 --body "..."   # the split, with the cert's before/after
 gh issue close 2021 2050 2020
