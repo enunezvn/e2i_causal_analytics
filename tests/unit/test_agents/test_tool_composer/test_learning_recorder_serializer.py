@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import pytest
+
+from src.agents.tool_composer import composer as _composer  # noqa: F401 - registers every tool
 from src.agents.tool_composer.learning_recorder import (
     groups_record,
     plan_record,
@@ -29,8 +31,6 @@ from src.agents.tool_composer.learning_recorder import (
     sub_questions_record,
     to_record,
 )
-
-from src.agents.tool_composer import composer as _composer  # noqa: F401 - registers every tool
 from src.agents.tool_composer.models.composition_models import (
     DecompositionResult,
     ExecutionPlan,
