@@ -377,9 +377,44 @@ def test_the_budget_covers_the_footer_not_just_the_json_body():
     assert footer_len > 100, "footer is big enough that ignoring it would matter"
     assert len(body) + footer_len == len(rendered) <= SYNTHESIS_OUTPUT_BUDGET_CHARS
 
-    # An explicitly passed budget is honoured on the total too, not just default.
+    # An explicitly passed budget is honoured on the total too, not just default
+    # — for every budget at or above this output's scalar floor (see below).
     for budget in (600, 1000, 2000, 4000):
         assert len(project_tool_output(out, budget)) <= budget, f"budget={budget}"
+
+
+def test_below_the_scalar_floor_the_budget_is_overrun_rather_than_a_verdict_dropped():
+    """The bound is ``max(budget, scalar_floor)`` — NOT ``<= budget``.
+
+    Scalars are never trimmed, so an output whose scalars alone exceed the budget
+    comes back OVER it. That is the deliberate trade: a complete answer that is
+    too big, never a small answer missing the finding. Dropping a verdict to hit
+    a byte target is exactly the defect #2019 removed.
+
+    Pinned so a future caller who lowers the budget meets a documented property
+    instead of a surprise. Harm today is nil: the only production caller is
+    ``ResponseSynthesizer.output_budget_chars`` (default 2,000), and the worst
+    scalars-only size across every registered tool is 598 chars — no real tool
+    output can reach the floor at the production budget.
+    """
+    out = _gap_output(150)  # scalar floor ≈ 340 chars (4 scalars + footer)
+
+    # Above the floor: the contract holds.
+    assert len(project_tool_output(out, 500)) <= 500
+
+    # Below it: overrun, and EVERY scalar verdict is still there.
+    rendered = project_tool_output(out, 300)
+    assert len(rendered) > 300, "expected the documented sub-floor overrun"
+    for key in ("gap", "top_performer", "bottom_performer"):
+        assert f'"{key}"' in rendered, f"verdict {key!r} was dropped to hit the budget"
+    assert str(out["top_performer"]) in rendered
+    # ...and the overrun is the FLOOR, not unbounded: the bulky container is
+    # still emptied down to its disclosed count.
+    assert "_omitted" in rendered
+    assert len(rendered) < len(json.dumps(out, indent=2, default=str)) // 4
+
+    # The floor is what binds, so tightening the budget further changes nothing.
+    assert project_tool_output(out, 300) == project_tool_output(out, 1)
 
 
 def test_whole_prompt_is_bounded_by_steps_times_budget(mock_llm_client):

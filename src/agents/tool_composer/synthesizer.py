@@ -184,12 +184,28 @@ def project_tool_output(result: Dict[str, Any], budget: int = SYNTHESIS_OUTPUT_B
     ``budget`` bounds the WHOLE returned string -- JSON body plus the trailing
     summary line -- because the whole string is what costs synthesis prompt
     budget. The footer is sized first and its cost is deducted before any
-    container is filled, so ``len(project_tool_output(x, n)) <= n``.
+    container is filled.
 
-    The ONE exception is deliberate: scalar fields are never dropped, because
-    dropping a field to hit a byte target is the defect this replaces. An output
-    that is all prose can therefore still exceed the budget; the scalar skeleton
-    of every registered tool measures 55-598 chars, so no tool here can.
+    The real bound is::
+
+        len(project_tool_output(x, n)) <= max(n, scalar_floor(x))
+
+    NOT ``<= n``. ``scalar_floor(x)`` is the incompressible part: every scalar
+    field rendered at its hardest clip (``_MIN_STRING_CHARS``), every container
+    emptied to its ``_omitted`` note, plus the footer. Below that floor this
+    function OVERRUNS the budget rather than meeting it, deliberately: scalars
+    are where the verdicts live (``top_performer``, ``gate_decision``,
+    ``total_eligible``), they are never trimmed, and dropping one to hit a byte
+    target is precisely the defect #2019 removed. A caller that lowers ``budget``
+    below the floor gets a complete answer that is too big, never a small answer
+    that is missing the finding.
+
+    Measured floors: ``gap_calculator``-shaped output 340 chars; the worst
+    scalars-only size across every registered tool is 598. So at the production
+    budget of 2,000 no registered tool can reach the floor, and the only caller
+    today is ``ResponseSynthesizer.output_budget_chars`` (default 2,000). The
+    overrun is reachable only by a future caller passing a much smaller budget --
+    which is why it is documented and pinned rather than silently true.
     """
     full = _render_json(result)
     if len(full) <= budget:
