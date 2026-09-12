@@ -149,6 +149,12 @@ class CATEResults(BaseModel):
     branch on), ``detail`` is the prose for synthesis to disclose, and ``name`` is
     ``None`` for the null-key group — the rows whose segment value is missing name
     no segment, so there is no honest label to give them.
+
+    A ``segments`` entry's ``n`` is the number of rows its CATE is computed from:
+    rows in either arm with a non-null ``outcome`` (#2016). When a segment that IS
+    estimated leaves rows out (a null treatment or outcome), those rows get an
+    ``excluded_segments`` entry with reason ``rows_missing_treatment_or_outcome``
+    and the same ``name``. That code alone does not mean the segment was dropped.
     """
 
     segments: List[Dict[str, Any]]
@@ -1489,6 +1495,9 @@ def sensitivity_analyzer(
 _CATE_EXCLUDED_MISSING = "missing_segment_value"
 _CATE_EXCLUDED_NO_CONTRAST = "no_within_segment_contrast"
 _CATE_EXCLUDED_NON_FINITE = "non_finite_mean_difference"
+# Rows left out of a segment that IS estimated (#2016); the other codes mark a
+# segment or a null-keyed group that is not estimated at all.
+_CATE_EXCLUDED_ROWS_WITHOUT_VALUES = "rows_missing_treatment_or_outcome"
 
 
 @composable_tool(
@@ -1525,6 +1534,9 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
     - No DataFrame supplied via the canonical kwargs keys -> ``RuntimeError``.
     - The treatment / outcome / segment columns missing from the frame ->
       ``RuntimeError``. The tool never substitutes a plausible-but-fake result.
+    - A treatment that is not a 0/1 column -> ``RuntimeError`` (#2016). A count
+      would otherwise be estimated as "exactly 1 vs exactly 0", ignoring every
+      other value.
     - No segment yields a MEASURED CATE -> ``RuntimeError`` (#1610). An empty
       segment set would read as "no heterogeneity between segments", a finding
       this data cannot support because no segment was ever estimated.
@@ -1582,6 +1594,19 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
                 f"DataFrame (columns={list(df.columns)!r}). Refusing to "
                 "fabricate a result."
             )
+    # Checked over the WHOLE column, null-keyed segments included: one non-0/1 value
+    # anywhere means the column is not a treatment indicator (#2016). Null treatment
+    # rows fall in neither arm below, as they always have, and leave the segment's n.
+    _refuse_unless_binary_01(
+        df[treatment],
+        tool="cate_analyzer",
+        role="treatment",
+        column=treatment,
+        consequence=(
+            "Refusing to report a difference between only the rows equal to 1 and those "
+            "equal to 0 as the segment's treatment effect."
+        ),
+    )
 
     segment_dicts: List[Dict[str, Any]] = []
     effect_by_segment: Dict[str, float] = {}
@@ -1662,8 +1687,28 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
                 }
             )
             continue
-        segment_dicts.append({"name": name, "cate": cate_val, "n": n})
+        # ``n`` counts the rows the CATE is computed from, not the segment's size
+        # (#2016): ``mean()`` skips a null outcome, and a null treatment sits in
+        # neither arm. Measured on the live Kisqali frame, a segment reported n=2239
+        # for a ``days_to_treatment`` CATE computed from 798 rows.
+        n_used = int(treated.notna().sum() + control.notna().sum())
+        segment_dicts.append({"name": name, "cate": cate_val, "n": n_used})
         effect_by_segment[name] = cate_val
+        if n_used < n:
+            no_treatment = int(sub[treatment].isna().sum())
+            excluded_segments.append(
+                {
+                    "name": name,
+                    "n": n - n_used,
+                    "reason": _CATE_EXCLUDED_ROWS_WITHOUT_VALUES,
+                    "detail": (
+                        f"{no_treatment} rows have no {treatment!r} value and "
+                        f"{n - no_treatment - n_used} further rows have no {outcome!r} "
+                        f"value, so the CATE for this segment uses the other {n_used} "
+                        "rows (the segment itself is still estimated)"
+                    ),
+                }
+            )
 
     if not effect_by_segment:
         no_contrast = sum(1 for e in excluded_segments if e["reason"] == _CATE_EXCLUDED_NO_CONTRAST)
@@ -2083,6 +2128,75 @@ def _is_missing_group_key(value: Any) -> bool:
         return bool(pd.isna(value))
     except (TypeError, ValueError):
         return False
+
+
+_BINARY_CHECK_SAMPLE = 6
+
+
+def _refuse_unless_binary_01(
+    series: Any, *, tool: str, role: str, column: str, consequence: str
+) -> None:
+    """Refuse unless the non-null values of ``series`` are a subset of {0, 1}.
+
+    The one binary check for every tool that reads a planner-bound column as a 0/1
+    indicator: ``risk_scorer.outcome`` (#2003) and the ``treatment`` of
+    ``propensity_estimator`` and ``cate_analyzer`` (#2016). Each tool cast or split
+    the column as binary without checking. A count became a multi-class target
+    whose P(class == 1) was reported as a score or propensity, or an "exactly 1 vs
+    exactly 0" contrast that ignored every other value. A 0-1 rate was either
+    truncated to one class and refused for the wrong reason or, when it reaches
+    exactly 0 and 1 as the live ``adherence_rate`` does, estimated from those rows
+    alone.
+
+    bool, int, float and nullable ``Int64`` encodings pass: ``True == 1`` and
+    ``1.0 == 1`` hash equal, and ``dropna`` removes ``NaN`` and ``pd.NA``. Nulls are
+    the caller's decision, since the tools disagree on what a null row means.
+    Shapes that would otherwise raise out of this check into the executor's
+    retrying arm are refused instead: a duplicated column name (``df[name]`` is a
+    DataFrame) and list- or dict-valued cells (``unique()`` raises ``TypeError``).
+    Each rendered value is clipped, because the composer truncates a carried
+    reason from the END.
+    """
+    name = _clip_name(column)
+    if getattr(series, "ndim", 1) != 1:
+        raise ToolRefusalError(
+            f"{tool}: {role} column {name!r} is ambiguous: {series.shape[1]} columns are "
+            f"named {name!r} in the supplied DataFrame. Refusing to pick one."
+        )
+
+    def _shown(value: Any) -> str:
+        # ``repr`` itself can raise (a 5,001-digit int exceeds Python's int-to-str
+        # limit), and nothing may escape this guard except the refusal.
+        try:
+            return _clip_name(repr(value))
+        except Exception:  # noqa: BLE001 - any repr failure renders as the type
+            return f"<{_clip_name(type(value).__name__)}>"
+
+    def _render(values: Any) -> str:
+        return "[" + ", ".join(_shown(v) for v in values) + "]"
+
+    non_null = series.dropna()
+    try:
+        observed = set(non_null.unique())
+    except TypeError:
+        carries = f"non-scalar values such as {_render(non_null.head(_BINARY_CHECK_SAMPLE))}"
+    else:
+        if observed <= {0, 1}:
+            return
+        values = [v.item() if hasattr(v, "item") else v for v in observed]
+        try:
+            ordered = sorted(values)
+        except TypeError:
+            ordered = sorted(values, key=_shown)
+        carries = (
+            f"{len(observed)} distinct non-null values, including "
+            f"{_render(ordered[:_BINARY_CHECK_SAMPLE])}"
+        )
+    raise ToolRefusalError(
+        f"{tool}: {role} column {name!r} is not a binary 0/1 column: its "
+        "non-null values must be a subset of {0, 1} (bool, int, float or nullable Int64), "
+        f"but it carries {carries}. {consequence}"
+    )
 
 
 def _gap_comparability_reason(
@@ -2839,13 +2953,15 @@ def risk_scorer(
             f"(numeric columns minus outcome were empty; columns={list(work.columns)!r})."
         )
 
-    observed = set(work[outcome].dropna().unique())
-    if not observed <= {0, 1}:
-        raise ToolRefusalError(
-            f"risk_scorer: outcome column {outcome!r} is not a binary 0/1 event column "
-            f"(observed values include {sorted(map(str, observed))[:6]!r}). Refusing to "
-            "cast it to classes and report a class probability as a risk score."
-        )
+    _refuse_unless_binary_01(
+        work[outcome],
+        tool="risk_scorer",
+        role="outcome",
+        column=outcome,
+        consequence=(
+            "Refusing to cast it to classes and report a class probability as a risk score."
+        ),
+    )
     y = work[outcome].astype(int)
     if y.nunique() < 2:
         raise ToolRefusalError(
@@ -2920,8 +3036,9 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
       region (the real common-support overlap, not a fabricated 0.94).
     - ``overlap_assessment`` is a label derived from ``common_support``.
 
-    Fail-closed: no DataFrame, missing treatment / covariate columns, or fewer
-    than 2 treatment classes -> ``RuntimeError``.
+    Fail-closed: no DataFrame, missing treatment / covariate columns, a treatment
+    that is not a 0/1 column (#2016), a null treatment value, or fewer than 2
+    treatment classes -> ``RuntimeError``.
 
     Args:
         treatment: Binary treatment column name in the DataFrame.
@@ -2957,6 +3074,25 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
             f"the supplied DataFrame (columns={list(df.columns)!r})."
         )
 
+    _refuse_unless_binary_01(
+        df[treatment],
+        tool="propensity_estimator",
+        role="treatment",
+        column=treatment,
+        consequence=(
+            "Refusing to fit it as classes and report P(class == 1) as the propensity of treatment."
+        ),
+    )
+    # A propensity describes units whose assignment is known. Dropping the null rows
+    # would silently shrink the population the reported distribution covers, and
+    # PropensityScores has no field to disclose it (#2016).
+    n_null = int(df[treatment].isna().sum())
+    if n_null:
+        raise ToolRefusalError(
+            f"propensity_estimator: treatment column {_clip_name(treatment)!r} has "
+            f"{n_null} null values of {len(df)} rows. Refusing to drop them silently "
+            "from the population the propensity distribution describes."
+        )
     t = df[treatment].astype(int)
     if t.nunique() < 2:
         raise ToolRefusalError(
