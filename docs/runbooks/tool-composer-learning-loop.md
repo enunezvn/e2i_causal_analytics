@@ -44,7 +44,7 @@ Admin → Observability → *Tool composer* (`GET /api/admin/observability/tool-
 
 ---
 
-## 3. `composer_record_failures_total`
+## 3. `e2i_composer_record_failures_total`
 
 A Prometheus counter, labelled by `rpc`, incremented when a recording write fails after its retry.
 

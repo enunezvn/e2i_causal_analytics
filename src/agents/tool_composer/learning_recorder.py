@@ -13,7 +13,7 @@ Two parts:
 - **``CompositionRecorder``** turns the composer's phase boundaries into seeded, idempotent RPC
   writes on one background chain per composition. Every method is a synchronous enqueue: nothing
   on the user's path awaits the database, and nothing raises into ``compose()``. Each write has a
-  timeout and one retry, then it is logged, counted in ``composer_record_failures_total{rpc}`` and
+  timeout and one retry, then it is logged, counted in ``e2i_composer_record_failures_total{rpc}`` and
   dropped; the finish snapshot restores every phase field and re-sends every step the recorder was
   given, so one lost write loses nothing the finish can carry. A heartbeat keeps
   ``last_activity_at`` fresh while the composition runs. ``drain()`` lets the API lifespan flush

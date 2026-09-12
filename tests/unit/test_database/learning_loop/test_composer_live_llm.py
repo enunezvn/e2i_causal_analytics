@@ -38,7 +38,7 @@ pytestmark = [
         os.getenv("E2I_LIVE_LLM") != "1",
         reason="real LLM spend; set E2I_LIVE_LLM=1 once the dispatcher records G-LLM",
     ),
-    pytest.mark.timeout(900),
+    pytest.mark.timeout(300),
 ]
 
 UPTO = "ml/041_composer_learning_loop_recording.sql"

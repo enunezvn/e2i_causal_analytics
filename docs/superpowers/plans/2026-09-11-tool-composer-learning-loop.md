@@ -698,7 +698,7 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
     - `recorder.start/phase/step/finish` calls complete in < 50 ms total, with no exception;
     - a composition-shaped coroutine under `asyncio.wait_for(…, 1)` finishes within 50 ms of the same
       coroutine with no recorder.
-  - `test_failure_counter_increments`: `composer_record_failures_total{rpc="composer_record_start"}`
+  - `test_failure_counter_increments`: `e2i_composer_record_failures_total{rpc="composer_record_start"}`
     increases when Prometheus is available.
 - [ ] **Step 3: Run.** Expect FAIL.
 - [ ] **Step 4: Implement** `learning_recorder.py`:
@@ -710,7 +710,7 @@ Tests `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializ
   - the heartbeat task;
   - module `_pending: set[asyncio.Task]` with a `discard` callback, and `async def drain(timeout)`.
 
-  In `metrics.py`, add `composer_record_failures_total` (labels `rpc`) to `_init_metrics`, plus an
+  In `metrics.py`, add `e2i_composer_record_failures_total` (labels `rpc`) to `_init_metrics`, plus an
   `inc_composer_record_failure(rpc)` helper that no-ops without Prometheus.
 - [ ] **Step 5: Run.** Expect PASS. `free -m` first.
 - [ ] **Step 6: Codex loop,** with the brief pointing at spec §5.3–§5.5. Commit
@@ -1025,7 +1025,7 @@ reliability function, views; the flowchart at L1625–1632); create `docs/runboo
 
 The runbook covers:
 - reading the admin section;
-- the `composer_record_failures_total` meaning;
+- the `e2i_composer_record_failures_total` meaning;
 - the coverage reconciliation query;
 - the retention re-evaluation trigger (> 50,000 episodes);
 - rollback steps (code revert first, then `rollback_041.sql`, then `rollback_040.sql` by hand);

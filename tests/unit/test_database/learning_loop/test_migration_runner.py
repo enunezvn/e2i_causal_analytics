@@ -33,7 +33,7 @@ pytestmark = [
         not _pg.db_integration_enabled(),
         reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
     ),
-    pytest.mark.timeout(900),
+    pytest.mark.timeout(300),
 ]
 
 ML = _pg.REPO_ROOT / "database" / "ml"

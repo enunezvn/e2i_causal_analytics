@@ -469,7 +469,7 @@ response can be re-sent.
 
 **Failure accounting.**
 - A failed write logs one structured WARNING (rpc, composition_id, error class).
-- It increments a Prometheus counter `composer_record_failures_total{rpc}`, following
+- It increments a Prometheus counter `e2i_composer_record_failures_total{rpc}`, following
   `src/api/routes/metrics.py`'s optional-client pattern.
 - It never raises into `compose()`.
 - Coverage is measured in the cert (§9), by identity:
@@ -1085,7 +1085,7 @@ per-tool drill-down there would split one reading across two surfaces.
      - Every triggered composition must have an episode. Where its audit row exists, the episode's
        `audit_workflow_id` must equal that row's workflow_id.
      - A composition present in one store and missing from the other is listed with
-       `composer_record_failures_total` and the recorder's WARNING lines.
+       `e2i_composer_record_failures_total` and the recorder's WARNING lines.
      - Audit writes are also fail-open (`composer.py:272–294`), so a miss is attributed to whichever store
        lacks the row. The triggered list is the independent denominator.
   9. **Plan cache, observed, not forced.** The live cert reports the `plan_source` distribution and each

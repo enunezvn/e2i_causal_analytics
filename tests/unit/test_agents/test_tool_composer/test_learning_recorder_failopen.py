@@ -4,7 +4,7 @@ Nothing ``compose()`` calls on the recorder awaits I/O: every method is a synchr
 onto a background chain. So an unreachable database (connection refused) or a hanging one adds
 no latency to a composition and never raises into it. A write that fails is logged once with the
 RPC, the composition id and the error class, and counted in
-``composer_record_failures_total{rpc}``: a transport failure or timeout after its one retry, a
+``e2i_composer_record_failures_total{rpc}``: a transport failure or timeout after its one retry, a
 permanent failure (a rejected payload, a database error) at once. No wait inside the chain is
 unbounded (catalog fetch and registry sync included), a malformed value never stops the rest of
 a record, the seed crosses the network only as its identity fields, and the heartbeat always ends.
@@ -149,7 +149,7 @@ def _recorder(port: Any, cid: str = "comp_failopen", **kw: Any) -> CompositionRe
 
 
 def _failures(registry: Any, rpc: str) -> float:
-    return registry.get_sample_value("composer_record_failures_total", {"rpc": rpc}) or 0.0
+    return registry.get_sample_value("e2i_composer_record_failures_total", {"rpc": rpc}) or 0.0
 
 
 def _models():

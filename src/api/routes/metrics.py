@@ -125,7 +125,7 @@ def _init_metrics() -> None:
     # Tool-composer learning loop: recording writes that failed their one retry and were
     # dropped (the composition itself was unaffected). See docs/runbooks/tool-composer-learning-loop.md.
     _composer_record_failures = Counter(
-        "composer_record_failures_total",
+        "e2i_composer_record_failures_total",
         "Composition recording writes dropped after their retry, by RPC",
         ["rpc"],
         registry=_metrics_registry,

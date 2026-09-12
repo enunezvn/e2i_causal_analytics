@@ -35,7 +35,7 @@ pytestmark = [
     ),
     # The session fixture starts a container and restores a schema dump inside the first test's
     # setup; the repo-wide 30 s pytest-timeout would cut that off on a loaded box.
-    pytest.mark.timeout(600),
+    pytest.mark.timeout(300),
 ]
 
 LANE_TABLES = [

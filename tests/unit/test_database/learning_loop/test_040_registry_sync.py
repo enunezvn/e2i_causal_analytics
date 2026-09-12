@@ -27,7 +27,7 @@ pytestmark = [
         not _pg.db_integration_enabled(),
         reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
     ),
-    pytest.mark.timeout(600),
+    pytest.mark.timeout(300),
 ]
 
 UPTO = "ml/040_tool_registry_startup_sync.sql"
