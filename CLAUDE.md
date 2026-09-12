@@ -207,9 +207,9 @@ git config --global http.https://github.com.proxy ""
 - **Linting**: `ruff check src/`
 - **Tests**: `pytest tests/`
 
-### ⚠️ Do NOT run full `mypy src/` on the prod droplet (memory) — CI is the arbiter (2026-06-05)
+### ⚠️ Do NOT run `mypy` AT ALL on the prod droplet — not even one file — CI is the arbiter (2026-06-05, corrected 2026-09-12)
 
-The prod droplet (`enunez@138.197.4.36`) is also the dev box and runs under memory pressure. A full `mypy --config-file pyproject.toml src/` spikes **~1.6 GiB** and has a known local env pathology (times out on `memory.py`). On the droplet, **rely on CI's `Type Check (MyPy)` gate as authoritative** — do not run the whole-tree mypy there. If you need a local check, scope it to the changed files only (e.g. `mypy <changed_file.py>`), which is a fraction of the memory. The mypy gate is a CEILING check; read the `mypy-report` artifact for the actual errors. (Same spirit for whole-tree `pytest` — prefer targeted runs on the box; CI runs the full suite.) Fail-safe mirror in memory: [[droplet-mypy-ci-arbiter-policy-20260605]].
+The prod droplet (`enunez@138.197.4.36`) is also the dev box and runs under memory pressure. A full `mypy --config-file pyproject.toml src/` spikes **~1.6 GiB** and has a known local env pathology (times out on `memory.py`). On the droplet, **rely on CI's `Type Check (MyPy)` gate as authoritative** — do not run the whole-tree mypy there. **Scoping to the changed file does NOT help — measured false 2026-09-12.** `mypy --config-file pyproject.toml <one changed file>.py` reached **1.49 GiB RSS and took ~6 min**, drove the box to 0 GiB free with swap full, and had to be abandoned once; a concurrent session flagged it as the largest non-container consumer and held a lane over it. The proof is in mypy's own output: that run reported `Found 47 errors in 34 files (checked 1 source file)`. The config follows imports, so **one leaf file in `src/` type-checks nearly the whole dependency closure — it is the same job with a smaller report, not a smaller job.** Run no mypy here; let CI answer. The mypy gate is a CEILING check; read the `mypy-report` artifact for the actual errors. (Same spirit for whole-tree `pytest` — prefer targeted runs on the box; CI runs the full suite.) Fail-safe mirror in memory: [[droplet-mypy-ci-arbiter-policy-20260605]].
 
 ## Known Issues
 
