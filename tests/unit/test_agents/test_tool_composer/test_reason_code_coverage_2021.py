@@ -220,4 +220,4 @@ def test_the_site_count_is_what_the_lane_measured():
     Measured by AST, not grep (a line count also matches docstrings and imports).
     """
     total = sum(1 for path in _SOURCES for _ in _raise_sites_in(_parse(path)))
-    assert total >= 88, f"expected at least the 88 sites measured for #2021, found {total}"
+    assert total >= 89, f"expected at least the 89 sites measured for #2021, found {total}"

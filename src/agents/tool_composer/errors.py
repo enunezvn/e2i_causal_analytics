@@ -41,9 +41,11 @@ class _CodedError(Exception):
         try:
             self.reason_code = ReasonCode(reason_code)
         except ValueError:
+            # The container log is the home for raw text (#2020); name the bad code, clipped.
             logger.error(
-                "%s raised with a reason_code outside ReasonCode; recorded as %s",
+                "%s raised with reason_code %r, which is outside ReasonCode; recorded as %s",
                 type(self).__name__,
+                str(reason_code)[:64],
                 ReasonCode.TOOL_ERROR,
             )
             self.reason_code = ReasonCode.TOOL_ERROR

@@ -226,13 +226,17 @@ def test_a_refusal_with_bad_details_still_refuses(caplog):
 
 
 def test_an_unknown_code_is_recorded_as_a_tool_error_not_raised(caplog):
+    bad_code = "not_a_real_code_" * 6  # 96 characters
     with caplog.at_level(logging.ERROR, logger=_ERRORS_LOGGER):
-        err = ToolInputError("bad input", reason_code="not_a_real_code")  # type: ignore[arg-type]
+        err = ToolInputError("bad input", reason_code=bad_code)  # type: ignore[arg-type]
     assert str(err) == "bad input"
     assert err.reason_code is ReasonCode.TOOL_ERROR
     assert isinstance(err, ValueError)
     records = [r for r in caplog.records if r.name == _ERRORS_LOGGER]
     assert [r.levelno for r in records] == [logging.ERROR]
+    # The container log is where raw text belongs (#2020); it names the bad code, clipped.
+    assert repr(bad_code[:64]) in records[0].getMessage()
+    assert bad_code not in caplog.text
 
 
 def test_a_valid_code_string_is_still_accepted():
