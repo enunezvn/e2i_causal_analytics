@@ -157,3 +157,68 @@ export interface LlmUsageResponse {
   pricing_version: string;
   unpriced_models: string[];
 }
+
+// GET /admin/observability/tool-composer (spec 2026-09-11 §8).
+// The verdict word leads every tool row; measured latency is null until there are 20 successful
+// runs to measure, and declared_latency_ms is a separate field that never stands in for it.
+export type ToolVerdict = 'no_runs' | 'too_few_runs' | 'caveat' | 'reliable' | 'inconclusive';
+
+export interface ToolComposerCompositionCounts {
+  total: number;
+  success: number;
+  partial: number;
+  failed: number;
+  cancelled: number;
+  unfinished: number;
+  abandoned: number;
+  by_plan_source: Record<string, number>;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+}
+
+export interface ToolComposerToolRow {
+  tool_name: string;
+  verdict: ToolVerdict;
+  category: string | null;
+  source_agent: string | null;
+  n_invoked: number;
+  n_succeeded: number;
+  n_refused: number;
+  n_health_failures: number;
+  n_health: number;
+  n_retried: number;
+  n_synthetic: number;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  declared_latency_ms: number | null;
+  most_common_health_error: string | null;
+  last_executed_at: string | null;
+}
+
+export interface ToolComposerStepClass {
+  step_number: number | null;
+  tool_name: string | null;
+  outcome_class: string | null;
+}
+
+export interface ToolComposerRecentFailure {
+  composition_id: string;
+  outcome: string | null;
+  status: string | null;
+  failed_phase: string | null;
+  error_type: string | null;
+  entry_point: string | null;
+  plan_source: string | null;
+  query_preview: string;
+  step_classes: ToolComposerStepClass[];
+  last_activity_at: string | null;
+  total_latency_ms: number | null;
+}
+
+export interface ToolComposerObservabilityResponse {
+  window_days: number;
+  include_synthetic: boolean;
+  compositions: ToolComposerCompositionCounts;
+  tools: ToolComposerToolRow[];
+  recent_failures: ToolComposerRecentFailure[];
+}

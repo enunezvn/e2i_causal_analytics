@@ -29,6 +29,7 @@ from src.digital_twin.effect.recommendation import (
     PolicyThresholds,
     Recommendation,
     RecommendationPolicy,
+    experiment_size,
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "PolicyThresholds",
     "Recommendation",
     "RecommendationPolicy",
+    "experiment_size",
 ]

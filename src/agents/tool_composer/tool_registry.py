@@ -212,8 +212,8 @@ class ToolRegistry:
 # output it can consume -- and DERIVES everything else from the live registry, so its
 # input/output schemas cannot drift from the registered callables again (#2003: the
 # hand-written copies had drifted on 14 of 16 tools). The DB ``tool_registry`` /
-# ``tool_dependencies`` rows are synced from these definitions by
-# ``scripts/generate_tool_registry_sync_migration.py``.
+# ``tool_dependencies`` rows are synced from these definitions at API startup by
+# ``registry_sync.sync_tool_registry_once()`` (ml/040).
 
 # name -> (category, tools whose output it can consume). Covers every live tool.
 TOOL_METADATA: dict[str, tuple[ToolCategory, list[str]]] = {
@@ -265,12 +265,21 @@ DEPENDENCY_FIELD_MAPPINGS: dict[tuple[str, str], tuple[Optional[str], Optional[s
     ("cate_analyzer", "causal_effect_estimator"): (None, None),
     ("segment_ranker", "cate_analyzer"): (None, "cate_results"),
     ("roi_estimator", "gap_calculator"): (None, "gap_analysis"),
-    ("power_calculator", "causal_effect_estimator"): ("ate", "effect_size"),
+    # Ordering only (#2015): the estimate's ``ate`` is in OUTCOME units, while
+    # ``effect_size`` is a Cohen's d, a relative change or a hazard ratio depending on the
+    # design, so passing it through would size the study for the wrong effect.
+    ("power_calculator", "causal_effect_estimator"): (None, None),
     # No direct field: effect_by_segment is a per-segment dict and effect_size one number,
     # so the planner has to pick the segment's effect.
     ("power_calculator", "cate_analyzer"): (None, None),
-    ("counterfactual_simulator", "causal_effect_estimator"): ("ate", "expected_effect"),
-    ("counterfactual_simulator", "cate_analyzer"): ("high_responders", "target_entities"),
+    # Ordering only (#2015): the twin engine estimates its own effect from the brand's
+    # cohort, so no field of the estimate is a simulator input. The pair is kept, like the
+    # #2003 pairs that cannot carry a value, so its seeded DB row is synced rather than left
+    # naming the removed expected_effect input.
+    ("counterfactual_simulator", "causal_effect_estimator"): (None, None),
+    # Ordering only (#2015): high_responders are values of whatever column CATE segmented
+    # by, and the simulator takes region names only, so the planner passes the regions.
+    ("counterfactual_simulator", "cate_analyzer"): (None, None),
     # No direct field: bottom_performer is one entity name and target_entities a list,
     # so the planner has to build the list.
     ("counterfactual_simulator", "gap_calculator"): (None, None),
@@ -283,6 +292,8 @@ _SCALAR_JSON_TYPES = {"str": "string", "float": "number", "int": "integer", "boo
 def _json_type(type_hint: str) -> dict[str, Any]:
     """JSON Schema for a registry parameter's Python type string."""
     hint = type_hint.strip()
+    if hint.startswith("Optional[") and hint.endswith("]"):
+        return {"anyOf": [_json_type(hint[len("Optional[") : -1]), {"type": "null"}]}
     if hint in _SCALAR_JSON_TYPES:
         return {"type": _SCALAR_JSON_TYPES[hint]}
     if hint == "Any":

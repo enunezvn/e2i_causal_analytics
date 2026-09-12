@@ -27,19 +27,27 @@ def _est(ate, lo, hi):
 
 def test_deploy_when_ci_lower_above_threshold():
     policy = RecommendationPolicy(PolicyThresholds(min_effect=0.05))
-    rec, rationale, n = policy.decide(_est(0.12, 0.07, 0.17), baseline_rate=0.3)
+    rec, rationale = policy.decide(_est(0.12, 0.07, 0.17))
     assert rec is Recommendation.DEPLOY
-    assert n > 0
     assert "lower bound" in rationale.lower()
 
 
 def test_skip_when_ci_upper_below_threshold():
     policy = RecommendationPolicy(PolicyThresholds(min_effect=0.05))
-    rec, _, n = policy.decide(_est(0.01, -0.02, 0.04), baseline_rate=0.3)
+    rec, _ = policy.decide(_est(0.01, -0.02, 0.04))
     assert rec is Recommendation.SKIP
 
 
 def test_refine_when_ci_straddles_threshold():
     policy = RecommendationPolicy(PolicyThresholds(min_effect=0.05))
-    rec, _, _ = policy.decide(_est(0.06, 0.01, 0.11), baseline_rate=0.3)
+    rec, _ = policy.decide(_est(0.06, 0.01, 0.11))
     assert rec is Recommendation.REFINE
+
+
+def test_the_policy_decides_but_does_not_size_the_experiment():
+    """#2015: sizing moved to ``experiment_size`` (the cohort outcome spread); the policy's
+    two-proportion size from twin propensity, and its ``baseline_rate`` input, are gone."""
+    import inspect
+
+    assert list(inspect.signature(RecommendationPolicy.decide).parameters) == ["self", "estimate"]
+    assert not hasattr(RecommendationPolicy, "_recommended_sample_size")

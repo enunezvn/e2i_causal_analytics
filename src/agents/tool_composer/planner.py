@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
@@ -21,7 +22,12 @@ from src.tool_registry.registry import ToolRegistry
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 
 from .cache import get_cache_manager
-from .memory_hooks import ToolComposerMemoryHooks, get_tool_composer_memory_hooks
+from .memory_hooks import (
+    ToolComposerMemoryHooks,
+    get_tool_composer_memory_hooks,
+    reference_raw_content,
+    reference_tools,
+)
 from .models.composition_models import (
     DecompositionResult,
     DependencyType,
@@ -160,6 +166,7 @@ class ToolPlanner:
         memory_hooks: Optional[ToolComposerMemoryHooks] = None,
         use_episodic_memory: bool = True,
         enable_caching: bool = True,
+        reliability_reader: Optional[Any] = None,
     ):
         self.llm_client = llm_client
         self.registry = tool_registry or ToolRegistry()
@@ -169,6 +176,9 @@ class ToolPlanner:
         self.memory_hooks = memory_hooks or get_tool_composer_memory_hooks()
         self.use_episodic_memory = use_episodic_memory
         self.enable_caching = enable_caching
+        # Built on first use, and only while the reliability flag is set (spec §7.2). Injected by
+        # the real-database tests so the read goes through their psycopg port.
+        self._reliability_reader = reliability_reader
 
         # G6: Initialize cache manager for plan similarity matching
         self._cache_manager = get_cache_manager() if enable_caching else None
@@ -209,27 +219,16 @@ class ToolPlanner:
             available_columns = [str(p["name"]) for p in column_profiles if p.get("name")]
 
         try:
-            # G6: Check for similar cached plan
-            if self._cache_manager:
-                cached_result = self._cache_manager.get_similar_plan(decomposition)
-                if cached_result:
-                    cached_plan, similarity = cached_result
-                    logger.info(f"Found similar cached plan (similarity: {similarity:.2f})")
-                    # Adapt cached plan to current decomposition
-                    adapted_plan = self._adapt_cached_plan(cached_plan, decomposition)
-                    if adapted_plan:
-                        # KPI outcome hint + treatment guard apply to cached plans
-                        # too (#810).
-                        self._apply_outcome_hint(
-                            adapted_plan.steps, outcome_hint, available_columns
-                        )
-                        self._apply_treatment_guard(
-                            adapted_plan.steps, column_profiles, outcome_hint
-                        )
-                        return adapted_plan
+            # G6: reuse a similar cached plan (recording the key it matched, spec §7.3)
+            cached_plan = self._try_cached_plan(
+                decomposition, available_columns, column_profiles, outcome_hint
+            )
+            if cached_plan is not None:
+                return cached_plan
 
-            # Get available tools for planning
-            tools_description = self._format_tools_for_prompt()
+            # Get available tools for planning, with measured reliability only where the
+            # experiment flag is set (spec §7.2) — an unset flag costs no read at all.
+            tools_description = self._format_tools_for_prompt(await self._reliability_verdicts())
 
             # G1/G2: Check episodic memory for similar past compositions
             similar_compositions = await self._check_episodic_memory(decomposition.original_query)
@@ -288,9 +287,11 @@ class ToolPlanner:
                 timestamp=datetime.now(timezone.utc),
             )
 
-            # G6: Cache the plan for future similarity matching
+            plan.plan_source = "llm"
+            # G6: Cache the plan for future similarity matching, under the key a composition that
+            # fails with it evicts (spec §7.3).
             if self._cache_manager:
-                self._cache_manager.cache_plan(decomposition, plan)
+                plan.plan_cache_key = self._cache_manager.cache_plan(decomposition, plan)
                 logger.debug("Cached plan for future similarity matching")
 
             logger.info(f"Created plan with {len(execution_steps)} steps")
@@ -299,6 +300,35 @@ class ToolPlanner:
         except Exception as e:
             logger.error(f"Planning failed: {e}")
             raise PlanningError(f"Failed to create execution plan: {e}") from e
+
+    def _try_cached_plan(
+        self,
+        decomposition: DecompositionResult,
+        available_columns: Optional[List[str]],
+        column_profiles: Optional[List[Dict[str, Any]]],
+        outcome_hint: Optional[str],
+    ) -> Optional[ExecutionPlan]:
+        """G6: a similar cached plan adapted to ``decomposition``, or ``None``.
+
+        The adapted plan carries ``plan_source="plan_cache"`` and the key of the entry it matched,
+        so a composition that fails with it can evict that entry.
+        """
+        if not self._cache_manager:
+            return None
+        match = self._cache_manager.get_similar_plan_with_key(decomposition)
+        if not match:
+            return None
+        cached_plan, similarity, key = match
+        logger.info(f"Found similar cached plan (similarity: {similarity:.2f})")
+        adapted_plan = self._adapt_cached_plan(cached_plan, decomposition)
+        if adapted_plan is None:
+            return None
+        # KPI outcome hint + treatment guard apply to cached plans too (#810).
+        self._apply_outcome_hint(adapted_plan.steps, outcome_hint, available_columns)
+        self._apply_treatment_guard(adapted_plan.steps, column_profiles, outcome_hint)
+        adapted_plan.plan_source = "plan_cache"
+        adapted_plan.plan_cache_key = key
+        return adapted_plan
 
     def _adapt_cached_plan(
         self, cached_plan: ExecutionPlan, decomposition: DecompositionResult
@@ -358,37 +388,61 @@ class ToolPlanner:
                 logger.info(f"Found {len(similar)} similar compositions in episodic memory")
                 # Log the tool sequences for debugging
                 for comp in similar:
-                    raw = comp.get("raw_content", {})
+                    # No numeric formatting of a stored value: an f-string is built even when
+                    # debug logging is off, so a malformed confidence would raise here and the
+                    # handler below would discard every reference.
+                    raw = reference_raw_content(comp)
                     logger.debug(
-                        f"  Similar: tools={raw.get('tool_sequence', [])}, "
-                        f"confidence={raw.get('confidence', 0):.2f}"
+                        f"  Similar: tools={raw.get('tool_sequence')}, "
+                        f"confidence={raw.get('confidence')}"
                     )
             return similar
         except Exception as e:
             logger.warning(f"Failed to check episodic memory: {e}")
             return []
 
-    def _format_tools_for_prompt(self) -> str:
-        """Format available tools for the planning prompt"""
+    def _resolve_reliability_reader(self) -> Any:
+        """The injected reader, or the process-wide one the admin surface also reads."""
+        from .reliability import default_reliability_reader
+
+        if self._reliability_reader is None:
+            self._reliability_reader = default_reliability_reader()
+        return self._reliability_reader
+
+    async def _reliability_verdicts(self) -> Optional[Dict[str, Any]]:
+        """Measured tool reliability for the prompt, or ``None`` while the flag is off.
+
+        The reader is fail-open (``{}`` on any error) and shared per process, so planning never
+        waits on a second read, never fails because reliability could not be read, and never
+        reports a different verdict from the admin page for the same window.
+        """
+        from .reliability import reliability_in_planner_enabled
+
+        if not reliability_in_planner_enabled():
+            return None
+        return await self._resolve_reliability_reader().get()
+
+    def _format_tools_for_prompt(self, verdicts: Optional[Dict[str, Any]] = None) -> str:
+        """Format available tools for the planning prompt.
+
+        Pure over ``verdicts``: the caller decides whether to read reliability, and this renders
+        what it was handed. With no verdicts — or with ``TOOL_COMPOSER_RELIABILITY_IN_PLANNER``
+        unset, the default — the block is byte-identical to what it rendered before the
+        reliability work existed, which a committed golden fixture pins. One shared formatter
+        serves this path and the DSPy one (#1584), so the two cannot drift apart.
+        """
+        # Function-local: reliability pulls the RPC port, which planning does not otherwise need.
+        from .reliability import format_tool_block, reliability_in_planner_enabled
+
         schemas = self.registry.get_schemas_for_planning()
 
         if not schemas:
             raise PlanningError("No tools available in registry")
 
-        lines = []
+        reliability = verdicts if (verdicts and reliability_in_planner_enabled()) else {}
+        lines: List[str] = []
         for tool in schemas:
-            lines.append(f"### {tool['name']} ({tool['source']})")
-            lines.append(f"Description: {tool['description']}")
-            lines.append(f"Inputs: {', '.join(tool['inputs'])}")
-            # #1573: show the REAL output field names so $step_N.<field>
-            # references can only be planned against fields that exist.
-            output_fields = tool.get("output_fields") or []
-            if output_fields:
-                lines.append(f"Output: {tool['output']} (fields: {', '.join(output_fields)})")
-            else:
-                lines.append(f"Output: {tool['output']}")
-            lines.append(f"Avg execution: {tool['avg_ms']}ms")
-            lines.append("")
+            lines.extend(format_tool_block(tool, reliability.get(tool["name"])))
 
         return "\n".join(lines)
 
@@ -536,6 +590,32 @@ class ToolPlanner:
         )
         return "\n".join(lines)
 
+    @staticmethod
+    def _as_number(value: Any) -> float:
+        """A stored value as a number, or ``0`` when it cannot be rendered as one.
+
+        A JSON number carries no size limit: ``10**400`` is numeric, passes an isinstance check,
+        and then overflows ``:.2f``. One reference's stored value must never abort the rest.
+        """
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        return number if math.isfinite(number) else 0.0
+
+    #: What a step's outcome class says happened to it, for the "did not work" list. The text
+    #: comes from the class the executor recorded, never from a tool's error message (§5.5).
+    _OUTCOME_PHRASES = {
+        "refused": "refused",
+        "input_rejected": "input rejected",
+        "timeout": "timed out",
+        "error": "error",
+        "plan_defect": "skipped: plan defect",
+        "dependency_unmet": "skipped: dependency unmet",
+        "circuit_open": "skipped: circuit open",
+        "not_registered": "skipped: tool not registered",
+    }
+
     def _format_episodic_context(self, similar_compositions: List[Dict[str, Any]]) -> str:
         """Format similar compositions as context for the LLM.
 
@@ -546,30 +626,55 @@ class ToolPlanner:
         zeros into the prompt. The ``.get(..., {})`` stays as tolerance for
         rows whose stored content is missing/unparseable (hydration yields
         ``{}`` for those — never fabricated values).
+
+        Each row also carries ``recorded_steps`` (``hydrate_reference_steps``). ``success`` is
+        true for a PARTIAL composition, so rendering its whole tool sequence recommended tools
+        that had failed — both live pre-loop rows repeat ``gap_calculator``, which succeeded in
+        neither. A reference now recommends only the steps that worked, names what did not, and
+        is dropped when it cannot tell the two apart (spec §7.3).
         """
         if not similar_compositions:
             return ""
 
-        lines = [
-            "## Similar Past Compositions (Use as Reference)",
-            "The following successful compositions may inform your planning:",
-            "",
-        ]
+        blocks: List[str] = []
+        for comp in similar_compositions:
+            tools = reference_tools(comp)
+            if tools is None:
+                continue
+            worked, did_not_work, hydrated = tools
+            raw = reference_raw_content(comp)
+            confidence = self._as_number(raw.get("confidence"))
+            duration = int(self._as_number(raw.get("total_duration_ms")))
 
-        for i, comp in enumerate(similar_compositions, 1):
-            raw = comp.get("raw_content", {})
-            tool_seq = raw.get("tool_sequence", [])
-            confidence = raw.get("confidence", 0)
-            duration = raw.get("total_duration_ms", 0)
-
-            lines.append(f"### Reference {i}")
-            lines.append(f"- Tools used: {', '.join(tool_seq)}")
+            lines = [f"### Reference {len(blocks) + 1}"]
+            if hydrated:
+                lines.append(f"- Tools that worked: {', '.join(worked)}")
+                if did_not_work:
+                    phrased = ", ".join(
+                        f"{name} ({self._OUTCOME_PHRASES.get(str(outcome), 'did not succeed')})"
+                        for name, outcome in did_not_work
+                    )
+                    lines.append(f"- Did not work for that question: {phrased}")
+            else:
+                lines.append(f"- Tools used: {', '.join(worked)}")
             lines.append(f"- Success confidence: {confidence:.2f}")
             lines.append(f"- Execution time: {duration}ms")
             lines.append("")
+            blocks.append("\n".join(lines))
 
-        lines.append("Consider similar tool sequences if they match the current query's intent.")
-        return "\n".join(lines)
+        if not blocks:
+            return ""
+
+        return "\n".join(
+            [
+                "## Similar Past Compositions (Use as Reference)",
+                "The following compositions may inform your planning. Reuse the tools that "
+                "worked; avoid the ones listed as not working for that question:",
+                "",
+                *blocks,
+                "Consider similar tool sequences if they match the current query's intent.",
+            ]
+        )
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse the planning JSON from the LLM response.

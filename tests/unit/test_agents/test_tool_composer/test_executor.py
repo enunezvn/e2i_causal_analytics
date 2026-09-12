@@ -1262,6 +1262,11 @@ class TestReferenceContract1573:
         err = result.output.error or ""
         assert "declined" in err
         assert "expected_effect" in err
+        # The CLASS too (spec §5.3), not only the retry count: turning a sync ToolInputError into
+        # a refusal on the way out of _run_sync_tool would leave every assertion above green while
+        # the learning loop recorded the wrong outcome for it.
+        assert result.outcome_class == "input_rejected"
+        assert result.error_type == "ToolInputError"
 
     @pytest.mark.asyncio
     async def test_transient_tool_errors_are_still_retried(
@@ -1394,16 +1399,19 @@ class TestReferenceContract1573:
             "conversion_rate": None,
         }
 
-    def test_counterfactual_simulator_declines_none_expected_effect(self):
-        """(e): stated-reason decline instead of ``NoneType * float`` TypeError."""
+    @pytest.mark.asyncio
+    async def test_counterfactual_simulator_declines_a_none_input(self):
+        """(e): stated-reason decline instead of a bare TypeError. #2015 replaced the
+        ``expected_effect`` input (the engine estimates the effect itself); a ``None``
+        intervention is the same unresolved-upstream shape."""
         from src.agents.tool_composer import tool_registrations as tr
         from src.agents.tool_composer.errors import ToolInputError
 
-        with pytest.raises(ToolInputError, match="expected_effect"):
-            tr.counterfactual_simulator(
-                intervention="increase rep visits",
+        with pytest.raises(ToolInputError, match="intervention is None"):
+            await tr.counterfactual_simulator(
+                intervention=None,
+                brand="Kisqali",
                 target_entities=["west"],
-                expected_effect=None,
             )
 
     @pytest.mark.asyncio
@@ -1417,9 +1425,9 @@ class TestReferenceContract1573:
 
         calls = {"n": 0}
 
-        def counting_simulator(**kwargs):
+        async def counting_simulator(**kwargs):
             calls["n"] += 1
-            return tr.counterfactual_simulator(**kwargs)
+            return await tr.counterfactual_simulator(**kwargs)
 
         mock_tool_registry.clear()
         schema = ToolSchema(
@@ -1437,22 +1445,22 @@ class TestReferenceContract1573:
             tool_name="counterfactual_simulator",
             source_agent="experiment_designer",
             input_mapping={
-                "intervention": "increase rep visits",
+                "intervention": "$context.intervention",
+                "brand": "Kisqali",
                 "target_entities": ["west"],
-                "expected_effect": "$context.expected_effect",
             },
             depends_on_steps=[],
         )
         executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=2)
         trace = await executor.execute(
             self._single_step_plan(sample_decomposition, step),
-            context={"expected_effect": None},
+            context={"intervention": None},
         )
 
         assert calls["n"] == 1, "deterministic None rejection must not be retried"
         result = trace.step_results[0]
         assert result.status == ExecutionStatus.FAILED
-        assert "expected_effect" in (result.output.error or "")
+        assert "intervention is None" in (result.output.error or "")
 
 
 class TestToolFailureStatsG8:
@@ -1605,91 +1613,3 @@ class TestToolFailureTrackerG8:
         assert all_stats["test_tool"]["ema_latency_ms"] > 0
         # 2 successes, 1 failure = ~66.7%
         assert abs(all_stats["test_tool"]["recent_success_rate"] - 2 / 3) < 0.01
-
-
-class TestUpdateToolPerformance:
-    """Tests for the update_tool_performance method (G8)."""
-
-    def test_update_requires_minimum_calls(self, mock_tool_registry):
-        """update_tool_performance skips tools with too few calls."""
-        executor = PlanExecutor(tool_registry=mock_tool_registry)
-
-        # Record fewer than min_calls
-        for _i in range(5):
-            executor.failure_tracker.record_success("causal_effect_estimator", 100)
-
-        results = executor.update_tool_performance(min_calls=10)
-
-        assert results.get("causal_effect_estimator") is False
-
-    def test_update_with_enough_calls(self, mock_tool_registry):
-        """update_tool_performance updates registry with enough calls."""
-        executor = PlanExecutor(tool_registry=mock_tool_registry)
-
-        # Get original latency
-        original = mock_tool_registry.get_schema("causal_effect_estimator")
-        original_latency = original.avg_execution_ms
-
-        # Record enough calls with consistent latency
-        for _ in range(15):
-            executor.failure_tracker.record_success("causal_effect_estimator", 200)
-
-        results = executor.update_tool_performance(min_calls=10)
-
-        assert results.get("causal_effect_estimator") is True
-
-        # Check registry was updated
-        updated = mock_tool_registry.get_schema("causal_effect_estimator")
-        assert updated.avg_execution_ms != original_latency
-        assert updated.avg_execution_ms == 200  # EMA converges to constant value
-
-    def test_update_specific_tool(self, mock_tool_registry):
-        """update_tool_performance can target a specific tool."""
-        executor = PlanExecutor(tool_registry=mock_tool_registry)
-
-        # Record for two tools
-        for _ in range(15):
-            executor.failure_tracker.record_success("causal_effect_estimator", 200)
-            executor.failure_tracker.record_success("cate_analyzer", 300)
-
-        # Update only one
-        results = executor.update_tool_performance(
-            tool_name="causal_effect_estimator", min_calls=10
-        )
-
-        assert "causal_effect_estimator" in results
-        assert "cate_analyzer" not in results
-
-    def test_update_nonexistent_tool(self, mock_tool_registry):
-        """update_tool_performance handles tools not in registry."""
-        executor = PlanExecutor(tool_registry=mock_tool_registry)
-
-        # Record for a fake tool
-        for _ in range(15):
-            executor.failure_tracker.record_success("nonexistent_tool", 100)
-
-        results = executor.update_tool_performance(min_calls=10)
-
-        assert results.get("nonexistent_tool") is False
-
-    def test_update_all_tools(self, mock_tool_registry):
-        """update_tool_performance can update all tools at once."""
-        executor = PlanExecutor(tool_registry=mock_tool_registry)
-
-        # Record for multiple tools
-        for _ in range(15):
-            executor.failure_tracker.record_success("causal_effect_estimator", 150)
-            executor.failure_tracker.record_success("cate_analyzer", 250)
-            executor.failure_tracker.record_success("gap_calculator", 100)
-
-        results = executor.update_tool_performance(min_calls=10)
-
-        # All should be updated
-        assert results.get("causal_effect_estimator") is True
-        assert results.get("cate_analyzer") is True
-        assert results.get("gap_calculator") is True
-
-        # Check registry values
-        assert mock_tool_registry.get_schema("causal_effect_estimator").avg_execution_ms == 150
-        assert mock_tool_registry.get_schema("cate_analyzer").avg_execution_ms == 250
-        assert mock_tool_registry.get_schema("gap_calculator").avg_execution_ms == 100

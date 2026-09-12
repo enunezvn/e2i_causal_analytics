@@ -31,7 +31,18 @@ import math
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NamedTuple, Optional, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Tuple,
+    cast,
+)
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 
@@ -5007,6 +5018,16 @@ def _extract_library_payload(
         effect = result_payload.get("causal_effect")
         if isinstance(effect, (int, float)):
             payload["effect_estimate"] = float(effect)
+        # #2014: DoWhy's uncertainty is its ``standard_error`` (HC1 of its OLS fit),
+        # not ``ate_ci_*`` — it used to be dropped here, leaving the stage CI None.
+        interval = _dowhy_interval(result_payload)
+        if interval is not None:
+            payload["ci_lower"], payload["ci_upper"] = interval
+            payload["p_value"] = _te_pvalue_from_z(
+                float(result_payload["causal_effect"]), result_payload["standard_error"]
+            )
+            payload["standard_error"] = float(result_payload["standard_error"])
+            payload["standard_error_method"] = result_payload.get("standard_error_method")
         method = result_payload.get("dowhy_method")
         if isinstance(method, str):
             payload["method"] = method
@@ -5048,6 +5069,23 @@ def _extract_library_payload(
             payload["is_dag"] = is_dag
 
     return payload
+
+
+def _dowhy_interval(dowhy_payload: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """95 % normal interval ``effect +/- z*SE`` from a DoWhy executor payload (#2014).
+
+    ``None`` when the payload has no finite effect or no positive finite
+    ``standard_error`` (every DoWhy method but linear regression) — never a number
+    without a measured SE.
+    """
+    effect = _as_optional_float(dowhy_payload.get("causal_effect"))
+    se = _as_optional_float(dowhy_payload.get("standard_error"))
+    if effect is None or se is None or not math.isfinite(effect) or not math.isfinite(se):
+        return None
+    if se <= 0.0:
+        return None
+    z = z_score_for_confidence(0.95)
+    return effect - z * se, effect + z * se
 
 
 def _read_library_result_from_state(
@@ -6381,7 +6419,7 @@ async def _run_treatment_effect_estimate(
     """Run the wired DoWhy+EconML sequential pipeline on the resolved frame.
 
     Prefers EconML's ate/ci/std (it carries the CI); falls back to DoWhy's
-    causal_effect/standard_error (no CI) when EconML fails. Raises
+    causal_effect/standard_error (CI from that SE, #2014) when EconML fails. Raises
     HTTPException(503) when NEITHER executor produces a usable estimate. NEVER
     fabricates a number.
     """
@@ -6438,10 +6476,14 @@ async def _run_treatment_effect_estimate(
         est_name = econml_payload.get("estimator")
         estimator = str(est_name) if est_name is not None else None
     elif dowhy_payload is not None and dowhy_payload.get("causal_effect") is not None:
-        # DoWhy fallback: no CI (linear_regression provides only an SE).
+        # DoWhy fallback: the CI is the 95 % normal interval of its SE (#2014; it was
+        # left None although the SE and its p-value were reported).
         ate = _as_optional_float(dowhy_payload.get("causal_effect"))
         std_error = _as_optional_float(dowhy_payload.get("standard_error"))
         estimator = dowhy_payload.get("dowhy_method")
+        dowhy_interval = _dowhy_interval(dowhy_payload)
+        if dowhy_interval is not None:
+            ci_lower, ci_upper = dowhy_interval
 
     if ate is None:
         # Neither executor produced a usable estimate — honest fail-close.

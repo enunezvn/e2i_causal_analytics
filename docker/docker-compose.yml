@@ -117,6 +117,12 @@ x-common-env: &common-env
   # rewriter). Costs ~2 small completions per worker per boot; set false to
   # keep the construction-only warm. Same forwarding rule as above.
   CHATBOT_STARTUP_WARM_LLM_ENABLED: ${CHATBOT_STARTUP_WARM_LLM_ENABLED:-true}
+  # Tool-composer learning loop (spec 2026-09-11): the API syncs the tool registry at startup
+  # and records every composition (composer_episodes, composition_steps, tool_performance).
+  # ON here; the in-code default is OFF, so tests and host-side scripts record nothing (a
+  # script run inside these containers inherits this value). Set false and recreate the
+  # containers to stop recording. Same forwarding rule as above.
+  TOOL_COMPOSER_LEARNING_LOOP_ENABLED: ${TOOL_COMPOSER_LEARNING_LOOP_ENABLED:-true}
   # #1484: retrieve_rag chain knobs. Timeout = fail-open ceiling per chain
   # LLM call (rewrite/score/hop-decider). Dry-hop limit = consecutive
   # zero-new-keep hops before the multi-hop loop stops (0 = legacy

@@ -1191,9 +1191,9 @@ export type CohortName =
  * A REAL estimated average treatment effect for one (cohort, brand) cell.
  *
  * Produced by the live DoWhy+EconML sequential pipeline over a confounded cohort
- * frame. `ci_lower`/`ci_upper` are EconML's analytic CI (null on the DoWhy
- * fallback path). `p_value` is a model-based two-sided z-test (NOT a refutation
- * p-value). `warnings` always carries an honest robustness-not-validated caveat.
+ * frame. `ci_lower`/`ci_upper` are EconML's analytic CI (on the DoWhy fallback
+ * path, the 95% normal interval of DoWhy's HC1 standard error). `p_value` is a
+ * model-based two-sided z-test (NOT a refutation p-value). `warnings` always carries an honest robustness-not-validated caveat.
  */
 export interface TreatmentEffectResponse {
   /** Cohort name */
@@ -1208,9 +1208,9 @@ export interface TreatmentEffectResponse {
   confounders: string[];
   /** Average treatment effect */
   ate: number;
-  /** Lower bound of the 95% CI (null on DoWhy fallback) */
+  /** Lower bound of the 95% CI (ate - z*std_error on DoWhy fallback) */
   ci_lower?: number | null;
-  /** Upper bound of the 95% CI (null on DoWhy fallback) */
+  /** Upper bound of the 95% CI (ate + z*std_error on DoWhy fallback) */
   ci_upper?: number | null;
   /** Model-based two-sided z-test p-value (null when no usable std_error) */
   p_value?: number | null;

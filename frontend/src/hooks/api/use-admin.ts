@@ -17,6 +17,7 @@ import {
   getAuditFeed,
   getLlmUsage,
   getPlatformActivity,
+  getToolComposerObservability,
   getUserActivity,
   inviteUser,
   listUsers,
@@ -59,6 +60,13 @@ export function useLlmUsage(days = 30) {
   return useQuery({
     queryKey: queryKeys.admin.llmUsage(days),
     queryFn: () => getLlmUsage(days),
+  });
+}
+
+export function useToolComposerObservability(days = 30) {
+  return useQuery({
+    queryKey: queryKeys.admin.toolComposer(days),
+    queryFn: () => getToolComposerObservability(days),
   });
 }
 

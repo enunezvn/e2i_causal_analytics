@@ -660,7 +660,13 @@ class TestMemoryIntegration:
         assert similar == []
 
     def test_format_episodic_context_with_compositions(self, mock_llm_client, mock_tool_registry):
-        """Test formatting of episodic context for LLM prompt"""
+        """Test formatting of episodic context for LLM prompt.
+
+        The counts are what make a reference without recorded steps renderable (spec §7.3): all
+        tools worked, so its sequence is safe to recommend. The writer has always emitted them
+        (``memory_hooks.store_composition``); a row carrying neither steps nor counts cannot say
+        which tools failed and is dropped — see test_episodic_reference_rendering.py.
+        """
         planner = ToolPlanner(
             llm_client=mock_llm_client,
             tool_registry=mock_tool_registry,
@@ -672,6 +678,8 @@ class TestMemoryIntegration:
                     "tool_sequence": ["causal_effect_estimator", "cate_analyzer"],
                     "confidence": 0.92,
                     "total_duration_ms": 450,
+                    "tools_executed": 2,
+                    "tools_succeeded": 2,
                 }
             },
             {
@@ -679,6 +687,8 @@ class TestMemoryIntegration:
                     "tool_sequence": ["gap_calculator"],
                     "confidence": 0.88,
                     "total_duration_ms": 200,
+                    "tools_executed": 1,
+                    "tools_succeeded": 1,
                 }
             },
         ]
@@ -718,6 +728,9 @@ class TestMemoryIntegration:
                         "tool_sequence": ["causal_effect_estimator"],
                         "confidence": 0.95,
                         "total_duration_ms": 300,
+                        # All tools worked, so the reference is renderable without steps (§7.3).
+                        "tools_executed": 1,
+                        "tools_succeeded": 1,
                     }
                 }
             ]

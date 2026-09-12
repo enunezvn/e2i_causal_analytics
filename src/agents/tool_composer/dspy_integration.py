@@ -181,6 +181,7 @@ REFERENCE_CONTRACT_INSTRUCTION = """## Reference contract (CRITICAL):
 
 def format_available_tools_for_planning(
     schemas: Optional[List[Dict[str, Any]]] = None,
+    verdicts: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Render tool descriptions for the DSPy planning path (#1584).
 
@@ -193,6 +194,12 @@ def format_available_tools_for_planning(
     Args:
         schemas: Pre-fetched ``get_schemas_for_planning()`` entries. When
             ``None``, pulled from the global tool registry.
+        verdicts: Pre-fetched ``ToolReliabilityReader.get()`` results, keyed by
+            tool name. This function never reads them itself: it is synchronous
+            and has no production caller, so a caller that wants the reliability
+            caveat must fetch and pass them. They are used only while
+            ``TOOL_COMPOSER_RELIABILITY_IN_PLANNER`` is set (spec §7.2); with the
+            flag unset the block is byte-identical to what it renders today.
 
     Raises:
         ValueError: when no tools are available — planning against an empty
@@ -210,20 +217,17 @@ def format_available_tools_for_planning(
     if not schemas:
         raise ValueError("No tools available in registry")
 
+    # Function-local, for the same import-weight reason as the registry above.
+    from .reliability import format_tool_block, reliability_in_planner_enabled
+
+    # #1581/#1584: every block shows the REAL output field names so $step_N.<field>
+    # references can only be planned against fields that exist. One shared formatter
+    # serves this path and ``ToolPlanner._format_tools_for_prompt``, so the two cannot
+    # drift apart.
+    reliability = verdicts if (verdicts and reliability_in_planner_enabled()) else {}
     lines: List[str] = []
     for tool in schemas:
-        lines.append(f"### {tool['name']} ({tool['source']})")
-        lines.append(f"Description: {tool['description']}")
-        lines.append(f"Inputs: {', '.join(tool['inputs'])}")
-        # #1581/#1584: show the REAL output field names so $step_N.<field>
-        # references can only be planned against fields that exist.
-        output_fields = tool.get("output_fields") or []
-        if output_fields:
-            lines.append(f"Output: {tool['output']} (fields: {', '.join(output_fields)})")
-        else:
-            lines.append(f"Output: {tool['output']}")
-        lines.append(f"Avg execution: {tool['avg_ms']}ms")
-        lines.append("")
+        lines.extend(format_tool_block(tool, reliability.get(tool["name"])))
 
     return "\n".join(lines)
 

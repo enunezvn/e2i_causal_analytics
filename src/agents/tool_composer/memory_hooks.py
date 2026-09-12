@@ -21,7 +21,7 @@ import logging
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -565,10 +565,186 @@ class ToolComposerMemoryHooks:
             # Filter to successful compositions only — on the HYDRATED content
             successful = [r for r in results if r.get("raw_content", {}).get("success", False)]
 
-            return successful[:limit]
+            # ``success`` is true for a PARTIAL run, so a kept row can name tools that failed.
+            # Hydrate the whole candidate set in ONE read, drop the references that cannot say
+            # what worked, and only THEN apply the limit (spec §7.3): limiting first would let
+            # three un-renderable rows starve a usable one sitting just below them, the same
+            # starvation the over-fetch window above exists to avoid.
+            hydrated = await hydrate_reference_steps(successful)
+            return select_renderable(hydrated, limit)
         except Exception as e:
             logger.warning(f"Failed to find similar compositions: {e}")
             return []
+
+
+# =============================================================================
+# REFERENCE STEP HYDRATION (spec §7.3)
+# =============================================================================
+
+#: Step outcome classes that mean the tool did its job. A cache hit is a step that worked.
+WORKED_OUTCOME_CLASSES = frozenset({"succeeded", "cache_hit"})
+
+
+async def hydrate_reference_steps(
+    references: List[Dict[str, Any]],
+    port: Any = None,
+) -> List[Dict[str, Any]]:
+    """Attach each reference's recorded steps as ``recorded_steps``, in step order.
+
+    One ``composer_steps_for`` read (ml/041) covers every reference, keyed by the
+    ``composition_id`` the episodic row already carries. Fail-open: a reference whose steps
+    cannot be read keeps an empty list, which the formatter treats as "no recorded steps" —
+    the legacy shape, rendered only when every tool worked. Nothing here can fail a plan.
+    """
+    rows = list(references)
+    for row in rows:
+        row.setdefault("recorded_steps", [])
+
+    def composition_id(row: Dict[str, Any]) -> Optional[str]:
+        raw = row.get("raw_content")
+        value = raw.get("composition_id") if isinstance(raw, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    wanted = sorted({cid for cid in (composition_id(row) for row in rows) if cid})
+    if not wanted:
+        return rows
+
+    try:
+        if port is None:
+            from .rpc_port import SupabaseRpcPort
+
+            port = SupabaseRpcPort()
+        result = await port.call("composer_steps_for", {"p_composition_ids": wanted})
+    except Exception as e:
+        logger.warning(f"Failed to hydrate reference steps: {e}")
+        return rows
+
+    by_id = result if isinstance(result, dict) else {}
+    for row in rows:
+        recorded = by_id.get(composition_id(row) or "")
+        # The payload for one composition is validated on its own: a value that is not a list,
+        # or step numbers that do not compare, must not raise past this row and lose every
+        # reference to the hook's outer handler.
+        steps = (
+            [s for s in recorded if isinstance(s, dict)]
+            if isinstance(recorded, (list, tuple))
+            else []
+        )
+        row["recorded_steps"] = sorted(steps, key=_step_order)
+    return rows
+
+
+def _step_order(step: Dict[str, Any]) -> Tuple[int, int]:
+    """Sort key for recorded steps: real step numbers first, anything else left in place."""
+    number = step.get("step_number")
+    if isinstance(number, int) and not isinstance(number, bool):
+        return (0, number)
+    return (1, 0)
+
+
+def _registered_tool_names() -> Optional[frozenset]:
+    """The tools this process can actually plan, or ``None`` when the registry cannot say."""
+    try:
+        from src.tool_registry.registry import get_registry
+
+        names = frozenset(get_registry().list_tools())
+    except Exception:  # noqa: BLE001 - an unreadable registry judges nothing
+        return None
+    return names or None
+
+
+def _usable_tool_names(names: Iterable[Any]) -> List[str]:
+    """The names worth recommending: real strings, and tools this process still has.
+
+    A reference exists to recommend a sequence someone can reuse. A stored value that is not a
+    name cannot be reused, and neither can a tool that no longer exists — planning it would only
+    produce a ``not_registered`` step. When the registry cannot answer, names are kept.
+    """
+    registered = _registered_tool_names()
+    usable: List[str] = []
+    for name in names:
+        if not isinstance(name, str) or not name:
+            continue
+        if registered is not None and name not in registered:
+            continue
+        usable.append(name)
+    return usable
+
+
+def reference_raw_content(reference: Dict[str, Any]) -> Dict[str, Any]:
+    """The reference's stored payload, or ``{}`` when it is missing or not a mapping.
+
+    Hydration yields ``{}`` for rows whose stored content is unparseable, and a malformed row
+    must never raise and take its valid neighbours out of the planner's context with it.
+    """
+    raw = reference.get("raw_content")
+    return raw if isinstance(raw, dict) else {}
+
+
+def reference_tools(
+    reference: Dict[str, Any],
+) -> Optional[Tuple[List[str], List[Tuple[str, Optional[str]]], bool]]:
+    """``(worked, did_not_work, hydrated)`` for one reference, or ``None`` to drop it.
+
+    A reference is only worth recommending if it can say which tools worked (spec §7.3). With
+    recorded steps that is the succeeded / cache_hit ones in step order, and the rest come back
+    with the class the executor recorded, for the caller to phrase. Without steps — the
+    pre-loop rows, and any row whose step writes were lost — the only honest reading is the
+    counts: either every tool worked, or the reference cannot name the ones that failed.
+    """
+    # Every shape below is checked before it is iterated or looked up: one malformed row must be
+    # dropped on its own, never raise and take the whole reference set with it.
+    raw_steps = reference.get("recorded_steps")
+    steps = (
+        [s for s in raw_steps if isinstance(s, dict)]
+        if isinstance(raw_steps, (list, tuple))
+        else []
+    )
+    if steps:
+
+        def outcome_of(step: Dict[str, Any]) -> Optional[str]:
+            outcome = step.get("outcome_class")
+            return outcome if isinstance(outcome, str) else None
+
+        worked = _usable_tool_names(
+            s.get("tool_name") for s in steps if outcome_of(s) in WORKED_OUTCOME_CLASSES
+        )
+        if not worked:
+            return None
+        did_not_work = [
+            (s["tool_name"], outcome_of(s))
+            for s in steps
+            if outcome_of(s) not in WORKED_OUTCOME_CLASSES
+            and isinstance(s.get("tool_name"), str)
+            and s["tool_name"]
+        ]
+        return worked, did_not_work, True
+
+    raw = reference_raw_content(reference)
+    executed, succeeded = raw.get("tools_executed"), raw.get("tools_succeeded")
+    sequence = raw.get("tool_sequence")
+    if (
+        isinstance(executed, int)
+        and isinstance(succeeded, int)
+        and executed > 0
+        and executed == succeeded
+        and isinstance(sequence, (list, tuple))
+    ):
+        usable = _usable_tool_names(sequence)
+        # A sequence with nothing recommendable left is not a reference worth rendering.
+        return (usable, [], False) if usable else None
+    return None
+
+
+def select_renderable(references: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    """The first ``limit`` references that can say which tools worked, in search order."""
+    kept: List[Dict[str, Any]] = []
+    for reference in references:
+        if len(kept) >= limit:
+            break
+        if reference_tools(reference) is not None:
+            kept.append(reference)
+    return kept
 
 
 # =============================================================================

@@ -57,27 +57,29 @@ class CohortCausalEffect:
     outcome_col: str
     adjustment_set: list[str] = field(default_factory=list)
     estimator_type: str = "causal_forest_dml"
+    # Inference on a region subset, set only when ``target_regions`` is requested (#2015):
+    # the forest's average effect over the cohort rows in those regions and its interval.
+    target_regions: list[str] = field(default_factory=list)
+    target_ate: float | None = None
+    target_ci_lower: float | None = None
+    target_ci_upper: float | None = None
+    target_n: int = 0
 
     def ci_width(self) -> float:
         return float(self.ate_ci_upper - self.ate_ci_lower)
 
 
-def estimate_cohort_effect(
+def _usable_rows(
     cohort: pd.DataFrame,
     treatment_col: str,
     *,
-    outcome_col: str = _OUTCOME_COL,
-    region_col: str = _REGION_COL,
-    confounders: Sequence[str] = DEFAULT_CONFOUNDERS,
-    alpha: float = 0.05,
-    seed: int = 42,
-) -> CohortCausalEffect:
-    """Estimate the ATE + per-region CATE of ``treatment_col`` on ``outcome_col``.
-
-    Treatment is binarized at its median (the pre-registered contrast: high vs low
-    intensity, mirroring the DGP). Region is the heterogeneity axis X; the present subset
-    of ``confounders`` is the control set W. Returns honest DML inference intervals.
-    """
+    outcome_col: str,
+    region_col: str,
+    confounders: Sequence[str],
+) -> pd.DataFrame:
+    """The rows every estimate on this cohort uses: required columns present (refusing an
+    under-adjusted estimate), numeric model inputs coerced, rows null in any of them dropped.
+    Columns: ``t_raw``, ``y``, ``region`` and one per confounder."""
     if treatment_col not in cohort.columns:
         raise EffectDataUnavailable(f"cohort missing treatment column '{treatment_col}'.")
     if outcome_col not in cohort.columns or region_col not in cohort.columns:
@@ -95,7 +97,6 @@ def estimate_cohort_effect(
             f"cohort missing required confounder column(s) {missing}; refusing to "
             "produce an under-adjusted estimate."
         )
-    present_confounders = list(confounders)
 
     # Coerce + drop rows null in any model input (fail-honest, no NaN-as-0 fabrication).
     work = pd.DataFrame(
@@ -105,9 +106,80 @@ def estimate_cohort_effect(
             "region": cohort[region_col].astype(str),
         }
     )
-    for c in present_confounders:
+    for c in confounders:
         work[c] = pd.to_numeric(cohort[c], errors="coerce")
     work = work.dropna().reset_index(drop=True)
+
+    return work
+
+
+def control_outcome_sd(
+    cohort: pd.DataFrame,
+    treatment_col: str,
+    *,
+    outcome_col: str = _OUTCOME_COL,
+    region_col: str = _REGION_COL,
+    confounders: Sequence[str] = DEFAULT_CONFOUNDERS,
+    regions: Sequence[str] = (),
+) -> tuple[float, int]:
+    """Outcome SD in the comparison arm of :func:`estimate_cohort_effect`'s contrast (#2015).
+
+    The comparison arm is the usable rows at or below the cohort-median treatment intensity
+    (the estimator's split), restricted to ``regions`` when given. Returns ``(sd, n)`` with
+    ``sd`` the sample standard deviation (ddof=1). Raises ``EffectDataUnavailable`` with
+    fewer than two such rows.
+    """
+    work = _usable_rows(
+        cohort,
+        treatment_col,
+        outcome_col=outcome_col,
+        region_col=region_col,
+        confounders=confounders,
+    )
+    control = work[work["t_raw"] <= float(work["t_raw"].median())]
+    targets = [str(r) for r in regions]
+    if targets:
+        control = control[control["region"].isin(targets)]
+    if len(control) < 2:
+        scope = f"regions {targets}" if targets else "the cohort"
+        raise EffectDataUnavailable(
+            f"{scope} has {len(control)} usable comparison-arm rows for '{treatment_col}'; "
+            "the outcome spread cannot be measured."
+        )
+    return float(control["y"].std(ddof=1)), int(len(control))
+
+
+def estimate_cohort_effect(
+    cohort: pd.DataFrame,
+    treatment_col: str,
+    *,
+    outcome_col: str = _OUTCOME_COL,
+    region_col: str = _REGION_COL,
+    confounders: Sequence[str] = DEFAULT_CONFOUNDERS,
+    alpha: float = 0.05,
+    seed: int = 42,
+    target_regions: Sequence[str] = (),
+) -> CohortCausalEffect:
+    """Estimate the ATE + per-region CATE of ``treatment_col`` on ``outcome_col``.
+
+    Treatment is binarized at its median (the pre-registered contrast: high vs low
+    intensity, mirroring the DGP). Region is the heterogeneity axis X; the present subset
+    of ``confounders`` is the control set W. Returns honest DML inference intervals.
+
+    ``target_regions`` (#2015) adds the same forest's average effect over the cohort rows
+    in those regions, with ``ate_interval`` over those rows — the interval the cohort-wide
+    ATE gets, on the subset. Each target region must be in the cohort with both treated and
+    control rows; otherwise ``EffectDataUnavailable`` (a region the cohort does not cover
+    would only get an extrapolated or fallback effect).
+    """
+    work = _usable_rows(
+        cohort,
+        treatment_col,
+        outcome_col=outcome_col,
+        region_col=region_col,
+        confounders=confounders,
+    )
+    present_confounders = list(confounders)
 
     if len(work) < _MIN_ROWS:
         raise EffectDataUnavailable(
@@ -168,6 +240,28 @@ def estimate_cohort_effect(
         c: float(np.mean(eff[region_arr == c])) for c in cats if (region_arr == c).any()
     }
 
+    targets = list(dict.fromkeys(str(r) for r in target_regions))
+    target_ate = target_lo = target_hi = None
+    target_n = 0
+    if targets:
+        for region in targets:
+            in_region = region_arr == region
+            if not in_region.any() or len(np.unique(t[in_region])) < 2:
+                raise EffectDataUnavailable(
+                    f"target region {region!r} has no treated-vs-control contrast in the "
+                    f"cohort for '{treatment_col}' (cohort regions: {cats}); its effect "
+                    "cannot be estimated."
+                )
+        mask = np.isin(region_arr, targets)
+        try:
+            t_lo, t_hi = cf.ate_interval(x[mask], alpha=alpha)
+        except Exception as e:  # econml failure -> honest no-data, never a fake interval
+            raise EffectDataUnavailable(
+                f"target-region inference failed for '{treatment_col}': {e}"
+            ) from e
+        target_ate, target_lo, target_hi = float(np.mean(eff[mask])), float(t_lo), float(t_hi)
+        target_n = int(mask.sum())
+
     adjustment_set = [region_col] + present_confounders
     return CohortCausalEffect(
         ate=float(np.mean(eff)),
@@ -178,6 +272,11 @@ def estimate_cohort_effect(
         treatment_col=treatment_col,
         outcome_col=outcome_col,
         adjustment_set=adjustment_set,
+        target_regions=targets,
+        target_ate=target_ate,
+        target_ci_lower=target_lo,
+        target_ci_upper=target_hi,
+        target_n=target_n,
     )
 
 

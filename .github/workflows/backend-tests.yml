@@ -263,12 +263,18 @@ jobs:
       # (or in a worker holding the GIL in native code) has no timer at all —
       # this job was CANCELLED at its 30-min cap on run 31915535379 with one
       # test dispatched and never reported and --timeout=30 never firing.
-      # 600 is 3.3x the largest per-test budget this lane can hit (180s, from
-      # a @pytest.mark.timeout in tests/unit/test_api/test_chatbot_warmup_1454.py;
-      # --timeout is 30s) and 5.8x its measured 103.7s startup. The sizing is
-      # recomputed from this file on every run by
+      # 600 is EXACTLY 2.0x the largest per-test budget this lane can hit (300s,
+      # from the @pytest.mark.timeout on the gated real-DB suite under
+      # tests/unit/test_database/learning_loop/; the next longest is 180s in
+      # tests/unit/test_api/test_chatbot_warmup_1454.py; --timeout is 30s) and
+      # 5.8x its measured 103.7s startup. The sizing is recomputed from this file
+      # on every run by
       # tests/unit/test_tests_meta/test_session_stall_watchdog_1655.py, so a new
       # long test fails that guard rather than this lane.
+      # NO HEADROOM LEFT: the guard requires window >= 2x the longest marker the
+      # lane COLLECTS (a static scan — gating and skips do not exempt a file), so
+      # any test above 300s here must either come down or move to a lane sized
+      # for it. Raising this window instead needs its own justification.
       E2I_PYTEST_STALL_TIMEOUT: '600'
     steps:
       - name: Checkout repository

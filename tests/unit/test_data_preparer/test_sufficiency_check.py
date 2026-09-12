@@ -717,3 +717,50 @@ class TestF15CausalEPVInteraction:
         assert "epv_floor*n_features" in report["verdict_rationale"]
         # required_n is at least the EPV-floor candidate value
         assert report["required_n"] >= 5 * 500
+
+
+@pytest.mark.parametrize("alpha", [1e-200])
+def test_an_uncomputable_causal_power_requirement_does_not_pass(alpha):
+    """#2015 (codex whole-diff #7): the causal classifier treats a PowerCalculationError as
+    "fall back to the floors", which can PASS. An alpha so small the z-score is infinite
+    has no finite power requirement; before the #2015 library guards it raised
+    OverflowError into the node's blocking INCONCLUSIVE handler, and it must not become a
+    floor-only PASS."""
+    from src.agents.ml_foundation.data_preparer.nodes.sufficiency_check import _classify_causal
+
+    try:
+        verdict = _classify_causal(
+            n_rows=10000,
+            n_features=1,
+            baseline_rate=0.5,
+            sigma_outcome=None,
+            user_config=None,
+            resolved=[],
+            alpha=alpha,
+            power=0.8,
+        )[0]
+    except OverflowError:
+        return  # reaches the node's INCONCLUSIVE handler
+    assert verdict != "PASS"
+
+
+def test_a_tiny_normal_approximation_design_keeps_its_inflated_requirement():
+    """#2015 (codex whole-diff #8): the causal classifier multiplies the RCT-equivalent n by
+    the observational inflation. At target_mde=100 the base library returned 2 in total, so
+    an inflation of 200 required 400 rows and 300 rows were a SOFT_FAIL. A shared-library
+    refusal of designs under two per arm dropped that requirement into the floor-only
+    fallback and PASSED. The minimum-design rule belongs to the leader-facing consumers
+    (the composer tools), not to this arithmetic."""
+    from src.agents.ml_foundation.data_preparer.nodes.sufficiency_check import _classify_causal
+
+    verdict, _rationale, required_n, *_ = _classify_causal(
+        n_rows=300,
+        n_features=1,
+        baseline_rate=None,
+        sigma_outcome=1.0,
+        user_config={"target_mde": 100, "observational_inflation": 200},
+        resolved=[],
+        alpha=0.05,
+        power=0.8,
+    )
+    assert (verdict, required_n) == ("SOFT_FAIL", 400)

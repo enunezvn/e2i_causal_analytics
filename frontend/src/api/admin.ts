@@ -16,6 +16,7 @@ import type {
   LinkResponse,
   LlmUsageResponse,
   PlatformActivityResponse,
+  ToolComposerObservabilityResponse,
   UpdateUserRequest,
   UserActivityResponse,
 } from '@/types/admin';
@@ -78,4 +79,12 @@ export function getAuditFeed(days = 30): Promise<AuditFeedResponse> {
 
 export function getLlmUsage(days = 30): Promise<LlmUsageResponse> {
   return get<LlmUsageResponse>(`${BASE}/observability/llm-usage`, { params: { days } });
+}
+
+export function getToolComposerObservability(
+  days = 30,
+): Promise<ToolComposerObservabilityResponse> {
+  return get<ToolComposerObservabilityResponse>(`${BASE}/observability/tool-composer`, {
+    params: { days },
+  });
 }

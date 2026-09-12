@@ -15,12 +15,15 @@ Three surfaces describe a tool's inputs and outputs (measured 2026-09-11):
    imports it at runtime; its hand-written schemas had drifted on 14 of its 16 tools, which
    is how #2003 came to be filed against a copy the planner never reads.
 3. The ``tool_registry`` / ``tool_dependencies`` rows seeded by ``database/ml/013`` and
-   ``027``. No code reads them either; all 16 rows and 8 of 11 dependency mappings had drifted.
+   ``027``. All 16 rows and 8 of 11 dependency mappings had drifted. They are no longer checked
+   here: ml/040's ``sync_tool_registry`` makes them equal to the live registry at every API
+   startup (``src/agents/tool_composer/registry_sync.py``; the real-DB round trip is
+   ``tests/unit/test_database/learning_loop/test_registry_sync_client.py``).
 
 The live registry is the single source of truth. The callable itself is the ground truth
 the registry is checked against: its signature (and the literal ``kwargs`` keys its body
 reads) for inputs, and the keys it really returns — each tool is CALLED on real minimal
-inputs — for outputs. The copy and the DB rows are then checked against the registry.
+inputs — for outputs. The copy is then checked against the registry.
 """
 
 from __future__ import annotations
@@ -28,12 +31,10 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
-import json
-import re
 import textwrap
 import types
 from pathlib import Path
-from typing import Any, Dict, List, Set, Union, get_args, get_origin, get_type_hints
+from typing import Any, Dict, Set, Union, get_args, get_origin, get_type_hints
 
 import numpy as np
 import pandas as pd
@@ -103,6 +104,8 @@ INTERNAL_INPUTS: Dict[str, Dict[str, str]] = {
     "causal_effect_estimator": {
         "data_source": "provenance label for the pipeline run",
         "query": "provenance text for the pipeline run",
+        # Not offered to the planner (#2014): it was echoed while linear regression ran.
+        "method": "accepted only to refuse an estimator other than linear regression",
     },
     "refutation_runner": {
         "treatment_var": "alias of treatment",
@@ -211,10 +214,17 @@ def _dump(result: Any) -> Dict[str, Any]:
     return result.model_dump() if hasattr(result, "model_dump") else result
 
 
+# Tools whose computation sits behind a service a unit test cannot reach, checked
+# structurally instead of called: ``model_inference`` calls a BentoML endpoint;
+# ``counterfactual_simulator`` reads the twin model and cohort from Supabase and MLflow
+# (#2015 — its output builder runs on a real engine result in
+# test_counterfactual_simulator_2015.py).
+NOT_CALLED = frozenset({"model_inference", "counterfactual_simulator"})
+
+
 def _call_every_tool() -> Dict[str, Dict[str, Any]]:
     """Call each live tool on real inputs, chaining real upstream outputs where a tool
-    consumes one. ``model_inference`` is excluded: its only computation is a network call
-    to a BentoML endpoint (checked structurally instead)."""
+    consumes one. The ``NOT_CALLED`` tools are excluded."""
     registry = _registry()
     df = _frame()
     call = lambda name, **kw: _dump(registry.get_callable(name)(**kw))  # noqa: E731
@@ -233,7 +243,6 @@ def _call_every_tool() -> Dict[str, Dict[str, Any]]:
         confounders=["x1", "x2"],
         estimation_data=df,
     )
-    estimate = out["causal_effect_estimator"]
     out["refutation_runner"] = call(
         "refutation_runner",
         estimate_id="est-2003",
@@ -268,12 +277,6 @@ def _call_every_tool() -> Dict[str, Dict[str, Any]]:
         "roi_estimator", gap_analysis=out["gap_calculator"], investment=1000.0
     )
     out["power_calculator"] = call("power_calculator", effect_size=0.3)
-    out["counterfactual_simulator"] = call(
-        "counterfactual_simulator",
-        intervention="rep call frequency",
-        target_entities=list(out["cate_analyzer"]["high_responders"]) or ["south"],
-        expected_effect=float(estimate["ate"]),
-    )
     out["psi_calculator"] = call(
         "psi_calculator",
         feature="x1",
@@ -362,13 +365,6 @@ def test_every_accepted_input_is_declared_or_documented_internal(name):
 # offered a knob that changes nothing). Listed so no NEW unread declaration can land.
 PREEXISTING_UNREAD_INPUTS: Dict[str, Dict[str, str]] = {
     "cohort_builder": {"indication": "never applied to the cohort"},
-    "counterfactual_simulator": {
-        "intervention": "lift is expected_effect * 0.85 regardless of the intervention",
-        "target_entities": "lift is expected_effect * 0.85 regardless of the entities",
-    },
-    "power_calculator": {
-        "alpha": "required_n hardcodes z = 1.96 + 0.84 (power is ignored too, only echoed)"
-    },
     "risk_scorer": {
         "entity_type": "documented as provenance but not echoed",
         "risk_type": "documented as provenance but not echoed",
@@ -460,11 +456,11 @@ def test_every_tool_registers_its_output_model(name):
     assert model.__name__ == registered.schema.output_schema
 
 
-def test_every_tool_but_model_inference_is_called(returned_by_tool):
-    assert set(returned_by_tool) == LIVE_TOOLS - {"model_inference"}
+def test_every_tool_but_the_not_called_ones_is_called(returned_by_tool):
+    assert set(returned_by_tool) == LIVE_TOOLS - NOT_CALLED
 
 
-@pytest.mark.parametrize("name", sorted(LIVE_TOOLS - {"model_inference"}))
+@pytest.mark.parametrize("name", sorted(LIVE_TOOLS - NOT_CALLED))
 def test_returned_keys_are_the_output_model_fields(name, returned_by_tool):
     model = _registry().get(name).pydantic_output_model
     assert model is not None, f"{name}: no output model registered"
@@ -504,6 +500,35 @@ def test_model_inference_returns_its_output_model_dump():
     call = assigned[0].value
     assert isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
     assert call.func.attr == "invoke"
+
+
+def test_counterfactual_simulator_returns_its_output_builder():
+    """Structural check for the twin-backed simulator (#2015).
+
+    Its single ``return`` is ``_simulation_results(...)``, which is annotated to return the
+    registered output model and builds it by keyword from the engine result.
+    """
+    from src.agents.tool_composer import tool_registrations as tr
+
+    registered = _registry().get("counterfactual_simulator")
+    assert get_type_hints(tr._simulation_results)["return"] is registered.pydantic_output_model
+    node = _function_def(registered.callable)
+    returns = [n for n in ast.walk(node) if isinstance(n, ast.Return)]
+    assert len(returns) == 1
+    value = returns[0].value
+    assert isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+    assert value.func.id == "_simulation_results"
+    builder = _function_def(tr._simulation_results)
+    built = [
+        n.value
+        for n in ast.walk(builder)
+        if isinstance(n, ast.Return) and isinstance(n.value, ast.Call)
+    ]
+    assert len(built) == 1 and isinstance(built[0].func, ast.Name)
+    assert built[0].func.id == registered.pydantic_output_model.__name__
+    assert {kw.arg for kw in built[0].keywords} == set(
+        registered.pydantic_output_model.model_fields
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -608,80 +633,3 @@ def test_default_tool_dependencies_carry_values_the_consumer_can_take():
             if not _assignable(source, target)
         ]
     assert not incompatible, incompatible
-
-
-# ---------------------------------------------------------------------------
-# 3. The DB rows (tool_registry / tool_dependencies) against the live registry
-# ---------------------------------------------------------------------------
-
-SYNC_MARKER = "tool-registry-schema-sync"
-_PAYLOAD_RE = re.compile(r"\$(tool_registry_sync|tool_dependencies_sync)\$(.*?)\$\1\$", re.DOTALL)
-
-
-def _latest_sync_migration() -> Path:
-    candidates = sorted(
-        path
-        for path in (REPO_ROOT / "database" / "ml").glob("[0-9][0-9][0-9]_*.sql")
-        if SYNC_MARKER in path.read_text()
-    )
-    assert candidates, f"no database/ml migration carries the {SYNC_MARKER!r} payload"
-    return candidates[-1]
-
-
-def _sync_payloads() -> Dict[str, List[Dict[str, Any]]]:
-    text = _latest_sync_migration().read_text()
-    payloads = {tag: json.loads(body) for tag, body in _PAYLOAD_RE.findall(text)}
-    assert set(payloads) == {"tool_registry_sync", "tool_dependencies_sync"}, set(payloads)
-    return payloads
-
-
-def test_db_sync_covers_every_seeded_tool():
-    from scripts.generate_tool_registry_sync_migration import NOT_SEEDED_IN_DB
-
-    rows = _sync_payloads()["tool_registry_sync"]
-    names = [row["name"] for row in rows]
-    assert len(names) == len(set(names))
-    assert set(names) == LIVE_TOOLS - set(NOT_SEEDED_IN_DB)
-
-
-def test_db_sync_rows_match_the_live_registry():
-    registry = _registry()
-    for row in _sync_payloads()["tool_registry_sync"]:
-        registered = registry.get(row["name"])
-        declared = {p.name for p in registered.schema.input_parameters}
-        required = {p.name for p in registered.schema.input_parameters if p.required}
-        assert set(row["input_schema"]["properties"]) == declared, row["name"]
-        assert set(row["input_schema"].get("required", [])) == required, row["name"]
-        assert set(row["output_schema"]["properties"]) == set(
-            registered.pydantic_output_model.model_fields
-        ), row["name"]
-
-
-def test_db_sync_dependencies_match_the_default_tool_mappings():
-    from scripts.generate_tool_registry_sync_migration import NOT_SEEDED_IN_DB
-    from src.agents.tool_composer.tool_registry import DEPENDENCY_FIELD_MAPPINGS
-
-    rows = _sync_payloads()["tool_dependencies_sync"]
-    got = {(r["consumer"], r["producer"]): (r["output_field"], r["input_field"]) for r in rows}
-    expected = {
-        pair: fields
-        for pair, fields in DEPENDENCY_FIELD_MAPPINGS.items()
-        if not set(pair) & set(NOT_SEEDED_IN_DB)
-    }
-    assert got == expected
-
-
-def test_generator_output_is_what_the_drift_parser_reads():
-    from scripts.generate_tool_registry_sync_migration import SYNC_MARKER as GENERATOR_MARKER
-    from scripts.generate_tool_registry_sync_migration import render_sql
-
-    payloads = _sync_payloads()
-    sql = render_sql(
-        payloads["tool_registry_sync"], payloads["tool_dependencies_sync"], "999_x.sql"
-    )
-    assert GENERATOR_MARKER == SYNC_MARKER and SYNC_MARKER in sql
-    reparsed = {tag: json.loads(body) for tag, body in _PAYLOAD_RE.findall(sql)}
-    assert reparsed == payloads
-    # The row-count guards are sized to the payload the migration carries.
-    assert f"v_expected := {len(payloads['tool_registry_sync'])};" in sql
-    assert f"v_expected := {len(payloads['tool_dependencies_sync'])};" in sql

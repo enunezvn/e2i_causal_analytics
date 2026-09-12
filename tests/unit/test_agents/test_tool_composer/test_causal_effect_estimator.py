@@ -8,9 +8,10 @@ assertions FAIL — they assert the tool:
 
 1. CALLS `SequentialPipeline.execute()` (the real multi-library aggregation pipeline
    wired through C-1..C-6).
-2. RETURNS PIPELINE-DERIVED outputs (`ate` from `PipelineOutput.consensus_effect`,
-   confidence-derived `p_value` and `ci_*`) — NOT the hardcoded `0.12/0.08/0.16/0.001`
-   placeholder constants.
+2. RETURNS PIPELINE-DERIVED outputs (`ate` from `PipelineOutput.consensus_effect`) —
+   NOT the hardcoded `0.12/0.08/0.16/0.001` placeholder constants. The CI / p-value
+   come from the primary library's own standard error or are `None` (#2014; the
+   agreement-derived proxy is gone — see test_causal_effect_estimator_uncertainty_2014.py).
 3. FAILS CLOSED when the caller does NOT supply a DataFrame (raises a descriptive
    `RuntimeError`; never falls back to `ate=0.12` or any default).
 4. FAILS CLOSED when the pipeline raises `ExecutorDataUnavailable` from a downstream
@@ -72,7 +73,9 @@ def _build_real_dataframe(*, n: int = 400, true_ate: float = 1.5, seed: int = 13
     """
     rng = np.random.default_rng(seed)
     confounder_a = rng.normal(0.0, 1.0, n)
-    treatment = 0.5 * confounder_a + rng.normal(0.0, 1.0, n)
+    # Binary (#2014): the mocked outputs below name EconML/CausalML among the libraries
+    # used, and the tool refuses a non-binary treatment on any non-DoWhy route.
+    treatment = (0.5 * confounder_a + rng.normal(0.0, 1.0, n) > 0).astype(int)
     outcome = true_ate * treatment + 0.7 * confounder_a + rng.normal(0.0, 1.0, n)
     return pd.DataFrame({"treatment": treatment, "outcome": outcome, "confounder_a": confounder_a})
 
@@ -165,7 +168,9 @@ class TestCausalEffectEstimatorRealWiring:
             # consensus_effect, NOT the hardcoded 0.12.
             assert isinstance(result, EffectEstimate)
             assert result.ate == pytest.approx(0.42)
-            assert result.method == "backdoor.linear_regression"
+            # #2014: ``method`` names what ran, not what was requested. This output's
+            # primary result names no library, so the effect is labelled a consensus.
+            assert result.method == "consensus(dowhy,econml,causalml)"
 
     def test_estimation_data_first_class_field_carries_dataframe(self) -> None:
         """Post-#458: the DataFrame is conveyed via the first-class
@@ -255,14 +260,12 @@ class TestCausalEffectEstimatorRealWiring:
                     "a non-0.12 test case — likely the tool is hardcoded."
                 )
 
-    def test_ci_derived_from_pipeline_output_not_hardcoded(self) -> None:
-        """CI bounds MUST be derived from the pipeline's confidence/effect, not 0.08/0.16.
+    def test_no_measured_uncertainty_yields_no_ci_never_a_derived_one(self) -> None:
+        """CI bounds are never derived from the pipeline's confidence (#2014).
 
-        The pipeline returns `consensus_effect` and `consensus_confidence`; the
-        tool derives `ci_lower`/`ci_upper` from those (any documented formula
-        is acceptable as long as it varies with the inputs). The historical
-        constants (0.08, 0.16) MUST NOT appear regardless of the pipeline's
-        outputs.
+        The primary result here carries no standard error or interval, so the tool
+        reports no CI and no p-value, with the reason — not the historical constants
+        (0.08 / 0.16) and not the former agreement-derived proxy.
         """
         df = _build_real_dataframe()
         with patch(
@@ -280,20 +283,11 @@ class TestCausalEffectEstimatorRealWiring:
                 data=df,
             )
 
-            # CIs must NOT be the placeholder constants.
-            assert result.ci_lower != pytest.approx(0.08), (
-                "ci_lower=0.08 is the hardcoded placeholder; real wiring must "
-                "derive CI bounds from pipeline outputs."
-            )
-            assert result.ci_upper != pytest.approx(0.16), (
-                "ci_upper=0.16 is the hardcoded placeholder; real wiring must "
-                "derive CI bounds from pipeline outputs."
-            )
-            # CIs must be ordered and bracket-or-touch the estimate.
-            assert result.ci_lower <= result.ate <= result.ci_upper, (
-                f"CIs must bracket the point estimate; got "
-                f"({result.ci_lower}, {result.ate}, {result.ci_upper})"
-            )
+            assert result.ci_lower is None
+            assert result.ci_upper is None
+            assert result.p_value is None
+            assert result.uncertainty_method == "not_computed"
+            assert result.uncertainty_note
             # n_samples should reflect the input data (NOT the hardcoded 10000
             # constant for a 400-row fixture).
             assert result.n_samples != 10000, (
@@ -455,8 +449,10 @@ class TestCausalEffectEstimatorAntiMocking:
         Scope (codex iter-0 LOW expansion): scans `causal_effect_estimator`
         AND all of its module-level helpers reachable from the tool body
         (`_extract_dataframe_from_kwargs`, `_run_pipeline_sync`,
-        `_derive_ci_and_p_value`, `_derive_p_value_from_confidence`, and the
-        `_DataAwareSequentialPipeline` subclass). The original AST guard only
+        `_derive_uncertainty`, `_describe_estimate`, `_primary_estimate`; the
+        former `_derive_ci_and_p_value` / `_derive_p_value_from_confidence` proxy
+        helpers were removed in #2014, and the `_DataAwareSequentialPipeline`
+        subclass in #458). The original AST guard only
         scanned the public function — codex flagged that a regression could
         hide in a helper. We now check the entire call graph in the module.
 
@@ -482,8 +478,9 @@ class TestCausalEffectEstimatorAntiMocking:
             "causal_effect_estimator",
             "_extract_dataframe_from_kwargs",
             "_run_pipeline_sync",
-            "_derive_ci_and_p_value",
-            "_derive_p_value_from_confidence",
+            "_derive_uncertainty",
+            "_describe_estimate",
+            "_primary_estimate",
         }
         in_scope_classes: set[str] = set()
 

@@ -23,8 +23,9 @@ Diagnostics:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 from scipy import stats
@@ -59,6 +60,28 @@ def _z_scores(alpha: float, power: float) -> tuple[float, float]:
     return float(stats.norm.ppf(1 - alpha / 2)), float(stats.norm.ppf(power))
 
 
+def _whole_count(compute: Callable[[], float], what: str) -> int:
+    """``ceil`` of a sample-size expression, with an unrepresentable result made explicit.
+
+    A float ``**`` that leaves the float range raises ``OverflowError``; an infinite result
+    (an extreme alpha gives an infinite z-score) is not a sample size either. Both raise
+    ``OverflowError`` with a message (#2015) — deliberately NOT ``PowerCalculationError``:
+    the data-preparer sufficiency gate turns a ``PowerCalculationError`` into a floor-only
+    verdict that can PASS, while an uncomputable requirement must reach its blocking
+    INCONCLUSIVE handler, as the bare ``OverflowError`` did before.
+    """
+    try:
+        value = float(compute())
+    except OverflowError:
+        value = float("inf")
+    if not math.isfinite(value):
+        raise OverflowError(
+            f"{what} is not a finite number for these inputs; check the effect size, alpha, "
+            "power and rates"
+        )
+    return int(math.ceil(value))
+
+
 def continuous_outcome_power(effect_size: float, alpha: float, power: float) -> PowerResult:
     """Two-sample t-test power calculation.
 
@@ -72,7 +95,9 @@ def continuous_outcome_power(effect_size: float, alpha: float, power: float) -> 
     if effect_size == 0:
         raise PowerCalculationError("effect_size must be non-zero for power calculation")
     z_alpha, z_beta = _z_scores(alpha, power)
-    n_per_arm = int(np.ceil(2 * ((z_alpha + z_beta) / abs(effect_size)) ** 2))
+    n_per_arm = _whole_count(
+        lambda: 2 * ((z_alpha + z_beta) / abs(effect_size)) ** 2, "the per-arm sample size"
+    )
     return PowerResult(
         sample_size=n_per_arm * 2,
         sample_size_per_arm=n_per_arm,
@@ -119,7 +144,10 @@ def binary_outcome_power(
     diff = abs(p2 - p1)
     if diff < 1e-9:
         raise PowerCalculationError("Effect size produces zero risk difference")
-    n_per_arm = int(np.ceil(2 * p_bar * (1 - p_bar) * ((z_alpha + z_beta) / diff) ** 2))
+    n_per_arm = _whole_count(
+        lambda: 2 * p_bar * (1 - p_bar) * ((z_alpha + z_beta) / diff) ** 2,
+        "the per-arm sample size",
+    )
     return PowerResult(
         sample_size=n_per_arm * 2,
         sample_size_per_arm=n_per_arm,
@@ -147,6 +175,10 @@ def cluster_rct_power(
     Design effect = 1 + (cluster_size - 1) * ICC
     n_adjusted = n_base * design_effect
 
+    Rounded to two equal arms of whole clusters (#2015): per arm = ceil(n_adjusted / 2),
+    clusters per arm = ceil(per arm / cluster_size), total = 2 x per arm. Flooring either
+    division reported a design that could not reach its own total.
+
     Args:
         effect_size: Cohen's d.
         alpha: Type-I error rate.
@@ -161,12 +193,15 @@ def cluster_rct_power(
 
     base = continuous_outcome_power(effect_size, alpha, power)
     design_effect = 1 + (cluster_size - 1) * icc
-    adjusted_n = int(np.ceil(base.sample_size * design_effect))
-    n_clusters = int(np.ceil(adjusted_n / cluster_size))
+    adjusted_n = _whole_count(
+        lambda: base.sample_size * design_effect, "the design-effect-adjusted sample size"
+    )
+    per_arm = -(-adjusted_n // 2)
+    clusters_per_arm = -(-per_arm // cluster_size)
 
     return PowerResult(
-        sample_size=adjusted_n,
-        sample_size_per_arm=adjusted_n // 2,
+        sample_size=2 * per_arm,
+        sample_size_per_arm=per_arm,
         mde=abs(effect_size),
         analysis_type="cluster_rct_adjusted",
         effect_size_type="cohens_d",
@@ -177,8 +212,8 @@ def cluster_rct_power(
             "Exchangeable correlation structure within clusters",
         ],
         extra={
-            "n_clusters_total": n_clusters,
-            "n_clusters_per_arm": max(1, n_clusters // 2),
+            "n_clusters_total": 2 * clusters_per_arm,
+            "n_clusters_per_arm": clusters_per_arm,
             "cluster_size": cluster_size,
             "icc": icc,
             "design_effect": design_effect,
@@ -196,7 +231,7 @@ def time_to_event_power(
     """Log-rank test power via Schoenfeld formula.
 
     required_events = 4 * (z_alpha/2 + z_beta)^2 / (log HR)^2
-    total_n = required_events / event_rate
+    total_n = required_events / event_rate, rounded up to two equal arms (#2015)
 
     Args:
         hazard_ratio: HR treatment vs. control. Must be > 0 and != 1.
@@ -214,11 +249,13 @@ def time_to_event_power(
             f"hazard_ratio too close to 1.0 ({hazard_ratio}); no detectable effect"
         )
     z_alpha, z_beta = _z_scores(alpha, power)
-    required_events = int(np.ceil(4 * ((z_alpha + z_beta) / log_hr) ** 2))
-    total_n = int(np.ceil(required_events / event_rate))
+    required_events = _whole_count(
+        lambda: 4 * ((z_alpha + z_beta) / log_hr) ** 2, "the required number of events"
+    )
+    per_arm = -(-_whole_count(lambda: required_events / event_rate, "the total sample size") // 2)
     return PowerResult(
-        sample_size=total_n,
-        sample_size_per_arm=total_n // 2,
+        sample_size=2 * per_arm,
+        sample_size_per_arm=per_arm,
         mde=hazard_ratio,
         analysis_type="log_rank_test",
         effect_size_type="hazard_ratio",

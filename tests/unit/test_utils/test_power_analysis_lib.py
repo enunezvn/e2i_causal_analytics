@@ -256,3 +256,100 @@ class TestSensitivityVariations:
         result = sensitivity_variations(effect_size=0.3, alpha=0.05, power=0.80, base_n=200)
         for entry in result["effect_size_variations"].values():
             assert "change_from_base" in entry
+
+
+class TestEqualAllocationDesignsAreRecruitable:
+    """#2015: every design is two arms of equal size, and its reported figures must be one
+    that can be recruited. The per-arm figure used to be floor(total / 2) and the cluster
+    count floor(clusters / 2): at d=0.3, ICC 0.05, 20 per cluster the library reported 683
+    in total but 341 per arm and 17 clusters per arm — 680 subjects. Measured over the grid
+    below before the fix: 29 of 64 cluster designs and 8 of 32 time-to-event designs could
+    not reach their own total.
+
+    The expectations are rebuilt here from the formulas, not read back from the library.
+    """
+
+    @staticmethod
+    def _z(alpha: float, power: float) -> float:
+        from scipy.stats import norm
+
+        return float(norm.ppf(1 - alpha / 2) + norm.ppf(power))
+
+    @pytest.mark.parametrize("d", [0.1, 0.2, 0.3, 0.5])
+    @pytest.mark.parametrize("icc", [0.0, 0.01, 0.05, 0.2])
+    @pytest.mark.parametrize("m", [1, 5, 20, 37])
+    def test_cluster_totals_are_whole_arms_of_whole_clusters(self, d, icc, m):
+        import math
+
+        individual_total = 2 * math.ceil(2 * (self._z(0.05, 0.8) / d) ** 2)
+        required = math.ceil(individual_total * (1 + (m - 1) * icc))
+        result = cluster_rct_power(d, 0.05, 0.8, icc=icc, cluster_size=m)
+        per_arm = result.sample_size_per_arm
+        clusters_per_arm = result.extra["n_clusters_per_arm"]
+
+        assert result.sample_size == 2 * per_arm >= required
+        assert per_arm == math.ceil(required / 2)
+        assert clusters_per_arm * 2 * m >= result.sample_size
+        assert (clusters_per_arm - 1) * m < per_arm  # no spare cluster
+        assert result.extra["n_clusters_total"] == 2 * clusters_per_arm
+
+    def test_cluster_worked_example(self):
+        result = cluster_rct_power(0.3, 0.05, 0.80, icc=0.05, cluster_size=20)
+        # 2 x ceil(2 x (2.8016 / 0.3)^2) = 350; x 1.95 = 682.5 -> 683 -> 342 per arm.
+        assert (result.sample_size, result.sample_size_per_arm) == (684, 342)
+        assert (result.extra["n_clusters_per_arm"], result.extra["n_clusters_total"]) == (18, 36)
+
+    @pytest.mark.parametrize("hr", [0.5, 0.7, 0.8, 1.3])
+    @pytest.mark.parametrize("event_rate", [0.1, 0.33, 0.5, 0.9])
+    @pytest.mark.parametrize("power", [0.8, 0.9])
+    def test_time_to_event_totals_are_whole_arms(self, hr, event_rate, power):
+        import math
+
+        import numpy as np
+
+        events = math.ceil(4 * (self._z(0.05, power) / float(np.log(hr))) ** 2)
+        result = time_to_event_power(hr, 0.05, power, event_rate)
+        assert result.extra["required_events"] == events
+        assert result.sample_size == 2 * result.sample_size_per_arm
+        assert result.sample_size >= events / event_rate
+        assert result.sample_size_per_arm == math.ceil(math.ceil(events / event_rate) / 2)
+
+    def test_time_to_event_worked_example(self):
+        result = time_to_event_power(0.7, 0.05, 0.80, 0.33)
+        # 247 events / 0.33 = 748.5 -> 749 -> 375 per arm (was 374, i.e. 748 < 749).
+        assert result.extra["required_events"] == 247
+        assert (result.sample_size, result.sample_size_per_arm) == (750, 375)
+
+
+class TestUnrepresentableDesigns:
+    """#2015: a calculation that leaves the float range is not a sample size. It raises
+    OverflowError with a message — NOT PowerCalculationError, which the data-preparer
+    sufficiency gate turns into a floor-only verdict that can PASS — as the bare
+    OverflowError did before.
+
+    Designs under two per arm (d=4 -> 1, d=1e200 -> 0) and under two events are returned as
+    computed: that arithmetic is an input to the sufficiency gate (times the observational
+    inflation). The composer tools refuse them as recommendations
+    (tests/unit/test_agents/test_tool_composer/test_power_calculator_2015.py).
+    """
+
+    @pytest.mark.parametrize(
+        ("call", "args"),
+        [
+            (continuous_outcome_power, (1e-200, 0.05, 0.80)),
+            (cluster_rct_power, (1e-200, 0.05, 0.80, 0.05, 20)),
+            (cluster_rct_power, (1e-153, 0.05, 0.80, 0.5, 100)),
+            (binary_outcome_power, (1, 1e-200, 0.80, 0.1)),
+            (continuous_outcome_power, (0.2, 1e-200, 0.80)),
+            (time_to_event_power, (0.7, 1e-200, 0.80, 0.5)),
+        ],
+    )
+    def test_a_calculation_outside_the_float_range_is_an_overflow(self, call, args):
+        with pytest.raises(OverflowError, match="finite") as raised:
+            call(*args)
+        assert not isinstance(raised.value, PowerCalculationError)
+
+    def test_a_tiny_design_is_returned_as_computed(self):
+        # 2 x (2.8016 / 4)^2 = 0.98 -> 1 per arm, 2 in total: the base arithmetic.
+        result = continuous_outcome_power(4.0, 0.05, 0.80)
+        assert (result.sample_size_per_arm, result.sample_size) == (1, 2)

@@ -432,24 +432,32 @@ Supports multi-faceted query handling with dependency-aware tool composition. Th
 |------|--------|
 | `routing_pattern` | `SINGLE_AGENT`, `PARALLEL_DELEGATION`, `TOOL_COMPOSER`, `CLARIFICATION_NEEDED` |
 | `dependency_type` | `REFERENCE_CHAIN`, `CONDITIONAL`, `LOGICAL_SEQUENCE`, `ENTITY_TRANSFORMATION` |
-| `tool_category` | `CAUSAL`, `SEGMENTATION`, `GAP`, `EXPERIMENT`, `PREDICTION`, `MONITORING` |
+| `tool_category` | `CAUSAL`, `SEGMENTATION`, `GAP`, `EXPERIMENT`, `PREDICTION`, `MONITORING`, `COHORT` (ml/039) |
 | `composition_status` | `PENDING`, `DECOMPOSING`, `PLANNING`, `EXECUTING`, `SYNTHESIZING`, `COMPLETED`, `FAILED`, `TIMEOUT` |
 
 ### 4.1 `tool_registry`
 
-Central registry of composable tools exposed by Tier 2--4 agents. Seeded with **13** default tools. The count is the `INSERT INTO tool_registry (...) VALUES` block in `database/ml/013_tool_composer_tables.sql`: 3 for `causal_impact` and 2 each for `heterogeneous_optimizer`, `gap_analyzer`, `experiment_designer`, `prediction_synthesizer` and `drift_monitor`. Rows are seeded by migration, never registered at runtime, so that block is the authority for the count.
+Central registry of composable tools exposed by agents. **The rows describe the code that is running.** At API startup `registry_sync.sync_tool_registry_once()` (`src/agents/tool_composer/registry_sync.py`) calls `sync_tool_registry(p_tools, p_dependencies, p_max_deprecations)` (ml/040) with every tool in the live registry (20 as of 2026-09-11):
+
+- rows are upserted by `name`, and an unchanged row is not rewritten;
+- a tool the code no longer registers gets `deprecated_at = now()` and `composable = false`; it is never deleted, because `composition_steps` reference it;
+- `tool_dependencies` becomes exactly `DEPENDENCY_FIELD_MAPPINGS`;
+- a payload that would deprecate more than 3 active tools is refused before any write, and an advisory lock serialises the API workers.
+
+ml/013 and ml/027 seeded the first 16 rows. ml/037 is applied history of the retired migration-per-schema-change regime (#2003); no migration is needed when a tool's inputs or output model change.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `tool_id` | UUID PK | Tool identifier |
 | `name` | VARCHAR(100) UNIQUE | Tool name (e.g., `causal_effect_estimator`) |
 | `category` | tool_category | Capability domain |
-| `source_agent` | VARCHAR(50) | Owning agent |
+| `source_agent` | VARCHAR(50) | Owning agent (CHECK: a value of the `e2i_agent_name` enum, ml/040) |
 | `input_schema` | JSONB | JSON Schema for inputs |
 | `output_schema` | JSONB | JSON Schema for outputs |
 | `composable` | BOOLEAN | Whether Tool Composer can use it |
-| `avg_latency_ms` | FLOAT | Rolling average latency |
-| `success_rate` | FLOAT | Rolling success rate (0--1) |
+| `avg_latency_ms` | FLOAT | **Declared** latency baseline of the registered tool, written by the sync. Measured latency comes from `get_tool_reliability()` (ml/041) |
+| `version` | VARCHAR(20) | Registered tool version |
+| `deprecated_at` | TIMESTAMPTZ | Set when the running code no longer registers the tool |
 
 ### 4.2 `tool_dependencies`
 
@@ -479,6 +487,26 @@ Audit trail of Orchestrator query classification decisions with feedback trackin
 | `confidence` | FLOAT | Classification confidence (0--1) |
 | `used_llm_layer` | BOOLEAN | Whether the LLM classifier was invoked |
 | `was_correct` | BOOLEAN | Feedback: NULL = pending |
+
+### 4.3b Learning-loop functions (ml/040, ml/041)
+
+The composer records what it actually did, so reliability is measured rather than declared. All of
+these are `SECURITY INVOKER` and executable by `service_role` only; `anon` and `authenticated` have
+no privileges on them.
+
+| Function | Migration | What it does |
+|---|---|---|
+| `sync_tool_registry(jsonb, jsonb, integer)` | ml/040 | Makes `tool_registry` and `tool_dependencies` equal to the running code's registered tools. Called at API startup, under an advisory lock, and refuses to deprecate more tools than its cap. It replaced the previous regime of generating a migration per schema change. |
+| `composer_record_start(jsonb)` | ml/041 | Seeds the episode. Every recording RPC carries the same seed and begins `INSERT … ON CONFLICT (composition_id) DO NOTHING`, so whichever write lands first creates the episode and a failed start never orphans later data. |
+| `composer_record_phase(jsonb, text, jsonb)` | ml/041 | Updates status and that phase's fields, only while the episode is non-terminal. |
+| `composer_record_steps(jsonb, jsonb)` | ml/041 | Inserts `composition_steps` and the `tool_performance` rows for invoked classes. Idempotent per `(episode_id, step_number)` and per `step_id`, and returns a receipt naming unknown or schema-mismatched tools. |
+| `composer_record_heartbeat(jsonb)` | ml/041 | Bumps `last_activity_at` while the episode is non-terminal, so an abandoned composition is distinguishable from a slow one. |
+| `composer_record_finish(jsonb, jsonb)` | ml/041 | Writes the terminal state and every phase latency from the recorder's in-memory snapshot, so a lost phase write is recovered. A second finish changes nothing. |
+| `composer_steps_for(text[])` | ml/041 | The recorded steps of the given compositions, for the planner's episodic references. |
+| `get_tool_reliability(integer, boolean)` | ml/041 | Per-tool counts and latency percentiles over a window. `n_health = succeeded + timeout + error` is the denominator; refusals are counted separately and never enter it. The verdict itself is computed in `src/agents/tool_composer/reliability.py`, not in SQL. |
+
+Rollback: `database/ml/rollback_041.sql` then `database/ml/rollback_040.sql`, by hand and newest
+first — see `docs/runbooks/tool-composer-learning-loop.md`.
 
 ### 4.4 `composer_episodes`
 
@@ -1635,7 +1663,16 @@ flowchart TD
     CS1 -->|Phase 4: Synthesize| R[Synthesized Response]
     CS2 --> R
     CS3 --> R
+    R -->|user rates the answer| FB[chatbot_message_feedback]
+    FB -->|nightly linker, same session + window| CE
+    TP -->|get_tool_reliability| RV["Reliability verdict\n(admin surface)"]
 ```
+
+The last two edges close the loop: `composer_episodes.success` is filled from the user's own
+thumbs by `src.tasks.link_composition_feedback`, and `tool_performance` is what
+`get_tool_reliability` reads. Neither changes planning behaviour — the reliability caveat in the
+planning prompt stays behind `TOOL_COMPOSER_RELIABILITY_IN_PLANNER`, which is off by default
+pending its experiment (see `docs/runbooks/tool-composer-learning-loop.md`).
 
 ---
 

@@ -58,7 +58,7 @@ import asyncio
 import math
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -68,6 +68,7 @@ from src.causal_engine.pipeline import (
     PipelineOutput,
     SequentialPipeline,
 )
+from src.causal_engine.pipeline.sequential import ECONML_SAMPLING_INTERVAL_ESTIMATORS
 from src.services import cohort_resolution
 from src.tool_registry import (
     composable_tool,
@@ -85,6 +86,13 @@ _DATAFRAME_KWARGS_KEYS: Tuple[str, ...] = (
     "estimation_data",
 )
 
+# The one estimator ``causal_effect_estimator`` runs (#2014): DoWhy's default
+# pipeline method, the only one with an analytic standard error.
+_EFFECT_ESTIMATOR_METHOD = "backdoor.linear_regression"
+
+# Two-sided 95 % normal critical value (the consensus aggregator uses the same).
+_Z_95 = 1.959963984540054
+
 
 # `_DataAwareSequentialPipeline` was deleted in #458 once `PipelineState` /
 # `PipelineInput` declared `estimation_data` as a first-class field — the
@@ -98,22 +106,37 @@ _DATAFRAME_KWARGS_KEYS: Tuple[str, ...] = (
 
 
 class EffectEstimatorInput(BaseModel):
-    """Input for causal effect estimation"""
+    """Input for causal effect estimation.
+
+    No ``method``: the tool runs DoWhy linear regression only (#2014).
+    """
 
     treatment: str
     outcome: str
     confounders: List[str] = []
-    method: str = "backdoor.linear_regression"
 
 
 class EffectEstimate(BaseModel):
-    """Output from causal effect estimation"""
+    """Output from causal effect estimation (#2014).
+
+    ``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` are real sampling
+    quantities or all ``None``. ``uncertainty_method`` names their source
+    (``ols_hc1_normal`` / ``dowhy_standard_error_normal``, or ``not_computed``) and ``uncertainty_note`` says how they were computed or why they
+    were not. ``method`` is the estimator that actually ran, ``estimand`` what it
+    estimated in words, ``effect_scale`` ``binary_contrast`` (treatment 1 vs 0) or
+    ``per_unit`` (per one-unit increase in a non-binary treatment).
+    """
 
     ate: float
-    ci_lower: float
-    ci_upper: float
-    p_value: float
+    ci_lower: Optional[float]
+    ci_upper: Optional[float]
+    p_value: Optional[float]
+    standard_error: Optional[float]
+    uncertainty_method: str
+    uncertainty_note: str
     method: str
+    estimand: str
+    effect_scale: str
     n_samples: int
 
 
@@ -149,6 +172,12 @@ class CATEResults(BaseModel):
     branch on), ``detail`` is the prose for synthesis to disclose, and ``name`` is
     ``None`` for the null-key group — the rows whose segment value is missing name
     no segment, so there is no honest label to give them.
+
+    A ``segments`` entry's ``n`` is the number of rows its CATE is computed from:
+    rows in either arm with a non-null ``outcome`` (#2016). When a segment that IS
+    estimated leaves rows out (a null treatment or outcome), those rows get an
+    ``excluded_segments`` entry with reason ``rows_missing_treatment_or_outcome``
+    and the same ``name``. That code alone does not mean the segment was dropped.
     """
 
     segments: List[Dict[str, Any]]
@@ -214,37 +243,98 @@ class PropensityScores(BaseModel):
 
 
 class PowerCalculatorInput(BaseModel):
-    """Input for power analysis"""
+    """Input for power analysis (#2015).
+
+    Mirrors the callable. The previous model also declared ``ratio`` (treatment/control
+    allocation), which the tool never read and ``power_analysis_lib`` cannot honour — every
+    formula there assumes equal allocation — so it is gone rather than silently ignored.
+    """
 
     effect_size: float
     alpha: float = 0.05
     power: float = 0.8
-    ratio: float = 1.0  # Treatment/control ratio
+    outcome_type: str = "continuous"
+    design: str = "individual"
+    baseline_rate: Optional[float] = None
+    event_rate: Optional[float] = None
+    icc: Optional[float] = None
+    cluster_size: Optional[int] = None
 
 
 class PowerAnalysis(BaseModel):
-    """Output from power analysis"""
+    """Output from power analysis, computed by ``src/utils/power_analysis_lib`` (#2015).
 
-    required_n: int
-    actual_power: float
-    detectable_effect: float
+    ``required_n_per_arm`` and ``required_n_total`` are the library's own figures: two equal
+    arms, and for a cluster design whole clusters per arm (``design_details``), the same
+    figures the experiment-designer agent reports. ``alpha`` and ``power`` are the design targets
+    the sample size was solved for. ``minimum_detectable_effect`` is on
+    ``minimum_detectable_effect_scale``, which differs from the input ``effect_size`` for a
+    binary design (relative change in, absolute risk difference out — #1639).
+    """
+
+    required_n_per_arm: int
+    required_n_total: int
+    alpha: float
+    power: float
+    effect_size: float
+    outcome_type: str
+    design: str
+    analysis_type: str
+    minimum_detectable_effect: float
+    minimum_detectable_effect_scale: str
+    assumptions: List[str]
+    design_details: Dict[str, Any]
 
 
 class SimulatorInput(BaseModel):
-    """Input for counterfactual simulation"""
+    """Input for counterfactual simulation (#2015): what the digital-twin engine can use.
+
+    The previous model declared ``expected_effect`` and ``duration_weeks``. The engine
+    estimates the effect itself from the brand's cohort, so an upstream effect has no role
+    in it, and ``duration_weeks`` never reached the tool.
+    """
 
     intervention: str
-    target_entities: List[str]
-    expected_effect: float
-    duration_weeks: int = 12
+    brand: str
+    target_entities: List[str] = []
 
 
 class SimulationResults(BaseModel):
-    """Output from counterfactual simulation"""
+    """Output from ``counterfactual_simulator``: one digital-twin simulation (#2015).
 
-    predicted_lift: float
-    confidence: str  # low, medium, high
-    uncertainty_range: List[float]
+    ``effect`` / ``ci_lower`` / ``ci_upper`` answer the question asked, on ``effect_scope``:
+    the cohort when no regions are targeted, else the targeted regions (the causal forest's
+    average effect over the cohort rows in them, with its 95% interval over those rows).
+    ``cohort_effect`` / ``cohort_ci_*`` are always the engine's cohort-wide numbers — the
+    ones ``/digital-twin/simulate`` returns, which a region filter does not change
+    (measured). ``region_effects`` are per-region effects for the simulated twins' regions
+    that the cohort covers: point estimates. ``recommendation`` / ``recommendation_rationale``
+    apply the engine's CI-based DEPLOY / REFINE / SKIP policy to the headline effect.
+    ``recommended_sample_size`` is the per-arm n of a two-sided, equal-allocation experiment
+    powered to detect the headline effect on the continuous outcome, sized from the outcome's
+    spread in the cohort's comparison arm (``src.digital_twin.effect.recommendation.experiment_size``,
+    the rule the Digital Twin page uses); ``None`` when that
+    cannot be measured, with the reason in ``assumptions``.
+    """
+
+    intervention_type: str
+    brand: str
+    target_regions: List[str]
+    effect_scope: str
+    effect: float
+    ci_lower: float
+    ci_upper: float
+    cohort_effect: float
+    cohort_ci_lower: float
+    cohort_ci_upper: float
+    region_effects: Dict[str, float]
+    twin_count: int
+    recommendation: str
+    recommendation_rationale: str
+    recommended_sample_size: Optional[int]
+    model_id: str
+    data_provenance: str
+    assumptions: List[str]
 
 
 # The four models below are the output contracts of the tools that return a plain dict
@@ -253,10 +343,16 @@ class SimulationResults(BaseModel):
 
 
 class SensitivityReport(BaseModel):
-    """Output from ``sensitivity_analyzer``: E-values and the shared ``evalue`` reading."""
+    """Output from ``sensitivity_analyzer``: E-values and the shared ``evalue`` reading.
+
+    Without a confidence interval (#2014) the report is point-only: ``e_value_ci`` is
+    None and ``reading`` is ``interval_unavailable``. ``benchmark`` is still the
+    confounding the adjustment removed when a naive contrast is given (a point
+    quantity), else None with basis ``none_measured``.
+    """
 
     e_value_point: float
-    e_value_ci: float
+    e_value_ci: Optional[float]
     reading: str
     headline: str
     benchmark: Optional[float]
@@ -269,9 +365,10 @@ class RefutationResults(BaseModel):
     """Output from ``refutation_runner``: the DoWhy refutation suite and its summary.
 
     The summary fields are read from the suite with ``.get`` and stay optional.
+    ``estimate_id`` is the caller's optional label, echoed (#2014).
     """
 
-    estimate_id: str
+    estimate_id: Optional[str]
     treatment: str
     outcome: str
     n_samples: int
@@ -799,7 +896,12 @@ def cohort_statistics(
 
 @composable_tool(
     name="causal_effect_estimator",
-    description="Estimate average treatment effect (ATE/ATT) using DoWhy/EconML with confidence intervals",
+    description=(
+        "Estimate the effect of a treatment on an outcome with DoWhy linear regression, "
+        "adjusted for confounders; reports a 95% CI and p-value from a "
+        "heteroskedasticity-robust (HC1) standard error, or none with the reason, and "
+        "names the estimand (per unit for a non-binary treatment)"
+    ),
     source_agent="causal_impact",
     tier=2,
     input_parameters=[
@@ -811,7 +913,6 @@ def cohort_statistics(
             "description": "Confounder variables",
             "required": False,
         },
-        {"name": "method", "type": "str", "description": "Estimation method", "required": False},
     ],
     output_schema="EffectEstimate",
     avg_execution_ms=2000,
@@ -822,28 +923,27 @@ def causal_effect_estimator(
     treatment: str,
     outcome: str,
     confounders: Optional[List[str]] = None,
-    method: str = "backdoor.linear_regression",
+    method: Optional[str] = None,
     **kwargs: Any,
 ) -> EffectEstimate:
     """Estimate causal effect by routing the request through ``SequentialPipeline``.
 
     Phase C-7 of GH #354. Replaces the previous hardcoded
     ``ate=0.12, ci_lower=0.08, ci_upper=0.16, p_value=0.001, n_samples=10000``
-    fabrication with a real multi-library run wired through the C-1..C-6
-    pipeline (NetworkX -> DoWhy -> EconML -> CausalML).
+    fabrication with a real run through the C-1..C-6 pipeline. Since #2014 the
+    run is pinned to DoWhy (primary) and NetworkX: the router used to pick the
+    libraries from keywords in the generated sentence, so a column name such as
+    ``payer_category`` sent the estimate to EconML + CausalML. EconML's
+    heterogeneity analysis stays in ``cate_analyzer`` and the causal_impact agent.
 
     Data flow:
     - The caller MUST supply a ``pandas.DataFrame`` under one of the canonical
       kwargs keys (``data`` / ``dataframe`` / ``estimation_data``). The tool
       does NOT fabricate synthetic data; absent a DataFrame it raises
       ``RuntimeError``.
-    - The DataFrame is conveyed to the pipeline via
-      ``PipelineInput.filters`` populated with the keys all Wave-1 executors
-      look at (``estimation_data`` for DoWhy/EconML, ``dataframe`` for
-      CausalML), plus a top-level ``data_cache`` mirror for forward-compat
-      with C-6's ``data_resolver`` canonical path. Wave-1 executors keep
-      reading their per-executor keys; the new ``data_resolver`` helper
-      reads ``data_cache.estimation_data`` first.
+    - The DataFrame is conveyed to the pipeline via the first-class
+      ``PipelineInput.estimation_data`` field (#458); every executor reads it
+      through ``data_resolver.resolve_estimation_dataframe``.
 
     Fail-closed semantics (per CLAUDE.md anti-mocking discipline + dispatch
     plan R2/R9):
@@ -860,20 +960,27 @@ def causal_effect_estimator(
       signal).
 
     Returned ``EffectEstimate`` fields are derived from the pipeline output:
-    - ``ate`` = ``PipelineOutput.consensus_effect`` (the confidence-weighted
-      cross-library consensus produced by C-6's ``_aggregate_results``).
-    - ``ci_lower`` / ``ci_upper`` = primary library's ``ate_ci_lower`` /
-      ``ate_ci_upper`` when present in ``primary_result`` (EconML emits
-      these directly); otherwise derived from ``consensus_confidence`` as
-      ``ate +/- width`` where ``width = max(|ate|, 0.05) * (1 -
-      consensus_confidence) + 0.001``. This is a documented derivation
-      from real pipeline outputs — NOT a hardcoded placeholder.
-    - ``p_value`` = primary library's ``p_value`` when present; otherwise
-      derived from ``consensus_confidence`` as
-      ``max(0.001, min(0.999, 1 - consensus_confidence))``. Again documented
-      derivation — NOT a hardcoded constant.
-    - ``method`` = the caller's requested method (echoed back).
+    - ``ate`` = ``PipelineOutput.consensus_effect``; with the pin DoWhy is the
+      only effect library, so it is DoWhy's estimate.
+    - ``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` come from
+      :func:`_derive_uncertainty` (#2014): the 95 % normal interval and
+      two-sided p of the primary library's own standard error — for DoWhy the
+      HC1 SE of its OLS fit — or all ``None`` with the reason in
+      ``uncertainty_note``. The former proxy (``ate +/- 0.001, p = 0.001``
+      whenever one library ran, built from library agreement) is gone.
+    - ``method`` / ``estimand`` / ``effect_scale`` = what actually ran and what
+      it estimated (:func:`_describe_estimate`).
     - ``n_samples`` = ``len(df)`` from the caller-supplied DataFrame.
+
+    ``method`` is not offered to the planner (#2014). It used to be echoed back
+    while DoWhy ran linear regression regardless. Passing it through was
+    measured and rejected: only linear regression has an analytic SE; the other
+    DoWhy methods need a bootstrap (100 refits at n = 8,730: matching 8.0 s,
+    weighting 6.1 s, stratification 126 s — past the 120 s step envelope),
+    DoWhy's bootstrap is unseeded (the same question would give a different
+    interval each run), and ``refutation_runner`` re-estimates with linear
+    regression, so it would refute a different estimate than the one reported.
+    A caller that still names another estimator gets a ``ToolInputError``.
 
     Cross-refs:
     - Dispatch plan: ``.claude/plans/354_dispatch_plan_v1.md`` §2.4 C-7
@@ -885,8 +992,8 @@ def causal_effect_estimator(
         treatment: Name of the treatment column in the supplied DataFrame.
         outcome: Name of the outcome column.
         confounders: Confounder column names (optional).
-        method: Estimation method label echoed back in the result; the
-            pipeline picks its own per-library estimator internally.
+        method: Not offered to the planner. Accepted only as ``None`` or
+            ``"backdoor.linear_regression"``; any other value is refused.
         **kwargs: Must contain the DataFrame under one of
             ``_DATAFRAME_KWARGS_KEYS``. May also contain ``data_source``
             (passed through as ``PipelineInput.data_source``) and
@@ -896,6 +1003,8 @@ def causal_effect_estimator(
         ``EffectEstimate`` populated from the pipeline's real consensus.
 
     Raises:
+        ToolInputError: when ``method`` names an estimator other than DoWhy
+            linear regression.
         RuntimeError: when the caller did not supply a DataFrame, when the
             pipeline reports failure, or when the pipeline did not produce a
             finite consensus effect.
@@ -903,6 +1012,14 @@ def causal_effect_estimator(
             ``ExecutorDataUnavailable`` from a downstream executor) is
             propagated unchanged.
     """
+    if method is not None and method != _EFFECT_ESTIMATOR_METHOD:
+        raise ToolInputError(
+            f"causal_effect_estimator estimates with DoWhy {_EFFECT_ESTIMATOR_METHOD!r} "
+            f"only; got method={method!r}. No other estimator is run by this tool, so the "
+            "request is refused rather than answered with a linear-regression estimate "
+            "labelled as another method (#2014). Omit method."
+        )
+
     # --- 1. Locate the caller's real DataFrame (fail-closed if missing). ---
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
@@ -917,8 +1034,10 @@ def causal_effect_estimator(
 
     # --- 2. Build the PipelineInput. ---
     data_source = kwargs.get("data_source") or "tool_composer.causal_effect_estimator"
+    # Wording unchanged from when ``method`` was echoed into it: routing reads it.
     query = kwargs.get("query") or (
-        f"Estimate the causal effect of {treatment} on {outcome} using method={method!r}."
+        f"Estimate the causal effect of {treatment} on {outcome} "
+        f"using method={_EFFECT_ESTIMATOR_METHOD!r}."
     )
     # Pass the DataFrame via the first-class `estimation_data` field (#458).
     # The orchestrator's `_create_initial_state` copies this into
@@ -936,7 +1055,11 @@ def causal_effect_estimator(
         "filters": None,
         "estimation_data": df,
         "mode": "sequential",
-        "libraries_enabled": None,
+        # Pinned (#2014): DoWhy first, because the router makes the first forced
+        # library primary (measured on a real run in both orders). NetworkX runs for
+        # the graph-quality channel and estimates no effect. A ``query`` override
+        # therefore no longer changes which libraries run.
+        "libraries_enabled": ["dowhy", "networkx"],
         "cross_validate": None,
     }
 
@@ -984,21 +1107,30 @@ def causal_effect_estimator(
             f"(got {ate_value}). Refusing to emit non-finite ATE to caller."
         )
 
-    # --- 5. Derive CI / p-value from real pipeline outputs. ---
+    # --- 5. Real uncertainty of the reported effect, and what was estimated. ---
     primary_result = pipeline_output.get("primary_result") or {}
-    consensus_confidence = pipeline_output.get("consensus_confidence")
-    ci_lower, ci_upper, p_value = _derive_ci_and_p_value(
+    libraries_used = list(pipeline_output.get("libraries_used") or [])
+    errors = list(pipeline_output.get("errors") or [])
+    uncertainty = _derive_uncertainty(
+        ate=ate_value, primary_result=primary_result, libraries_used=libraries_used, errors=errors
+    )
+    method_used, estimand, effect_scale = _describe_estimate(
         ate=ate_value,
         primary_result=primary_result,
-        consensus_confidence=consensus_confidence,
+        libraries_used=libraries_used,
+        errors=errors,
+        treatment_values=df.get(treatment),
+        treatment=treatment,
+        outcome=outcome,
+        confounders=confounders or [],
     )
 
     return EffectEstimate(
         ate=ate_value,
-        ci_lower=ci_lower,
-        ci_upper=ci_upper,
-        p_value=p_value,
-        method=method,
+        **uncertainty,
+        method=method_used,
+        estimand=estimand,
+        effect_scale=effect_scale,
         n_samples=int(len(df)),
     )
 
@@ -1061,84 +1193,275 @@ def _run_pipeline_sync(
         new_loop.close()
 
 
-def _derive_ci_and_p_value(
+def _finite_float(value: Any) -> Optional[float]:
+    """``value`` as a finite float, or None (bools and non-numbers are None)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    f = float(value)
+    return f if math.isfinite(f) else None
+
+
+def _primary_estimate(primary_result: Dict[str, Any]) -> Tuple[Optional[str], Optional[float]]:
+    """The primary library's name and its OWN effect estimate, from its result keys.
+
+    DoWhy reports ``causal_effect`` (and ``dowhy_method``); EconML ``ate`` with its
+    ``estimator``; CausalML ``ate`` with its ``model``. NetworkX (primary for
+    impact-flow wording) estimates no effect.
+    """
+    if "dowhy_method" in primary_result:
+        return "dowhy", _finite_float(primary_result.get("causal_effect"))
+    if "estimator" in primary_result and "ate" in primary_result:
+        return "econml", _finite_float(primary_result.get("ate"))
+    if "model" in primary_result and "ate" in primary_result:
+        return "causalml", _finite_float(primary_result.get("ate"))
+    return ("networkx" if "is_dag" in primary_result else None), None
+
+
+# Libraries whose result is an effect estimate the pipeline consensus can blend.
+_EFFECT_LIBRARIES = ("dowhy", "econml", "causalml")
+
+
+class _EstimateProvenance(NamedTuple):
+    """Which library the reported effect came from (#2014)."""
+
+    library: Optional[str]  # the primary library
+    own_effect: Optional[float]  # the primary library's own estimate
+    effect_libraries: List[str]  # libraries that ran without error and estimate effects
+    is_primary_estimate: bool  # the reported ate IS the primary library's sole estimate
+
+
+def _estimate_provenance(
     *,
     ate: float,
     primary_result: Dict[str, Any],
-    consensus_confidence: Optional[float],
-) -> Tuple[float, float, float]:
-    """Derive ``(ci_lower, ci_upper, p_value)`` from real pipeline outputs.
+    libraries_used: List[str],
+    errors: List[Any],
+) -> _EstimateProvenance:
+    """Whether the reported ``ate`` is the primary library's own, unblended estimate.
 
-    Priority order:
-
-    1. **Primary library emits CI / p-value directly** (EconML does this
-       — see ``executors/econml.py``'s ``ate_ci_lower`` / ``ate_ci_upper``
-       fields). Use those values when finite and consistent (lower <= ate
-       <= upper).
-    2. **Derive from ``consensus_confidence``** as a documented fallback.
-       The pipeline does not (yet) surface a cross-library standard error
-       at the consensus level; we use confidence as a proxy for relative
-       uncertainty. Formula:
-       - ``width = max(|ate|, 0.05) * (1 - confidence) + 0.001``
-       - ``ci_lower = ate - width``
-       - ``ci_upper = ate + width``
-       - ``p_value = clamp(1 - confidence, 0.001, 0.999)``
-
-       This is a derivation from real pipeline outputs (consensus_confidence
-       comes from C-6's confidence-weighted aggregation across actually-run
-       libraries). It is NOT a hardcoded constant.
-
-    Returns:
-        Tuple of ``(ci_lower, ci_upper, p_value)``; all floats; CI always
-        brackets the ATE.
+    Decided from provenance, not only numbers: the consensus blends every effect
+    library that ran, so two libraries agreeing (or a blend landing on the primary's
+    value) must not borrow the primary's uncertainty. A library counts when it ran
+    and reported no error; one that ran but contributed no effect is still counted,
+    which can only withhold an interval, never invent one.
     """
-    # Priority 1: primary-library CI/p-value when usable.
-    pr_ci_lower_raw = primary_result.get("ate_ci_lower")
-    pr_ci_upper_raw = primary_result.get("ate_ci_upper")
-    pr_p_value_raw = primary_result.get("p_value")
-    if (
-        isinstance(pr_ci_lower_raw, (int, float))
-        and isinstance(pr_ci_upper_raw, (int, float))
-        and math.isfinite(float(pr_ci_lower_raw))
-        and math.isfinite(float(pr_ci_upper_raw))
-    ):
-        ci_lower_pl = float(pr_ci_lower_raw)
-        ci_upper_pl = float(pr_ci_upper_raw)
-        if ci_lower_pl <= ate <= ci_upper_pl and ci_lower_pl < ci_upper_pl:
-            if isinstance(pr_p_value_raw, (int, float)) and math.isfinite(float(pr_p_value_raw)):
-                p_value_pl = max(0.0, min(1.0, float(pr_p_value_raw)))
-            else:
-                p_value_pl = _derive_p_value_from_confidence(consensus_confidence)
-            return ci_lower_pl, ci_upper_pl, p_value_pl
-
-    # Priority 2: derive from consensus_confidence (documented formula above).
-    confidence = (
-        float(consensus_confidence)
-        if isinstance(consensus_confidence, (int, float))
-        and math.isfinite(float(consensus_confidence))
-        else 0.5  # Documented neutral fallback when confidence is also missing.
+    library, own_effect = _primary_estimate(primary_result)
+    failed = {e.get("library") for e in errors if isinstance(e, dict)}
+    effect_libraries = [
+        lib for lib in libraries_used if lib in _EFFECT_LIBRARIES and lib not in failed
+    ]
+    is_primary_estimate = (
+        own_effect is not None
+        and effect_libraries == [library]
+        and math.isclose(own_effect, ate, rel_tol=1e-9, abs_tol=1e-12)
     )
-    confidence = max(0.0, min(1.0, confidence))
-    width = max(abs(ate), 0.05) * (1.0 - confidence) + 0.001
-    ci_lower = ate - width
-    ci_upper = ate + width
-    p_value = _derive_p_value_from_confidence(consensus_confidence)
-    return ci_lower, ci_upper, p_value
+    return _EstimateProvenance(library, own_effect, effect_libraries, is_primary_estimate)
 
 
-def _derive_p_value_from_confidence(consensus_confidence: Optional[float]) -> float:
-    """Map ``consensus_confidence`` -> two-sided p-value proxy.
+def _derive_uncertainty(
+    *,
+    ate: float,
+    primary_result: Dict[str, Any],
+    libraries_used: List[str],
+    errors: List[Any],
+) -> Dict[str, Any]:
+    """Real sampling uncertainty of the reported effect, or None with the reason (#2014).
 
-    ``p_value = clamp(1 - confidence, 0.001, 0.999)``. When confidence is
-    missing/None/non-finite, returns 0.5 (documented neutral fallback —
-    NOT a hardcoded placeholder; the formula remains deterministic given
-    the available information).
+    Replaces the former proxy, which built ``ate +/- width`` and ``p`` from library
+    AGREEMENT (``consensus_confidence``) — ATE +/- 0.001 with p = 0.001 whenever a
+    single library ran — while the standard error DoWhy returned went unread.
+
+    An interval exists only when the reported ``ate`` IS the primary library's own
+    estimate (:func:`_estimate_provenance`) and that library measured its sampling
+    error:
+
+    * DoWhy: its ``standard_error`` (the HC1 SE of its OLS fit) gives the 95 % normal
+      interval ``ate +/- z*SE`` and the two-sided normal p-value.
+    * EconML, for the estimators whose interval is a sampling interval: that 95 %
+      interval and its ``ate_std`` (the SE back-derived from the width, ``(hi - lo) /
+      2z``, only when ``ate_std`` is absent), with the p-value from that SE.
+
+    Otherwise every field is None: the effect is a consensus across libraries (no SE
+    exists for that blend), the primary library produced no estimate of its own, it
+    measured no SE (e.g. zero residual degrees of freedom), or its interval is not a
+    sampling interval — CausalML's is always ``std(predicted uplift) / sqrt(n)``,
+    which ignores the uncertainty of fitting the uplift model.
     """
-    if not isinstance(consensus_confidence, (int, float)) or not math.isfinite(
-        float(consensus_confidence)
-    ):
-        return 0.5
-    return max(0.001, min(0.999, 1.0 - float(consensus_confidence)))
+    prov = _estimate_provenance(
+        ate=ate, primary_result=primary_result, libraries_used=libraries_used, errors=errors
+    )
+
+    def not_computed(reason: str) -> Dict[str, Any]:
+        return {
+            "ci_lower": None,
+            "ci_upper": None,
+            "p_value": None,
+            "standard_error": None,
+            "uncertainty_method": "not_computed",
+            "uncertainty_note": f"No confidence interval or p-value: {reason}",
+        }
+
+    if prov.own_effect is None:
+        return not_computed(
+            f"the primary library ({prov.library or 'unknown'}) produced no effect estimate "
+            "of its own, so no standard error belongs to the reported effect."
+        )
+    if not prov.is_primary_estimate:
+        return not_computed(
+            "the reported effect is the consensus of the "
+            f"{', '.join(prov.effect_libraries) or 'pipeline'} estimates; no standard error "
+            "exists for that blend."
+        )
+
+    if prov.library == "dowhy":
+        se = _finite_float(primary_result.get("standard_error"))
+        if se is None or se <= 0:
+            return not_computed(
+                f"DoWhy's {primary_result.get('dowhy_method')!r} produced no standard error "
+                "for this estimate (linear regression needs residual degrees of freedom)."
+            )
+        se_method = primary_result.get("standard_error_method")
+        robust = se_method == "ols_hc1"
+        lower, upper = ate - _Z_95 * se, ate + _Z_95 * se
+        method_code = "ols_hc1_normal" if robust else "dowhy_standard_error_normal"
+        note = "95% normal-approximation interval and two-sided p-value from the " + (
+            "heteroskedasticity-robust (HC1) standard error of the OLS fit."
+            if robust
+            else f"standard error DoWhy reported ({se_method or 'method unstated'})."
+        )
+    elif prov.library == "econml":
+        estimator = primary_result.get("estimator")
+        if estimator not in ECONML_SAMPLING_INTERVAL_ESTIMATORS:
+            return not_computed(
+                f"EconML's {estimator!r} interval is the spread of its per-unit effects "
+                "divided by sqrt(n), not a sampling interval for the average effect."
+            )
+        lower_raw = _finite_float(primary_result.get("ate_ci_lower"))
+        upper_raw = _finite_float(primary_result.get("ate_ci_upper"))
+        if (
+            lower_raw is None
+            or upper_raw is None
+            or not lower_raw < upper_raw
+            or not lower_raw <= ate <= upper_raw
+        ):
+            return not_computed(
+                f"EconML reported no usable interval around its estimate "
+                f"(ate_ci_lower={primary_result.get('ate_ci_lower')!r}, "
+                f"ate_ci_upper={primary_result.get('ate_ci_upper')!r})."
+            )
+        lower, upper = lower_raw, upper_raw
+        # EconML's own standard error when it reports one (as /causal/treatment-effects
+        # reads it), else back-derived from the interval's width.
+        ate_std = _finite_float(primary_result.get("ate_std"))
+        se = ate_std if ate_std is not None and ate_std > 0 else (upper - lower) / (2.0 * _Z_95)
+        method_code = "library_interval"
+        note = (
+            f"95% interval and standard error as reported by EconML {estimator}; the "
+            "two-sided p-value is from that standard error under a normal approximation."
+        )
+    else:
+        return not_computed(
+            "CausalML's interval is the spread of its model-predicted uplift divided by "
+            "sqrt(n); it omits the uncertainty of fitting the uplift model, so it is not a "
+            "sampling interval for the effect."
+        )
+
+    return {
+        "ci_lower": lower,
+        "ci_upper": upper,
+        "p_value": math.erfc(abs(ate / se) / math.sqrt(2.0)),
+        "standard_error": se,
+        "uncertainty_method": method_code,
+        "uncertainty_note": note,
+    }
+
+
+def _is_binary_01(values: Any) -> bool:
+    """Whether a treatment column holds only 0 and 1 (booleans included)."""
+    if values is None:
+        return False
+    try:
+        observed = {float(v) for v in values.dropna().unique()}
+    except (TypeError, ValueError):
+        return False
+    return bool(observed) and observed <= {0.0, 1.0}
+
+
+def _describe_estimate(
+    *,
+    ate: float,
+    primary_result: Dict[str, Any],
+    libraries_used: List[str],
+    errors: List[Any],
+    treatment_values: Any,
+    treatment: str,
+    outcome: str,
+    confounders: List[str],
+) -> Tuple[str, str, str]:
+    """``(method, estimand, effect_scale)`` for what the pipeline actually estimated (#2014).
+
+    DoWhy's linear regression reports ``E[Y | T=1] - E[Y | T=0]`` from the fitted model,
+    which is the treatment coefficient: for a binary treatment a regression-adjusted
+    1-vs-0 difference, for any other numeric treatment the change per ONE UNIT. The
+    wording gives SUFFICIENT conditions for that coefficient to be the average treatment
+    effect: treatment independent of the confounders (the linear adjustment then only
+    adds precision), or an outcome linear in the confounders as modelled with a constant
+    effect. A constant effect alone is not enough: confounding that is non-linear in the
+    confounders biases the linear adjustment.
+    """
+    prov = _estimate_provenance(
+        ate=ate, primary_result=primary_result, libraries_used=libraries_used, errors=errors
+    )
+    binary = _is_binary_01(treatment_values)
+    effect_scale = "binary_contrast" if binary else "per_unit"
+    # A count, not the names: the synthesizer truncates each step's JSON at 1,000
+    # characters, and a long confounder list would cut this sentence off.
+    adjusted = (
+        f"adjusted for {len(confounders)} confounder{'s' if len(confounders) != 1 else ''}"
+        if confounders
+        else "with no confounder adjustment"
+    )
+    contrast = (
+        f"between {treatment} = 1 and {treatment} = 0"
+        if binary
+        else f"per one-unit increase in {treatment}"
+    )
+    if not prov.is_primary_estimate:
+        libraries = prov.effect_libraries or [lib for lib in libraries_used if lib != "networkx"]
+        return (
+            f"consensus({','.join(libraries)})",
+            f"Consensus of the {', '.join(libraries)} estimates of the effect on {outcome} "
+            f"{contrast}, {adjusted}.",
+            effect_scale,
+        )
+    if prov.library == "dowhy":
+        dowhy_method = str(primary_result.get("dowhy_method"))
+        if "linear_regression" in dowhy_method:
+            estimand = (
+                f"Regression-adjusted difference in {outcome} {contrast} (OLS with an "
+                f"additive treatment term, {adjusted}"
+                + ("" if binary else f"; assumes the effect is linear in {treatment}")
+                + "). It is the average treatment effect when treatment does not depend on "
+                "the confounders, or when the outcome is linear in them as modelled and the "
+                "effect is constant; otherwise it can differ from the average treatment effect."
+            )
+        else:
+            estimand = f"Effect on {outcome} {contrast}, {adjusted} (DoWhy {dowhy_method})."
+        return dowhy_method, estimand, effect_scale
+    if prov.library == "econml":
+        estimator = primary_result.get("estimator")
+        return (
+            f"econml.{estimator}",
+            f"Average treatment effect on {outcome} {contrast}, {adjusted} (EconML {estimator}).",
+            effect_scale,
+        )
+    model = primary_result.get("model")
+    return (
+        f"causalml.{model}",
+        f"Mean model-predicted uplift in {outcome} {contrast} (CausalML {model}); not an "
+        "identification-validated average treatment effect.",
+        effect_scale,
+    )
 
 
 @composable_tool(
@@ -1150,7 +1473,11 @@ def _derive_p_value_from_confidence(consensus_confidence: Optional[float]) -> fl
         {
             "name": "estimate_id",
             "type": "str",
-            "description": "ID of the causal estimate to refute (echoed back for provenance)",
+            "description": (
+                "Optional label echoed back; the suite re-estimates from the data and does "
+                "not look an estimate up by it"
+            ),
+            "required": False,
         },
         {
             "name": "treatment",
@@ -1173,7 +1500,7 @@ def _derive_p_value_from_confidence(consensus_confidence: Optional[float]) -> fl
     avg_execution_ms=5000,
     output_model=RefutationResults,
 )
-def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
+def refutation_runner(estimate_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     """Run the REAL DoWhy refutation suite on the in-context data (#778).
 
     The live DoWhy model/estimand/estimate do not survive serialization across
@@ -1192,8 +1519,13 @@ def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
     verdict.
 
     Args:
-        estimate_id: Echoed back for provenance; not used to fetch a live
-            estimate (which is impossible across the serialization boundary).
+        estimate_id: Optional caller label, echoed back. Not used to fetch a live
+            estimate (impossible across the serialization boundary). Optional since
+            #2014: no tool produces an estimate id, so the planner filled the required
+            field with whatever it could reference (``$step_1.method``,
+            ``$step_1.ate``). An id minted by ``causal_effect_estimator`` was rejected:
+            the suite re-estimates from the data, so the id would claim a link to an
+            estimate this run never refutes.
         **kwargs: Must carry the DataFrame (one of ``_DATAFRAME_KWARGS_KEYS``)
             and ``treatment``/``outcome`` (plus optional ``confounders``).
 
@@ -1373,10 +1705,18 @@ def _run_dowhy_refutation(
     tier=2,
     input_parameters=[
         {"name": "ate", "type": "float", "description": "Estimated average treatment effect"},
-        {"name": "ci_lower", "type": "float", "description": "Lower confidence bound"},
+        {
+            "name": "ci_lower",
+            "type": "Optional[float]",
+            "description": (
+                "Lower confidence bound (optional; null when the estimate has no interval, "
+                "which makes the report point-only)"
+            ),
+            "required": False,
+        },
         {
             "name": "ci_upper",
-            "type": "float",
+            "type": "Optional[float]",
             "description": "Upper confidence bound (optional; defaults to ate + (ate - ci_lower))",
             "required": False,
         },
@@ -1405,7 +1745,7 @@ def _run_dowhy_refutation(
 )
 def sensitivity_analyzer(
     ate: float,
-    ci_lower: float,
+    ci_lower: Optional[float] = None,
     ci_upper: Optional[float] = None,
     baseline_risk: Optional[float] = None,
     naive_ate: Optional[float] = None,
@@ -1424,6 +1764,14 @@ def sensitivity_analyzer(
     refused rather than silently read on the standardized-difference scale. A CI
     that includes zero is reported as a null finding regardless of the benchmark
     (spec §4.4 precedence).
+
+    Without an interval (#2014: ``causal_effect_estimator`` returns ``ci_lower`` /
+    ``ci_upper`` = None when no sampling uncertainty was measured, and the planner maps
+    those fields here by name) the report is point-only: the point E-value under the
+    same conversion rule, no CI E-value, the measured-confounding benchmark when
+    ``naive_ate`` is given, and reading ``interval_unavailable`` — no verdict, because
+    the null-finding check that precedes beyond / within needs the interval. An upper
+    bound without a lower one is refused rather than mirrored into an invented bound.
     """
     for name, value in (
         ("ate", ate),
@@ -1438,6 +1786,14 @@ def sensitivity_analyzer(
                 "fabricate an E-value — per anti-mocking discipline non-finite inputs surface as "
                 "a structured error."
             )
+    if ci_lower is None:
+        if ci_upper is not None:
+            raise ToolInputError(
+                f"sensitivity_analyzer got ci_upper={ci_upper!r} without ci_lower. An interval "
+                "needs both bounds (or ci_lower alone, mirrored around ate); refusing to invent "
+                "the lower bound."
+            )
+        return _point_only_sensitivity(ate, baseline_risk=baseline_risk, naive_ate=naive_ate)
     hi = float(ci_upper) if ci_upper is not None else float(ate) + (float(ate) - float(ci_lower))
     try:
         reading = evalue.classify(
@@ -1480,6 +1836,65 @@ def sensitivity_analyzer(
     ).model_dump()
 
 
+_READING_INTERVAL_UNAVAILABLE = "interval_unavailable"
+
+
+def _point_only_sensitivity(
+    ate: float, *, baseline_risk: Optional[float], naive_ate: Optional[float]
+) -> Dict[str, Any]:
+    """``sensitivity_analyzer``'s report when the estimate has no confidence interval (#2014).
+
+    The point E-value and, with a naive contrast, the measured-confounding benchmark
+    (both point quantities — spec §2.5 benchmarks the point estimate and states
+    precision separately). No reading: ``classify`` checks "the CI includes zero" before
+    beyond / within, and that check cannot be made.
+    """
+    try:
+        e_point, _, conversion = evalue.point_e_value(
+            float(ate), baseline_risk=baseline_risk, outcome_std=None, naive_effect=naive_ate
+        )
+        joint = evalue.joint_confounding_benchmark(
+            naive_ate,
+            float(ate),
+            baseline_risk=baseline_risk if conversion == "risk_ratio" else None,
+            outcome_std=None,
+        )
+        benchmark, basis = evalue.measured_confounding_benchmark(joint, {})
+    except ValueError as exc:
+        raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}") from exc
+    if baseline_risk is not None and conversion != "risk_ratio":
+        raise ToolRefusalError(
+            f"sensitivity_analyzer: baseline_risk={baseline_risk!r} with ate={ate!r} does not "
+            "form valid risks in (0, 1), so no risk-ratio E-value exists. Refusing to "
+            "substitute a standardized-difference scale for a caller who asked for the "
+            "risk-ratio path."
+        )
+    benchmark_sentence = (
+        f" The confounding the measured adjustment removed corresponds to a risk ratio of "
+        f"{benchmark:.2f} ({evalue.BASIS_IN_WORDS[basis]}); no reading against it is given "
+        "without the interval."
+        if benchmark is not None
+        else ""
+    )
+    return SensitivityReport(
+        e_value_point=e_point,
+        e_value_ci=None,
+        reading=_READING_INTERVAL_UNAVAILABLE,
+        headline="Robustness not assessed: the estimate has no confidence interval",
+        benchmark=benchmark,
+        benchmark_basis=basis,
+        conversion=conversion,
+        interpretation=(
+            f"No confidence interval exists for this estimate, so only the point E-value is "
+            f"reported: an unobserved confounder would need a risk ratio of at least "
+            f"{e_point:.2f} with both treatment and outcome to explain away the point "
+            "estimate. Without the interval it is unknown whether the effect is "
+            "distinguishable from zero, so no robustness reading (null finding, or beyond / "
+            "within measured confounding) is given." + benchmark_sentence
+        ),
+    ).model_dump()
+
+
 # ============================================================================
 # HETEROGENEOUS OPTIMIZER AGENT TOOLS
 # ============================================================================
@@ -1489,6 +1904,9 @@ def sensitivity_analyzer(
 _CATE_EXCLUDED_MISSING = "missing_segment_value"
 _CATE_EXCLUDED_NO_CONTRAST = "no_within_segment_contrast"
 _CATE_EXCLUDED_NON_FINITE = "non_finite_mean_difference"
+# Rows left out of a segment that IS estimated (#2016); the other codes mark a
+# segment or a null-keyed group that is not estimated at all.
+_CATE_EXCLUDED_ROWS_WITHOUT_VALUES = "rows_missing_treatment_or_outcome"
 
 
 @composable_tool(
@@ -1525,6 +1943,9 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
     - No DataFrame supplied via the canonical kwargs keys -> ``RuntimeError``.
     - The treatment / outcome / segment columns missing from the frame ->
       ``RuntimeError``. The tool never substitutes a plausible-but-fake result.
+    - A treatment that is not a 0/1 column -> ``RuntimeError`` (#2016). A count
+      would otherwise be estimated as "exactly 1 vs exactly 0", ignoring every
+      other value.
     - No segment yields a MEASURED CATE -> ``RuntimeError`` (#1610). An empty
       segment set would read as "no heterogeneity between segments", a finding
       this data cannot support because no segment was ever estimated.
@@ -1582,6 +2003,19 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
                 f"DataFrame (columns={list(df.columns)!r}). Refusing to "
                 "fabricate a result."
             )
+    # Checked over the WHOLE column, null-keyed segments included: one non-0/1 value
+    # anywhere means the column is not a treatment indicator (#2016). Null treatment
+    # rows fall in neither arm below, as they always have, and leave the segment's n.
+    _refuse_unless_binary_01(
+        df[treatment],
+        tool="cate_analyzer",
+        role="treatment",
+        column=treatment,
+        consequence=(
+            "Refusing to report a difference between only the rows equal to 1 and those "
+            "equal to 0 as the segment's treatment effect."
+        ),
+    )
 
     segment_dicts: List[Dict[str, Any]] = []
     effect_by_segment: Dict[str, float] = {}
@@ -1662,8 +2096,28 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
                 }
             )
             continue
-        segment_dicts.append({"name": name, "cate": cate_val, "n": n})
+        # ``n`` counts the rows the CATE is computed from, not the segment's size
+        # (#2016): ``mean()`` skips a null outcome, and a null treatment sits in
+        # neither arm. Measured on the live Kisqali frame, a segment reported n=2239
+        # for a ``days_to_treatment`` CATE computed from 798 rows.
+        n_used = int(treated.notna().sum() + control.notna().sum())
+        segment_dicts.append({"name": name, "cate": cate_val, "n": n_used})
         effect_by_segment[name] = cate_val
+        if n_used < n:
+            no_treatment = int(sub[treatment].isna().sum())
+            excluded_segments.append(
+                {
+                    "name": name,
+                    "n": n - n_used,
+                    "reason": _CATE_EXCLUDED_ROWS_WITHOUT_VALUES,
+                    "detail": (
+                        f"{no_treatment} rows have no {treatment!r} value and "
+                        f"{n - no_treatment - n_used} further rows have no {outcome!r} "
+                        f"value, so the CATE for this segment uses the other {n_used} "
+                        "rows (the segment itself is still estimated)"
+                    ),
+                }
+            )
 
     if not effect_by_segment:
         no_contrast = sum(1 for e in excluded_segments if e["reason"] == _CATE_EXCLUDED_NO_CONTRAST)
@@ -2085,6 +2539,75 @@ def _is_missing_group_key(value: Any) -> bool:
         return False
 
 
+_BINARY_CHECK_SAMPLE = 6
+
+
+def _refuse_unless_binary_01(
+    series: Any, *, tool: str, role: str, column: str, consequence: str
+) -> None:
+    """Refuse unless the non-null values of ``series`` are a subset of {0, 1}.
+
+    The one binary check for every tool that reads a planner-bound column as a 0/1
+    indicator: ``risk_scorer.outcome`` (#2003) and the ``treatment`` of
+    ``propensity_estimator`` and ``cate_analyzer`` (#2016). Each tool cast or split
+    the column as binary without checking. A count became a multi-class target
+    whose P(class == 1) was reported as a score or propensity, or an "exactly 1 vs
+    exactly 0" contrast that ignored every other value. A 0-1 rate was either
+    truncated to one class and refused for the wrong reason or, when it reaches
+    exactly 0 and 1 as the live ``adherence_rate`` does, estimated from those rows
+    alone.
+
+    bool, int, float and nullable ``Int64`` encodings pass: ``True == 1`` and
+    ``1.0 == 1`` hash equal, and ``dropna`` removes ``NaN`` and ``pd.NA``. Nulls are
+    the caller's decision, since the tools disagree on what a null row means.
+    Shapes that would otherwise raise out of this check into the executor's
+    retrying arm are refused instead: a duplicated column name (``df[name]`` is a
+    DataFrame) and list- or dict-valued cells (``unique()`` raises ``TypeError``).
+    Each rendered value is clipped, because the composer truncates a carried
+    reason from the END.
+    """
+    name = _clip_name(column)
+    if getattr(series, "ndim", 1) != 1:
+        raise ToolRefusalError(
+            f"{tool}: {role} column {name!r} is ambiguous: {series.shape[1]} columns are "
+            f"named {name!r} in the supplied DataFrame. Refusing to pick one."
+        )
+
+    def _shown(value: Any) -> str:
+        # ``repr`` itself can raise (a 5,001-digit int exceeds Python's int-to-str
+        # limit), and nothing may escape this guard except the refusal.
+        try:
+            return _clip_name(repr(value))
+        except Exception:  # noqa: BLE001 - any repr failure renders as the type
+            return f"<{_clip_name(type(value).__name__)}>"
+
+    def _render(values: Any) -> str:
+        return "[" + ", ".join(_shown(v) for v in values) + "]"
+
+    non_null = series.dropna()
+    try:
+        observed = set(non_null.unique())
+    except TypeError:
+        carries = f"non-scalar values such as {_render(non_null.head(_BINARY_CHECK_SAMPLE))}"
+    else:
+        if observed <= {0, 1}:
+            return
+        values = [v.item() if hasattr(v, "item") else v for v in observed]
+        try:
+            ordered = sorted(values)
+        except TypeError:
+            ordered = sorted(values, key=_shown)
+        carries = (
+            f"{len(observed)} distinct non-null values, including "
+            f"{_render(ordered[:_BINARY_CHECK_SAMPLE])}"
+        )
+    raise ToolRefusalError(
+        f"{tool}: {role} column {name!r} is not a binary 0/1 column: its "
+        "non-null values must be a subset of {0, 1} (bool, int, float or nullable Int64), "
+        f"but it carries {carries}. {consequence}"
+    )
+
+
 def _gap_comparability_reason(
     *,
     entity_type: str,
@@ -2429,90 +2952,837 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
 # ============================================================================
 
 
+_POWER_OUTCOME_TYPES = ("continuous", "binary", "time_to_event")
+_POWER_DESIGNS = ("individual", "cluster")
+# What ``PowerResult.mde`` is measured in, per outcome type (#1639: a binary design takes a
+# RELATIVE effect but reports an ABSOLUTE risk difference as its MDE).
+_POWER_MDE_SCALES = {
+    "continuous": "cohens_d",
+    "binary": "absolute_risk_difference",
+    "time_to_event": "hazard_ratio",
+}
+
+
+def _power_number(name: str, value: Any, default: Optional[float] = None) -> Optional[float]:
+    """A finite number for a power input, ``default`` when the value is omitted (``None``).
+
+    A supplied value that is not a finite number is refused rather than coerced: the tool
+    would otherwise size a study for a parameter the caller never gave.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ToolInputError(
+            f"power_calculator: {name} must be a finite number; got {value!r}. No sample "
+            "size can be computed from it."
+        )
+    return float(value)
+
+
+def _refuse_unhonoured_power_design(kwargs: Dict[str, Any]) -> None:
+    """Refuse a design argument the library cannot compute instead of absorbing it.
+
+    ``power_calculator`` takes ``**kwargs`` (the executor injects ``estimation_data`` into
+    every tool), so an undeclared ``ratio=2`` used to be dropped and the equal-allocation n
+    returned as if it answered the unequal design (codex whole-diff F2). ``ratio`` and
+    ``alternative`` are statsmodels' power-API arguments, the names a planner reaches for;
+    every ``power_analysis_lib`` formula is equal allocation and two-sided, so only those
+    values are accepted. Other unknown kwargs stay ignored, as for every composer tool.
+    """
+    if "ratio" in kwargs:
+        ratio = kwargs["ratio"]
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio != 1:
+            raise ToolInputError(
+                f"power_calculator: ratio={ratio!r} asks for unequal allocation, which the "
+                "power library cannot compute (every formula assumes equal arms); refusing "
+                "to return the equal-allocation sample size for a different design."
+            )
+    if "alternative" in kwargs:
+        alternative = kwargs["alternative"]
+        if not isinstance(alternative, str) or alternative.strip().lower() not in (
+            "two-sided",
+            "two_sided",
+        ):
+            raise ToolInputError(
+                f"power_calculator: alternative={alternative!r} asks for a one-sided test, "
+                "which the power library cannot compute (every formula is two-sided); "
+                "refusing to return the two-sided sample size for a different design."
+            )
+
+
 @composable_tool(
     name="power_calculator",
-    description="Calculate required sample size for statistical power in A/B tests",
+    description=(
+        "Required sample size (per arm and total) for a two-arm experiment with equal "
+        "allocation, from the shared power-analysis library. Designs: continuous outcome "
+        "(two-sample t-test), binary outcome (two-proportion z-test, needs baseline_rate), "
+        "time-to-event (log-rank, needs event_rate), and cluster-randomised continuous "
+        "(needs icc and cluster_size)."
+    ),
     source_agent="experiment_designer",
     tier=3,
     input_parameters=[
-        {"name": "effect_size", "type": "float", "description": "Expected effect size"},
+        {
+            "name": "effect_size",
+            "type": "float",
+            "description": (
+                "Effect to detect, non-zero: Cohen's d (standardised mean difference) for a "
+                "continuous or cluster design; relative change vs baseline_rate for a binary "
+                "design (0.10 = +10%); hazard ratio for time_to_event (not 1.0). An ATE in "
+                "outcome units is NOT a Cohen's d."
+            ),
+        },
         {
             "name": "alpha",
             "type": "float",
-            "description": "Significance level",
+            "description": "Two-sided significance level in (0, 1)",
             "required": False,
             "default": 0.05,
         },
         {
             "name": "power",
             "type": "float",
-            "description": "Desired power",
+            "description": "Target power in (0, 1)",
             "required": False,
             "default": 0.8,
         },
+        {
+            "name": "outcome_type",
+            "type": "str",
+            "description": "continuous, binary or time_to_event",
+            "required": False,
+            "default": "continuous",
+        },
+        {
+            "name": "design",
+            "type": "str",
+            "description": "individual or cluster (cluster supports a continuous outcome only)",
+            "required": False,
+            "default": "individual",
+        },
+        {
+            "name": "baseline_rate",
+            "type": "float",
+            "description": "Control-arm proportion in (0, 1); required for, and only for, binary",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "event_rate",
+            "type": "float",
+            "description": "Expected event rate in (0, 1]; required for, and only for, time_to_event",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "icc",
+            "type": "float",
+            "description": "Intra-cluster correlation in [0, 1); required for, and only for, cluster",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "cluster_size",
+            "type": "int",
+            "description": "Average cluster size (>= 1); required for, and only for, cluster",
+            "required": False,
+            "default": None,
+        },
     ],
     output_schema="PowerAnalysis",
-    avg_execution_ms=500,
+    avg_execution_ms=50,
     input_model=PowerCalculatorInput,
     output_model=PowerAnalysis,
 )
 def power_calculator(
-    effect_size: float, alpha: float = 0.05, power: float = 0.8, **kwargs
+    effect_size: float,
+    alpha: float = 0.05,
+    power: float = 0.8,
+    outcome_type: str = "continuous",
+    design: str = "individual",
+    baseline_rate: Optional[float] = None,
+    event_rate: Optional[float] = None,
+    icc: Optional[float] = None,
+    cluster_size: Optional[int] = None,
+    **kwargs,
 ) -> PowerAnalysis:
-    """Calculate sample size for desired power."""
-    # Simplified calculation - real implementation uses statsmodels
-    n = int(16 * (1.96 + 0.84) ** 2 / (effect_size**2))
-    return PowerAnalysis(required_n=n, actual_power=power, detectable_effect=effect_size)
+    """Sample size for a two-arm experiment, delegated to ``power_analysis_lib`` (#2015).
+
+    Replaces ``n = 16 * (1.96 + 0.84) ** 2 / d**2``, which ignored ``alpha`` and ``power``
+    and was about 8x the per-arm n (3,135 at d=0.2 against the library's 393 per arm).
+    The design is routed the way the experiment-designer agent's power node routes it, with
+    one difference: that node substitutes defaults for a missing baseline rate, event rate,
+    ICC or cluster size, and this tool refuses instead — a leader-facing sample size must
+    not rest on a rate nobody stated.
+
+    Every refusal is a :class:`ToolInputError` (deterministic over the inputs, never
+    retried): a non-finite or zero effect, alpha/power outside (0, 1), a design parameter
+    missing for its design, or one supplied for a design that does not use it (it would be
+    silently ignored).
+    """
+    from src.utils.power_analysis_lib import (
+        PowerCalculationError,
+        PowerResult,
+        binary_outcome_power,
+        cluster_rct_power,
+        continuous_outcome_power,
+        time_to_event_power,
+    )
+
+    effect = _power_number("effect_size", effect_size)
+    if effect is None:
+        raise ToolInputError(
+            "power_calculator: effect_size is None — no effect to detect was supplied (an "
+            "upstream step likely failed or lacked the referenced field)."
+        )
+    _refuse_unhonoured_power_design(kwargs)
+    alpha_value = _power_number("alpha", alpha, default=0.05)
+    power_value = _power_number("power", power, default=0.8)
+    assert alpha_value is not None and power_value is not None
+    outcome = (
+        (outcome_type or "continuous").strip().lower()
+        if isinstance(outcome_type, str)
+        else outcome_type
+    )
+    design_value = (design or "individual").strip().lower() if isinstance(design, str) else design
+    if outcome not in _POWER_OUTCOME_TYPES:
+        raise ToolInputError(
+            f"power_calculator: outcome_type must be one of {list(_POWER_OUTCOME_TYPES)}; "
+            f"got {outcome_type!r}."
+        )
+    if design_value not in _POWER_DESIGNS:
+        raise ToolInputError(
+            f"power_calculator: design must be one of {list(_POWER_DESIGNS)}; got {design!r}."
+        )
+    if design_value == "cluster" and outcome != "continuous":
+        raise ToolInputError(
+            f"power_calculator: a cluster design is supported for a continuous outcome only "
+            f"(the library's design-effect formula inflates a Cohen's d sample size); got "
+            f"outcome_type={outcome!r}."
+        )
+
+    used_by = {
+        "baseline_rate": outcome == "binary",
+        "event_rate": outcome == "time_to_event",
+        "icc": design_value == "cluster",
+        "cluster_size": design_value == "cluster",
+    }
+    supplied = {
+        "baseline_rate": baseline_rate,
+        "event_rate": event_rate,
+        "icc": icc,
+        "cluster_size": cluster_size,
+    }
+    for name, value in supplied.items():
+        if value is not None and not used_by[name]:
+            raise ToolInputError(
+                f"power_calculator: {name}={value!r} was supplied but outcome_type={outcome!r} "
+                f"with design={design_value!r} does not use it; refusing to ignore it silently. "
+                "Set the design it belongs to, or omit it."
+            )
+        if value is None and used_by[name]:
+            raise ToolInputError(
+                f"power_calculator: {name} is required for outcome_type={outcome!r} with "
+                f"design={design_value!r}; no default is assumed."
+            )
+
+    forward: PowerResult
+    try:
+        if design_value == "cluster":
+            icc_value = _power_number("icc", icc)
+            if (
+                isinstance(cluster_size, bool)
+                or not isinstance(cluster_size, (int, float))
+                or not math.isfinite(cluster_size)
+                or int(cluster_size) != cluster_size
+            ):
+                raise ToolInputError(
+                    f"power_calculator: cluster_size must be a whole number; got {cluster_size!r}."
+                )
+            assert icc_value is not None
+            forward = cluster_rct_power(
+                effect, alpha_value, power_value, icc_value, int(cluster_size)
+            )
+        elif outcome == "binary":
+            rate = _power_number("baseline_rate", baseline_rate)
+            assert rate is not None
+            forward = binary_outcome_power(effect, alpha_value, power_value, rate)
+        elif outcome == "time_to_event":
+            rate = _power_number("event_rate", event_rate)
+            assert rate is not None
+            forward = time_to_event_power(effect, alpha_value, power_value, rate)
+        else:
+            forward = continuous_outcome_power(effect, alpha_value, power_value)
+    except (PowerCalculationError, ArithmeticError) as exc:
+        # ArithmeticError (the library raises OverflowError for an unrepresentable size) is
+        # as deterministic over the inputs as a PowerCalculationError, so it is not retried.
+        raise ToolInputError(f"power_calculator: {exc}") from exc
+    # Minimum usable design, enforced here rather than in the shared library: the library's
+    # normal-approximation arithmetic is also an INPUT to the data-preparer sufficiency gate
+    # (multiplied by the observational inflation), where refusing it dropped a requirement
+    # (codex whole-diff #8). A recommended design needs two per arm to estimate a variance,
+    # a cluster-randomised one two clusters per arm (#10), and a log-rank comparison two
+    # events.
+    if forward.sample_size_per_arm < 2:
+        raise ToolInputError(
+            f"power_calculator: effect_size {effect} gives {forward.sample_size_per_arm} per "
+            "arm, below the two per arm a two-arm test needs; the effect is too large, or "
+            "alpha/power too lax, for this approximation (is the effect in outcome units "
+            "rather than standardised?)"
+        )
+    if int(forward.extra.get("n_clusters_per_arm", 2)) < 2:
+        raise ToolInputError(
+            f"power_calculator: the design needs {forward.extra['n_clusters_per_arm']} cluster "
+            f"per arm ({forward.sample_size_per_arm} subjects, {forward.extra['cluster_size']} "
+            "per cluster); with one cluster per arm treatment is confounded with the cluster. "
+            "A cluster-randomised comparison needs at least two clusters per arm."
+        )
+    if int(forward.extra.get("required_events", 2)) < 2:
+        raise ToolInputError(
+            f"power_calculator: hazard ratio {effect} needs {forward.extra['required_events']} "
+            "event(s); a log-rank comparison needs at least two."
+        )
+
+    assumptions = [
+        f"Solved for alpha={alpha_value:g} (two-sided) and power={power_value:g} with equal "
+        f"allocation ({forward.analysis_type}).",
+        *forward.assumptions,
+    ]
+    return PowerAnalysis(
+        required_n_per_arm=forward.sample_size_per_arm,
+        required_n_total=forward.sample_size,
+        alpha=alpha_value,
+        power=power_value,
+        effect_size=effect,
+        outcome_type=outcome,
+        design=design_value,
+        analysis_type=forward.analysis_type,
+        minimum_detectable_effect=float(forward.mde),
+        minimum_detectable_effect_scale=_POWER_MDE_SCALES[outcome],
+        assumptions=assumptions,
+        design_details=dict(forward.extra),
+    )
 
 
 @composable_tool(
     name="counterfactual_simulator",
-    description="Simulate intervention outcomes using the causal model",
+    description=(
+        "Simulate a commercial intervention for a brand with the digital-twin engine (the "
+        "engine behind /digital-twin/simulate): a causal-forest estimate of the "
+        "intervention's effect on HCP conversion_rate in the brand's synthetic-gold per-HCP "
+        "cohort, with its 95% interval, per-region effects and a DEPLOY / REFINE / SKIP "
+        "recommendation. Estimates the effect itself, so it takes no upstream effect and needs no "
+        "prior step unless target_entities come from one."
+    ),
     source_agent="experiment_designer",
     tier=3,
     input_parameters=[
-        {"name": "intervention", "type": "str", "description": "Intervention to simulate"},
+        {
+            "name": "intervention",
+            "type": "str",
+            "description": (
+                "One of: email_campaign, call_frequency_increase, speaker_program_invitation, "
+                "sample_distribution, peer_influence_activation, digital_engagement, "
+                "patient_support_program, rep_training_quality"
+            ),
+        },
+        {
+            "name": "brand",
+            "type": "str",
+            "description": "Remibrutinib, Fabhalta or Kisqali (use $context.brand when set)",
+        },
         {
             "name": "target_entities",
             "type": "List[str]",
-            "description": "Entities to apply intervention to",
-        },
-        {
-            "name": "expected_effect",
-            "type": "float",
-            "description": "Expected effect from prior analysis",
+            "description": (
+                "Optional regions to simulate on: northeast, south, midwest, west. Effects "
+                "vary only by region in the twin model, so other entity kinds are refused."
+            ),
+            "required": False,
+            "default": None,
         },
     ],
     output_schema="SimulationResults",
-    avg_execution_ms=3000,
+    avg_execution_ms=60000,
     input_model=SimulatorInput,
     output_model=SimulationResults,
 )
-def counterfactual_simulator(
-    intervention: str, target_entities: List[str], expected_effect: Optional[float], **kwargs
+async def counterfactual_simulator(
+    intervention: str,
+    brand: str,
+    target_entities: Optional[List[str]] = None,
+    **kwargs,
 ) -> SimulationResults:
-    """Simulate intervention outcomes.
+    """Simulate an intervention with the digital-twin engine (#2015).
 
-    Null-guard (#1573): a ``None`` / non-numeric ``expected_effect`` means no
-    upstream effect estimate was actually supplied (live q08: the planner
-    referenced fields the CATE output does not carry, which degraded to
-    ``None`` and crashed here with ``NoneType * float`` three times). The
-    tool declines with a stated reason — a deterministic
-    :class:`ToolInputError` the executor does NOT retry — instead of
-    fabricating a lift or raising a bare ``TypeError``.
+    Replaces ``predicted_lift = expected_effect * 0.85`` with a hard-coded "medium"
+    confidence, which ignored ``intervention`` and ``target_entities``. Runs the path the
+    live ``/digital-twin/simulate`` route runs (``src/api/routes/digital_twin.py``): the
+    brand's active HCP twin model, the cohort identification gate, MLflow hydration, twin
+    generation, and ``SimulationEngine`` with the cohort provider and
+    ``CohortCausalEstimator`` — so the cohort-wide numbers are the ones the Digital Twin
+    page states for the same request.
+
+    Why the contract changed (measured 2026-09-11, Kisqali ``email_campaign``, 1,000
+    twins): the engine serves a catalog intervention on a brand; it estimates the effect
+    from the cohort, so an upstream ``expected_effect`` has no role (dropped). A region
+    filter leaves the engine's ATE, interval and recommendation unchanged (0.135 [0.092,
+    0.178] for all twins and for the 274 northeast twins) while the region's effect is
+    0.258. So ``target_entities`` are regions, and a targeted request is answered with the
+    same causal forest's inference on the targeted regions (:func:`_targeted_effect`), not
+    with the cohort-wide numbers.
+
+    Refusals:
+
+    * :class:`ToolInputError` (not retried) — the #1573 null-guard generalised: a missing
+      or non-catalog intervention, a brand without a twin model, a target that is not a
+      region. Raised before any lookup.
+    * :class:`ToolRefusalError` (not retried) — the loaded cohort cannot identify the
+      intervention, a targeted region has no treated-vs-control contrast in it, or the
+      engine run failed (e.g. under 100 twins after filtering).
+    * any other exception (retried) — no active twin model could be read or loaded (the
+      route's 503 + Retry-After), or the cohort could not be loaded.
+
+    Heavy work (MLflow hydration, generating the twins — ~67 ms each, measured — and the
+    causal-forest fits) runs on the executor's bounded compute pool, never on the event loop.
     """
-    if not isinstance(expected_effect, (int, float)) or isinstance(expected_effect, bool):
-        raise ToolInputError(
-            "counterfactual_simulator declined: expected_effect is "
-            f"{expected_effect!r} — no usable effect estimate was supplied "
-            "(an upstream step likely failed or its output lacked the "
-            "referenced field). Refusing to simulate a lift from a missing "
-            "effect."
+    intervention_type, brand_value, regions = _counterfactual_inputs(
+        intervention, brand, target_entities
+    )
+    deadline = _simulation_deadline(_COUNTERFACTUAL_BUDGET_S)
+
+    from src.digital_twin.twin_repository import TwinRepository
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    repo = TwinRepository(supabase_client=client)
+    # list_active_models logs and returns [] on a database error, so an empty result is
+    # either "no model" or "unreadable" — both are the route's retryable 503.
+    actives = await repo.list_active_models(twin_type=_twin_type_hcp(), brand=brand_value)
+    if not actives:
+        raise RuntimeError(
+            f"counterfactual_simulator: no active trained HCP digital-twin model could be read "
+            f"for {brand_value}; the simulation cannot run until one is trained and active."
         )
+    model_row = actives[0]
+    provider = await _load_cohort_provider(repo.client, intervention_type, brand_value)
+    frame = provider.get_training_frame(intervention_type, brand=brand_value, twin_type="hcp")
+    result, targeted = await _offload_within_budget(
+        _run_twin_simulation,
+        model_row,
+        provider,
+        frame,
+        intervention_type,
+        brand_value,
+        regions,
+        deadline=deadline,
+        budget_s=_COUNTERFACTUAL_BUDGET_S,
+    )
+    return _simulation_results(
+        result,
+        brand=brand_value,
+        intervention_type=intervention_type,
+        frame=frame,
+        targeted=targeted,
+    )
+
+
+#: Twins generated per simulation. The twins do not enter the ATE, its interval or the
+#: per-region effects (those come from the cohort fit, so any count gives the same numbers);
+#: they set the engine's 100-twin floor after filtering and the recommendation's baseline
+#: rate. Measured 2026-09-11 on the deployed image: generation costs 66-69 ms per twin, and
+#: a run at the /simulate default of 1,000 took 100 s end to end — too close to the
+#: composer's 120 s step timeout. The smallest region share in all three active HCP models
+#: is 0.2235 (south), so 700 twins put a single targeted region at ~156 +/- 11, five
+#: standard deviations above the floor, for ~47 s of generation.
+_COUNTERFACTUAL_TWIN_COUNT = 700
+
+#: Seconds the whole tool call may take — lookups, queueing on the pool and the offload
+#: (hydrate, generate, simulate, targeted fit). It must expire before the executor's 120 s
+#: step envelope: that envelope cancels the coroutine but not the pool thread, and the
+#: executor's generic retry arm would then queue a second simulation behind the abandoned
+#: one (codex iter-3; the clock starts at tool entry so slow lookups count, iter-4).
+#: Measured runs take 47-52 s, so this is about twice the observed cost. No config
+#: overrides the composer's envelope (``phases.execute.max_execution_time_seconds``); one
+#: set below this budget would reopen the retry.
+_COUNTERFACTUAL_BUDGET_S = 100.0
+
+
+def _simulation_deadline(budget_s: float) -> float:
+    """The event-loop time at which a simulation started now exhausts ``budget_s``."""
+    return asyncio.get_running_loop().time() + budget_s
+
+
+async def _offload_within_budget(func: Any, *args: Any, deadline: float, budget_s: float) -> Any:
+    """Run ``func`` on the bounded heavy-compute pool, failing once at ``deadline``.
+
+    The executor's sync-tool envelope (#1592) applied to this async tool's offload: an
+    expired budget raises ``SyncToolTimeout``, which the executor records against the
+    circuit breaker and does not retry, because the thread keeps running and a retry would
+    queue the same work behind it. An exception raised by ``func`` — including its own
+    ``TimeoutError`` — propagates unchanged. ``budget_s`` is the whole budget the deadline
+    was set from, named in the error.
+    """
+    from src.api.dependencies.compute import run_in_bounded_executor
+
+    from .executor import SyncToolTimeout
+
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise SyncToolTimeout(
+            f"counterfactual_simulator timed out after {budget_s:g}s before the twin "
+            "simulation started (the model and cohort lookups used the budget); not retried"
+        )
+
+    async def bounded_call() -> Tuple[Any, Optional[Exception]]:
+        try:
+            return await run_in_bounded_executor(func, *args), None
+        except Exception as exc:  # noqa: BLE001 - re-raised below
+            return None, exc
+
+    try:
+        value, error = await asyncio.wait_for(bounded_call(), timeout=remaining)
+    except asyncio.TimeoutError as exc:
+        raise SyncToolTimeout(
+            f"counterfactual_simulator timed out after {budget_s:g}s (the twin simulation is "
+            "still running on the bounded heavy-compute pool — a thread cannot be cancelled); "
+            "not retried"
+        ) from exc
+    if error is not None:
+        raise error
+    return value
+
+
+def _twin_type_hcp() -> Any:
+    from src.digital_twin.models.twin_models import TwinType
+
+    return TwinType.HCP
+
+
+async def _load_cohort_provider(client: Any, intervention_type: str, brand_value: str) -> Any:
+    """The brand's cohort provider for this intervention, or a refusal.
+
+    Loads the frame itself rather than calling ``build_cohort_provider_or_none``, which
+    turns a database error into ``None``: here an unreachable database must propagate (the
+    executor retries it) and only an unusable cohort is refused.
+    """
+    from src.digital_twin.effect.cohort_loader import (
+        cohort_provider_from_frame,
+        load_cohort_frame,
+    )
+
+    cohort = await load_cohort_frame(client, brand_value)
+    provider = cohort_provider_from_frame(cohort, intervention_type)
+    if provider is None:
+        raise ToolRefusalError(
+            f"counterfactual_simulator: no effect data for intervention {intervention_type!r} "
+            f"and brand {brand_value!r} — the brand's per-HCP cohort ({len(cohort)} rows) does "
+            "not carry enough usable rows for this intervention's treatment channel, outcome, "
+            "region and confounders, so a causal effect cannot be estimated. No effect is "
+            "returned."
+        )
+    return provider
+
+
+def _counterfactual_inputs(
+    intervention: Any, brand: Any, target_entities: Any
+) -> Tuple[str, str, List[str]]:
+    """Normalise the simulator inputs to (catalog intervention, brand, regions) or refuse.
+
+    Matching is case-insensitive; an intervention may be given as its catalog value or
+    label, with spaces or hyphens for underscores. Nothing is guessed beyond that: a
+    free-text intervention ("increase rep visits") has no twin treatment channel.
+    """
+    from src.digital_twin.effect.provider import INTERVENTION_CATALOG
+    from src.digital_twin.models.twin_models import Brand, Region
+
+    catalog = [value for value, _label in INTERVENTION_CATALOG]
+    if not isinstance(intervention, str) or not intervention.strip():
+        raise ToolInputError(
+            f"counterfactual_simulator declined: intervention is {intervention!r} — no "
+            f"intervention was supplied. It must be one of {catalog}."
+        )
+    wanted = re.sub(r"[\s\-]+", "_", intervention.strip().lower())
+    by_key = {value: value for value, _label in INTERVENTION_CATALOG}
+    by_key.update(
+        {re.sub(r"[\s\-]+", "_", label.lower()): value for value, label in INTERVENTION_CATALOG}
+    )
+    intervention_type = by_key.get(wanted)
+    if intervention_type is None:
+        raise ToolInputError(
+            f"counterfactual_simulator: intervention {intervention!r} is not a digital-twin "
+            f"intervention; the twin engine simulates only {catalog}."
+        )
+
+    brands = {b.value.lower(): b.value for b in Brand}
+    if not isinstance(brand, str) or brand.strip().lower() not in brands:
+        raise ToolInputError(
+            f"counterfactual_simulator: brand {brand!r} has no digital-twin model; it must be "
+            f"one of {sorted(brands.values())}."
+        )
+    brand_value = brands[brand.strip().lower()]
+
+    regions_known = [r.value for r in Region]
+    if target_entities is None:
+        return intervention_type, brand_value, []
+    if not isinstance(target_entities, list) or not all(
+        isinstance(entity, str) for entity in target_entities
+    ):
+        raise ToolInputError(
+            f"counterfactual_simulator: target_entities must be a list of region names; got "
+            f"{target_entities!r}."
+        )
+    regions: List[str] = []
+    for entity in target_entities:
+        region = entity.strip().lower()
+        if region not in regions_known:
+            raise ToolInputError(
+                f"counterfactual_simulator: target entity {entity!r} is not a region. The twin "
+                f"model's effects vary only by region ({regions_known}), so a simulation "
+                "targeted at any other entity would report an effect that does not depend on it."
+            )
+        if region not in regions:
+            regions.append(region)
+    return intervention_type, brand_value, regions
+
+
+class _TargetedEffect(BaseModel):
+    """Inference on the targeted regions (see :func:`_targeted_effect`)."""
+
+    regions: List[str]
+    effect: float
+    ci_lower: float
+    ci_upper: float
+    cohort_rows: int
+    recommendation: str
+    recommendation_rationale: str
+
+
+def _targeted_effect(frame: Any, regions: List[str]) -> _TargetedEffect:
+    """The causal forest's effect on the targeted regions, its interval and the policy.
+
+    A second fit of ``estimate_cohort_effect`` on the same frame with the engine's seed and
+    alpha (``CohortCausalEstimator`` defaults), so its point estimate for a region is the
+    engine's region effect; ``ate_interval`` over the targeted cohort rows gives the
+    interval. The engine's DEPLOY / REFINE / SKIP policy (same minimum effect, power and
+    alpha) is then applied to it; the experiment is sized separately by the shared
+    ``experiment_size``. A region without a treated-vs-control contrast in the cohort is
+    refused.
+    """
+    import numpy as np
+
+    from src.digital_twin.effect.cohort_causal_estimator import (
+        CohortCausalEstimator,
+        estimate_cohort_effect,
+    )
+    from src.digital_twin.effect.errors import EffectDataUnavailable
+    from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
+    from src.digital_twin.effect.recommendation import PolicyThresholds, RecommendationPolicy
+    from src.digital_twin.simulation_engine import SimulationEngine
+
+    defaults = CohortCausalEstimator()
+    try:
+        fit = estimate_cohort_effect(
+            frame.df,
+            frame.treatment_var,
+            outcome_col=frame.outcome_var,
+            confounders=tuple(frame.confounders),
+            alpha=defaults.alpha,
+            seed=defaults.seed,
+            target_regions=regions,
+        )
+    except EffectDataUnavailable as exc:
+        raise ToolRefusalError(f"counterfactual_simulator: {exc} No effect is returned.") from exc
+    assert fit.target_ate is not None
+    assert fit.target_ci_lower is not None and fit.target_ci_upper is not None
+    estimate = EffectEstimate(
+        ate=fit.target_ate,
+        ate_ci_lower=fit.target_ci_lower,
+        ate_ci_upper=fit.target_ci_upper,
+        att=None,
+        atc=None,
+        per_twin_uplift=np.array([fit.target_ate]),
+        auuc=None,
+        qini=None,
+        feature_importances=None,
+        n_train=fit.target_n,
+        estimator_type="cohort_causal_forest_dml",
+        data_provenance=PROVENANCE_COHORT,
+    )
+    recommendation, rationale = RecommendationPolicy(
+        PolicyThresholds(min_effect=SimulationEngine.DEFAULT_MIN_EFFECT_THRESHOLD)
+    ).decide(estimate)
+    return _TargetedEffect(
+        regions=list(fit.target_regions),
+        effect=fit.target_ate,
+        ci_lower=fit.target_ci_lower,
+        ci_upper=fit.target_ci_upper,
+        cohort_rows=fit.target_n,
+        recommendation=recommendation.value,
+        recommendation_rationale=rationale,
+    )
+
+
+def _run_twin_simulation(
+    model_row: Dict[str, Any],
+    provider: Any,
+    frame: Any,
+    intervention_type: str,
+    brand_value: str,
+    regions: List[str],
+) -> Tuple[Any, Optional[_TargetedEffect]]:
+    """Hydrate the brand's twin model and generate the twins — the route's inline path —
+    then simulate them (:func:`_simulate_population`)."""
+    from uuid import UUID
+
+    from src.digital_twin import twin_persistence
+    from src.digital_twin.models.twin_models import Brand, TwinType
+    from src.digital_twin.twin_generator import TwinGenerator
+
+    generator = TwinGenerator(twin_type=TwinType.HCP, brand=Brand(brand_value))
+    if not twin_persistence.hydrate_generator(
+        generator, model_row.get("mlflow_model_uri"), model_row.get("mlflow_run_id")
+    ):
+        raise RuntimeError(
+            f"counterfactual_simulator: trained twin model {model_row.get('model_id')} for "
+            f"{brand_value}/hcp could not be loaded from the model registry."
+        )
+    population = generator.generate(n=_COUNTERFACTUAL_TWIN_COUNT)
+    return _simulate_population(
+        population,
+        provider=provider,
+        frame=frame,
+        intervention_type=intervention_type,
+        regions=regions,
+        model_id=UUID(str(model_row["model_id"])),
+    )
+
+
+def _simulate_population(
+    population: Any,
+    *,
+    provider: Any,
+    frame: Any,
+    intervention_type: str,
+    regions: List[str],
+    model_id: Any,
+) -> Tuple[Any, Optional[_TargetedEffect]]:
+    """Run the engine on a twin population and, for a targeted request that completed, the
+    inference on the targeted regions."""
+    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+    from src.digital_twin.models.simulation_models import InterventionConfig, PopulationFilter
+    from src.digital_twin.simulation_engine import SimulationEngine
+
+    engine = SimulationEngine(
+        population=population,
+        effect_provider=provider,
+        effect_estimator=CohortCausalEstimator(),
+    )
+    # Pin the model id the way the route does (the engine derives it from the population).
+    engine.model_id = model_id
+    result = engine.simulate(
+        intervention_config=InterventionConfig(
+            intervention_type=intervention_type, target_regions=regions
+        ),
+        population_filter=PopulationFilter(regions=regions) if regions else None,
+        use_cache=False,
+    )
+    if not regions or getattr(result.status, "value", result.status) != "completed":
+        return result, None
+    return result, _targeted_effect(frame, regions)
+
+
+def _simulation_results(
+    result: Any,
+    *,
+    brand: str,
+    intervention_type: str,
+    frame: Any,
+    targeted: Optional[_TargetedEffect],
+) -> SimulationResults:
+    """Report one engine ``SimulationResult`` (plus the targeted inference, when the request
+    targeted regions) as the tool output, or refuse a failed run.
+
+    ``frame`` is the provider's ``TrainingFrame`` for this intervention; the contrast it
+    describes is stated in ``assumptions`` so the effect cannot be read as anything else.
+    Region effects are reported only for regions the cohort covers: the estimator gives a
+    twin in an uncovered region the cohort ATE, which is not that region's effect.
+    """
+    from src.digital_twin.effect.recommendation import experiment_size
+
+    if getattr(result.status, "value", result.status) != "completed":
+        raise ToolRefusalError(
+            f"counterfactual_simulator: the twin simulation for {intervention_type!r} on "
+            f"{brand!r} did not complete: {result.error_message}. No effect is returned."
+        )
+
+    modifier = frame.effect_modifiers[0] if frame.effect_modifiers else "region"
+    covered = set(frame.df[modifier].astype(str)) if modifier in frame.df.columns else set()
+    region_effects = {
+        region: float(stats["ate"])
+        for region, stats in result.effect_heterogeneity.by_region.items()
+        if "ate" in stats and region in covered
+    }
+    target_regions = list(targeted.regions) if targeted is not None else []
+    if targeted is None:
+        scope = "cohort"
+        effect, ci_lower, ci_upper = (
+            float(result.simulated_ate),
+            float(result.simulated_ci_lower),
+            float(result.simulated_ci_upper),
+        )
+        recommendation = str(result.recommendation.value)
+        rationale = str(result.recommendation_rationale)
+        scope_note = (
+            "effect and its 95% interval are the engine's cohort-wide estimate, the numbers "
+            "/digital-twin/simulate returns for this request."
+        )
+    else:
+        scope = f"targeted regions {target_regions}"
+        effect, ci_lower, ci_upper = targeted.effect, targeted.ci_lower, targeted.ci_upper
+        recommendation = targeted.recommendation
+        rationale = targeted.recommendation_rationale
+        scope_note = (
+            f"effect and its 95% interval are the causal forest's average effect over the "
+            f"{targeted.cohort_rows} cohort rows in {target_regions}; cohort_effect and its "
+            "interval are the engine's cohort-wide estimate, which a region filter does not "
+            "change."
+        )
+    # The rule POST /digital-twin/simulate uses too (#2015): for an untargeted run this is the
+    # engine's own recommended_sample_size.
+    recommended_n, size_note = experiment_size(frame, effect, regions=target_regions)
+    assumptions = [
+        f"Effect of {intervention_type} = high vs low {frame.treatment_var} (split at the "
+        f"cohort median) on {frame.outcome_var}, estimated with a causal forest (DML) on "
+        f"{brand}'s per-HCP cohort, adjusting for {', '.join(frame.confounders)} with "
+        f"{', '.join(frame.effect_modifiers)} as the effect modifier.",
+        f"Data provenance: {result.data_provenance} — a synthetic-gold cohort, not "
+        "real-world data.",
+        scope_note,
+        f"region_effects are the per-region effects for the {result.twin_count} simulated "
+        "twins' regions that the cohort covers: point estimates without an interval.",
+        f"Recommendation policy (applied to effect): {rationale}",
+        size_note,
+    ]
     return SimulationResults(
-        predicted_lift=expected_effect * 0.85,  # Adjusted for real-world factors
-        confidence="medium",
-        uncertainty_range=[expected_effect * 0.6, expected_effect * 1.1],
+        intervention_type=intervention_type,
+        brand=brand,
+        target_regions=target_regions,
+        effect_scope=scope,
+        effect=effect,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        cohort_effect=float(result.simulated_ate),
+        cohort_ci_lower=float(result.simulated_ci_lower),
+        cohort_ci_upper=float(result.simulated_ci_upper),
+        region_effects=region_effects,
+        twin_count=int(result.twin_count),
+        recommendation=recommendation,
+        recommendation_rationale=rationale,
+        recommended_sample_size=recommended_n,
+        model_id=str(result.model_id),
+        data_provenance=str(result.data_provenance),
+        assumptions=assumptions,
     )
 
 
@@ -2839,13 +4109,15 @@ def risk_scorer(
             f"(numeric columns minus outcome were empty; columns={list(work.columns)!r})."
         )
 
-    observed = set(work[outcome].dropna().unique())
-    if not observed <= {0, 1}:
-        raise ToolRefusalError(
-            f"risk_scorer: outcome column {outcome!r} is not a binary 0/1 event column "
-            f"(observed values include {sorted(map(str, observed))[:6]!r}). Refusing to "
-            "cast it to classes and report a class probability as a risk score."
-        )
+    _refuse_unless_binary_01(
+        work[outcome],
+        tool="risk_scorer",
+        role="outcome",
+        column=outcome,
+        consequence=(
+            "Refusing to cast it to classes and report a class probability as a risk score."
+        ),
+    )
     y = work[outcome].astype(int)
     if y.nunique() < 2:
         raise ToolRefusalError(
@@ -2920,8 +4192,9 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
       region (the real common-support overlap, not a fabricated 0.94).
     - ``overlap_assessment`` is a label derived from ``common_support``.
 
-    Fail-closed: no DataFrame, missing treatment / covariate columns, or fewer
-    than 2 treatment classes -> ``RuntimeError``.
+    Fail-closed: no DataFrame, missing treatment / covariate columns, a treatment
+    that is not a 0/1 column (#2016), a null treatment value, or fewer than 2
+    treatment classes -> ``RuntimeError``.
 
     Args:
         treatment: Binary treatment column name in the DataFrame.
@@ -2957,6 +4230,25 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
             f"the supplied DataFrame (columns={list(df.columns)!r})."
         )
 
+    _refuse_unless_binary_01(
+        df[treatment],
+        tool="propensity_estimator",
+        role="treatment",
+        column=treatment,
+        consequence=(
+            "Refusing to fit it as classes and report P(class == 1) as the propensity of treatment."
+        ),
+    )
+    # A propensity describes units whose assignment is known. Dropping the null rows
+    # would silently shrink the population the reported distribution covers, and
+    # PropensityScores has no field to disclose it (#2016).
+    n_null = int(df[treatment].isna().sum())
+    if n_null:
+        raise ToolRefusalError(
+            f"propensity_estimator: treatment column {_clip_name(treatment)!r} has "
+            f"{n_null} null values of {len(df)} rows. Refusing to drop them silently "
+            "from the population the propensity distribution describes."
+        )
     t = df[treatment].astype(int)
     if t.nunique() < 2:
         raise ToolRefusalError(
