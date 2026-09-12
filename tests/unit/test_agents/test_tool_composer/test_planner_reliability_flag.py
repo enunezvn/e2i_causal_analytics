@@ -251,9 +251,10 @@ def test_flag_on_adds_one_caveat_line_inside_each_caveated_tools_block(registry,
     first_caveat = _lines_with("\n".join(_block_of(block, first)), CAVEAT_PREFIX)
     other_caveat = _lines_with("\n".join(_block_of(block, other)), CAVEAT_PREFIX)
     assert len(first_caveat) == 1 and len(other_caveat) == 1
-    assert "6 of 24" in first_caveat[0] and "timeout" in first_caveat[0]
-    assert "9 of 30" in other_caveat[0]
-    assert first_caveat[0] != other_caveat[0]
+    # The WHOLE line, not substrings: the counts and the prefix survive a formatter that says
+    # "runs succeeded on tool errors", which would invert what the planner is told.
+    assert first_caveat[0] == "Reliability caveat: 6 of 24 runs failed on tool errors (timeout)"
+    assert other_caveat[0] == "Reliability caveat: 9 of 30 runs failed on tool errors (timeout)"
 
     # The declared number the LLM already reads is untouched, and it is still actually there:
     # the expected list comes from the registry, not from the render.

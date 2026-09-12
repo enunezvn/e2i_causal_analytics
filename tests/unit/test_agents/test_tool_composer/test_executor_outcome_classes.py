@@ -15,8 +15,11 @@ caught, never from error text:
 exists, inside the parallel-group task, so a step that finished before a cancel or an escaping
 exception in its group is not lost.
 
-Refusals and input rejections come from REAL tool guard code (``tool_registrations``) over real
-frames; the probe callables only count calls, sleep or raise.
+Refusals and the async input rejection come from REAL tool guard code (``tool_registrations``)
+over real frames. The sync input rejection is the one exception: the only guard on this branch
+raising ``ToolInputError`` is ``counterfactual_simulator``, which #2015 turns async, so a local
+sync probe stands in for it on that arm. Otherwise the probe callables only count calls, sleep
+or raise.
 """
 
 from __future__ import annotations
@@ -183,7 +186,10 @@ async def test_refusal_class(registry):
 
 
 async def test_input_rejected_class(registry):
+    calls: List[int] = []
+
     async def rejecting(**_: Any) -> Any:
+        calls.append(1)
         # REAL guard, and deliberately one that BOTH tool contracts refuse, because this call
         # has to survive a signature change landing from another branch:
         #   here (#1573)  - expected_effect=None is no usable effect estimate;
@@ -206,6 +212,35 @@ async def test_input_rejected_class(registry):
     _register(registry, "counterfactual_simulator", rejecting)
     trace = await _executor(registry).execute(_one("s", "counterfactual_simulator"))
     assert _classes(trace.step_results[0]) == ("input_rejected", 1, False, "ToolInputError")
+    # Reported attempts is what the step SAYS; the call count is what happened.
+    assert calls == [1]
+
+
+async def test_input_rejected_class_on_the_sync_path(registry):
+    """The same class through the executor's SYNC arm (``executor.py`` iscoroutinefunction split).
+
+    The case above has to be async, because #2015 turns ``counterfactual_simulator`` async. The
+    sync arm has its own transport — ``_run_sync_tool`` on the #1592 bounded pool — and only then
+    reaches the shared ``except (ToolInputError, ToolRefusalError)`` handler, so a change that
+    turned a sync ``ToolInputError`` into a refusal would be invisible to the async case alone.
+    That arm does not go away at the merge: #2015's ``power_calculator`` and #2016's
+    binary-treatment guard both classify through it.
+    """
+    from src.agents.tool_composer.errors import ToolInputError
+
+    calls: List[int] = []
+
+    def declining_sync(**_: Any) -> Any:
+        calls.append(1)
+        raise ToolInputError("declined: the probe's inputs cannot support this calculation")
+
+    assert not asyncio.iscoroutinefunction(declining_sync), "this case must take the sync arm"
+
+    _register(registry, "power_calculator", declining_sync)
+    trace = await _executor(registry).execute(_one("s", "power_calculator"))
+
+    assert _classes(trace.step_results[0]) == ("input_rejected", 1, False, "ToolInputError")
+    assert calls == [1], "a retry would run it again; reported attempts alone is not proof"
 
 
 async def test_plan_defect_class(registry):

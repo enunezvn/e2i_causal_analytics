@@ -1262,6 +1262,11 @@ class TestReferenceContract1573:
         err = result.output.error or ""
         assert "declined" in err
         assert "expected_effect" in err
+        # The CLASS too (spec §5.3), not only the retry count: turning a sync ToolInputError into
+        # a refusal on the way out of _run_sync_tool would leave every assertion above green while
+        # the learning loop recorded the wrong outcome for it.
+        assert result.outcome_class == "input_rejected"
+        assert result.error_type == "ToolInputError"
 
     @pytest.mark.asyncio
     async def test_transient_tool_errors_are_still_retried(
