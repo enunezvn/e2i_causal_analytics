@@ -1,7 +1,11 @@
-"""#2029: placebo_treatment and random_common_cause are seeded from the estimate id.
+"""#2029: placebo_treatment and random_common_cause are seeded from the pair identity.
 
-Two runs with the same estimate id give byte-identical refits; two estimate ids
-differ (the positive control against a seed that ignores its input).
+The seed comes from ``seed_identity_for`` (``brand|treatment|outcome``); the
+estimate id is only the fallback when a caller passes no identity. These tests
+drive ``_seed_for`` directly, so "estimate id" below stands for whichever identity
+string the runner seeds from: two runs with the same identity give byte-identical
+refits; two identities differ (the positive control against a seed that ignores
+its input).
 """
 
 from __future__ import annotations

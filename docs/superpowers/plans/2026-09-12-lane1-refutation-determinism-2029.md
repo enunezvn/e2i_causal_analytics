@@ -29,15 +29,17 @@ placebo/random-common-cause `refuted_effect`/`p_value` identical 0/22, with a di
 Cause: the discovery node passes `estimate_id=query_id`, and `query_id` is the per-analysis `uuid4` minted in
 `src/api/routes/causal.py` — it names the run, not the estimate. Owner decision (2026-09-12 21:40Z): seed from
 the content-addressed pair identity `brand|treatment|outcome` (all in node state at seed time; the dataset is
-excluded because a changed frame changes the refits anyway); the query id is the fallback only when treatment
-or outcome is missing. Worktree `.worktrees/lane-2029b`, branch `claude/2029-seed-identity`.
+excluded because a changed frame changes the refits anyway); the query id is the fallback whenever a caller
+passes no `seed_identity` or treatment/outcome is missing (spec §4: `None` (default) keeps the historical behaviour). Worktree `.worktrees/lane-2029b`, branch `claude/2029-seed-identity`.
 
-- [ ] **1b.1 Runner:** `seed_identity_for(brand=, treatment=, outcome=)` in `refutation_runner.py`;
+- [x] **1b.1 Runner:** `seed_identity_for(brand=, treatment=, outcome=)` in `refutation_runner.py`;
   `run_all_tests(..., seed_identity: Optional[str] = None)` seeds from `seed_for_estimate(seed_identity or estimate_id)`;
   `estimate_id` keeps its tracing/suite role; every perturbation row's details also record `seed_identity`.
-- [ ] **1b.2 Node:** `nodes/refutation.py` derives the identity from state and passes `seed_identity`; the
+- [x] **1b.1a Executor:** `pipeline/executors/dowhy.py` (the tool-composer `refutation_runner` path) passes
+  `seed_identity_for(brand=None, ...)` -- the pipeline state carries no brand; no `estimate_id` is invented.
+- [x] **1b.2 Node:** `nodes/refutation.py` derives the identity from state and passes `seed_identity`; the
   calibration probe is seeded from the same value.
-- [ ] **1b.3 Tests (red first):** runner — two `run_all_tests` calls with different estimate ids and the same
+- [x] **1b.3 Tests (red first):** runner — two `run_all_tests` calls with different estimate ids and the same
   identity give identical perturbation results, different identities differ (positive control); node — two
   query ids for the same pair produce the same seed and `seed_identity`.
 - [ ] **1b.4 Cert:** re-run condition 4 on the deployed image; verdicts, `refuted_effect`, `p_value` and the
