@@ -123,19 +123,28 @@ its check would fail on the pre-lane image.
 ## 4. Lane 1 — refutation determinism (#2029)
 
 ### Seeding
-- One integer seed per run, derived from the estimate id the same way `_resample_seed_for` already does,
-  computed once in `run_all_tests` and passed to `_run_placebo_test` and `_run_random_common_cause_test`,
-  which forward it as `random_state=` to `refute_estimate`. No new config key: identical inputs give
-  identical verdicts; a run with no estimate id stays unseeded and records `random_state: null`.
+- One integer seed per run, derived by `seed_for_estimate` from the content-addressed pair identity
+  `brand|treatment|outcome` (built by `seed_identity_for(brand=, treatment=, outcome=)`; the dataset is
+  deliberately excluded because a changed frame changes the refits anyway), computed once in `run_all_tests`
+  and passed to `_run_placebo_test` and `_run_random_common_cause_test`, which forward it as `random_state=`
+  to `refute_estimate`. Fallback: when treatment or outcome is missing the seed derives from `estimate_id`
+  (the per-run query id). No new config key: identical inputs give identical verdicts; a run with neither
+  identity nor estimate id stays unseeded and records `random_state: null`.
+- Why not the estimate id: in the discovery path the node passes `estimate_id=query_id`, and `query_id` is the
+  per-analysis `uuid4` minted in `src/api/routes/causal.py` — it names the run, not the estimate. Measured
+  2026-09-12 on image 38b653b21: two consecutive eleven-pair Remibrutinib discovery runs gave identical ATEs
+  (11/11) and statuses (22/22) but placebo/random-common-cause `refuted_effect`/`p_value` identical 0/22, with a
+  different recorded seed per run (`docs/demos/results/2026-09-12_lane2029/cert.md`, untracked evidence dir).
 - The calibration probe in `nodes/refutation.py` (`num_simulations=1`) also passes the seed; it measures
   wall time, so determinism there is free.
-- The runner's `run_all_tests` signature gains nothing public; the seed rides the existing
-  `estimate_id` argument.
+- The runner's `run_all_tests` signature gains ONE keyword-only argument, `seed_identity: Optional[str] = None`;
+  the seed is `seed_for_estimate(seed_identity or estimate_id)`. `estimate_id` keeps its tracing/suite role.
 
 ### Persistence
 - Every persisted test row's `details_json` carries the seed it used: `resample_seed` for subset and
   bootstrap (already computed, never written), `random_state` for placebo and random common cause,
-  absent for the analytic tests. A flipped verdict is reproducible from the row.
+  absent for the analytic tests; every perturbation row also carries the `seed_identity` string the seed
+  derived from, alongside `random_state`/`resample_seed`. A flipped verdict is reproducible from the row.
 
 ### Overflow
 - Migration `database/migrations/139_causal_validations_delta_percent_numeric_12_4.sql`:
@@ -151,6 +160,8 @@ its check would fail on the pre-lane image.
 - Two-run identity: `placebo_treatment` and `random_common_cause` at `num_simulations=2` return identical
   `refuted_effect`, `p_value` and status on two runs with the same estimate id, and differ across two
   estimate ids (the differing case is the positive control against a seed that ignores its input).
+- Pair identity: two `run_all_tests` calls with different estimate ids and the same pair identity give
+  identical perturbation results; different identities differ (positive control).
 - Persisted seed: the row builder emits `random_state`/`resample_seed` in details for the four
   perturbation tests and omits them for `sensitivity_e_value` and `negative_control_outcome`.
 - Near-zero claim: a suite with `original_effect = 1e-8` and a perturbation shift of 0.01 persists all rows
@@ -164,7 +175,9 @@ its check would fail on the pre-lane image.
 - Ledger shows migration 139; the column type reads NUMERIC(12,4).
 - Two consecutive eleven-pair Remibrutinib discovery runs on the deployed image: placebo and
   random-common-cause verdicts, `refuted_effect` and `p_value` identical pair-for-pair between the runs;
-  every perturbation row since the flip carries its seed in details (count = rows, nulls = 0).
+  every perturbation row since the flip carries its seed in details (count = rows, nulls = 0), and the
+  recorded `seed_identity` strings match pair-for-pair.
+- Lane-1 cert 2026-09-12: conditions 1–3 PASS, 4 FAIL (per-run seed) → lane 1b.
 - Negative control: the pre-lane image's rows carry no seed keys (measured 2026-09-12: 0 of 11).
 
 ## 5. Lane 2 — one vocabulary per gate

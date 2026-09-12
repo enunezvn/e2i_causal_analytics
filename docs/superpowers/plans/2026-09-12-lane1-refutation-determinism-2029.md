@@ -20,6 +20,31 @@ Every command below runs from `.worktrees/lane-2029` with `.venv/bin/python` / `
 
 ---
 
+## Amendment 2026-09-12 (lane 1b) — seed from the pair identity, not the per-run estimate id
+
+Tasks 1–6 below shipped in PR #2071 (merged `38b653b21`); they are kept as written. Lane-1 cert on that image
+(`docs/demos/results/2026-09-12_lane2029/cert.md`, untracked evidence dir): conditions 1–3 PASS, 4 FAIL — two
+consecutive eleven-pair Remibrutinib discovery runs gave identical ATEs (11/11) and statuses (22/22) but
+placebo/random-common-cause `refuted_effect`/`p_value` identical 0/22, with a different recorded seed per run.
+Cause: the discovery node passes `estimate_id=query_id`, and `query_id` is the per-analysis `uuid4` minted in
+`src/api/routes/causal.py` — it names the run, not the estimate. Owner decision (2026-09-12 21:40Z): seed from
+the content-addressed pair identity `brand|treatment|outcome` (all in node state at seed time; the dataset is
+excluded because a changed frame changes the refits anyway); the query id is the fallback only when treatment
+or outcome is missing. Worktree `.worktrees/lane-2029b`, branch `claude/2029-seed-identity`.
+
+- [ ] **1b.1 Runner:** `seed_identity_for(brand=, treatment=, outcome=)` in `refutation_runner.py`;
+  `run_all_tests(..., seed_identity: Optional[str] = None)` seeds from `seed_for_estimate(seed_identity or estimate_id)`;
+  `estimate_id` keeps its tracing/suite role; every perturbation row's details also record `seed_identity`.
+- [ ] **1b.2 Node:** `nodes/refutation.py` derives the identity from state and passes `seed_identity`; the
+  calibration probe is seeded from the same value.
+- [ ] **1b.3 Tests (red first):** runner — two `run_all_tests` calls with different estimate ids and the same
+  identity give identical perturbation results, different identities differ (positive control); node — two
+  query ids for the same pair produce the same seed and `seed_identity`.
+- [ ] **1b.4 Cert:** re-run condition 4 on the deployed image; verdicts, `refuted_effect`, `p_value` and the
+  recorded `seed_identity` strings match pair-for-pair.
+
+---
+
 ## File map
 
 | file | change |
