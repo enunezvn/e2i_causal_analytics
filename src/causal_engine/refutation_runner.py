@@ -249,6 +249,8 @@ def _budget_skip_result(
     stopped: bool,
     config_details: Dict[str, Any],
     execution_time_ms: float = 0.0,
+    *,
+    resample_seed: Optional[int] = None,
 ) -> RefutationResult:
     """Honest SKIPPED when fewer than ``minimum`` re-fits completed.
 
@@ -288,6 +290,8 @@ def _budget_skip_result(
             "resamples_completed": completed,
             "resamples_requested": requested,
             "stopped_for_budget": stopped,
+            # #2029: the seed the re-fits were drawn with, persisted with the row.
+            "resample_seed": resample_seed,
             **config_details,
         },
         execution_time_ms=execution_time_ms,
@@ -302,6 +306,8 @@ def _degenerate_skip_result(
     stopped: bool,
     config_details: Dict[str, Any],
     execution_time_ms: float = 0.0,
+    *,
+    resample_seed: Optional[int] = None,
 ) -> RefutationResult:
     """Honest SKIPPED when every re-fit returned the SAME effect (owner decision
     2026-09-09). A zero-variance distribution cannot be scored (DoWhy's normal
@@ -329,6 +335,8 @@ def _degenerate_skip_result(
             "resamples_completed": len(effects),
             "resamples_requested": requested,
             "stopped_for_budget": stopped,
+            # #2029: the seed the re-fits were drawn with, persisted with the row.
+            "resample_seed": resample_seed,
             **config_details,
         },
         execution_time_ms=execution_time_ms,
@@ -2017,7 +2025,10 @@ class RefutationRunner:
                     # #2029: DoWhy 0.14 converts an int ``random_state`` to one
                     # RandomState shared across the simulations, so the whole
                     # permutation sequence is reproducible from the estimate id.
-                    # (``random_seed`` would only seed numpy's GLOBAL rng.)
+                    # (``random_seed`` would only seed numpy's GLOBAL rng.) The
+                    # sequence is reproducible only because the refits run
+                    # sequentially (default n_jobs); do not add n_jobs>1 -- joblib
+                    # would copy the same RandomState into every worker.
                     random_state=random_state,
                 )
                 refuted_effect = float(refutation.new_effect)
@@ -2160,7 +2171,10 @@ class RefutationRunner:
                 # #2029: DoWhy 0.14 converts an int ``random_state`` to one
                 # RandomState shared across the simulations, so the whole
                 # draw sequence is reproducible from the estimate id.
-                # (``random_seed`` would only seed numpy's GLOBAL rng.)
+                # (``random_seed`` would only seed numpy's GLOBAL rng.) The
+                # sequence is reproducible only because the refits run
+                # sequentially (default n_jobs); do not add n_jobs>1 -- joblib
+                # would copy the same RandomState into every worker.
                 if random_state is not None:
                     _rcc_kwargs["random_state"] = random_state
                 refutation = causal_model.refute_estimate(
@@ -2313,6 +2327,7 @@ class RefutationRunner:
                 stopped,
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
+                resample_seed=resample_seed,
             )
 
         # "Every re-fit returned the same effect" is tested EXACTLY (max == min):
@@ -2328,6 +2343,7 @@ class RefutationRunner:
                 stopped,
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
+                resample_seed=resample_seed,
             )
 
         refuted_effect = float(np.mean(subset_effects))
@@ -2362,6 +2378,8 @@ class RefutationRunner:
                 "resamples_completed": len(subset_effects),
                 "resamples_requested": requested,
                 "stopped_for_budget": stopped,
+                # #2029: the seed the re-fits were drawn with, persisted with the row.
+                "resample_seed": resample_seed,
                 **config_details,
             },
             execution_time_ms=execution_time,
@@ -2449,6 +2467,7 @@ class RefutationRunner:
                 stopped,
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
+                resample_seed=resample_seed,
             )
 
         # Exact degeneracy check (max == min); see _run_data_subset_test.
@@ -2461,6 +2480,7 @@ class RefutationRunner:
                 stopped,
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
+                resample_seed=resample_seed,
             )
 
         refuted_effect = float(np.mean(bootstrap_effects))
@@ -2507,6 +2527,8 @@ class RefutationRunner:
                 "resamples_completed": len(bootstrap_effects),
                 "resamples_requested": requested,
                 "stopped_for_budget": stopped,
+                # #2029: the seed the re-fits were drawn with, persisted with the row.
+                "resample_seed": resample_seed,
                 **config_details,
             },
             execution_time_ms=execution_time,
