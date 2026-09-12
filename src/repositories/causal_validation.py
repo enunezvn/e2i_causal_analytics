@@ -32,9 +32,17 @@ DELTA_PERCENT_COLUMN_MAX = 99999999.9999
 def _clamp_delta_percent(value: Any, details: Dict[str, Any]) -> Any:
     """Return the column-safe delta_percent; record the exact value when clamped.
 
-    Non-finite values are returned untouched: ``inf > MAX`` is True in Python,
-    and saturating it would fabricate a bounded, plausible-looking number for a
-    value that is not a measurement.
+    Non-finite values become ``None`` with ``details["delta_percent_nonfinite"]``
+    set to their repr (``'inf'`` / ``'-inf'`` / ``'nan'``) so the diagnostic
+    survives: ``inf > MAX`` is True in Python, and saturating it would fabricate
+    a bounded, plausible-looking number for a value that is not a measurement;
+    and the transport encodes with ``allow_nan=False`` (httpx ``_content.py``,
+    measured 2026-09-12: a NaN/Infinity anywhere in the payload raises
+    ``ValueError`` before the request is sent), so leaving it in the top-level
+    column would fail the WHOLE ``save_suite`` insert -- the one-row-drops-the-
+    suite failure this clamp exists to prevent. NULL is the honest column
+    reading of "no finite value" (same policy ``to_plain_json`` applies inside
+    details_json).
     """
     if value is None:
         return None
@@ -43,7 +51,8 @@ def _clamp_delta_percent(value: Any, details: Dict[str, Any]) -> Any:
     except (TypeError, ValueError):
         return value
     if not math.isfinite(v):
-        return v
+        details["delta_percent_nonfinite"] = repr(v)
+        return None
     if v > DELTA_PERCENT_COLUMN_MAX:
         details["delta_percent_exact"] = v
         return DELTA_PERCENT_COLUMN_MAX

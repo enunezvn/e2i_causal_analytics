@@ -40,11 +40,16 @@ def test_widens_the_column_idempotently():
     sql = _statements()
     assert re.search(r"ALTER\s+TABLE\s+public\.causal_validations", sql, re.I)
     assert re.search(r"ALTER\s+COLUMN\s+delta_percent\s+TYPE\s+NUMERIC\(12,\s*4\)", sql, re.I)
-    # idempotent AND never narrowing: the guard fires only when the column is
-    # narrower than 12 (or untyped), so a re-run -- or a later wider column -- is a no-op
-    assert re.search(r"numeric_precision\s+IS\s+NULL", sql, re.I)
+    # idempotent AND strictly widening (codex r1 B): the guard fires ONLY on the
+    # intended narrower scale-4 column (precision < 12 AND scale = 4). A re-run,
+    # a later wider column, an unconstrained NUMERIC (precision NULL) or any
+    # other scale was set deliberately and is left alone -- retyping those
+    # would be a rewrite that can overflow or lose fractional digits.
+    assert re.search(r"numeric_precision\s+IS\s+NOT\s+NULL", sql, re.I)
     assert re.search(r"numeric_precision\s+<\s+12", sql)
-    assert not re.search(r"numeric_precision\s+IS\s+DISTINCT\s+FROM\s+12", sql, re.I)
+    assert re.search(r"numeric_scale\s*=\s*4", sql)
+    assert not re.search(r"IS\s+DISTINCT\s+FROM", sql, re.I)
+    assert not re.search(r"numeric_precision\s+IS\s+NULL\s+OR", sql, re.I)
 
 
 @pytest.mark.unit

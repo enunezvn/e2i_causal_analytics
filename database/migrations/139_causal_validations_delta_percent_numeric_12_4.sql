@@ -38,8 +38,8 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'causal_validations'
           AND column_name = 'delta_percent'
-          -- Only ever WIDEN: a column someone later widened beyond 12 must not be narrowed back (a rewrite that could overflow).
-          AND (numeric_precision IS NULL OR numeric_precision < 12 OR numeric_scale IS DISTINCT FROM 4)
+          -- Never narrows precision or changes scale: only the narrower scale-4 column is widened; an unconstrained NUMERIC or any other scale was set deliberately and is left alone (retyping would be a rewrite that can overflow or lose fractional digits).
+          AND (numeric_precision IS NOT NULL AND numeric_precision < 12 AND numeric_scale = 4)
     ) THEN
         ALTER TABLE public.causal_validations ALTER COLUMN delta_percent TYPE NUMERIC(12, 4);
     END IF;

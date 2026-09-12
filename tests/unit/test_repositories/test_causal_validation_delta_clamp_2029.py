@@ -9,7 +9,7 @@ now lives in ``CausalValidationRepository`` -- once, for every writer.
 
 from __future__ import annotations
 
-import math
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -82,15 +82,22 @@ def test_clamp_does_not_mutate_the_result_details():
     assert "delta_percent_exact" not in suite.tests[0].details  # the row gets a copy
 
 
-@pytest.mark.parametrize("value", [float("inf"), float("nan")])
-def test_non_finite_delta_is_left_alone_not_saturated(value):
-    """+inf > MAX is True in Python; saturating it would fabricate a bounded,
-    plausible-looking number for a value that is not a measurement. The clamp
-    only bounds finite values."""
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_non_finite_delta_is_nulled_and_flagged(value):
+    """Codex r1 C: the transport encodes with ``allow_nan=False`` (httpx
+    ``_content.py``; measured 2026-09-12: ``httpx.Request(json={"x": nan})``
+    raises ``ValueError: Out of range float values are not JSON compliant``),
+    so a non-finite TOP-LEVEL ``delta_percent`` would fail the WHOLE insert
+    client-side -- the same one-row-drops-the-suite failure the clamp exists to
+    prevent. +inf > MAX is True in Python, and saturating it would fabricate a
+    bounded, plausible-looking number for a value that is not a measurement;
+    the honest column value is NULL, with the diagnostic kept in details_json."""
     row = _row(_suite(value))
-    assert isinstance(row["delta_percent"], float)
-    assert not math.isfinite(row["delta_percent"])
+    assert row["delta_percent"] is None
+    assert row["details_json"]["delta_percent_nonfinite"] == repr(value)
     assert "delta_percent_exact" not in row["details_json"]
+    # The row must survive the transport's strict encoder.
+    assert json.dumps(row, allow_nan=False)
 
 
 def test_none_delta_stays_none():

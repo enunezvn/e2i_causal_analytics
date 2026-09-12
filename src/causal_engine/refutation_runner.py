@@ -381,6 +381,9 @@ def _degenerate_ci_skip_result(
     config_details: Dict[str, Any],
     execution_time_ms: float = 0.0,
     unscorable: str = "coverage / width ratio",
+    *,
+    seed_key: Optional[str] = None,
+    seed: Optional[int] = None,
 ) -> RefutationResult:
     """Honest SKIPPED, decided BEFORE any re-fit, when the reported interval has
     no width: coverage of a point and a width ratio against ~0 cannot be scored
@@ -391,33 +394,41 @@ def _degenerate_ci_skip_result(
     scores the shift in SE units, #2005) so one helper -- one ``reason``
     vocabulary, ``original_ci_degenerate`` -- serves every interval-referenced
     test without misdescribing what was skipped.
+
+    ``seed_key`` / ``seed`` (#2029): the perturbation test's seed key
+    (``_SEED_KEY_BY_TEST``) and the seed the run WOULD have used; recorded on
+    the skip row too, so every persisted perturbation row carries its key
+    (``None`` when the run was unseeded -- present, not silently absent).
     """
     name = test_name.value
+    details: Dict[str, Any] = {
+        # Criticality-neutral wording: this helper serves the two non-critical
+        # tests AND random_common_cause (critical, #2005); a SKIPPED result of
+        # either kind is excluded from the confidence average and the
+        # remaining tests decide the suite. ``to_legacy_format`` forwards this
+        # message verbatim into ``skipped_tests``.
+        "reason": (
+            "original_ci_degenerate — the reported interval has no width, so "
+            f"{unscorable} cannot be scored; the remaining tests decide the suite"
+        ),
+        "message": (
+            f"{name} skipped: original_ci={tuple(original_ci)!r} has width "
+            f"{float(original_ci[1] - original_ci[0]):.6g}; no re-fit was run; "
+            "excluded from the confidence average, not scored as a failure"
+        ),
+        "original_ci": (float(original_ci[0]), float(original_ci[1])),
+        "resamples_completed": 0,
+        "stopped_for_budget": False,
+        **config_details,
+    }
+    if seed_key is not None:
+        details[seed_key] = seed
     return RefutationResult(
         test_name=test_name,
         status=RefutationStatus.SKIPPED,
         original_effect=original_effect,
         refuted_effect=original_effect,
-        details={
-            # Criticality-neutral wording: this helper serves the two non-critical
-            # tests AND random_common_cause (critical, #2005); a SKIPPED result of
-            # either kind is excluded from the confidence average and the
-            # remaining tests decide the suite. ``to_legacy_format`` forwards this
-            # message verbatim into ``skipped_tests``.
-            "reason": (
-                "original_ci_degenerate — the reported interval has no width, so "
-                f"{unscorable} cannot be scored; the remaining tests decide the suite"
-            ),
-            "message": (
-                f"{name} skipped: original_ci={tuple(original_ci)!r} has width "
-                f"{float(original_ci[1] - original_ci[0]):.6g}; no re-fit was run; "
-                "excluded from the confidence average, not scored as a failure"
-            ),
-            "original_ci": (float(original_ci[0]), float(original_ci[1])),
-            "resamples_completed": 0,
-            "stopped_for_budget": False,
-            **config_details,
-        },
+        details=details,
         execution_time_ms=execution_time_ms,
     )
 
@@ -640,6 +651,20 @@ def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
     import hashlib
 
     return int(hashlib.sha256(str(estimate_id).encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+
+
+#: Spec §4 (#2029): the details_json key under which EACH perturbation test
+#: records the seed it used -- ``random_state`` for the two DoWhy refuters,
+#: ``resample_seed`` for the two in-house resample loops -- present on EVERY
+#: persisted row of that test (scored, post-run skip, pre-run skip, budget
+#: skip); absent for the analytic tests (sensitivity, negative control). The
+#: post-deploy cert counts perturbation rows WITH the key and expects nulls = 0.
+_SEED_KEY_BY_TEST: Dict[str, str] = {
+    "placebo_treatment": "random_state",
+    "random_common_cause": "random_state",
+    "data_subset": "resample_seed",
+    "bootstrap": "resample_seed",
+}
 
 
 # ============================================================================
@@ -1138,11 +1163,14 @@ class RefutationRunner:
 
     @staticmethod
     def _seed_for(estimate_id: Optional[str]) -> Optional[int]:
-        """The ONE seed a run uses for every random refit (#2029).
+        """The seed a run uses for every random refit (#2029), for callers
+        OUTSIDE the run (the causal_impact refutation node's probe reads it).
 
-        Same derivation as the in-house resample loops (``_resample_seed_for``):
-        a stable 31-bit integer from the estimate id, ``None`` when there is no
-        id -- an unseeded run stays unseeded and says so in its details.
+        ``run_all_tests`` derives the run's seed ONCE via the module-level
+        ``_resample_seed_for`` and feeds the same value to all four perturbation
+        tests; this is the same derivation exposed on the runner: a stable
+        31-bit integer from the estimate id, ``None`` when there is no id --
+        an unseeded run stays unseeded and says so in its details.
         """
         return _resample_seed_for(estimate_id)
 
@@ -1373,8 +1401,9 @@ class RefutationRunner:
         # and seed their draws from the estimate id so a re-run reproduces its
         # evidence (None → unseeded, the pre-lane-1 behaviour).
         resample_seed = _resample_seed_for(estimate_id)
-        # #2029: the same seed feeds the two DoWhy refits.
-        random_state = self._seed_for(estimate_id)
+        # #2029: the same VALUE feeds the two DoWhy refits -- derived once,
+        # aliased under the name the DoWhy refuters take it by.
+        random_state = resample_seed
 
         # #2005: the random_common_cause shift is scored against the reported
         # interval's SE scaled to the refit frame. ``reference_n`` is the frame
@@ -1708,23 +1737,30 @@ class RefutationRunner:
                     },
                 )
             for name in skipped_for_budget:
+                _skip_details: Dict[str, Any] = {
+                    "reason": (
+                        "time_budget — non-critical test skipped to avoid "
+                        "orphaning compute past the cooperative deadline; "
+                        "the critical gates completed and decide the suite"
+                    ),
+                    "message": (
+                        f"{name} skipped: estimated cost would run past the "
+                        "compute deadline (non-critical, degraded honestly)"
+                    ),
+                }
+                # #2029 spec §4: a budget-skipped perturbation row still carries
+                # the seed the run used under that test's key; analytic tests
+                # (sensitivity) are not in the mapping and get nothing.
+                _seed_key = _SEED_KEY_BY_TEST.get(name)
+                if _seed_key is not None:
+                    _skip_details[_seed_key] = resample_seed
                 tests.append(
                     RefutationResult(
                         test_name=RefutationTestType(name),
                         status=RefutationStatus.SKIPPED,
                         original_effect=original_effect,
                         refuted_effect=original_effect,
-                        details={
-                            "reason": (
-                                "time_budget — non-critical test skipped to avoid "
-                                "orphaning compute past the cooperative deadline; "
-                                "the critical gates completed and decide the suite"
-                            ),
-                            "message": (
-                                f"{name} skipped: estimated cost would run past the "
-                                "compute deadline (non-critical, degraded honestly)"
-                            ),
-                        },
+                        details=_skip_details,
                     )
                 )
             logger.info(
@@ -2146,6 +2182,8 @@ class RefutationRunner:
                     config_details,
                     execution_time_ms=(time.time() - start_time) * 1000,
                     unscorable="the shift in SE units",
+                    seed_key="random_state",
+                    seed=random_state,
                 )
             try:
                 # Pass num_simulations ONLY when configured, so prod (no key set)
@@ -2286,6 +2324,8 @@ class RefutationRunner:
                 original_ci,
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
+                seed_key="resample_seed",
+                seed=resample_seed,
             )
         rng = np.random.default_rng(resample_seed)
         try:
@@ -2428,6 +2468,8 @@ class RefutationRunner:
                 original_ci,
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
+                seed_key="resample_seed",
+                seed=resample_seed,
             )
         rng = np.random.default_rng(resample_seed)
         try:
