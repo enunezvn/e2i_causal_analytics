@@ -938,3 +938,62 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         assert "distinct outcome values = 1" in msg, msg
         assert "the outcome is constant" in msg, msg
         assert "frac(y > 0) = 0.0000" in msg, msg
+
+    def test_all_nan_outcome_is_diagnosed_as_nan_not_binarization(self):
+        """An all-NaN outcome must be refused FOR BEING NaN (#2063 follow-up).
+
+        `NaN > 0` is False, so an all-NaN column also trips the binarization
+        gate — but blaming binarization would send the reader hunting the
+        wrong problem. A misleading-but-confident diagnostic is the same harm
+        class as a misleading-but-confident estimate, so the NaN check runs
+        first and names what is actually wrong.
+        """
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = np.nan
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _extract_uplift_inputs_from_state(state)
+
+        msg = str(excinfo.value)
+        assert "NaN" in msg, msg
+        assert f"{len(df)} of {len(df)}" in msg, msg
+        assert "binariz" not in msg.lower(), f"all-NaN must not be blamed on binarization: {msg!r}"
+
+    def test_partially_nan_outcome_passes_this_gate_to_the_fitters_own_check(self):
+        """POSITIVE CONTROL — partial NaN is already diagnosed truthfully.
+
+        Measured on today's code: a single NaN in 240 rows already fails
+        closed at the uplift wrapper with `Input y contains NaN` (the same at
+        60/240). That refusal names the real problem, so widening this gate to
+        any-NaN would add production code for no honesty gain. The extractor
+        therefore passes partial NaN through, NaN intact, to that check.
+        """
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = (df["sales"] > df["sales"].median()).astype(float)
+        df.loc[df.index[:3], "sales"] = np.nan
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        _X_df, _t, y_arr, _names, _groups = _extract_uplift_inputs_from_state(state)
+
+        assert int(np.isnan(y_arr).sum()) == 3, "NaN must survive to the fitter's own check"
+
+    def test_nan_free_outcome_passes_the_nan_gate(self):
+        """POSITIVE CONTROL — a column with no NaN is untouched by the gate."""
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = (df["sales"] > df["sales"].median()).astype(float)
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        _X_df, _t, y_arr, _names, _groups = _extract_uplift_inputs_from_state(state)
+
+        assert int(np.isnan(y_arr).sum()) == 0
+        assert len(y_arr) == len(df)

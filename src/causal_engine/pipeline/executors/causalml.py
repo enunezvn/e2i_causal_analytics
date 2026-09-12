@@ -192,6 +192,30 @@ def _extract_uplift_inputs_from_state(
     # invented here.
     #
     # Cost: measured 0.04 ms on the raw array, before any fit.
+    # Refuse an entirely-NaN outcome FOR BEING NaN, ahead of the
+    # binarization gate below (#2063).
+    #
+    # `NaN > 0` is False, so an all-NaN column also trips that gate — but it
+    # would then be blamed on binarization, and would report
+    # `mean|y - (y > 0)| = nan` into the bargain. A misleading-but-confident
+    # diagnostic is the same harm class as a misleading-but-confident
+    # estimate: the reader goes looking for the wrong problem.
+    #
+    # Scoped to ALL-NaN on measurement, not caution. Partial NaN already
+    # fails closed with a truthful message — the uplift wrapper's own
+    # validation raises `Input y contains NaN` at 1 NaN of 240 just as it
+    # does at 60 of 240 — so widening this to any-NaN would add production
+    # code for no honesty gain, and partial NaN is passed through to that
+    # check intact.
+    nan_count = int(np.isnan(y_arr).sum())
+    if nan_count == len(y_arr):
+        raise ExecutorDataUnavailable(
+            f"CausalMLExecutor: outcome '{outcome_var}' is entirely NaN "
+            f"({nan_count} of {len(y_arr)} rows), so there is no outcome to "
+            f"model. This is a data-loading problem, not a modeling one: "
+            f"check the join/filter that produced this column."
+        )
+
     binarized = (y_arr > 0).astype(float)
     if binarized.all() or not binarized.any():
         positive_fraction = float(binarized.mean())
