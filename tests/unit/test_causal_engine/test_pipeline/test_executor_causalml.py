@@ -1061,7 +1061,7 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
 
         `binarized.all()` cannot be True while any NaN is present, so the
         only reachable partial-NaN collapse is the all-non-positive one --
-        whose non-NaN values STILL collapse once the NaN is fixed. A message
+        whose non-NaN values STILL collapse once the NaN rows are dropped. A message
         naming only the NaN sends the reader to fix it and straight into a
         second refusal (NEW-1), so it leads with the NaN and then reports
         the collapse, with statistics over the non-NaN values only.
@@ -1089,6 +1089,10 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         assert "would still collapse to a single class under CausalML's internal binarization" in (
             msg
         ), f"second problem hidden behind the NaN: {msg!r}"
+        # Only DROPPING the NaN rows is certain to leave the collapse; re-filling
+        # them with positive values would pass the gate (#2063 Minor-1).
+        assert "Dropping the NaN rows is not enough:" in msg, msg
+        assert "alone is not enough" not in msg, msg
         assert "not a modeling one" not in msg, msg
         assert "no usable outcome" not in msg, msg
         # The three sub-defects of the collapse message, each pinned.
@@ -1135,6 +1139,7 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         assert "would still collapse to a single class under CausalML's internal binarization" in (
             msg
         ), msg
+        assert "Dropping the NaN rows is not enough:" in msg, msg
         assert "= nan" not in msg, msg
         # Statistics over the 239 non-NaN values only.
         assert "frac(y > 0) = 0.0000" in msg, msg
@@ -1174,6 +1179,7 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         msg = str(excinfo.value)
         assert msg.startswith("CausalMLExecutor: outcome 'sales' is NaN in 1 of 4 rows"), msg
         assert "the non-NaN values are constant, so no estimator can identify an effect" in msg, msg
+        assert "Dropping the NaN rows is not enough:" in msg, msg
         assert "distinct outcome values = 1," in msg, msg
         assert "= nan" not in msg, msg
         assert "collapse" not in msg, msg

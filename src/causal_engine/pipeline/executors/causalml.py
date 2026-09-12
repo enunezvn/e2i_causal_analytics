@@ -228,9 +228,9 @@ def _extract_uplift_inputs_from_state(
         # A NaN-bearing column can reach here only via `not binarized.any()`
         # -- `binarized.all()` cannot be True while any NaN is present -- so
         # every non-NaN value is <= 0, and the column would STILL collapse
-        # once the NaN is fixed. That is two problems, and a message naming
-        # only the NaN sends the reader into a second refusal after fixing
-        # it. Both are reported; the statistics are computed over the
+        # once the NaN rows are dropped. That is two problems, and a message
+        # naming only the NaN sends the reader into a second refusal after
+        # dropping them. Both are reported; the statistics are computed over the
         # non-NaN values only, since over NaN they print `nan` and count NaN
         # as a distinct outcome value. For a NaN-free column this is the
         # whole column.
@@ -290,7 +290,7 @@ def _extract_uplift_inputs_from_state(
             message = (
                 f"outcome '{outcome_var}' is NaN in {nan_count} of {len(y_arr)} "
                 f"rows -- check the join/filter that produced this column. "
-                f"Fixing the NaN rows alone is not enough: {second_problem}. "
+                f"Dropping the NaN rows is not enough: {second_problem}. "
                 f"Over the non-NaN values: {stats} {remedy}"
             )
         elif distinct_outcomes == 1:
