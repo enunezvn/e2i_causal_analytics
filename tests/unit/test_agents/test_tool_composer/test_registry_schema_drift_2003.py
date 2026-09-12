@@ -107,15 +107,13 @@ INTERNAL_INPUTS: Dict[str, Dict[str, str]] = {
         # Not offered to the planner (#2014): it was echoed while linear regression ran.
         "method": "accepted only to refuse an estimator other than linear regression",
     },
+    # treatment / outcome have no aliases since #2061: both are required by the signature,
+    # so the pre-dispatch guard can enforce what the schema declares required.
     "refutation_runner": {
-        "treatment_var": "alias of treatment",
-        "outcome_var": "alias of outcome",
         "covariates": "alias of confounders",
         "common_causes": "alias of confounders",
     },
     "sensitivity_analyzer": {
-        "treatment_var": "alias of treatment",
-        "outcome_var": "alias of outcome",
         "covariates": "alias of confounders",
         "common_causes": "alias of confounders",
         # Read ONLY to refuse them (#2022). Not offered to the planner: no tool output

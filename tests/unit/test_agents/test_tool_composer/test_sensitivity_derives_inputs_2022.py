@@ -182,7 +182,14 @@ def test_a_supplied_naive_ate_is_refused_because_nothing_emits_one() -> None:
         )
     # Refused with no frame too: no tool output carries it there either.
     with pytest.raises(ToolRefusalError, match="naive_ate"):
-        tr.sensitivity_analyzer(ate=0.11, ci_lower=0.10, ci_upper=0.12, naive_ate=0.11)
+        tr.sensitivity_analyzer(
+            ate=0.11,
+            ci_lower=0.10,
+            ci_upper=0.12,
+            treatment="treatment_arm",
+            outcome="adherence_rate",
+            naive_ate=0.11,
+        )
 
 
 def test_a_binary_outcome_derives_the_control_arm_rate_and_takes_the_risk_ratio_path() -> None:
@@ -229,9 +236,15 @@ def test_a_frame_without_the_bound_columns_is_refused() -> None:
 def test_a_frame_in_context_without_a_bound_treatment_or_outcome_is_refused() -> None:
     # The frame is right there in kwargs; serving an unstandardized, unbenchmarked
     # E-value from it would be the plausible-wrong number this issue is about.
+    # Omitting them is a signature error since #2061 (the executor refuses that plan before
+    # dispatch); a bound-but-blank column name reaches the tool and is refused there.
     df = _continuous_frame()
-    with pytest.raises(ToolRefusalError, match="treatment"):
+    with pytest.raises(TypeError, match="treatment"):
         tr.sensitivity_analyzer(ate=0.11, ci_lower=0.10, ci_upper=0.12, estimation_data=df)
+    with pytest.raises(ToolRefusalError, match="treatment"):
+        tr.sensitivity_analyzer(
+            ate=0.11, ci_lower=0.10, ci_upper=0.12, treatment=" ", outcome="", estimation_data=df
+        )
 
 
 def test_without_a_frame_the_calculation_is_refused_because_the_effect_has_no_scale() -> None:
@@ -244,12 +257,13 @@ def test_without_a_frame_the_calculation_is_refused_because_the_effect_has_no_sc
     four orders of magnitude apart, with nothing in the answer to contradict either.
     A caveat on an unsupported number is a labeling fix; the calculation is refused.
     """
+    bound = {"treatment": "treatment_arm", "outcome": "adherence_rate"}
     for ate, lo, hi in ((0.1, 0.05, 0.15), (10.0, 5.0, 15.0)):
         with pytest.raises(ToolRefusalError, match="standard deviation"):
-            tr.sensitivity_analyzer(ate=ate, ci_lower=lo, ci_upper=hi)
+            tr.sensitivity_analyzer(ate=ate, ci_lower=lo, ci_upper=hi, **bound)
     # Point-only reporting survives — but only when a usable frame supplies the scale.
     with pytest.raises(ToolRefusalError, match="standard deviation"):
-        tr.sensitivity_analyzer(ate=0.3, ci_lower=None)
+        tr.sensitivity_analyzer(ate=0.3, ci_lower=None, **bound)
 
 
 def test_a_supplied_but_unusable_frame_is_refused_rather_than_read_as_absent() -> None:

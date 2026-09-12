@@ -101,14 +101,18 @@ def test_no_interval_on_the_risk_ratio_path() -> None:
 def test_no_interval_with_a_supplied_baseline_risk_is_refused() -> None:
     # #2022: nothing emits a baseline risk, so a supplied one is invented by construction.
     with pytest.raises(RuntimeError, match="baseline_risk"):
-        tr.sensitivity_analyzer(ate=0.9, ci_lower=None, baseline_risk=0.3)
+        tr.sensitivity_analyzer(
+            ate=0.9, ci_lower=None, baseline_risk=0.3, treatment="treatment", outcome="outcome"
+        )
 
 
 def test_half_an_interval_is_refused_not_mirrored_from_nothing() -> None:
     # An upper bound alone used to be unreachable (ci_lower was required); mirroring it
     # would invent a lower bound the estimator never produced.
     with pytest.raises(ToolInputError, match="ci_upper"):
-        tr.sensitivity_analyzer(ate=0.3, ci_lower=None, ci_upper=0.5)
+        tr.sensitivity_analyzer(
+            ate=0.3, ci_lower=None, ci_upper=0.5, treatment="treatment", outcome="outcome"
+        )
 
 
 def test_ci_lower_is_declared_optional() -> None:
