@@ -957,6 +957,19 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         assert "distinct outcome values = 1" in msg, msg
         assert "the outcome is constant" in msg, msg
         assert "frac(y > 0) = 0.0000" in msg, msg
+        # NEW-2: the opening must not contradict the "not a binarization
+        # problem" remedy. A constant outcome is not collapsed BY
+        # binarization, and its zero is the true difference in means, not a
+        # fabricated one; the harm is the zero-width CI and maximal
+        # confidence a fit would attach to an uninformative estimate.
+        assert msg.startswith(
+            "CausalMLExecutor: outcome 'sales' is constant, so no estimator can identify "
+            "an effect from it"
+        ), msg
+        assert "ate = 0.0 with a zero-width CI and maximal confidence" in msg, msg
+        assert "fabricated" not in msg, f"a constant outcome's zero is not fabricated: {msg!r}"
+        assert "collapses to a single class" not in msg, msg
+        assert "internal binarization" not in msg, msg
         # I2: a zero-variance outcome yields no effect under ANY estimator,
         # so pointing the reader at DoWhy/EconML would cost them a second
         # run that fails for the same reason — and send them hunting "the
@@ -1035,8 +1048,8 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         assert int(np.isnan(y_arr).sum()) == 0
         assert len(y_arr) == len(df)
 
-    def test_partial_nan_with_nonpositive_remainder_is_diagnosed_as_nan(self):
-        """Some NaN + every non-NaN value <= 0 must still be blamed on NaN.
+    def test_partial_nan_with_nonpositive_remainder_names_nan_and_the_collapse(self):
+        """Some NaN + every non-NaN value <= 0 is TWO problems; name both.
 
         `NaN > 0` is False, so the NaN rows push the column into the collapse
         gate even though the early all-NaN gate does not fire. On the
@@ -1047,7 +1060,11 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         two-real-value column called "continuous".
 
         `binarized.all()` cannot be True while any NaN is present, so the
-        only reachable partial-NaN collapse is the all-non-positive one.
+        only reachable partial-NaN collapse is the all-non-positive one --
+        whose non-NaN values STILL collapse once the NaN is fixed. A message
+        naming only the NaN sends the reader to fix it and straight into a
+        second refusal (NEW-1), so it leads with the NaN and then reports
+        the collapse, with statistics over the non-NaN values only.
         """
         df = pd.DataFrame(
             {
@@ -1066,14 +1083,99 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
             _extract_uplift_inputs_from_state(state)
 
         msg = str(excinfo.value)
-        assert "NaN" in msg, msg
-        assert "2 of 4" in msg, msg
-        assert "binariz" not in msg.lower(), (
-            f"partial NaN must not be blamed on binarization: {msg!r}"
-        )
+        # Leads with the NaN, not with binarization (the 5409cc175 defect).
+        assert msg.startswith("CausalMLExecutor: outcome 'sales' is NaN in 2 of 4 rows"), msg
+        # ...and ALSO names the collapse the non-NaN values would still hit.
+        assert "would still collapse to a single class under CausalML's internal binarization" in (
+            msg
+        ), f"second problem hidden behind the NaN: {msg!r}"
+        assert "not a modeling one" not in msg, msg
+        assert "no usable outcome" not in msg, msg
         # The three sub-defects of the collapse message, each pinned.
         assert "= nan" not in msg, f"incoherent NaN statistic leaked: {msg!r}"
-        assert "distinct outcome values" not in msg, (
+        assert "distinct outcome values = 2," in msg, (
             f"NaN must not be counted as a distinct outcome value: {msg!r}"
         )
         assert "continuous" not in msg, msg
+        # Branch remedy for {-0.5, 0.0}: two values on the same side of zero.
+        assert "Recode the outcome to 0/1, or estimate it with DoWhy/EconML." in msg, msg
+
+    def test_one_nan_in_continuous_nonpositive_outcome_names_both_problems(self):
+        """The reviewer's measured case: 1 NaN + 239 negative continuous values.
+
+        The previous in-branch message ("no usable outcome to model ... a
+        data-loading problem, not a modeling one") sent the reader to fix
+        the NaN; doing exactly that produced a second, different refusal
+        ("the outcome is continuous ... Estimate this outcome with
+        DoWhy/EconML"). Both must be in the first refusal.
+        """
+        rng = np.random.default_rng(0)
+        negatives = -np.abs(rng.normal(1.0, 0.3, 239))
+        n = 240
+        df = pd.DataFrame(
+            {
+                "marketing_spend": np.arange(n) % 2,
+                "sales": np.r_[np.nan, negatives],
+                "age": np.linspace(20.0, 70.0, n),
+                "income": np.linspace(1.0, 2.0, n),
+            }
+        )
+        expected_distinct = int(len(np.unique(negatives)))
+        expected_loss = float(np.abs(negatives).mean())
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _extract_uplift_inputs_from_state(state)
+
+        msg = str(excinfo.value)
+        assert msg.startswith("CausalMLExecutor: outcome 'sales' is NaN in 1 of 240 rows"), msg
+        assert "would still collapse to a single class under CausalML's internal binarization" in (
+            msg
+        ), msg
+        assert "= nan" not in msg, msg
+        # Statistics over the 239 non-NaN values only.
+        assert "frac(y > 0) = 0.0000" in msg, msg
+        assert f"distinct outcome values = {expected_distinct}," in msg, msg
+        assert f"mean|y - (y > 0)| = {expected_loss:.4f}" in msg, msg
+        assert "the outcome is continuous" in msg, msg
+        assert (
+            "Estimate this outcome with DoWhy/EconML, or supply a genuinely binary outcome column."
+            in msg
+        ), msg
+        assert "not a modeling one" not in msg, msg
+
+    def test_partial_nan_with_constant_remainder_names_nan_and_the_constant(self):
+        """Some NaN + a constant non-NaN remainder: also two problems, but the
+        second is NOT a binarization one (NEW-2 applied to the remainder).
+
+        No estimator can identify an effect from a constant column, so the
+        message must neither blame binarization for it nor send the reader
+        to DoWhy/EconML.
+        """
+        df = pd.DataFrame(
+            {
+                "marketing_spend": [0, 1, 0, 1],
+                "sales": [np.nan, 0.0, 0.0, 0.0],
+                "age": [25.0, 35.0, 45.0, 55.0],
+                "income": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income"],
+        )
+
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _extract_uplift_inputs_from_state(state)
+
+        msg = str(excinfo.value)
+        assert msg.startswith("CausalMLExecutor: outcome 'sales' is NaN in 1 of 4 rows"), msg
+        assert "the non-NaN values are constant, so no estimator can identify an effect" in msg, msg
+        assert "distinct outcome values = 1," in msg, msg
+        assert "= nan" not in msg, msg
+        assert "collapse" not in msg, msg
+        assert "DoWhy" not in msg, msg
+        assert "not a binarization problem" in msg, msg
