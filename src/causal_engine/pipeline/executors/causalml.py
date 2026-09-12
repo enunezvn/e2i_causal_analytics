@@ -81,7 +81,10 @@ def _extract_uplift_inputs_from_state(
     Raises:
         ExecutorDataUnavailable: when ``filters["dataframe"]`` is missing,
             not a pandas DataFrame, empty, or missing the declared
-            ``treatment_var`` / ``outcome_var`` columns.
+            ``treatment_var`` / ``outcome_var`` / feature columns; and
+            when the outcome itself cannot be honestly modeled — it is
+            entirely NaN, or CausalML's internal ``y = (y > 0)``
+            binarization would collapse it to a single class (#2063).
     """
     # Local imports keep module import cheap when callers don't use this
     # executor; uplift wrapper itself imports causalml lazily.
@@ -168,6 +171,34 @@ def _extract_uplift_inputs_from_state(
     treatment_arr = df[treatment_var].to_numpy()
     y_arr = df[outcome_var].to_numpy().astype(float)
 
+    # Refuse a NaN outcome FOR BEING NaN, ahead of the binarization gate
+    # below (#2063).
+    #
+    # `NaN > 0` is False, so a NaN-bearing column can also trip that gate --
+    # and would then be blamed on binarization, reporting
+    # `mean|y - (y > 0)| = nan`, counting NaN as a distinct outcome value,
+    # and calling a two-real-value column "continuous". A
+    # misleading-but-confident diagnostic is the same harm class as a
+    # misleading-but-confident estimate: the reader goes hunting the wrong
+    # problem.
+    #
+    # Scoped on measurement, not caution. A NaN-bearing column that does NOT
+    # collapse already fails closed with a truthful message -- the uplift
+    # wrapper's own validation raises `Input y contains NaN` at 1 NaN of 240
+    # just as it does at 60 of 240 -- so a blanket any-NaN gate here would
+    # add production code for no honesty gain. Such a column is passed
+    # through to that check with the NaN intact. Only the cases this gate
+    # would otherwise MISDIAGNOSE are taken: all-NaN here, and the
+    # NaN-bearing collapse inside the branch below.
+    nan_count = int(np.isnan(y_arr).sum())
+    if nan_count == len(y_arr):
+        raise ExecutorDataUnavailable(
+            f"CausalMLExecutor: outcome '{outcome_var}' is entirely NaN "
+            f"({nan_count} of {len(y_arr)} rows), so there is no outcome to "
+            f"model. This is a data-loading problem, not a modeling one: "
+            f"check the join/filter that produced this column."
+        )
+
     # Fail closed when CausalML's internal binarization collapses the outcome
     # to a single class (#2063).
     #
@@ -192,49 +223,53 @@ def _extract_uplift_inputs_from_state(
     # invented here.
     #
     # Cost: measured 0.04 ms on the raw array, before any fit.
-    # Refuse an entirely-NaN outcome FOR BEING NaN, ahead of the
-    # binarization gate below (#2063).
-    #
-    # `NaN > 0` is False, so an all-NaN column also trips that gate — but it
-    # would then be blamed on binarization, and would report
-    # `mean|y - (y > 0)| = nan` into the bargain. A misleading-but-confident
-    # diagnostic is the same harm class as a misleading-but-confident
-    # estimate: the reader goes looking for the wrong problem.
-    #
-    # Scoped to ALL-NaN on measurement, not caution. Partial NaN already
-    # fails closed with a truthful message — the uplift wrapper's own
-    # validation raises `Input y contains NaN` at 1 NaN of 240 just as it
-    # does at 60 of 240 — so widening this to any-NaN would add production
-    # code for no honesty gain, and partial NaN is passed through to that
-    # check intact.
-    nan_count = int(np.isnan(y_arr).sum())
-    if nan_count == len(y_arr):
-        raise ExecutorDataUnavailable(
-            f"CausalMLExecutor: outcome '{outcome_var}' is entirely NaN "
-            f"({nan_count} of {len(y_arr)} rows), so there is no outcome to "
-            f"model. This is a data-loading problem, not a modeling one: "
-            f"check the join/filter that produced this column."
-        )
-
     binarized = (y_arr > 0).astype(float)
     if binarized.all() or not binarized.any():
+        # A NaN-bearing column can reach here only via `not binarized.any()`
+        # -- `binarized.all()` cannot be True while any NaN is present -- so
+        # every non-NaN value is <= 0. The NaN is the reportable problem;
+        # every statistic below would be computed over NaN and would
+        # misdescribe the column.
+        if nan_count > 0:
+            raise ExecutorDataUnavailable(
+                f"CausalMLExecutor: outcome '{outcome_var}' is NaN in "
+                f"{nan_count} of {len(y_arr)} rows, and every non-NaN value "
+                f"is <= 0, so there is no usable outcome to model. This is a "
+                f"data-loading problem, not a modeling one: check the "
+                f"join/filter that produced this column."
+            )
         positive_fraction = float(binarized.mean())
         distinct_outcomes = int(len(np.unique(y_arr)))
         information_lost = float(np.abs(y_arr - binarized).mean())
         # A genuinely binary 0/1 outcome NEVER reaches this branch -- its
         # positive fraction is strictly between 0 and 1 -- so the
         # distinct-value count says which of three different problems the
-        # caller actually has.
+        # caller actually has, and which remedy is honest for it.
         if distinct_outcomes == 1:
             shape = "the outcome is constant"
+            # No gloss: a zero-variance column carries no information for
+            # binarization to destroy, so calling 0.0000 a "loss" would make
+            # the message contradict its own evidence.
+            loss_gloss = ""
+            remedy = (
+                "This is not a binarization problem -- a constant outcome "
+                "yields no effect under any estimator. Check the join/filter "
+                "that produced this column."
+            )
         elif distinct_outcomes == 2:
             shape = (
                 "the outcome has 2 distinct values but both lie on the same "
-                "side of zero, so binarization maps them to the same class -- "
-                "recode it to 0/1"
+                "side of zero, so binarization maps them to the same class"
             )
+            loss_gloss = " (the information binarization would destroy)"
+            remedy = "Recode the outcome to 0/1, or estimate it with DoWhy/EconML."
         else:
             shape = "the outcome is continuous (a genuinely binary 0/1 outcome would not collapse)"
+            loss_gloss = " (the information binarization would destroy)"
+            remedy = (
+                "Estimate this outcome with DoWhy/EconML, or supply a "
+                "genuinely binary outcome column."
+            )
         raise ExecutorDataUnavailable(
             f"CausalMLExecutor: outcome '{outcome_var}' collapses to a single "
             f"class under CausalML's internal binarization "
@@ -243,9 +278,8 @@ def _extract_uplift_inputs_from_state(
             f"fabricated zero carrying maximal confidence. "
             f"frac(y > 0) = {positive_fraction:.4f} (must be strictly between 0 "
             f"and 1); distinct outcome values = {distinct_outcomes}, i.e. "
-            f"{shape}; mean|y - (y > 0)| = {information_lost:.4f} (the "
-            f"information binarization would destroy). Estimate this outcome "
-            f"with DoWhy/EconML, or supply a genuinely binary outcome column."
+            f"{shape}; mean|y - (y > 0)| = {information_lost:.4f}{loss_gloss}. "
+            f"{remedy}"
         )
 
     treatment_groups = sorted({str(t) for t in treatment_arr})
