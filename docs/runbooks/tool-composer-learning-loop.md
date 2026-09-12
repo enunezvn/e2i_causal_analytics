@@ -150,9 +150,18 @@ docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --sin
   < database/ml/rollback_040.sql
 ```
 
-Both are idempotent and each removes its own `schema_migrations` row. They refuse rather than
-destroy: if recorded data would be lost, the script names the offending rows or episodes and stops.
-Clear those deliberately before re-running.
+Both are idempotent and each removes its own `schema_migrations` row.
+
+**Rolling back 041 destroys recorded data, and you should expect that.** It drops the columns this
+lane added — `outcome`, `failed_phase`, `error_type`, `plan_source`, `entry_point`, `attempts`,
+`audit_workflow_id`, `is_synthetic` and the rest — with whatever values they hold. The guards it
+does carry are narrower than that: they stop the rollback when an episode is still unfinished or
+when rows exist that the older shape cannot represent, naming the offending rows so you can clear
+them deliberately. They do **not** preserve the recording columns' contents.
+
+So: revert the code first and leave the schema alone unless the schema itself is the problem. If
+you do roll 041 back, take a dump of `composer_episodes`, `composition_steps` and
+`tool_performance` first if the recorded history matters.
 
 `rollback_041.sql` restores the ml/013 shapes it replaced; `rollback_040.sql` restores
 `update_tool_registry_metrics()`, `tool_registry.success_rate` (with the ml/027 values) and

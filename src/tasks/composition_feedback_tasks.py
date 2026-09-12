@@ -40,7 +40,9 @@ MATCH_WINDOW = timedelta(minutes=30)
 _SUCCESS_BY_RATING = {"thumbs_up": True, "thumbs_down": False}
 
 _EPISODE_COLUMNS = "episode_id, composition_id, session_id, created_at, success, feedback_at"
-_FEEDBACK_COLUMNS = "session_id, rating, created_at"
+#: computed_user_id is selected because _same_owner reads it; a column the matcher uses but the
+#: query never asks for is how the T14 ordering defect happened.
+_FEEDBACK_COLUMNS = "session_id, computed_user_id, rating, created_at"
 
 
 def _parse(value: Any) -> Optional[datetime]:
@@ -53,29 +55,70 @@ def _parse(value: Any) -> Optional[datetime]:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
 
 
-def match_rating(
-    episode: Dict[str, Any], ratings: List[Dict[str, Any]]
-) -> Optional[Dict[str, Any]]:
-    """The rating this composition earned: same session, at or after it, inside the window.
+def _owner(value: Any) -> Optional[str]:
+    """The user a session belongs to. Chat session ids are ``<user-uuid>~<session>``."""
+    if not isinstance(value, str) or not value:
+        return None
+    return value.split("~", 1)[0] or None
 
-    The nearest qualifying rating wins, so in a session with several compositions each rating
-    labels the one it actually followed.
+
+def _same_owner(episode: Dict[str, Any], rating: Dict[str, Any]) -> bool:
+    """Defence in depth: never label across users when both sides name one.
+
+    On the chat path this cannot differ — a session has exactly one owner
+    (``chatbot_conversations.user_id`` is NOT NULL) and the feedback table derives
+    ``computed_user_id`` from the session id itself — but the composer is reachable from entry
+    points where ``user_id`` is whatever the caller passed, so the check is worth its two lines.
     """
-    started = _parse(episode.get("created_at"))
-    if started is None:
-        return None
+    rating_owner = rating.get("computed_user_id") or _owner(rating.get("session_id"))
+    episode_owner = _owner(episode.get("session_id"))
+    if rating_owner is None or episode_owner is None:
+        return True
+    return str(rating_owner) == str(episode_owner)
 
-    candidates = []
-    for rating in ratings:
-        if rating.get("session_id") != episode.get("session_id"):
-            continue
+
+def match_episodes(
+    episodes: List[Dict[str, Any]], ratings: List[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """Assign each rating to the one composition it followed, by composition_id.
+
+    Driven by the RATINGS, not the episodes: a rating is one verdict about one answer, so it may
+    label at most one composition. Matching per episode instead gave two compositions minutes
+    apart the same rating — the ordinary case of a user asking twice and then rating.
+
+    A rating claims the nearest eligible composition that started at or before it, within the
+    window, in the same session and owned by the same user. A composition already claimed by an
+    earlier rating is not reconsidered.
+    """
+    claimed: Dict[str, Dict[str, Any]] = {}
+    taken: set = set()
+
+    for rating in sorted(ratings, key=lambda r: str(r.get("created_at") or "")):
         given = _parse(rating.get("created_at"))
-        if given is None or given < started or given - started > MATCH_WINDOW:
+        if given is None:
             continue
-        candidates.append((given - started, rating))
-    if not candidates:
-        return None
-    return min(candidates, key=lambda pair: pair[0])[1]
+
+        best: Optional[tuple] = None
+        for episode in episodes:
+            composition_id = episode.get("composition_id")
+            if not composition_id or composition_id in taken:
+                continue
+            if rating.get("session_id") != episode.get("session_id"):
+                continue
+            if not _same_owner(episode, rating):
+                continue
+            started = _parse(episode.get("created_at"))
+            if started is None or given < started or given - started > MATCH_WINDOW:
+                continue
+            distance = given - started
+            if best is None or distance < best[0]:
+                best = (distance, composition_id)
+
+        if best is not None:
+            taken.add(best[1])
+            claimed[best[1]] = rating
+
+    return claimed
 
 
 def link_composition_feedback(
@@ -128,10 +171,13 @@ def link_composition_feedback(
         logger.warning(f"composition feedback linker: rating read failed ({type(e).__name__}: {e})")
         return {"labelled": 0, "considered": len(pending)}
 
+    # One pass over the ratings, so no rating labels two compositions.
+    claimed = match_episodes(pending, ratings)
+
     labelled = 0
     failed = 0
     for episode in pending:
-        rating = match_rating(episode, ratings)
+        rating = claimed.get(episode.get("composition_id"))
         if rating is None:
             continue
         success = _SUCCESS_BY_RATING.get(str(rating.get("rating")))

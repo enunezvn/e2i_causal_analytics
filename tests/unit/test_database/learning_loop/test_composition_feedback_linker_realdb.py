@@ -226,6 +226,38 @@ async def test_the_rating_labels_the_composition_it_followed_not_an_earlier_one(
     assert _episode(synced, "comp_older")["success"] is None
 
 
+async def test_one_rating_labels_one_composition(synced):
+    """Two compositions minutes apart, one rating: it belongs to the one it followed.
+
+    The earlier regression put the other composition two hours away, outside the window, so it
+    proved nothing about the case that actually happens — a user asking twice, then rating.
+    """
+    port = _pg.PsycopgRpcPort(synced)
+    await _record_episode(port, "comp_first", minutes_ago=11)
+    await _record_episode(port, "comp_second", minutes_ago=1)
+    _feedback(synced, "thumbs_up", minutes_ago=0)
+
+    result = _link(synced)
+
+    assert result["labelled"] == 1
+    assert _episode(synced, "comp_second")["success"] is True
+    assert _episode(synced, "comp_first")["success"] is None
+
+
+async def test_a_rating_never_labels_another_users_composition(synced):
+    """Sessions are per user, but a composition carries its own user: match on both."""
+    other_session = "22222222-2222-2222-2222-222222222222~sess-2"
+    port = _pg.PsycopgRpcPort(synced)
+    await _record_episode(port, "comp_mine", session_id=SESSION, minutes_ago=1)
+    await _record_episode(port, "comp_theirs", session_id=other_session, minutes_ago=1)
+    _feedback(synced, "thumbs_down", session_id=SESSION, minutes_ago=0)
+
+    _link(synced)
+
+    assert _episode(synced, "comp_mine")["success"] is False
+    assert _episode(synced, "comp_theirs")["success"] is None
+
+
 async def test_running_it_again_changes_nothing(synced):
     await _record_episode(_pg.PsycopgRpcPort(synced), "comp_idem")
     _feedback(synced, "thumbs_up")
