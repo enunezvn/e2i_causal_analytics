@@ -32,11 +32,12 @@ class TestReconstructionNuisanceInitParams:
         )
         assert set(p) == {"model_y", "model_t"}
         # Mirror production exactly: RF regressor outcome, RF classifier propensity
-        # (discrete treatment). Same params as LinearDMLWrapper (n_estimators=50, ...).
+        # (discrete treatment). Same params as LinearDMLWrapper -- both sites now
+        # build from src/causal_engine/nuisance_config.py (#2031: leaf 5 -> 50).
         assert isinstance(p["model_y"], RandomForestRegressor)
         assert isinstance(p["model_t"], RandomForestClassifier)
         assert p["model_y"].n_estimators == 50
-        assert p["model_y"].min_samples_leaf == 5
+        assert p["model_y"].min_samples_leaf == 50
         assert is_classifier(p["model_t"])
         assert not is_classifier(p["model_y"])
 
