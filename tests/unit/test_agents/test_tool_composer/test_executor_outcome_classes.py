@@ -225,6 +225,43 @@ async def test_input_rejected_class(registry):
     ],
     ids=["says_declined", "neutral_wording", "wording_of_a_refusal"],
 )
+async def test_input_rejected_class_on_the_async_path(registry, message):
+    """The same wording independence, on the ASYNC arm.
+
+    The sync matrix below does not pin this arm. An implementation that keyed on the word
+    "declined" for coroutine callables and on the exception type otherwise would satisfy every
+    sync case AND the real-guard case above — whose #1573 message happens to say "declined" —
+    while an async ``ToolInputError("invalid sample size")`` was recorded as a refusal.
+
+    The real-guard case above is left alone deliberately: it exercises the actual tool contract
+    across the #2015 transition, which a synthetic probe cannot. This one varies only the message.
+    """
+    from src.agents.tool_composer.errors import ToolInputError
+
+    calls: List[int] = []
+
+    async def declining_async(**_: Any) -> Any:
+        calls.append(1)
+        raise ToolInputError(message)
+
+    assert asyncio.iscoroutinefunction(declining_async), "this case must take the async arm"
+
+    _register(registry, "power_calculator", declining_async)
+    trace = await _executor(registry).execute(_one("s", "power_calculator"))
+
+    assert _classes(trace.step_results[0]) == ("input_rejected", 1, False, "ToolInputError")
+    assert calls == [1], "a retry would run it again; reported attempts alone is not proof"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "declined: the probe's inputs cannot support this calculation",
+        "invalid sample size",
+        "refused: this cohort cannot answer that",
+    ],
+    ids=["says_declined", "neutral_wording", "wording_of_a_refusal"],
+)
 async def test_input_rejected_class_on_the_sync_path(registry, message):
     """The same class through the executor's SYNC arm (``executor.py`` iscoroutinefunction split).
 
