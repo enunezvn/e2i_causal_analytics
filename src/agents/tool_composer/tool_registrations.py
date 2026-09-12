@@ -226,11 +226,23 @@ class ROIEstimate(BaseModel):
 
 
 class RiskScores(BaseModel):
-    """Output from risk scoring (real per-entity scores from a DataFrame)."""
+    """Output from risk scoring (real per-entity scores from a DataFrame).
+
+    ``n_scored`` / ``n_rows_dropped`` / ``missing_data_disclosure`` (#2044) state which
+    population was actually fit. They are REQUIRED, not optional: a model that dropped
+    an incomplete feature column or an incomplete row and did not say so is
+    indistinguishable from one that scored every entity, and the caller would read a
+    partial cohort as the whole one. They are scalars deliberately -- the #2019 synthesis
+    projection keeps every scalar field in full and trims only containers, so the
+    disclosure reaches the answer even when ``scores`` is trimmed to its head.
+    """
 
     scores: List[Dict[str, Any]]
     model_version: str
     scored_at: str
+    n_scored: int
+    n_rows_dropped: int
+    missing_data_disclosure: str
 
 
 class PropensityScores(BaseModel):
@@ -4050,8 +4062,14 @@ def risk_scorer(
     - ``scored_at`` is the real UTC timestamp of this scoring run.
 
     Fail-closed: no DataFrame, missing outcome column, an outcome that is not a
-    0/1 event column, fewer than 2 outcome classes, or no usable numeric features
-    -> ``RuntimeError`` (we refuse to fabricate scores).
+    0/1 event column, fewer than 2 outcome classes, no usable numeric features,
+    every numeric feature too incomplete to use, or no row complete across the
+    usable features -> ``RuntimeError`` (we refuse to fabricate scores).
+
+    Missing feature values (#2044) are triaged rather than imputed: a numeric column
+    missing for more than 20% of rows is dropped as a FEATURE, then the rows still
+    carrying a gap are dropped. Both drops are reported in ``missing_data_disclosure``
+    / ``n_scored`` / ``n_rows_dropped`` — never silently.
 
     Args:
         entity_type: Logical entity type (echoed for provenance only).
@@ -4118,6 +4136,163 @@ def risk_scorer(
             "Refusing to cast it to classes and report a class probability as a risk score."
         ),
     )
+    # Missing-value triage (#2044). LogisticRegression has no NaN path, so until now a
+    # single missing feature value ended the run with a raw sklearn
+    # ``ValueError: Input X contains NaN`` — the one condition this otherwise fail-closed
+    # tool did not name, and the one that took three dependent steps down with it.
+    #
+    # COLUMNS ARE TRIAGED BEFORE ROWS, and the order is the whole fix. Measured on the
+    # real 8,730-row Kisqali cohort: of 29 numeric features exactly two carry NaN, and
+    # ``days_to_treatment`` is NaN for 5,712 of them (65.4%) — for precisely the rows
+    # with ``treatment_initiated == 0`` and no others. A patient who never started has
+    # no days-to-treatment, so imputing one invents a quantity that does not exist, and
+    # complete-casing on it deletes the entire never-treated population (cohort event
+    # rate 0.4204 vs 0.4338 over the complete cases). Dropping the COLUMN instead costs
+    # one collinear feature — ``treatment_initiated`` already carries the signal — and
+    # scores 8,723 of 8,730 patients; dropping ROWS first would have scored 3,015.
+    #
+    # Two independent reasons to exclude a feature, because a percentage alone gets the
+    # first one wrong:
+    #
+    # 1. STRUCTURAL — the value does not EXIST for a knowable subpopulation, detected by
+    #    applicability rather than by volume: the column's NaN mask is exactly the set of
+    #    rows where some fully-observed feature takes one value. Such a column is excluded
+    #    at ANY share, because keeping it deletes precisely that subpopulation. A
+    #    share-only rule fails here: on a 100-patient subset with 20 never-treated,
+    #    ``days_to_treatment`` sits at exactly 20%, stays under any 20% limit, and the row
+    #    stage then deletes every never-treated patient — the very outcome column-first
+    #    ordering exists to prevent, and reachable on live data because triage runs after
+    #    the ``entity_ids`` filter. Measured on the real 8,730-row cohort BOTH NaN columns
+    #    are structural: ``days_to_treatment`` is NaN for exactly the 5,712 rows with
+    #    ``treatment_initiated == 0`` (no days-to-treatment for a patient who never
+    #    started) and ``gap_days`` for exactly the 7 rows with ``adherence_rate == 0.0``
+    #    (no refill gap for a patient who never refilled), so all 8,730 now score.
+    #    A mask of one row is NOT structural: any continuous column has a unique value on
+    #    that row and would "explain" it (measured: 8 false positives in 20 random probes,
+    #    0 once two rows are required).
+    #
+    # 2. TOO SPARSE — missingness explained by nothing, above the share below. Then the
+    #    column costs more rows than it is worth. This is an economy, not a correctness
+    #    rule, which is why it is secondary: the live outcome is identical anywhere from
+    #    1% to 50%.
+    #
+    # Excluding a structural column removes real information — ``treatment_initiated``
+    # records whether timing exists, NOT how long it was, so two patients starting on day
+    # 1 and day 90 become indistinguishable on that axis. That loss is stated in the
+    # disclosure rather than claimed away; what is established here is coverage of the
+    # subpopulation, not equivalence of the reduced model.
+    if len(set(feature_cols)) != len(feature_cols):
+        ambiguous = sorted({c for c in feature_cols if feature_cols.count(c) > 1})
+        raise ToolRefusalError(
+            f"risk_scorer: the supplied DataFrame carries duplicate numeric column "
+            f"name(s) {ambiguous!r}, so a feature cannot be addressed unambiguously. "
+            "Refusing to guess which one the risk model should fit on."
+        )
+
+    max_feature_nan_share = 0.20
+    nan_counts = work[feature_cols].isna().sum()
+    fully_observed = [c for c in feature_cols if int(nan_counts[c]) == 0]
+
+    def _structural_subpopulation(column: str) -> Optional[Tuple[str, Any]]:
+        """The (column, value) whose rows are EXACTLY where ``column`` is missing."""
+        mask = work[column].isna()
+        n_missing = int(mask.sum())
+        if n_missing < 2 or bool(mask.all()):
+            return None
+        for other in fully_observed:
+            if other == column:
+                continue
+            levels = work.loc[mask, other].unique()
+            if len(levels) == 1 and int((work[other] == levels[0]).sum()) == n_missing:
+                return other, levels[0]
+        return None
+
+    excluded: Dict[str, str] = {}
+    for c in feature_cols:
+        n_missing = int(nan_counts[c])
+        if n_missing == 0:
+            continue
+        share = n_missing / len(work) if len(work) else 0.0
+        detail = f"missing {n_missing} of {len(work)}, {share:.1%}"
+        subpopulation = _structural_subpopulation(c)
+        if subpopulation is not None:
+            excluded[c] = (
+                f"{c} ({detail} — undefined wherever {subpopulation[0]} == {subpopulation[1]})"
+            )
+        elif share > max_feature_nan_share:
+            excluded[c] = f"{c} ({detail} — above the {max_feature_nan_share:.0%} usable limit)"
+
+    usable_features = [c for c in feature_cols if c not in excluded]
+    if not usable_features:
+        raise ToolRefusalError(
+            f"risk_scorer: none of the {len(feature_cols)} numeric feature columns is "
+            f"usable on the {len(work)} supplied rows "
+            f"({'; '.join(excluded[c] for c in sorted(excluded))}); there is nothing "
+            "left to fit a risk model on. Refusing to impute values for the missing "
+            "entries and report the result as a measured risk score."
+        )
+
+    # The population the CALLER asked about, captured before the complete-case filter.
+    # NOT ``len(df)``: ``entity_ids`` has already narrowed ``work`` above, and reporting
+    # against the whole frame turns a complete answer over 100 requested patients into
+    # "scored 100 of 8730" — a fabricated 98.9% loss in the very field that exists to
+    # stop a caller reading a partial cohort as the whole one.
+    n_in_scope = len(work)
+    scope_note = f"scored {{n}} of {n_in_scope} supplied row(s)"
+    if entity_ids:
+        # A partial ID match narrows the answer just as silently as a NaN drop does:
+        # only a ZERO match refuses above, so 60 of 100 requested IDs would otherwise
+        # score 60 patients with nothing saying the other 40 were never in the frame.
+        n_requested = len({str(e) for e in entity_ids})
+        n_matched = int(work[id_column].astype(str).nunique())
+        scope_note = (
+            f"scored {{n}} of {n_in_scope} requested row(s) "
+            f"({n_matched} of {n_requested} requested entity ID(s) matched)"
+        )
+
+    complete = work[usable_features + [outcome]].notna().all(axis=1)
+    n_rows_dropped = int((~complete).sum())
+    if not bool(complete.any()):
+        raise ToolRefusalError(
+            f"risk_scorer: 0 of the {len(work)} supplied rows are complete across the "
+            f"{len(usable_features)} usable feature columns and the outcome "
+            f"{outcome!r} — every row is missing at least one value, so no row can be "
+            "fit. Refusing to fabricate scores."
+        )
+    # AGGREGATE ADEQUACY. Per-column limits cannot see what the fit ends up standing on:
+    # five retained features each missing 19% on DISJOINT rows are individually fine and
+    # together retain 5 rows of 100. The model would fit, tier those 5, and every count
+    # reported would be true — an answer about a different cohort than the caller named.
+    # So the surviving population is gated on its own terms. A count is a label; this is
+    # the functional check. The floor is a majority: below half, "who is highest risk"
+    # would be ranking a minority of the requested population. Live retention is 100%.
+    min_retention_share = 0.50
+    if len(work[complete]) < min_retention_share * n_in_scope:
+        raise ToolRefusalError(
+            f"risk_scorer: only {int(complete.sum())} of {n_in_scope} rows are complete "
+            f"across the {len(usable_features)} usable feature columns and the outcome "
+            f"{outcome!r} — under the {min_retention_share:.0%} floor, so a risk ranking "
+            "would describe a selected minority rather than the population asked about. "
+            f"Gaps are spread across {', '.join(sorted(c for c in usable_features if int(nan_counts[c])))}. "
+            "Refusing to present scores for that subset as the cohort's risk."
+        )
+    work = work[complete]
+    feature_cols = usable_features
+
+    if excluded:
+        excluded_note = f"{len(excluded)} numeric column(s) excluded as features: " + "; ".join(
+            excluded[c] for c in sorted(excluded)
+        )
+    else:
+        excluded_note = "no feature column excluded for missing values"
+    rows_note = (
+        f"{n_rows_dropped} row(s) dropped for a missing value in the remaining "
+        f"{len(feature_cols)} feature(s) or in the outcome"
+        if n_rows_dropped
+        else "no row dropped for missing values"
+    )
+    missing_data_disclosure = f"{excluded_note}; {rows_note}; {scope_note.format(n=len(work))}."
+
     y = work[outcome].astype(int)
     if y.nunique() < 2:
         raise ToolRefusalError(
@@ -4160,6 +4335,9 @@ def risk_scorer(
         scores=scores,
         model_version=model_version,
         scored_at=datetime.now(timezone.utc).isoformat(),
+        n_scored=len(scores),
+        n_rows_dropped=n_rows_dropped,
+        missing_data_disclosure=missing_data_disclosure,
     )
 
 
