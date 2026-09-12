@@ -49,6 +49,7 @@ from src.agents.tool_composer.models.composition_models import (
     SubQuestion,
     ToolMapping,
 )
+from src.agents.tool_composer.reason_codes import ReasonCode
 from src.tool_registry.registry import ToolRegistry, ToolSchema
 
 
@@ -260,7 +261,10 @@ async def test_tool_input_error_still_fails_once_with_its_prefix():
 
     def declining_tool(**kwargs: Any) -> Any:
         attempts.append(1)
-        raise ToolInputError("declined: expected_effect is None — cannot simulate a lift")
+        raise ToolInputError(
+            "declined: expected_effect is None — cannot simulate a lift",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
+        )
 
     executor = _executor(_registry_with("counterfactual_simulator", declining_tool))
     trace = await executor.execute(_single_step_plan("counterfactual_simulator"))
@@ -296,7 +300,10 @@ async def test_explicit_tool_refusal_error_is_attempted_once():
 
     def refusing_tool(**kwargs: Any) -> Any:
         attempts.append(1)
-        raise ToolRefusalError("probe_tool: refusing — deterministic over inputs.")
+        raise ToolRefusalError(
+            "probe_tool: refusing — deterministic over inputs.",
+            reason_code=ReasonCode.UNSUPPORTED_REQUEST,
+        )
 
     executor = _executor(_registry_with("probe_tool", refusing_tool))
     trace = await executor.execute(_single_step_plan("probe_tool"))

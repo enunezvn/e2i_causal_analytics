@@ -75,6 +75,7 @@ from src.tool_registry import (
 )
 
 from .errors import ToolInputError, ToolRefusalError
+from .reason_codes import ReasonCode
 
 # Canonical kwargs keys under which callers may supply the real DataFrame for
 # causal_effect_estimator. Listed in priority order; the first non-None value
@@ -550,7 +551,8 @@ def cohort_builder(
             "cohort_builder: no real patient population available for "
             f"brand={brand!r} (region={kwargs.get('region')!r}) — the "
             "cohort_resolution service returned no cohort and no DataFrame was "
-            "injected via context. Refusing to fabricate eligible_patient_ids."
+            "injected via context. Refusing to fabricate eligible_patient_ids.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
 
     # --- 2. Locate a real patient-id column (fail closed if absent). ---
@@ -559,7 +561,8 @@ def cohort_builder(
         raise ToolRefusalError(
             "cohort_builder: resolved cohort has no recognizable patient-id "
             f"column (columns={list(df.columns)!r}). Refusing to fabricate "
-            "patient IDs from row positions."
+            "patient IDs from row positions.",
+            reason_code=ReasonCode.NO_USABLE_COLUMNS,
         )
 
     total_evaluated = int(len(df))
@@ -740,7 +743,8 @@ def cohort_validator(
         raise ToolRefusalError(
             "cohort_validator: `cohort_result` must be a dict (the output of "
             f"cohort_builder); got {type(cohort_result).__name__}={cohort_result!r}. "
-            "Refusing to proceed."
+            "Refusing to proceed.",
+            reason_code=ReasonCode.INVALID_INPUT_TYPE,
         )
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
@@ -748,7 +752,8 @@ def cohort_validator(
             "cohort_validator requires a real cohort DataFrame supplied via one "
             f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
             f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate a "
-            "completeness score — missing data must surface as a structured error."
+            "completeness score — missing data must surface as a structured error.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
 
     total_eligible = int(cohort_result.get("total_eligible", 0))
@@ -841,7 +846,8 @@ def cohort_statistics(
             "cohort_statistics: `cohort_result` must be a dict (the output of "
             f"cohort_builder); got {type(cohort_result).__name__}={cohort_result!r}. "
             "Refusing to proceed — pass the structured cohort result, not a "
-            "string or other scalar."
+            "string or other scalar.",
+            reason_code=ReasonCode.INVALID_INPUT_TYPE,
         )
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
@@ -849,7 +855,8 @@ def cohort_statistics(
             "cohort_statistics requires a real cohort DataFrame supplied via one "
             f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
             f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate "
-            "demographics — missing data must surface as a structured error."
+            "demographics — missing data must surface as a structured error.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
 
     cohort_size = int(cohort_result.get("total_eligible", len(df)))
@@ -1029,7 +1036,8 @@ def causal_effect_estimator(
             f"causal_effect_estimator estimates with DoWhy {_EFFECT_ESTIMATOR_METHOD!r} "
             f"only; got method={method!r}. No other estimator is run by this tool, so the "
             "request is refused rather than answered with a linear-regression estimate "
-            "labelled as another method (#2014). Omit method."
+            "labelled as another method (#2014). Omit method.",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
         )
 
     # --- 1. Locate the caller's real DataFrame (fail-closed if missing). ---
@@ -1041,7 +1049,8 @@ def causal_effect_estimator(
             f"kwargs keys={sorted(kwargs.keys())!r}. The tool does not "
             "fabricate synthetic data — per anti-mocking discipline, missing "
             "data must surface as a structured error rather than a "
-            "plausible-but-fake placeholder."
+            "plausible-but-fake placeholder.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
 
     # --- 2. Build the PipelineInput. ---
@@ -1556,7 +1565,8 @@ def refutation_runner(estimate_id: Optional[str] = None, **kwargs) -> Dict[str, 
             f"{sorted(kwargs.keys())!r} (estimate_id={estimate_id!r}). The live "
             "DoWhy estimate cannot cross the serialization boundary, so refutation "
             "must re-run on the source data. Refusing to fabricate refutation "
-            "results."
+            "results.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
 
     treatment = _first_kwarg(kwargs, ("treatment", "treatment_var"))
@@ -1565,7 +1575,8 @@ def refutation_runner(estimate_id: Optional[str] = None, **kwargs) -> Dict[str, 
         raise ToolRefusalError(
             "refutation_runner requires the planner-bound treatment and outcome "
             f"column names to run real DoWhy refutation; got treatment={treatment!r}, "
-            f"outcome={outcome!r}. Refusing to fabricate refutation results."
+            f"outcome={outcome!r}. Refusing to fabricate refutation results.",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
 
     confounders = _as_str_list(
@@ -1657,7 +1668,8 @@ def _run_dowhy_refutation(
     except Exception as exc:  # noqa: BLE001 - non-DataFrame input
         raise ToolRefusalError(
             f"refutation_runner: supplied data is not a DataFrame ({exc}). "
-            "Refusing to fabricate refutation results."
+            "Refusing to fabricate refutation results.",
+            reason_code=ReasonCode.INVALID_INPUT_TYPE,
         ) from exc
 
     missing = [c for c in [treatment, outcome, *confounders] if c not in columns]
@@ -1665,7 +1677,8 @@ def _run_dowhy_refutation(
         raise ToolRefusalError(
             f"refutation_runner: columns {missing!r} are not in the DataFrame "
             f"(columns={sorted(columns)!r}). Refusing to fabricate refutation "
-            "results."
+            "results.",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
 
     from src.causal_engine.pipeline.executors.dowhy import DoWhyExecutor
@@ -1780,7 +1793,8 @@ def _derive_sensitivity_inputs(
                 f"sensitivity_analyzer: {key}={type(value).__name__} is not a DataFrame, so no "
                 "outcome standard deviation can be measured from it. Reading it as 'no frame "
                 "was supplied' would report a number about data the caller DID supply. "
-                "Refusing to fabricate the sensitivity benchmark inputs."
+                "Refusing to fabricate the sensitivity benchmark inputs.",
+                reason_code=ReasonCode.INVALID_INPUT_TYPE,
             )
         raise ToolRefusalError(
             "sensitivity_analyzer requires the in-context DataFrame to compute an E-value; "
@@ -1789,7 +1803,8 @@ def _derive_sensitivity_inputs(
             "though it were already a standardized difference — the E-value would then move "
             "with the outcome's units (measured: the same effect as a proportion vs "
             "percentage points gives 1.42 vs 17910.09). Refusing to report a number that "
-            "cannot be interpreted rather than reporting it with a caveat."
+            "cannot be interpreted rather than reporting it with a caveat.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
     if not treatment or not outcome:
         raise ToolRefusalError(
@@ -1798,21 +1813,24 @@ def _derive_sensitivity_inputs(
             "baseline risk and the outcome SD are all derived from those columns; serving "
             "an unstandardized, unbenchmarked E-value from a frame the tool can read would "
             "state a different number than the refutation suite does for the same estimate. "
-            "Bind the treatment and outcome the estimate was measured on."
+            "Bind the treatment and outcome the estimate was measured on.",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
     try:
         columns = set(df.columns)
     except Exception as exc:  # noqa: BLE001 - non-DataFrame input
         raise ToolRefusalError(
             f"sensitivity_analyzer: supplied data is not a DataFrame ({exc}). Refusing to "
-            "fabricate the sensitivity benchmark inputs."
+            "fabricate the sensitivity benchmark inputs.",
+            reason_code=ReasonCode.INVALID_INPUT_TYPE,
         ) from exc
     missing = [c for c in [treatment, outcome, *confounders] if c not in columns]
     if missing:
         raise ToolRefusalError(
             f"sensitivity_analyzer: columns {missing!r} are not in the DataFrame "
             f"(columns={sorted(columns)!r}). Refusing to fabricate the sensitivity "
-            "benchmark inputs."
+            "benchmark inputs.",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
     try:
         inputs = evalue.benchmark_inputs_from_frame(df, treatment, outcome, confounders)
@@ -1825,7 +1843,8 @@ def _derive_sensitivity_inputs(
             "sensitivity_analyzer: the sensitivity benchmark inputs could not be computed "
             f"from the frame for treatment={treatment!r} / outcome={outcome!r}: {exc}. A "
             "present but unusable column is a data error to surface, not a missing input to "
-            "fall back on — refusing to serve an unstandardized reading in its place."
+            "fall back on — refusing to serve an unstandardized reading in its place.",
+            reason_code=ReasonCode.NO_USABLE_COLUMNS,
         ) from exc
     return _SensitivityInputs(
         baseline_risk=inputs.baseline_risk,
@@ -1938,7 +1957,8 @@ def sensitivity_analyzer(
             raise ToolRefusalError(
                 f"sensitivity_analyzer requires finite inputs; got {name}={value!r}. Refusing to "
                 "fabricate an E-value — per anti-mocking discipline non-finite inputs surface as "
-                "a structured error."
+                "a structured error.",
+                reason_code=ReasonCode.NON_FINITE_INPUT,
             )
     for invented, supplied in (
         ("baseline_risk", kwargs.get("baseline_risk")),
@@ -1952,7 +1972,8 @@ def sensitivity_analyzer(
                 "the adjusted ate, which pins the measured-confounding benchmark to exactly "
                 "1.00 and contradicts the refutation suite on the same estimate. Bind "
                 "treatment / outcome / confounders instead and the quantity is derived from "
-                "the data the estimate was measured on."
+                "the data the estimate was measured on.",
+                reason_code=ReasonCode.UNEXPECTED_INPUT,
             )
     # The interval's SHAPE is a property of the caller's arguments alone, so it is
     # decided before the frame is looked at — a malformed interval must not be reported
@@ -1961,7 +1982,8 @@ def sensitivity_analyzer(
         raise ToolInputError(
             f"sensitivity_analyzer got ci_upper={ci_upper!r} without ci_lower. An interval "
             "needs both bounds (or ci_lower alone, mirrored around ate); refusing to invent "
-            "the lower bound."
+            "the lower bound.",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
     # Bound the same way ``refutation_runner`` binds them, aliases included, so the two
     # tools cannot end up reading one estimate on two different column sets (#2022).
@@ -1989,7 +2011,10 @@ def sensitivity_analyzer(
             covariates_measured=derived.covariates_measured,
         )
     except ValueError as exc:
-        raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}") from exc
+        raise ToolRefusalError(
+            f"sensitivity_analyzer refused its inputs: {exc}",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
+        ) from exc
     interpretation = reading.message
     if reading.reading == evalue.READING_UNBENCHMARKED:
         interpretation = (
@@ -2042,7 +2067,10 @@ def _point_only_sensitivity(ate: float, *, derived: _SensitivityInputs) -> Dict[
         )
         benchmark, basis = evalue.measured_confounding_benchmark(joint, derived.covariate_factors)
     except ValueError as exc:
-        raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}") from exc
+        raise ToolRefusalError(
+            f"sensitivity_analyzer refused its inputs: {exc}",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
+        ) from exc
     # The same correction ``evalue.classify`` applies after its own call to
     # ``measured_confounding_benchmark``: an empty factor dict with covariates MEASURED is
     # "measured but unscoreable", not "nothing measured". Omitting it here made one frame
@@ -2169,12 +2197,14 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
             f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate segment "
             "effects — per anti-mocking discipline, missing data must surface "
-            "as a structured error rather than a plausible-but-fake placeholder."
+            "as a structured error rather than a plausible-but-fake placeholder.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
     if not segments:
         raise ToolRefusalError(
             "cate_analyzer requires at least one segmentation column in "
-            "`segments`; got an empty list."
+            "`segments`; got an empty list.",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
     segment_col = segments[0]
     for col in (treatment, outcome, segment_col):
@@ -2182,7 +2212,8 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
             raise ToolRefusalError(
                 f"cate_analyzer: column {col!r} not found in the supplied "
                 f"DataFrame (columns={list(df.columns)!r}). Refusing to "
-                "fabricate a result."
+                "fabricate a result.",
+                reason_code=ReasonCode.UNKNOWN_COLUMN,
             )
     # Checked over the WHOLE column, null-keyed segments included: one non-0/1 value
     # anywhere means the column is not a treatment indicator (#2016). Null treatment
@@ -2191,6 +2222,7 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
         df[treatment],
         tool="cate_analyzer",
         role="treatment",
+        reason_code=ReasonCode.NON_BINARY_TREATMENT,
         column=treatment,
         consequence=(
             "Refusing to report a difference between only the rows equal to 1 and those "
@@ -2262,7 +2294,8 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
                 f"(dtype={df[outcome].dtype!s}), so no within-segment mean difference "
                 f"can be computed for {_clip_name(segment_col)!r}={_clip_name(name)!r}: "
                 f"{exc}. Refusing to fabricate a treatment effect from a non-numeric "
-                "outcome."
+                "outcome.",
+                reason_code=ReasonCode.NON_NUMERIC_COLUMN,
             ) from exc
         if cate_val is None:
             excluded_segments.append(
@@ -2323,7 +2356,13 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
             f"{segment_label!r} value at all and so name no segment. Refusing to "
             "fabricate: an empty segment set reads as 'no heterogeneity between "
             "segments', which is a finding this data cannot support — the segments "
-            f"were never estimated. cate_estimation_scope={scope!r}"
+            f"were never estimated. cate_estimation_scope={scope!r}",
+            reason_code=ReasonCode.INSUFFICIENT_GROUPS,
+            details={
+                "segments_named": len(named_groups),
+                "no_contrast": no_contrast,
+                "non_finite": non_finite,
+            },
         )
 
     # Every value is finite by construction now, so the cross-segment mean is a
@@ -2380,7 +2419,8 @@ def segment_ranker(cate_results: Dict[str, Any], **kwargs) -> SegmentRanking:
             "`effect_by_segment` (from cate_analyzer) or `entity_values` (from "
             f"gap_calculator); got {cate_results!r}. Refusing to fabricate a "
             "ranking — per anti-mocking discipline, missing upstream data must "
-            "surface as a structured error."
+            "surface as a structured error.",
+            reason_code=ReasonCode.UPSTREAM_STEP_FAILED,
         )
 
     # Sort descending by effect; non-finite effects sort last.
@@ -2482,12 +2522,14 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate entity "
             "values — per anti-mocking discipline, missing data must surface as "
-            "a structured error rather than a plausible-but-fake placeholder."
+            "a structured error rather than a plausible-but-fake placeholder.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
     if metric not in df.columns:
         raise ToolRefusalError(
             f"gap_calculator: metric column {metric!r} not found in the supplied "
-            f"DataFrame (columns={list(df.columns)!r})."
+            f"DataFrame (columns={list(df.columns)!r}).",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
 
     group_by = kwargs.get("group_by")
@@ -2495,14 +2537,16 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
         raise ToolRefusalError(
             f"gap_calculator: group_by={group_by!r} is not a column of the supplied "
             f"DataFrame (columns={list(df.columns)!r}). Refusing to group by a different "
-            "column than the one requested."
+            "column than the one requested.",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
     group_col = _resolve_grouping_column(df, group_by, entity_type)
     if group_col is None:
         raise ToolRefusalError(
             "gap_calculator: could not resolve a grouping column from group_by="
             f"{kwargs.get('group_by')!r} / entity_type={entity_type!r}; "
-            f"DataFrame columns={list(df.columns)!r}. Refusing to fabricate."
+            f"DataFrame columns={list(df.columns)!r}. Refusing to fabricate.",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
 
     try:
@@ -2517,7 +2561,8 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             f"gap_calculator: metric column {metric!r} is not numeric (dtype="
             f"{df[metric].dtype!s}), so no per-{group_col!r} group mean can be "
             f"computed: {exc}. Refusing to fabricate a comparison from a "
-            "non-numeric metric."
+            "non-numeric metric.",
+            reason_code=ReasonCode.NON_NUMERIC_COLUMN,
         ) from exc
 
     # Group KEYS are coerced with ``str`` because ``GapAnalysis.entity_values``
@@ -2566,7 +2611,9 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             f"{_clip_entity_labels(collisions)!r} each name more than one raw group, so a "
             "per-group mean cannot be attributed unambiguously. Refusing to fabricate: "
             "comparing the surviving labels would silently drop a real group and report "
-            "a spread over the wrong basis."
+            "a spread over the wrong basis.",
+            reason_code=ReasonCode.AMBIGUOUS_IDENTIFIER,
+            details={"raw_groups": raw_in_basis, "labels": len(selected)},
         )
 
     # ``_coerce_finite`` funnels every "not a usable number" shape to ``None``:
@@ -2609,7 +2656,8 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
                 metric=metric,
                 row_count=len(df),
                 rows_missing_group_key=rows_missing_group_key,
-            )
+            ),
+            reason_code=ReasonCode.COVERAGE_GAP,
         )
 
     top_performer = max(entity_values, key=lambda k: entity_values[k])
@@ -2724,7 +2772,13 @@ _BINARY_CHECK_SAMPLE = 6
 
 
 def _refuse_unless_binary_01(
-    series: Any, *, tool: str, role: str, column: str, consequence: str
+    series: Any,
+    *,
+    tool: str,
+    role: str,
+    column: str,
+    consequence: str,
+    reason_code: ReasonCode,
 ) -> None:
     """Refuse unless the non-null values of ``series`` are a subset of {0, 1}.
 
@@ -2746,12 +2800,21 @@ def _refuse_unless_binary_01(
     DataFrame) and list- or dict-valued cells (``unique()`` raises ``TypeError``).
     Each rendered value is clipped, because the composer truncates a carried
     reason from the END.
+
+    ``reason_code`` is the CALLER's, not this function's: one guard serves both
+    roles, so the code that names the offending column (#2021) can only be right
+    if it is chosen where the role is — ``NON_BINARY_TREATMENT`` at the two
+    treatment call sites, ``NON_BINARY_OUTCOME`` at ``risk_scorer``'s. Deriving it
+    here from ``role`` would put a runtime expression where the coverage test
+    requires a literal member, and defaulting it would silently mislabel one of
+    the three.
     """
     name = _clip_name(column)
     if getattr(series, "ndim", 1) != 1:
         raise ToolRefusalError(
             f"{tool}: {role} column {name!r} is ambiguous: {series.shape[1]} columns are "
-            f"named {name!r} in the supplied DataFrame. Refusing to pick one."
+            f"named {name!r} in the supplied DataFrame. Refusing to pick one.",
+            reason_code=ReasonCode.AMBIGUOUS_IDENTIFIER,
         )
 
     def _shown(value: Any) -> str:
@@ -2785,7 +2848,8 @@ def _refuse_unless_binary_01(
     raise ToolRefusalError(
         f"{tool}: {role} column {name!r} is not a binary 0/1 column: its "
         "non-null values must be a subset of {0, 1} (bool, int, float or nullable Int64), "
-        f"but it carries {carries}. {consequence}"
+        f"but it carries {carries}. {consequence}",
+        reason_code=reason_code,
     )
 
 
@@ -3052,17 +3116,20 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
             "roi_estimator requires an upstream gap_analysis carrying a `gap` "
             f"value (from gap_calculator); got {gap_analysis!r}. Refusing to "
             "fabricate an ROI — per anti-mocking discipline, missing upstream "
-            "data must surface as a structured error."
+            "data must surface as a structured error.",
+            reason_code=ReasonCode.UPSTREAM_STEP_FAILED,
         )
     gap_raw = gap_analysis.get("gap")
     if not isinstance(gap_raw, (int, float)) or not math.isfinite(float(gap_raw)):
         raise ToolRefusalError(
-            f"roi_estimator: gap value is not a finite number (got {gap_raw!r})."
+            f"roi_estimator: gap value is not a finite number (got {gap_raw!r}).",
+            reason_code=ReasonCode.NON_FINITE_INPUT,
         )
     if not isinstance(investment, (int, float)) or investment <= 0:
         raise ToolRefusalError(
             f"roi_estimator requires investment > 0; got {investment!r}. ROI is "
-            "undefined for a non-positive investment; refusing to fabricate."
+            "undefined for a non-positive investment; refusing to fabricate.",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
         )
 
     gap = float(gap_raw)
@@ -3079,7 +3146,8 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     ):
         raise ToolRefusalError(
             f"roi_estimator requires value_per_unit to be a finite number > 0; got "
-            f"{value_per_unit!r}. Refusing to substitute 1.0 for a value the caller supplied."
+            f"{value_per_unit!r}. Refusing to substitute 1.0 for a value the caller supplied.",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
         )
 
     opportunity_value = gap * n_entities * float(value_per_unit)
@@ -3155,7 +3223,8 @@ def _power_number(name: str, value: Any, default: Optional[float] = None) -> Opt
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ToolInputError(
             f"power_calculator: {name} must be a finite number; got {value!r}. No sample "
-            "size can be computed from it."
+            "size can be computed from it.",
+            reason_code=ReasonCode.NON_FINITE_INPUT,
         )
     return float(value)
 
@@ -3176,7 +3245,8 @@ def _refuse_unhonoured_power_design(kwargs: Dict[str, Any]) -> None:
             raise ToolInputError(
                 f"power_calculator: ratio={ratio!r} asks for unequal allocation, which the "
                 "power library cannot compute (every formula assumes equal arms); refusing "
-                "to return the equal-allocation sample size for a different design."
+                "to return the equal-allocation sample size for a different design.",
+                reason_code=ReasonCode.UNSUPPORTED_REQUEST,
             )
     if "alternative" in kwargs:
         alternative = kwargs["alternative"]
@@ -3187,7 +3257,8 @@ def _refuse_unhonoured_power_design(kwargs: Dict[str, Any]) -> None:
             raise ToolInputError(
                 f"power_calculator: alternative={alternative!r} asks for a one-sided test, "
                 "which the power library cannot compute (every formula is two-sided); "
-                "refusing to return the two-sided sample size for a different design."
+                "refusing to return the two-sided sample size for a different design.",
+                reason_code=ReasonCode.UNSUPPORTED_REQUEST,
             )
 
 
@@ -3314,7 +3385,8 @@ def power_calculator(
     if effect is None:
         raise ToolInputError(
             "power_calculator: effect_size is None — no effect to detect was supplied (an "
-            "upstream step likely failed or lacked the referenced field)."
+            "upstream step likely failed or lacked the referenced field).",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
     _refuse_unhonoured_power_design(kwargs)
     alpha_value = _power_number("alpha", alpha, default=0.05)
@@ -3329,17 +3401,20 @@ def power_calculator(
     if outcome not in _POWER_OUTCOME_TYPES:
         raise ToolInputError(
             f"power_calculator: outcome_type must be one of {list(_POWER_OUTCOME_TYPES)}; "
-            f"got {outcome_type!r}."
+            f"got {outcome_type!r}.",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
         )
     if design_value not in _POWER_DESIGNS:
         raise ToolInputError(
-            f"power_calculator: design must be one of {list(_POWER_DESIGNS)}; got {design!r}."
+            f"power_calculator: design must be one of {list(_POWER_DESIGNS)}; got {design!r}.",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
         )
     if design_value == "cluster" and outcome != "continuous":
         raise ToolInputError(
             f"power_calculator: a cluster design is supported for a continuous outcome only "
             f"(the library's design-effect formula inflates a Cohen's d sample size); got "
-            f"outcome_type={outcome!r}."
+            f"outcome_type={outcome!r}.",
+            reason_code=ReasonCode.UNSUPPORTED_REQUEST,
         )
 
     used_by = {
@@ -3359,12 +3434,14 @@ def power_calculator(
             raise ToolInputError(
                 f"power_calculator: {name}={value!r} was supplied but outcome_type={outcome!r} "
                 f"with design={design_value!r} does not use it; refusing to ignore it silently. "
-                "Set the design it belongs to, or omit it."
+                "Set the design it belongs to, or omit it.",
+                reason_code=ReasonCode.UNEXPECTED_INPUT,
             )
         if value is None and used_by[name]:
             raise ToolInputError(
                 f"power_calculator: {name} is required for outcome_type={outcome!r} with "
-                f"design={design_value!r}; no default is assumed."
+                f"design={design_value!r}; no default is assumed.",
+                reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
             )
 
     forward: PowerResult
@@ -3378,7 +3455,8 @@ def power_calculator(
                 or int(cluster_size) != cluster_size
             ):
                 raise ToolInputError(
-                    f"power_calculator: cluster_size must be a whole number; got {cluster_size!r}."
+                    f"power_calculator: cluster_size must be a whole number; got {cluster_size!r}.",
+                    reason_code=ReasonCode.INVALID_INPUT_VALUE,
                 )
             assert icc_value is not None
             forward = cluster_rct_power(
@@ -3397,7 +3475,9 @@ def power_calculator(
     except (PowerCalculationError, ArithmeticError) as exc:
         # ArithmeticError (the library raises OverflowError for an unrepresentable size) is
         # as deterministic over the inputs as a PowerCalculationError, so it is not retried.
-        raise ToolInputError(f"power_calculator: {exc}") from exc
+        raise ToolInputError(
+            f"power_calculator: {exc}", reason_code=ReasonCode.INVALID_INPUT_VALUE
+        ) from exc
     # Minimum usable design, enforced here rather than in the shared library: the library's
     # normal-approximation arithmetic is also an INPUT to the data-preparer sufficiency gate
     # (multiplied by the observational inflation), where refusing it dropped a requirement
@@ -3409,19 +3489,22 @@ def power_calculator(
             f"power_calculator: effect_size {effect} gives {forward.sample_size_per_arm} per "
             "arm, below the two per arm a two-arm test needs; the effect is too large, or "
             "alpha/power too lax, for this approximation (is the effect in outcome units "
-            "rather than standardised?)"
+            "rather than standardised?)",
+            reason_code=ReasonCode.DEGENERATE_DESIGN,
         )
     if int(forward.extra.get("n_clusters_per_arm", 2)) < 2:
         raise ToolInputError(
             f"power_calculator: the design needs {forward.extra['n_clusters_per_arm']} cluster "
             f"per arm ({forward.sample_size_per_arm} subjects, {forward.extra['cluster_size']} "
             "per cluster); with one cluster per arm treatment is confounded with the cluster. "
-            "A cluster-randomised comparison needs at least two clusters per arm."
+            "A cluster-randomised comparison needs at least two clusters per arm.",
+            reason_code=ReasonCode.DEGENERATE_DESIGN,
         )
     if int(forward.extra.get("required_events", 2)) < 2:
         raise ToolInputError(
             f"power_calculator: hazard ratio {effect} needs {forward.extra['required_events']} "
-            "event(s); a log-rank comparison needs at least two."
+            "event(s); a log-rank comparison needs at least two.",
+            reason_code=ReasonCode.DEGENERATE_DESIGN,
         )
 
     assumptions = [
@@ -3660,7 +3743,8 @@ async def _load_cohort_provider(client: Any, intervention_type: str, brand_value
             f"and brand {brand_value!r} — the brand's per-HCP cohort ({len(cohort)} rows) does "
             "not carry enough usable rows for this intervention's treatment channel, outcome, "
             "region and confounders, so a causal effect cannot be estimated. No effect is "
-            "returned."
+            "returned.",
+            reason_code=ReasonCode.NO_USABLE_ROWS,
         )
     return provider
 
@@ -3681,7 +3765,8 @@ def _counterfactual_inputs(
     if not isinstance(intervention, str) or not intervention.strip():
         raise ToolInputError(
             f"counterfactual_simulator declined: intervention is {intervention!r} — no "
-            f"intervention was supplied. It must be one of {catalog}."
+            f"intervention was supplied. It must be one of {catalog}.",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
     wanted = re.sub(r"[\s\-]+", "_", intervention.strip().lower())
     by_key = {value: value for value, _label in INTERVENTION_CATALOG}
@@ -3692,14 +3777,16 @@ def _counterfactual_inputs(
     if intervention_type is None:
         raise ToolInputError(
             f"counterfactual_simulator: intervention {intervention!r} is not a digital-twin "
-            f"intervention; the twin engine simulates only {catalog}."
+            f"intervention; the twin engine simulates only {catalog}.",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
         )
 
     brands = {b.value.lower(): b.value for b in Brand}
     if not isinstance(brand, str) or brand.strip().lower() not in brands:
         raise ToolInputError(
             f"counterfactual_simulator: brand {brand!r} has no digital-twin model; it must be "
-            f"one of {sorted(brands.values())}."
+            f"one of {sorted(brands.values())}.",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
         )
     brand_value = brands[brand.strip().lower()]
 
@@ -3711,7 +3798,8 @@ def _counterfactual_inputs(
     ):
         raise ToolInputError(
             f"counterfactual_simulator: target_entities must be a list of region names; got "
-            f"{target_entities!r}."
+            f"{target_entities!r}.",
+            reason_code=ReasonCode.INVALID_INPUT_TYPE,
         )
     regions: List[str] = []
     for entity in target_entities:
@@ -3720,7 +3808,8 @@ def _counterfactual_inputs(
             raise ToolInputError(
                 f"counterfactual_simulator: target entity {entity!r} is not a region. The twin "
                 f"model's effects vary only by region ({regions_known}), so a simulation "
-                "targeted at any other entity would report an effect that does not depend on it."
+                "targeted at any other entity would report an effect that does not depend on it.",
+                reason_code=ReasonCode.INVALID_INPUT_VALUE,
             )
         if region not in regions:
             regions.append(region)
@@ -3773,7 +3862,10 @@ def _targeted_effect(frame: Any, regions: List[str]) -> _TargetedEffect:
             target_regions=regions,
         )
     except EffectDataUnavailable as exc:
-        raise ToolRefusalError(f"counterfactual_simulator: {exc} No effect is returned.") from exc
+        raise ToolRefusalError(
+            f"counterfactual_simulator: {exc} No effect is returned.",
+            reason_code=ReasonCode.NO_USABLE_ROWS,
+        ) from exc
     assert fit.target_ate is not None
     assert fit.target_ci_lower is not None and fit.target_ci_upper is not None
     estimate = EffectEstimate(
@@ -3894,7 +3986,8 @@ def _simulation_results(
     if getattr(result.status, "value", result.status) != "completed":
         raise ToolRefusalError(
             f"counterfactual_simulator: the twin simulation for {intervention_type!r} on "
-            f"{brand!r} did not complete: {result.error_message}. No effect is returned."
+            f"{brand!r} did not complete: {result.error_message}. No effect is returned.",
+            reason_code=ReasonCode.UPSTREAM_STEP_FAILED,
         )
 
     modifier = frame.effect_modifiers[0] if frame.effect_modifiers else "region"
@@ -4045,14 +4138,16 @@ def psi_calculator(
             "psi_calculator requires a real DataFrame supplied via one of the "
             f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate a PSI — "
-            "missing data must surface as a structured error."
+            "missing data must surface as a structured error.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
     for col in (feature, period_column):
         if col not in df.columns:
             raise ToolRefusalError(
                 f"psi_calculator: column {col!r} not found in the supplied "
                 f"DataFrame (columns={list(df.columns)!r}). Refusing to "
-                "fabricate a result."
+                "fabricate a result.",
+                reason_code=ReasonCode.UNKNOWN_COLUMN,
             )
     baseline = df.loc[df[period_column] == baseline_period, feature].dropna()
     current = df.loc[df[period_column] == current_period, feature].dropna()
@@ -4061,7 +4156,9 @@ def psi_calculator(
             f"psi_calculator: baseline_period={baseline_period!r} matched "
             f"{len(baseline)} rows and current_period={current_period!r} matched "
             f"{len(current)} rows in column {period_column!r}; both must be "
-            "non-empty to compute a PSI. Refusing to fabricate a result."
+            "non-empty to compute a PSI. Refusing to fabricate a result.",
+            reason_code=ReasonCode.NO_USABLE_ROWS,
+            details={"baseline_rows": len(baseline), "current_rows": len(current)},
         )
     psi_value, buckets = _psi(baseline.to_numpy(), current.to_numpy())
     threshold = 0.1
@@ -4126,12 +4223,14 @@ def distribution_comparator(
             "distribution_comparator requires a real DataFrame supplied via one "
             f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
             f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate KS "
-            "statistics — missing data must surface as a structured error."
+            "statistics — missing data must surface as a structured error.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
     if period_column not in df.columns:
         raise ToolRefusalError(
             f"distribution_comparator: period column {period_column!r} not found "
-            f"in the supplied DataFrame (columns={list(df.columns)!r})."
+            f"in the supplied DataFrame (columns={list(df.columns)!r}).",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
     p1_mask = df[period_column] == period_1
     p2_mask = df[period_column] == period_2
@@ -4140,7 +4239,9 @@ def distribution_comparator(
             f"distribution_comparator: period_1={period_1!r} matched "
             f"{int(p1_mask.sum())} rows and period_2={period_2!r} matched "
             f"{int(p2_mask.sum())} rows in column {period_column!r}; both must "
-            "be non-empty. Refusing to fabricate a result."
+            "be non-empty. Refusing to fabricate a result.",
+            reason_code=ReasonCode.NO_USABLE_ROWS,
+            details={"period_1_rows": int(p1_mask.sum()), "period_2_rows": int(p2_mask.sum())},
         )
     comparisons: List[Dict[str, Any]] = []
     any_drift = False
@@ -4148,7 +4249,8 @@ def distribution_comparator(
         if feature not in df.columns:
             raise ToolRefusalError(
                 f"distribution_comparator: feature {feature!r} not found in the "
-                f"supplied DataFrame (columns={list(df.columns)!r})."
+                f"supplied DataFrame (columns={list(df.columns)!r}).",
+                reason_code=ReasonCode.UNKNOWN_COLUMN,
             )
         a = df.loc[p1_mask, feature].dropna()
         b = df.loc[p2_mask, feature].dropna()
@@ -4262,7 +4364,8 @@ def risk_scorer(
             "or risk scores — per anti-mocking discipline, missing data must "
             "surface as a structured error rather than a plausible-but-fake "
             "placeholder (the previous placeholder body emitted synthetic "
-            "entity IDs the Tier 1-5 anti-fab gate correctly rejects)."
+            "entity IDs the Tier 1-5 anti-fab gate correctly rejects).",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
 
     id_column = kwargs.get("id_column", "patient_id")
@@ -4270,13 +4373,15 @@ def risk_scorer(
     if outcome not in df.columns:
         raise ToolRefusalError(
             f"risk_scorer: outcome column {outcome!r} not found in the supplied "
-            f"DataFrame (columns={list(df.columns)!r})."
+            f"DataFrame (columns={list(df.columns)!r}).",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
     if id_column not in df.columns:
         raise ToolRefusalError(
             f"risk_scorer: id_column {id_column!r} not found in the supplied "
             f"DataFrame (columns={list(df.columns)!r}). Refusing to fabricate "
-            "entity IDs."
+            "entity IDs.",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
 
     work = df
@@ -4286,20 +4391,23 @@ def risk_scorer(
         if len(work) == 0:
             raise ToolRefusalError(
                 f"risk_scorer: no rows matched entity_ids={entity_ids!r} on "
-                f"column {id_column!r}. Refusing to fabricate."
+                f"column {id_column!r}. Refusing to fabricate.",
+                reason_code=ReasonCode.NO_USABLE_ROWS,
             )
 
     feature_cols = [c for c in work.select_dtypes(include="number").columns if c != outcome]
     if not feature_cols:
         raise ToolRefusalError(
             "risk_scorer: no usable numeric feature columns to fit a model "
-            f"(numeric columns minus outcome were empty; columns={list(work.columns)!r})."
+            f"(numeric columns minus outcome were empty; columns={list(work.columns)!r}).",
+            reason_code=ReasonCode.NO_USABLE_COLUMNS,
         )
 
     _refuse_unless_binary_01(
         work[outcome],
         tool="risk_scorer",
         role="outcome",
+        reason_code=ReasonCode.NON_BINARY_OUTCOME,
         column=outcome,
         consequence=(
             "Refusing to cast it to classes and report a class probability as a risk score."
@@ -4355,7 +4463,8 @@ def risk_scorer(
         raise ToolRefusalError(
             f"risk_scorer: the supplied DataFrame carries duplicate numeric column "
             f"name(s) {ambiguous!r}, so a feature cannot be addressed unambiguously. "
-            "Refusing to guess which one the risk model should fit on."
+            "Refusing to guess which one the risk model should fit on.",
+            reason_code=ReasonCode.AMBIGUOUS_IDENTIFIER,
         )
 
     max_feature_nan_share = 0.20
@@ -4398,7 +4507,9 @@ def risk_scorer(
             f"usable on the {len(work)} supplied rows "
             f"({'; '.join(excluded[c] for c in sorted(excluded))}); there is nothing "
             "left to fit a risk model on. Refusing to impute values for the missing "
-            "entries and report the result as a measured risk score."
+            "entries and report the result as a measured risk score.",
+            reason_code=ReasonCode.NO_USABLE_COLUMNS,
+            details={"numeric_features": len(feature_cols), "rows": len(work)},
         )
 
     # The population the CALLER asked about, captured before the complete-case filter.
@@ -4426,7 +4537,9 @@ def risk_scorer(
             f"risk_scorer: 0 of the {len(work)} supplied rows are complete across the "
             f"{len(usable_features)} usable feature columns and the outcome "
             f"{outcome!r} — every row is missing at least one value, so no row can be "
-            "fit. Refusing to fabricate scores."
+            "fit. Refusing to fabricate scores.",
+            reason_code=ReasonCode.NO_USABLE_ROWS,
+            details={"rows": len(work), "usable_features": len(usable_features)},
         )
     # AGGREGATE ADEQUACY. Per-column limits cannot see what the fit ends up standing on:
     # five retained features each missing 19% on DISJOINT rows are individually fine and
@@ -4443,7 +4556,9 @@ def risk_scorer(
             f"{outcome!r} — under the {min_retention_share:.0%} floor, so a risk ranking "
             "would describe a selected minority rather than the population asked about. "
             f"Gaps are spread across {', '.join(sorted(c for c in usable_features if int(nan_counts[c])))}. "
-            "Refusing to present scores for that subset as the cohort's risk."
+            "Refusing to present scores for that subset as the cohort's risk.",
+            reason_code=ReasonCode.INSUFFICIENT_SAMPLE,
+            details={"complete_rows": int(complete.sum()), "rows_in_scope": n_in_scope},
         )
     work = work[complete]
     feature_cols = usable_features
@@ -4467,7 +4582,8 @@ def risk_scorer(
         raise ToolRefusalError(
             "risk_scorer: the outcome column has fewer than 2 classes in the "
             "supplied data; cannot fit a discriminative risk model. Refusing to "
-            "fabricate scores."
+            "fabricate scores.",
+            reason_code=ReasonCode.SINGLE_CLASS_OUTCOME,
         )
 
     x = work[feature_cols].astype(float)
@@ -4559,28 +4675,33 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
             f"the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
             f"{sorted(kwargs.keys())!r}. The tool does not fabricate propensity "
             "scores — per anti-mocking discipline, missing data must surface as "
-            "a structured error rather than a plausible-but-fake placeholder."
+            "a structured error rather than a plausible-but-fake placeholder.",
+            reason_code=ReasonCode.MISSING_DATAFRAME,
         )
     if treatment not in df.columns:
         raise ToolRefusalError(
             f"propensity_estimator: treatment column {treatment!r} not found in "
-            f"the supplied DataFrame (columns={list(df.columns)!r})."
+            f"the supplied DataFrame (columns={list(df.columns)!r}).",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
     if not covariates:
         raise ToolRefusalError(
-            "propensity_estimator requires at least one covariate column; got an empty list."
+            "propensity_estimator requires at least one covariate column; got an empty list.",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
     missing = [c for c in covariates if c not in df.columns]
     if missing:
         raise ToolRefusalError(
             f"propensity_estimator: covariate columns {missing!r} not found in "
-            f"the supplied DataFrame (columns={list(df.columns)!r})."
+            f"the supplied DataFrame (columns={list(df.columns)!r}).",
+            reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
 
     _refuse_unless_binary_01(
         df[treatment],
         tool="propensity_estimator",
         role="treatment",
+        reason_code=ReasonCode.NON_BINARY_TREATMENT,
         column=treatment,
         consequence=(
             "Refusing to fit it as classes and report P(class == 1) as the propensity of treatment."
@@ -4594,13 +4715,15 @@ def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Pro
         raise ToolRefusalError(
             f"propensity_estimator: treatment column {_clip_name(treatment)!r} has "
             f"{n_null} null values of {len(df)} rows. Refusing to drop them silently "
-            "from the population the propensity distribution describes."
+            "from the population the propensity distribution describes.",
+            reason_code=ReasonCode.NON_FINITE_INPUT,
         )
     t = df[treatment].astype(int)
     if t.nunique() < 2:
         raise ToolRefusalError(
             "propensity_estimator: the treatment column has fewer than 2 classes; "
-            "cannot fit a propensity model. Refusing to fabricate."
+            "cannot fit a propensity model. Refusing to fabricate.",
+            reason_code=ReasonCode.SINGLE_CLASS_TREATMENT,
         )
 
     x = df[covariates].astype(float)

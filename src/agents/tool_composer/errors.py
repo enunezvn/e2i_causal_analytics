@@ -9,6 +9,56 @@ the other needs.
 
 from __future__ import annotations
 
+from typing import Any, Dict, Optional, Union
+
+from .reason_codes import ReasonCode, canonical_sentence, validate_details
+
+
+class _CodedError(Exception):
+    """Mixin: a deterministic tool objection that carries a closed reason code (#2021).
+
+    The human ``message`` is preserved exactly — 96 assertions pin that prose, and
+    #1574's ``estimation_data_scope`` disclosure rides it into the fail-closed answer.
+    The code is what the learning loop aggregates and what the database stores; the
+    canonical sentence is what is shown when the raw message is not safe to show.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: Union[ReasonCode, str],
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        self.reason_code = ReasonCode(reason_code)
+        self.details: Dict[str, Any] = validate_details(dict(details or {}))
+        super().__init__(message)
+
+    @property
+    def canonical_sentence(self) -> str:
+        return canonical_sentence(self.reason_code)
+
+    def __reduce__(self) -> Any:
+        """Rebuild through the keyword contract, so the error stays picklable.
+
+        ``BaseException.__reduce__`` replays ``self.args`` POSITIONALLY, which for
+        a keyword-only ``reason_code`` raises a ``TypeError`` from deep inside
+        ``pickle`` instead of re-raising the refusal. These errors crossed process
+        boundaries before #2021 (pytest-xdist and multiprocessing both reduce
+        exceptions this way) and must keep doing so.
+        """
+        return (_rebuild_coded_error, (type(self), self.args, self.reason_code, self.details))
+
+
+def _rebuild_coded_error(
+    cls: type,
+    args: tuple,
+    reason_code: ReasonCode,
+    details: Dict[str, Any],
+) -> Any:
+    """Unpickle helper for :class:`_CodedError`; module-level so it is importable."""
+    return cls(*args, reason_code=reason_code, details=details)
+
 
 class ReferenceResolutionError(Exception):
     """A plan reference (``$step_X.field`` / ``$context.field``) cannot be resolved.
@@ -28,7 +78,7 @@ class ReferenceResolutionError(Exception):
         super().__init__(f"reference '{reference}' is unresolvable: {reason}")
 
 
-class ToolInputError(ValueError):
+class ToolInputError(_CodedError, ValueError):
     """A composable tool deterministically rejects its input.
 
     Raised by a tool when an input value violates the tool's contract in a
@@ -36,10 +86,13 @@ class ToolInputError(ValueError):
     ``expected_effect=None``). The executor treats this as non-retryable:
     the step fails once, with the tool's stated reason, instead of being
     retried identically (#1573 acceptance: no ``NoneType`` retry loops).
+
+    Carries a :class:`~src.agents.tool_composer.reason_codes.ReasonCode` (#2021) so the
+    learning loop can aggregate rejections by category rather than by prose.
     """
 
 
-class ToolRefusalError(RuntimeError):
+class ToolRefusalError(_CodedError, RuntimeError):
     """A composable tool deterministically REFUSES to produce a result (#1600).
 
     The distinction from :class:`ToolInputError` is what the tool is objecting
@@ -71,6 +124,11 @@ class ToolRefusalError(RuntimeError):
     plain ``RuntimeError`` and keep retrying: that machinery is genuinely
     stochastic (bootstrap resampling, placebo simulations, no pinned
     ``random_state``), so a second attempt is not futile by construction.
+
+    Carries a :class:`~src.agents.tool_composer.reason_codes.ReasonCode` (#2021) so the
+    learning loop can aggregate refusals by category rather than by prose, and so the
+    fail-closed answer can render a data-free sentence when the raw message is not
+    safe to show (#2020).
     """
 
 

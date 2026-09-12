@@ -46,6 +46,7 @@ from src.agents.tool_composer.models.composition_models import (
     SubQuestion,
     ToolMapping,
 )
+from src.agents.tool_composer.reason_codes import ReasonCode
 from src.tool_registry.registry import ToolSchema, get_registry
 
 
@@ -242,7 +243,7 @@ async def test_input_rejected_class_on_the_async_path(registry, message):
 
     async def declining_async(**_: Any) -> Any:
         calls.append(1)
-        raise ToolInputError(message)
+        raise ToolInputError(message, reason_code=ReasonCode.INVALID_INPUT_VALUE)
 
     assert asyncio.iscoroutinefunction(declining_async), "this case must take the async arm"
 
@@ -284,7 +285,7 @@ async def test_input_rejected_class_on_the_sync_path(registry, message):
 
     def declining_sync(**_: Any) -> Any:
         calls.append(1)
-        raise ToolInputError(message)
+        raise ToolInputError(message, reason_code=ReasonCode.INVALID_INPUT_VALUE)
 
     assert not asyncio.iscoroutinefunction(declining_sync), "this case must take the sync arm"
 
