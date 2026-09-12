@@ -1270,10 +1270,11 @@ class ToolComposer:
             if not raw and not reason_code:
                 # Nothing to withhold and nothing to say: no reason fragment, as before #2020.
                 continue
-            # One rule: verbatim only when tool-authored, coded AND non-empty; otherwise the code's
-            # canonical sentence.
+            # One rule: verbatim only when tool-authored, non-empty AND carrying a KNOWN code (the
+            # refusal arm's constructor fails soft to tool_error, so an unknown code on an authored
+            # class came from a foreign producer); otherwise the code's canonical sentence.
             authored = getattr(step, "outcome_class", None) in _TOOL_AUTHORED_CLASSES
-            if authored and reason_code and raw:
+            if authored and raw and reason_code in ReasonCode:
                 trusted_reasons.append(f"{tool_name}: {raw}")
                 continue
             # Not tool-authored, uncoded (which fails closed the same way), or authored with no text.

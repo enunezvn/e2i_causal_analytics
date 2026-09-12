@@ -231,6 +231,14 @@ def test_an_input_rejection_without_a_code_fails_closed():
     assert _rendered("counterfactual_simulator", ReasonCode.TOOL_ERROR) in result.response.answer
 
 
+def test_a_refused_step_with_an_unknown_code_fails_closed():
+    """The coded-error constructor fails soft to tool_error, so the refusal arm cannot produce an
+    unknown code: a refused step carrying one came from a foreign producer and is not trusted."""
+    result = _fail_closed(_step("x", "SENTINEL raw", "refused", "not_a_real_code"))
+    assert "SENTINEL" not in _user_visible_text(result)
+    assert _rendered("x", ReasonCode.TOOL_ERROR) in result.response.answer
+
+
 def test_an_uncoded_error_with_text_renders_tool_error():
     result = _fail_closed(_step("causal_effect_estimator", _DOWHY_INTERNALS, "error", None))
     visible = _user_visible_text(result)
