@@ -216,15 +216,30 @@ async def test_input_rejected_class(registry):
     assert calls == [1]
 
 
-async def test_input_rejected_class_on_the_sync_path(registry):
+@pytest.mark.parametrize(
+    "message",
+    [
+        "declined: the probe's inputs cannot support this calculation",
+        "invalid sample size",
+        "refused: this cohort cannot answer that",
+    ],
+    ids=["says_declined", "neutral_wording", "wording_of_a_refusal"],
+)
+async def test_input_rejected_class_on_the_sync_path(registry, message):
     """The same class through the executor's SYNC arm (``executor.py`` iscoroutinefunction split).
 
     The case above has to be async, because #2015 turns ``counterfactual_simulator`` async. The
     sync arm has its own transport — ``_run_sync_tool`` on the #1592 bounded pool — and only then
     reaches the shared ``except (ToolInputError, ToolRefusalError)`` handler, so a change that
     turned a sync ``ToolInputError`` into a refusal would be invisible to the async case alone.
-    That arm does not go away at the merge: #2015's ``power_calculator`` and #2016's
-    binary-treatment guard both classify through it.
+    That arm does not go away at the merge: #2015's ``power_calculator`` raises ``ToolInputError``
+    from its own input guards, and #2016's binary-treatment guard reaches the same handler with a
+    ``ToolRefusalError`` — the shared handler stays live either way.
+
+    The message is parametrized because the class must come from the exception TYPE, never from
+    what the message happens to say (spec §5.3). Every other input-rejection probe in this repo
+    says "declined", so classifying on that word alone would keep all of them green while a real
+    ``ToolInputError("invalid sample size")`` was recorded as a refusal.
     """
     from src.agents.tool_composer.errors import ToolInputError
 
@@ -232,7 +247,7 @@ async def test_input_rejected_class_on_the_sync_path(registry):
 
     def declining_sync(**_: Any) -> Any:
         calls.append(1)
-        raise ToolInputError("declined: the probe's inputs cannot support this calculation")
+        raise ToolInputError(message)
 
     assert not asyncio.iscoroutinefunction(declining_sync), "this case must take the sync arm"
 
