@@ -640,8 +640,15 @@ def _score_common_cause_shift(
     return status, details
 
 
-def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
-    """Stable 31-bit seed from the estimate id (``None`` → unseeded, as before).
+def seed_for_estimate(estimate_id: Optional[str]) -> Optional[int]:
+    """THE seed derivation for a refutation run (#2029): a stable 31-bit
+    integer from the estimate id; ``None`` for ``None``/``""`` (an unseeded
+    run stays unseeded and says so in its details).
+
+    This module-level function is the contract for OTHER modules (the
+    causal_impact refutation node seeds its 1-sim calibration probe with it)
+    -- callers must not reach for an attribute of a runner INSTANCE, which
+    breaks every lightweight runner double.
 
     The first 8 hex digits of the digest are 32 bits (measured max 4294943764
     over the live ids, 2026-09-09); the mask keeps the promise in this docstring.
@@ -651,6 +658,11 @@ def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
     import hashlib
 
     return int(hashlib.sha256(str(estimate_id).encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+
+
+#: Runner-internal alias of ``seed_for_estimate`` (the name ``run_all_tests``
+#: and the existing evidence tests use); ONE body, no second derivation.
+_resample_seed_for = seed_for_estimate
 
 
 #: Spec §4 (#2029): the details_json key under which EACH perturbation test
@@ -1163,16 +1175,16 @@ class RefutationRunner:
 
     @staticmethod
     def _seed_for(estimate_id: Optional[str]) -> Optional[int]:
-        """The seed a run uses for every random refit (#2029), for callers
-        OUTSIDE the run (the causal_impact refutation node's probe reads it).
+        """Runner-side convenience for the seed a run uses for every random
+        refit (#2029); delegates to the module-level ``seed_for_estimate``.
 
-        ``run_all_tests`` derives the run's seed ONCE via the module-level
-        ``_resample_seed_for`` and feeds the same value to all four perturbation
-        tests; this is the same derivation exposed on the runner: a stable
-        31-bit integer from the estimate id, ``None`` when there is no id --
-        an unseeded run stays unseeded and says so in its details.
+        ``run_all_tests`` derives the run's seed ONCE via that function and
+        feeds the same value to all four perturbation tests. This method is
+        NOT the contract for other modules -- they import
+        ``seed_for_estimate`` directly, so a runner double without this
+        attribute never breaks them.
         """
-        return _resample_seed_for(estimate_id)
+        return seed_for_estimate(estimate_id)
 
     def run_all_tests(
         self,
