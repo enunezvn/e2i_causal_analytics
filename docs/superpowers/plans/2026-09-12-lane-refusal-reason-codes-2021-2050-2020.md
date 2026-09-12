@@ -1117,14 +1117,21 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
     - `rr_from_smd`'s `math.exp` can only overflow, which raises `OverflowError`, not `ValueError`. That lands in the executor's generic arm, which Task 4 already renders as the canonical sentence.
   - The allowlist entry's one-line reason should cite this.
 - No existing test pins text this task removes (lead grep, 2026-09-12). The only pinned phrase in scope is `"not a DataFrame"`, which survives. `"uplift fit failed"` in `test_executor_causalml.py:732` belongs to a different path (the causalml executor) and is unaffected.
-- `:3478` power_calculator — `PowerCalculationError` is authored and pinned (`test_power_calculator_2015.py`, `match=reason`). Its `ArithmeticError` arm carries Python's own `OverflowError` text: measure what that text is and report it; do **not** change the site in this task.
+- `:3489` power_calculator — **split this site (lead call, 2026-09-12, after the Task 4 quality review).** It is `except (PowerCalculationError, ArithmeticError) as exc`. The `PowerCalculationError` half is authored and pinned (`test_power_calculator_2015.py`, `match=reason`), so it stays verbatim. The `ArithmeticError` half carries Python's own text (`OverflowError` "math range error", `ZeroDivisionError` "float division by zero"), which is not authored. Split it into two `except` clauses:
+  - `PowerCalculationError` keeps `f"power_calculator: {exc}"` and `INVALID_INPUT_VALUE`.
+  - `ArithmeticError` raises the same class and code with an authored sentence (e.g. `"power_calculator: the requested design is outside the range the calculation can represent."`), logs `exc`, and keeps `from exc`.
+  - The guard's allowlist names `power_calculator` for the `PowerCalculationError` clause only. The guard must still flag an `ArithmeticError` clause that interpolates its name, so key that allowlist entry by function AND the caught exception type.
+  - Add a behavioral test: a design that overflows produces no Python arithmetic text in the refusal, and does produce it in `caplog`.
 - `:3865` — `EffectDataUnavailable`, authored once `:234` / `:259` are fixed.
 - `:3987` — `result.error_message`, which is `SimulationEngine`'s authored prefix plus an authored `EffectDataUnavailable` / `EstimationError` once the estimator sites are fixed. It is a model attribute, not an `except` name, so the guard below does not see it — pin it with a behavioral test instead.
 - `src/digital_twin/effect/recommendation.py:98` — interpolates `control_outcome_sd`'s `EffectDataUnavailable`, which is authored.
 
 > **Sites re-derived by AST at `4d1892dc7` (lead, 2026-09-12).** Line numbers below replace the table's, which predate Tasks 2b and 3. The search covered every `raise ToolRefusalError/ToolInputError/EffectDataUnavailable/EstimationError` inside an `except … as NAME` whose arguments reference `NAME`.
 > - **Fix (7):** `tool_registrations.py` :1669 `_run_dowhy_refutation`, :1822 and :1842 `_derive_sensitivity_inputs`, :2292 `cate_analyzer`, :2560 `gap_calculator`; `cohort_causal_estimator.py` :234 and :259 `estimate_cohort_effect`.
-> - **Allowlist (4, keyed by function):** :2014 `sensitivity_analyzer`, :2070 `_point_only_sensitivity`, :3489 `power_calculator`, :3876 `_targeted_effect`. **No function contains both a site to fix and an allowlisted site**, so keying the allowlist by function cannot exempt a site that should be fixed. Assert this in the guard test: an allowlisted function must hold only allowlisted sites.
+> - **Split (1):** :3489 `power_calculator`. The `PowerCalculationError` clause stays verbatim (allowlisted); the `ArithmeticError` clause is fixed (see the allowlist bullet below).
+> - **Allowlist (4 entries):** :2014 `sensitivity_analyzer`, :2070 `_point_only_sensitivity`, :3876 `_targeted_effect`, keyed by function; `power_calculator`, keyed by function AND caught type `PowerCalculationError`.
+>   - **No function other than `power_calculator` contains both a site to fix and an allowlisted site.** Keying those three entries by function therefore cannot exempt a site that should be fixed.
+>   - Assert this in the guard test: an allowlisted function must hold only allowlisted sites, with `power_calculator` qualified by exception type.
 > - **Model-attribute interpolations, invisible to the AST guard, pinned behaviorally:** `estimator.py:78` (fix) and `tool_registrations.py:4000` `_simulation_results` (keep; authored once the estimator sites are fixed).
 > - **Correction:** `recommendation.py:98` *returns* its text; it does not raise it. The guard cannot see it, and it does not belong on the allowlist.
 
