@@ -8,11 +8,10 @@ session but belong to no conversation. Once #2069 threaded the orchestrator's
 session into ``composer_episodes``, those values would have made unattributable
 compositions look attributed.
 
-The real session is bound by each chat brain before its tools run:
-
-* AG-UI (``copilotkit.py`` execute) sets ``_session_id_context``;
-* ``/chat/stream`` (``chatbot_graph``) binds ``state["session_id"]`` around its
-  ``tools`` node.
+The real session is bound by each chat brain's ``tools`` node
+(``SessionBoundToolNode``), from ``state["session_id"]``: AG-UI's ``execute()``
+also sets ``_session_id_context``, but the handler's keepalive wrapper pulls each
+frame in a fresh task, so that binding never reaches the graph's nodes.
 
 Every test here drives the production entry (the tool, a real ToolNode, or the
 compiled chatbot graph's own ``tools`` node); only the orchestrator and the
@@ -21,10 +20,11 @@ composer behind the tools are faked.
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -193,3 +193,90 @@ async def test_chatbot_graph_tools_node_binds_the_state_session(orchestrator):
     assert not FABRICATED.match(session or "")
     # The binding is scoped to the node: nothing leaks into the caller's context.
     assert _session_id_context.get() == before
+
+
+# ------------------------------------------------------------ AG-UI brain
+
+
+class _ScriptedChatModel:
+    """The chat leg asks for ``orchestrator_tool``; the synthesis leg answers in text."""
+
+    def __init__(self, calls_tool: bool = False) -> None:
+        self._calls_tool = calls_tool
+
+    def bind_tools(self, tools, **kwargs) -> _ScriptedChatModel:
+        return _ScriptedChatModel(calls_tool=True)
+
+    async def astream(self, messages, *args, **kwargs):
+        if self._calls_tool:
+            yield AIMessageChunk(
+                content="",
+                tool_call_chunks=[
+                    {
+                        "name": "orchestrator_tool",
+                        "args": json.dumps({"query": "system health score"}),
+                        "id": "call-2064",
+                        "index": 0,
+                    }
+                ],
+            )
+        else:
+            yield AIMessageChunk(content="The system health score is available.")
+
+
+async def test_an_agui_turn_gives_its_tools_the_thread_session(orchestrator, monkeypatch):
+    """The browser route end to end: ``execute()`` under the handler's keepalive wrapper.
+
+    The handler streams ``with_sse_keepalive(...)`` around ``execute()``, which
+    pulls every frame in a fresh task. The session ``execute()`` binds before its
+    first frame therefore never reaches the graph's nodes (production: ``chat_node
+    … (source=state)``, and ``classification_logs.session_id`` NULL), so the tools
+    node must bind the thread session from graph state itself.
+    """
+    from src.api.routes import copilotkit
+    from src.api.utils.sse_keepalive import with_sse_keepalive
+
+    monkeypatch.setattr(copilotkit, "get_chat_llm", lambda **kwargs: _ScriptedChatModel())
+    monkeypatch.setattr("src.api.dependencies.supabase_client.get_supabase", lambda: None)
+
+    async def _no_learning_signal(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(copilotkit, "_collect_copilot_learning_signal", _no_learning_signal)
+    agent = copilotkit.LangGraphAgent(
+        name="default",
+        description="#2064",
+        graph=copilotkit.e2i_chat_graph,
+        graph_factory=copilotkit.create_e2i_chat_agent,
+    )
+
+    frames = with_sse_keepalive(
+        agent.execute(
+            thread_id=REAL_SESSION,
+            state={},
+            messages=[{"id": "u-2064", "role": "user", "content": "What is the health score?"}],
+            actions=[],
+        )
+    )
+    async for _ in frames:
+        pass
+
+    assert len(orchestrator.payloads) == 1, "orchestrator_tool never ran"
+    assert orchestrator.payloads[0]["session_id"] == REAL_SESSION
+
+
+async def test_the_agui_tools_node_binds_nothing_without_a_state_session(orchestrator):
+    """The compiled AG-UI graph's own ``tools`` node: no session in state, none invented."""
+    from src.api.routes import copilotkit
+    from src.api.routes.chatbot_state import ChatbotState
+
+    workflow = StateGraph(ChatbotState)
+    workflow.add_node("tools", copilotkit.e2i_chat_graph.nodes["tools"].bound)
+    workflow.add_edge(START, "tools")
+    workflow.add_edge("tools", END)
+
+    await workflow.compile().ainvoke(
+        {"messages": [_tool_call_message("orchestrator_tool", {"query": "q"})]}
+    )
+
+    assert orchestrator.payloads[0]["session_id"] is None

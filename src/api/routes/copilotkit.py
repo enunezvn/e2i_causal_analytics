@@ -325,7 +325,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 from src.agents.factory import build_agent_roster_block
@@ -340,7 +339,11 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
-from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
+from src.api.routes.chatbot_tools import (
+    E2I_CHATBOT_TOOLS,
+    SessionBoundToolNode,
+    set_raw_user_query,
+)
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
 from src.api.routes.synthesis_guard import (
     build_superlative_correction,
@@ -4258,7 +4261,9 @@ def create_e2i_chat_agent(
     # in test_copilotkit_classifier_stream_leak_1636.py fails loudly if the two
     # drift apart.
     workflow.add_node("chat", chat_node)
-    workflow.add_node(_TOOL_NODE_NAME, ToolNode(E2I_CHATBOT_TOOLS))
+    # #2064: execute()'s session binding does not reach graph nodes (see
+    # SessionBoundToolNode), so the tools take the session from graph state.
+    workflow.add_node(_TOOL_NODE_NAME, SessionBoundToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("synthesize", synthesize_node)
 
     # Set entry point
