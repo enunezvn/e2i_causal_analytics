@@ -2,13 +2,17 @@
 
 Measured 2026-09-12 (``docs/demos/results/2026-09-12_estimator_calibration_2031/
 disproof.md``): on the seed-21 planted-truth DGP at n = 1500 (the live row cap) the
-production fit at RF leaf 50 has seed-SD / mean-SE 0.20 median, max < 0.4 across the
-11 planted pairs, and 1.00 coverage of the population-weighted planted truth; at
-leaf 5 the median was 0.52 and one live pair's spread reached 0.89 SE, flipping its
-CI-vs-zero verdict. This test fits the SAME config production uses (guarded below so
-the pin cannot drift from ``nuisance_config``) and gates:
+production fit at RF leaf 50 has seed-SD / mean-SE max 0.31 over four seeds across
+the 11 planted pairs (0.358 over the disproof's eight seeds) and 1.00 coverage of
+the population-weighted planted truth; at leaf 5 four of the 11 pairs breach 0.4
+(max 1.05) and one live pair's spread reached 0.89 SE, flipping its CI-vs-zero
+verdict. This test fits the SAME config production uses (guarded below so the pin
+cannot drift from ``nuisance_config``) and gates:
 
-  1. seed-SD / mean-SE <= 0.5 on every pair;
+  1. seed-SD / mean-SE <= 0.4 on every pair. The bound detects a GLOBAL rollback
+     of the nuisance config (4/11 pairs breach at leaf 5, none at leaf 50); it
+     does not separate leaf 5 from leaf 50 pair by pair -- several leaf-5 pairs
+     sit below other pairs' leaf-50 ratios (codex r1);
   2. coverage of the weighted planted truth >= 0.9 over pairs x seeds;
   3. the test's own RF params == ``linear_dml_rf_params()`` except ``random_state``.
 
@@ -30,7 +34,7 @@ from tests.unit.test_causal_engine.test_sensitivity_calibration import N_ROWS, _
 pytestmark = pytest.mark.heavy_ml
 
 SEEDS = (42, 7, 123, 2024)
-MAX_SEED_SD_OVER_SE = 0.5
+MAX_SEED_SD_OVER_SE = 0.4
 MIN_COVERAGE = 0.9
 
 
