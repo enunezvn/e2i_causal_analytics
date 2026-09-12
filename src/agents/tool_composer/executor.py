@@ -1075,16 +1075,53 @@ class PlanExecutor:
         return False
 
     @staticmethod
-    def _accepts_keyword(tool_callable: Any, name: str) -> bool:
+    def _dispatch_signature(tool_callable: Any) -> Optional[inspect.Signature]:
+        """The signature of what the executor will ACTUALLY call, or ``None``.
+
+        ``None`` means "cannot be established" and every caller must then fail
+        OPEN — dispatch the call and let the real invocation decide, which is
+        exactly today's behavior. A guard that exists to save doomed retries must
+        never suppress work that would have succeeded: the bug it replaces wasted
+        attempts on calls that could not work, whereas a false refusal destroys a
+        result and evicts a valid cached plan.
+
+        Two ways the advertised signature can lie about the call (codex r1):
+
+        * ``inspect.signature`` follows ``__wrapped__`` by DEFAULT, so a
+          ``functools.wraps`` decorator that SUPPLIES a required argument
+          advertises the inner function's parameters while accepting
+          ``(**kwargs)``. Reproduced: the wrapper call succeeds, yet binding
+          against the advertised signature reports the injected argument missing.
+        * A decorator may set ``__signature__`` outright, which
+          ``inspect.signature`` honors over the real parameters at any
+          ``follow_wrapped``.
+
+        So: refuse to judge a callable carrying either marker, and otherwise read
+        the dispatch boundary itself with ``follow_wrapped=False``. Measured over
+        all 20 registered tools (2026-09-12): NONE carries ``__wrapped__`` or
+        ``__signature__``, and NONE has a different signature under
+        ``follow_wrapped=False`` — this costs the guard no coverage today, and
+        the tools it cannot judge are exactly the ones it could get wrong.
+        """
+        if hasattr(tool_callable, "__wrapped__") or hasattr(tool_callable, "__signature__"):
+            return None
+        try:
+            return inspect.signature(tool_callable, follow_wrapped=False)
+        except (TypeError, ValueError):
+            # Some C callables expose no signature. Not evidence of a defect.
+            return None
+
+    @classmethod
+    def _accepts_keyword(cls, tool_callable: Any, name: str) -> bool:
         """True iff ``tool_callable`` can be passed ``name=`` as a keyword.
 
-        Fails OPEN (``True``) when the signature cannot be read, so an opaque
-        callable keeps whatever behavior it has today.
+        Fails OPEN (``True``) when the dispatch signature cannot be established,
+        so such a callable keeps whatever behavior it has today.
         """
-        try:
-            parameters = inspect.signature(tool_callable).parameters
-        except (TypeError, ValueError):
+        signature = cls._dispatch_signature(tool_callable)
+        if signature is None:
             return True
+        parameters = signature.parameters
         return any(
             p.kind is inspect.Parameter.VAR_KEYWORD
             or (
@@ -1095,28 +1132,32 @@ class PlanExecutor:
             for p in parameters.values()
         )
 
-    @staticmethod
+    @classmethod
     def _validate_call_arguments(
-        tool_callable: Any, resolved_inputs: Dict[str, Any], tool_name: str
+        cls, tool_callable: Any, resolved_inputs: Dict[str, Any], tool_name: str
     ) -> None:
         """Raise :class:`PlanArgumentError` if ``tool_callable(**resolved_inputs)`` cannot bind.
 
-        Predicts exactly the ``TypeError`` the call would raise, from the signature
-        alone. Verified against the live registry (2026-09-12, all 20 registered
-        composable tools): every callable exposes a readable signature, none is
-        ``(*args, **kwargs)``-opaque, and binding each tool's complete required set
-        succeeds — so the guard produces no false positives on the shipped tools.
+        Predicts exactly the ``TypeError`` the call would raise, from the dispatch
+        signature alone. Verified against the live registry (2026-09-12, all 20
+        registered composable tools): every callable exposes a readable signature,
+        none is ``(*args, **kwargs)``-opaque, none carries wrapper metadata, and
+        binding each tool's complete required set succeeds — so the guard produces
+        no false positives on the shipped tools.
+
+        Fails OPEN whenever :meth:`_dispatch_signature` cannot establish what the
+        call requires. Refusing a call that would have worked is strictly worse
+        than the defect this guard removes, so an unjudgeable callable is
+        dispatched exactly as it is today.
 
         Raises:
             PlanArgumentError: on a missing required parameter, or — for a tool
                 with no ``**kwargs`` — an argument the signature does not declare.
         """
-        try:
-            parameters = inspect.signature(tool_callable).parameters
-        except (TypeError, ValueError):
-            # An unreadable signature (some C callables) is not evidence of a
-            # defect. Fail open: the call itself stays the only check.
+        signature = cls._dispatch_signature(tool_callable)
+        if signature is None:
             return
+        parameters = signature.parameters
 
         empty = inspect.Parameter.empty
         missing = tuple(

@@ -28,6 +28,7 @@ Falsifiability: every test below names the exact behaviour it fails on today.
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -482,6 +483,149 @@ async def test_a_mixed_dependency_skips_on_the_bound_one_only() -> None:
     assert "step_1" not in error, (
         f"an ordering-only dependency is not why the step could not run; got {error!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_an_argument_injecting_wrapper_is_dispatched_not_refused() -> None:
+    """The guard must FAIL OPEN when it cannot establish what a call requires.
+
+    ``inspect.signature`` follows ``__wrapped__`` by default, so a
+    ``functools.wraps`` decorator that SUPPLIES a required argument advertises the
+    inner function's parameters while really accepting ``(**kwargs)``. Binding the
+    plan against the advertised signature then reports an argument the wrapper fills
+    in itself. Refusing that call is strictly worse than the defect this guard
+    removes: #2045 wasted retries on work that was doomed, whereas a false refusal
+    destroys a result that would have succeeded AND evicts a valid cached plan
+    (``plan_defect`` is in ``composer._PLAN_DEFECT_CLASSES``).
+
+    Measured 2026-09-12: no shipped callable has this shape, so this is latent, not
+    live — but the guard must not be the thing that breaks the first one."""
+    import functools
+
+    invoked: Dict[str, int] = {}
+    registry = _make_registry(invoked)
+
+    def inner(metric: str, entities: List[str]) -> Dict[str, Any]:
+        invoked["wrapped_tool"] = invoked.get("wrapped_tool", 0) + 1
+        return {"gap": 2.0, "metric": metric, "entities": entities}
+
+    @functools.wraps(inner)
+    def wrapped_tool(**kwargs: Any) -> Dict[str, Any]:
+        # Supplies `metric` itself — the plan is not expected to provide it.
+        return inner(metric="trx", **kwargs)
+
+    # The wrapper really does accept the plan's arguments ...
+    assert wrapped_tool(entities=["T1"]) == {"gap": 2.0, "metric": "trx", "entities": ["T1"]}
+    invoked.clear()
+    # ... while advertising `metric` as required.
+    assert "metric" in inspect.signature(wrapped_tool).parameters
+
+    _register(
+        registry,
+        "wrapped_tool",
+        wrapped_tool,
+        [ToolParameter("entities", "List[str]", "entities", True)],
+    )
+    executor = _executor(registry, max_retries=0)
+
+    trace = await executor.execute(
+        _plan([_step("step_1", "wrapped_tool", {"entities": ["T1"]})], [["step_1"]]), context={}
+    )
+    result = trace.get_result("step_1")
+
+    assert result.status == ExecutionStatus.COMPLETED, (
+        f"a callable whose requirements cannot be established must be DISPATCHED, "
+        f"not refused; got {result.outcome_class!r}: {result.output.error!r}"
+    )
+    assert invoked.get("wrapped_tool", 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_custom_signature_attribute_also_fails_open() -> None:
+    """The second way an advertised signature can lie: a decorator that sets
+    ``__signature__`` outright, which ``inspect.signature`` honors over the real
+    parameters at ANY ``follow_wrapped`` — so ``follow_wrapped=False`` alone is not
+    enough and the marker itself has to be refused judgement."""
+    invoked: Dict[str, int] = {}
+    registry = _make_registry(invoked)
+
+    def custom_sig_tool(**kwargs: Any) -> Dict[str, Any]:
+        invoked["custom_sig_tool"] = invoked.get("custom_sig_tool", 0) + 1
+        return {"ok": True, **kwargs}
+
+    custom_sig_tool.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [
+            inspect.Parameter("required_but_not_really", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+        ]
+    )
+    _register(registry, "custom_sig_tool", custom_sig_tool, [])
+    executor = _executor(registry, max_retries=0)
+
+    trace = await executor.execute(
+        _plan([_step("step_1", "custom_sig_tool", {"anything": 1})], [["step_1"]]), context={}
+    )
+    result = trace.get_result("step_1")
+
+    assert result.status == ExecutionStatus.COMPLETED, (
+        f"a custom __signature__ cannot establish the real requirements; the call "
+        f"must be dispatched. Got {result.outcome_class!r}: {result.output.error!r}"
+    )
+    assert invoked.get("custom_sig_tool", 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_signature_variants_that_must_still_be_judged() -> None:
+    """Failing open must stay NARROW — it applies to unjudgeable callables only.
+
+    Three shapes that carry no wrapper metadata and so must still be validated:
+    a ``functools.partial`` (which legitimately REMOVES a requirement), a
+    keyword-only required parameter, and a callable object with ``__call__``."""
+    import functools
+
+    invoked: Dict[str, int] = {}
+    registry = _make_registry(invoked)
+
+    def base(metric: str, entities: List[str], **kwargs: Any) -> Dict[str, Any]:
+        invoked["partial_tool"] = invoked.get("partial_tool", 0) + 1
+        return {"metric": metric, "entities": entities}
+
+    def kwonly(*, region: str, **kwargs: Any) -> Dict[str, Any]:
+        invoked["kwonly_tool"] = invoked.get("kwonly_tool", 0) + 1
+        return {"region": region}
+
+    class Callable_:
+        def __call__(self, entity: str, **kwargs: Any) -> Dict[str, Any]:
+            invoked["object_tool"] = invoked.get("object_tool", 0) + 1
+            return {"entity": entity}
+
+    _register(registry, "partial_tool", functools.partial(base, metric="trx"), [])
+    _register(registry, "kwonly_tool", kwonly, [])
+    _register(registry, "object_tool", Callable_(), [])
+    executor = _executor(registry, max_retries=0)
+
+    # A partial that PRE-SUPPLIES `metric` must not have it reported missing.
+    trace = await executor.execute(
+        _plan([_step("s", "partial_tool", {"entities": ["T1"]})], [["s"]]), context={}
+    )
+    assert trace.get_result("s").status == ExecutionStatus.COMPLETED, (
+        f"functools.partial legitimately removes a requirement: "
+        f"{trace.get_result('s').output.error!r}"
+    )
+
+    # A keyword-only required parameter is still required.
+    trace = await executor.execute(_plan([_step("s", "kwonly_tool", {})], [["s"]]), context={})
+    assert trace.get_result("s").outcome_class == "plan_defect"
+    assert "region" in (trace.get_result("s").output.error or "")
+    assert invoked.get("kwonly_tool", 0) == 0
+
+    # A callable object is judged by its __call__, and `self` is not a parameter.
+    trace = await executor.execute(
+        _plan([_step("s", "object_tool", {"entity": "T1"})], [["s"]]), context={}
+    )
+    assert trace.get_result("s").status == ExecutionStatus.COMPLETED, (
+        f"a callable object's __call__ binds fine: {trace.get_result('s').output.error!r}"
+    )
+    assert invoked.get("object_tool", 0) == 1
 
 
 @pytest.mark.asyncio
