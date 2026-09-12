@@ -98,6 +98,9 @@ export function ToolComposerSection({ days }: { days: number }) {
         <StatCard label="Partial" value={fmtInt(compositions.partial)} />
         <StatCard label="Failed" value={fmtInt(compositions.failed)} />
         <StatCard label="Cancelled" value={fmtInt(compositions.cancelled)} />
+        {/* Unfinished is what is left once the four outcomes are counted: without it the cards
+            do not add up to the total, and a composition still in flight is invisible. */}
+        <StatCard label="Unfinished" value={fmtInt(compositions.unfinished)} />
         <StatCard label="Abandoned" value={fmtInt(compositions.abandoned)} />
       </div>
 

@@ -64,15 +64,35 @@ describe('ToolComposerSection', () => {
     expect(within(unmeasured).getByText(/declared/i)).toBeInTheDocument();
   });
 
-  it('renders the composition stat cards, cancelled runs included', () => {
+  it('renders every composition count, so the cards account for the total', () => {
+    // Values, not just labels: a card bound to the wrong field, or a label with nothing behind
+    // it, is exactly how a composition goes missing from the reader's arithmetic.
+    const counts = {
+      ...payload.compositions,
+      total: 9,
+      success: 2,
+      partial: 1,
+      failed: 3,
+      cancelled: 1,
+      unfinished: 2,
+      abandoned: 1,
+    };
+    mockData({ ...payload, compositions: counts });
+
     render(<ToolComposerSection days={30} />);
 
-    // Cancelled is one of the four outcomes the recorder writes; a card set that omits it
-    // silently drops compositions from the reader's arithmetic.
-    for (const label of ['Compositions', 'Success', 'Partial', 'Failed', 'Cancelled', 'Abandoned']) {
-      expect(screen.getByText(label)).toBeInTheDocument();
-    }
-    expect(screen.getByText('5')).toBeInTheDocument(); // compositions.total
+    const shown = (label: string) =>
+      screen.getByText(label).parentElement?.textContent?.replace(label, '').trim();
+    expect(shown('Compositions')).toBe('9');
+    expect(shown('Success')).toBe('2');
+    expect(shown('Partial')).toBe('1');
+    expect(shown('Failed')).toBe('3');
+    expect(shown('Cancelled')).toBe('1');
+    expect(shown('Unfinished')).toBe('2');
+    expect(shown('Abandoned')).toBe('1');
+    // The four outcomes plus the unfinished ones account for every composition counted.
+    expect(counts.success + counts.partial + counts.failed + counts.cancelled + counts.unfinished)
+      .toBe(counts.total);
   });
 
   it('lists each recent failure with its phase, step classes and bounded preview', () => {
