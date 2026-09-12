@@ -1392,7 +1392,8 @@ class SyncToolTimeout(Exception):
     Distinct from a plain ``TimeoutError`` so the retry loop can tell "the
     envelope fired around a thread we cannot cancel" (do not re-dispatch) from
     "the tool itself reported a timeout" (ordinary retryable failure). Raised
-    only by :meth:`PlanExecutor._run_sync_tool`.
+    by :meth:`PlanExecutor._run_sync_tool`, and by ``counterfactual_simulator``'s
+    own envelope around its pool offload (an async tool, #2015).
     """
 
     pass

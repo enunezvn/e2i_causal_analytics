@@ -243,37 +243,98 @@ class PropensityScores(BaseModel):
 
 
 class PowerCalculatorInput(BaseModel):
-    """Input for power analysis"""
+    """Input for power analysis (#2015).
+
+    Mirrors the callable. The previous model also declared ``ratio`` (treatment/control
+    allocation), which the tool never read and ``power_analysis_lib`` cannot honour — every
+    formula there assumes equal allocation — so it is gone rather than silently ignored.
+    """
 
     effect_size: float
     alpha: float = 0.05
     power: float = 0.8
-    ratio: float = 1.0  # Treatment/control ratio
+    outcome_type: str = "continuous"
+    design: str = "individual"
+    baseline_rate: Optional[float] = None
+    event_rate: Optional[float] = None
+    icc: Optional[float] = None
+    cluster_size: Optional[int] = None
 
 
 class PowerAnalysis(BaseModel):
-    """Output from power analysis"""
+    """Output from power analysis, computed by ``src/utils/power_analysis_lib`` (#2015).
 
-    required_n: int
-    actual_power: float
-    detectable_effect: float
+    ``required_n_per_arm`` and ``required_n_total`` are the library's own figures: two equal
+    arms, and for a cluster design whole clusters per arm (``design_details``), the same
+    figures the experiment-designer agent reports. ``alpha`` and ``power`` are the design targets
+    the sample size was solved for. ``minimum_detectable_effect`` is on
+    ``minimum_detectable_effect_scale``, which differs from the input ``effect_size`` for a
+    binary design (relative change in, absolute risk difference out — #1639).
+    """
+
+    required_n_per_arm: int
+    required_n_total: int
+    alpha: float
+    power: float
+    effect_size: float
+    outcome_type: str
+    design: str
+    analysis_type: str
+    minimum_detectable_effect: float
+    minimum_detectable_effect_scale: str
+    assumptions: List[str]
+    design_details: Dict[str, Any]
 
 
 class SimulatorInput(BaseModel):
-    """Input for counterfactual simulation"""
+    """Input for counterfactual simulation (#2015): what the digital-twin engine can use.
+
+    The previous model declared ``expected_effect`` and ``duration_weeks``. The engine
+    estimates the effect itself from the brand's cohort, so an upstream effect has no role
+    in it, and ``duration_weeks`` never reached the tool.
+    """
 
     intervention: str
-    target_entities: List[str]
-    expected_effect: float
-    duration_weeks: int = 12
+    brand: str
+    target_entities: List[str] = []
 
 
 class SimulationResults(BaseModel):
-    """Output from counterfactual simulation"""
+    """Output from ``counterfactual_simulator``: one digital-twin simulation (#2015).
 
-    predicted_lift: float
-    confidence: str  # low, medium, high
-    uncertainty_range: List[float]
+    ``effect`` / ``ci_lower`` / ``ci_upper`` answer the question asked, on ``effect_scope``:
+    the cohort when no regions are targeted, else the targeted regions (the causal forest's
+    average effect over the cohort rows in them, with its 95% interval over those rows).
+    ``cohort_effect`` / ``cohort_ci_*`` are always the engine's cohort-wide numbers — the
+    ones ``/digital-twin/simulate`` returns, which a region filter does not change
+    (measured). ``region_effects`` are per-region effects for the simulated twins' regions
+    that the cohort covers: point estimates. ``recommendation`` / ``recommendation_rationale``
+    apply the engine's CI-based DEPLOY / REFINE / SKIP policy to the headline effect.
+    ``recommended_sample_size`` is the per-arm n of a two-sided, equal-allocation experiment
+    powered to detect the headline effect on the continuous outcome, sized from the outcome's
+    spread in the cohort's comparison arm (``src.digital_twin.effect.recommendation.experiment_size``,
+    the rule the Digital Twin page uses); ``None`` when that
+    cannot be measured, with the reason in ``assumptions``.
+    """
+
+    intervention_type: str
+    brand: str
+    target_regions: List[str]
+    effect_scope: str
+    effect: float
+    ci_lower: float
+    ci_upper: float
+    cohort_effect: float
+    cohort_ci_lower: float
+    cohort_ci_upper: float
+    region_effects: Dict[str, float]
+    twin_count: int
+    recommendation: str
+    recommendation_rationale: str
+    recommended_sample_size: Optional[int]
+    model_id: str
+    data_provenance: str
+    assumptions: List[str]
 
 
 # The four models below are the output contracts of the tools that return a plain dict
@@ -2891,90 +2952,837 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
 # ============================================================================
 
 
+_POWER_OUTCOME_TYPES = ("continuous", "binary", "time_to_event")
+_POWER_DESIGNS = ("individual", "cluster")
+# What ``PowerResult.mde`` is measured in, per outcome type (#1639: a binary design takes a
+# RELATIVE effect but reports an ABSOLUTE risk difference as its MDE).
+_POWER_MDE_SCALES = {
+    "continuous": "cohens_d",
+    "binary": "absolute_risk_difference",
+    "time_to_event": "hazard_ratio",
+}
+
+
+def _power_number(name: str, value: Any, default: Optional[float] = None) -> Optional[float]:
+    """A finite number for a power input, ``default`` when the value is omitted (``None``).
+
+    A supplied value that is not a finite number is refused rather than coerced: the tool
+    would otherwise size a study for a parameter the caller never gave.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ToolInputError(
+            f"power_calculator: {name} must be a finite number; got {value!r}. No sample "
+            "size can be computed from it."
+        )
+    return float(value)
+
+
+def _refuse_unhonoured_power_design(kwargs: Dict[str, Any]) -> None:
+    """Refuse a design argument the library cannot compute instead of absorbing it.
+
+    ``power_calculator`` takes ``**kwargs`` (the executor injects ``estimation_data`` into
+    every tool), so an undeclared ``ratio=2`` used to be dropped and the equal-allocation n
+    returned as if it answered the unequal design (codex whole-diff F2). ``ratio`` and
+    ``alternative`` are statsmodels' power-API arguments, the names a planner reaches for;
+    every ``power_analysis_lib`` formula is equal allocation and two-sided, so only those
+    values are accepted. Other unknown kwargs stay ignored, as for every composer tool.
+    """
+    if "ratio" in kwargs:
+        ratio = kwargs["ratio"]
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio != 1:
+            raise ToolInputError(
+                f"power_calculator: ratio={ratio!r} asks for unequal allocation, which the "
+                "power library cannot compute (every formula assumes equal arms); refusing "
+                "to return the equal-allocation sample size for a different design."
+            )
+    if "alternative" in kwargs:
+        alternative = kwargs["alternative"]
+        if not isinstance(alternative, str) or alternative.strip().lower() not in (
+            "two-sided",
+            "two_sided",
+        ):
+            raise ToolInputError(
+                f"power_calculator: alternative={alternative!r} asks for a one-sided test, "
+                "which the power library cannot compute (every formula is two-sided); "
+                "refusing to return the two-sided sample size for a different design."
+            )
+
+
 @composable_tool(
     name="power_calculator",
-    description="Calculate required sample size for statistical power in A/B tests",
+    description=(
+        "Required sample size (per arm and total) for a two-arm experiment with equal "
+        "allocation, from the shared power-analysis library. Designs: continuous outcome "
+        "(two-sample t-test), binary outcome (two-proportion z-test, needs baseline_rate), "
+        "time-to-event (log-rank, needs event_rate), and cluster-randomised continuous "
+        "(needs icc and cluster_size)."
+    ),
     source_agent="experiment_designer",
     tier=3,
     input_parameters=[
-        {"name": "effect_size", "type": "float", "description": "Expected effect size"},
+        {
+            "name": "effect_size",
+            "type": "float",
+            "description": (
+                "Effect to detect, non-zero: Cohen's d (standardised mean difference) for a "
+                "continuous or cluster design; relative change vs baseline_rate for a binary "
+                "design (0.10 = +10%); hazard ratio for time_to_event (not 1.0). An ATE in "
+                "outcome units is NOT a Cohen's d."
+            ),
+        },
         {
             "name": "alpha",
             "type": "float",
-            "description": "Significance level",
+            "description": "Two-sided significance level in (0, 1)",
             "required": False,
             "default": 0.05,
         },
         {
             "name": "power",
             "type": "float",
-            "description": "Desired power",
+            "description": "Target power in (0, 1)",
             "required": False,
             "default": 0.8,
         },
+        {
+            "name": "outcome_type",
+            "type": "str",
+            "description": "continuous, binary or time_to_event",
+            "required": False,
+            "default": "continuous",
+        },
+        {
+            "name": "design",
+            "type": "str",
+            "description": "individual or cluster (cluster supports a continuous outcome only)",
+            "required": False,
+            "default": "individual",
+        },
+        {
+            "name": "baseline_rate",
+            "type": "float",
+            "description": "Control-arm proportion in (0, 1); required for, and only for, binary",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "event_rate",
+            "type": "float",
+            "description": "Expected event rate in (0, 1]; required for, and only for, time_to_event",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "icc",
+            "type": "float",
+            "description": "Intra-cluster correlation in [0, 1); required for, and only for, cluster",
+            "required": False,
+            "default": None,
+        },
+        {
+            "name": "cluster_size",
+            "type": "int",
+            "description": "Average cluster size (>= 1); required for, and only for, cluster",
+            "required": False,
+            "default": None,
+        },
     ],
     output_schema="PowerAnalysis",
-    avg_execution_ms=500,
+    avg_execution_ms=50,
     input_model=PowerCalculatorInput,
     output_model=PowerAnalysis,
 )
 def power_calculator(
-    effect_size: float, alpha: float = 0.05, power: float = 0.8, **kwargs
+    effect_size: float,
+    alpha: float = 0.05,
+    power: float = 0.8,
+    outcome_type: str = "continuous",
+    design: str = "individual",
+    baseline_rate: Optional[float] = None,
+    event_rate: Optional[float] = None,
+    icc: Optional[float] = None,
+    cluster_size: Optional[int] = None,
+    **kwargs,
 ) -> PowerAnalysis:
-    """Calculate sample size for desired power."""
-    # Simplified calculation - real implementation uses statsmodels
-    n = int(16 * (1.96 + 0.84) ** 2 / (effect_size**2))
-    return PowerAnalysis(required_n=n, actual_power=power, detectable_effect=effect_size)
+    """Sample size for a two-arm experiment, delegated to ``power_analysis_lib`` (#2015).
+
+    Replaces ``n = 16 * (1.96 + 0.84) ** 2 / d**2``, which ignored ``alpha`` and ``power``
+    and was about 8x the per-arm n (3,135 at d=0.2 against the library's 393 per arm).
+    The design is routed the way the experiment-designer agent's power node routes it, with
+    one difference: that node substitutes defaults for a missing baseline rate, event rate,
+    ICC or cluster size, and this tool refuses instead — a leader-facing sample size must
+    not rest on a rate nobody stated.
+
+    Every refusal is a :class:`ToolInputError` (deterministic over the inputs, never
+    retried): a non-finite or zero effect, alpha/power outside (0, 1), a design parameter
+    missing for its design, or one supplied for a design that does not use it (it would be
+    silently ignored).
+    """
+    from src.utils.power_analysis_lib import (
+        PowerCalculationError,
+        PowerResult,
+        binary_outcome_power,
+        cluster_rct_power,
+        continuous_outcome_power,
+        time_to_event_power,
+    )
+
+    effect = _power_number("effect_size", effect_size)
+    if effect is None:
+        raise ToolInputError(
+            "power_calculator: effect_size is None — no effect to detect was supplied (an "
+            "upstream step likely failed or lacked the referenced field)."
+        )
+    _refuse_unhonoured_power_design(kwargs)
+    alpha_value = _power_number("alpha", alpha, default=0.05)
+    power_value = _power_number("power", power, default=0.8)
+    assert alpha_value is not None and power_value is not None
+    outcome = (
+        (outcome_type or "continuous").strip().lower()
+        if isinstance(outcome_type, str)
+        else outcome_type
+    )
+    design_value = (design or "individual").strip().lower() if isinstance(design, str) else design
+    if outcome not in _POWER_OUTCOME_TYPES:
+        raise ToolInputError(
+            f"power_calculator: outcome_type must be one of {list(_POWER_OUTCOME_TYPES)}; "
+            f"got {outcome_type!r}."
+        )
+    if design_value not in _POWER_DESIGNS:
+        raise ToolInputError(
+            f"power_calculator: design must be one of {list(_POWER_DESIGNS)}; got {design!r}."
+        )
+    if design_value == "cluster" and outcome != "continuous":
+        raise ToolInputError(
+            f"power_calculator: a cluster design is supported for a continuous outcome only "
+            f"(the library's design-effect formula inflates a Cohen's d sample size); got "
+            f"outcome_type={outcome!r}."
+        )
+
+    used_by = {
+        "baseline_rate": outcome == "binary",
+        "event_rate": outcome == "time_to_event",
+        "icc": design_value == "cluster",
+        "cluster_size": design_value == "cluster",
+    }
+    supplied = {
+        "baseline_rate": baseline_rate,
+        "event_rate": event_rate,
+        "icc": icc,
+        "cluster_size": cluster_size,
+    }
+    for name, value in supplied.items():
+        if value is not None and not used_by[name]:
+            raise ToolInputError(
+                f"power_calculator: {name}={value!r} was supplied but outcome_type={outcome!r} "
+                f"with design={design_value!r} does not use it; refusing to ignore it silently. "
+                "Set the design it belongs to, or omit it."
+            )
+        if value is None and used_by[name]:
+            raise ToolInputError(
+                f"power_calculator: {name} is required for outcome_type={outcome!r} with "
+                f"design={design_value!r}; no default is assumed."
+            )
+
+    forward: PowerResult
+    try:
+        if design_value == "cluster":
+            icc_value = _power_number("icc", icc)
+            if (
+                isinstance(cluster_size, bool)
+                or not isinstance(cluster_size, (int, float))
+                or not math.isfinite(cluster_size)
+                or int(cluster_size) != cluster_size
+            ):
+                raise ToolInputError(
+                    f"power_calculator: cluster_size must be a whole number; got {cluster_size!r}."
+                )
+            assert icc_value is not None
+            forward = cluster_rct_power(
+                effect, alpha_value, power_value, icc_value, int(cluster_size)
+            )
+        elif outcome == "binary":
+            rate = _power_number("baseline_rate", baseline_rate)
+            assert rate is not None
+            forward = binary_outcome_power(effect, alpha_value, power_value, rate)
+        elif outcome == "time_to_event":
+            rate = _power_number("event_rate", event_rate)
+            assert rate is not None
+            forward = time_to_event_power(effect, alpha_value, power_value, rate)
+        else:
+            forward = continuous_outcome_power(effect, alpha_value, power_value)
+    except (PowerCalculationError, ArithmeticError) as exc:
+        # ArithmeticError (the library raises OverflowError for an unrepresentable size) is
+        # as deterministic over the inputs as a PowerCalculationError, so it is not retried.
+        raise ToolInputError(f"power_calculator: {exc}") from exc
+    # Minimum usable design, enforced here rather than in the shared library: the library's
+    # normal-approximation arithmetic is also an INPUT to the data-preparer sufficiency gate
+    # (multiplied by the observational inflation), where refusing it dropped a requirement
+    # (codex whole-diff #8). A recommended design needs two per arm to estimate a variance,
+    # a cluster-randomised one two clusters per arm (#10), and a log-rank comparison two
+    # events.
+    if forward.sample_size_per_arm < 2:
+        raise ToolInputError(
+            f"power_calculator: effect_size {effect} gives {forward.sample_size_per_arm} per "
+            "arm, below the two per arm a two-arm test needs; the effect is too large, or "
+            "alpha/power too lax, for this approximation (is the effect in outcome units "
+            "rather than standardised?)"
+        )
+    if int(forward.extra.get("n_clusters_per_arm", 2)) < 2:
+        raise ToolInputError(
+            f"power_calculator: the design needs {forward.extra['n_clusters_per_arm']} cluster "
+            f"per arm ({forward.sample_size_per_arm} subjects, {forward.extra['cluster_size']} "
+            "per cluster); with one cluster per arm treatment is confounded with the cluster. "
+            "A cluster-randomised comparison needs at least two clusters per arm."
+        )
+    if int(forward.extra.get("required_events", 2)) < 2:
+        raise ToolInputError(
+            f"power_calculator: hazard ratio {effect} needs {forward.extra['required_events']} "
+            "event(s); a log-rank comparison needs at least two."
+        )
+
+    assumptions = [
+        f"Solved for alpha={alpha_value:g} (two-sided) and power={power_value:g} with equal "
+        f"allocation ({forward.analysis_type}).",
+        *forward.assumptions,
+    ]
+    return PowerAnalysis(
+        required_n_per_arm=forward.sample_size_per_arm,
+        required_n_total=forward.sample_size,
+        alpha=alpha_value,
+        power=power_value,
+        effect_size=effect,
+        outcome_type=outcome,
+        design=design_value,
+        analysis_type=forward.analysis_type,
+        minimum_detectable_effect=float(forward.mde),
+        minimum_detectable_effect_scale=_POWER_MDE_SCALES[outcome],
+        assumptions=assumptions,
+        design_details=dict(forward.extra),
+    )
 
 
 @composable_tool(
     name="counterfactual_simulator",
-    description="Simulate intervention outcomes using the causal model",
+    description=(
+        "Simulate a commercial intervention for a brand with the digital-twin engine (the "
+        "engine behind /digital-twin/simulate): a causal-forest estimate of the "
+        "intervention's effect on HCP conversion_rate in the brand's synthetic-gold per-HCP "
+        "cohort, with its 95% interval, per-region effects and a DEPLOY / REFINE / SKIP "
+        "recommendation. Estimates the effect itself, so it takes no upstream effect and needs no "
+        "prior step unless target_entities come from one."
+    ),
     source_agent="experiment_designer",
     tier=3,
     input_parameters=[
-        {"name": "intervention", "type": "str", "description": "Intervention to simulate"},
+        {
+            "name": "intervention",
+            "type": "str",
+            "description": (
+                "One of: email_campaign, call_frequency_increase, speaker_program_invitation, "
+                "sample_distribution, peer_influence_activation, digital_engagement, "
+                "patient_support_program, rep_training_quality"
+            ),
+        },
+        {
+            "name": "brand",
+            "type": "str",
+            "description": "Remibrutinib, Fabhalta or Kisqali (use $context.brand when set)",
+        },
         {
             "name": "target_entities",
             "type": "List[str]",
-            "description": "Entities to apply intervention to",
-        },
-        {
-            "name": "expected_effect",
-            "type": "float",
-            "description": "Expected effect from prior analysis",
+            "description": (
+                "Optional regions to simulate on: northeast, south, midwest, west. Effects "
+                "vary only by region in the twin model, so other entity kinds are refused."
+            ),
+            "required": False,
+            "default": None,
         },
     ],
     output_schema="SimulationResults",
-    avg_execution_ms=3000,
+    avg_execution_ms=60000,
     input_model=SimulatorInput,
     output_model=SimulationResults,
 )
-def counterfactual_simulator(
-    intervention: str, target_entities: List[str], expected_effect: Optional[float], **kwargs
+async def counterfactual_simulator(
+    intervention: str,
+    brand: str,
+    target_entities: Optional[List[str]] = None,
+    **kwargs,
 ) -> SimulationResults:
-    """Simulate intervention outcomes.
+    """Simulate an intervention with the digital-twin engine (#2015).
 
-    Null-guard (#1573): a ``None`` / non-numeric ``expected_effect`` means no
-    upstream effect estimate was actually supplied (live q08: the planner
-    referenced fields the CATE output does not carry, which degraded to
-    ``None`` and crashed here with ``NoneType * float`` three times). The
-    tool declines with a stated reason — a deterministic
-    :class:`ToolInputError` the executor does NOT retry — instead of
-    fabricating a lift or raising a bare ``TypeError``.
+    Replaces ``predicted_lift = expected_effect * 0.85`` with a hard-coded "medium"
+    confidence, which ignored ``intervention`` and ``target_entities``. Runs the path the
+    live ``/digital-twin/simulate`` route runs (``src/api/routes/digital_twin.py``): the
+    brand's active HCP twin model, the cohort identification gate, MLflow hydration, twin
+    generation, and ``SimulationEngine`` with the cohort provider and
+    ``CohortCausalEstimator`` — so the cohort-wide numbers are the ones the Digital Twin
+    page states for the same request.
+
+    Why the contract changed (measured 2026-09-11, Kisqali ``email_campaign``, 1,000
+    twins): the engine serves a catalog intervention on a brand; it estimates the effect
+    from the cohort, so an upstream ``expected_effect`` has no role (dropped). A region
+    filter leaves the engine's ATE, interval and recommendation unchanged (0.135 [0.092,
+    0.178] for all twins and for the 274 northeast twins) while the region's effect is
+    0.258. So ``target_entities`` are regions, and a targeted request is answered with the
+    same causal forest's inference on the targeted regions (:func:`_targeted_effect`), not
+    with the cohort-wide numbers.
+
+    Refusals:
+
+    * :class:`ToolInputError` (not retried) — the #1573 null-guard generalised: a missing
+      or non-catalog intervention, a brand without a twin model, a target that is not a
+      region. Raised before any lookup.
+    * :class:`ToolRefusalError` (not retried) — the loaded cohort cannot identify the
+      intervention, a targeted region has no treated-vs-control contrast in it, or the
+      engine run failed (e.g. under 100 twins after filtering).
+    * any other exception (retried) — no active twin model could be read or loaded (the
+      route's 503 + Retry-After), or the cohort could not be loaded.
+
+    Heavy work (MLflow hydration, generating the twins — ~67 ms each, measured — and the
+    causal-forest fits) runs on the executor's bounded compute pool, never on the event loop.
     """
-    if not isinstance(expected_effect, (int, float)) or isinstance(expected_effect, bool):
-        raise ToolInputError(
-            "counterfactual_simulator declined: expected_effect is "
-            f"{expected_effect!r} — no usable effect estimate was supplied "
-            "(an upstream step likely failed or its output lacked the "
-            "referenced field). Refusing to simulate a lift from a missing "
-            "effect."
+    intervention_type, brand_value, regions = _counterfactual_inputs(
+        intervention, brand, target_entities
+    )
+    deadline = _simulation_deadline(_COUNTERFACTUAL_BUDGET_S)
+
+    from src.digital_twin.twin_repository import TwinRepository
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    repo = TwinRepository(supabase_client=client)
+    # list_active_models logs and returns [] on a database error, so an empty result is
+    # either "no model" or "unreadable" — both are the route's retryable 503.
+    actives = await repo.list_active_models(twin_type=_twin_type_hcp(), brand=brand_value)
+    if not actives:
+        raise RuntimeError(
+            f"counterfactual_simulator: no active trained HCP digital-twin model could be read "
+            f"for {brand_value}; the simulation cannot run until one is trained and active."
         )
+    model_row = actives[0]
+    provider = await _load_cohort_provider(repo.client, intervention_type, brand_value)
+    frame = provider.get_training_frame(intervention_type, brand=brand_value, twin_type="hcp")
+    result, targeted = await _offload_within_budget(
+        _run_twin_simulation,
+        model_row,
+        provider,
+        frame,
+        intervention_type,
+        brand_value,
+        regions,
+        deadline=deadline,
+        budget_s=_COUNTERFACTUAL_BUDGET_S,
+    )
+    return _simulation_results(
+        result,
+        brand=brand_value,
+        intervention_type=intervention_type,
+        frame=frame,
+        targeted=targeted,
+    )
+
+
+#: Twins generated per simulation. The twins do not enter the ATE, its interval or the
+#: per-region effects (those come from the cohort fit, so any count gives the same numbers);
+#: they set the engine's 100-twin floor after filtering and the recommendation's baseline
+#: rate. Measured 2026-09-11 on the deployed image: generation costs 66-69 ms per twin, and
+#: a run at the /simulate default of 1,000 took 100 s end to end — too close to the
+#: composer's 120 s step timeout. The smallest region share in all three active HCP models
+#: is 0.2235 (south), so 700 twins put a single targeted region at ~156 +/- 11, five
+#: standard deviations above the floor, for ~47 s of generation.
+_COUNTERFACTUAL_TWIN_COUNT = 700
+
+#: Seconds the whole tool call may take — lookups, queueing on the pool and the offload
+#: (hydrate, generate, simulate, targeted fit). It must expire before the executor's 120 s
+#: step envelope: that envelope cancels the coroutine but not the pool thread, and the
+#: executor's generic retry arm would then queue a second simulation behind the abandoned
+#: one (codex iter-3; the clock starts at tool entry so slow lookups count, iter-4).
+#: Measured runs take 47-52 s, so this is about twice the observed cost. No config
+#: overrides the composer's envelope (``phases.execute.max_execution_time_seconds``); one
+#: set below this budget would reopen the retry.
+_COUNTERFACTUAL_BUDGET_S = 100.0
+
+
+def _simulation_deadline(budget_s: float) -> float:
+    """The event-loop time at which a simulation started now exhausts ``budget_s``."""
+    return asyncio.get_running_loop().time() + budget_s
+
+
+async def _offload_within_budget(func: Any, *args: Any, deadline: float, budget_s: float) -> Any:
+    """Run ``func`` on the bounded heavy-compute pool, failing once at ``deadline``.
+
+    The executor's sync-tool envelope (#1592) applied to this async tool's offload: an
+    expired budget raises ``SyncToolTimeout``, which the executor records against the
+    circuit breaker and does not retry, because the thread keeps running and a retry would
+    queue the same work behind it. An exception raised by ``func`` — including its own
+    ``TimeoutError`` — propagates unchanged. ``budget_s`` is the whole budget the deadline
+    was set from, named in the error.
+    """
+    from src.api.dependencies.compute import run_in_bounded_executor
+
+    from .executor import SyncToolTimeout
+
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise SyncToolTimeout(
+            f"counterfactual_simulator timed out after {budget_s:g}s before the twin "
+            "simulation started (the model and cohort lookups used the budget); not retried"
+        )
+
+    async def bounded_call() -> Tuple[Any, Optional[Exception]]:
+        try:
+            return await run_in_bounded_executor(func, *args), None
+        except Exception as exc:  # noqa: BLE001 - re-raised below
+            return None, exc
+
+    try:
+        value, error = await asyncio.wait_for(bounded_call(), timeout=remaining)
+    except asyncio.TimeoutError as exc:
+        raise SyncToolTimeout(
+            f"counterfactual_simulator timed out after {budget_s:g}s (the twin simulation is "
+            "still running on the bounded heavy-compute pool — a thread cannot be cancelled); "
+            "not retried"
+        ) from exc
+    if error is not None:
+        raise error
+    return value
+
+
+def _twin_type_hcp() -> Any:
+    from src.digital_twin.models.twin_models import TwinType
+
+    return TwinType.HCP
+
+
+async def _load_cohort_provider(client: Any, intervention_type: str, brand_value: str) -> Any:
+    """The brand's cohort provider for this intervention, or a refusal.
+
+    Loads the frame itself rather than calling ``build_cohort_provider_or_none``, which
+    turns a database error into ``None``: here an unreachable database must propagate (the
+    executor retries it) and only an unusable cohort is refused.
+    """
+    from src.digital_twin.effect.cohort_loader import (
+        cohort_provider_from_frame,
+        load_cohort_frame,
+    )
+
+    cohort = await load_cohort_frame(client, brand_value)
+    provider = cohort_provider_from_frame(cohort, intervention_type)
+    if provider is None:
+        raise ToolRefusalError(
+            f"counterfactual_simulator: no effect data for intervention {intervention_type!r} "
+            f"and brand {brand_value!r} — the brand's per-HCP cohort ({len(cohort)} rows) does "
+            "not carry enough usable rows for this intervention's treatment channel, outcome, "
+            "region and confounders, so a causal effect cannot be estimated. No effect is "
+            "returned."
+        )
+    return provider
+
+
+def _counterfactual_inputs(
+    intervention: Any, brand: Any, target_entities: Any
+) -> Tuple[str, str, List[str]]:
+    """Normalise the simulator inputs to (catalog intervention, brand, regions) or refuse.
+
+    Matching is case-insensitive; an intervention may be given as its catalog value or
+    label, with spaces or hyphens for underscores. Nothing is guessed beyond that: a
+    free-text intervention ("increase rep visits") has no twin treatment channel.
+    """
+    from src.digital_twin.effect.provider import INTERVENTION_CATALOG
+    from src.digital_twin.models.twin_models import Brand, Region
+
+    catalog = [value for value, _label in INTERVENTION_CATALOG]
+    if not isinstance(intervention, str) or not intervention.strip():
+        raise ToolInputError(
+            f"counterfactual_simulator declined: intervention is {intervention!r} — no "
+            f"intervention was supplied. It must be one of {catalog}."
+        )
+    wanted = re.sub(r"[\s\-]+", "_", intervention.strip().lower())
+    by_key = {value: value for value, _label in INTERVENTION_CATALOG}
+    by_key.update(
+        {re.sub(r"[\s\-]+", "_", label.lower()): value for value, label in INTERVENTION_CATALOG}
+    )
+    intervention_type = by_key.get(wanted)
+    if intervention_type is None:
+        raise ToolInputError(
+            f"counterfactual_simulator: intervention {intervention!r} is not a digital-twin "
+            f"intervention; the twin engine simulates only {catalog}."
+        )
+
+    brands = {b.value.lower(): b.value for b in Brand}
+    if not isinstance(brand, str) or brand.strip().lower() not in brands:
+        raise ToolInputError(
+            f"counterfactual_simulator: brand {brand!r} has no digital-twin model; it must be "
+            f"one of {sorted(brands.values())}."
+        )
+    brand_value = brands[brand.strip().lower()]
+
+    regions_known = [r.value for r in Region]
+    if target_entities is None:
+        return intervention_type, brand_value, []
+    if not isinstance(target_entities, list) or not all(
+        isinstance(entity, str) for entity in target_entities
+    ):
+        raise ToolInputError(
+            f"counterfactual_simulator: target_entities must be a list of region names; got "
+            f"{target_entities!r}."
+        )
+    regions: List[str] = []
+    for entity in target_entities:
+        region = entity.strip().lower()
+        if region not in regions_known:
+            raise ToolInputError(
+                f"counterfactual_simulator: target entity {entity!r} is not a region. The twin "
+                f"model's effects vary only by region ({regions_known}), so a simulation "
+                "targeted at any other entity would report an effect that does not depend on it."
+            )
+        if region not in regions:
+            regions.append(region)
+    return intervention_type, brand_value, regions
+
+
+class _TargetedEffect(BaseModel):
+    """Inference on the targeted regions (see :func:`_targeted_effect`)."""
+
+    regions: List[str]
+    effect: float
+    ci_lower: float
+    ci_upper: float
+    cohort_rows: int
+    recommendation: str
+    recommendation_rationale: str
+
+
+def _targeted_effect(frame: Any, regions: List[str]) -> _TargetedEffect:
+    """The causal forest's effect on the targeted regions, its interval and the policy.
+
+    A second fit of ``estimate_cohort_effect`` on the same frame with the engine's seed and
+    alpha (``CohortCausalEstimator`` defaults), so its point estimate for a region is the
+    engine's region effect; ``ate_interval`` over the targeted cohort rows gives the
+    interval. The engine's DEPLOY / REFINE / SKIP policy (same minimum effect, power and
+    alpha) is then applied to it; the experiment is sized separately by the shared
+    ``experiment_size``. A region without a treated-vs-control contrast in the cohort is
+    refused.
+    """
+    import numpy as np
+
+    from src.digital_twin.effect.cohort_causal_estimator import (
+        CohortCausalEstimator,
+        estimate_cohort_effect,
+    )
+    from src.digital_twin.effect.errors import EffectDataUnavailable
+    from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
+    from src.digital_twin.effect.recommendation import PolicyThresholds, RecommendationPolicy
+    from src.digital_twin.simulation_engine import SimulationEngine
+
+    defaults = CohortCausalEstimator()
+    try:
+        fit = estimate_cohort_effect(
+            frame.df,
+            frame.treatment_var,
+            outcome_col=frame.outcome_var,
+            confounders=tuple(frame.confounders),
+            alpha=defaults.alpha,
+            seed=defaults.seed,
+            target_regions=regions,
+        )
+    except EffectDataUnavailable as exc:
+        raise ToolRefusalError(f"counterfactual_simulator: {exc} No effect is returned.") from exc
+    assert fit.target_ate is not None
+    assert fit.target_ci_lower is not None and fit.target_ci_upper is not None
+    estimate = EffectEstimate(
+        ate=fit.target_ate,
+        ate_ci_lower=fit.target_ci_lower,
+        ate_ci_upper=fit.target_ci_upper,
+        att=None,
+        atc=None,
+        per_twin_uplift=np.array([fit.target_ate]),
+        auuc=None,
+        qini=None,
+        feature_importances=None,
+        n_train=fit.target_n,
+        estimator_type="cohort_causal_forest_dml",
+        data_provenance=PROVENANCE_COHORT,
+    )
+    recommendation, rationale = RecommendationPolicy(
+        PolicyThresholds(min_effect=SimulationEngine.DEFAULT_MIN_EFFECT_THRESHOLD)
+    ).decide(estimate)
+    return _TargetedEffect(
+        regions=list(fit.target_regions),
+        effect=fit.target_ate,
+        ci_lower=fit.target_ci_lower,
+        ci_upper=fit.target_ci_upper,
+        cohort_rows=fit.target_n,
+        recommendation=recommendation.value,
+        recommendation_rationale=rationale,
+    )
+
+
+def _run_twin_simulation(
+    model_row: Dict[str, Any],
+    provider: Any,
+    frame: Any,
+    intervention_type: str,
+    brand_value: str,
+    regions: List[str],
+) -> Tuple[Any, Optional[_TargetedEffect]]:
+    """Hydrate the brand's twin model and generate the twins — the route's inline path —
+    then simulate them (:func:`_simulate_population`)."""
+    from uuid import UUID
+
+    from src.digital_twin import twin_persistence
+    from src.digital_twin.models.twin_models import Brand, TwinType
+    from src.digital_twin.twin_generator import TwinGenerator
+
+    generator = TwinGenerator(twin_type=TwinType.HCP, brand=Brand(brand_value))
+    if not twin_persistence.hydrate_generator(
+        generator, model_row.get("mlflow_model_uri"), model_row.get("mlflow_run_id")
+    ):
+        raise RuntimeError(
+            f"counterfactual_simulator: trained twin model {model_row.get('model_id')} for "
+            f"{brand_value}/hcp could not be loaded from the model registry."
+        )
+    population = generator.generate(n=_COUNTERFACTUAL_TWIN_COUNT)
+    return _simulate_population(
+        population,
+        provider=provider,
+        frame=frame,
+        intervention_type=intervention_type,
+        regions=regions,
+        model_id=UUID(str(model_row["model_id"])),
+    )
+
+
+def _simulate_population(
+    population: Any,
+    *,
+    provider: Any,
+    frame: Any,
+    intervention_type: str,
+    regions: List[str],
+    model_id: Any,
+) -> Tuple[Any, Optional[_TargetedEffect]]:
+    """Run the engine on a twin population and, for a targeted request that completed, the
+    inference on the targeted regions."""
+    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+    from src.digital_twin.models.simulation_models import InterventionConfig, PopulationFilter
+    from src.digital_twin.simulation_engine import SimulationEngine
+
+    engine = SimulationEngine(
+        population=population,
+        effect_provider=provider,
+        effect_estimator=CohortCausalEstimator(),
+    )
+    # Pin the model id the way the route does (the engine derives it from the population).
+    engine.model_id = model_id
+    result = engine.simulate(
+        intervention_config=InterventionConfig(
+            intervention_type=intervention_type, target_regions=regions
+        ),
+        population_filter=PopulationFilter(regions=regions) if regions else None,
+        use_cache=False,
+    )
+    if not regions or getattr(result.status, "value", result.status) != "completed":
+        return result, None
+    return result, _targeted_effect(frame, regions)
+
+
+def _simulation_results(
+    result: Any,
+    *,
+    brand: str,
+    intervention_type: str,
+    frame: Any,
+    targeted: Optional[_TargetedEffect],
+) -> SimulationResults:
+    """Report one engine ``SimulationResult`` (plus the targeted inference, when the request
+    targeted regions) as the tool output, or refuse a failed run.
+
+    ``frame`` is the provider's ``TrainingFrame`` for this intervention; the contrast it
+    describes is stated in ``assumptions`` so the effect cannot be read as anything else.
+    Region effects are reported only for regions the cohort covers: the estimator gives a
+    twin in an uncovered region the cohort ATE, which is not that region's effect.
+    """
+    from src.digital_twin.effect.recommendation import experiment_size
+
+    if getattr(result.status, "value", result.status) != "completed":
+        raise ToolRefusalError(
+            f"counterfactual_simulator: the twin simulation for {intervention_type!r} on "
+            f"{brand!r} did not complete: {result.error_message}. No effect is returned."
+        )
+
+    modifier = frame.effect_modifiers[0] if frame.effect_modifiers else "region"
+    covered = set(frame.df[modifier].astype(str)) if modifier in frame.df.columns else set()
+    region_effects = {
+        region: float(stats["ate"])
+        for region, stats in result.effect_heterogeneity.by_region.items()
+        if "ate" in stats and region in covered
+    }
+    target_regions = list(targeted.regions) if targeted is not None else []
+    if targeted is None:
+        scope = "cohort"
+        effect, ci_lower, ci_upper = (
+            float(result.simulated_ate),
+            float(result.simulated_ci_lower),
+            float(result.simulated_ci_upper),
+        )
+        recommendation = str(result.recommendation.value)
+        rationale = str(result.recommendation_rationale)
+        scope_note = (
+            "effect and its 95% interval are the engine's cohort-wide estimate, the numbers "
+            "/digital-twin/simulate returns for this request."
+        )
+    else:
+        scope = f"targeted regions {target_regions}"
+        effect, ci_lower, ci_upper = targeted.effect, targeted.ci_lower, targeted.ci_upper
+        recommendation = targeted.recommendation
+        rationale = targeted.recommendation_rationale
+        scope_note = (
+            f"effect and its 95% interval are the causal forest's average effect over the "
+            f"{targeted.cohort_rows} cohort rows in {target_regions}; cohort_effect and its "
+            "interval are the engine's cohort-wide estimate, which a region filter does not "
+            "change."
+        )
+    # The rule POST /digital-twin/simulate uses too (#2015): for an untargeted run this is the
+    # engine's own recommended_sample_size.
+    recommended_n, size_note = experiment_size(frame, effect, regions=target_regions)
+    assumptions = [
+        f"Effect of {intervention_type} = high vs low {frame.treatment_var} (split at the "
+        f"cohort median) on {frame.outcome_var}, estimated with a causal forest (DML) on "
+        f"{brand}'s per-HCP cohort, adjusting for {', '.join(frame.confounders)} with "
+        f"{', '.join(frame.effect_modifiers)} as the effect modifier.",
+        f"Data provenance: {result.data_provenance} — a synthetic-gold cohort, not "
+        "real-world data.",
+        scope_note,
+        f"region_effects are the per-region effects for the {result.twin_count} simulated "
+        "twins' regions that the cohort covers: point estimates without an interval.",
+        f"Recommendation policy (applied to effect): {rationale}",
+        size_note,
+    ]
     return SimulationResults(
-        predicted_lift=expected_effect * 0.85,  # Adjusted for real-world factors
-        confidence="medium",
-        uncertainty_range=[expected_effect * 0.6, expected_effect * 1.1],
+        intervention_type=intervention_type,
+        brand=brand,
+        target_regions=target_regions,
+        effect_scope=scope,
+        effect=effect,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        cohort_effect=float(result.simulated_ate),
+        cohort_ci_lower=float(result.simulated_ci_lower),
+        cohort_ci_upper=float(result.simulated_ci_upper),
+        region_effects=region_effects,
+        twin_count=int(result.twin_count),
+        recommendation=recommendation,
+        recommendation_rationale=rationale,
+        recommended_sample_size=recommended_n,
+        model_id=str(result.model_id),
+        data_provenance=str(result.data_provenance),
+        assumptions=assumptions,
     )
 
 

@@ -57,7 +57,7 @@ BEGIN
       ]
     },
     "output_schema": {
-      "description": "Output from CATE analysis.\n\n``segments`` and ``effect_by_segment`` carry ONLY the segments whose CATE was\nactually measured — every value in them is a finite float (#1610). A segment\nthat could not produce one moves to ``excluded_segments`` instead of entering\nthe numeric results as ``NaN``: a ``NaN`` there is not JSON-compliant for a\nstrict consumer (``json.dumps(allow_nan=False)`` raises) and renders as a\nplausible-looking blank in synthesis. Same reasoning as ``GapAnalysis``'s\nfinite ``entity_values`` (#1599).\n\nEach ``excluded_segments`` entry is ``{\"name\", \"n\", \"reason\", \"detail\"}``.\n``reason`` is one of the ``_CATE_EXCLUDED_*`` codes (stable, for consumers to\nbranch on), ``detail`` is the prose for synthesis to disclose, and ``name`` is\n``None`` for the null-key group — the rows whose segment value is missing name\nno segment, so there is no honest label to give them.",
+      "description": "Output from CATE analysis.\n\n``segments`` and ``effect_by_segment`` carry ONLY the segments whose CATE was\nactually measured — every value in them is a finite float (#1610). A segment\nthat could not produce one moves to ``excluded_segments`` instead of entering\nthe numeric results as ``NaN``: a ``NaN`` there is not JSON-compliant for a\nstrict consumer (``json.dumps(allow_nan=False)`` raises) and renders as a\nplausible-looking blank in synthesis. Same reasoning as ``GapAnalysis``'s\nfinite ``entity_values`` (#1599).\n\nEach ``excluded_segments`` entry is ``{\"name\", \"n\", \"reason\", \"detail\"}``.\n``reason`` is one of the ``_CATE_EXCLUDED_*`` codes (stable, for consumers to\nbranch on), ``detail`` is the prose for synthesis to disclose, and ``name`` is\n``None`` for the null-key group — the rows whose segment value is missing name\nno segment, so there is no honest label to give them.\n\nA ``segments`` entry's ``n`` is the number of rows its CATE is computed from:\nrows in either arm with a non-null ``outcome`` (#2016). When a segment that IS\nestimated leaves rows out (a null treatment or outcome), those rows get an\n``excluded_segments`` entry with reason ``rows_missing_treatment_or_outcome``\nand the same ``name``. That code alone does not mean the segment was dropped.",
       "properties": {
         "segments": {
           "items": {
@@ -221,55 +221,142 @@ BEGIN
   },
   {
     "name": "counterfactual_simulator",
-    "description": "Simulate intervention outcomes using the causal model",
+    "description": "Simulate a commercial intervention for a brand with the digital-twin engine (the engine behind /digital-twin/simulate): a causal-forest estimate of the intervention's effect on HCP conversion_rate in the brand's synthetic-gold per-HCP cohort, with its 95% interval, per-region effects and a DEPLOY / REFINE / SKIP recommendation. Estimates the effect itself, so it takes no upstream effect and needs no prior step unless target_entities come from one.",
     "input_schema": {
       "type": "object",
       "properties": {
         "intervention": {
           "type": "string",
-          "description": "Intervention to simulate"
+          "description": "One of: email_campaign, call_frequency_increase, speaker_program_invitation, sample_distribution, peer_influence_activation, digital_engagement, patient_support_program, rep_training_quality"
+        },
+        "brand": {
+          "type": "string",
+          "description": "Remibrutinib, Fabhalta or Kisqali (use $context.brand when set)"
         },
         "target_entities": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Entities to apply intervention to"
-        },
-        "expected_effect": {
-          "type": "number",
-          "description": "Expected effect from prior analysis"
+          "description": "Optional regions to simulate on: northeast, south, midwest, west. Effects vary only by region in the twin model, so other entity kinds are refused."
         }
       },
       "required": [
         "intervention",
-        "target_entities",
-        "expected_effect"
+        "brand"
       ]
     },
     "output_schema": {
-      "description": "Output from counterfactual simulation",
+      "description": "Output from ``counterfactual_simulator``: one digital-twin simulation (#2015).\n\n``effect`` / ``ci_lower`` / ``ci_upper`` answer the question asked, on ``effect_scope``:\nthe cohort when no regions are targeted, else the targeted regions (the causal forest's\naverage effect over the cohort rows in them, with its 95% interval over those rows).\n``cohort_effect`` / ``cohort_ci_*`` are always the engine's cohort-wide numbers — the\nones ``/digital-twin/simulate`` returns, which a region filter does not change\n(measured). ``region_effects`` are per-region effects for the simulated twins' regions\nthat the cohort covers: point estimates. ``recommendation`` / ``recommendation_rationale``\napply the engine's CI-based DEPLOY / REFINE / SKIP policy to the headline effect.\n``recommended_sample_size`` is the per-arm n of a two-sided, equal-allocation experiment\npowered to detect the headline effect on the continuous outcome, sized from the outcome's\nspread in the cohort's comparison arm (``src.digital_twin.effect.recommendation.experiment_size``,\nthe rule the Digital Twin page uses); ``None`` when that\ncannot be measured, with the reason in ``assumptions``.",
       "properties": {
-        "predicted_lift": {
-          "title": "Predicted Lift",
-          "type": "number"
-        },
-        "confidence": {
-          "title": "Confidence",
+        "intervention_type": {
+          "title": "Intervention Type",
           "type": "string"
         },
-        "uncertainty_range": {
+        "brand": {
+          "title": "Brand",
+          "type": "string"
+        },
+        "target_regions": {
           "items": {
+            "type": "string"
+          },
+          "title": "Target Regions",
+          "type": "array"
+        },
+        "effect_scope": {
+          "title": "Effect Scope",
+          "type": "string"
+        },
+        "effect": {
+          "title": "Effect",
+          "type": "number"
+        },
+        "ci_lower": {
+          "title": "Ci Lower",
+          "type": "number"
+        },
+        "ci_upper": {
+          "title": "Ci Upper",
+          "type": "number"
+        },
+        "cohort_effect": {
+          "title": "Cohort Effect",
+          "type": "number"
+        },
+        "cohort_ci_lower": {
+          "title": "Cohort Ci Lower",
+          "type": "number"
+        },
+        "cohort_ci_upper": {
+          "title": "Cohort Ci Upper",
+          "type": "number"
+        },
+        "region_effects": {
+          "additionalProperties": {
             "type": "number"
           },
-          "title": "Uncertainty Range",
+          "title": "Region Effects",
+          "type": "object"
+        },
+        "twin_count": {
+          "title": "Twin Count",
+          "type": "integer"
+        },
+        "recommendation": {
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "recommendation_rationale": {
+          "title": "Recommendation Rationale",
+          "type": "string"
+        },
+        "recommended_sample_size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recommended Sample Size"
+        },
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "data_provenance": {
+          "title": "Data Provenance",
+          "type": "string"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
           "type": "array"
         }
       },
       "required": [
-        "predicted_lift",
-        "confidence",
-        "uncertainty_range"
+        "intervention_type",
+        "brand",
+        "target_regions",
+        "effect_scope",
+        "effect",
+        "ci_lower",
+        "ci_upper",
+        "cohort_effect",
+        "cohort_ci_lower",
+        "cohort_ci_upper",
+        "region_effects",
+        "twin_count",
+        "recommendation",
+        "recommendation_rationale",
+        "recommended_sample_size",
+        "model_id",
+        "data_provenance",
+        "assumptions"
       ],
       "title": "SimulationResults",
       "type": "object"
@@ -749,23 +836,49 @@ BEGIN
   },
   {
     "name": "power_calculator",
-    "description": "Calculate required sample size for statistical power in A/B tests",
+    "description": "Required sample size (per arm and total) for a two-arm experiment with equal allocation, from the shared power-analysis library. Designs: continuous outcome (two-sample t-test), binary outcome (two-proportion z-test, needs baseline_rate), time-to-event (log-rank, needs event_rate), and cluster-randomised continuous (needs icc and cluster_size).",
     "input_schema": {
       "type": "object",
       "properties": {
         "effect_size": {
           "type": "number",
-          "description": "Expected effect size"
+          "description": "Effect to detect, non-zero: Cohen's d (standardised mean difference) for a continuous or cluster design; relative change vs baseline_rate for a binary design (0.10 = +10%); hazard ratio for time_to_event (not 1.0). An ATE in outcome units is NOT a Cohen's d."
         },
         "alpha": {
           "type": "number",
-          "description": "Significance level",
+          "description": "Two-sided significance level in (0, 1)",
           "default": 0.05
         },
         "power": {
           "type": "number",
-          "description": "Desired power",
+          "description": "Target power in (0, 1)",
           "default": 0.8
+        },
+        "outcome_type": {
+          "type": "string",
+          "description": "continuous, binary or time_to_event",
+          "default": "continuous"
+        },
+        "design": {
+          "type": "string",
+          "description": "individual or cluster (cluster supports a continuous outcome only)",
+          "default": "individual"
+        },
+        "baseline_rate": {
+          "type": "number",
+          "description": "Control-arm proportion in (0, 1); required for, and only for, binary"
+        },
+        "event_rate": {
+          "type": "number",
+          "description": "Expected event rate in (0, 1]; required for, and only for, time_to_event"
+        },
+        "icc": {
+          "type": "number",
+          "description": "Intra-cluster correlation in [0, 1); required for, and only for, cluster"
+        },
+        "cluster_size": {
+          "type": "integer",
+          "description": "Average cluster size (>= 1); required for, and only for, cluster"
         }
       },
       "required": [
@@ -773,25 +886,74 @@ BEGIN
       ]
     },
     "output_schema": {
-      "description": "Output from power analysis",
+      "description": "Output from power analysis, computed by ``src/utils/power_analysis_lib`` (#2015).\n\n``required_n_per_arm`` and ``required_n_total`` are the library's own figures: two equal\narms, and for a cluster design whole clusters per arm (``design_details``), the same\nfigures the experiment-designer agent reports. ``alpha`` and ``power`` are the design targets\nthe sample size was solved for. ``minimum_detectable_effect`` is on\n``minimum_detectable_effect_scale``, which differs from the input ``effect_size`` for a\nbinary design (relative change in, absolute risk difference out — #1639).",
       "properties": {
-        "required_n": {
-          "title": "Required N",
+        "required_n_per_arm": {
+          "title": "Required N Per Arm",
           "type": "integer"
         },
-        "actual_power": {
-          "title": "Actual Power",
+        "required_n_total": {
+          "title": "Required N Total",
+          "type": "integer"
+        },
+        "alpha": {
+          "title": "Alpha",
           "type": "number"
         },
-        "detectable_effect": {
-          "title": "Detectable Effect",
+        "power": {
+          "title": "Power",
           "type": "number"
+        },
+        "effect_size": {
+          "title": "Effect Size",
+          "type": "number"
+        },
+        "outcome_type": {
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "design": {
+          "title": "Design",
+          "type": "string"
+        },
+        "analysis_type": {
+          "title": "Analysis Type",
+          "type": "string"
+        },
+        "minimum_detectable_effect": {
+          "title": "Minimum Detectable Effect",
+          "type": "number"
+        },
+        "minimum_detectable_effect_scale": {
+          "title": "Minimum Detectable Effect Scale",
+          "type": "string"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "design_details": {
+          "additionalProperties": true,
+          "title": "Design Details",
+          "type": "object"
         }
       },
       "required": [
-        "required_n",
-        "actual_power",
-        "detectable_effect"
+        "required_n_per_arm",
+        "required_n_total",
+        "alpha",
+        "power",
+        "effect_size",
+        "outcome_type",
+        "design",
+        "analysis_type",
+        "minimum_detectable_effect",
+        "minimum_detectable_effect_scale",
+        "assumptions",
+        "design_details"
       ],
       "title": "PowerAnalysis",
       "type": "object"
@@ -1602,14 +1764,14 @@ $tool_registry_sync$::jsonb)
   {
     "consumer": "counterfactual_simulator",
     "producer": "cate_analyzer",
-    "output_field": "high_responders",
-    "input_field": "target_entities"
+    "output_field": null,
+    "input_field": null
   },
   {
     "consumer": "counterfactual_simulator",
     "producer": "causal_effect_estimator",
-    "output_field": "ate",
-    "input_field": "expected_effect"
+    "output_field": null,
+    "input_field": null
   },
   {
     "consumer": "counterfactual_simulator",
@@ -1626,8 +1788,8 @@ $tool_registry_sync$::jsonb)
   {
     "consumer": "power_calculator",
     "producer": "causal_effect_estimator",
-    "output_field": "ate",
-    "input_field": "effect_size"
+    "output_field": null,
+    "input_field": null
   },
   {
     "consumer": "rank_drivers",

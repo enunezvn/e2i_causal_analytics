@@ -32,6 +32,7 @@ from src.digital_twin.effect import (
     RecommendationPolicy,
     SyntheticEffectDataProvider,
     TwinEffectEstimator,
+    experiment_size,
 )
 
 from .models.simulation_models import (
@@ -230,11 +231,15 @@ class SimulationEngine:
         if calculate_heterogeneity:
             heterogeneity = self._calculate_heterogeneity(twins, treatment_effects)
 
-        # Generate recommendation from the CI-based policy
-        baseline_rate = float(np.mean([t.baseline_propensity for t in twins]))
-        rec, rationale, recommended_n = RecommendationPolicy(
-            PolicyThresholds(min_effect=self.min_effect_threshold)
-        ).decide(estimate, baseline_rate=baseline_rate)
+        # Generate recommendation from the CI-based policy. The experiment is sized by the
+        # rule the chat simulator shares (#2015): the outcome's comparison-arm spread in the
+        # effect provider's frame, never the twins' propensity. No size -> None, and the
+        # reason joins the rationale the page shows.
+        policy = PolicyThresholds(min_effect=self.min_effect_threshold)
+        rec, rationale = RecommendationPolicy(policy).decide(estimate)
+        recommended_n, size_note = experiment_size(frame, ate, thresholds=policy)
+        if recommended_n is None:
+            rationale = f"{rationale} {size_note}"
         recommendation = SimulationRecommendation(rec.value)
 
         # Check fidelity warnings

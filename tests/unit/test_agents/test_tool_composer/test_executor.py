@@ -1394,16 +1394,19 @@ class TestReferenceContract1573:
             "conversion_rate": None,
         }
 
-    def test_counterfactual_simulator_declines_none_expected_effect(self):
-        """(e): stated-reason decline instead of ``NoneType * float`` TypeError."""
+    @pytest.mark.asyncio
+    async def test_counterfactual_simulator_declines_a_none_input(self):
+        """(e): stated-reason decline instead of a bare TypeError. #2015 replaced the
+        ``expected_effect`` input (the engine estimates the effect itself); a ``None``
+        intervention is the same unresolved-upstream shape."""
         from src.agents.tool_composer import tool_registrations as tr
         from src.agents.tool_composer.errors import ToolInputError
 
-        with pytest.raises(ToolInputError, match="expected_effect"):
-            tr.counterfactual_simulator(
-                intervention="increase rep visits",
+        with pytest.raises(ToolInputError, match="intervention is None"):
+            await tr.counterfactual_simulator(
+                intervention=None,
+                brand="Kisqali",
                 target_entities=["west"],
-                expected_effect=None,
             )
 
     @pytest.mark.asyncio
@@ -1417,9 +1420,9 @@ class TestReferenceContract1573:
 
         calls = {"n": 0}
 
-        def counting_simulator(**kwargs):
+        async def counting_simulator(**kwargs):
             calls["n"] += 1
-            return tr.counterfactual_simulator(**kwargs)
+            return await tr.counterfactual_simulator(**kwargs)
 
         mock_tool_registry.clear()
         schema = ToolSchema(
@@ -1437,22 +1440,22 @@ class TestReferenceContract1573:
             tool_name="counterfactual_simulator",
             source_agent="experiment_designer",
             input_mapping={
-                "intervention": "increase rep visits",
+                "intervention": "$context.intervention",
+                "brand": "Kisqali",
                 "target_entities": ["west"],
-                "expected_effect": "$context.expected_effect",
             },
             depends_on_steps=[],
         )
         executor = PlanExecutor(tool_registry=mock_tool_registry, max_retries=2)
         trace = await executor.execute(
             self._single_step_plan(sample_decomposition, step),
-            context={"expected_effect": None},
+            context={"intervention": None},
         )
 
         assert calls["n"] == 1, "deterministic None rejection must not be retried"
         result = trace.step_results[0]
         assert result.status == ExecutionStatus.FAILED
-        assert "expected_effect" in (result.output.error or "")
+        assert "intervention is None" in (result.output.error or "")
 
 
 class TestToolFailureStatsG8:

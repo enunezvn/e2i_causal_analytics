@@ -265,12 +265,21 @@ DEPENDENCY_FIELD_MAPPINGS: dict[tuple[str, str], tuple[Optional[str], Optional[s
     ("cate_analyzer", "causal_effect_estimator"): (None, None),
     ("segment_ranker", "cate_analyzer"): (None, "cate_results"),
     ("roi_estimator", "gap_calculator"): (None, "gap_analysis"),
-    ("power_calculator", "causal_effect_estimator"): ("ate", "effect_size"),
+    # Ordering only (#2015): the estimate's ``ate`` is in OUTCOME units, while
+    # ``effect_size`` is a Cohen's d, a relative change or a hazard ratio depending on the
+    # design, so passing it through would size the study for the wrong effect.
+    ("power_calculator", "causal_effect_estimator"): (None, None),
     # No direct field: effect_by_segment is a per-segment dict and effect_size one number,
     # so the planner has to pick the segment's effect.
     ("power_calculator", "cate_analyzer"): (None, None),
-    ("counterfactual_simulator", "causal_effect_estimator"): ("ate", "expected_effect"),
-    ("counterfactual_simulator", "cate_analyzer"): ("high_responders", "target_entities"),
+    # Ordering only (#2015): the twin engine estimates its own effect from the brand's
+    # cohort, so no field of the estimate is a simulator input. The pair is kept, like the
+    # #2003 pairs that cannot carry a value, so its seeded DB row is synced rather than left
+    # naming the removed expected_effect input.
+    ("counterfactual_simulator", "causal_effect_estimator"): (None, None),
+    # Ordering only (#2015): high_responders are values of whatever column CATE segmented
+    # by, and the simulator takes region names only, so the planner passes the regions.
+    ("counterfactual_simulator", "cate_analyzer"): (None, None),
     # No direct field: bottom_performer is one entity name and target_entities a list,
     # so the planner has to build the list.
     ("counterfactual_simulator", "gap_calculator"): (None, None),
