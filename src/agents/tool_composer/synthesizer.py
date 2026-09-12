@@ -60,7 +60,8 @@ logger = logging.getLogger(__name__)
 # the user-visible answer (#1574 / #1599 / #1610 all bound their reasons against
 # it), so its SUCCESS output getting 1,000 was the incoherent half. With the
 # decomposer's ``max_sub_questions=6`` ceiling the whole results block is bounded
-# at 6 x 2,000 chars.
+# at 6 x 2,000 chars. The budget covers the WHOLE rendered string -- body plus
+# the trailing summary line -- since that is what costs prompt budget.
 SYNTHESIS_OUTPUT_BUDGET_CHARS = 2000
 
 # Longest string measured in a real tool output is 269 chars (the
@@ -180,14 +181,28 @@ def project_tool_output(result: Dict[str, Any], budget: int = SYNTHESIS_OUTPUT_B
     An output that already fits is returned byte-identically to the pre-#2019
     dump, so nothing changes for the tools that were never truncated.
 
-    ``budget`` bounds the CONTAINER content. Scalar fields are never dropped --
-    dropping a field to hit a byte target is the defect this replaces -- so an
-    output that is all prose can still exceed it; the scalar skeleton of every
-    registered tool measures 55-598 chars, so no tool here can.
+    ``budget`` bounds the WHOLE returned string -- JSON body plus the trailing
+    summary line -- because the whole string is what costs synthesis prompt
+    budget. The footer is sized first and its cost is deducted before any
+    container is filled, so ``len(project_tool_output(x, n)) <= n``.
+
+    The ONE exception is deliberate: scalar fields are never dropped, because
+    dropping a field to hit a byte target is the defect this replaces. An output
+    that is all prose can therefore still exceed the budget; the scalar skeleton
+    of every registered tool measures 55-598 chars, so no tool here can.
     """
     full = _render_json(result)
     if len(full) <= budget:
         return full
+
+    # Size the footer up front and charge it to the budget, so the caller's cap
+    # covers what the LLM actually receives rather than only the JSON body.
+    footer = (
+        f"\n(structured summary of a {len(full)}-char tool output: every scalar field is "
+        f"kept in full, longer lists and dicts are trimmed from the tail and each trim is "
+        f"marked '{_OMISSION_PREFIX}' with its count)"
+    )
+    budget = max(budget - len(footer), 0)
 
     containers = {k: v for k, v in result.items() if _is_container(v)}
     counts: Dict[str, int] = dict.fromkeys(containers, 0)
@@ -243,11 +258,7 @@ def project_tool_output(result: Dict[str, Any], budget: int = SYNTHESIS_OUTPUT_B
     fill(disclosure_keys + plain_keys, budget)
 
     projected = _build_projection(result, containers, counts, limits)
-    return _render_json(projected) + (
-        f"\n(structured summary of a {len(full)}-char tool output: every scalar field is "
-        f"kept in full, longer lists and dicts are trimmed from the tail and each trim is "
-        f"marked '{_OMISSION_PREFIX}' with its count)"
-    )
+    return _render_json(projected) + footer
 
 
 # ============================================================================

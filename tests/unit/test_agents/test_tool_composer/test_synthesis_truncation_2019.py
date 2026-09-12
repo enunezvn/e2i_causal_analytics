@@ -75,6 +75,7 @@ from src.agents.tool_composer.models.composition_models import (
 from src.agents.tool_composer.synthesizer import (
     SYNTHESIS_OUTPUT_BUDGET_CHARS,
     ResponseSynthesizer,
+    project_tool_output,
 )
 
 # ---------------------------------------------------------------------------
@@ -338,6 +339,10 @@ def test_each_tool_output_stays_within_the_budget(mock_llm_client):
     ``_MAX_FAILURE_REASON_CHARS`` carry limit (2,000) — a tool's FAILURE reason
     already gets 2,000 characters carried into the user-visible answer, so its
     SUCCESS output getting less was the incoherent part.
+
+    Asserted on the WHOLE rendered string, body AND trailing summary line: the
+    whole string is what costs prompt budget, so accounting that excluded the
+    footer would let the real cost drift ~180 chars past the cap per tool.
     """
     for name, out in (
         ("risk_scorer", _risk_output(1200)),
@@ -345,11 +350,36 @@ def test_each_tool_output_stays_within_the_budget(mock_llm_client):
         ("cohort_builder", _cohort_output(800)),
         ("gap_calculator", _gap_output(150)),
     ):
-        block = _rendered_output_block(_prompt_for({name: out}, mock_llm_client))
-        payload = block.split("\n(structured summary", 1)[0].strip()
-        assert len(payload) <= SYNTHESIS_OUTPUT_BUDGET_CHARS, (
-            f"{name} rendered {len(payload)} chars, over the {SYNTHESIS_OUTPUT_BUDGET_CHARS} budget"
+        rendered = project_tool_output(out)
+        assert "structured summary" in rendered, f"{name} was expected to be projected"
+        assert len(rendered) <= SYNTHESIS_OUTPUT_BUDGET_CHARS, (
+            f"{name} rendered {len(rendered)} chars TOTAL, over the "
+            f"{SYNTHESIS_OUTPUT_BUDGET_CHARS} budget"
         )
+        # ...and that exact string is what lands in the prompt.
+        block = _rendered_output_block(_prompt_for({name: out}, mock_llm_client))
+        assert block.strip() == rendered.strip()
+
+
+def test_the_budget_covers_the_footer_not_just_the_json_body():
+    """Regression pin: the budget is accounted on the TOTAL string.
+
+    The first cut of this fix enforced the cap on the JSON body only and then
+    appended the ~180-char summary line on top, so an output reported as "within
+    budget" actually handed the model 2,181 chars against a 2,000 cap. The footer
+    is now sized first and charged to the budget.
+    """
+    out = _gap_output(150)
+    rendered = project_tool_output(out)
+    body, sep, tail = rendered.partition("\n(structured summary")
+    assert sep, "expected the summary footer"
+    footer_len = len(sep + tail)
+    assert footer_len > 100, "footer is big enough that ignoring it would matter"
+    assert len(body) + footer_len == len(rendered) <= SYNTHESIS_OUTPUT_BUDGET_CHARS
+
+    # An explicitly passed budget is honoured on the total too, not just default.
+    for budget in (600, 1000, 2000, 4000):
+        assert len(project_tool_output(out, budget)) <= budget, f"budget={budget}"
 
 
 def test_whole_prompt_is_bounded_by_steps_times_budget(mock_llm_client):
