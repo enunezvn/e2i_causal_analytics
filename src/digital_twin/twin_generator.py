@@ -258,29 +258,29 @@ class TwinGenerator:
 
         logger.info(f"Generating {n} {self.twin_type.value} twins")
 
-        twins = []
-        features_list = []
+        # Draw every twin's features first, one np.random draw sequence in the
+        # same order as before, so a seeded population is unchanged (#2048).
+        features_list = [self._generate_features(constraints) for _ in range(n)]
+        feature_rows = [self._features_to_array(features) for features in features_list]
 
-        for _ in range(n):
-            # Generate features
-            features = self._generate_features(constraints)
-            features_list.append(features)
+        # One batched predict for the whole population instead of one per twin:
+        # the per-twin call was 23.4s of a 33.8s e2e test at n=500 (#2048).
+        if feature_rows:
+            baseline_outcomes = self.model.predict(np.vstack(feature_rows))
+        else:
+            baseline_outcomes = np.empty(0)
 
-            # Predict baseline outcome
-            X = self._features_to_array(features)
-            baseline_outcome = float(self.model.predict(X.reshape(1, -1))[0])
-
-            # Calculate propensity (simplified)
-            propensity = self._calculate_propensity(features)
-
-            twin = DigitalTwin(
+        twins = [
+            DigitalTwin(
                 twin_type=self.twin_type,
                 brand=self.brand,
                 features=features,
-                baseline_outcome=baseline_outcome,
-                baseline_propensity=propensity,
+                baseline_outcome=float(baseline_outcome),
+                # Calculate propensity (simplified)
+                baseline_propensity=self._calculate_propensity(features),
             )
-            twins.append(twin)
+            for features, baseline_outcome in zip(features_list, baseline_outcomes, strict=True)
+        ]
 
         # Calculate feature summary
         feature_summary = self._calculate_feature_summary(features_list)

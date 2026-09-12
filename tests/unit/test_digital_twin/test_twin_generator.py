@@ -793,3 +793,125 @@ class TestDataLeakagePrevention:
 
         # Should not be identical
         assert propensities1 != propensities2
+
+
+# =============================================================================
+# BATCHED PREDICTION TESTS (#2048)
+# =============================================================================
+
+
+class TestGenerateBatchesPrediction:
+    """generate() must call the fitted estimator once, not once per twin (#2048).
+
+    The per-twin ``self.model.predict(X.reshape(1, -1))`` dominated the digital
+    twin e2e suite: a 500-twin population spent 23.4s of a 33.8s test inside
+    sklearn call overhead, while one batched predict of the same 500 rows costs
+    0.064s. These tests pin the invariant (one call) and the properties the
+    batching must not break (equivalence, determinism, the n edge cases).
+    """
+
+    def test_generate_calls_predict_once_for_many_twins(self, hcp_generator, hcp_training_data):
+        """One batched predict per generate(), not one per twin (#2048).
+
+        Asserts the invariant rather than the wall clock: a duration assertion
+        is flaky on a contended runner, the call count is not.
+        """
+        hcp_generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        calls = []
+        real_predict = hcp_generator.model.predict
+
+        def counting_predict(X, *args, **kwargs):
+            calls.append(np.asarray(X).shape)
+            return real_predict(X, *args, **kwargs)
+
+        hcp_generator.model.predict = counting_predict
+
+        population = hcp_generator.generate(n=25, seed=7)
+
+        assert len(population) == 25
+        assert len(calls) == 1, f"expected 1 batched predict, got {len(calls)} calls: {calls}"
+        assert calls[0] == (25, len(hcp_generator.feature_columns))
+
+    def test_batched_outcomes_match_per_row_prediction(self, hcp_generator, hcp_training_data):
+        """Batched baseline_outcome equals the per-row prediction (#2048).
+
+        Float summation order makes the batched result differ from the per-row
+        result by ~1e-17, so this is np.allclose(atol=1e-12) and never exact
+        equality. The expectation is recomputed from the model here rather than
+        pinned as magic numbers.
+        """
+        hcp_generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        population = hcp_generator.generate(n=40, seed=42)
+
+        batched = np.array([t.baseline_outcome for t in population.twins])
+        per_row = np.array(
+            [
+                float(
+                    hcp_generator.model.predict(
+                        hcp_generator._features_to_array(t.features).reshape(1, -1)
+                    )[0]
+                )
+                for t in population.twins
+            ]
+        )
+
+        assert batched.shape == per_row.shape
+        assert np.allclose(batched, per_row, atol=1e-12), (
+            f"max abs diff {np.max(np.abs(batched - per_row))}"
+        )
+
+    def test_generate_is_deterministic_under_seed(self, hcp_generator, hcp_training_data):
+        """A seeded population is unchanged by the batching (#2048).
+
+        The real risk of the change: _generate_features consumes np.random, so
+        the feature loop must still run n times in the same order before any
+        predict. The features are therefore asserted EXACTLY equal.
+
+        The outcomes are asserted to 1e-12, not exactly: the model is built with
+        ``n_jobs=-1``, and the parallel per-tree accumulation order in
+        RandomForestRegressor.predict varies between identical calls. Measured on
+        the pre-change code, one unchanging row predicted 300 times returned 9
+        distinct values spanning 7.6e-17, so an exact-equality assertion here is
+        a false red against production code that nobody has touched.
+        """
+        hcp_generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        pop1 = hcp_generator.generate(n=200, seed=42)
+        pop2 = hcp_generator.generate(n=200, seed=42)
+
+        features1 = [t.features for t in pop1.twins]
+        features2 = [t.features for t in pop2.twins]
+        assert features1 == features2
+
+        outcomes1 = np.array([t.baseline_outcome for t in pop1.twins])
+        outcomes2 = np.array([t.baseline_outcome for t in pop2.twins])
+        assert np.allclose(outcomes1, outcomes2, atol=1e-12), (
+            f"max abs diff {np.max(np.abs(outcomes1 - outcomes2))}"
+        )
+
+    def test_generate_single_twin(self, hcp_generator, hcp_training_data):
+        """n=1 still produces one twin with a real outcome (#2048)."""
+        hcp_generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        population = hcp_generator.generate(n=1, seed=3)
+
+        assert len(population) == 1
+        assert population.size == 1
+        assert isinstance(population.twins[0].baseline_outcome, float)
+
+    def test_generate_zero_twins_preserves_contract(self, hcp_generator, hcp_training_data):
+        """n=0 keeps today's contract: an empty population, not a raise (#2048).
+
+        Measured on the pre-change code: generate(n=0) returns a TwinPopulation
+        with size 0 and an empty feature_summary. The batched predict must be
+        guarded against the empty matrix rather than changing this.
+        """
+        hcp_generator.train(data=hcp_training_data, target_col="prescribing_change")
+
+        population = hcp_generator.generate(n=0)
+
+        assert len(population) == 0
+        assert population.size == 0
+        assert population.feature_summary == {}
