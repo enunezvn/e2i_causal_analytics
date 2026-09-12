@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from src.repositories.base import BaseRepository
 
 from .models.simulation_models import (
+    EstimateScope,
     FidelityGrade,
     FidelityRecord,
     SimulationResult,
@@ -345,6 +346,38 @@ class TwinModelRepository(BaseRepository):
         return None
 
 
+class StoredEstimateScope(BaseModel):
+    """What a stored simulation's effect was estimated ON (#2053, migration 042)."""
+
+    scope: EstimateScope
+    target_regions: List[str] = Field(default_factory=list)
+    cohort_ate: Optional[float] = None
+    cohort_ci_lower: Optional[float] = None
+    cohort_ci_upper: Optional[float] = None
+
+    @classmethod
+    def from_row(cls, row: Dict[str, Any]) -> "StoredEstimateScope":
+        """Read the scope ``save_simulation`` recorded on a twin_simulations row.
+
+        ``effect_scope_regions`` NULL, or absent before migration 042, is UNKNOWN — never
+        cohort-wide, and never taken from ``population_filters.regions``: a pre-#2023 row
+        carries the same regions filter over a cohort-wide ATE. An empty array is the whole
+        cohort. The cohort-wide comparator is reported only for a region-scoped estimate.
+        """
+        regions = row.get("effect_scope_regions")
+        if regions is None:
+            return cls(scope=EstimateScope.UNKNOWN)
+        if not regions:
+            return cls(scope=EstimateScope.COHORT)
+        return cls(
+            scope=EstimateScope.REGIONS,
+            target_regions=[str(r) for r in regions],
+            cohort_ate=row.get("cohort_ate"),
+            cohort_ci_lower=row.get("cohort_ci_lower"),
+            cohort_ci_upper=row.get("cohort_ci_upper"),
+        )
+
+
 class SimulationRepository(BaseRepository):
     """
     Repository for twin_simulations table.
@@ -405,6 +438,13 @@ class SimulationRepository(BaseRepository):
             # honest source label R1 surfaced on the live POST (#705 H5b,
             # migration 030 adds the column).
             "data_provenance": result.data_provenance,
+            # What the ATE above was estimated ON (#2053, migration 042). A cohort-wide run
+            # writes [] and never None: NULL is reserved for rows written before the scope was
+            # recorded, which read back as unknown (StoredEstimateScope.from_row).
+            "effect_scope_regions": list(result.target_regions),
+            "cohort_ate": result.cohort_ate,
+            "cohort_ci_lower": result.cohort_ci_lower,
+            "cohort_ci_upper": result.cohort_ci_upper,
             "brand": brand,
             "created_at": result.created_at.isoformat() if result.created_at else None,
             "completed_at": result.completed_at.isoformat() if result.completed_at else None,

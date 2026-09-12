@@ -17,6 +17,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DigitalTwin from './DigitalTwin';
 import {
+  EstimateScope,
   InterventionType,
   RecommendationType,
   Recommendation,
@@ -527,6 +528,137 @@ describe('DigitalTwin', () => {
     // The cohort-wide effect is reported alongside, not replaced.
     expect(screen.getAllByText(/cohort-wide.*0\.135/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Cohort-wide effect \(all regions\).*0\.092.*0\.178/i)).toBeInTheDocument();
+  });
+
+  // #2053 — the backend states what the headline effect was estimated ON. A stored
+  // simulation written before that was recorded is 'unknown', and must not read as
+  // cohort-wide just because it carries no regions.
+  async function openHistoryDetail(detail: SimulationDetailResponse) {
+    (useSimulation as ReturnType<typeof vi.fn>).mockImplementation((id: string) => ({
+      data: id ? detail : undefined,
+      isLoading: false,
+      isError: false,
+    }));
+    const user = userEvent.setup();
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /History/i }));
+    });
+    const matches = await screen.findAllByText(/Email Campaign/i);
+    const row = matches.find((el) => el.tagName === 'P') ?? matches[matches.length - 1];
+    await act(async () => {
+      await user.click(row);
+    });
+    await screen.findByText(/Historical detail rationale for sim-001/i);
+  }
+
+  it('labels a stored region-scoped simulation with its regions and the cohort-wide effect (#2053)', async () => {
+    await openHistoryDetail({
+      ...mockDetail,
+      estimate_scope: EstimateScope.REGIONS,
+      target_regions: ['midwest'],
+      population_filters: { regions: ['midwest'] },
+      cohort_effect: 0.1352,
+      cohort_ci_lower: 0.0924,
+      cohort_ci_upper: 0.1781,
+    });
+
+    expect(screen.getAllByText(/estimated on midwest/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ATE · midwest/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/cohort-wide.*0\.135/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/scope not recorded/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a cohort-wide result as a plain ATE with no scope note (#2053)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, estimate_scope: EstimateScope.COHORT, target_regions: [] },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('ATE')).toBeInTheDocument();
+    expect(screen.queryByText(/estimated on/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/scope not recorded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cohort-wide effect \(all regions\)/i)).not.toBeInTheDocument();
+  });
+
+  it('notes an unrecorded scope on a region-filtered stored simulation, naming its regions (#2053)', async () => {
+    // A pre-#2053 row filtered to northeast: whether its ATE is northeast's or the cohort's
+    // was never stored, so it may cover only northeast. It is labelled neither way.
+    await openHistoryDetail({
+      ...mockDetail,
+      estimate_scope: EstimateScope.UNKNOWN,
+      target_regions: [],
+      population_filters: { regions: ['northeast'] },
+    });
+
+    expect(
+      screen.getByText(/scope not recorded — this effect may cover only northeast/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/estimated on/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ATE · /)).not.toBeInTheDocument();
+  });
+
+  it('adds no note to an unknown-scope stored simulation that had no regions filter (#2053)', async () => {
+    await openHistoryDetail({
+      ...mockDetail,
+      estimate_scope: EstimateScope.UNKNOWN,
+      target_regions: [],
+      population_filters: { regions: [] },
+    });
+
+    expect(screen.queryByText(/scope not recorded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/estimated on/i)).not.toBeInTheDocument();
+    expect(screen.getByText('ATE')).toBeInTheDocument();
+  });
+
+  it('names a region-scoped history row and leaves unknown and cohort rows plain (#2053)', async () => {
+    // History rows carry no population filter, so an unknown row cannot tell whether it was
+    // region-filtered; only the detail view can, and only it notes the unrecorded scope.
+    (useSimulationHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        ...mockHistory,
+        simulations: [
+          {
+            ...mockHistory.simulations[0],
+            estimate_scope: EstimateScope.REGIONS,
+            target_regions: ['northeast'],
+          },
+          {
+            ...mockHistory.simulations[1],
+            estimate_scope: EstimateScope.UNKNOWN,
+            target_regions: [],
+          },
+          {
+            simulation_id: 'real-sim-003',
+            created_at: '2026-06-02T09:00:00Z',
+            intervention_type: InterventionType.SAMPLE_DISTRIBUTION,
+            brand: 'Kisqali',
+            ate_estimate: 0.04,
+            recommendation_type: RecommendationType.SKIP,
+            estimate_scope: EstimateScope.COHORT,
+            target_regions: [],
+          },
+        ],
+        total: 3,
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+    const user = userEvent.setup();
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /History/i }));
+    });
+
+    const rowOf = (ate: string) =>
+      screen.getByText((_, el) => el?.tagName === 'P' && !!el.textContent?.startsWith(`ATE: ${ate}`));
+    expect(rowOf('0.09').textContent).toMatch(/northeast/);
+    expect(rowOf('0.01').textContent).toBe('ATE: 0.01');
+    expect(rowOf('0.04').textContent).toBe('ATE: 0.04');
   });
 
   it('renders a Supporting Evidence list derived from the fixture values', async () => {
