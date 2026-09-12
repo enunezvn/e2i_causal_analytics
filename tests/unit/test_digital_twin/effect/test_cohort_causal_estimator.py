@@ -171,3 +171,60 @@ def test_control_outcome_sd_is_the_outcome_spread_of_the_low_intensity_rows():
 
     with pytest.raises(EffectDataUnavailable, match="atlantis"):
         control_outcome_sd(cohort, "engagement_score", regions=["atlantis"])
+
+
+def test_estimator_scoped_to_target_regions_reports_that_regions_effect():
+    """#2023: a region-filtered simulation must be ESTIMATED on those regions.
+
+    The engine seam scoped to target regions reports the targeted effect and its interval
+    as the headline estimate — the same numbers the chat ``counterfactual_simulator``
+    reports for the same regions — and carries the cohort-wide estimate it narrowed from
+    alongside, so nothing is lost.
+    """
+    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+    from src.digital_twin.effect.provider import CohortEffectDataProvider
+
+    cohort = _make_confounded_cohort(n_per_region=200)
+    frame = CohortEffectDataProvider(cohort).get_training_frame(
+        "digital_engagement", brand="Kisqali", twin_type="hcp"
+    )
+    twins = pd.DataFrame({"region": ["northeast"] * 50})
+
+    whole = CohortCausalEstimator().estimate(frame, twins)
+    scoped = CohortCausalEstimator(target_regions=["northeast"]).estimate(frame, twins)
+    reference = estimate_cohort_effect(cohort, "engagement_score", target_regions=["northeast"])
+
+    assert scoped.target_regions == ["northeast"]
+    assert scoped.ate == pytest.approx(reference.target_ate, abs=1e-9)
+    assert scoped.ate_ci_lower == pytest.approx(reference.target_ci_lower, abs=1e-9)
+    assert scoped.ate_ci_upper == pytest.approx(reference.target_ci_upper, abs=1e-9)
+    assert scoped.n_train == reference.target_n
+
+    # The cohort-wide estimate rides along rather than being replaced.
+    assert scoped.cohort_ate == pytest.approx(whole.ate, abs=1e-9)
+    assert scoped.cohort_ci_lower == pytest.approx(whole.ate_ci_lower, abs=1e-9)
+    assert scoped.cohort_ci_upper == pytest.approx(whole.ate_ci_upper, abs=1e-9)
+
+    # An unscoped estimate is unchanged: cohort-wide headline, nothing narrowed away.
+    assert whole.target_regions == []
+    assert whole.cohort_ate is None
+
+    # northeast's planted effect (0.45) is far above the cohort mean (~0.25). Reporting
+    # the cohort number for a northeast-filtered run is the #2023 defect.
+    assert abs(scoped.ate - whole.ate) > 0.05
+
+
+def test_estimator_refuses_a_target_region_the_cohort_cannot_estimate():
+    """#2023: a region the cohort cannot contrast is refused, as the chat tool refuses it —
+    never silently answered with the cohort-wide effect."""
+    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+    from src.digital_twin.effect.provider import CohortEffectDataProvider
+
+    cohort = _make_confounded_cohort(n_per_region=200)
+    frame = CohortEffectDataProvider(cohort).get_training_frame(
+        "digital_engagement", brand="Kisqali", twin_type="hcp"
+    )
+    twins = pd.DataFrame({"region": ["atlantis"] * 50})
+
+    with pytest.raises(EffectDataUnavailable, match="atlantis"):
+        CohortCausalEstimator(target_regions=["atlantis"]).estimate(frame, twins)

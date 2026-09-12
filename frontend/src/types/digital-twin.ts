@@ -342,6 +342,18 @@ export interface SimulationResponse {
   effect_direction: string;
   /** Creation timestamp */
   created_at: string;
+  /**
+   * Regions the effect above was estimated ON (#2023). Empty/absent = the whole cohort.
+   * When a region filter is applied, simulated_ate, its interval, the recommendation and
+   * recommended_sample_size all describe these regions.
+   */
+  target_regions?: string[];
+  /** The cohort-wide ATE the targeted estimate narrowed from; absent when not narrowed. */
+  cohort_effect?: number | null;
+  /** Lower bound of the cohort-wide interval, when narrowed. */
+  cohort_ci_lower?: number | null;
+  /** Upper bound of the cohort-wide interval, when narrowed. */
+  cohort_ci_upper?: number | null;
 }
 
 /**

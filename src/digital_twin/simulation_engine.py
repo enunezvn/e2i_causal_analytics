@@ -235,9 +235,14 @@ class SimulationEngine:
         # rule the chat simulator shares (#2015): the outcome's comparison-arm spread in the
         # effect provider's frame, never the twins' propensity. No size -> None, and the
         # reason joins the rationale the page shows.
+        # The size is scoped to whatever the estimate is scoped to (#2023): sizing a
+        # region-targeted effect on the whole cohort's spread would state a number for a
+        # different population than the effect it is powering for.
         policy = PolicyThresholds(min_effect=self.min_effect_threshold)
         rec, rationale = RecommendationPolicy(policy).decide(estimate)
-        recommended_n, size_note = experiment_size(frame, ate, thresholds=policy)
+        recommended_n, size_note = experiment_size(
+            frame, ate, regions=estimate.target_regions, thresholds=policy
+        )
         if recommended_n is None:
             rationale = f"{rationale} {size_note}"
         recommendation = SimulationRecommendation(rec.value)
@@ -266,6 +271,10 @@ class SimulationEngine:
             simulated_ci_lower=ci_lower,
             simulated_ci_upper=ci_upper,
             simulated_std_error=std_error,
+            target_regions=list(estimate.target_regions),
+            cohort_ate=estimate.cohort_ate,
+            cohort_ci_lower=estimate.cohort_ci_lower,
+            cohort_ci_upper=estimate.cohort_ci_upper,
             effect_heterogeneity=heterogeneity,
             recommendation=recommendation,
             recommendation_rationale=rationale,

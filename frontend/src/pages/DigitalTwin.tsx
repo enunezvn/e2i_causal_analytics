@@ -389,6 +389,20 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
   }
   evidence.push(`95% CI: [${fmt(simulation.simulated_ci_lower)}, ${fmt(simulation.simulated_ci_upper)}]`);
 
+  // Region scope (#2023). A region filter narrows the estimate itself, so the headline
+  // numbers above describe those regions, not the whole cohort. Say which, and keep the
+  // cohort-wide effect visible so neither number is lost.
+  const targetRegions = simulation.target_regions ?? [];
+  const scopedToRegions = targetRegions.length > 0;
+  if (scopedToRegions && simulation.cohort_effect != null) {
+    evidence.push(
+      `Cohort-wide effect (all regions): ${fmt(simulation.cohort_effect)}` +
+        (simulation.cohort_ci_lower != null && simulation.cohort_ci_upper != null
+          ? ` [${fmt(simulation.cohort_ci_lower)}, ${fmt(simulation.cohort_ci_upper)}]`
+          : '')
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Title — identifies WHAT this simulation is (intervention · brand), so an
@@ -466,12 +480,24 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
 
       {/* Core outcome metrics (exactly what the backend returns) */}
       <div>
-        <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Estimated Effect</h4>
+        <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">
+          Estimated Effect
+          {scopedToRegions && (
+            <span className="ml-2 font-normal text-[var(--color-text-tertiary)]">
+              · estimated on {targetRegions.join(', ')}
+            </span>
+          )}
+        </h4>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Metric
-            label="ATE"
+            label={scopedToRegions ? `ATE · ${targetRegions.join(', ')}` : 'ATE'}
             value={fmt(simulation.simulated_ate)}
-            hint={`95% CI: [${fmt(simulation.simulated_ci_lower)}, ${fmt(simulation.simulated_ci_upper)}]`}
+            hint={
+              `95% CI: [${fmt(simulation.simulated_ci_lower)}, ${fmt(simulation.simulated_ci_upper)}]` +
+              (scopedToRegions && simulation.cohort_effect != null
+                ? ` · cohort-wide: ${fmt(simulation.cohort_effect)}`
+                : '')
+            }
           />
           <Metric
             label="Std. Error"

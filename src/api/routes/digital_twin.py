@@ -374,6 +374,29 @@ class SimulationResponse(BaseModel):
             "None for legacy/error results."
         ),
     )
+    target_regions: List[str] = Field(
+        default=[],
+        description=(
+            "Regions the effect above was estimated ON (#2023). Empty means the whole "
+            "cohort. When a region filter is applied, simulated_ate / its interval / the "
+            "recommendation / recommended_sample_size all describe these regions — the "
+            "same numbers the chat counterfactual_simulator gives for the same question."
+        ),
+    )
+    cohort_effect: Optional[float] = Field(
+        default=None,
+        description=(
+            "The cohort-wide ATE the targeted estimate was narrowed from, reported "
+            "alongside it. None when nothing was narrowed (simulated_ate IS cohort-wide) "
+            "or on a history read, which does not record the scope."
+        ),
+    )
+    cohort_ci_lower: Optional[float] = Field(
+        default=None, description="Lower bound of the cohort-wide interval, when narrowed."
+    )
+    cohort_ci_upper: Optional[float] = Field(
+        default=None, description="Upper bound of the cohort-wide interval, when narrowed."
+    )
 
 
 class SimulationDetailResponse(SimulationResponse):
@@ -896,12 +919,22 @@ async def run_simulation(
                 CohortCausalEstimator,
             )
 
+            # A region filter subsets the TWINS; on its own it left the effect estimated
+            # over the brand-wide cohort, so a filtered run returned the cohort-wide ATE,
+            # CI and recommendation unchanged while the chat simulator answered the same
+            # region-targeted question with that region's own estimate (#2023). Scope the
+            # estimator to the filtered regions so both surfaces state the same number.
+            # This moves the ATE, CI, SE, recommendation and sample size onto the targeted
+            # regions; the subgroup heterogeneity below stays twin-weighted and
+            # simulation_confidence still rewards twin count (both pre-#2023).
+            target_regions = list(pop_filter.regions) if pop_filter else []
+
             def _do_sim():
                 population = generator.generate(n=request.twin_count)
                 engine = SimulationEngine(
                     population=population,
                     effect_provider=cohort_provider,
-                    effect_estimator=CohortCausalEstimator(),
+                    effect_estimator=CohortCausalEstimator(target_regions=target_regions),
                 )
                 # Pin the resolved DB model id so twin_simulations.model_id FK holds
                 # (engine derives self.model_id from population otherwise) (#705 H4).
@@ -955,6 +988,14 @@ async def run_simulation(
             effect_direction=result.effect_direction(),
             created_at=result.created_at,
             data_provenance=result.data_provenance,
+            target_regions=result.target_regions,
+            cohort_effect=(None if result.cohort_ate is None else round(result.cohort_ate, 4)),
+            cohort_ci_lower=(
+                None if result.cohort_ci_lower is None else round(result.cohort_ci_lower, 4)
+            ),
+            cohort_ci_upper=(
+                None if result.cohort_ci_upper is None else round(result.cohort_ci_upper, 4)
+            ),
         )
 
     except HTTPException:
