@@ -15,28 +15,11 @@ Version: 1.0.0
 
 import json
 import logging
-import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# UUID CONVERSION HELPER
-# =============================================================================
-
-
-def _ensure_uuid(value: str) -> str:
-    """Convert a non-UUID string to a deterministic UUID v5."""
-    if not value:
-        return str(_uuid.uuid4())
-    try:
-        _uuid.UUID(value)
-        return value  # Already a valid UUID
-    except ValueError:
-        return str(_uuid.uuid5(_uuid.NAMESPACE_DNS, value))
 
 
 # =============================================================================
@@ -584,7 +567,9 @@ class ResourceOptimizerMemoryHooks:
             memory_id = await insert_episodic_memory_with_text(
                 memory=memory_input,
                 text_to_embed=f"{state.get('query', '')} {description}",
-                session_id=_ensure_uuid(session_id),
+                # Raw id: the writer recovers the session uuid from a composite
+                # id or stores NULL — never pre-hash it here (#1404, #2068).
+                session_id=session_id,
             )
 
             logger.info(f"Stored optimization in episodic memory: {memory_id}")
