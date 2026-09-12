@@ -175,7 +175,32 @@ you do roll 041 back, take a dump of `composer_episodes`, `composition_steps` an
 
 ---
 
-## 9. Where things live
+## 9. The nightly feedback linker
+
+`link_composition_feedback` (Celery beat `composition-feedback-linker`, `crontab(hour=5, minute=0)`,
+queue `analytics`) attaches a chat rating to the composition that produced the answer. Only
+unlabelled episodes are written, and the rating's text is never stored — just its verdict.
+
+It returns `{"labelled", "considered"}`, and `"failed"` **only on the normal path**. An early exit
+returns the pair alone: no database client, an episode read that failed, nothing pending, or a
+rating read that failed. So a result with no `failed` key at all is not a clean run — it is a run
+that stopped before it could write anything, and the log line says which.
+
+**`failed > 0` is the signal to inspect.** It counts matches the task computed but could not write.
+The count exists precisely so a swallowed write cannot read as "nothing to do".
+
+**Known caveat — #2035.** Attribution is reconstructed on each run from the ratings that still
+exist, not persisted when the match is made. A rating can disappear underneath it:
+`chatbot_message_feedback` cascades from both `chatbot_messages(id)` and
+`chatbot_conversations(session_id)`. So a rerun after a rating deletion can relabel — a later run
+may attach a surviving rating to a different composition than the first run did, and an episode
+already labelled is skipped rather than retried. If labels look wrong after deletions in that
+window, that is the mechanism. The fix needs a further migration on ml/041 and is deliberately not
+in this wave.
+
+---
+
+## 10. Where things live
 
 | Thing | Where |
 |---|---|
