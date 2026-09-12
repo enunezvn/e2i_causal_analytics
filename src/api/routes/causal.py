@@ -1057,28 +1057,29 @@ def _is_randomized_treatment(dataset: Optional[str], treatment_var: str) -> bool
 # effect is direct evidence that the adjustment set left confounding behind.
 #
 # This registry is DECLARED, never inferred from discovery, and lists ONLY the
-# pairs MEASURED to respond on the synthetic generator (omitted-confounder fits,
-# seed 21, n = 1500, the disproof script's estimator: run_disproof.py `_fit`,
-# LinearDML with X = confounders, W = None —
-# docs/demos/results/2026-09-11_negative_control_disproof/disproof.md):
-#   copay_support      -> treatment_initiated  adjusted +0.017 -> omitted +0.052
-#   psp_enrolled       -> treatment_initiated  adjusted +0.005 -> omitted +0.090
-#   rep_detailing_high -> persistent_180d      adjusted +0.031 -> omitted +0.058
-# (adjusted CI contains 0, omitted CI does not; 0/9 adjusted false positives on
-# the structural nulls; 11/11 planted truths detected by the adjusted fit).
-# The refutation node's own DoWhy reconstruction (X = W = confounders, RF
-# nuisances) reads +0.0153 / +0.0022 / +0.0281 adjusted for the same three
-# pairs, all PASSED (CI contains 0) — nc_fit_timing.py in the same directory;
-# the two fits condition on the same columns through different econml
-# arguments, so their points differ in the third decimal, not in verdict.
+# pairs MEASURED to respond on the synthetic generator: the control's omitted-
+# confounder fit leaves its 95% CI on >= 5 of 6 seeds (42, 7, 123, 2024, 99,
+# 314) at PRODUCTION's nuisance config (LinearDML, RF leaf 50 from
+# src/causal_engine/nuisance_config.py, X = W, #2031; seed-21 frame, n = 1500;
+# tests/unit/test_causal_engine/test_negative_control_calibration_2007.py):
+#   copay_support -> treatment_initiated  omitted 6/6 seeds, seed-mean +0.062
+#   psp_enrolled  -> treatment_initiated  omitted 6/6 seeds, seed-mean +0.086
+# (adjusted CI contains 0 on 6/6 seeds for both; 0/9 adjusted false positives
+# on the structural nulls; 11/11 planted truths detected by the adjusted fit).
+# The 2026-09-11 registry (docs/demos/results/2026-09-11_negative_control_
+# disproof/disproof.md) was measured on ONE seed at RF leaf 5 and also declared
+# rep_detailing_high -> persistent_180d (omitted +0.058): over 6 seeds that
+# candidate leaks a STABLE ~ +0.04 (~ 1.6 SE) and never clears the bar (0/6 at
+# leaf 50, 2/6 at leaf 5) — the single-seed declaration was a high draw
+# (+0.058 vs 6-seed mean +0.042), so it was dropped (#2031, 2026-09-12).
 #
-# DELIBERATELY ABSENT: sample_dropped and trigger_accepted — none of their
-# candidate controls responds at n = 1500 (0/3 each), so a declared control
-# would PASS under confounding and read as false assurance. treatment_arm has
-# no structural-null outcome in the generator (it moves every outcome);
-# hcp_adoption and nba_triggers declare none. For every undeclared pair the
-# runner emits SKIPPED ``no_negative_control_declared`` — a null is a finding,
-# never a fabricated PASS.
+# DELIBERATELY ABSENT: rep_detailing_high, sample_dropped and trigger_accepted
+# — none of their candidate controls responds (0/6 seeds each at n = 1500), so
+# a declared control would PASS under confounding and read as false assurance.
+# treatment_arm has no structural-null outcome in the generator (it moves every
+# outcome); hcp_adoption and nba_triggers declare none. For every undeclared
+# pair the runner emits SKIPPED ``no_negative_control_declared`` — a null is a
+# finding, never a fabricated PASS.
 #
 # When Optum / CSU (or any non-synthetic) data arrive, this registry MUST be
 # re-verified PER DATA SOURCE with the same omitted-confounder experiment before
@@ -1108,7 +1109,6 @@ _CAUSAL_NEGATIVE_CONTROL_OUTCOMES: Dict[str, Dict[str, str]] = {
     "patient_journeys": {
         "copay_support": "treatment_initiated",
         "psp_enrolled": "treatment_initiated",
-        "rep_detailing_high": "persistent_180d",
     },
 }
 

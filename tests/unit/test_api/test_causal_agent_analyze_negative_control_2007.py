@@ -75,16 +75,21 @@ class TestNegativeControlOutcome:
         [
             ("copay_support", "adherent_180d", "treatment_initiated"),
             ("psp_enrolled", "adherent_180d", "treatment_initiated"),
-            ("rep_detailing_high", "treatment_initiated", "persistent_180d"),
+            # #2031: ("rep_detailing_high", "treatment_initiated", "persistent_180d")
+            # was declared here on a single-seed leaf-5 draw; it responds on 0/6
+            # seeds at production's config and is now undeclared (below).
         ],
     )
     def test_measured_responders_are_declared(self, treatment, outcome, expected):
         assert _negative_control_outcome("patient_journeys", treatment, outcome) == expected
 
-    @pytest.mark.parametrize("treatment", ["sample_dropped", "trigger_accepted", "treatment_arm"])
+    @pytest.mark.parametrize(
+        "treatment", ["rep_detailing_high", "sample_dropped", "trigger_accepted", "treatment_arm"]
+    )
     def test_arms_without_a_responding_control_are_none(self, treatment):
-        # sample_dropped / trigger_accepted: no candidate control responds at
-        # n = 1500 (disproof 0/3 each); treatment_arm has no structural null.
+        # rep_detailing_high (#2031, 0/6 seeds at leaf 50) / sample_dropped /
+        # trigger_accepted: no candidate control responds at n = 1500;
+        # treatment_arm has no structural null.
         assert _negative_control_outcome("patient_journeys", treatment, "adherent_180d") is None
 
     def test_control_equal_to_the_outcome_under_test_is_none(self):
@@ -135,12 +140,13 @@ def test_registry_values_are_spec_outcomes_and_keys_are_spec_treatments():
         spec = _CAUSAL_DATASET_SPECS[dataset]
         assert set(mapping) <= set(spec["treatment"]), mapping
         assert set(mapping.values()) <= set(spec["outcome"]), mapping
-    # The disproof's exact responders — and NOTHING for the two arms where no
-    # candidate control responded (a declared non-responder is false assurance).
+    # The measured responders (>= 5/6 seeds at production's nuisance config,
+    # #2031) — and NOTHING for the three arms where no candidate control
+    # responds (a declared non-responder is false assurance). #2031: was three
+    # entries; rep_detailing_high -> persistent_180d responded on 0/6 seeds.
     assert _CAUSAL_NEGATIVE_CONTROL_OUTCOMES["patient_journeys"] == {
         "copay_support": "treatment_initiated",
         "psp_enrolled": "treatment_initiated",
-        "rep_detailing_high": "persistent_180d",
     }
 
 
