@@ -341,6 +341,7 @@ from src.api.dependencies.auth import (
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
+from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
 from src.api.routes.synthesis_guard import (
     build_superlative_correction,
     find_superlative_contradictions,
@@ -361,11 +362,11 @@ from src.utils.tool_evidence import evidence_tool_count
 
 logger = logging.getLogger(__name__)
 
-# Context variable for passing session_id across async boundaries
-# This is used because AG-UI LangGraph may not preserve custom state fields
-_session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "copilotkit_session_id", default=None
-)
+# ``_session_id_context`` (imported above) passes session_id across async
+# boundaries, because AG-UI LangGraph may not preserve custom state fields.
+# #2064: the variable is declared in chatbot_tools so the chat tools read the
+# same binding (tools only ever see the model's args); this name stays for its
+# existing readers here and in chat_bridge.
 
 # Per-run discriminator for frontend_message_id stamping: the session key is
 # the conversation threadId, so overlapping streams in the same conversation

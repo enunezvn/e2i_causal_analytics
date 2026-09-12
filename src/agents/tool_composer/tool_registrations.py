@@ -1521,7 +1521,9 @@ def _describe_estimate(
     avg_execution_ms=5000,
     output_model=RefutationResults,
 )
-def refutation_runner(estimate_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+def refutation_runner(
+    estimate_id: Optional[str] = None, *, treatment: str, outcome: str, **kwargs
+) -> Dict[str, Any]:
     """Run the REAL DoWhy refutation suite on the in-context data (#778).
 
     The live DoWhy model/estimand/estimate do not survive serialization across
@@ -1547,8 +1549,13 @@ def refutation_runner(estimate_id: Optional[str] = None, **kwargs) -> Dict[str, 
             ``$step_1.ate``). An id minted by ``causal_effect_estimator`` was rejected:
             the suite re-estimates from the data, so the id would claim a link to an
             estimate this run never refutes.
-        **kwargs: Must carry the DataFrame (one of ``_DATAFRAME_KWARGS_KEYS``)
-            and ``treatment``/``outcome`` (plus optional ``confounders``).
+        treatment: Treatment column. Required by the signature, not only by the
+            schema (#2061): through ``**kwargs`` the executor's pre-dispatch guard could
+            not see an omission, so the plan was dispatched and refused instead of
+            reported as a plan defect (and its cached plan kept).
+        outcome: Outcome column; required for the same reason.
+        **kwargs: Must carry the DataFrame (one of ``_DATAFRAME_KWARGS_KEYS``),
+            plus optional ``confounders``.
 
     Returns:
         Dict with the real ``refutation_results`` suite, its ``gate_decision``,
@@ -1569,8 +1576,10 @@ def refutation_runner(estimate_id: Optional[str] = None, **kwargs) -> Dict[str, 
             reason_code=ReasonCode.MISSING_DATAFRAME,
         )
 
-    treatment = _first_kwarg(kwargs, ("treatment", "treatment_var"))
-    outcome = _first_kwarg(kwargs, ("outcome", "outcome_var"))
+    # Presence is enforced by the signature, so the executor refuses a plan that omits
+    # either before dispatch (#2061); a blank or non-string binding still refuses here.
+    treatment = treatment if isinstance(treatment, str) and treatment.strip() else ""
+    outcome = outcome if isinstance(outcome, str) and outcome.strip() else ""
     if not treatment or not outcome:
         raise ToolRefusalError(
             "refutation_runner requires the planner-bound treatment and outcome "
@@ -1598,15 +1607,6 @@ def refutation_runner(estimate_id: Optional[str] = None, **kwargs) -> Dict[str, 
         total_tests=refutation.get("total_tests"),
         needs_review=refutation.get("needs_review"),
     ).model_dump()
-
-
-def _first_kwarg(kwargs: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[str]:
-    """Return the first non-empty string value among ``keys`` in ``kwargs``."""
-    for key in keys:
-        value = kwargs.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
 
 
 def _as_str_list(value: Any) -> List[str]:
@@ -1913,6 +1913,9 @@ def sensitivity_analyzer(
     ate: float,
     ci_lower: Optional[float] = None,
     ci_upper: Optional[float] = None,
+    *,
+    treatment: str,
+    outcome: str,
     **kwargs,
 ) -> Dict[str, Any]:
     """E-values and the sensitivity READING from the shared ``evalue`` module.
@@ -1985,12 +1988,13 @@ def sensitivity_analyzer(
             "the lower bound.",
             reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
         )
-    # Bound the same way ``refutation_runner`` binds them, aliases included, so the two
-    # tools cannot end up reading one estimate on two different column sets (#2022).
+    # Bound the same way ``refutation_runner`` binds them (required by both signatures since
+    # #2061, confounder aliases included), so the two tools cannot end up reading one
+    # estimate on two different column sets (#2022).
     derived = _derive_sensitivity_inputs(
         kwargs,
-        _first_kwarg(kwargs, ("treatment", "treatment_var")),
-        _first_kwarg(kwargs, ("outcome", "outcome_var")),
+        treatment if isinstance(treatment, str) and treatment.strip() else None,
+        outcome if isinstance(outcome, str) and outcome.strip() else None,
         _as_str_list(
             kwargs.get("confounders") or kwargs.get("covariates") or kwargs.get("common_causes")
         ),

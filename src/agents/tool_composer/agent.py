@@ -400,6 +400,24 @@ class ToolComposerAgent:
         # Who called, for the composition record (spec §5.3): the orchestrator's dispatch path.
         merged_context["entry_point"] = "orchestrator_agent"
 
+        # #2062: the turn's identity, threaded from the dispatcher's
+        # BaseAgentState pass-through fields (DispatcherNode._prepare_agent_input
+        # -> state["session_id"]/["user_id"]). ToolComposer._recording_seed reads
+        # these off the context, so without this every composition dispatched
+        # from chat was recorded anonymous (session_id NULL) and
+        # composition_feedback_tasks dropped it on the session equality check —
+        # composer_episodes.success could never become non-NULL on this path.
+        # Only a REAL value is bound: an absent/blank id stays absent — NULL is
+        # honest, whereas a synthesised one would leave the episode LOOKING
+        # attributed while matching no rating that exists. A caller that put its
+        # own identity in ``context`` keeps it when the payload carries none.
+        session_id = input_data.get("session_id")
+        if session_id:
+            merged_context["session_id"] = session_id
+        user_id = input_data.get("user_id")
+        if user_id:
+            merged_context["user_id"] = user_id
+
         # F2-core: normalize a caller-supplied DataFrame (passed as
         # input_data["data"]) into the canonical context key the executor's
         # DataFrame auto-injection reads (``estimation_data``). A passed-through

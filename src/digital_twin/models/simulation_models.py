@@ -30,6 +30,14 @@ class SimulationRecommendation(str, Enum):
     REFINE = "refine"  # Refine intervention and re-simulate
 
 
+class EstimateScope(str, Enum):
+    """What a simulation's effect was estimated ON (#2053)."""
+
+    COHORT = "cohort"  # The whole cohort
+    REGIONS = "regions"  # The filtered regions (SimulationResult.target_regions)
+    UNKNOWN = "unknown"  # A stored row written before the scope was recorded (migration 042)
+
+
 class FidelityGrade(str, Enum):
     """Grade assessing twin prediction accuracy."""
 
@@ -165,17 +173,13 @@ class SimulationResult(BaseModel):
     # filter narrowed the estimate, these name the regions it was estimated ON and carry
     # the cohort-wide estimate alongside, so neither number is lost.
     #
-    # These are NOT persisted, and that is a known gap rather than a principled limit: a
-    # new run knows its own scope and could record it. twin_simulations has no column for
-    # it (012/030), this lane adds no migration, and the three JSONB columns that exist
-    # are the wrong homes — population_filters is the REQUEST (mixing the estimate's scope
-    # into it re-merges the request/result distinction that caused #2023),
-    # intervention_config is the intervention spec, and effect_heterogeneity is typed
-    # subgroup -> metric -> float in both models. So a history read leaves these at their
-    # defaults and cannot tell a region-scoped row from a cohort-wide one. Inferring the
-    # scope from the persisted population_filters would be worse: pre-fix rows carry the
-    # same filter with a cohort-wide ATE, and would be relabelled with a scope that is
-    # false for them. Fix = a migration adding explicit versioned scope columns.
+    # Persisted by migration 042 (#2053) as twin_simulations.effect_scope_regions and
+    # cohort_ate / cohort_ci_lower / cohort_ci_upper — never folded into population_filters,
+    # which is the REQUEST (re-merging request and result is what caused #2023). A row
+    # written before 042 with a population filter has no recorded scope and reads back as
+    # EstimateScope.UNKNOWN; its scope is not inferred from population_filters, because
+    # pre-#2023 rows carry the same filter over a cohort-wide ATE and would be relabelled
+    # with a scope that is false for them. 042 backfills only unfiltered rows as cohort-wide.
     target_regions: List[str] = Field(default_factory=list)
     cohort_ate: Optional[float] = None
     cohort_ci_lower: Optional[float] = None

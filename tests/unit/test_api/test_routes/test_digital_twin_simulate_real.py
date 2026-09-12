@@ -398,10 +398,9 @@ def test_region_filtered_simulate_persists_the_targeted_numbers(monkeypatch):
     """The history row must carry the numbers the response stated, asserted through the
     REAL repository serializer rather than the in-memory result object.
 
-    It also pins what is NOT persisted: twin_simulations has no column for the estimate's
-    scope, so target_regions / cohort_* do not survive the write and a history read cannot
-    tell a region-scoped row from a cohort-wide one. That gap is deliberate here (no
-    migration in this lane) and is pinned so it cannot be forgotten (#2023 follow-up).
+    The estimate's scope and the cohort-wide comparator are persisted too (#2053). Until
+    ml/042 this test pinned their ABSENCE (``"target_regions" not in row``), so the gap a
+    history read could not see stayed visible in CI; it now pins that they survive the write.
     """
     cohort = _region_heterogeneous_cohort()
     sink = {}
@@ -414,7 +413,62 @@ def test_region_filtered_simulate_persists_the_targeted_numbers(monkeypatch):
     assert row["simulated_ci_upper"] == pytest.approx(filtered.simulated_ci_upper, abs=5e-5)
     assert row["recommendation"] == "refine"
     assert row["recommended_sample_size"] == filtered.recommended_sample_size
-    # The filter that produced the scope IS recorded, even though the scope is not.
+    # The REQUEST filter and the RESULT scope are recorded separately (#2053).
     assert row["population_filters"]["regions"] == ["midwest"]
-    assert "target_regions" not in row
-    assert "cohort_ate" not in row
+    assert row["effect_scope_regions"] == ["midwest"]
+    assert row["cohort_ate"] == pytest.approx(filtered.cohort_effect, abs=5e-5)
+    assert row["cohort_ci_lower"] == pytest.approx(filtered.cohort_ci_lower, abs=5e-5)
+    assert row["cohort_ci_upper"] == pytest.approx(filtered.cohort_ci_upper, abs=5e-5)
+
+
+@pytest.mark.unit
+def test_a_stored_simulation_reads_back_the_scope_and_numbers_the_live_response_stated(
+    monkeypatch,
+):
+    """#2053: persist a region-scoped and a cohort-wide simulation through the REAL serializer,
+    then read each row back through the detail, list and history routes. Every read must report
+    the scope and the numbers the live POST response stated — so a stored region-scoped row can
+    never be mistaken for a cohort-wide one.
+    """
+    import asyncio
+
+    from src.api.routes import digital_twin as dt
+
+    admin = {"app_metadata": {"role": "admin"}}
+    cohort = _region_heterogeneous_cohort()
+
+    for regions, scope in ((["northeast"], "regions"), ([], "cohort")):
+        sink = {}
+        live, _ = _run_simulate(monkeypatch, cohort, regions=regions, capture=sink)
+        row = dict(sink["row"])
+        assert live.estimate_scope.value == scope
+
+        repo = SimpleNamespace(
+            get_simulation=AsyncMock(return_value=row),
+            simulations=SimpleNamespace(list_simulations=AsyncMock(return_value=[row])),
+        )
+        monkeypatch.setattr(dt, "_get_twin_repo", AsyncMock(return_value=repo))
+
+        detail = asyncio.run(dt.get_simulation(row["simulation_id"], user=admin))
+        listed = asyncio.run(
+            dt.list_simulations(
+                brand=None, model_id=None, status=None, page=1, page_size=20, user=admin
+            )
+        ).simulations[0]
+        history = asyncio.run(
+            dt.get_simulation_history(brand=None, limit=20, offset=0, user=admin)
+        ).simulations[0]
+
+        for read in (detail, listed, history):
+            assert read.estimate_scope.value == scope
+            assert read.target_regions == regions
+        assert detail.simulated_ate == live.simulated_ate
+        assert detail.simulated_ci_lower == live.simulated_ci_lower
+        assert detail.simulated_ci_upper == live.simulated_ci_upper
+        assert detail.recommendation == live.recommendation
+        assert detail.cohort_effect == live.cohort_effect
+        assert detail.cohort_ci_lower == live.cohort_ci_lower
+        assert detail.cohort_ci_upper == live.cohort_ci_upper
+        assert listed.simulated_ate == live.simulated_ate
+        assert listed.cohort_effect == live.cohort_effect
+        assert history.ate_estimate == live.simulated_ate

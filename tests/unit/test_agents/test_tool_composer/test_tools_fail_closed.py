@@ -139,7 +139,9 @@ def test_the_non_finite_guard_runs_before_the_frame_is_looked_at():
     # property of the caller's arguments, so it is reported as such even when the frame
     # that #2022 requires is missing too. Two defects, and the caller's own is named first.
     with pytest.raises(ToolRefusalError, match="ate=nan"):
-        tr.sensitivity_analyzer(ate=float("nan"), ci_lower=0.1)
+        tr.sensitivity_analyzer(
+            ate=float("nan"), ci_lower=0.1, treatment="dose", outcome="response"
+        )
 
 
 def test_sensitivity_analyzer_refuses_a_point_estimate_outside_its_own_ci():
@@ -162,7 +164,14 @@ def test_sensitivity_analyzer_refuses_the_two_inputs_no_tool_output_carries():
     # and the quantities come from the frame instead.
     for invented in ({"baseline_risk": 0.30}, {"naive_ate": 0.20}):
         with pytest.raises(RuntimeError, match="No composable tool output carries it"):
-            tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, **invented)
+            tr.sensitivity_analyzer(
+                ate=0.15,
+                ci_lower=0.08,
+                ci_upper=0.22,
+                treatment="treatment",
+                outcome="outcome",
+                **invented,
+            )
 
 
 def test_a_derived_baseline_risk_the_risk_ratio_path_cannot_use_falls_to_one_shared_scale():
@@ -185,7 +194,7 @@ def test_a_derived_baseline_risk_the_risk_ratio_path_cannot_use_falls_to_one_sha
     # #2022: with NO frame there is no outcome SD, so there is no scale to read either
     # conversion on — the calculation is refused rather than served on the raw effect.
     with pytest.raises(RuntimeError, match="standard deviation"):
-        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
+        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1, treatment="treatment", outcome="outcome")
 
 
 def test_sensitivity_analyzer_null_finding_takes_precedence_over_unbenchmarked():
@@ -398,7 +407,7 @@ def test_cohort_builder_fail_closes_when_no_cohort_resolves(monkeypatch):
 def test_refutation_runner_fail_closes_without_dataframe():
     # Receiving only an estimate_id (no DataFrame) -> fail closed.
     with pytest.raises(RuntimeError, match="Refusing to fabricate"):
-        tr.refutation_runner(estimate_id="est-123")
+        tr.refutation_runner(estimate_id="est-123", treatment="t", outcome="y")
 
 
 # ---------------------------------------------------------------------------

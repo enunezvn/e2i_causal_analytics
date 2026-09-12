@@ -83,6 +83,41 @@ def reset_raw_user_query(token: "contextvars.Token[Optional[str]]") -> None:
     _raw_user_query_context.reset(token)
 
 
+# #2064: the real session of the chat turn running these tools. ToolNode invokes
+# tools with the model's args only, and the model cannot know the frontend thread
+# id, so orchestrator_tool / tool_composer_tool used to invent ``chatbot-<ts>`` /
+# ``composer-<ts>`` ids that look like sessions but belong to no conversation.
+# Each chat brain binds the real id before its tools run: copilotkit's execute()
+# (AG-UI — re-exported there as ``_session_id_context``) and chatbot_graph's tools
+# node (/chat/stream). Declared here rather than in copilotkit.py because
+# copilotkit already imports this module: no import cycle, and chatbot_graph does
+# not pull in the CopilotKit SDK to reach it.
+chat_session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "e2i_chat_session_id", default=None
+)
+
+
+def set_chat_session_id(session_id: Optional[str]) -> "contextvars.Token[Optional[str]]":
+    """Bind the real chat session for the tools running in this context."""
+    return chat_session_id_context.set(session_id or None)
+
+
+def reset_chat_session_id(token: "contextvars.Token[Optional[str]]") -> None:
+    chat_session_id_context.reset(token)
+
+
+def _resolve_session_id(tool_arg: Optional[str]) -> Optional[str]:
+    """The session a tool call belongs to — never an invented one.
+
+    The chat handler's binding wins: inside a chat turn the ``session_id`` tool
+    argument can only be a model guess (the input schema's example even offers
+    one). The argument is honoured only when no chat session is bound, i.e. a
+    direct caller. With neither, ``None``: an unattributable call records NULL
+    instead of an id that looks like a real conversation.
+    """
+    return chat_session_id_context.get() or tool_arg or None
+
+
 # Try to import Opik for tracing
 try:
     from src.mlops.opik_connector import OpikConnector
@@ -1594,8 +1629,8 @@ async def orchestrator_tool(
         if raw_user_query and raw_user_query != query:
             user_context["raw_user_query"] = raw_user_query
 
-        # Generate session_id if not provided
-        effective_session_id = session_id or f"chatbot-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # #2064: the real chat session, or None — never a synthesized id.
+        effective_session_id = _resolve_session_id(session_id)
 
         # Call the orchestrator
         orchestrator_result = await orchestrator.run(
@@ -1706,7 +1741,8 @@ def _composer_context(
     return {
         "brand": brand,
         "region": region,
-        "session_id": session_id or f"composer-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        # #2064: absent stays None, so an unattributable composition records NULL.
+        "session_id": session_id,
         "max_parallel": max_parallel,
         "entry_point": "chat_tool",
     }
@@ -1752,6 +1788,9 @@ async def tool_composer_tool(
         Dict with synthesized response from multiple agent outputs
     """
     logger.info(f"Tool composer: query={redact_query(query)}, brand={brand}")
+    # #2064: the real chat session, or None — used by the composition and by the
+    # orchestrator fallback below alike.
+    session_id = _resolve_session_id(session_id)
 
     try:
         # Build context for Tool Composer
@@ -1862,8 +1901,7 @@ async def tool_composer_tool(
                 fallback_result = await orchestrator.run(
                     {
                         "query": query,
-                        "session_id": session_id
-                        or f"fallback-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                        "session_id": session_id,
                         "user_context": {"brand": brand, "region": region},
                     }
                 )

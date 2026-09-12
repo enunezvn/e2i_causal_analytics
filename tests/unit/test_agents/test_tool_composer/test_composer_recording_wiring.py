@@ -327,17 +327,34 @@ async def test_cancelled_recorded_then_reraised(mock_llm_client, mock_tool_regis
 # ---------------------------------------------------------------------------
 
 
-async def test_orchestrator_agent_marks_its_compositions(mock_llm_client, mock_tool_registry):
+async def test_direct_invocation_stamps_the_orchestrator_entry_point(
+    mock_llm_client, mock_tool_registry
+):
+    """``ToolComposerAgent.run`` stamps ``entry_point='orchestrator_agent'``.
+
+    The payload below is a DIRECT CALL, NOT the payload the orchestrator
+    dispatches — read nothing here as evidence about the dispatch path.
+
+    #2062: this test used to pass ``{"context": {"session_id": "sess-agent"}}``
+    and assert the seed carried that session. The dispatcher never populates
+    ``input_data["context"]`` — it passes ``session_id``/``user_id`` as
+    top-level BaseAgentState fields (``DispatcherNode._prepare_agent_input``) —
+    so the assertion pinned an imagined call shape and stayed green while every
+    live chat composition recorded ``session_id = NULL``. The identity claims
+    now live in ``test_orchestrator_session_threading_2062.py``, which builds
+    its payload with the real dispatcher method and so cannot drift from
+    production the same way; what is left here is the entry-point stamp, which
+    is all this test ever really proved.
+    """
     from src.agents.tool_composer.agent import ToolComposerAgent
 
     capture = Capture()
     agent = ToolComposerAgent()
     agent._composer = _composer(mock_llm_client, mock_tool_registry, capture)
-    output = await agent.run({"query": QUERY, "context": {"session_id": "sess-agent"}})
+    output = await agent.run({"query": QUERY})
     assert await drain(timeout=10) == 0
     assert output.success is True
     assert capture.seeds[0]["entry_point"] == "orchestrator_agent"
-    assert capture.seeds[0]["session_id"] == "sess-agent"
 
 
 def test_chat_tool_marks_its_compositions():
