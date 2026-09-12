@@ -118,3 +118,52 @@ async def test_save_single_test_clamps_at_the_same_boundary():
     assert row["details_json"]["delta_percent_exact"] == 1e8
     assert row["test_config"] == {"n": 2}
     assert "delta_percent_exact" not in suite.tests[0].details
+
+
+@pytest.mark.asyncio
+async def test_save_suite_persists_every_row_when_one_overflows():
+    """End to end through the bulk writer (spec section 4, "near-zero claim"):
+    the suite goes to Supabase in ONE ``insert(rows)`` call, so the overflowing
+    row must arrive clamped (exact value kept) and the ordinary row untouched --
+    and no row is dropped."""
+    overflowing = _suite(1e8).tests[0]  # 0.01 / 1e-8 * 100
+    ordinary = RefutationResult(
+        test_name=RefutationTestType.DATA_SUBSET,
+        status=RefutationStatus.PASSED,
+        original_effect=0.10,
+        refuted_effect=0.1125,
+        p_value=0.3,
+        delta_percent=12.5,
+        details={"message": "m2", "config": {"n": 3}},
+    )
+    suite = RefutationSuite(
+        passed=True,
+        confidence_score=0.9,
+        tests=[overflowing, ordinary],
+        gate_decision=GateDecision.PROCEED,
+        treatment_variable="t",
+        outcome_variable="y",
+        brand="B",
+    )
+    client = MagicMock()
+    insert = client.table.return_value.insert
+    insert.return_value.execute = AsyncMock(
+        return_value=MagicMock(data=[{"validation_id": "v1"}, {"validation_id": "v2"}])
+    )
+    repo = CausalValidationRepository()
+    repo.client = client
+
+    ids = await repo.save_suite(suite, estimate_id="e")
+
+    assert ids == ["v1", "v2"]
+    client.table.assert_called_once_with("causal_validations")
+    rows = insert.call_args[0][0]
+    assert len(rows) == 2
+    clamped, plain = rows
+    assert clamped["test_type"] == RefutationTestType.PLACEBO_TREATMENT.value
+    assert clamped["delta_percent"] == DELTA_PERCENT_COLUMN_MAX
+    assert clamped["details_json"]["delta_percent_exact"] == 1e8
+    assert plain["test_type"] == RefutationTestType.DATA_SUBSET.value
+    assert plain["delta_percent"] == 12.5
+    assert "delta_percent_exact" not in plain["details_json"]
+    assert "delta_percent_exact" not in overflowing.details

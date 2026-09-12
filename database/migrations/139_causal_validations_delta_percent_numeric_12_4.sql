@@ -38,7 +38,8 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'causal_validations'
           AND column_name = 'delta_percent'
-          AND (numeric_precision IS DISTINCT FROM 12 OR numeric_scale IS DISTINCT FROM 4)
+          -- Only ever WIDEN: a column someone later widened beyond 12 must not be narrowed back (a rewrite that could overflow).
+          AND (numeric_precision IS NULL OR numeric_precision < 12 OR numeric_scale IS DISTINCT FROM 4)
     ) THEN
         ALTER TABLE public.causal_validations ALTER COLUMN delta_percent TYPE NUMERIC(12, 4);
     END IF;
