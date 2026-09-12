@@ -51,7 +51,7 @@ from src.causal_engine import (
     evalue,
     log_validation_outcome_with_status,
 )
-from src.causal_engine.refutation_runner import seed_for_estimate
+from src.causal_engine.refutation_runner import seed_for_estimate, seed_identity_for
 from src.repositories.causal_validation import (
     CAUSAL_QUERY_ESTIMATE_SOURCE,
     CausalValidationRepository,
@@ -1887,6 +1887,19 @@ class RefutationNode:
             outcome = state.get("outcome_var", "unknown_outcome")
             brand = state.get("brand")
             query_id = state.get("query_id", "")
+            # #2029 (lane 1b): the refutation run is seeded from the
+            # content-addressed PAIR identity ``brand|treatment|outcome``, not
+            # from ``query_id`` -- on the discovery path that id is a uuid4
+            # minted per analysis, so two runs of the same pair got different
+            # refits (measured 2026-09-12: ATEs 11/11 and statuses 22/22
+            # identical, refit values 0/22). The RAW state values are read
+            # here, not the ``unknown_*`` logging defaults above, so a missing
+            # pair yields ``None`` and the runner falls back to the query id.
+            seed_identity = seed_identity_for(
+                brand=brand,
+                treatment=state.get("treatment_var"),
+                outcome=state.get("outcome_var"),
+            )
 
             logger.info(
                 f"Running refutation suite for {treatment} → {outcome} "
@@ -2043,9 +2056,11 @@ class RefutationNode:
             # longer run than estimated and orphan the worker thread.
             per_refit_hint_heavy = per_refit_hint
             # #2029: the probe is seeded like the scored refits it calibrates
-            # -- via the module-level derivation, never an attribute of the
-            # runner instance (runner doubles in tests carry no such method).
-            probe_seed = seed_for_estimate(query_id)
+            # -- from the pair identity, the query id only as fallback (the
+            # same choice ``run_all_tests`` makes below) -- via the
+            # module-level derivation, never an attribute of the runner
+            # instance (runner doubles in tests carry no such method).
+            probe_seed = seed_for_estimate(seed_identity or query_id)
             if deadline is not None and time.monotonic() + per_refit_hint <= deadline:
                 try:
                     _cal_t0 = time.monotonic()
@@ -2090,6 +2105,9 @@ class RefutationNode:
                     outcome=outcome,
                     brand=brand,
                     estimate_id=query_id,
+                    # #2029 (lane 1b): the seed comes from the pair identity;
+                    # ``estimate_id`` keeps feeding tracing / persistence.
+                    seed_identity=seed_identity,
                     # Data passthrough from estimation node (enables DoWhy-based refutation)
                     data=refutation_data,
                     causal_model=causal_model,
