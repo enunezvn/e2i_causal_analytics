@@ -172,6 +172,29 @@ assertions.
    ``chisq`` branch is a code-shape defect, not a measured recovery loss, and a
    selection change would re-open the fix-1/fix-2 measured bands for no gain.
 
+7. MEASURED (2026-09-11, #2009, ``docs/demos/results/2026-09-11_pc_indep_test/``;
+   numbered 7 and placed here because it extends item 5 — item 6 keeps its number,
+   it is cross-referenced from graph_builder and the FCI/latent tests): the item-5
+   result extended to the MIXED shape every live frame has (binary T/Y, continuous
+   covariates). Same DGP (``_make_frame``), n in {500, 2000} x seeds 1-10, guided
+   production shape (anchored=[], declared=ALL, B=20), driven through the real
+   ``GraphBuilderNode`` with the PC wrapper's ``_select_independence_test`` forced
+   per arm. fisherz: mean F1 0.933 / recall 0.929 / SHD 0.95 / 1.15 s per point.
+   chisq on 10-level quantile-binned covariates: 0.832 / 0.764 / 1.9 / 3.7 s.
+   gsq (same binning): 0.872 / 0.843 / 1.65 / 3.9 s. Paired per (n, seed) on SHD
+   of the shipped DAG, fisherz better 10 / tie 9 / worse 1 against either
+   alternative; the loss is concentrated at n=500 (recall 0.857 vs 0.586 / 0.729),
+   where binning makes each conditional test a sparse contingency table and PC
+   drops true conf->T / conf->Y edges. kci converged on one unbootstrapped n=500
+   frame in 83 s, i.e. ~29 min per production-shape point (1 + B=20 fits), so it
+   is out on wall-clock alone; its recovery is unmeasured. The adjustment-set
+   invariant (true confounders present) held 20/20 under all three tests. No
+   alternative passes the decision rule, so the selector is UNCHANGED and this
+   measurement is pinned as a second assertion in
+   ``TestBinaryFramesGetAGaussianTest`` (mixed frame -> fisherz). The
+   LiNGAM-on-binary guard from the same issue lives in
+   ``test_algorithm_selection_2009.py``.
+
 6. NEW CAPABILITY (2026-09-02, ``TestLatentConfounderProducesAFlag``): a
    latent-confounding DIAGNOSTIC. Guided discovery is PC-only and PC assumes
    causal sufficiency, so before this nothing in the pipeline could NOTICE a
@@ -712,13 +735,31 @@ class TestBinaryFramesGetAGaussianTest:
     columns are therefore tested with Fisher's z, a linear-Gaussian test.
 
     Measured 2026-09-02 (item 5): routing all-binary frames to chisq does not
-    improve recovery on this benchmark, so the selection — and this pin — stand."""
+    improve recovery on this benchmark, so the selection — and this pin — stand.
+
+    Measured 2026-09-11 (item 7, #2009): the same holds on the MIXED frame every
+    live run has — chisq/gsq on binned covariates lose recall at n=500 and cost
+    3-4x the wall-clock; kci is ~1500x. The selector stays on fisherz."""
 
     def test_all_binary_frame_selects_fisherz(self) -> None:
         rng = np.random.default_rng(0)
         frame = pd.DataFrame(
             {name: rng.binomial(1, 0.5, 500).astype(float) for name in ("a", "b", "c")}
         )
+        config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC])
+        assert PCAlgorithm()._select_independence_test(frame, config) == "fisherz"
+
+    def test_mixed_binary_and_continuous_frame_selects_fisherz(self) -> None:
+        """Item 7 (2026-09-11 sweep, ``docs/demos/results/2026-09-11_pc_indep_test/``):
+        on ``_make_frame`` — binary treatment/outcome plus continuous covariates —
+        fisherz F1 0.933 / recall 0.929 / 1.15 s beat binned chisq (0.832 / 0.764 /
+        3.7 s) and gsq (0.872 / 0.843 / 3.9 s), paired SHD better 10 / tie 9 /
+        worse 1; kci ~29 min per production-shape point. Pin: a mixed frame
+        selects fisherz."""
+        frame = _make_frame(500, 1)
+        assert set(frame.columns) == {TREATMENT, OUTCOME, *ALL_COVARIATES}
+        assert frame[TREATMENT].nunique() == 2 and frame[OUTCOME].nunique() == 2
+        assert frame["disease_severity"].nunique() > 10  # continuous covariate present
         config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC])
         assert PCAlgorithm()._select_independence_test(frame, config) == "fisherz"
 

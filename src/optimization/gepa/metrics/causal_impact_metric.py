@@ -144,8 +144,16 @@ class CausalImpactGEPAMetric:
             details = "; ".join(
                 [
                     (
-                        f"{f['test']}: {f['original']:.3f}→{f['refuted']:.3f} (p={f['p_value']:.4f})"
+                        f"{f['test']}: {f['original']:.3f}→{f['refuted']:.3f}"
+                        + (
+                            f" (p={f['p_value']:.4f})"
+                            # #2007: an interval-rule reading (negative control,
+                            # sensitivity) carries p_value None -- no p to print.
+                            if isinstance(f["p_value"], (int, float))
+                            else ""
+                        )
                         if isinstance(f["original"], (int, float))
+                        and isinstance(f["refuted"], (int, float))
                         else f"{f['test']}: FAILED"
                     )
                     for f in failed

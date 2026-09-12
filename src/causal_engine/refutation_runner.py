@@ -4,7 +4,8 @@ Version: 4.3
 Purpose: DoWhy-based refutation testing for causal estimate validation
 
 This module implements the Causal Validation Protocol's primary validation tier:
-- 5 refutation tests (placebo, random_common_cause, data_subset, bootstrap, sensitivity)
+- 6 refutation tests (placebo, random_common_cause, data_subset, bootstrap, sensitivity,
+  negative_control_outcome -- the sixth is a non-critical weight-0 READING, #2007)
 - Configurable thresholds for pass/fail criteria
 - Gate decision logic (proceed, review, block)
 - Database persistence integration
@@ -371,10 +372,18 @@ def _degenerate_ci_skip_result(
     original_ci: Tuple[float, float],
     config_details: Dict[str, Any],
     execution_time_ms: float = 0.0,
+    unscorable: str = "coverage / width ratio",
 ) -> RefutationResult:
     """Honest SKIPPED, decided BEFORE any re-fit, when the reported interval has
     no width: coverage of a point and a width ratio against ~0 cannot be scored
-    and would blame the estimate for an upstream degenerate interval."""
+    and would blame the estimate for an upstream degenerate interval.
+
+    ``unscorable`` names the quantity the caller could not score (the two
+    distributional tests score coverage / width ratio; random_common_cause
+    scores the shift in SE units, #2005) so one helper -- one ``reason``
+    vocabulary, ``original_ci_degenerate`` -- serves every interval-referenced
+    test without misdescribing what was skipped.
+    """
     name = test_name.value
     return RefutationResult(
         test_name=test_name,
@@ -382,15 +391,19 @@ def _degenerate_ci_skip_result(
         original_effect=original_effect,
         refuted_effect=original_effect,
         details={
+            # Criticality-neutral wording: this helper serves the two non-critical
+            # tests AND random_common_cause (critical, #2005); a SKIPPED result of
+            # either kind is excluded from the confidence average and the
+            # remaining tests decide the suite. ``to_legacy_format`` forwards this
+            # message verbatim into ``skipped_tests``.
             "reason": (
                 "original_ci_degenerate — the reported interval has no width, so "
-                "coverage / width ratio cannot be scored; the critical gates decide "
-                "the suite"
+                f"{unscorable} cannot be scored; the remaining tests decide the suite"
             ),
             "message": (
                 f"{name} skipped: original_ci={tuple(original_ci)!r} has width "
                 f"{float(original_ci[1] - original_ci[0]):.6g}; no re-fit was run; "
-                "non-critical, degraded honestly"
+                "excluded from the confidence average, not scored as a failure"
             ),
             "original_ci": (float(original_ci[0]), float(original_ci[1])),
             "resamples_completed": 0,
@@ -399,6 +412,213 @@ def _degenerate_ci_skip_result(
         },
         execution_time_ms=execution_time_ms,
     )
+
+
+_NEGATIVE_CONTROL_SKIP_EXPLANATIONS: Dict[str, str] = {
+    "no_negative_control_declared": (
+        "no negative-control outcome is declared for this treatment on this "
+        "dataset; the test cannot run"
+    ),
+    "negative_control_column_missing": (
+        "the declared negative-control outcome is not a column of the frame the "
+        "refutation ran on; the test cannot run"
+    ),
+    "negative_control_too_few_rows": (
+        "too few non-null rows of the declared negative-control outcome to re-run "
+        "the adjusted fit; the test cannot run"
+    ),
+    "negative_control_ci_unavailable": (
+        "the negative-control fit gave no usable interval (non-finite or inverted "
+        "endpoints); the test cannot be scored"
+    ),
+    "negative_control_reference_effect_non_finite": (
+        "the claimed effect is not a finite number; the negative control cannot be compared to it"
+    ),
+    "negative_control_budget_exhausted": (
+        "the compute deadline left no room for the control's fit; the primary suite ran "
+        "without the reading"
+    ),
+}
+
+
+def _negative_control_skip_result(
+    skip_reason: str,
+    original_effect: float,
+    nc_outcome: Optional[str] = None,
+    nc_n: Optional[int] = None,
+    received: Optional[Dict[str, Any]] = None,
+    execution_time_ms: float = 0.0,
+) -> RefutationResult:
+    """The ONE emitter of a SKIPPED negative-control row (#2007).
+
+    ``skip_reason`` is a token of ``NEGATIVE_CONTROL_SKIP_REASONS`` and is
+    persisted bare (``details["skip_reason"]``) for machine reading; ``reason``
+    starts with the same token followed by the explanation, and ``message`` is
+    what ``to_legacy_format`` forwards into ``skipped_tests`` -- the same
+    ``reason`` / ``message`` contract as the other SKIPPED helpers. The row
+    carries the ORIGINAL effect as ``refuted_effect`` (their shape) and no
+    interval: a skipped reading never invents a number.
+    """
+    try:
+        explanation = _NEGATIVE_CONTROL_SKIP_EXPLANATIONS[skip_reason]
+    except KeyError:
+        raise ValueError(
+            "negative_control_skip_reason must be one of "
+            f"{sorted(_NEGATIVE_CONTROL_SKIP_EXPLANATIONS)}, got {skip_reason!r}"
+        ) from None
+    name = RefutationTestType.NEGATIVE_CONTROL_OUTCOME.value
+    details: Dict[str, Any] = {
+        "reason": f"{skip_reason} — {explanation}; the remaining tests decide the suite",
+        "message": (
+            f"{name} skipped: {explanation}; a weight-0 reading, excluded from the "
+            "confidence average, not scored as a failure"
+        ),
+        "skip_reason": skip_reason,
+        "nc_outcome": nc_outcome,
+        "nc_effect": None,
+        "nc_ci": None,
+        "nc_n": nc_n,
+        "rule": "negative_control_ci_vs_zero",
+        "weight": 0.0,
+        "critical": False,
+    }
+    if received is not None:
+        details["received"] = received
+    return RefutationResult(
+        test_name=RefutationTestType.NEGATIVE_CONTROL_OUTCOME,
+        status=RefutationStatus.SKIPPED,
+        original_effect=original_effect,
+        refuted_effect=original_effect,
+        p_value=None,
+        delta_percent=0.0,
+        details=details,
+        execution_time_ms=execution_time_ms,
+    )
+
+
+_Z975 = 1.959964  # two-sided 95 % normal quantile: half-width / SE of a reported interval
+
+
+def _usable_count(value: Any) -> Optional[int]:
+    """A row count usable for SE scaling: a finite, positive, integral number.
+
+    ``bool`` is excluded (it is an ``int`` subclass), as are strings, fractions
+    and non-finite floats. Returns ``None`` for anything unusable so the caller
+    keeps scale 1.0 and persists the count as unknown.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, np.integer)):
+        return int(value) if value > 0 else None
+    if isinstance(value, (float, np.floating)):
+        if not np.isfinite(value) or value <= 0 or float(value) != int(value):
+            return None
+        return int(value)
+    return None
+
+
+def _score_common_cause_shift(
+    original_effect: float,
+    refuted_effect: float,
+    original_ci: Tuple[float, float],
+    reference_n: Optional[int],
+    refit_n: Optional[int],
+    thresholds: Dict[str, float],
+) -> Tuple[RefutationStatus, Dict[str, Any]]:
+    """Score a random-common-cause shift in units of the reported interval's SE (#2005).
+
+    Pure: no re-fit, no I/O. The caller has already decided the interval is
+    finite (``_require_finite_ci``) and has width (``_degenerate_ci_skip_result``).
+
+    Rule::
+
+        reported_se  = (ci_upper - ci_lower) / (2 * 1.959964)
+        scale        = sqrt(reference_n / refit_n)   when both counts are known,
+                                                     > 0, and refit_n < reference_n
+                     = 1.0                            otherwise
+        reference_se = reported_se * scale
+        shift_se     = |refuted - original| / reference_se
+        PASSED  <= thresholds["pass"]     (1.0)
+        WARNING <= thresholds["warning"]  (2.0)
+        FAILED  otherwise
+
+    Why SE units and not ``|delta| / |effect|`` (the rule this replaced):
+    measured 2026-09-11 on the 136 live runs of the agent path, every one of the 7 FAILED
+    rows had |ATE| <= 0.047 and an ABSOLUTE shift smaller than the PASSED rows'
+    -- the percentage denominator made a small true effect fail on the same
+    perturbation noise a large effect absorbs (a scale-dependent defect, the
+    same class as the retired E-value cutoffs). The reported interval is the
+    estimator's own statement of its precision, so a shift within one SE is
+    indistinguishable from sampling noise whatever the effect's size.
+
+    Why the ``sqrt(reference_n / refit_n)`` scale: the refits run on the frame
+    the runner was handed, which #1419 subsamples to the selection row cap
+    when the estimation frame is larger, while the reported interval comes
+    from the FULL frame. A 5 000-row refit of a 37 515-row estimate has an SE
+    ~2.7x the reported one; scoring it against the full-frame SE over-flags
+    (live: 3 PASSED -> WARNING rows, all subsampled, 0.39-0.55 SE against the
+    refit frame). The scale is persisted (``reference_se_scale``) with both
+    counts so a reader can undo it; it never shrinks the SE (a refit frame at
+    least as large as the reference keeps 1.0) and a missing or zero count
+    keeps 1.0 rather than guessing.
+    """
+    lo, hi = float(original_ci[0]), float(original_ci[1])
+    reported_se = (hi - lo) / (2.0 * _Z975)
+    # Only a usable row count may scale the SE: a finite positive integer (an
+    # integral float is accepted, since counts round-trip through JSON). Anything
+    # else -- None, 0, negative, fractional, inf/NaN, a string, a bool -- is
+    # recorded as None and leaves the scale at 1.0, never a weaker verdict.
+    reference_n = _usable_count(reference_n)
+    refit_n = _usable_count(refit_n)
+    scale = 1.0
+    if reference_n is not None and refit_n is not None and refit_n < reference_n:
+        scale = float(np.sqrt(reference_n / refit_n))
+    reference_se = reported_se * scale
+    shift = abs(float(refuted_effect) - float(original_effect))
+    shift_se = shift / reference_se
+    pass_se = float(thresholds["pass"])
+    warning_se = float(thresholds["warning"])
+    scale_txt = (
+        f"; reference SE scaled x{scale:.2f} from the reported interval on "
+        f"{reference_n} rows to the {refit_n}-row refit frame"
+        if scale != 1.0
+        else ""
+    )
+    if shift_se <= pass_se:
+        status = RefutationStatus.PASSED
+        message = (
+            "Effect remains stable when adding a random common cause: shift "
+            f"{shift_se:.2f} SE of the reported interval (PASSED at <= {pass_se:g} SE"
+            f"{scale_txt})"
+        )
+    elif shift_se <= warning_se:
+        status = RefutationStatus.WARNING
+        message = (
+            "Effect somewhat sensitive to a random common cause: shift "
+            f"{shift_se:.2f} SE of the reported interval (WARNING between {pass_se:g} "
+            f"and {warning_se:g} SE{scale_txt})"
+        )
+    else:
+        status = RefutationStatus.FAILED
+        message = (
+            "WARNING: Effect highly sensitive to a random common cause: shift "
+            f"{shift_se:.2f} SE of the reported interval (FAILED above {warning_se:g} SE"
+            f"{scale_txt})"
+        )
+    details: Dict[str, Any] = {
+        "message": message,
+        "rule": "shift_vs_reported_se",
+        "reference_ci": (lo, hi),
+        "reported_se": reported_se,
+        "reference_se_scale": scale,
+        "reference_se": reference_se,
+        "shift": shift,
+        "shift_se_units": shift_se,
+        "reference_n": reference_n,
+        "refit_n": refit_n,
+        "thresholds_se": {"pass": pass_se, "warning": warning_se},
+    }
+    return status, details
 
 
 def _resample_seed_for(estimate_id: Optional[str]) -> Optional[int]:
@@ -455,6 +675,60 @@ class RefutationTestType(str, Enum):
     DATA_SUBSET = "data_subset"
     BOOTSTRAP = "bootstrap"
     SENSITIVITY_E_VALUE = "sensitivity_e_value"
+    # #2007: a negative-control outcome (Lipsitch, Tchetgen Tchetgen & Cohen
+    # 2010) -- an outcome the treatment cannot causally affect but that shares
+    # its confounders. The only refuter that can DETECT unmeasured confounding:
+    # the others perturb or resample the fit and are silent when the adjustment
+    # set is missing a common cause. DB enum value added by migration 138.
+    NEGATIVE_CONTROL_OUTCOME = "negative_control_outcome"
+
+
+# #2007: the closed vocabulary of ``skip_reason`` tokens the negative-control
+# test can persist (``details["skip_reason"]``; ``details["reason"]`` starts with
+# the same token). The runner emits every SKIPPED row for this test -- the node
+# only names WHY it could not produce the ``(nc_outcome, nc_effect, nc_ci, nc_n)``
+# tuple -- so the vocabulary is enforced in one place and a typo at the call site
+# is a ``ValueError``, not a new, unrecognised reason in ``skipped_tests``.
+# Single-sourced from ``_NEGATIVE_CONTROL_SKIP_EXPLANATIONS`` (the token -> sentence
+# map the emitter prints) so the vocabulary and its wording cannot drift apart:
+#   no_negative_control_declared     no registry entry for this treatment /
+#                                    dataset (every non-agent caller;
+#                                    treatment_arm, hcp_adoption, nba_triggers;
+#                                    the two arms the 2026-09-11 disproof found
+#                                    no responding control for)
+#   negative_control_column_missing  declared, but the loaded frame lacks it
+#   negative_control_too_few_rows    declared and present, too few rows to fit
+#   negative_control_ci_unavailable  the fit gave no usable interval, or the
+#                                    backend cannot provide one -- never a
+#                                    fabricated interval
+#   negative_control_reference_effect_non_finite
+#                                    the claimed (primary) effect is NaN / inf,
+#                                    so there is nothing to compare the
+#                                    control to (runner-emitted only)
+#   negative_control_budget_exhausted
+#                                    the caller's compute deadline left no room
+#                                    for one more model build (or lapsed while
+#                                    the control's fit waited for a slot); a
+#                                    weight-0 reading must never cost the
+#                                    primary suite a budget failure
+NEGATIVE_CONTROL_SKIP_REASONS: frozenset = frozenset(_NEGATIVE_CONTROL_SKIP_EXPLANATIONS)
+
+# ``causal_validations.delta_percent`` is DECIMAL(8,4)
+# (database/ml/010_causal_validation_tables.sql:84): the largest value the
+# column stores. A persisted ``delta_percent`` above it fails the whole bulk
+# ``save_suite`` insert, so writers clamp to it (#2007).
+_DELTA_PERCENT_COLUMN_MAX = 9999.9999
+
+
+def _validate_negative_control_skip_reason(reason: Optional[str]) -> None:
+    """``None`` or a token of ``NEGATIVE_CONTROL_SKIP_REASONS``; anything else is a
+    call-site bug, raised before any row is emitted (and before the enabled check,
+    so a mistyped reason is caught even on a disabled test)."""
+    if reason is not None and reason not in NEGATIVE_CONTROL_SKIP_REASONS:
+        raise ValueError(
+            "negative_control_skip_reason must be one of "
+            f"{sorted(NEGATIVE_CONTROL_SKIP_REASONS)}, got {reason!r}"
+        )
 
 
 # ============================================================================
@@ -548,7 +822,13 @@ class RefutationSuite:
 
     @property
     def total_tests(self) -> int:
-        """Total number of tests run (excluding skipped)."""
+        """Total number of tests run (excluding skipped).
+
+        Readings count here like scored tests do -- the sensitivity reading
+        and, since #2007, the weight-0 negative-control reading -- so
+        ``tests_passed / total_tests`` include them while ``confidence_score``
+        weighs them at their configured weight (0 for the negative control).
+        """
         return sum(1 for t in self.tests if t.status != RefutationStatus.SKIPPED)
 
     @property
@@ -591,6 +871,11 @@ class RefutationSuite:
         - random_common_cause
         - data_subset
         - unobserved_common_cause (maps from sensitivity_e_value)
+        - bootstrap (additional, passes through unmapped)
+        - negative_control_outcome (#2007, passes through unmapped; its
+          ``details`` string is the one-sentence ``reading``, and a SKIPPED
+          row lands in ``skipped_tests`` under the same key with its
+          ``message``, never in ``individual_tests``)
 
         #1249: ``skipped_tests`` ({contract_key: reason}, always present)
         records WHY a test was SKIPPED. Skipped entries stay out of
@@ -632,7 +917,12 @@ class RefutationSuite:
                 "status": t.status.value,
                 "new_effect": t.refuted_effect,
                 "original_effect": t.original_effect,
-                "p_value": t.p_value or 0.0,
+                # None stays None (codex whole-diff HIGH 3): a reading whose
+                # verdict is an interval rule (negative control, sensitivity)
+                # has no p-value, and ``0.0`` read as "significant at every
+                # level". The API schema, its mapper (``_opt_float``) and the
+                # FE type already carry null; a real 0.0 stays 0.0.
+                "p_value": t.p_value,
                 "details": t.details.get("message", ""),
             }
 
@@ -759,6 +1049,18 @@ class RefutationRunner:
             # a correct one. The benchmark is the confounding this run measured.
             "critical": False,
         },
+        "negative_control_outcome": {
+            "enabled": True,
+            # #2007: a READING for the first live period -- non-critical AND weight
+            # 0 in ``_calculate_confidence_score`` (an unlisted test would default
+            # to 0.1 there). The rule is calibrated on the synthetic generator only
+            # (2026-09-11: 0/9 adjusted false positives, 3/9 nulls respond to an
+            # omitted confounder, 11/11 truths detected at n = 1500); no live count
+            # exists yet, and a WARNING a leader reads must be rare and concrete.
+            # Promotion to a weighted or critical test is an owner decision after
+            # the live counts are in.
+            "critical": False,
+        },
     }
 
     # Thresholds for determining pass/fail/warning
@@ -770,9 +1072,16 @@ class RefutationRunner:
             "pass": 0.05,
             "warning": 0.10,
         },
-        "common_cause_delta": {
-            "pass": 0.20,  # Effect change must be < 20%
-            "warning": 0.30,  # Warning if 20% < delta < 30%
+        "common_cause_shift_se": {
+            # |refuted - original| in units of the REPORTED interval's SE, scaled
+            # to the refit frame (``_score_common_cause_shift``, #2005). The
+            # ``common_cause_delta`` rule this replaced (|delta| / |effect| at
+            # 20 % / 30 %) was scale-dependent: measured 2026-09-11, all 7 live
+            # FAILED rows had |ATE| <= 0.047 and smaller absolute shifts than the
+            # PASSED rows. Live re-band under these cutoffs: the 7 FAILED become
+            # 3 PASSED / 3 WARNING / 1 FAILED, no PASSED row becomes FAILED.
+            "pass": 1.0,  # shift <= 1 SE: within the estimate's own noise
+            "warning": 2.0,  # 1-2 SE: sensitive; above 2 SE: FAILED
         },
         "subset_ci_coverage": {
             "pass": 0.80,  # 80% of subsets must contain original effect
@@ -848,6 +1157,11 @@ class RefutationRunner:
         covariate_bias_factors: Optional[Dict[str, float]] = None,
         n_rows: Optional[int] = None,
         covariates_measured: Optional[int] = None,
+        reference_n: Optional[int] = None,
+        refit_n: Optional[int] = None,
+        negative_control: Optional[Tuple[str, float, Tuple[float, float], int]] = None,
+        negative_control_skip_reason: Optional[str] = None,
+        negative_control_deferred: bool = False,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -938,6 +1252,53 @@ class RefutationRunner:
                 be scored" instead of "no measured confounders". Same precedence
                 as ``n_rows``: the caller's value wins, else the count the runner's
                 own benchmark-inputs branch computed, else 0.
+            reference_n: Row count of the frame the REPORTED interval
+                (``original_ci``) was estimated on. The random_common_cause test
+                scores its shift in units of that interval's SE, scaled to the
+                frame the refits ran on by ``sqrt(reference_n / refit_n)``
+                (#2005, ``_score_common_cause_shift``). ``None`` falls back to
+                ``n_rows`` -- the same full-frame count -- so a caller that
+                already passes ``n_rows`` gets the scaling without repeating it.
+            refit_n: Row count of the frame the refuters actually re-fit on.
+                ``None`` falls back to ``len(data)`` when ``data`` is given (the
+                refutation frame, a #1419 subsample on the agent path), else the
+                scale stays 1.0. Both counts are persisted on the test's details
+                with the scale applied so a reader can undo it.
+            negative_control: #2007. ``(nc_outcome, nc_effect, (nc_lo, nc_hi),
+                nc_n)`` -- the SAME adjusted fit re-run with the declared
+                negative-control outcome (an outcome the treatment cannot
+                causally affect but that shares its confounders), its 95 %
+                interval and the row count it was fit on. The caller (the agent
+                refutation node) fits it; the runner only scores it against
+                zero and the claimed effect (``_run_negative_control_test``).
+                ``None`` on an enabled test emits a persisted SKIPPED row with
+                reason ``no_negative_control_declared`` (or the caller's
+                ``negative_control_skip_reason``) so ``skipped_tests`` says why
+                the reading is absent. The comparison costs nothing, so it is
+                never budget-skipped and never feeds the per-refit average.
+            negative_control_deferred: #2007 (codex whole-diff HIGH). ``True``
+                emits NO negative-control row at all: the caller promises to
+                fit the control AFTER this suite -- with whatever budget is
+                left, so a slow control fit can never push the critical
+                refuters into a budget skip or the fail-closed timeout -- and
+                to attach the row with ``attach_negative_control``. Passing a
+                tuple or a reason alongside it is a call-site bug
+                (``ValueError``).
+            negative_control_skip_reason: #2007. Why the caller could not
+                produce ``negative_control`` -- one of
+                ``NEGATIVE_CONTROL_SKIP_REASONS`` (``negative_control_column_missing``,
+                ``negative_control_too_few_rows``,
+                ``negative_control_ci_unavailable``,
+                ``negative_control_budget_exhausted``; ``no_negative_control_declared``
+                is the default when both are ``None``). The runner is the one
+                place that emits the SKIPPED row, with THAT reason
+                (``_negative_control_row``, shared with ``attach_negative_control``). An unknown
+                token is a ``ValueError`` (a call-site bug, not a data
+                condition). When a tuple is ALSO given the reason WINS and the
+                tuple is discarded with a warning: the caller saw something
+                the numbers hide (a fit on too few rows, an interval the
+                backend could not vouch for), and neither contradictory input
+                is authoritative enough to score a PASSED from.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -1000,6 +1361,19 @@ class RefutationRunner:
         # and seed their draws from the estimate id so a re-run reproduces its
         # evidence (None → unseeded, the pre-lane-1 behaviour).
         resample_seed = _resample_seed_for(estimate_id)
+
+        # #2005: the random_common_cause shift is scored against the reported
+        # interval's SE scaled to the refit frame. ``reference_n`` is the frame
+        # the interval came from (falls back to ``n_rows``, the same count);
+        # ``refit_n`` is the frame the refits run on (falls back to the frame
+        # the runner was handed). Either unknown -> no scaling (scale 1.0).
+        if reference_n is None:
+            reference_n = n_rows
+        if refit_n is None and data is not None:
+            try:
+                refit_n = int(len(data))
+            except TypeError:
+                refit_n = None
 
         tests: List[RefutationResult] = []
 
@@ -1220,10 +1594,13 @@ class RefutationRunner:
                     trace_id=trace_id,
                     estimate_id=estimate_id,
                     original_effect=original_effect,
+                    original_ci=original_ci,
                     causal_model=causal_model,
                     identified_estimand=identified_estimand,
                     estimate=estimate,
                     use_dowhy=use_dowhy,
+                    reference_n=reference_n,
+                    refit_n=refit_n,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1340,6 +1717,42 @@ class RefutationRunner:
                 ran,
             )
 
+        # #2007: the negative-control reading. Validated before the enabled
+        # check so a mistyped reason is caught even on a disabled test.
+        _validate_negative_control_skip_reason(negative_control_skip_reason)
+        if negative_control_deferred:
+            if negative_control is not None or negative_control_skip_reason is not None:
+                raise ValueError(
+                    "negative_control_deferred=True emits no negative-control row; "
+                    "pass the tuple / skip reason to attach_negative_control instead "
+                    f"(got negative_control={negative_control!r}, "
+                    f"negative_control_skip_reason={negative_control_skip_reason!r})"
+                )
+            # The caller fits the control AFTER this suite, on the budget that
+            # remains, and attaches the row through the same code path
+            # (``attach_negative_control`` -> ``_negative_control_row``).
+        elif self.config["negative_control_outcome"]["enabled"]:
+            # NOT budget-gated, deliberately: the test does no refit -- it is
+            # arithmetic on a tuple the caller already computed -- so
+            # ``_budget_allows`` (a per-refit cost model) does not apply and a
+            # deadline that has already passed saves nothing by skipping it.
+            # It runs LAST -- after the #1419 budget accounting above -- so the
+            # critical-first order of the refit tests is unchanged, a
+            # fail-closed ``time_budget_exceeded`` error still reports only the
+            # refuters that actually ``ran``, and its ~us elapsed is never
+            # ``_record``-ed (the same reason the analytic E-value is kept out
+            # of the average).
+            tests.append(
+                self._negative_control_row(
+                    original_effect,
+                    negative_control,
+                    negative_control_skip_reason,
+                    opik=opik,
+                    trace_id=trace_id,
+                    estimate_id=estimate_id,
+                )
+            )
+
         total_time = (time.time() - start_time) * 1000
 
         # Calculate confidence score and gate decision
@@ -1382,6 +1795,93 @@ class RefutationRunner:
             f"confidence={confidence_score:.2f}, gate={gate_decision.value}"
         )
 
+        return suite
+
+    def _negative_control_row(
+        self,
+        original_effect: float,
+        negative_control: Optional[Tuple[str, float, Tuple[float, float], int]],
+        negative_control_skip_reason: Optional[str],
+        *,
+        opik: Any,
+        trace_id: Optional[str] = None,
+        estimate_id: Optional[str] = None,
+    ) -> RefutationResult:
+        """The ONE producer of the negative-control row (#2007): a scored
+        reading from a tuple, or the SKIPPED row with the caller's reason
+        (``no_negative_control_declared`` when neither is given). Shared by
+        ``run_all_tests`` and ``attach_negative_control`` so the deferred path
+        cannot drift from the inline one. The reason must already be validated.
+        """
+        if negative_control is not None and negative_control_skip_reason is not None:
+            # Codex round 1 (MED): contradictory inputs. The caller's reason
+            # wins -- it disowned the numbers -- so the tuple is discarded
+            # rather than scored; the row below carries the caller's reason.
+            logger.warning(
+                "negative_control tuple %r given alongside "
+                "negative_control_skip_reason=%r; the tuple is discarded and the "
+                "caller's SKIPPED reason is emitted (neither input is authoritative).",
+                negative_control,
+                negative_control_skip_reason,
+            )
+            negative_control = None
+        if negative_control is not None:
+            return self._run_test_with_tracing(
+                test_name="negative_control_outcome",
+                test_func=self._run_negative_control_test,
+                opik=opik,
+                trace_id=trace_id,
+                estimate_id=estimate_id,
+                original_effect=original_effect,
+                negative_control=negative_control,
+            )
+        return _negative_control_skip_result(
+            negative_control_skip_reason or "no_negative_control_declared",
+            original_effect,
+        )
+
+    def attach_negative_control(
+        self,
+        suite: RefutationSuite,
+        original_effect: float,
+        negative_control: Optional[Tuple[str, float, Tuple[float, float], int]] = None,
+        negative_control_skip_reason: Optional[str] = None,
+    ) -> RefutationSuite:
+        """Attach the negative-control row to a suite run with
+        ``negative_control_deferred=True`` (#2007, codex whole-diff HIGH).
+
+        The row is produced through the SAME path as the inline one
+        (``_negative_control_row``: caller reason wins over a tuple, ``None`` /
+        ``None`` is ``no_negative_control_declared``, an unknown reason is a
+        ``ValueError``), appended to ``suite.tests``, and the suite's
+        ``confidence_score`` / ``gate_decision`` / ``passed`` are recomputed
+        through the existing functions -- which, at weight 0 and non-critical,
+        leaves them IDENTICAL (pinned per band); ``tests_passed`` /
+        ``tests_failed`` / ``total_tests`` are properties over ``tests`` and so
+        count the reading like the inline path does. A disabled test attaches
+        nothing (the inline gate); a suite that already carries the row refuses
+        a second one. Returns the same (mutated) suite object.
+        """
+        _validate_negative_control_skip_reason(negative_control_skip_reason)
+        if not self.config["negative_control_outcome"]["enabled"]:
+            return suite
+        if any(t.test_name == RefutationTestType.NEGATIVE_CONTROL_OUTCOME for t in suite.tests):
+            raise ValueError(
+                "the suite already carries a negative_control_outcome row; "
+                "attach_negative_control is for suites run with negative_control_deferred=True"
+            )
+        suite.tests.append(
+            self._negative_control_row(
+                original_effect,
+                negative_control,
+                negative_control_skip_reason,
+                opik=get_opik_connector(),
+                estimate_id=suite.estimate_id,
+            )
+        )
+        suite.confidence_score = self._calculate_confidence_score(suite.tests)
+        suite.gate_decision = self._determine_gate_decision(suite.tests, suite.confidence_score)
+        suite.passed = suite.gate_decision != GateDecision.BLOCK
         return suite
 
     def _run_test_with_tracing(
@@ -1568,23 +2068,52 @@ class RefutationRunner:
     def _run_random_common_cause_test(
         self,
         original_effect: float,
+        original_ci: Tuple[float, float],
         causal_model: Optional[Any],
         identified_estimand: Optional[Any],
         estimate: Optional[Any],
         use_dowhy: bool,
+        *,
+        reference_n: Optional[int] = None,
+        refit_n: Optional[int] = None,
     ) -> RefutationResult:
         """Run random common cause refutation test.
 
-        Adds a random variable as a common cause. If the effect changes
-        significantly, unmeasured confounding may be present.
+        Adds a random variable as a common cause and re-estimates. The shift
+        ``|refuted - original|`` is scored in units of the REPORTED interval's
+        SE, scaled to the refit frame (``_score_common_cause_shift``, #2005):
+        PASSED within 1 SE, WARNING within 2, FAILED beyond. ``delta_percent``
+        is still populated (it is the persisted ``causal_validations`` column
+        and descriptive text reads it) but no longer decides.
+
+        ``original_ci`` is the estimation node's reported interval, the same
+        reference data_subset and bootstrap use; it is checked BEFORE any
+        refit -- a non-finite endpoint fails closed (``_require_finite_ci``),
+        a zero-width interval is an honest SKIPPED
+        (``_degenerate_ci_skip_result``). ``reference_n`` / ``refit_n`` are
+        the row counts of the interval's frame and of the refit frame.
         """
         import time
 
         start_time = time.time()
 
         test_name = RefutationTestType.RANDOM_COMMON_CAUSE
+        config_details = {"effect_strength": self.config["random_common_cause"]["effect_strength"]}
 
         if use_dowhy and causal_model is not None:
+            # The reference interval decides first: no refit is spent on an
+            # interval the shift cannot be scored against (same order as
+            # data_subset / bootstrap).
+            _require_finite_ci(original_ci, "random_common_cause", original_effect)
+            if original_ci[1] - original_ci[0] <= 0:
+                return _degenerate_ci_skip_result(
+                    test_name,
+                    original_effect,
+                    original_ci,
+                    config_details,
+                    execution_time_ms=(time.time() - start_time) * 1000,
+                    unscorable="the shift in SE units",
+                )
             try:
                 # Pass num_simulations ONLY when configured, so prod (no key set)
                 # keeps DoWhy's own default exactly. DoWhy defaults to 100
@@ -1634,21 +2163,21 @@ class RefutationRunner:
                 },
             )
 
-        # Calculate delta percentage
+        # Descriptive only (persisted column; ``_describe_failure`` prints it).
         delta_percent = (
             abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
         )
 
-        # Determine status: effect should remain stable
-        if delta_percent <= self.thresholds["common_cause_delta"]["pass"] * 100:
-            status = RefutationStatus.PASSED
-            message = "Effect remains stable when adding random common cause"
-        elif delta_percent <= self.thresholds["common_cause_delta"]["warning"] * 100:
-            status = RefutationStatus.WARNING
-            message = "Effect somewhat sensitive to random confounders"
-        else:
-            status = RefutationStatus.FAILED
-            message = "WARNING: Effect highly sensitive to random confounders"
+        # The verdict: the shift in units of the reported interval's SE (#2005).
+        status, details = _score_common_cause_shift(
+            original_effect=original_effect,
+            refuted_effect=refuted_effect,
+            original_ci=original_ci,
+            reference_n=reference_n,
+            refit_n=refit_n,
+            thresholds=self.thresholds["common_cause_shift_se"],
+        )
+        details.update(config_details)
 
         execution_time = (time.time() - start_time) * 1000
 
@@ -1659,10 +2188,7 @@ class RefutationRunner:
             refuted_effect=refuted_effect,
             p_value=p_value,
             delta_percent=delta_percent,
-            details={
-                "message": message,
-                "effect_strength": self.config["random_common_cause"]["effect_strength"],
-            },
+            details=details,
             execution_time_ms=execution_time,
         )
 
@@ -2051,6 +2577,162 @@ class RefutationRunner:
             execution_time_ms=(time.time() - start_time) * 1000,
         )
 
+    def _run_negative_control_test(
+        self,
+        original_effect: float,
+        negative_control: Tuple[str, float, Tuple[float, float], int],
+    ) -> RefutationResult:
+        """Negative-control-outcome READING (#2007), non-critical, weight 0.
+
+        A negative-control outcome (Lipsitch, Tchetgen Tchetgen & Cohen 2010) is
+        an outcome the treatment cannot causally affect but that shares the
+        treatment's confounders. The caller re-runs the SAME adjusted fit with it
+        as the outcome; if that fit finds a non-null effect, the adjustment is
+        leaking confounding -- the one signal the perturbation and resampling
+        refuters cannot give. Measured on the synthetic generator 2026-09-11
+        (``docs/demos/results/2026-09-11_negative_control_disproof``): omitting
+        the declared confounders moves 3 of 9 structural nulls out of their CI;
+        the adjusted fits give 0/9 false positives and detect 11/11 truths.
+
+        Rule (``negative_control_ci_vs_zero``)::
+
+            PASSED   nc_lo <= 0 <= nc_hi            the control stayed null
+            WARNING  CI excludes 0, |nc| <  |orig|  moved, less than the claim
+            FAILED   CI excludes 0, |nc| >= |orig|  moved at least as much as
+                                                    the claimed effect
+            SKIPPED  the claimed effect is not finite
+                     (``negative_control_reference_effect_non_finite``); the
+                     row count is not a finite positive integer
+                     (``negative_control_too_few_rows`` -- a zero-row or
+                     unknown-basis fit must not read PASSED on a
+                     zero-containing interval); non-finite effect / endpoint,
+                     or lo > hi (``negative_control_ci_unavailable``) -- never
+                     a placeholder number, the same fail-honest class as
+                     ``_require_finite_ci`` / ``_degenerate_ci_skip_result``.
+                     Checked in that order: nothing can be compared without a
+                     reference, and an unusable row basis explains an
+                     unusable interval.
+
+        ``refuted_effect`` is the control's effect; ``p_value`` is ``None`` (the
+        verdict is an interval rule, not a test statistic); ``delta_percent`` is
+        ``100 * |nc| / |orig|`` -- the FAILED ratio itself, so the persisted
+        column carries the verdict's number (0.0 when the claimed effect is
+        exactly 0, where no ratio exists) -- CLAMPED to
+        ``_DELTA_PERCENT_COLUMN_MAX`` (9999.9999, the DECIMAL(8,4) column's
+        range) with the exact ratio in ``details["control_to_claimed_ratio"]``;
+        >= 100 is already FAILED, so saturation loses nothing the verdict
+        needs. (The other tests' ``delta_percent`` formulas share the column's
+        range limit -- pre-existing; a follow-up is filed by the dispatcher.) ``details["reading"]`` is the one
+        sentence the narrative prints and ``details["message"]`` is the same
+        sentence, which ``to_legacy_format`` forwards as the legacy per-test
+        ``details`` string the interpretation node reads.
+        """
+        start_time = time.time()
+        nc_outcome, nc_effect, nc_ci, nc_n = negative_control
+        outcome_name = str(nc_outcome)
+        usable_n = _usable_count(nc_n)
+        try:
+            claimed_finite = bool(np.isfinite(float(original_effect)))
+        except (TypeError, ValueError):
+            claimed_finite = False
+        if not claimed_finite:
+            # Codex round 1 (MED): a NaN / inf claim would score PASSED against a
+            # zero-containing interval and fabricate delta_percent = 0.0.
+            return _negative_control_skip_result(
+                "negative_control_reference_effect_non_finite",
+                original_effect,
+                nc_outcome=outcome_name,
+                nc_n=usable_n,
+                received={"original_effect": repr(original_effect)},
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+        if usable_n is None:
+            # Codex round 1 (MED): ``_usable_count`` maps None / 0 / negative /
+            # fractional / non-finite / non-numeric to None; a fit with no known
+            # positive row basis is not evidence the control stayed null.
+            return _negative_control_skip_result(
+                "negative_control_too_few_rows",
+                original_effect,
+                nc_outcome=outcome_name,
+                nc_n=None,
+                received={"nc_n": repr(nc_n)},
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+        try:
+            eff = float(nc_effect)
+            lo, hi = float(nc_ci[0]), float(nc_ci[1])
+        except (TypeError, ValueError, IndexError):
+            eff, lo, hi = float("nan"), float("nan"), float("nan")
+        if not (np.isfinite(eff) and np.isfinite(lo) and np.isfinite(hi)) or lo > hi:
+            ci_repr: List[str]
+            try:
+                ci_repr = [repr(v) for v in nc_ci]
+            except TypeError:
+                ci_repr = [repr(nc_ci)]
+            return _negative_control_skip_result(
+                "negative_control_ci_unavailable",
+                original_effect,
+                nc_outcome=outcome_name,
+                nc_n=usable_n,
+                # repr, not the floats: NaN / inf are not JSONB-safe.
+                received={"nc_effect": repr(nc_effect), "nc_ci": ci_repr},
+                execution_time_ms=(time.time() - start_time) * 1000,
+            )
+
+        includes_zero = lo <= 0.0 <= hi
+        claimed = abs(float(original_effect))
+        on_n = f" on n = {usable_n}"
+        subject = f"A negative-control outcome the treatment cannot affect ({outcome_name})"
+        interval = f"{eff:+.3f} [{lo:+.3f}, {hi:+.3f}]"
+        if includes_zero:
+            status = RefutationStatus.PASSED
+            reading = f"{subject} stayed null: {interval}{on_n}."
+        elif abs(eff) < claimed:
+            status = RefutationStatus.WARNING
+            reading = (
+                f"{subject} moved by {interval}{on_n}, less than the claimed effect "
+                f"{float(original_effect):+.3f}."
+            )
+        else:
+            status = RefutationStatus.FAILED
+            reading = (
+                f"{subject} moved by {interval}{on_n}, at least as much as the claimed "
+                f"effect {float(original_effect):+.3f}: the adjustment is leaking "
+                "confounding."
+            )
+        # ``delta_percent`` persists to ``causal_validations.delta_percent``, a
+        # DECIMAL(8,4) (database/ml/010_causal_validation_tables.sql:84, max
+        # 9999.9999). The ratio itself is unbounded -- claimed 0.0001 against a
+        # control of 0.05 is 50000 -- and an out-of-range value fails the bulk
+        # ``save_suite`` insert, losing the WHOLE suite's persistence (codex
+        # whole-diff HIGH). The column gets the clamped value; the exact ratio
+        # rides in ``details["control_to_claimed_ratio"]``. Saturation loses
+        # nothing the verdict needs: >= 100 is already FAILED.
+        ratio = 100.0 * abs(eff) / claimed if claimed > 0.0 else 0.0
+        assert np.isfinite(ratio), ratio  # claimed finite and > 0, eff finite: checked above
+        delta_percent = min(ratio, _DELTA_PERCENT_COLUMN_MAX)
+        return RefutationResult(
+            test_name=RefutationTestType.NEGATIVE_CONTROL_OUTCOME,
+            status=status,
+            original_effect=original_effect,
+            refuted_effect=eff,
+            p_value=None,
+            delta_percent=delta_percent,
+            details={
+                "nc_outcome": outcome_name,
+                "nc_effect": eff,
+                "nc_ci": [lo, hi],
+                "nc_n": usable_n,
+                "rule": "negative_control_ci_vs_zero",
+                "weight": 0.0,
+                "critical": False,
+                "control_to_claimed_ratio": ratio,
+                "reading": reading,
+                "message": reading,
+            },
+            execution_time_ms=(time.time() - start_time) * 1000,
+        )
+
     # ========================================================================
     # F-014 (#416): The previous ``_mock_*`` methods that simulated placebo,
     # random_common_cause, data_subset, and bootstrap tests via seeded random
@@ -2112,6 +2794,14 @@ class RefutationRunner:
           0.25 each (sensitivity is non-critical since 2026-09-10; its weight is
           unchanged — it still carries evidence, it just cannot block)
         - data_subset and bootstrap weigh 0.125 each
+        - negative_control_outcome weighs 0.0 (#2007: a reading for the first
+          live period). With weight 0 its row adds 0 to both the numerator and
+          the denominator, so the score is IDENTICAL with and without the row
+          in every status, FAILED included; an all-SKIPPED-elsewhere suite still
+          fails closed to 0.0 because the reading's weight cannot make the
+          denominator positive. The entry is EXPLICIT because an unlisted test
+          would take the 0.1 default below (measured: an all-PASSED suite
+          would read 0.909 with a FAILED control under that default).
 
         Args:
             tests: List of test results
@@ -2128,6 +2818,7 @@ class RefutationRunner:
             RefutationTestType.SENSITIVITY_E_VALUE: 0.25,
             RefutationTestType.DATA_SUBSET: 0.125,
             RefutationTestType.BOOTSTRAP: 0.125,
+            RefutationTestType.NEGATIVE_CONTROL_OUTCOME: 0.0,
         }
 
         status_scores = {

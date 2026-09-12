@@ -103,6 +103,8 @@ INTERNAL_INPUTS: Dict[str, Dict[str, str]] = {
     "causal_effect_estimator": {
         "data_source": "provenance label for the pipeline run",
         "query": "provenance text for the pipeline run",
+        # Not offered to the planner (#2014): it was echoed while linear regression ran.
+        "method": "accepted only to refuse an estimator other than linear regression",
     },
     "refutation_runner": {
         "treatment_var": "alias of treatment",

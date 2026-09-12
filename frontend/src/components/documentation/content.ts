@@ -315,7 +315,7 @@ export const PIPELINE_STAGES: PipelineStage[] = [
     plain:
       'Attack the estimate before believing it. Effects that fail these attacks are blocked or flagged for review — they never silently reach a recommendation.',
     analyst:
-      'Five refutation tests: placebo treatment (fake treatment should show no effect), random common cause (adding noise confounders should not move the estimate), data subset (the effect should hold on subsamples), bootstrap (stability across resamples), and unobserved-common-cause sensitivity mapped to an E-value (how strong would a hidden confounder need to be to explain the effect away). Results feed a proceed / review / block gate.',
+      'Six refutation tests: placebo treatment (fake treatment should show no effect), random common cause (adding noise confounders should not move the estimate), data subset (the effect should hold on subsamples), bootstrap (stability across resamples), unobserved-common-cause sensitivity mapped to an E-value (how strong would a hidden confounder need to be to explain the effect away), and a negative-control outcome (the same adjustment refitted on an outcome the treatment cannot affect must find nothing — the only test that can detect confounding; a weight-0 reading for now). Results feed a proceed / review / block gate.',
   },
   {
     id: 'act',
@@ -715,7 +715,7 @@ export const DAG_PATHS: DagPath[] = [
 // ── Section nav ─────────────────────────────────────────────────────────────
 
 // ---------------------------------------------------------------------------
-// Quality gate — the five refutation tests (Documentation §Quality Gate).
+// Quality gate — the six refutation tests (Documentation §Quality Gate).
 // Defaults and pass rules mirror src/causal_engine/refutation_runner.py
 // (RefutationRunner.DEFAULT_CONFIG / PASS_THRESHOLDS / GATE_THRESHOLDS and
 // _determine_gate_decision). Keep them in sync when the runner changes.
@@ -726,7 +726,8 @@ export type RefutationTestId =
   | 'random_common_cause'
   | 'data_subset'
   | 'bootstrap'
-  | 'sensitivity_e_value';
+  | 'sensitivity_e_value'
+  | 'negative_control_outcome';
 
 export interface RefutationTestDef {
   id: RefutationTestId;
@@ -746,7 +747,7 @@ export interface RefutationTestDef {
 }
 
 export const REFUTATION_INTRO =
-  'No causal estimate is reported until it survives five refutation tests — adversarial attacks that try to break it. Two are critical: a single failure blocks the estimate outright. The E-value sensitivity test is a reading, not a gate: it says how strong a hidden confounder would have to be, benchmarked against the confounding the adjustment actually removed. All five feed a weighted confidence score that decides the gate.';
+  'No causal estimate is reported until it survives six refutation tests — adversarial attacks that try to break it. Two are critical: a single failure blocks the estimate outright. The E-value sensitivity test is a reading, not a gate: it says how strong a hidden confounder would have to be, benchmarked against the confounding the adjustment actually removed. The negative-control outcome test is the only one that can detect confounding — it refits the same adjustment on an outcome the treatment cannot affect — and for now it is also a reading, with no weight in the score. The other five feed a weighted confidence score that decides the gate.';
 
 export const REFUTATION_TESTS: RefutationTestDef[] = [
   {
@@ -766,7 +767,7 @@ export const REFUTATION_TESTS: RefutationTestDef[] = [
     action: 'Add a random confounder',
     mustHold: 'effect must hold stable',
     defaults: '20 simulations, confounder strength 0.1',
-    passRule: 'effect moves by < 20 %',
+    passRule: 'effect moves by ≤ 1 SE of its reported interval (SE-units, not a percentage; 1–2 SE warns, more fails)',
     critical: true,
     failSign:
       'The estimate swings with a confounder that carries no information — the adjustment is fragile.',
@@ -805,6 +806,21 @@ export const REFUTATION_TESTS: RefutationTestDef[] = [
     critical: false,
     failSign:
       'A caveat, never a block — three warning readings. "Sensitive to confounding": a confounder no stronger than the measured-confounding benchmark (defined above) could account for the whole effect. "No detectable effect at this sample size": a null finding, the CI includes zero. "Robustness not benchmarked": no measured confounders, or measured confounders that could not be scored (for example a covariate collinear with the treatment).',
+  },
+  {
+    // #2007 (2026-09-11): the one refuter that can DETECT confounding. The
+    // caller re-runs the SAME adjusted fit with a declared negative-control
+    // outcome; weight 0 for the first live period, so it never moves the gate.
+    id: 'negative_control_outcome',
+    name: 'Negative-Control Outcome',
+    action: 'Fit an outcome the treatment cannot affect',
+    mustHold: "the control's effect must stay null",
+    defaults: 'declared per treatment (3 controls on patient journeys); weight 0 — a reading',
+    passRule:
+      'control CI includes 0 (passes); excludes 0 but smaller than the claimed effect (warns); at least as large (fails)',
+    critical: false,
+    failSign:
+      'The adjustment is leaking confounding — the same fit finds an effect where none can exist. Whatever moved the control is still moving the claimed effect; do not act on its size until the missing confounder is measured.',
   },
 ];
 

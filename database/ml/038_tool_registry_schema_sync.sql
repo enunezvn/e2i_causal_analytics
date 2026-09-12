@@ -57,7 +57,7 @@ BEGIN
       ]
     },
     "output_schema": {
-      "description": "Output from CATE analysis.\n\n``segments`` and ``effect_by_segment`` carry ONLY the segments whose CATE was\nactually measured — every value in them is a finite float (#1610). A segment\nthat could not produce one moves to ``excluded_segments`` instead of entering\nthe numeric results as ``NaN``: a ``NaN`` there is not JSON-compliant for a\nstrict consumer (``json.dumps(allow_nan=False)`` raises) and renders as a\nplausible-looking blank in synthesis. Same reasoning as ``GapAnalysis``'s\nfinite ``entity_values`` (#1599).\n\nEach ``excluded_segments`` entry is ``{\"name\", \"n\", \"reason\", \"detail\"}``.\n``reason`` is one of the ``_CATE_EXCLUDED_*`` codes (stable, for consumers to\nbranch on), ``detail`` is the prose for synthesis to disclose, and ``name`` is\n``None`` for the null-key group — the rows whose segment value is missing name\nno segment, so there is no honest label to give them.",
+      "description": "Output from CATE analysis.\n\n``segments`` and ``effect_by_segment`` carry ONLY the segments whose CATE was\nactually measured — every value in them is a finite float (#1610). A segment\nthat could not produce one moves to ``excluded_segments`` instead of entering\nthe numeric results as ``NaN``: a ``NaN`` there is not JSON-compliant for a\nstrict consumer (``json.dumps(allow_nan=False)`` raises) and renders as a\nplausible-looking blank in synthesis. Same reasoning as ``GapAnalysis``'s\nfinite ``entity_values`` (#1599).\n\nEach ``excluded_segments`` entry is ``{\"name\", \"n\", \"reason\", \"detail\"}``.\n``reason`` is one of the ``_CATE_EXCLUDED_*`` codes (stable, for consumers to\nbranch on), ``detail`` is the prose for synthesis to disclose, and ``name`` is\n``None`` for the null-key group — the rows whose segment value is missing name\nno segment, so there is no honest label to give them.\n\nA ``segments`` entry's ``n`` is the number of rows its CATE is computed from:\nrows in either arm with a non-null ``outcome`` (#2016). When a segment that IS\nestimated leaves rows out (a null treatment or outcome), those rows get an\n``excluded_segments`` entry with reason ``rows_missing_treatment_or_outcome``\nand the same ``name``. That code alone does not mean the segment was dropped.",
       "properties": {
         "segments": {
           "items": {
@@ -101,7 +101,7 @@ BEGIN
   },
   {
     "name": "causal_effect_estimator",
-    "description": "Estimate average treatment effect (ATE/ATT) using DoWhy/EconML with confidence intervals",
+    "description": "Estimate the effect of a treatment on an outcome with DoWhy linear regression, adjusted for confounders; reports a 95% CI and p-value from a heteroskedasticity-robust (HC1) standard error, or none with the reason, and names the estimand (per unit for a non-binary treatment)",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -119,10 +119,6 @@ BEGIN
             "type": "string"
           },
           "description": "Confounder variables"
-        },
-        "method": {
-          "type": "string",
-          "description": "Estimation method"
         }
       },
       "required": [
@@ -131,26 +127,74 @@ BEGIN
       ]
     },
     "output_schema": {
-      "description": "Output from causal effect estimation",
+      "description": "Output from causal effect estimation (#2014).\n\n``ci_lower`` / ``ci_upper`` / ``p_value`` / ``standard_error`` are real sampling\nquantities or all ``None``. ``uncertainty_method`` names their source\n(``ols_hc1_normal`` / ``dowhy_standard_error_normal``, or ``not_computed``) and ``uncertainty_note`` says how they were computed or why they\nwere not. ``method`` is the estimator that actually ran, ``estimand`` what it\nestimated in words, ``effect_scale`` ``binary_contrast`` (treatment 1 vs 0) or\n``per_unit`` (per one-unit increase in a non-binary treatment).",
       "properties": {
         "ate": {
           "title": "Ate",
           "type": "number"
         },
         "ci_lower": {
-          "title": "Ci Lower",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ci Lower"
         },
         "ci_upper": {
-          "title": "Ci Upper",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ci Upper"
         },
         "p_value": {
-          "title": "P Value",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "P Value"
+        },
+        "standard_error": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Standard Error"
+        },
+        "uncertainty_method": {
+          "title": "Uncertainty Method",
+          "type": "string"
+        },
+        "uncertainty_note": {
+          "title": "Uncertainty Note",
+          "type": "string"
         },
         "method": {
           "title": "Method",
+          "type": "string"
+        },
+        "estimand": {
+          "title": "Estimand",
+          "type": "string"
+        },
+        "effect_scale": {
+          "title": "Effect Scale",
           "type": "string"
         },
         "n_samples": {
@@ -163,7 +207,12 @@ BEGIN
         "ci_lower",
         "ci_upper",
         "p_value",
+        "standard_error",
+        "uncertainty_method",
+        "uncertainty_note",
         "method",
+        "estimand",
+        "effect_scale",
         "n_samples"
       ],
       "title": "EffectEstimate",
@@ -1267,7 +1316,7 @@ BEGIN
       "properties": {
         "estimate_id": {
           "type": "string",
-          "description": "ID of the causal estimate to refute (echoed back for provenance)"
+          "description": "Optional label echoed back; the suite re-estimates from the data and does not look an estimate up by it"
         },
         "treatment": {
           "type": "string",
@@ -1286,17 +1335,23 @@ BEGIN
         }
       },
       "required": [
-        "estimate_id",
         "treatment",
         "outcome"
       ]
     },
     "output_schema": {
-      "description": "Output from ``refutation_runner``: the DoWhy refutation suite and its summary.\n\nThe summary fields are read from the suite with ``.get`` and stay optional.",
+      "description": "Output from ``refutation_runner``: the DoWhy refutation suite and its summary.\n\nThe summary fields are read from the suite with ``.get`` and stay optional.\n``estimate_id`` is the caller's optional label, echoed (#2014).",
       "properties": {
         "estimate_id": {
-          "title": "Estimate Id",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Estimate Id"
         },
         "treatment": {
           "title": "Treatment",
@@ -1579,11 +1634,25 @@ BEGIN
           "description": "Estimated average treatment effect"
         },
         "ci_lower": {
-          "type": "number",
-          "description": "Lower confidence bound"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lower confidence bound (optional; null when the estimate has no interval, which makes the report point-only)"
         },
         "ci_upper": {
-          "type": "number",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "description": "Upper confidence bound (optional; defaults to ate + (ate - ci_lower))"
         },
         "baseline_risk": {
@@ -1596,20 +1665,26 @@ BEGIN
         }
       },
       "required": [
-        "ate",
-        "ci_lower"
+        "ate"
       ]
     },
     "output_schema": {
-      "description": "Output from ``sensitivity_analyzer``: E-values and the shared ``evalue`` reading.",
+      "description": "Output from ``sensitivity_analyzer``: E-values and the shared ``evalue`` reading.\n\nWithout a confidence interval (#2014) the report is point-only: ``e_value_ci`` is\nNone and ``reading`` is ``interval_unavailable``. ``benchmark`` is still the\nconfounding the adjustment removed when a naive contrast is given (a point\nquantity), else None with basis ``none_measured``.",
       "properties": {
         "e_value_point": {
           "title": "E Value Point",
           "type": "number"
         },
         "e_value_ci": {
-          "title": "E Value Ci",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "E Value Ci"
         },
         "reading": {
           "title": "Reading",

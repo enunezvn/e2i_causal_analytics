@@ -18959,8 +18959,9 @@ export interface components {
          *     estimator output — no fabricated/placeholder values. ``ci_lower``/``ci_upper``
          *     come from EconML's analytic CI; ``p_value`` is a model-based two-sided
          *     z-test ``2*(1-Phi(|ate|/std_error))`` (NOT a refutation p-value), and
-         *     ``std_error`` is EconML's ``ate_std`` (or DoWhy's ``standard_error`` on the
-         *     DoWhy fallback path, where no CI is available and ci_lower/ci_upper are None).
+         *     ``std_error`` is EconML's ``ate_std`` (or, on the DoWhy fallback path, DoWhy's
+         *     ``standard_error`` — the HC1 SE of its OLS fit — with ci_lower/ci_upper the 95%
+         *     normal interval ``ate +/- z*std_error``).
          *
          *     The pipeline does NOT run refutation/sensitivity checks, so ``warnings``
          *     always carries an honest 'robustness not validated' caveat — the UI must
@@ -19023,12 +19024,12 @@ export interface components {
             ate: number;
             /**
              * Ci Lower
-             * @description Lower bound of the EconML 95% CI (None on DoWhy fallback)
+             * @description Lower bound of the 95% CI (EconML's; ate - z*std_error on DoWhy fallback)
              */
             ci_lower?: number | null;
             /**
              * Ci Upper
-             * @description Upper bound of the EconML 95% CI (None on DoWhy fallback)
+             * @description Upper bound of the 95% CI (EconML's; ate + z*std_error on DoWhy fallback)
              */
             ci_upper?: number | null;
             /**
@@ -19038,7 +19039,7 @@ export interface components {
             p_value?: number | null;
             /**
              * Std Error
-             * @description Standard error of the ATE (EconML ate_std, or DoWhy standard_error fallback)
+             * @description Standard error of the ATE (EconML ate_std, or the HC1 DoWhy standard_error fallback)
              */
             std_error?: number | null;
             /**

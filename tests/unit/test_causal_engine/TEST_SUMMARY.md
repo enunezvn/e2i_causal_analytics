@@ -35,7 +35,7 @@ Comprehensive unit tests have been created for the E2I Causal Analytics causal_e
 **Coverage:**
 - RefutationRunner (initialization, config, thresholds)
 - RefutationResult and RefutationSuite dataclasses
-- All 5 refutation tests (placebo, random_common_cause, data_subset, bootstrap, sensitivity_e_value)
+- All 6 refutation tests (placebo, random_common_cause, data_subset, bootstrap, sensitivity_e_value, negative_control_outcome — the sixth is a non-critical weight-0 reading, #2007)
 - Mock implementations for when DoWhy is unavailable
 - Confidence scoring algorithm
 - Gate decision logic (proceed/review/block)
@@ -119,7 +119,7 @@ Tests are organized into logical classes:
 - ✅ Complex query building
 
 ### RefutationRunner
-- ✅ All 5 refutation tests (100% coverage)
+- ✅ All 6 refutation tests (100% coverage; negative_control_outcome is a weight-0 reading, #2007)
 - ✅ Both DoWhy and mock execution paths
 - ✅ All status outcomes (passed, warning, failed, skipped)
 - ✅ Confidence scoring with correct weights

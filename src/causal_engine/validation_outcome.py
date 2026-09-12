@@ -251,9 +251,56 @@ def extract_failure_patterns(
     return patterns
 
 
+def _random_common_cause_severity(test) -> str:
+    """Severity of a random_common_cause pattern, from the verdict's own statistic.
+
+    #2005 (2026-09-11): the runner scores the refit shift in units of the
+    reported interval's SE (``details["shift_se_units"]``; FAILED above the
+    ``common_cause_shift_se`` warning cutoff, WARNING between the two cutoffs).
+    The retired label -- ``"high" if delta_percent > 30 else "medium"`` on
+    ``|delta| / |ATE|`` -- was decoupled from that verdict: a FAILED row at a
+    large effect can carry a small percentage, and a null's percentage can be
+    huge at a small shift (measured 174 % at 0.34 SE on the DGP).
+
+    Precedence: the persisted shift when present; else the stored status (a
+    result built before the key existed still carries its verdict); else the
+    retired percentage rule. That last branch is a defensive fallback for a
+    DIRECT caller handing in a result with neither the shift nor a decisive
+    status -- ``extract_failure_patterns`` admits only FAILED / WARNING results,
+    and the store re-hydrates ``ValidationFailurePattern`` rows with their
+    stored severity without calling this, so no production path reaches it.
+    """
+    from .refutation_runner import RefutationRunner, RefutationStatus
+
+    details = test.details if isinstance(getattr(test, "details", None), dict) else {}
+    shift = details.get("shift_se_units")
+    if shift is not None:
+        try:
+            # The cutoff that PRODUCED the verdict: the runner persists its (possibly
+            # overridden) thresholds beside the shift; the class default is only
+            # for a row that carries the shift without them.
+            persisted = details.get("thresholds_se")
+            warning_cutoff = float(
+                persisted["warning"]
+                if isinstance(persisted, dict) and persisted.get("warning") is not None
+                else RefutationRunner.PASS_THRESHOLDS["common_cause_shift_se"]["warning"]
+            )
+            return "high" if float(shift) > warning_cutoff else "medium"
+        except (TypeError, ValueError, KeyError):
+            pass  # a non-numeric persisted value: fall through to the status
+    status = getattr(test, "status", None)
+    if status == RefutationStatus.FAILED:
+        return "high"
+    if status == RefutationStatus.WARNING:
+        return "medium"
+    # Defensive fallback (see the docstring): neither the shift nor a decisive
+    # status. The retired percentage rule survives only here.
+    return "high" if abs(test.delta_percent) > 30 else "medium"
+
+
 def _categorize_failure(test) -> tuple:
     """Categorize a test failure into a learning category."""
-    from .refutation_runner import RefutationTestType
+    from .refutation_runner import RefutationStatus, RefutationTestType
 
     test_name = test.test_name
     delta = abs(test.delta_percent)
@@ -334,7 +381,7 @@ def _categorize_failure(test) -> tuple:
     elif test_name == RefutationTestType.RANDOM_COMMON_CAUSE:
         return (
             FailureCategory.MODEL_MISSPECIFICATION,
-            "high" if delta > 30 else "medium",
+            _random_common_cause_severity(test),
             "Effect is sensitive to random common causes. Review the causal DAG "
             "for missing confounders or incorrect causal assumptions.",
         )
@@ -353,6 +400,30 @@ def _categorize_failure(test) -> tuple:
             "medium" if delta > 20 else "low",
             "High variance in bootstrap estimates. Increase sample size or "
             "investigate heterogeneous treatment effects.",
+        )
+
+    elif test_name == RefutationTestType.NEGATIVE_CONTROL_OUTCOME:
+        # #2007 (2026-09-11): the SAME adjusted fit, re-run with a declared
+        # outcome the treatment cannot affect, found a non-null effect. That is
+        # confounding the adjustment left behind, read from a different
+        # instrument than the sensitivity test's ``within`` reading, so the
+        # category is the existing UNOBSERVED_CONFOUNDING -- no new member.
+        # Severity follows the runner's verdict (``negative_control_ci_vs_zero``):
+        # FAILED = the control moved at least as much as the claimed effect;
+        # WARNING = it moved, less than the claim. ``delta_percent`` here is the
+        # FAILED ratio itself (100 * |nc| / |claim|), not a stability measure.
+        status = getattr(test, "status", None)
+        severity = "high" if status == RefutationStatus.FAILED else "medium"
+        return (
+            FailureCategory.UNOBSERVED_CONFOUNDING,
+            severity,
+            "The negative-control outcome moved under the same adjustment: the "
+            "adjustment is leaking confounding, and whatever moved the control "
+            "is still moving the claimed effect. Do not act on the size of this "
+            "effect; find the confounder the control shares with the treatment "
+            "(measure it and add it to the adjustment set, or use a design that "
+            "removes it), and confirm the control cannot itself be affected by "
+            "the treatment.",
         )
 
     return (
@@ -390,6 +461,32 @@ def _describe_failure(test) -> str:
         return f"E-value of {e_value} indicates sensitivity to unmeasured confounding"
 
     elif test_name == RefutationTestType.RANDOM_COMMON_CAUSE:
+        # #2005: the verdict is the shift in units of the REFERENCE SE -- the
+        # reported interval's SE, scaled to the refit frame when the refutation
+        # ran on a #1419 subsample (``reference_se_scale`` != 1). The stored
+        # percentage stays as context; its denominator is floored at 1e-10, so
+        # on a ~zero effect it is not "a percentage of the effect" and is not
+        # printed as one. Legacy rows carry no shift.
+        details = test.details or {}
+        shift = details.get("shift_se_units")
+        if shift is not None:
+            scale = details.get("reference_se_scale")
+            scale_txt = (
+                f", scaled x{float(scale):.2f} to the refit frame"
+                if scale is not None and float(scale) != 1.0
+                else ""
+            )
+            if abs(float(test.original_effect)) <= 1e-10:
+                pct_txt = (
+                    f"; stored delta {abs(delta):.1f}% is against a floored denominator, "
+                    "the effect is ~0"
+                )
+            else:
+                pct_txt = f" (stored delta {abs(delta):.1f}% of the effect)"
+            return (
+                f"Random common cause shifted the effect by {float(shift):.2f} SE of the "
+                f"reference interval (the reported interval's SE{scale_txt}){pct_txt}"
+            )
         return f"Random common cause changed effect by {abs(delta):.1f}%"
 
     elif test_name == RefutationTestType.DATA_SUBSET:
@@ -397,6 +494,33 @@ def _describe_failure(test) -> str:
 
     elif test_name == RefutationTestType.BOOTSTRAP:
         return f"Bootstrap variance: effect changed by {abs(delta):.1f}%"
+
+    elif test_name == RefutationTestType.NEGATIVE_CONTROL_OUTCOME:
+        # #2007: the description IS the runner's sentence (``details["reading"]``,
+        # composed with the control's name, interval and row basis), so the
+        # learned row cannot contradict the verdict stored beside it. A row
+        # without the sentence gets one built from the control's own numbers --
+        # never the generic "% change": ``delta_percent`` is the FAILED ratio and
+        # reads 0.0 when the claimed effect is exactly 0.
+        details = test.details if isinstance(test.details, dict) else {}
+        reading = details.get("reading")
+        if reading:
+            return str(reading)
+        outcome = details.get("nc_outcome") or "unknown"
+        eff = details.get("nc_effect")
+        try:
+            eff_txt = f"{float(eff):+.3f}" if eff is not None else "n/a"
+        except (TypeError, ValueError):
+            eff_txt = "n/a"
+        ci = details.get("nc_ci")
+        try:
+            ci_txt = f" [{float(ci[0]):+.3f}, {float(ci[1]):+.3f}]" if ci is not None else ""
+        except (TypeError, ValueError, IndexError, KeyError):
+            ci_txt = ""
+        return (
+            f"Negative-control outcome {outcome} (an outcome the treatment cannot "
+            f"affect) moved by {eff_txt}{ci_txt} under the same adjustment"
+        )
 
     return f"Test {test_name.value} failed with {abs(delta):.1f}% change"
 

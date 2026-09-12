@@ -1814,8 +1814,10 @@ class TestOlsAnchorHonestCi:
         y1, y0 = outcome[treatment == 1], outcome[treatment == 0]
         welch_se = float(np.sqrt(y1.var(ddof=1) / len(y1) + y0.var(ddof=1) / len(y0)))
         assert r.ate_std == pytest.approx(welch_se, rel=1e-9)
-        assert r.ate_ci_lower == pytest.approx(r.ate - 1.96 * welch_se, rel=1e-9)
-        assert r.ate_ci_upper == pytest.approx(r.ate + 1.96 * welch_se, rel=1e-9)
+        # #2014: the exact 95 % quantile, so the CI agrees with a p-value from ate_std.
+        z = 1.959963984540054
+        assert r.ate_ci_lower == pytest.approx(r.ate - z * welch_se, rel=1e-12)
+        assert r.ate_ci_upper == pytest.approx(r.ate + z * welch_se, rel=1e-12)
 
     def test_ols_ci_deterministic_across_runs(self):
         """Two identical fits must produce identical CIs — an unseeded bootstrap

@@ -154,12 +154,30 @@ def _collect_ate_estimates(state: PipelineState) -> List[Tuple[str, float, float
 
 _Z_95 = 1.959963984540054  # z for a 95% normal CI (half-width / z = SE)
 
+# EconML estimators whose ``ate_ci_*`` is a SAMPLING interval (#2014): econml's
+# ``ate_inference`` for causal_forest / linear_dml / drlearner (#1188, Monte-Carlo
+# validated) and OLS's Welch or seeded-bootstrap SE — the EstimatorSelector's default
+# set. The S/T/X-learner intervals and the OrthoForest fallback are
+# ``std(CATE) / sqrt(n)``: the spread of heterogeneous effects, not an SE (#1188
+# measured that construction ~50x too narrow).
+ECONML_SAMPLING_INTERVAL_ESTIMATORS = frozenset({"causal_forest", "linear_dml", "drlearner", "ols"})
+
 
 def _se_for_library(state: PipelineState, lib: str) -> Optional[float]:
-    """Resolve a per-library standard error of the ATE for inverse-variance
-    weighting (H9). DoWhy emits ``standard_error`` directly; EconML / CausalML
-    expose a 95% CI, so SE = (ci_upper − ci_lower) / (2·z). Returns None when no
-    valid positive SE is available."""
+    """Resolve a per-library SAMPLING standard error of the ATE for inverse-variance
+    weighting (H9). DoWhy emits ``standard_error`` directly (the HC1 SE of its OLS
+    fit); EconML exposes a 95% CI, so SE = (ci_upper − ci_lower) / (2·z), for the
+    estimators in ``ECONML_SAMPLING_INTERVAL_ESTIMATORS`` only. Returns None when no
+    valid positive sampling SE is available.
+
+    CausalML always returns None (#2014): its ``ate_ci_*`` is
+    ``std(predicted uplift) / sqrt(n)`` — ``ate_std`` is documented as a dispersion,
+    not an SE — and weighting by it let a pseudo-precision dominate the consensus. On
+    the real Kisqali cohort (treatment_arm -> adherence_rate) CausalML's 0.0005 with a
+    pseudo-SE of 1.75e-5 pulled the inverse-variance consensus to 0.0005 while DoWhy
+    (0.1096, SE 0.0044) and EconML (0.0916, SE 0.0047) agreed. Without a CausalML SE
+    the all-or-nothing gate below falls back to confidence weighting.
+    """
 
     def _ci_to_se(lo: object, hi: object) -> Optional[float]:
         try:
@@ -189,17 +207,9 @@ def _se_for_library(state: PipelineState, lib: str) -> Optional[float]:
         return None
     if lib == "econml":
         p = _payload("econml_result")
-        return _ci_to_se(p.get("ate_ci_lower"), p.get("ate_ci_upper")) if p else None
-    if lib == "causalml":
-        us = state.get("uplift_summary")
-        if isinstance(us, dict):
-            # Distinct name: the dowhy branch binds ``se: float``; reusing it here
-            # for the Optional return of _ci_to_se would conflict (mypy).
-            se_uplift = _ci_to_se(us.get("ate_ci_lower"), us.get("ate_ci_upper"))
-            if se_uplift is not None:
-                return se_uplift
-        p = _payload("causalml_result")
-        return _ci_to_se(p.get("ate_ci_lower"), p.get("ate_ci_upper")) if p else None
+        if p is None or p.get("estimator") not in ECONML_SAMPLING_INTERVAL_ESTIMATORS:
+            return None
+        return _ci_to_se(p.get("ate_ci_lower"), p.get("ate_ci_upper"))
     return None
 
 

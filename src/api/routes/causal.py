@@ -31,7 +31,18 @@ import math
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NamedTuple, Optional, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Tuple,
+    cast,
+)
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 
@@ -1047,6 +1058,94 @@ def _is_randomized_treatment(dataset: Optional[str], treatment_var: str) -> bool
     return treatment_var in spec.get("randomized_treatment", [])
 
 
+# #2007 (Lane G): NEGATIVE-CONTROL OUTCOMES, per dataset, per TREATMENT.
+#
+# A negative-control outcome is an outcome the treatment cannot causally affect
+# but that shares the treatment's confounders (Lipsitch, Tchetgen Tchetgen &
+# Cohen 2010, "Negative controls: a tool for detecting confounding and bias in
+# observational studies"). Re-running the SAME adjusted fit with the control as
+# the outcome should give an interval containing zero; a non-null control
+# effect is direct evidence that the adjustment set left confounding behind.
+#
+# This registry is DECLARED, never inferred from discovery, and lists ONLY the
+# pairs MEASURED to respond on the synthetic generator (omitted-confounder fits,
+# seed 21, n = 1500, the disproof script's estimator: run_disproof.py `_fit`,
+# LinearDML with X = confounders, W = None —
+# docs/demos/results/2026-09-11_negative_control_disproof/disproof.md):
+#   copay_support      -> treatment_initiated  adjusted +0.017 -> omitted +0.052
+#   psp_enrolled       -> treatment_initiated  adjusted +0.005 -> omitted +0.090
+#   rep_detailing_high -> persistent_180d      adjusted +0.031 -> omitted +0.058
+# (adjusted CI contains 0, omitted CI does not; 0/9 adjusted false positives on
+# the structural nulls; 11/11 planted truths detected by the adjusted fit).
+# The refutation node's own DoWhy reconstruction (X = W = confounders, RF
+# nuisances) reads +0.0153 / +0.0022 / +0.0281 adjusted for the same three
+# pairs, all PASSED (CI contains 0) — nc_fit_timing.py in the same directory;
+# the two fits condition on the same columns through different econml
+# arguments, so their points differ in the third decimal, not in verdict.
+#
+# DELIBERATELY ABSENT: sample_dropped and trigger_accepted — none of their
+# candidate controls responds at n = 1500 (0/3 each), so a declared control
+# would PASS under confounding and read as false assurance. treatment_arm has
+# no structural-null outcome in the generator (it moves every outcome);
+# hcp_adoption and nba_triggers declare none. For every undeclared pair the
+# runner emits SKIPPED ``no_negative_control_declared`` — a null is a finding,
+# never a fabricated PASS.
+#
+# When Optum / CSU (or any non-synthetic) data arrive, this registry MUST be
+# re-verified PER DATA SOURCE with the same omitted-confounder experiment before
+# the test is allowed to score: a control that responds on the generator is
+# not evidence it responds on real claims data.
+#
+# SHAPE (why the control is NOT a column of ``estimation_data``): the submit
+# endpoint fetches the declared control as a loader PASSTHROUGH column (same
+# rows, same select), and ``_run_agent_analysis_task`` splits it off into
+# ``data_cache["negative_control_data"]`` — a one-column frame sharing the
+# estimation frame's index. Measured disproof of "an extra frame column is
+# inert": two existing consumers treat EVERY non-question column of the
+# estimation frame as a covariate —
+#   * src/agents/causal_impact/nodes/graph_builder.py:787-800 (guided
+#     discovery) tiers all of them as candidate pre-treatment covariates and
+#     hands the whole frame to discover_dag, so the control would become a
+#     DAG node and could enter the DAG-derived adjustment set;
+#   * src/agents/causal_impact/nodes/estimation.py:286-295 (no-backdoor
+#     fallback) adjusts on all of them.
+# Only the static PROVENANCE_DROP_COLS is excluded on those paths; a per-
+# question column cannot go there. Keeping the control OUT of the frame holds
+# "the estimate conditions on exactly the declared covariates" by construction
+# instead of by two nodes each remembering to drop a dynamic column. The
+# refutation node aligns by index (the #1419 subsample is ``frame.iloc[...]``,
+# which keeps the original labels): ``negative_control_data.loc[frame.index]``.
+_CAUSAL_NEGATIVE_CONTROL_OUTCOMES: Dict[str, Dict[str, str]] = {
+    "patient_journeys": {
+        "copay_support": "treatment_initiated",
+        "psp_enrolled": "treatment_initiated",
+        "rep_detailing_high": "persistent_180d",
+    },
+}
+
+
+def _negative_control_outcome(
+    dataset: Optional[str], treatment_var: str, outcome_var: str
+) -> Optional[str]:
+    """The declared negative-control outcome column for this question, or None.
+
+    Fail-closed like :func:`_is_randomized_treatment`: None when the dataset
+    or treatment is undeclared, when the mapped column IS the outcome under
+    test (a control cannot be the outcome it is meant to check — e.g.
+    psp_enrolled -> treatment_initiated), or when the mapped column is not in
+    the dataset spec's ``outcome`` list (an unlisted column is never fetched).
+    Never inferred from discovery.
+    """
+    dataset_key = dataset or _DEFAULT_CAUSAL_DATASET
+    control = _CAUSAL_NEGATIVE_CONTROL_OUTCOMES.get(dataset_key, {}).get(treatment_var)
+    if control is None or control == outcome_var:
+        return None
+    spec = _CAUSAL_DATASET_SPECS.get(dataset_key)
+    if spec is None or control not in spec.get("outcome", []):
+        return None
+    return control
+
+
 # --- Brand-aware clinical covariate gating (Phase 2) --------------------------------
 # After the DGP brand-gating (src.ml.synthetic.clinical_codes.BRAND_ELIGIBILITY_FIELDS)
 # the indication-specific clinical columns are populated ONLY for their own brand's
@@ -2021,6 +2120,12 @@ async def _run_discover_effects_task(
             q_brand = q.brand or brand
             effects[key] = _pending_effect(q, "running")
             await _publish("running", completed)
+            # #2007: fetch the declared negative-control outcome as a PASSTHROUGH
+            # column exactly like the submit endpoint does — ``_run_agent_analysis_task``
+            # splits it off into ``data_cache["negative_control_data"]`` only when it is
+            # a column of ``df``. Live cert 2026-09-11 (job 457b345f on 903b7addc): without
+            # this every discovery row read SKIPPED ``negative_control_column_missing``.
+            negative_control = _negative_control_outcome(dataset, t, o)
             try:
                 df, select_cols = await _load_agent_estimation_frame(
                     dataset=dataset,
@@ -2029,6 +2134,7 @@ async def _run_discover_effects_task(
                     covariates=q.adjustment_set,
                     limit=_DISCOVERY_ROW_CAP,
                     brand=q_brand,
+                    passthrough_columns=[negative_control] if negative_control else None,
                 )
                 # The loader EXPANDS categorical covariates (e.g. geographic_region)
                 # into one-hot dummies; the agent run must adjust on the resolved frame
@@ -3020,6 +3126,7 @@ async def _load_agent_estimation_frame(
     limit: int,
     brand: Optional[str] = None,
     baseline_covariates: Optional[List[str]] = None,
+    passthrough_columns: Optional[List[str]] = None,
 ) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
     """Load a REAL estimation DataFrame for the causal_impact agent.
 
@@ -3029,9 +3136,35 @@ async def _load_agent_estimation_frame(
     ``data_cache['estimation_data']``. Fail-closed: raises ``HTTPException`` (404
     unknown dataset, 400 disallowed column, 503 no data store / no usable rows) —
     never fabricates rows.
+
+    ``passthrough_columns`` (#2007): extra columns fetched on the SAME rows
+    for a consumer other than the estimator — today the negative-control
+    outcome the refutation node re-fits. They are validated against the
+    dataset's allowlist like every other column but hold NO covariate role
+    (``_require_covariate_role`` does not see them), get the dataset's numeric
+    coercion / fill_zero like any outcome column, are NEVER one-hot expanded,
+    NEVER appear in the returned ``expanded_cols`` (the adjustment set the
+    caller passes as confounders), and their NULLs NEVER drop a row from the
+    primary frame — an all-NULL passthrough column is kept (the node reports
+    ``negative_control_column_missing`` / ``too_few_rows`` itself). The
+    JOIN datasets refuse them (400) rather than silently dropping them.
     """
+    passthrough = [str(c) for c in dict.fromkeys(passthrough_columns or [])]
+
     # hcp_adoption is a JOIN dataset (hcp_brand_adoption JOIN hcp_profiles), not a
     # single table — route it to the JOIN-aware loader (same allowlist/coercion gate).
+    if passthrough and (
+        dataset == "hcp_adoption"
+        or (dataset == "nba_triggers" and (covariates or baseline_covariates))
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"passthrough column(s) {passthrough} are not supported on the JOIN "
+                f"loader for dataset '{dataset}' (no negative-control outcome is "
+                "declared for it; extend the JOIN loader before declaring one)."
+            ),
+        )
     if dataset == "hcp_adoption":
         return await _load_hcp_adoption_join_frame(
             treatment_var=treatment_var,
@@ -3067,7 +3200,7 @@ async def _load_agent_estimation_frame(
 
     allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
     requested = [treatment_var, outcome_var, *covariates]
-    not_allowed = [c for c in requested if c not in allowed]
+    not_allowed = [c for c in [*requested, *passthrough] if c not in allowed]
     if not_allowed:
         raise HTTPException(
             status_code=400,
@@ -3077,6 +3210,10 @@ async def _load_agent_estimation_frame(
             ),
         )
     _require_covariate_role(dataset, spec, covariates)
+    # A passthrough column already in a question/covariate slot is that slot's
+    # column (deduped below); only the passthrough-ONLY names are excluded from
+    # the adjustment set, the one-hot expansion and the all-NULL drop.
+    passthrough_only = [c for c in passthrough if c not in requested]
 
     # #1872 (codex iter-2): the union allowlist above is role-insensitive, so a
     # patient-JOINED covariate could ride a question slot into this
@@ -3095,7 +3232,7 @@ async def _load_agent_estimation_frame(
                 ),
             )
 
-    select_cols = list(dict.fromkeys(requested))
+    select_cols = list(dict.fromkeys([*requested, *passthrough_only]))
 
     from src.memory.services.factories import get_async_supabase_client
 
@@ -3152,8 +3289,10 @@ async def _load_agent_estimation_frame(
     # the brand-aware adjustment-set selection). An all-NULL covariate carries no
     # information and would crash EconML ("Input contains NaN"), so drop it from the
     # adjustment set — NEVER the treatment/outcome (those already drop rows on a
-    # missing value via _coerce_estimation_row).
-    protected = {treatment_var, outcome_var}
+    # missing value via _coerce_estimation_row), and never a passthrough column
+    # (#2007: it is not adjusted on, so an all-NULL one cannot crash EconML; the
+    # node that consumes it reports the missing/too-few condition itself).
+    protected = {treatment_var, outcome_var, *passthrough_only}
     dropped_null = [
         c
         for c in select_cols
@@ -3169,10 +3308,25 @@ async def _load_agent_estimation_frame(
         )
         frame = frame.drop(columns=dropped_null)
         select_cols = [c for c in select_cols if c not in dropped_null]
+    null_passthrough = [
+        c for c in passthrough_only if c in frame.columns and bool(frame[c].isna().all())
+    ]
+    if null_passthrough:
+        logger.debug(
+            "causal loader: passthrough column(s) %s are all-NULL for dataset '%s' "
+            "brand=%s — kept (the consumer reports the condition)",
+            null_passthrough,
+            dataset,
+            brand,
+        )
 
-    requested_categoricals = [c for c in select_cols if c in categorical_cols]
+    requested_categoricals = [
+        c for c in select_cols if c in categorical_cols and c not in passthrough_only
+    ]
     frame, dummy_names = _one_hot_categoricals(frame, requested_categoricals)
-    expanded_cols = [c for c in select_cols if c not in categorical_cols] + dummy_names
+    expanded_cols = [
+        c for c in select_cols if c not in categorical_cols and c not in passthrough_only
+    ] + dummy_names
     return frame, expanded_cols
 
 
@@ -3254,6 +3408,12 @@ async def run_causal_agent_analysis(
     # 503 no data) before scheduling the heavy run. ``brand`` (optional) scopes
     # the cohort to one brand (a row subset; brand stays out of the estimation
     # columns) so the analyst can analyze a single brand's patients.
+    # #2007: the declared negative-control outcome (if any) rides along as a
+    # PASSTHROUGH column — same rows, never a covariate, never in select_cols —
+    # so the refutation node can re-fit the identical adjusted model on it.
+    negative_control = _negative_control_outcome(
+        request.dataset, request.treatment_var, request.outcome_var
+    )
     df, select_cols = await _load_agent_estimation_frame(
         dataset=request.dataset,
         treatment_var=request.treatment_var,
@@ -3262,6 +3422,7 @@ async def run_causal_agent_analysis(
         limit=request.limit,
         brand=request.brand,
         baseline_covariates=baseline_covariates or None,
+        passthrough_columns=[negative_control] if negative_control else None,
     )
     # The loader EXPANDS categorical columns (e.g. geographic_region) into
     # one-hot dummies; the agent needs the resolved frame columns (the dummy
@@ -3363,6 +3524,22 @@ async def _run_agent_analysis_task(
             "random_common_cause": {"num_simulations": 10},
         },
     )
+    # #2007: the declared negative-control outcome (None when undeclared — the
+    # runner then emits SKIPPED ``no_negative_control_declared``). The submit
+    # endpoint fetched it as a passthrough column of ``df``; it is SPLIT OFF
+    # here into its own data_cache entry, index-aligned with the estimation
+    # frame, because two existing consumers treat every non-question column of
+    # ``estimation_data`` as a covariate: guided discovery tiers all of them as
+    # candidate confounders (graph_builder), and the estimator's no-backdoor
+    # fallback adjusts on all of them (estimation). A control that entered
+    # either would corrupt the very estimate it is meant to check.
+    negative_control = _negative_control_outcome(
+        request.dataset, request.treatment_var, request.outcome_var
+    )
+    data_cache: Dict[str, Any] = {"estimation_data": df}
+    if negative_control and negative_control in df.columns:
+        data_cache["negative_control_data"] = df[[negative_control]]
+        data_cache["estimation_data"] = df.drop(columns=[negative_control])
     initial_state: Dict[str, Any] = {
         "query": (
             f"What is the causal effect of {request.treatment_var} on {request.outcome_var}?"
@@ -3396,7 +3573,7 @@ async def _run_agent_analysis_task(
         # efficiency_controls channel).
         "baseline_covariates": list(baseline_covariates or []),
         "data_source": data_source,
-        "data_cache": {"estimation_data": df},
+        "data_cache": data_cache,
         # Learn the DAG from data via GUIDED discovery (graph_builder anchors the
         # treatment/outcome roles; the data selects the confounders). Falls back
         # to the domain DAG if discovery is skipped or not accepted by the gate.
@@ -3410,6 +3587,9 @@ async def _run_agent_analysis_task(
         # instead of an unmeasured-confounding BLOCK gate, and the narrative
         # stops calling the RCT "observational data". Fail-closed default False.
         "randomized_design": _is_randomized_treatment(request.dataset, request.treatment_var),
+        # #2007: consumed by the refutation node (negative-control-outcome test);
+        # the column itself is data_cache["negative_control_data"] (see above).
+        "negative_control_outcome": negative_control,
         # Cooperative compute deadline so the refutation suite self-terminates
         # before the hard wait_for cap below (orphan-fix): timed-out runs return
         # cleanly instead of orphaning an uncancellable to_thread refutation.
@@ -4838,6 +5018,16 @@ def _extract_library_payload(
         effect = result_payload.get("causal_effect")
         if isinstance(effect, (int, float)):
             payload["effect_estimate"] = float(effect)
+        # #2014: DoWhy's uncertainty is its ``standard_error`` (HC1 of its OLS fit),
+        # not ``ate_ci_*`` — it used to be dropped here, leaving the stage CI None.
+        interval = _dowhy_interval(result_payload)
+        if interval is not None:
+            payload["ci_lower"], payload["ci_upper"] = interval
+            payload["p_value"] = _te_pvalue_from_z(
+                float(result_payload["causal_effect"]), result_payload["standard_error"]
+            )
+            payload["standard_error"] = float(result_payload["standard_error"])
+            payload["standard_error_method"] = result_payload.get("standard_error_method")
         method = result_payload.get("dowhy_method")
         if isinstance(method, str):
             payload["method"] = method
@@ -4879,6 +5069,23 @@ def _extract_library_payload(
             payload["is_dag"] = is_dag
 
     return payload
+
+
+def _dowhy_interval(dowhy_payload: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """95 % normal interval ``effect +/- z*SE`` from a DoWhy executor payload (#2014).
+
+    ``None`` when the payload has no finite effect or no positive finite
+    ``standard_error`` (every DoWhy method but linear regression) — never a number
+    without a measured SE.
+    """
+    effect = _as_optional_float(dowhy_payload.get("causal_effect"))
+    se = _as_optional_float(dowhy_payload.get("standard_error"))
+    if effect is None or se is None or not math.isfinite(effect) or not math.isfinite(se):
+        return None
+    if se <= 0.0:
+        return None
+    z = z_score_for_confidence(0.95)
+    return effect - z * se, effect + z * se
 
 
 def _read_library_result_from_state(
@@ -6212,7 +6419,7 @@ async def _run_treatment_effect_estimate(
     """Run the wired DoWhy+EconML sequential pipeline on the resolved frame.
 
     Prefers EconML's ate/ci/std (it carries the CI); falls back to DoWhy's
-    causal_effect/standard_error (no CI) when EconML fails. Raises
+    causal_effect/standard_error (CI from that SE, #2014) when EconML fails. Raises
     HTTPException(503) when NEITHER executor produces a usable estimate. NEVER
     fabricates a number.
     """
@@ -6269,10 +6476,14 @@ async def _run_treatment_effect_estimate(
         est_name = econml_payload.get("estimator")
         estimator = str(est_name) if est_name is not None else None
     elif dowhy_payload is not None and dowhy_payload.get("causal_effect") is not None:
-        # DoWhy fallback: no CI (linear_regression provides only an SE).
+        # DoWhy fallback: the CI is the 95 % normal interval of its SE (#2014; it was
+        # left None although the SE and its p-value were reported).
         ate = _as_optional_float(dowhy_payload.get("causal_effect"))
         std_error = _as_optional_float(dowhy_payload.get("standard_error"))
         estimator = dowhy_payload.get("dowhy_method")
+        dowhy_interval = _dowhy_interval(dowhy_payload)
+        if dowhy_interval is not None:
+            ci_lower, ci_upper = dowhy_interval
 
     if ate is None:
         # Neither executor produced a usable estimate — honest fail-close.

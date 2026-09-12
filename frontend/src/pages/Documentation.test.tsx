@@ -431,33 +431,36 @@ describe('CausalImpactDag', () => {
 });
 
 describe('RefutationGate', () => {
-  it('renders the five refutation tests with illustrations, criteria, and the gate bands', () => {
+  it('renders the six refutation tests with illustrations, criteria, and the gate bands', () => {
     renderPage();
-    const region = screen.getByRole('region', { name: /five refutation tests/i });
+    const region = screen.getByRole('region', { name: /six refutation tests/i });
     expect(within(region).getByText(/illustrative example/i)).toBeInTheDocument();
     const items = within(region).getAllByRole('listitem');
-    expect(items.length).toBe(5);
+    expect(items.length).toBe(6);
     const names = [
       'Placebo Treatment',
       'Random Common Cause',
       'Data Subset',
       'Bootstrap',
       'Sensitivity (E-value)',
+      'Negative-Control Outcome',
     ];
     for (const name of names) {
       expect(within(region).getByRole('heading', { name })).toBeInTheDocument();
     }
     // Two tests are critical (a single failure blocks the estimate); the E-value
-    // sensitivity test is a per-run reading since lane D′ (#1991).
+    // sensitivity test is a per-run reading since lane D′ (#1991), and the
+    // negative-control outcome is a weight-0 reading since lane G (#2007).
     expect(region.querySelectorAll('[data-critical="true"]').length).toBe(2);
     // One illustration per test.
-    expect(within(region).getAllByRole('img').length).toBe(5);
+    expect(within(region).getAllByRole('img').length).toBe(6);
     // The user-facing criteria and the production defaults.
     expect(within(region).getByText(/effect must vanish/i)).toBeInTheDocument();
     expect(within(region).getByText(/effect must hold stable/i)).toBeInTheDocument();
     expect(within(region).getByText(/effect must reproduce/i)).toBeInTheDocument();
     expect(within(region).getByText(/variance must stay bounded/i)).toBeInTheDocument();
     expect(within(region).getByText(/outgrows the confounding we could measure/i)).toBeInTheDocument();
+    expect(within(region).getByText(/control's effect must stay null/i)).toBeInTheDocument();
     expect(within(region).getByText(/50 resamples/i)).toBeInTheDocument();
     expect(within(region).getByText(/above the measured confounding benchmark/i)).toBeInTheDocument();
     // Gate bands.
@@ -468,23 +471,23 @@ describe('RefutationGate', () => {
 
   it('switches every illustration to its failing state and lights the Block band', async () => {
     renderPage();
-    const region = screen.getByRole('region', { name: /five refutation tests/i });
+    const region = screen.getByRole('region', { name: /six refutation tests/i });
     const survives = within(region).getByRole('button', { name: /estimate survives/i });
     const fails = within(region).getByRole('button', { name: /estimate fails/i });
     expect(survives).toHaveAttribute('aria-pressed', 'true');
     expect(fails).toHaveAttribute('aria-pressed', 'false');
-    expect(region.querySelectorAll('[data-outcome="pass"]').length).toBe(5);
+    expect(region.querySelectorAll('[data-outcome="pass"]').length).toBe(6);
     expect(region.querySelector('[data-gate-active="true"]')).toHaveAttribute('data-gate', 'proceed');
 
     await userEvent.click(fails);
     expect(fails).toHaveAttribute('aria-pressed', 'true');
     expect(survives).toHaveAttribute('aria-pressed', 'false');
-    expect(region.querySelectorAll('[data-outcome="fail"]').length).toBe(5);
+    expect(region.querySelectorAll('[data-outcome="fail"]').length).toBe(6);
     expect(region.querySelectorAll('[data-outcome="pass"]').length).toBe(0);
     expect(region.querySelector('[data-gate-active="true"]')).toHaveAttribute('data-gate', 'block');
 
     await userEvent.click(survives);
-    expect(region.querySelectorAll('[data-outcome="pass"]').length).toBe(5);
+    expect(region.querySelectorAll('[data-outcome="pass"]').length).toBe(6);
     expect(region.querySelector('[data-gate-active="true"]')).toHaveAttribute('data-gate', 'proceed');
   });
 });

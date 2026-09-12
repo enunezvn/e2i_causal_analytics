@@ -128,6 +128,31 @@ class TestCausalImpactGEPAMetric:
         else:
             assert "score" in result
 
+    def test_failed_reading_without_a_p_value_is_reported_not_crashed(self, metric):
+        """#2007: an interval-rule reading (negative control, sensitivity) carries
+        ``p_value: None`` in the legacy individual_tests -- the feedback line must
+        name the failure without a ``p=`` rather than raise on ``None:.4f``."""
+        prediction = MagicMock()
+        prediction.refutation_results = {
+            "placebo_treatment": {
+                "status": "failed",
+                "original_effect": 0.121,
+                "refuted_effect": 0.130,
+                "p_value": None,
+            },
+            "random_common_cause": {"status": "passed"},
+            "data_subset": {"status": "passed"},
+            "bootstrap": {"status": "passed"},
+            "sensitivity_e_value": {"status": "passed"},
+        }
+        score, feedback = metric._score_refutation(prediction)
+        assert score == pytest.approx(4 / 5)
+        assert "placebo_treatment: 0.121→0.130" in feedback
+        assert "p=" not in feedback
+        prediction.refutation_results["placebo_treatment"]["p_value"] = 0.03
+        _, feedback = metric._score_refutation(prediction)
+        assert "(p=0.0300)" in feedback
+
     def test_metric_with_missing_fields(self, metric):
         """Test metric handles missing fields gracefully."""
         example = MagicMock(spec=[])  # spec=[] means no auto-created attributes

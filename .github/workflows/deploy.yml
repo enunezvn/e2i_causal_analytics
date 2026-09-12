@@ -155,8 +155,14 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # cache-from is kept (harmless); cache-to is DROPPED. Measured 2026-09-11 on
+          # runs 34601718634 (success) and 34651392399 (timed out): buildkit restored
+          # 0 layers from the gha cache in BOTH builds, the export of the ~1.2 GB pip
+          # layer took 308 s and then >700 s (the whole 20-min budget), and the
+          # repo's Actions cache sat at 10.6 GB over the 10 GB quota. The export
+          # never paid for itself and is the variance that pushed the job over
+          # timeout-minutes, skipping the deploy.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   # #528-B: build + push the frontend nginx production image so the droplet can pull
   # it instead of building Vite/nginx on the box. Mirrors build-and-push (api).
@@ -332,8 +338,9 @@ jobs:
           file: docker/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.probe.outputs.sha }}
+          # No cache-to: same measurement as build-and-push (0 cached layers,
+          # 5-12 min export) — this job has a 30-min budget but the same api image.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Build and push frontend image for main HEAD
         if: steps.probe.outputs.needed == 'true'
