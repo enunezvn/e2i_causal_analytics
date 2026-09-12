@@ -684,13 +684,23 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 },
             }
         }
+        # #2031: every ``ate`` is the POPULATION-weighted mean of the per-segment RD
+        # map (weighted by the per-row ``segment``), like every other arm/outcome.
+        # The copay/psp adherence entries used to store the UNWEIGHTED mean over the
+        # 3 severity segments, overstating the population ATE by ~0.02 at segment
+        # shares 0.54 / 0.31 / 0.16 (docs/demos/results/
+        # 2026-09-12_estimator_calibration_2031/disproof.md, Result 3).
         df.attrs["true_ate_by_arm"]["copay_support"] = {
             "adherent_180d": {
-                "ate": float(np.mean(list(_adh["copay_adherent_rd_by_segment"].values()))),
+                "ate": float(
+                    np.mean([_adh["copay_adherent_rd_by_segment"][str(s)] for s in segment])
+                ),
                 "cate_by_segment": _adh["copay_adherent_rd_by_segment"],
             },
             "low_gap_180d": {
-                "ate": float(np.mean(list(_adh["copay_low_gap_rd_by_segment"].values()))),
+                "ate": float(
+                    np.mean([_adh["copay_low_gap_rd_by_segment"][str(s)] for s in segment])
+                ),
                 "cate_by_segment": _adh["copay_low_gap_rd_by_segment"],
             },
             "persistent_180d": {
@@ -702,7 +712,9 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         }
         df.attrs["true_ate_by_arm"]["psp_enrolled"] = {
             "adherent_180d": {
-                "ate": float(np.mean(list(_adh["psp_adherent_rd_by_segment"].values()))),
+                "ate": float(
+                    np.mean([_adh["psp_adherent_rd_by_segment"][str(s)] for s in segment])
+                ),
                 "cate_by_segment": _adh["psp_adherent_rd_by_segment"],
             },
             "persistent_180d": {

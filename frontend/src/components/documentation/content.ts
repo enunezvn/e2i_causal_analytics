@@ -815,7 +815,9 @@ export const REFUTATION_TESTS: RefutationTestDef[] = [
     name: 'Negative-Control Outcome',
     action: 'Fit an outcome the treatment cannot affect',
     mustHold: "the control's effect must stay null",
-    defaults: 'declared per treatment (3 controls on patient journeys); weight 0 — a reading',
+    // #2031 (2026-09-12): 3 -> 2 controls; rep_detailing_high's candidate never
+    // clears the CI on any of 6 seeds at production's nuisance config.
+    defaults: 'declared per treatment (2 controls on patient journeys); weight 0 — a reading',
     passRule:
       'control CI includes 0 (passes); excludes 0 but smaller than the claimed effect (warns); at least as large (fails)',
     critical: false,

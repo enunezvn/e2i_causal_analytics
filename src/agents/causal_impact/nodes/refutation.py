@@ -326,7 +326,9 @@ def _reconstruction_nuisance_init_params(
     and FAIL-CLOSED refutation (the analyst saw "no refutation test results").
     RandomForest is scale-invariant and fast (no lbfgs grind — the reason the
     linear substitution existed does not apply to it), so mirroring production is
-    both correct-by-construction AND within the time budget.
+    both correct-by-construction AND within the time budget. Since #2031 both sites
+    build their RF nuisances from ``src/causal_engine/nuisance_config.py`` (one
+    shared ``min_samples_leaf`` / tree count), so they cannot drift apart.
 
     Applied to ``LinearDML`` and ``DRLearner`` (#1188 codex iter-1 MED — the
     DR wrapper now uses GradientBoosting nuisances + a
@@ -338,30 +340,14 @@ def _reconstruction_nuisance_init_params(
       * plain ``linear_regression`` / IPW — no iterative nuisance to converge.
     """
     if "LinearDML" in dowhy_method:
-        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+        from src.causal_engine.nuisance_config import linear_dml_model_t, linear_dml_model_y
 
-        # Mirror production's LinearDMLWrapper nuisance EXACTLY (same class + params)
-        # so the reconstructed ATE reproduces the reported one by construction.
-        def _rf_regressor() -> Any:
-            return RandomForestRegressor(
-                n_estimators=50,
-                min_samples_leaf=5,
-                min_impurity_decrease=1e-7,
-                random_state=42,
-            )
-
+        # Mirror production's LinearDMLWrapper nuisance EXACTLY: both sites build
+        # from ``nuisance_config`` (#2031) so the reconstructed ATE reproduces the
+        # reported one by construction.
         return {
-            "model_y": _rf_regressor(),
-            "model_t": (
-                RandomForestClassifier(
-                    n_estimators=50,
-                    min_samples_leaf=5,
-                    min_impurity_decrease=1e-7,
-                    random_state=42,
-                )
-                if discrete_treatment
-                else _rf_regressor()
-            ),
+            "model_y": linear_dml_model_y(),
+            "model_t": linear_dml_model_t() if discrete_treatment else linear_dml_model_y(),
         }
     if "DRLearner" in dowhy_method:
         from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression
@@ -874,7 +860,7 @@ def _reconstruction_evidence(estimate: Any, estimation_result: Dict[str, Any]) -
 
 # #2007: the smallest non-null row basis on which the negative-control fit is
 # attempted. Below it the SAME production estimator (RandomForest nuisances,
-# min_samples_leaf=5, 50 trees, K-fold cross-fitting) has too few rows per
+# min_samples_leaf=50 since #2031, 50 trees, K-fold cross-fitting) has too few rows per
 # treatment x fold cell for any interval to mean anything -- and a wide
 # zero-containing interval on a handful of rows would read PASSED ("the control
 # stayed null") when nothing was measured. Pinned, not derived: the runner's

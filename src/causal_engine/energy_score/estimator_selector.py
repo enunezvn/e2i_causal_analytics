@@ -645,22 +645,17 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
 
         try:
             from econml.dml import LinearDML
-            from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
-            # Fit model
+            from src.causal_engine.nuisance_config import (
+                linear_dml_model_t,
+                linear_dml_model_y,
+            )
+
+            # Fit model. Nuisances come from the shared config (#2031: leaf 50
+            # removes the seed-42 low-tail draw; the refutation rebuild must match).
             model = LinearDML(
-                model_y=RandomForestRegressor(
-                    n_estimators=50,
-                    min_samples_leaf=5,
-                    min_impurity_decrease=1e-7,
-                    random_state=42,
-                ),
-                model_t=RandomForestClassifier(
-                    n_estimators=50,
-                    min_samples_leaf=5,
-                    min_impurity_decrease=1e-7,
-                    random_state=42,
-                ),
+                model_y=linear_dml_model_y(),
+                model_t=linear_dml_model_t(),
                 discrete_treatment=True,
                 random_state=42,
             )
