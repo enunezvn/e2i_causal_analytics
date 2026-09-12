@@ -196,9 +196,35 @@ def _twin_population(brand, n_per_region: int = 150):
     return TwinPopulation(twin_type=TwinType.HCP, brand=brand, twins=twins, size=len(twins))
 
 
-def _run_simulate(monkeypatch, cohort, *, regions):
+class _CapturingClient:
+    """Minimal async Supabase stand-in that records the row handed to insert().
+
+    Lets a test drive the REAL SimulationRepository.save_simulation serializer instead of
+    asserting on the in-memory SimulationResult, so what actually reaches twin_simulations
+    is what gets pinned.
+    """
+
+    def __init__(self, sink):
+        self._sink = sink
+
+    def table(self, name):
+        self._sink["table"] = name
+        return self
+
+    def insert(self, row):
+        self._sink["row"] = row
+        return self
+
+    async def execute(self):
+        return SimpleNamespace(data=[self._sink["row"]])
+
+
+def _run_simulate(monkeypatch, cohort, *, regions, capture=None):
     """Drive the REAL route against the REAL engine + cohort estimator. Only the two
-    external seams are faked: the DB frame load and the MLflow generator hydration."""
+    external seams are faked: the DB frame load and the MLflow generator hydration.
+
+    ``capture``: a dict to receive the row the REAL repository serializer would insert.
+    """
     import asyncio
 
     from src.api.routes import digital_twin as dt
@@ -214,6 +240,11 @@ def _run_simulate(monkeypatch, cohort, *, regions):
 
     async def fake_save(result, brand_value):
         saved["result"] = result
+        if capture is not None:
+            from src.digital_twin.twin_repository import SimulationRepository
+
+            real = SimulationRepository(supabase_client=_CapturingClient(capture))
+            await real.save_simulation(result, brand_value)
         return result.simulation_id
 
     repo = SimpleNamespace(
@@ -330,3 +361,60 @@ def test_region_filtered_simulate_refuses_a_region_the_cohort_cannot_estimate(mo
         _run_simulate(monkeypatch, cohort, regions=["midwest"])
     assert ei.value.status_code == 422
     assert "midwest" in str(ei.value.detail)
+
+
+@pytest.mark.unit
+def test_region_filtered_simulate_changes_the_verdict_not_only_the_number(monkeypatch):
+    """#2023's user-visible symptom: the page recommended DEPLOY for a region whose own
+    interval does not clear the minimum effect, because only the twins were filtered.
+
+    The verdict, its rationale and the standard error must all come from the targeted
+    estimate — an implementation that moved the ATE and CI but kept a cohort-wide DEPLOY
+    would still show the wrong call to the user.
+    """
+    cohort = _region_heterogeneous_cohort()
+    unfiltered, _ = _run_simulate(monkeypatch, cohort, regions=[])
+    filtered, _ = _run_simulate(monkeypatch, cohort, regions=["midwest"])
+
+    # midwest's own interval straddles the 0.05 minimum effect; the cohort's clears it.
+    assert unfiltered.recommendation.value == "deploy"
+    assert filtered.recommendation.value == "refine"
+
+    # The rationale quotes the TARGETED bounds, so the page cannot state cohort numbers.
+    assert (
+        f"[{filtered.simulated_ci_lower:.3f}, {filtered.simulated_ci_upper:.3f}]"
+        in filtered.recommendation_rationale
+    )
+
+    # SE is the targeted interval's half-width, not the cohort's.
+    assert filtered.simulated_std_error != unfiltered.simulated_std_error
+    assert filtered.simulated_std_error == pytest.approx(
+        (filtered.simulated_ci_upper - filtered.simulated_ci_lower) / (2 * 1.96), abs=1e-3
+    )
+
+
+@pytest.mark.unit
+def test_region_filtered_simulate_persists_the_targeted_numbers(monkeypatch):
+    """The history row must carry the numbers the response stated, asserted through the
+    REAL repository serializer rather than the in-memory result object.
+
+    It also pins what is NOT persisted: twin_simulations has no column for the estimate's
+    scope, so target_regions / cohort_* do not survive the write and a history read cannot
+    tell a region-scoped row from a cohort-wide one. That gap is deliberate here (no
+    migration in this lane) and is pinned so it cannot be forgotten (#2023 follow-up).
+    """
+    cohort = _region_heterogeneous_cohort()
+    sink = {}
+    filtered, _ = _run_simulate(monkeypatch, cohort, regions=["midwest"], capture=sink)
+
+    row = sink["row"]
+    assert sink["table"] == "twin_simulations"
+    assert row["simulated_ate"] == pytest.approx(filtered.simulated_ate, abs=5e-5)
+    assert row["simulated_ci_lower"] == pytest.approx(filtered.simulated_ci_lower, abs=5e-5)
+    assert row["simulated_ci_upper"] == pytest.approx(filtered.simulated_ci_upper, abs=5e-5)
+    assert row["recommendation"] == "refine"
+    assert row["recommended_sample_size"] == filtered.recommended_sample_size
+    # The filter that produced the scope IS recorded, even though the scope is not.
+    assert row["population_filters"]["regions"] == ["midwest"]
+    assert "target_regions" not in row
+    assert "cohort_ate" not in row

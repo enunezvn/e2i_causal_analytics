@@ -322,8 +322,13 @@ class CohortCausalEstimator:
 
         # The headline estimate is the one the request asked for: scoped to the targeted
         # regions when there are any (with the cohort-wide estimate kept alongside), else
-        # cohort-wide. Every quantity derived downstream — the SE, the DEPLOY/REFINE/SKIP
-        # policy, the experiment size, the persisted row — then describes one population.
+        # cohort-wide. What this carries to: the ATE, its interval, the SE derived from it,
+        # the DEPLOY/REFINE/SKIP policy and the experiment size.
+        # It does NOT re-weight the engine's subgroup heterogeneity (by_specialty /
+        # by_decile / by_adoption_stage average region CATEs over the GENERATED TWINS, a
+        # different weighting from this cohort-row-weighted headline) or the simulation
+        # confidence heuristic (which still rewards twin count). Both predate #2023 and
+        # are unchanged by it.
         if eff.target_regions:
             assert eff.target_ate is not None  # set whenever target_regions is non-empty
             assert eff.target_ci_lower is not None and eff.target_ci_upper is not None

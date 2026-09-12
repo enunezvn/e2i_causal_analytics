@@ -923,8 +923,10 @@ async def run_simulation(
             # over the brand-wide cohort, so a filtered run returned the cohort-wide ATE,
             # CI and recommendation unchanged while the chat simulator answered the same
             # region-targeted question with that region's own estimate (#2023). Scope the
-            # estimator to the filtered regions so both surfaces state the same number and
-            # every derived quantity describes the population that was simulated.
+            # estimator to the filtered regions so both surfaces state the same number.
+            # This moves the ATE, CI, SE, recommendation and sample size onto the targeted
+            # regions; the subgroup heterogeneity below stays twin-weighted and
+            # simulation_confidence still rewards twin count (both pre-#2023).
             target_regions = list(pop_filter.regions) if pop_filter else []
 
             def _do_sim():
