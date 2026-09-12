@@ -84,11 +84,12 @@ class TestDataSubsetRealEvidence:
         NON-critical test (the critical placebo gate catches an estimator that
         ignores its data)."""
         runner = RefutationRunner()
-        result = _subset(runner, _sequence_estimate([0.15] * 5))
+        result = _subset(runner, _sequence_estimate([0.15] * 5), resample_seed=7)
         assert result.status == RefutationStatus.SKIPPED
         assert result.details["reason"].startswith("degenerate_resample_distribution")
         assert result.details["resamples_completed"] == 5
         assert result.details["resample_effects"] == [0.15] * 5
+        assert result.details["resample_seed"] == 7  # #2029: the seed rides on this skip too
         assert result.p_value is None
 
     @pytest.mark.parametrize(
