@@ -652,7 +652,13 @@ class PlanExecutor:
 
         # F2-core: thread a context-carried DataFrame into tool kwargs under
         # the canonical ``estimation_data`` key (only when the caller did not
-        # already supply one). All composable tools accept **kwargs.
+        # already supply one). NOT every composable tool accepts **kwargs:
+        # measured over all 20 registered tools (2026-09-12),
+        # ``detect_structural_drift`` and ``model_inference`` do not, so Gate 0
+        # of the hook declines to inject into a tool that cannot bind the
+        # keyword. Any future autopopulate hook needs the same gate — injecting
+        # an unbindable kwarg raises ``TypeError`` from the executor's own doing,
+        # which #2045 would then report as a PLAN defect (#2061).
         autopop_dataframe = self._maybe_autopopulate_dataframe(step, resolved_inputs, context)
         if autopop_dataframe is not None:
             resolved_inputs = {**resolved_inputs, "estimation_data": autopop_dataframe}
