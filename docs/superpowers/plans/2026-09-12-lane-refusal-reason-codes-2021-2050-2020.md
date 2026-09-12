@@ -1164,8 +1164,41 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 - For `ToolComposerOutput.error`, find every consumer (orchestrator, API routes, frontend) and establish whether it reaches a user.
 - For each phase, list what can actually raise inside it: an authored `DecompositionError` / `PlanningError` / `ExecutionError`, or anything at all.
 
-**Rule:**
-- An authored phase error (the module's own error classes, with messages the module writes) may keep its text.
+**Lead classification of the phase-error raises (2026-09-12). This supersedes the "authored may keep its text" assumption below, because the phase classes are NOT authored all the way down.**
+
+**Library text wrapped at source — fix D5-style:**
+- `decomposer.py:141`: `except Exception as e` → `DecompositionError(f"Failed to decompose query: {e}")`
+- `decomposer.py:174`: `except (json.JSONDecodeError, TypeError) as e` → `f"Invalid JSON in LLM response: {e}"`
+- `planner.py:302`: `except Exception as e` → `PlanningError(f"Failed to create execution plan: {e}")`
+- `planner.py:695`: `JSONDecodeError`/`TypeError` → `f"Invalid JSON in LLM response: {e}"`
+- `executor.py:512`: `except Exception as e` → `ExecutionError(f"Plan execution failed: {e}")`
+
+**Authored — keep (11):**
+- `decomposer.py`: `:181` too few sub-questions, `:212` invalid dependency (ids from the decomposition), `:239` dependency cycle.
+- `planner.py`:
+  - `:440` no tools
+  - `:698` names only `type(parsed).__name__`
+  - `:744` unknown tool in plan (a planner-LLM tool name, not library text)
+  - `:801` cannot map a sub-question
+  - `:806` step references an unknown tool
+  - `:813` step depends on an unknown step
+  - `:906` unbound column: plan values plus the schema's own column list, which is intentionally user-meaningful
+  - `:1058` cycle in the execution plan
+
+The full repo-wide count is 16 = 5 fix + 11 keep; every raise of the three classes is classified above. Re-derive the line numbers by AST before editing.
+
+**Trap at the three catch-alls (`decomposer.py:141`, `planner.py:302`, `executor.py:512`).** Each `except Exception` also catches its module's OWN authored error raised deeper in the same `try`, e.g. `:181`'s "Too few sub-questions", and re-wraps it with `{e}`. Merely dropping `{e}` would erase those useful authored messages from the user's view. Use the pattern `cohort_causal_estimator.py:231` already uses:
+- Add `except DecompositionError: raise` (and the equivalent for the other two classes) BEFORE the generic `except Exception`, so authored errors pass through unchanged.
+- The generic arm raises the class with a fixed sentence, logs `e`, and keeps `from e`.
+
+**Follow-through:**
+- Extend Task 4b's AST guard: add `DecompositionError`, `PlanningError` and `ExecutionError` to its target classes, and `decomposer.py`, `planner.py` and `executor.py` to its scope, so these wraps cannot regress.
+- Enumerate every raise of the three classes by AST before editing. The repo-wide grep finds 16, and this list names 12.
+
+**Rule (revised):**
+- Once the wraps above are fixed at source, the three phase classes carry only authored text, so the composer keeps `Decomposition failed: {e}` / `Planning failed: {e}` / `Execution failed: {e}` as they are.
+- Only `Unexpected error: {e}` (`composer.py:593`) still carries arbitrary exception text; it becomes a fixed sentence, and its existing `logger.exception` keeps the raw text.
+- The general rule for anything else stays:
 - Anything else renders `"<Phase> failed: <fixed sentence>"`. Use a phase-level sentence, not a `ReasonCode`; these are not step failures.
 - The raw exception goes to `logger.warning` / `logger.exception` with `exc_info`.
 - `agent.py`'s `error=str(e)` follows the same rule when the error reaches a user. Report it and leave it unchanged when it provably does not.
