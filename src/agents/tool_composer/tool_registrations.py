@@ -4151,25 +4151,85 @@ def risk_scorer(
     # one collinear feature — ``treatment_initiated`` already carries the signal — and
     # scores 8,723 of 8,730 patients; dropping ROWS first would have scored 3,015.
     #
-    # A feature is unusable when it is missing for more than this share of the rows. The
-    # cut is disclosed with every offending column's real NaN count so the caller can
-    # audit it, and on the live cohort the outcome is identical anywhere from 1% to 50%
-    # — the fix does not balance on the exact value.
+    # Two independent reasons to exclude a feature, because a percentage alone gets the
+    # first one wrong:
+    #
+    # 1. STRUCTURAL — the value does not EXIST for a knowable subpopulation, detected by
+    #    applicability rather than by volume: the column's NaN mask is exactly the set of
+    #    rows where some fully-observed feature takes one value. Such a column is excluded
+    #    at ANY share, because keeping it deletes precisely that subpopulation. A
+    #    share-only rule fails here: on a 100-patient subset with 20 never-treated,
+    #    ``days_to_treatment`` sits at exactly 20%, stays under any 20% limit, and the row
+    #    stage then deletes every never-treated patient — the very outcome column-first
+    #    ordering exists to prevent, and reachable on live data because triage runs after
+    #    the ``entity_ids`` filter. Measured on the real 8,730-row cohort BOTH NaN columns
+    #    are structural: ``days_to_treatment`` is NaN for exactly the 5,712 rows with
+    #    ``treatment_initiated == 0`` (no days-to-treatment for a patient who never
+    #    started) and ``gap_days`` for exactly the 7 rows with ``adherence_rate == 0.0``
+    #    (no refill gap for a patient who never refilled), so all 8,730 now score.
+    #    A mask of one row is NOT structural: any continuous column has a unique value on
+    #    that row and would "explain" it (measured: 8 false positives in 20 random probes,
+    #    0 once two rows are required).
+    #
+    # 2. TOO SPARSE — missingness explained by nothing, above the share below. Then the
+    #    column costs more rows than it is worth. This is an economy, not a correctness
+    #    rule, which is why it is secondary: the live outcome is identical anywhere from
+    #    1% to 50%.
+    #
+    # Excluding a structural column removes real information — ``treatment_initiated``
+    # records whether timing exists, NOT how long it was, so two patients starting on day
+    # 1 and day 90 become indistinguishable on that axis. That loss is stated in the
+    # disclosure rather than claimed away; what is established here is coverage of the
+    # subpopulation, not equivalence of the reduced model.
+    if len(set(feature_cols)) != len(feature_cols):
+        ambiguous = sorted({c for c in feature_cols if feature_cols.count(c) > 1})
+        raise ToolRefusalError(
+            f"risk_scorer: the supplied DataFrame carries duplicate numeric column "
+            f"name(s) {ambiguous!r}, so a feature cannot be addressed unambiguously. "
+            "Refusing to guess which one the risk model should fit on."
+        )
+
     max_feature_nan_share = 0.20
     nan_counts = work[feature_cols].isna().sum()
-    excluded = {
-        c: int(nan_counts[c])
-        for c in feature_cols
-        if len(work) and nan_counts[c] / len(work) > max_feature_nan_share
-    }
+    fully_observed = [c for c in feature_cols if int(nan_counts[c]) == 0]
+
+    def _structural_subpopulation(column: str) -> Optional[Tuple[str, Any]]:
+        """The (column, value) whose rows are EXACTLY where ``column`` is missing."""
+        mask = work[column].isna()
+        n_missing = int(mask.sum())
+        if n_missing < 2 or bool(mask.all()):
+            return None
+        for other in fully_observed:
+            if other == column:
+                continue
+            levels = work.loc[mask, other].unique()
+            if len(levels) == 1 and int((work[other] == levels[0]).sum()) == n_missing:
+                return other, levels[0]
+        return None
+
+    excluded: Dict[str, str] = {}
+    for c in feature_cols:
+        n_missing = int(nan_counts[c])
+        if n_missing == 0:
+            continue
+        share = n_missing / len(work) if len(work) else 0.0
+        detail = f"missing {n_missing} of {len(work)}, {share:.1%}"
+        subpopulation = _structural_subpopulation(c)
+        if subpopulation is not None:
+            excluded[c] = (
+                f"{c} ({detail} — undefined wherever {subpopulation[0]} == {subpopulation[1]})"
+            )
+        elif share > max_feature_nan_share:
+            excluded[c] = f"{c} ({detail} — above the {max_feature_nan_share:.0%} usable limit)"
+
     usable_features = [c for c in feature_cols if c not in excluded]
     if not usable_features:
         raise ToolRefusalError(
-            "risk_scorer: every numeric feature column is missing for more than "
-            f"{max_feature_nan_share:.0%} of the {len(work)} supplied rows "
-            f"({', '.join(f'{c} missing {n}' for c, n in sorted(excluded.items()))}); "
-            "there is nothing left to fit a risk model on. Refusing to impute values "
-            "for the missing entries and report the result as a measured risk score."
+            f"risk_scorer: none of the {len(feature_cols)} numeric feature columns is "
+            f"usable on the {len(work)} supplied rows "
+            f"({'; '.join(excluded[c] for c in sorted(excluded))}); there is nothing "
+            "left to fit a risk model on. Refusing to impute values for the missing "
+            "entries and report the result as a measured risk score."
         )
 
     # The population the CALLER asked about, captured before the complete-case filter.
@@ -4199,14 +4259,29 @@ def risk_scorer(
             f"{outcome!r} — every row is missing at least one value, so no row can be "
             "fit. Refusing to fabricate scores."
         )
+    # AGGREGATE ADEQUACY. Per-column limits cannot see what the fit ends up standing on:
+    # five retained features each missing 19% on DISJOINT rows are individually fine and
+    # together retain 5 rows of 100. The model would fit, tier those 5, and every count
+    # reported would be true — an answer about a different cohort than the caller named.
+    # So the surviving population is gated on its own terms. A count is a label; this is
+    # the functional check. The floor is a majority: below half, "who is highest risk"
+    # would be ranking a minority of the requested population. Live retention is 100%.
+    min_retention_share = 0.50
+    if len(work[complete]) < min_retention_share * n_in_scope:
+        raise ToolRefusalError(
+            f"risk_scorer: only {int(complete.sum())} of {n_in_scope} rows are complete "
+            f"across the {len(usable_features)} usable feature columns and the outcome "
+            f"{outcome!r} — under the {min_retention_share:.0%} floor, so a risk ranking "
+            "would describe a selected minority rather than the population asked about. "
+            f"Gaps are spread across {', '.join(sorted(c for c in usable_features if int(nan_counts[c])))}. "
+            "Refusing to present scores for that subset as the cohort's risk."
+        )
     work = work[complete]
     feature_cols = usable_features
 
     if excluded:
-        excluded_note = (
-            f"{len(excluded)} numeric column(s) excluded as features for missing more "
-            f"than {max_feature_nan_share:.0%} of rows: "
-            + ", ".join(f"{c} (missing {n})" for c, n in sorted(excluded.items()))
+        excluded_note = f"{len(excluded)} numeric column(s) excluded as features: " + "; ".join(
+            excluded[c] for c in sorted(excluded)
         )
     else:
         excluded_note = "no feature column excluded for missing values"
