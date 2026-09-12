@@ -263,17 +263,21 @@ class TestSimulationExecution:
         estimate's comparison arm — shared with the chat simulator, replacing the policy's
         two-proportion figure fed the twins' heuristic treatment propensity.
 
-        This engine drives ``SyntheticEffectDataProvider``'s frame, which carries no
-        ``region`` column, so there is no comparison arm to measure a spread in:
-        ``estimate_cohort_effect`` refuses the same frame with the same message (measured).
-        The contract is then no number plus the stated reason — never a fabricated one. The
-        provider backs the dormant engine defaults tracked in #2025.
+        This engine drives ``SyntheticEffectDataProvider``. ``simulate`` passes the twin
+        features as ``reference_covariates``, so the frame is the resampled one: the twins'
+        numeric columns plus ``treatment`` and ``outcome``, and no ``region``. The sizing
+        rule's comparison arm is defined on the cohort contrast, which that frame cannot
+        express — ``estimate_cohort_effect`` refuses it with the same missing-column message
+        (measured). The contract is then no number plus the stated reason, never a
+        fabricated one. The provider backs the dormant engine defaults tracked in #2025.
         """
         result = engine.simulate(email_campaign_config)
 
         assert result.recommended_sample_size is None
-        assert "recommended_sample_size is not given" in result.recommendation_rationale
-        assert "region" in result.recommendation_rationale
+        assert (
+            "recommended_sample_size is not given: cohort missing required column(s): "
+            "need 'outcome' and 'region'." in result.recommendation_rationale
+        )
 
     def test_simulate_sizes_a_cohort_frame(self, sample_population, email_campaign_config):
         """The other side of the contract, so the test above cannot pass on a blanket None: a
@@ -287,20 +291,29 @@ class TestSimulationExecution:
         from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
         from src.digital_twin.effect.provider import CohortEffectDataProvider
 
+        # Both arms in EVERY region (150 treated + 150 control each), so the effect is
+        # identified conditional on the estimator's region axis rather than confounded with
+        # it, and the confounders vary independently of the arm.
+        rng = np.random.default_rng(11)
         regions = ["northeast", "south", "midwest", "west"]
         rows = []
         for i in range(1200):
-            treated = i % 2
+            treated = (i // 4) % 2
             rows.append(
                 {
                     "region": regions[i % 4],
-                    "email_campaign_count": 8.0 + i % 3 if treated else float(i % 3),
-                    "conversion_rate": (1.3 if treated else 1.0) + 0.1 * ((i // 4) % 5),
-                    "market_share": 0.2 + 0.1 * (i % 5),
-                    "total_rx_count": 40.0 + i % 7,
+                    "email_campaign_count": float(
+                        rng.uniform(8.0, 11.0) if treated else rng.uniform(0.0, 3.0)
+                    ),
+                    "conversion_rate": (1.3 if treated else 1.0) + float(rng.normal(0.0, 0.15)),
+                    "market_share": float(rng.uniform(0.1, 0.9)),
+                    "total_rx_count": float(rng.integers(30, 90)),
                 }
             )
         cohort = pd.DataFrame(rows)
+        arm = (cohort["email_campaign_count"] > cohort["email_campaign_count"].median()).astype(int)
+        overlap = pd.crosstab(cohort["region"], arm)
+        assert (overlap > 0).all().all(), f"both arms must appear in every region: {overlap}"
         provider = CohortEffectDataProvider(cohort)
         engine = SimulationEngine(
             sample_population,
