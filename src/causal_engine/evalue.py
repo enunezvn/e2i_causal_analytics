@@ -564,6 +564,19 @@ def covariate_bias_factors(
         return out
     t = np.asarray(frame[treatment], dtype=float)
     y = np.asarray(frame[outcome], dtype=float)
+    # A frame with no rows, or whose treatment or outcome is ENTIRELY missing, has no
+    # benchmark to compute: every covariate's complete-case ``ok`` mask below is empty
+    # and every factor is skipped, so the result is the same empty dict either way.
+    # Saying so HERE -- before the two full-column pre-computations -- is what keeps it
+    # quiet: ``_high_mask`` would ask numpy for the median of an all-NaN column and
+    # ``np.nanstd`` for the SD of one, each emitting a RuntimeWarning about a degenerate
+    # frame that the per-covariate masks then discard anyway (#2001). Narrowing the two
+    # pre-computations to the non-NaN subset instead is NOT available for ``treated``:
+    # ``_factor_from_numeric_covariate`` indexes it with the per-covariate ``ok`` mask,
+    # so that mask has to stay frame-length. ``t.size`` is checked explicitly because
+    # ``np.isnan(empty).all()`` is vacuously True and should not be the reason.
+    if t.size == 0 or bool(np.isnan(t).all()) or bool(np.isnan(y).all()):
+        return out
     treated = _high_mask(t)
     control = ~treated
     y_binary = _is_binary(y)

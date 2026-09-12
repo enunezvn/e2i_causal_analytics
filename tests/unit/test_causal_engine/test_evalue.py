@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -857,3 +858,75 @@ class TestOutcomeStdFromFrame:
                 covariate_factors={},
                 n_rows=3,
             )
+
+
+class TestDegenerateFramesEmitNoWarning:
+    """A degenerate frame has no benchmark to compute -- and must say so silently (#2001).
+
+    ``covariate_bias_factors`` pre-computes the treatment split and the outcome SD on
+    the FULL columns, before any per-covariate complete-case mask exists. On a frame
+    whose treatment or outcome is entirely missing (or which has no rows at all) those
+    two pre-computations reach numpy with nothing to work on and emit a
+    ``RuntimeWarning`` -- while every covariate is still correctly skipped and the
+    benchmark still comes back empty. The empty result is right; the warning is noise.
+    These tests pin BOTH: no warning, and the same empty dict.
+    """
+
+    @staticmethod
+    def _empty_float_frame() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "t": pd.Series(dtype=float),
+                "y": pd.Series(dtype=float),
+                "c": pd.Series(dtype=float),
+            }
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        ["all_nan_treatment", "all_nan_outcome", "no_rows", "all_nan_covariate"],
+    )
+    def test_a_degenerate_frame_returns_an_empty_benchmark_without_warning(self, name):
+        frames = {
+            # _high_mask -> np.nanmedian on an all-NaN column: "All-NaN slice encountered"
+            "all_nan_treatment": pd.DataFrame(
+                {"t": [np.nan] * 6, "y": [1.0, 2, 3, 4, 5, 6], "c": [0, 1, 0, 1, 0, 1]}
+            ),
+            # np.nanstd on an all-NaN column: "Degrees of freedom <= 0 for slice."
+            "all_nan_outcome": pd.DataFrame(
+                {"t": [0.0, 1, 0, 1, 0, 1], "y": [np.nan] * 6, "c": [0, 1, 0, 1, 0, 1]}
+            ),
+            # zero rows: both of the above
+            "no_rows": self._empty_float_frame(),
+            # already guarded by the per-covariate ``ok`` mask -- pinned so it stays that way
+            "all_nan_covariate": pd.DataFrame(
+                {"t": [0.0, 1, 0, 1, 0, 1], "y": [1.0, 2, 3, 4, 5, 6], "c": [np.nan] * 6}
+            ),
+        }
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert ev.covariate_bias_factors(frames[name], "t", "y", ["c"]) == {}
+
+    def test_a_categorical_covariate_on_a_degenerate_frame_is_silent_too(self):
+        """The categorical route reads the same two pre-computed full-column values."""
+        frame = pd.DataFrame(
+            {"t": [np.nan] * 8, "y": [1.0, 0, 1, 0, 1, 0, 1, 0], "g": list("aabbccdd")}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert ev.covariate_bias_factors(frame, "t", "y", ["g"]) == {}
+
+    def test_a_partially_missing_frame_still_scores_its_covariate(self):
+        """The guard must fire on ALL-missing, never on SOME-missing: the complete-case
+        rows below are exactly the hand-checked 4/3 fixture, so the factor must survive."""
+        frame = pd.DataFrame(
+            {
+                "t": [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, np.nan, 1.0],
+                "c": [1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1.0, np.nan],
+                "y": [1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1.0, 0.0],
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            factors = ev.covariate_bias_factors(frame, "t", "y", ["c"])
+        assert factors["c"] == pytest.approx(4 / 3)
