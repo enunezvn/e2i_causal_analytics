@@ -28,6 +28,17 @@ def _frame(n: int, seed: int = 2014) -> pd.DataFrame:
     return pd.DataFrame({"treatment": t, "outcome": y, "confounder_a": c})
 
 
+def _binary_frame(n: int, seed: int = 2014) -> pd.DataFrame:
+    """Same shape as ``_frame`` with a BINARY outcome, so a baseline risk is derivable."""
+    rng = np.random.default_rng(seed)
+    c = rng.normal(0.0, 1.0, n)
+    t = (c + rng.normal(0.0, 1.0, n) > 0.3).astype(int)
+    p = 1.0 / (1.0 + np.exp(-(-0.3 + 0.6 * t + 0.5 * c)))
+    return pd.DataFrame(
+        {"treatment": t, "outcome": (rng.random(n) < p).astype(int), "confounder_a": c}
+    )
+
+
 def _assert_point_only(report: dict, expected_point: float) -> None:
     assert report["e_value_point"] == pytest.approx(expected_point, rel=1e-12)
     assert report["e_value_ci"] is None
@@ -46,15 +57,30 @@ def test_no_interval_reports_the_point_e_value_only(ci) -> None:
 
 
 def test_no_interval_on_the_risk_ratio_path() -> None:
-    report = tr.sensitivity_analyzer(ate=0.1, ci_lower=None, baseline_risk=0.3)
+    # #2022: the baseline risk is DERIVED — the control-arm rate of a binary outcome —
+    # so the risk-ratio path is reached from the frame, not from a caller's number.
+    frame = _binary_frame(800)
+    report = tr.sensitivity_analyzer(
+        ate=0.1,
+        ci_lower=None,
+        treatment="treatment",
+        outcome="outcome",
+        confounders=["confounder_a"],
+        estimation_data=frame,
+    )
 
-    rr = evalue.rr_from_risk_difference(0.1, 0.3)
+    t = np.asarray(frame["treatment"], dtype=float)
+    y = np.asarray(frame["outcome"], dtype=float)
+    rr = evalue.rr_from_risk_difference(0.1, float(y[t == 0].mean()))
     assert rr is not None
-    _assert_point_only(report, evalue.e_value_from_rr(rr))
+    assert report["e_value_point"] == pytest.approx(evalue.e_value_from_rr(rr), rel=1e-12)
+    assert report["e_value_ci"] is None
+    assert report["reading"] == "interval_unavailable"
     assert report["conversion"] == "risk_ratio"
 
 
-def test_no_interval_with_an_impossible_baseline_risk_is_refused() -> None:
+def test_no_interval_with_a_supplied_baseline_risk_is_refused() -> None:
+    # #2022: nothing emits a baseline risk, so a supplied one is invented by construction.
     with pytest.raises(RuntimeError, match="baseline_risk"):
         tr.sensitivity_analyzer(ate=0.9, ci_lower=None, baseline_risk=0.3)
 
@@ -115,11 +141,27 @@ def test_a_real_interval_still_gives_the_full_reading() -> None:
 
 def test_no_interval_still_reports_the_measured_confounding_benchmark() -> None:
     # The benchmark is a point quantity (spec 2.5: benchmark the point estimate, state
-    # precision separately), so a naive contrast still yields it; only the verdict, which
-    # needs the interval to rule out a null finding, is withheld.
-    report = tr.sensitivity_analyzer(ate=0.1, ci_lower=None, baseline_risk=0.3, naive_ate=0.2)
+    # precision separately), so the frame-derived naive contrast still yields it; only the
+    # verdict, which needs the interval to rule out a null finding, is withheld.
+    # #2022: the contrast and the SD come from the frame, not from caller-bound numbers.
+    frame = _frame(600)
+    report = tr.sensitivity_analyzer(
+        ate=0.1,
+        ci_lower=None,
+        treatment="treatment",
+        outcome="outcome",
+        confounders=["confounder_a"],
+        estimation_data=frame,
+    )
 
-    expected = evalue.joint_confounding_benchmark(0.2, 0.1, baseline_risk=0.3, outcome_std=None)
+    t = np.asarray(frame["treatment"], dtype=float)
+    y = np.asarray(frame["outcome"], dtype=float)
+    expected = evalue.joint_confounding_benchmark(
+        float(y[t == 1].mean() - y[t == 0].mean()),
+        0.1,
+        baseline_risk=None,
+        outcome_std=float(np.std(y)),
+    )
     assert expected is not None
     assert report["benchmark"] == pytest.approx(expected, rel=1e-12)
     assert report["benchmark_basis"] == "joint_naive_vs_adjusted"

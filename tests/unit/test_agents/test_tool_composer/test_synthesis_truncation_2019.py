@@ -448,7 +448,9 @@ def test_whole_prompt_is_bounded_by_steps_times_budget(mock_llm_client):
         ("gap_calculator", lambda: _gap_output(5)),
         (
             "sensitivity_analyzer",
-            lambda: tr.sensitivity_analyzer(ate=0.12, ci_lower=0.04, ci_upper=0.20, naive_ate=0.19),
+            # #2022: no naive_ate parameter any more — the contrast is derived from the
+            # frame, and this rendering check only needs a small, valid report.
+            lambda: tr.sensitivity_analyzer(ate=0.12, ci_lower=0.04, ci_upper=0.20),
         ),
     ],
 )

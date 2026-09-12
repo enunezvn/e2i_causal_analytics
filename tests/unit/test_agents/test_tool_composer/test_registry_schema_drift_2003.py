@@ -113,6 +113,19 @@ INTERNAL_INPUTS: Dict[str, Dict[str, str]] = {
         "covariates": "alias of confounders",
         "common_causes": "alias of confounders",
     },
+    "sensitivity_analyzer": {
+        "treatment_var": "alias of treatment",
+        "outcome_var": "alias of outcome",
+        "covariates": "alias of confounders",
+        "common_causes": "alias of confounders",
+        # Read ONLY to refuse them (#2022). Not offered to the planner: no tool output
+        # carries either, so every bound value was invented — live, baseline_risk=0.5 on a
+        # continuous outcome and naive_ate = the adjusted ate, which pins the
+        # measured-confounding benchmark to 1.00 and contradicts the refutation suite on
+        # the same estimate. Both are derived from the frame now.
+        "baseline_risk": "accepted only to refuse it; derived from the frame instead",
+        "naive_ate": "accepted only to refuse it; derived from the frame instead",
+    },
 }
 
 

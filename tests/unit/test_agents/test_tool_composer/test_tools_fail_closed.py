@@ -46,21 +46,41 @@ def test_sensitivity_analyzer_matches_the_shared_module_and_reads_unbenchmarked_
     assert out_cross["e_value_ci"] == pytest.approx(1.0, abs=1e-12)
 
 
-def test_sensitivity_analyzer_reads_beyond_or_within_with_a_naive_contrast_and_baseline_risk():
-    beyond = tr.sensitivity_analyzer(
-        ate=0.15, ci_lower=0.08, ci_upper=0.22, baseline_risk=0.30, naive_ate=0.20
-    )
+def _confounded_binary_outcome_frame(n: int = 900, seed: int = 354) -> pd.DataFrame:
+    """Confounded frame with a BINARY outcome: a control-arm baseline risk IS derivable."""
+    rng = np.random.default_rng(seed)
+    c = rng.normal(0.0, 1.0, n)
+    t = (0.9 * c + rng.normal(0.0, 1.0, n) > 0.0).astype(int)
+    p = 1.0 / (1.0 + np.exp(-(-0.5 + 0.7 * t + 0.8 * c)))
+    return pd.DataFrame({"treatment": t, "outcome": (rng.random(n) < p).astype(int), "c": c})
+
+
+def test_sensitivity_analyzer_reads_beyond_or_within_against_the_frames_own_contrast():
+    # #2022: the naive contrast and the baseline risk are DERIVED from the frame, so the
+    # three readings are driven by the estimate alone, against one measured benchmark.
+    frame = _confounded_binary_outcome_frame()
+    bound = {
+        "treatment": "treatment",
+        "outcome": "outcome",
+        "confounders": ["c"],
+        "estimation_data": frame,
+    }
+
+    beyond = tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, **bound)
     assert beyond["reading"] == "beyond_measured_confounding"
     assert beyond["headline"] == "Robust to confounding at measured strength"
-    assert beyond["benchmark"] == pytest.approx((0.50 / 0.30) / (0.45 / 0.30))
-    within = tr.sensitivity_analyzer(
-        ate=0.03, ci_lower=0.01, ci_upper=0.05, baseline_risk=0.30, naive_ate=0.10
-    )
+    assert beyond["benchmark"] is not None and beyond["benchmark"] > 1.0
+    assert beyond["benchmark_basis"] == "joint_naive_vs_adjusted"
+
+    within = tr.sensitivity_analyzer(ate=0.001, ci_lower=0.0005, ci_upper=0.0015, **bound)
     assert within["reading"] == "within_measured_confounding"
-    null = tr.sensitivity_analyzer(
-        ate=0.05, ci_lower=-0.02, ci_upper=0.12, baseline_risk=0.30, naive_ate=0.10
-    )
+
+    null = tr.sensitivity_analyzer(ate=0.05, ci_lower=-0.02, ci_upper=0.12, **bound)
     assert null["reading"] == "null_finding" and null["e_value_ci"] == 1.0
+
+    # Every reading is benchmarked against the frame's own measured contrast (the value
+    # varies with the adjusted effect, since the benchmark is naive-vs-THIS-adjusted).
+    assert within["benchmark_basis"] == "joint_naive_vs_adjusted"
 
 
 def test_sensitivity_analyzer_fail_closes_on_non_finite():
@@ -68,8 +88,9 @@ def test_sensitivity_analyzer_fail_closes_on_non_finite():
         tr.sensitivity_analyzer(ate=float("nan"), ci_lower=0.1)
     with pytest.raises(RuntimeError):
         tr.sensitivity_analyzer(ate=0.5, ci_lower=float("inf"))
-    with pytest.raises(RuntimeError):
-        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1, naive_ate=float("nan"))
+    # #2022: naive_ate is gone, so the third finite input to guard is the upper bound.
+    with pytest.raises(RuntimeError, match="ci_upper"):
+        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1, ci_upper=float("nan"))
 
 
 def test_sensitivity_analyzer_refuses_a_point_estimate_outside_its_own_ci():
@@ -79,18 +100,34 @@ def test_sensitivity_analyzer_refuses_a_point_estimate_outside_its_own_ci():
         tr.sensitivity_analyzer(ate=0.5, ci_lower=0.6, ci_upper=0.9)
 
 
-def test_sensitivity_analyzer_refuses_a_supplied_baseline_risk_the_risk_ratio_path_cannot_use():
-    # A supplied baseline_risk is a contract: the caller asked for risk-ratio E-values.
-    # When effect/CI/baseline do not form risks in (0, 1) the tool must REFUSE rather
-    # than silently substitute the standardized-difference scale (codex round 1).
-    with pytest.raises(RuntimeError, match="risk-ratio"):
-        tr.sensitivity_analyzer(ate=-0.4, ci_lower=-0.5, ci_upper=-0.3, baseline_risk=0.3)
-    with pytest.raises(RuntimeError, match="risk-ratio"):
-        tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, baseline_risk=1.5)
-    valid = tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, baseline_risk=0.30)
-    assert valid["conversion"] == "risk_ratio"
-    no_baseline = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
-    assert no_baseline["conversion"] == "standardized_difference"
+def test_sensitivity_analyzer_refuses_the_two_inputs_no_tool_output_carries():
+    # #2022: ``baseline_risk`` and ``naive_ate`` were planner-bound parameters no tool
+    # output emits, so every value the planner put there was invented. They are refused,
+    # and the quantities come from the frame instead.
+    for invented in ({"baseline_risk": 0.30}, {"naive_ate": 0.20}):
+        with pytest.raises(RuntimeError, match="No composable tool output carries it"):
+            tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, **invented)
+
+
+def test_a_derived_baseline_risk_the_risk_ratio_path_cannot_use_falls_to_one_shared_scale():
+    # A DERIVED baseline risk is a measurement, not a caller contract: when the effect
+    # cannot form risks in (0, 1) at the control-arm rate, ``classify`` puts the WHOLE
+    # reading on the standardized-difference scale — the same thing it does inside the
+    # refutation runner, so the two engines stay on one scale for one estimate.
+    frame = _confounded_binary_outcome_frame()
+    bound = {
+        "treatment": "treatment",
+        "outcome": "outcome",
+        "confounders": ["c"],
+        "estimation_data": frame,
+    }
+    in_domain = tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, **bound)
+    assert in_domain["conversion"] == "risk_ratio"
+    # An effect far larger than 1 - baseline_risk has no risk-ratio reading.
+    out_of_domain = tr.sensitivity_analyzer(ate=0.95, ci_lower=0.90, ci_upper=0.99, **bound)
+    assert out_of_domain["conversion"] == "standardized_difference"
+    no_frame = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
+    assert no_frame["conversion"] == "standardized_difference"
 
 
 def test_sensitivity_analyzer_null_finding_takes_precedence_over_unbenchmarked():
