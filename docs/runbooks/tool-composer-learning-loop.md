@@ -127,9 +127,15 @@ At API startup, when the learning-loop flag is set, `learning_loop_startup()` ca
 running code's registered tools. It replaced the previous regime of generating a migration whenever
 a tool's schema changed.
 
-**Consequence worth knowing:** with `TOOL_COMPOSER_LEARNING_LOOP_ENABLED` off, nothing re-syncs the
-registry. If the flag is turned off long-term, either re-enable the sync independently of recording
-or keep a static sync migration in the tree.
+**Consequence worth knowing:** the re-sync only runs while `TOOL_COMPOSER_LEARNING_LOOP_ENABLED` is
+on. With the flag off, nothing re-syncs the registry, and the static sync migration
+(`database/ml/038_tool_registry_schema_sync.sql`, regenerated from the merged registry when this
+work lands alongside the other tool-composer branches) is the only thing holding those rows in step
+with the code — which is why one is kept rather than retired with the generator regime.
+
+The coupling itself — registry sync and the column allowlist both riding the *recording* flag — is
+filed as **#2034**. It is deliberately not changed here; until it is, treat the static migration as
+the fallback and re-run it after any tool-schema change made with the flag off.
 
 Boot log to look for: `tool-composer learning loop: registry sync {...}; column allowlist N names`.
 
