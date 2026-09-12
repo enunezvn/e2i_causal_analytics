@@ -139,7 +139,9 @@ def test_flag_on_adds_one_caveat_line_per_caveated_tool(registry, monkeypatch):
 def test_flag_on_says_nothing_about_tools_without_a_caveat(registry, monkeypatch):
     monkeypatch.setenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", "1")
     name = _first_tool_name(registry)
-    reliable = {name: ToolReliability.from_row(_row(name, n_succeeded=40, n_health_failures=0, n_health=40))}
+    reliable = {
+        name: ToolReliability.from_row(_row(name, n_succeeded=40, n_health_failures=0, n_health=40))
+    }
     assert reliable[name].verdict == "reliable"
 
     block = _planner(registry)._format_tools_for_prompt(verdicts=reliable)
