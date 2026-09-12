@@ -23,10 +23,11 @@ episode therefore landed with ``session_id = NULL``, and
 labelled.
 
 These tests build the agent payload with the REAL dispatcher method rather than
-a hand-written dict — the previous coverage
-(``test_composer_recording_wiring.test_orchestrator_agent_marks_its_compositions``)
+a hand-written dict. The previous coverage (the wiring test now named
+``test_composer_recording_wiring.test_direct_invocation_stamps_the_orchestrator_entry_point``)
 passed ``{"context": {"session_id": ...}}``, a shape the production caller
-never produces, which is exactly how the defect hid.
+never produces, which is exactly how the defect hid. That test now asserts
+only the ``entry_point`` stamp; every identity claim lives here.
 
 Scope: the composition-feedback owner gate (``_same_owner``) is a separate
 defect and is not touched here.
@@ -137,8 +138,32 @@ async def test_absent_identity_stays_absent(mock_llm_client, mock_tool_registry)
 
 
 async def test_explicit_context_identity_is_not_clobbered(mock_llm_client, mock_tool_registry):
-    """A caller that puts the identity in ``context`` (direct invocation, the
-    existing wiring test) keeps it when the dispatch payload has none."""
+    """A direct caller that puts the identity in ``context`` keeps it when the
+    payload carries no top-level ``session_id``/``user_id``.
+
+    The dispatcher never builds a ``context`` key, so this payload is
+    hand-written on purpose: it pins the direct-invocation contract, not the
+    dispatch path.
+    """
     payload = {"query": QUERY, "context": {"session_id": "sess-agent", "user_id": "u-agent"}}
     seed = await _seed_for(payload, mock_llm_client, mock_tool_registry)
     assert (seed["session_id"], seed["user_id"]) == ("sess-agent", "u-agent")
+
+
+async def test_dispatched_identity_wins_over_a_context_supplied_one(
+    mock_llm_client, mock_tool_registry
+):
+    """When the payload AND the merged context both carry an identity, the
+    payload's (the orchestrator state's) is recorded.
+
+    ``_prepare_agent_input`` never builds ``context``/``extracted_entities``; the
+    one context channel it passes through is ``state["user_context"]``, which
+    ``ToolComposerAgent.run`` spreads into ``merged_context`` before binding the
+    top-level ids. A stale id riding in there must not beat the dispatcher's.
+    """
+    payload = _prepared(
+        user_context={"brand": "Kisqali", "session_id": "stale-session", "user_id": "stale-user"}
+    )
+    assert payload["user_context"]["session_id"] == "stale-session"  # both really present
+    seed = await _seed_for(payload, mock_llm_client, mock_tool_registry)
+    assert (seed["session_id"], seed["user_id"]) == (SESSION, USER)
