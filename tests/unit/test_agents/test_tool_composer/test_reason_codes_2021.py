@@ -34,6 +34,15 @@ def test_canonical_sentences_carry_no_interpolation():
         assert len(sentence) <= 160, code
 
 
+def test_the_dependency_unmet_sentence_does_not_claim_the_upstream_never_ran():
+    """The executor skips a step whose bound upstream is in ``failed_step_ids``, which holds
+    every step whose output is not a success: refused, error and timeout steps RAN."""
+    assert (
+        canonical_sentence(ReasonCode.DEPENDENCY_UNMET)
+        == "a step this one depends on did not produce a result"
+    )
+
+
 # The wire values as of the #2021 lane. Once codes are persisted, removing or renaming a
 # member orphans stored rows and needs a data migration; adding one does not.
 _WIRE_VALUES_2021 = frozenset(
@@ -55,7 +64,6 @@ _WIRE_VALUES_2021 = frozenset(
         "missing_dataframe",
         "ci_outside_estimate",
         "point_estimate_only",
-        "upstream_step_failed",
         "unsupported_request",
         "degenerate_design",
         "simulation_incomplete",
@@ -76,8 +84,11 @@ _WIRE_VALUES_2021 = frozenset(
 
 
 def test_wire_values_may_grow_but_never_shrink_or_rename():
-    """Removing or renaming a member needs a data migration once codes are persisted."""
-    assert len(_WIRE_VALUES_2021) == 33
+    """Removing or renaming a member needs a data migration once codes are persisted.
+
+    upstream_step_failed removed 2026-09-12 before first deploy; never persisted.
+    """
+    assert len(_WIRE_VALUES_2021) == 32
     current = {c.value for c in ReasonCode}
     assert current >= _WIRE_VALUES_2021, sorted(_WIRE_VALUES_2021 - current)
     for member in ReasonCode:

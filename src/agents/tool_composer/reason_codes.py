@@ -40,7 +40,6 @@ class ReasonCode(StrEnum):
     MISSING_DATAFRAME = "missing_dataframe"
     CI_OUTSIDE_ESTIMATE = "ci_outside_estimate"
     POINT_ESTIMATE_ONLY = "point_estimate_only"
-    UPSTREAM_STEP_FAILED = "upstream_step_failed"
     UNSUPPORTED_REQUEST = "unsupported_request"
     DEGENERATE_DESIGN = "degenerate_design"
     SIMULATION_INCOMPLETE = "simulation_incomplete"
@@ -80,7 +79,6 @@ CANONICAL_SENTENCES: Dict[ReasonCode, str] = {
     ReasonCode.MISSING_DATAFRAME: "the real source data was not supplied to the tool",
     ReasonCode.CI_OUTSIDE_ESTIMATE: "the confidence interval is inconsistent with the point estimate",
     ReasonCode.POINT_ESTIMATE_ONLY: "no uncertainty could be computed for the estimate",
-    ReasonCode.UPSTREAM_STEP_FAILED: "an earlier step this one depends on did not produce a result",
     ReasonCode.UNSUPPORTED_REQUEST: "the tool cannot answer a question of this shape",
     ReasonCode.DEGENERATE_DESIGN: "the study design the inputs imply is too small to support a valid comparison",
     ReasonCode.SIMULATION_INCOMPLETE: "the twin simulation did not complete",
@@ -93,7 +91,7 @@ CANONICAL_SENTENCES: Dict[ReasonCode, str] = {
     ReasonCode.TOOL_TIMEOUT: "the tool exceeded its time budget",
     ReasonCode.PLAN_DEFECT: "the plan called this tool incorrectly",
     ReasonCode.REFERENCE_UNRESOLVABLE: "the plan referred to a result that does not exist",
-    ReasonCode.DEPENDENCY_UNMET: "a step this one depends on did not run",
+    ReasonCode.DEPENDENCY_UNMET: "a step this one depends on did not produce a result",
     ReasonCode.CIRCUIT_OPEN: "the tool was temporarily withheld after repeated failures",
     ReasonCode.TOOL_NOT_REGISTERED: "the plan named a tool that is not registered",
 }

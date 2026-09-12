@@ -343,6 +343,8 @@ class StepResult(BaseModel):
     # #2021: the closed reason code for this step's failure. Tool-authored when a
     # ToolRefusalError/ToolInputError was caught, executor-assigned on every other failure arm,
     # None on success. The aggregation key the learning loop stores; the raw message never is.
+    # A refused/input_rejected step can still carry tool_error: the error constructor fails soft
+    # on a code outside the closed set, so that pairing records a bad code, not a contradiction.
     reason_code: Optional[str] = None
     reason_details: Dict[str, Any] = Field(default_factory=dict)
 
