@@ -498,6 +498,37 @@ describe('DigitalTwin', () => {
     expect(screen.getByText(/1840\s*ms/i)).toBeInTheDocument();
   });
 
+  it('labels a region-filtered result with its regions and shows the cohort-wide effect (#2023)', () => {
+    // A region filter narrows the ESTIMATE, not just the twins: the headline ATE/CI are
+    // the targeted regions'. The page must say which regions, and keep the cohort-wide
+    // effect visible so the two numbers are never confused for each other.
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: {
+        ...mockRunResult,
+        simulated_ate: 0.2585,
+        simulated_ci_lower: 0.1995,
+        simulated_ci_upper: 0.3174,
+        target_regions: ['northeast'],
+        cohort_effect: 0.1352,
+        cohort_ci_lower: 0.0924,
+        cohort_ci_upper: 0.1781,
+      },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    // The headline is labelled with the scope it was estimated on.
+    expect(screen.getAllByText(/estimated on northeast/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ATE · northeast/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/0\.259/).length).toBeGreaterThan(0);
+    // The cohort-wide effect is reported alongside, not replaced.
+    expect(screen.getAllByText(/cohort-wide.*0\.135/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Cohort-wide effect \(all regions\).*0\.092.*0\.178/i)).toBeInTheDocument();
+  });
+
   it('renders a Supporting Evidence list derived from the fixture values', async () => {
     // Reuse the exact mockRunResult fixture (is_significant: true,
     // effect_size_cohens_d: 0.42, statistical_power: 0.86,

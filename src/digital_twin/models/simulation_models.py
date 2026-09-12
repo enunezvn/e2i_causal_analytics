@@ -161,6 +161,16 @@ class SimulationResult(BaseModel):
     simulated_ci_upper: float = Field(description="95% CI upper bound")
     simulated_std_error: float = Field(ge=0)
 
+    # Region scope of the effect above (#2023). Empty = the whole cohort. When a region
+    # filter narrowed the estimate, these name the regions it was estimated ON and carry
+    # the cohort-wide estimate alongside, so neither number is lost. Not persisted (the
+    # twin_simulations row records the filter in population_filters), so a history read
+    # leaves them at their defaults rather than asserting a scope it cannot verify.
+    target_regions: List[str] = Field(default_factory=list)
+    cohort_ate: Optional[float] = None
+    cohort_ci_lower: Optional[float] = None
+    cohort_ci_upper: Optional[float] = None
+
     # Heterogeneity
     effect_heterogeneity: EffectHeterogeneity = Field(default_factory=EffectHeterogeneity)
 
@@ -202,6 +212,12 @@ class SimulationResult(BaseModel):
         """Ensure CI bounds are properly ordered."""
         if self.simulated_ci_lower > self.simulated_ci_upper:
             raise ValueError("CI lower bound must be <= upper bound")
+        if (
+            self.cohort_ci_lower is not None
+            and self.cohort_ci_upper is not None
+            and self.cohort_ci_lower > self.cohort_ci_upper
+        ):
+            raise ValueError("cohort CI lower bound must be <= upper bound")
         return self
 
     def is_significant(self, threshold: float = 0.05) -> bool:

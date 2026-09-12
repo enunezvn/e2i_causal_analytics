@@ -289,11 +289,25 @@ class CohortCausalEstimator:
     training-evidence CI), this produces a REAL DML estimate on the cohort with an honest
     inference interval, and reports per-twin uplift as each twin's REGION CATE (genuine
     heterogeneity from the data, not a synthetic-forest artifact).
+
+    ``target_regions`` (#2023) SCOPES the headline estimate: the returned ``ate`` and its
+    interval are the forest's effect on the cohort rows in those regions — the same numbers
+    the chat ``counterfactual_simulator`` reports for the same regions, from the same
+    single fit — and the cohort-wide estimate rides along in ``cohort_*``. Without it the
+    estimate is cohort-wide, as before. A targeted region the cohort cannot contrast raises
+    ``EffectDataUnavailable`` rather than quietly answering with the cohort-wide effect.
     """
 
-    def __init__(self, *, alpha: float = 0.05, seed: int = 42) -> None:
+    def __init__(
+        self,
+        *,
+        alpha: float = 0.05,
+        seed: int = 42,
+        target_regions: Sequence[str] = (),
+    ) -> None:
         self.alpha = alpha
         self.seed = seed
+        self.target_regions = [str(r) for r in target_regions]
 
     def estimate(self, frame, twin_population: pd.DataFrame) -> EffectEstimate:
         eff = estimate_cohort_effect(
@@ -303,28 +317,50 @@ class CohortCausalEstimator:
             confounders=tuple(frame.confounders),
             alpha=self.alpha,
             seed=self.seed,
+            target_regions=self.target_regions,
         )
 
+        # The headline estimate is the one the request asked for: scoped to the targeted
+        # regions when there are any (with the cohort-wide estimate kept alongside), else
+        # cohort-wide. Every quantity derived downstream — the SE, the DEPLOY/REFINE/SKIP
+        # policy, the experiment size, the persisted row — then describes one population.
+        if eff.target_regions:
+            assert eff.target_ate is not None  # set whenever target_regions is non-empty
+            assert eff.target_ci_lower is not None and eff.target_ci_upper is not None
+            ate, ci_lower, ci_upper = eff.target_ate, eff.target_ci_lower, eff.target_ci_upper
+            n_train = eff.target_n
+            cohort_ate: float | None = eff.ate
+            cohort_ci_lower: float | None = eff.ate_ci_lower
+            cohort_ci_upper: float | None = eff.ate_ci_upper
+        else:
+            ate, ci_lower, ci_upper = eff.ate, eff.ate_ci_lower, eff.ate_ci_upper
+            n_train = eff.n
+            cohort_ate = cohort_ci_lower = cohort_ci_upper = None
+
         # Per-twin uplift = the twin's region CATE (honest, data-driven heterogeneity);
-        # twins in a region absent from the cohort fall back to the population ATE.
+        # twins in a region absent from the cohort fall back to the headline ATE.
         if twin_population is not None and "region" in getattr(twin_population, "columns", []):
             regions = twin_population["region"].astype(str)
-            per_twin = np.array([eff.cate_by_region.get(r, eff.ate) for r in regions], dtype=float)
+            per_twin = np.array([eff.cate_by_region.get(r, ate) for r in regions], dtype=float)
         else:
             n = len(twin_population) if twin_population is not None else 0
-            per_twin = np.full(max(n, 1), eff.ate, dtype=float)
+            per_twin = np.full(max(n, 1), ate, dtype=float)
 
         return EffectEstimate(
-            ate=eff.ate,
-            ate_ci_lower=eff.ate_ci_lower,
-            ate_ci_upper=eff.ate_ci_upper,
+            ate=ate,
+            ate_ci_lower=ci_lower,
+            ate_ci_upper=ci_upper,
             att=None,
             atc=None,
             per_twin_uplift=per_twin,
             auuc=None,
             qini=None,
             feature_importances={f"cate::{r}": v for r, v in eff.cate_by_region.items()},
-            n_train=eff.n,
+            n_train=n_train,
             estimator_type="cohort_causal_forest_dml",
             data_provenance=PROVENANCE_COHORT,
+            target_regions=list(eff.target_regions),
+            cohort_ate=cohort_ate,
+            cohort_ci_lower=cohort_ci_lower,
+            cohort_ci_upper=cohort_ci_upper,
         )

@@ -18486,6 +18486,27 @@ export interface components {
              * @description Origin of the ATE estimate: 'synthetic_uplift_v1' (synthetic-DGP-trained uplift, ~constant per brand/intervention in v1) or 'rwd_uplift' (real-world). None for legacy/error results.
              */
             data_provenance?: string | null;
+            /**
+             * Target Regions
+             * @description Regions the effect above was estimated ON (#2023). Empty means the whole cohort. When a region filter is applied, simulated_ate / its interval / the recommendation / recommended_sample_size all describe these regions — the same numbers the chat counterfactual_simulator gives for the same question.
+             * @default []
+             */
+            target_regions: string[];
+            /**
+             * Cohort Effect
+             * @description The cohort-wide ATE the targeted estimate was narrowed from, reported alongside it. None when nothing was narrowed (simulated_ate IS cohort-wide) or on a history read, which does not record the scope.
+             */
+            cohort_effect?: number | null;
+            /**
+             * Cohort Ci Lower
+             * @description Lower bound of the cohort-wide interval, when narrowed.
+             */
+            cohort_ci_lower?: number | null;
+            /**
+             * Cohort Ci Upper
+             * @description Upper bound of the cohort-wide interval, when narrowed.
+             */
+            cohort_ci_upper?: number | null;
             /** Population Filters */
             population_filters: {
                 [key: string]: unknown;
@@ -18643,6 +18664,27 @@ export interface components {
              * @description Origin of the ATE estimate: 'synthetic_uplift_v1' (synthetic-DGP-trained uplift, ~constant per brand/intervention in v1) or 'rwd_uplift' (real-world). None for legacy/error results.
              */
             data_provenance?: string | null;
+            /**
+             * Target Regions
+             * @description Regions the effect above was estimated ON (#2023). Empty means the whole cohort. When a region filter is applied, simulated_ate / its interval / the recommendation / recommended_sample_size all describe these regions — the same numbers the chat counterfactual_simulator gives for the same question.
+             * @default []
+             */
+            target_regions: string[];
+            /**
+             * Cohort Effect
+             * @description The cohort-wide ATE the targeted estimate was narrowed from, reported alongside it. None when nothing was narrowed (simulated_ate IS cohort-wide) or on a history read, which does not record the scope.
+             */
+            cohort_effect?: number | null;
+            /**
+             * Cohort Ci Lower
+             * @description Lower bound of the cohort-wide interval, when narrowed.
+             */
+            cohort_ci_lower?: number | null;
+            /**
+             * Cohort Ci Upper
+             * @description Upper bound of the cohort-wide interval, when narrowed.
+             */
+            cohort_ci_upper?: number | null;
         };
         /**
          * SimulationStatusEnum

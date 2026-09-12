@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -29,6 +29,14 @@ class EffectEstimate:
     n_train: int
     estimator_type: str
     data_provenance: str
+    # Region scope of this estimate (#2023). Empty = the whole cohort, and ``cohort_*`` is
+    # None because nothing was narrowed away. When regions ARE targeted, ``ate`` and its
+    # interval are the effect ON those regions and ``cohort_*`` carries the cohort-wide
+    # estimate they were narrowed from, so both numbers stay available to the caller.
+    target_regions: list[str] = field(default_factory=list)
+    cohort_ate: float | None = None
+    cohort_ci_lower: float | None = None
+    cohort_ci_upper: float | None = None
 
     def ci_width(self) -> float:
         return float(self.ate_ci_upper - self.ate_ci_lower)
