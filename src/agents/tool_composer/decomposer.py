@@ -143,7 +143,7 @@ class QueryDecomposer:
             # #2020: library text (LLM client, pydantic, a missing key) goes to the log, not the answer.
             logger.error(f"Decomposition failed: {e}", exc_info=e)
             raise DecompositionError(
-                "Failed to decompose query: decomposition stopped on an internal error."
+                "the query could not be broken into sub-questions because of an internal error"
             ) from e
 
     async def _call_llm(self, query: str) -> str:

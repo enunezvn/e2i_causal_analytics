@@ -399,7 +399,7 @@ class TestErrorHandling:
             await decomposer.decompose("Test")
 
         assert str(exc_info.value) == (
-            "Failed to decompose query: decomposition stopped on an internal error."
+            "the query could not be broken into sub-questions because of an internal error"
         )
         assert "LLM error" in caplog.text
         assert exc_info.value.__cause__ is llm_error

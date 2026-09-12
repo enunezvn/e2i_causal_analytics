@@ -562,7 +562,7 @@ class TestErrorHandling:
             await planner.plan(sample_decomposition)
 
         assert str(exc_info.value) == (
-            "Failed to create execution plan: planning stopped on an internal error."
+            "no execution plan could be built because of an internal error"
         )
         assert "LLM error" in caplog.text
         assert exc_info.value.__cause__ is llm_error

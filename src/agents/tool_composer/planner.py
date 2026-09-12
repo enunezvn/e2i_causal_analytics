@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
@@ -304,7 +305,7 @@ class ToolPlanner:
             # #2020: library text (LLM client, pydantic, a missing key) goes to the log, not the answer.
             logger.error(f"Planning failed: {e}", exc_info=e)
             raise PlanningError(
-                "Failed to create execution plan: planning stopped on an internal error."
+                "no execution plan could be built because of an internal error"
             ) from e
 
     def _try_cached_plan(
@@ -814,10 +815,11 @@ class ToolPlanner:
         # Check step ids are unique. The plan model rejects duplicates too, but as pydantic
         # ValidationError text (with the whole plan as input_value), which #2020 keeps out of the
         # answer — so the finding is named here.
-        all_ids = [s.step_id for s in steps]
-        duplicates = sorted({sid for sid in all_ids if all_ids.count(sid) > 1})
+        duplicates = sorted(
+            sid for sid, count in Counter(s.step_id for s in steps).items() if count > 1
+        )
         if duplicates:
-            raise PlanningError(f"Plan has duplicate step id(s): {duplicates}")
+            raise PlanningError(f"duplicate step id(s) in plan: {duplicates}")
 
         # Check step dependencies are valid
         step_ids = {s.step_id for s in steps}

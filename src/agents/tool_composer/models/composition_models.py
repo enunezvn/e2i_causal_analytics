@@ -173,12 +173,12 @@ class ExecutionPlan(BaseModel):
         Duplicate ids made ``get_step`` return the first of two different steps; an unknown
         dependency or a cycle leaves a step that can never become ready.
         """
-        problem = self._graph_problem()
+        problem = self.graph_problem()
         if problem:
             raise ValueError(problem)
         return self
 
-    def _graph_problem(self) -> Optional[str]:
+    def graph_problem(self) -> Optional[str]:
         seen: set[str] = set()
         duplicates: set[str] = set()
         for step in self.steps:
@@ -222,7 +222,8 @@ class ExecutionPlan(BaseModel):
         :attr:`execution_order_repaired` names the violated condition.
 
         Raises ``ValueError`` when the steps no longer form a valid graph (a duplicate id, an
-        unknown dependency or a cycle introduced after construction).
+        unknown dependency or a cycle introduced after construction); the executor checks
+        :meth:`graph_problem` first, so it can name the problem.
         """
         return self._execution_order()[0]
 
@@ -251,7 +252,7 @@ class ExecutionPlan(BaseModel):
             return [], None
         # Re-checked on every call: steps mutated after construction must fail before any tool
         # runs, never fall back to list order.
-        problem = self._graph_problem()
+        problem = self.graph_problem()
         if problem:
             raise ValueError(problem)
         levels = self._topological_levels() or []

@@ -36,9 +36,9 @@ from src.agents.tool_composer.planner import PlanningError, ToolPlanner
 SENTINEL = "LIBTEXT_SENTINEL"
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
-DECOMPOSE_FAILED = "Failed to decompose query: decomposition stopped on an internal error."
-PLAN_FAILED = "Failed to create execution plan: planning stopped on an internal error."
-EXECUTE_FAILED = "Plan execution failed: execution stopped on an internal error."
+DECOMPOSE_FAILED = "the query could not be broken into sub-questions because of an internal error"
+PLAN_FAILED = "no execution plan could be built because of an internal error"
+EXECUTE_FAILED = "the plan stopped on an internal error"
 INVALID_JSON = "Invalid JSON in LLM response"
 UNEXPECTED = "Unexpected error: the analysis could not be completed."
 AGENT_FAILED = "Tool composition failed: the analysis could not be completed."
@@ -182,7 +182,7 @@ async def test_planner_duplicate_step_ids_named_without_pydantic_text(
     with pytest.raises(PlanningError) as exc_info:
         await _planner(mock_llm_client, mock_tool_registry).plan(_one_question_decomposition())
     message = str(exc_info.value)
-    assert message == "Plan has duplicate step id(s): ['step_1']"
+    assert message == "duplicate step id(s) in plan: ['step_1']"
     assert "validation error" not in message and "input_value" not in message
 
 
@@ -214,7 +214,7 @@ async def test_executor_plan_graph_problem_named_and_no_step_runs(
     monkeypatch.setattr(executor, "_execute_step", step)
     with pytest.raises(ExecutionError) as exc_info:
         await executor.execute(sample_execution_plan)
-    assert str(exc_info.value) == "Plan execution failed: dependency cycle among plan steps"
+    assert str(exc_info.value) == "dependency cycle among plan steps"
     assert step.await_count == 0
 
 
@@ -258,13 +258,40 @@ async def test_composer_non_phase_exception_uses_fixed_sentence(
     assert SENTINEL in caplog.text
 
 
+def _fail_decompose(composer: ToolComposer, llm_client, monkeypatch) -> None:
+    llm_client.set_error(RuntimeError(SENTINEL))
+
+
+def _fail_plan(composer: ToolComposer, llm_client, monkeypatch) -> None:
+    # Not set_error: that would fail decompose first.
+    monkeypatch.setattr(
+        composer.planner, "_call_llm", AsyncMock(side_effect=RuntimeError(SENTINEL))
+    )
+
+
+def _fail_execute(composer: ToolComposer, llm_client, monkeypatch) -> None:
+    monkeypatch.setattr(
+        composer.executor, "_execute_step", AsyncMock(side_effect=RuntimeError(SENTINEL))
+    )
+
+
+@pytest.mark.parametrize(
+    ("inject", "expected_error"),
+    [
+        (_fail_decompose, f"Decomposition failed: {DECOMPOSE_FAILED}"),
+        (_fail_plan, f"Planning failed: {PLAN_FAILED}"),
+        (_fail_execute, f"Execution failed: {EXECUTE_FAILED}"),
+    ],
+    ids=["decompose", "plan", "execute"],
+)
 async def test_composer_library_text_inside_a_phase_stays_out(
-    mock_llm_client, mock_tool_registry, caplog
+    mock_llm_client, mock_tool_registry, monkeypatch, caplog, inject, expected_error
 ):
-    mock_llm_client.set_error(RuntimeError(SENTINEL))
+    composer = _composer(mock_llm_client, mock_tool_registry)
+    inject(composer, mock_llm_client, monkeypatch)
     with caplog.at_level(logging.WARNING):
-        result = await _composer(mock_llm_client, mock_tool_registry).compose("q")
-    assert result.error == f"Decomposition failed: {DECOMPOSE_FAILED}"
+        result = await composer.compose("q")
+    assert result.error == expected_error
     assert not [s for s in _surfaces(result) if SENTINEL in s]
     assert SENTINEL in caplog.text
 
