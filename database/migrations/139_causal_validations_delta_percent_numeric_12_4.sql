@@ -21,7 +21,9 @@
 --   negative-control test. The repository now clamps EVERY row at the write
 --   boundary to this column's bound (src/repositories/causal_validation.py
 --   DELTA_PERCENT_COLUMN_MAX) and keeps the exact value in
---   details_json.delta_percent_exact when clamping occurred.
+--   details_json.delta_percent_exact when clamping occurred. A non-finite
+--   value (NaN / +-inf, which NUMERIC(12,4) cannot hold) is stored NULL with
+--   its repr in details_json.delta_percent_nonfinite.
 --
 -- SAFETY: on the live Postgres 15.8 (measured 2026-09-12), increasing the
 --   precision of a numeric column while keeping the same scale is a
@@ -38,7 +40,10 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'causal_validations'
           AND column_name = 'delta_percent'
-          -- Never narrows precision or changes scale: only the narrower scale-4 column is widened; an unconstrained NUMERIC or any other scale was set deliberately and is left alone (retyping would be a rewrite that can overflow or lose fractional digits).
+          -- Never narrows precision or changes scale: only the narrower scale-4
+          -- column is widened; an unconstrained NUMERIC or any other scale was
+          -- set deliberately and is left alone (retyping would be a rewrite
+          -- that can overflow or lose fractional digits).
           AND (numeric_precision IS NOT NULL AND numeric_precision < 12 AND numeric_scale = 4)
     ) THEN
         ALTER TABLE public.causal_validations ALTER COLUMN delta_percent TYPE NUMERIC(12, 4);
@@ -48,4 +53,5 @@ END $$;
 COMMENT ON COLUMN public.causal_validations.delta_percent IS
     'Percentage change from the original effect, |delta|/|original|*100, clamped by the '
     'repository to 99999999.9999 (migration 139, #2029); the exact value rides in '
-    'details_json.delta_percent_exact when clamping occurred.';
+    'details_json.delta_percent_exact when clamping occurred; a non-finite value is '
+    'stored NULL with its repr in details_json.delta_percent_nonfinite.';

@@ -382,7 +382,6 @@ def _degenerate_ci_skip_result(
     execution_time_ms: float = 0.0,
     unscorable: str = "coverage / width ratio",
     *,
-    seed_key: Optional[str] = None,
     seed: Optional[int] = None,
 ) -> RefutationResult:
     """Honest SKIPPED, decided BEFORE any re-fit, when the reported interval has
@@ -395,10 +394,12 @@ def _degenerate_ci_skip_result(
     vocabulary, ``original_ci_degenerate`` -- serves every interval-referenced
     test without misdescribing what was skipped.
 
-    ``seed_key`` / ``seed`` (#2029): the perturbation test's seed key
-    (``_SEED_KEY_BY_TEST``) and the seed the run WOULD have used; recorded on
-    the skip row too, so every persisted perturbation row carries its key
-    (``None`` when the run was unseeded -- present, not silently absent).
+    ``seed`` (#2029): the seed the run WOULD have used; recorded on the skip
+    row too, under the key ``_SEED_KEY_BY_TEST`` assigns to ``test_name`` (the
+    same map the budget-skip loop in ``run_all_tests`` reads, so the key is
+    spelled in ONE place), so every persisted perturbation row carries its key
+    (``None`` when the run was unseeded -- present, not silently absent). A
+    test type absent from the map (the analytic tests) records no key.
     """
     name = test_name.value
     details: Dict[str, Any] = {
@@ -421,6 +422,7 @@ def _degenerate_ci_skip_result(
         "stopped_for_budget": False,
         **config_details,
     }
+    seed_key = _SEED_KEY_BY_TEST.get(name)
     if seed_key is not None:
         details[seed_key] = seed
     return RefutationResult(
@@ -2194,7 +2196,6 @@ class RefutationRunner:
                     config_details,
                     execution_time_ms=(time.time() - start_time) * 1000,
                     unscorable="the shift in SE units",
-                    seed_key="random_state",
                     seed=random_state,
                 )
             try:
@@ -2336,7 +2337,6 @@ class RefutationRunner:
                 original_ci,
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
-                seed_key="resample_seed",
                 seed=resample_seed,
             )
         rng = np.random.default_rng(resample_seed)
@@ -2480,7 +2480,6 @@ class RefutationRunner:
                 original_ci,
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
-                seed_key="resample_seed",
                 seed=resample_seed,
             )
         rng = np.random.default_rng(resample_seed)

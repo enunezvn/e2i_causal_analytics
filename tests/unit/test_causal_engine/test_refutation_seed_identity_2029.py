@@ -250,3 +250,18 @@ def test_budget_skip_rows_carry_the_seed_key_for_perturbation_tests_only(monkeyp
     assert rows["placebo_treatment"].details["random_state"] == seed
     assert "random_state" not in rows["sensitivity_e_value"].details
     assert "resample_seed" not in rows["sensitivity_e_value"].details
+
+
+def test_seed_key_map_covers_every_perturbation_test_type_and_nothing_else():
+    """Drift guard for ``_SEED_KEY_BY_TEST`` (#2029, Task 9): the map is THE
+    place a test's seed key is spelled -- the budget-skip loop and the
+    pre-run degenerate-CI skip helper both derive the key from the test type,
+    so a NEW perturbation test type must be added to the map or its skip rows
+    will silently lack the key (and the post-deploy cert's nulls = 0 count
+    breaks). The two analytic tests (sensitivity, negative control) are the
+    only enum members that must NOT carry a key."""
+    from src.causal_engine.refutation_runner import _SEED_KEY_BY_TEST, RefutationTestType
+
+    analytic = {"sensitivity_e_value", "negative_control_outcome"}
+    assert set(_SEED_KEY_BY_TEST) == {t.value for t in RefutationTestType} - analytic
+    assert set(_SEED_KEY_BY_TEST.values()) == {"random_state", "resample_seed"}
