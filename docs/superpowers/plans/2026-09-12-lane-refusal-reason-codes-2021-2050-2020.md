@@ -44,6 +44,10 @@ Verified 2026-09-12 against `origin/main` `0a16e9c18`. **Read this section befor
 | L1 | *(lead call, 2026-09-12)* `details` values are finite numbers or booleans only, keys are snake_case. Task 1 as first planned allowed strings up to 64 characters, which fits a column or brand name — exactly the data D1/D1′ keep out. All 15 detail values at the 7 current sites are integers, so tightening breaks nothing. Applied as a Task 1 fix after its spec review. |
 | D2 | **All 87 raise sites** get a code in this lane, enforced by an AST test that fails if any raise site lacks one. |
 | D3 | The admin observability route **does** surface the codes (per-tool `most_common_refusal_reason`, per-step `reason_code`). |
+| D5 | *(owner, 2026-09-12)* **Fix library text at its source.** A coded refusal that wraps a caught exception drops the exception's text from its message, keeps its authored sentence, logs the original exception at the wrap site, and keeps `raise ... from exc`. An AST guard forbids a coded refusal (or an `EffectDataUnavailable`) from interpolating an `except ... as` name, except at an explicit allowlist of sites whose wrapped exception text is itself authored. Task 4b. |
+| D6 | *(owner, 2026-09-12)* **Extend the lane to the two other surfaces that carry raw failure text:** the synthesis prompt (`synthesizer._format_results` writes raw `output.error` for a failed step on partial success) and the Digital Twin API's error fields. Larger blast radius — it changes what the synthesis LLM sees and a second API's error contract — accepted by the owner. Task 7b, with its own certificate items. |
+| R1 | *(lead, after verifying the Task 1+2 spec review against source)* Recodes: `:3987` (twin simulation did not complete — it runs INSIDE this step, not upstream) → new `SIMULATION_INCOMPLETE`; `:2417` segment_ranker and `:3115` roi_estimator (executor F5 already short-circuits a failed upstream as `dependency_unmet`, so these fire on a wrong-shape or literal input) → `MISSING_REQUIRED_INPUT`; `:3741` `_load_cohort_provider` and `:3865` the `EffectDataUnavailable` wrap → new `EFFECT_NOT_ESTIMABLE`, because each covers several causes (missing columns, too few rows, no contrast, unestimable intervention, estimator failure) and per-cause coding would need `src/digital_twin` to carry a code — a cross-package contract, and importing `reason_codes` from there costs the ~564 MB package `__init__`; `:3224` `_power_number` splits into two raises with the IDENTICAL message: bool/non-number → `INVALID_INPUT_TYPE`, non-finite number → `NON_FINITE_INPUT`. `:2350` cate_analyzer stays `INSUFFICIENT_GROUPS` (zero measurable segments is fewer than the one required). |
+| P1 | *(lead)* `_CodedError.__reduce__` is **kept**: a required keyword-only `reason_code` makes `BaseException.__reduce__` raise `TypeError` on pickle or `copy.deepcopy`, turning a refusal into a crash wherever an exception is copied. Trivial and tested. Its docstring's claim that these errors "crossed process boundaries before #2021" is unverified and is replaced by the invariant itself. |
 
 ## File structure
 
@@ -61,6 +65,9 @@ Verified 2026-09-12 against `origin/main` `0a16e9c18`. **Read this section befor
 | `src/agents/tool_composer/reliability.py` | `most_common_refusal_reason` on `ToolReliability` | 7 |
 | `src/api/schemas/admin_tool_composer.py` | wire fields | 7 |
 | `src/services/tool_composer_observability_service.py` | map the new fields | 7 |
+| `src/digital_twin/effect/cohort_causal_estimator.py`, `src/digital_twin/effect/estimator.py` | exception text removed from wrapped estimator errors (D5) | 4b |
+| `src/agents/tool_composer/synthesizer.py` | failed-step text in the synthesis prompt follows the #2020 rule (D6) | 7b |
+| `src/api/routes/digital_twin.py` | error details carry no library text, where measured reachable (D6) | 7b |
 
 ---
 
@@ -553,6 +560,39 @@ Claude-Session: https://claude.ai/code/session_017AdJUYq6yCMahuwKuFfWJw"
 
 ---
 
+## Task 2b: Apply the Task 1+2 review — L1, R1, P1 and the attribute-call hole
+
+> **Added 2026-09-12 after the Task 1+2 spec review (`spec-review-task12`), every finding re-verified against source by the lead.** Line numbers are at `956a57e3b`; re-derive them by AST before editing.
+
+**Files:**
+- Modify: `src/agents/tool_composer/reason_codes.py`, `src/agents/tool_composer/errors.py`, `src/agents/tool_composer/tool_registrations.py`
+- Test: `tests/unit/test_agents/test_tool_composer/test_reason_codes_2021.py`, `test_reason_code_coverage_2021.py` (extend in place)
+
+**Still the hard rule: no message text changes.** The one exception is structural — `_power_number`'s single raise becomes two raises carrying the byte-identical message.
+
+- [ ] **Step 1: L1 — `details` is numbers and booleans under snake_case keys.** Red first. Rejected: any `str` value (drop `_MAX_DETAIL_STR`), `None`, a list or dict (the reviewer's `{"cols": ["free text" * 5]}` passes today), a `float` that is NaN or ±inf, and a key that does not match `^[a-z][a-z0-9_]*$`. Accepted: `bool`, `int`, a finite `float`. Keep `_MAX_DETAIL_KEYS = 8`. The existing `test_details_must_be_structure_only` must still pass unchanged. All 15 detail values at the 7 current sites are ints, so no site changes.
+
+- [ ] **Step 2: R1 — recodes.** Add two members with sentences obeying `test_canonical_sentences_carry_no_interpolation`:
+  - `SIMULATION_INCOMPLETE = "simulation_incomplete"` — `"the twin simulation did not complete"`
+  - `EFFECT_NOT_ESTIMABLE = "effect_not_estimable"` — `"the cohort data cannot support a causal effect estimate for this intervention"`
+
+  Then: `:3987` → `SIMULATION_INCOMPLETE`; `:2417` segment_ranker and `:3115` roi_estimator → `MISSING_REQUIRED_INPUT`; `:3741` and `:3865` → `EFFECT_NOT_ESTIMABLE`; `:3224` `_power_number` → two `raise` statements with the identical message, `isinstance(value, bool) or not isinstance(value, (int, float))` → `INVALID_INPUT_TYPE`, otherwise (a non-finite number) → `NON_FINITE_INPUT`. `:2350` is unchanged (R1 says why).
+
+  Pin each recode with a test that fails on the old code. Where the function takes plain inputs, call it: `segment_ranker({})`, `roi_estimator({}, 1.0)`, `_power_number("x", "a")`, `_power_number("x", True)`, `_power_number("x", float("nan"))`. For `:3741`, `:3865` and `:3987`, find how their existing tests reach those branches (`grep -rn "_load_cohort_provider\|EffectDataUnavailable\|did not complete" tests/unit/test_agents/test_tool_composer/`) and reuse that seam. If a branch cannot be reached without a heavy fit, say so in the report and pin that site's code by AST inside its named function instead — never an invented seam.
+
+- [ ] **Step 3: P1 — keep `__reduce__`, fix its docstring.** Replace the sentence claiming these errors "crossed process boundaries before #2021" with the invariant: a required keyword-only `reason_code` makes `BaseException.__reduce__` raise `TypeError` on `pickle` or `copy.deepcopy`. No code change.
+
+- [ ] **Step 4: Close the attribute-call hole in the threaded-code check.** `test_a_threaded_reason_code_is_literal_at_every_call_site` only inspects `ast.Name` calls, so `tr._refuse_unless_binary_01(..., reason_code="oops")` passes every test today. Factor the check into a helper that takes a parsed tree, make it cover `ast.Attribute` calls too, and add a test that feeds the helper a synthetic source string with a bad attribute call and asserts it is flagged. That synthetic test is the proof of teeth; a green run on the real file is not.
+
+- [ ] **Step 5: Verify.**
+  - Every message string at every raise site is identical to `0a16e9c18`'s, compared by AST (the only allowed difference is `_power_number`'s message now appearing at two sites).
+  - `test_reason_codes_2021.py` + `test_reason_code_coverage_2021.py`, then the whole `tests/unit/test_agents/test_tool_composer/` directory, `-n 0`, exit code read from `$?` (the directory took 150 s and gave 1227 passed at `dd6146b16`).
+  - `ruff check --no-cache` and `ruff format --check --no-cache` on every changed file.
+
+- [ ] **Step 6: Commit** — `fix(tool-composer): apply the #2021 code review — numeric details, recodes, attribute-call guard`, the body naming each recode and why.
+
+---
+
 ## Task 3: Propagate the code through the executor
 
 > **Corrected 2026-09-12, before dispatch.** The first draft of this task called an `executor_with_tool` fixture that does not exist, carried stale line anchors, and gave the plan-defect arm an `isinstance` branch it does not need — there are two separate plan-defect arms, one per exception. Everything below is verified against `executor.py` and `test_executor_outcome_classes.py` on the lane base `0a16e9c18`; Tasks 1+2 do not touch `executor.py`. Re-run `grep -n 'outcome_class=' src/agents/tool_composer/executor.py` before editing and trust it over the numbers here.
@@ -1034,6 +1074,48 @@ raw DoWhy / sklearn / driver text goes to the log only.
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 ```
+
+---
+
+## Task 4b: Fix library text at its source (D5)
+
+> **Added 2026-09-12 for owner decision D5.** Task 4 trusts a coded refusal's text. That trust is only sound if no coded refusal carries library text inside it — and eight sites do. Lines are at `956a57e3b`; re-derive them before editing.
+
+**Files:**
+- Modify: `src/agents/tool_composer/tool_registrations.py`, `src/digital_twin/effect/cohort_causal_estimator.py`, `src/digital_twin/effect/estimator.py`
+- Test: `tests/unit/test_agents/test_tool_composer/test_refusal_text_is_authored_2020.py` (new), plus the existing estimator tests extended in place
+
+**The rule at each fixed site:** remove the interpolated exception text from the message; keep every authored word (pinned substrings that must survive include `"not a DataFrame"` — `test_sensitivity_derives_inputs_2022.py:260` — and any column or region name the message already states, such as `"atlantis"` and `"west"`); log the original exception at the wrap site with the module logger (`exc_info=exc`, WARNING); keep `raise ... from exc` so the cause stays on the chain.
+
+| Site | Wraps | Why it is library text |
+|---|---|---|
+| `tool_registrations.py:1669` refutation_runner `not a DataFrame ({exc})` | `except Exception` around `df.columns` | an `AttributeError` repr of whatever object was passed |
+| `:1822` sensitivity_analyzer `not a DataFrame ({exc})` | same | same |
+| `:1842` sensitivity_analyzer `could not be computed … : {exc}` | `except Exception` around `evalue.benchmark_inputs_from_frame` / `outcome_std_from_frame` | pandas / numpy errors from the frame |
+| `:2292` cate_analyzer `is not numeric … : {exc}` | `except (TypeError, ValueError)` around pandas `mean()` | `"Could not convert string 'hi' to numeric"` — carries a data VALUE |
+| `:2560` gap_calculator `is not numeric … : {exc}` | pandas `groupby().mean()` | `"agg function failed [how->mean,dtype->object]"` |
+| `cohort_causal_estimator.py:234` `cohort causal estimation failed for …: {e}` | `except Exception` around econml `CausalForestDML` | econml / sklearn internals; reaches the user through `tool_registrations.py:3865` and, via `SimulationEngine`'s `"Effect estimation failed: {e}"`, `:3987` and the Digital Twin route |
+| `cohort_causal_estimator.py:259` `target-region inference failed …: {e}` | econml `ate_interval` | same |
+| `estimator.py:78` `uplift fit failed: {result.error_message}` | `UpliftRandomForest.estimate`'s result | **lead addition, not in D5's list:** `SimulationEngine` defaults to `TwinEffectEstimator` when no estimator is passed, which `experiment_designer/tools/simulate_intervention_tool.py:269` and `digital_twin/simulation_runner.py:96` do. **First read what `UpliftRandomForest.estimate` puts in `error_message`.** If it is library text, fix it here by the rule above. If it is authored, add it to the allowlist below and say why. |
+
+**Kept verbatim — the wrapped text is authored all the way down** (the allowlist; keyed by enclosing FUNCTION name, never by line):
+- `:2014`, `:2070` sensitivity_analyzer — `evalue`'s `ValueError`s are authored messages.
+- `:3478` power_calculator — `PowerCalculationError` is authored and pinned (`test_power_calculator_2015.py`, `match=reason`). Its `ArithmeticError` arm carries Python's own `OverflowError` text: measure what that text is and report it; do **not** change the site in this task.
+- `:3865` — `EffectDataUnavailable`, authored once `:234` / `:259` are fixed.
+- `:3987` — `result.error_message`, which is `SimulationEngine`'s authored prefix plus an authored `EffectDataUnavailable` / `EstimationError` once the estimator sites are fixed. It is a model attribute, not an `except` name, so the guard below does not see it — pin it with a behavioral test instead.
+- `src/digital_twin/effect/recommendation.py:98` — interpolates `control_outcome_sd`'s `EffectDataUnavailable`, which is authored.
+
+- [ ] **Step 1: Red — behavioral tests, one per fixed site.** Force each wrap with a sentinel: pass an object whose `.columns` raises `AttributeError("LIBTEXT_SENTINEL")`; monkeypatch the `evalue` helper, or the econml fit and `ate_interval`, to raise `RuntimeError("LIBTEXT_SENTINEL")`; use a non-numeric outcome for the pandas sites and assert pandas' own phrase is absent. For each, assert:
+  - the sentinel (or pandas phrase) is NOT in `str(err)`
+  - the authored words and pinned substrings ARE
+  - the sentinel IS in `caplog.text`
+  - `err.__cause__` is the original exception
+
+  Reuse the seams existing tests already use for these functions (`grep -rn` them first); do not fit a real forest when a patch reaches the branch. Add one test for `:3987` end to end at the tool boundary: a failed engine result whose estimator raised sentinel text does not carry the sentinel into the refusal.
+- [ ] **Step 2: Red — the AST guard,** `test_no_coded_refusal_interpolates_a_caught_exception`. Scope: `tool_registrations.py` and every `src/digital_twin/effect/*.py`. For every `except … as NAME` handler, any `raise` inside it of `ToolRefusalError`, `ToolInputError`, `EffectDataUnavailable` or `EstimationError` whose arguments reference `NAME` — f-string `FormattedValue`, `str(NAME)`, `repr(NAME)`, `%` formatting or `.format(NAME)` — is a violation unless the enclosing function is on the allowlist, each entry carrying a one-line reason. Prove it has teeth with synthetic-source tests covering each reference form; a green run on the real files proves nothing by itself.
+- [ ] **Step 3: Green.** Fix the sites. Then find existing tests that asserted the removed exception text (`grep -rn "Could not convert\|agg function failed\|estimation failed for\|inference failed for\|uplift fit failed" tests/`). A test that asserted library text was asserting the defect — update it and say so in the commit body.
+- [ ] **Step 4: Verify.** The new file, the estimator tests, `test_sensitivity_derives_inputs_2022.py`, `test_power_calculator_2015.py`, then all of `tests/unit/test_agents/test_tool_composer/` and `tests/unit/test_digital_twin/`, each `-n 0` with `$?` captured. `ruff check --no-cache` and `ruff format --check --no-cache` on every changed file.
+- [ ] **Step 5: Commit** — `fix(tool-composer,digital-twin): keep library exception text out of authored refusals (#2020, D5)`.
 
 ---
 
@@ -2097,6 +2179,48 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 
 ---
 
+## Task 7b: The same rule on the synthesis prompt and the Digital Twin API (D6)
+
+> **Added 2026-09-12 for owner decision D6.** Depends on Tasks 3, 4 and 4b. The owner accepted the larger blast radius: this changes what the synthesis LLM sees on partial success, and a second API's error contract.
+
+**Files:**
+- Modify: `src/agents/tool_composer/synthesizer.py` (`_format_results`), `src/agents/tool_composer/composer.py` (Task 4's loop, to share the helper), `src/api/routes/digital_twin.py`
+- Create or modify: one shared helper for the rule — see Step 1
+- Test: `tests/unit/test_agents/test_tool_composer/test_synthesis_failure_text_2020.py` (new); `tests/unit/test_api/test_routes/test_digital_twin*.py` (extend the file that already covers each route)
+
+### (a) The synthesis prompt
+
+`_format_results` writes `Error: {result.output.error}` for every failed step (about line 424). On a partial success, raw DoWhy / sklearn / driver text reaches the synthesis LLM, and from there it can reach the answer, which is exactly what Task 4 closed on the fail-closed path.
+
+- [ ] **Step 1: One rule, one helper.** Move Task 4's decision into a single function that both the composer and the synthesizer call, so the two surfaces cannot drift. The function takes `outcome_class`, `reason_code` and the raw text, and returns the user-safe text plus whether the raw text was withheld: verbatim when `outcome_class in {"refused", "input_rejected"}` and a code is present, otherwise `"<canonical sentence> [<code>]"` with `tool_error` as the fallback code. Keep it import-light — `reason_codes.py` is imported by `errors.py`, so the helper may live there only if it imports nothing new. The caller logs the withheld raw text, as Task 4 does.
+- [ ] **Step 2: Red.** Build a partial-success trace — one succeeded step, one `error` step carrying `_DOWHY_INTERNALS` from Task 4's test, one coded `refused` step, one uncoded `refused` step — and assert on `_format_results`' output:
+  - no `_LEAKS` substring appears
+  - the refusal is present verbatim
+  - both non-trusted steps render their canonical sentence and code
+  - the raw text is in `caplog`
+
+  Run it and see it fail.
+- [ ] **Step 3: Green, then re-run** Task 4's test file, `test_synthesizer.py` and `test_synthesis_truncation_2019.py`, `-n 0`.
+
+### (b) The Digital Twin API
+
+**Measure before changing, site by site.** After Task 4b, all three production `SimulationEngine` constructions that pass `CohortCausalEstimator` produce authored `error_message` text. So the question at each site is whether library text can STILL arrive there, not whether a field is named "error". For each site, write down what reaches it and how you established that (source read, test, or a read-only prod query), then act only where library text can arrive. A site shown to be unreachable, or to carry only authored text, is left unchanged and reported with that evidence.
+
+| Site | What to establish |
+|---|---|
+| `digital_twin.py:957`, `:1277` — 422 `detail=result.error_message` | After Task 4b: engine prefix plus authored estimator text. Expect keep-as-is. Confirm that no `except` in the engine path still interpolates library text. |
+| `:985`, `:1302` — `error_message=`; `:977`, `:1294` — `recommendation_rationale=` | These are on the success response, and a FAILED result raises at `:957` / `:1277` first. Establish whether any non-FAILED status can carry an error message. |
+| `:1441` — history `error_message=result.get("error_message")` | Failed results are not persisted (the N1 comment at `:951`). Check the repository for any other path that persists one, and count prod rows with a non-null `error_message`, read-only: `PGOPTIONS='-c default_transaction_read_only=on'`. |
+| `:1011`, `:1355` — `except ValueError: detail=str(e)` → 400 | **The likeliest real leak.** Pydantic's `ValidationError` subclasses `ValueError`, and its text carries input values and a `pydantic.dev` URL. Enumerate every `ValueError` source inside each `try`. Grep the route tests and `frontend/src` for consumers of `detail`. |
+
+- [ ] **Step 4: Report the findings table to the lead BEFORE changing any site** (status `NEEDS_CONTEXT` is correct here). Any change to an HTTP `detail` a test or the frontend pins is a contract change, and the lead confirms it with the owner. Expected shape of a fix where one is warranted: authored `ValueError`s the route itself raises keep their text; anything else gets a fixed sentence, and the raw text goes to `logger.warning`. The status code is unchanged.
+- [ ] **Step 5: Red then green** for each site the lead confirms. Each test forces library text into the path (for example, a request that makes pydantic raise inside the `try`), then asserts the text is absent from the response body and present in the log.
+- [ ] **Step 6: Verify and commit.** Run the route test files, the Task 4 and 7b(a) tests, and `ruff --no-cache`. Commit: `fix(tool-composer,api): no library text in the synthesis prompt or Digital Twin errors (#2020, D6)`.
+
+**Certificate items this task adds to Task 8** (items 6–7 there).
+
+---
+
 ## Task 8: Whole-lane verification, push, and the live certificate
 
 > **Rewritten 2026-09-12 for D1′ and D4.** Deploy applies ml/042 automatically (`deploy.yml` runs `scripts/run_migrations.sh`); nothing is applied by hand. **Each outward action needs the owner's explicit go at the time: the push and PR, the merge, any PAID call in the live certificate, and every issue comment or close.**
@@ -2123,7 +2247,7 @@ The learning-loop real-DB modules skip on this droplet (D4). Say so in the repor
 
 ```bash
 codex exec -C /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes \
-  --sandbox read-only "$(cat /tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/468a7b54-325d-441e-b4ae-a41ae1833e39/scratchpad/codex_brief.md)" < /dev/null
+  --sandbox read-only "$(cat /tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/5e63ac9d-aac4-41c2-abc8-a2a1165854c4/scratchpad/codex_brief.md)" < /dev/null
 ```
 
 Omit `-m` (the catalogue rotates). The brief carries the mandatory pushback paragraph verbatim. Iterate on REVISE findings until ACCEPT.
@@ -2139,7 +2263,8 @@ cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes && g
 
 Write the body to a file and create the PR with `--body-file`. Then re-read it with `gh pr view <n> --json body`: `--body-file` has silently failed before. The body must state:
 - the two corrections to the issues as filed: #2050 cause 1's `StepResult.error_message` does not exist, and the plan's 94 raise sites are really 87
-- owner decisions D1′ and D4, and lead call L1
+- owner decisions D1′, D4, D5 and D6, and lead calls L1, R1 and P1
+- Task 7b's per-site findings for the Digital Twin API, including the sites left unchanged and the evidence for each
 - the latent three-migration assertion in `test_migration_runner.py`
 - `rollback_042.sql`'s runbook
 
@@ -2188,6 +2313,9 @@ Write `cert.md` verdict word first, then the numbers:
 3. **#2021 — the admin page.** `GET /admin/observability/tool-composer` shows that tool's `most_common_refusal_reason` and `most_common_refusal_sentence`, and the failure's step class carries `reason_code` and `reason`.
 4. **#2020 — the answer.** Force an all-null treatment column through a composed question. The returned answer contains no `DoWhy`, `shape=(0,)` or `backdoor.` substring, AND the container log for that same composition does contain the raw text. Both halves are required: the log half is what proves the text was withheld, not lost.
 5. **Negative control.** A tool-authored refusal (a single-brand gap) reaches the answer verbatim. Without it, item 4 could pass because every reason was suppressed.
+6. **D6(a) — the synthesis prompt, on the deployed image, free.** Inside `e2i_api`, build a partial-success trace (one succeeded step, one `error` step carrying DoWhy text, one coded refusal) and print `ToolSynthesizer._format_results`' output. PASS requires no DoWhy substring, the refusal verbatim, and the canonical sentence plus code for the error step. No LLM call is made, so this item needs no paid authorization.
+7. **D6(b) — the Digital Twin API.** For each site Task 7b changed, force its path on the live route and read the response body and the container log for that request. PASS requires the library text in the log and absent from the body, with the status code unchanged. For each site Task 7b left unchanged, cite its evidence rather than re-testing it.
+8. **D5 — authored refusals carry no library text.** Force a non-numeric metric through a composed `gap_calculator` question. PASS requires the refusal to reach the answer verbatim (it is tool-authored) with no pandas `agg function failed` phrase in it, and that phrase present in the container log.
 
 - [ ] **Step 10: With the owner's go — close out**
 
@@ -2214,7 +2342,10 @@ Write `cert.md` verdict word first, then the numbers:
 | D1′: code and details persisted, no text, sentence rendered at read time | 5, 6, 7 |
 | D2: all sites | 2 |
 | D4: rehearsal rather than an in-harness test | 6 |
-| L1: numeric-only details | Task 1 fix after its spec review |
+| L1: numeric-only details | 2b |
+| R1: recodes from the Task 1+2 review; P1: `__reduce__` kept | 2b |
+| D5: library exception text removed at its source, AST-guarded | 4b |
+| D6: synthesis prompt and Digital Twin API follow the same rule | 7b |
 
 **Type consistency.**
 - `StepResult.reason_code` is `Optional[str]` holding `ReasonCode` values, from Task 3 on.
