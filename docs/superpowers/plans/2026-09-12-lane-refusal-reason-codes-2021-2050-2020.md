@@ -507,7 +507,7 @@ Mapping rule — read the message, then pick the member whose canonical sentence
 | "requires a real DataFrame supplied via one of the kwargs keys", "does not fabricate" | `MISSING_DATAFRAME` |
 | CI does not bracket / contradicts the point estimate | `CI_OUTSIDE_ESTIMATE` |
 | point estimate with no uncertainty (#2014) | `POINT_ESTIMATE_ONLY` |
-| the upstream result reports `status='failed'` / did not complete | `UPSTREAM_STEP_FAILED` |
+| ~~the upstream result reports `status='failed'` / did not complete~~ | ~~`UPSTREAM_STEP_FAILED`~~ — **removed 2026-09-12, before first deploy.** R1 recoded all three sites that used it (one failure ran inside its own step; the other two fired on wrong-shape inputs), and the executor's F5 short-circuit means no tool can receive a failed upstream result. The executor-assigned `DEPENDENCY_UNMET` covers the real case, and its sentence was corrected to "a step this one depends on did not produce a result" (the Task 1 vocabulary block above predates both changes). |
 | the tool cannot answer this question shape at all | `UNSUPPORTED_REQUEST` |
 | a required kwarg is absent or `None` | `MISSING_REQUIRED_INPUT` |
 | "must be a dict", "got {type(...).__name__}" | `INVALID_INPUT_TYPE` |
