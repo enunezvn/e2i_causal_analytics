@@ -48,11 +48,25 @@ def _assert_point_only(report: dict, expected_point: float) -> None:
     assert "no confidence interval" in report["interpretation"].lower()
 
 
+def _continuous_treatment_frame(n: int, seed: int = 2014) -> pd.DataFrame:
+    """Continuous treatment: no naive contrast and no baseline risk, so no benchmark.
+
+    #2022: the frame is still required — it is what supplies the outcome SD.
+    """
+    rng = np.random.default_rng(seed)
+    dose = rng.normal(0.0, 1.0, n)
+    return pd.DataFrame({"dose": dose, "response": 0.3 * dose + rng.normal(0.0, 1.0, n)})
+
+
 @pytest.mark.parametrize("ci", [{}, {"ci_lower": None, "ci_upper": None}])
 def test_no_interval_reports_the_point_e_value_only(ci) -> None:
-    report = tr.sensitivity_analyzer(ate=0.3, **ci)
+    frame = _continuous_treatment_frame(600)
+    sd = float(np.std(np.asarray(frame["response"], dtype=float)))
+    report = tr.sensitivity_analyzer(
+        ate=0.3, treatment="dose", outcome="response", estimation_data=frame, **ci
+    )
 
-    _assert_point_only(report, evalue.e_value_from_rr(evalue.rr_from_smd(0.3)))
+    _assert_point_only(report, evalue.e_value_from_rr(evalue.rr_from_smd(0.3 / sd)))
     assert report["conversion"] == "standardized_difference"
 
 
@@ -116,7 +130,13 @@ def test_the_estimators_none_interval_survives_executor_resolution_into_sensitiv
     )
     assert resolved == {"ate": estimate["ate"], "ci_lower": None, "ci_upper": None}
 
-    report = tr.sensitivity_analyzer(**resolved)
+    report = tr.sensitivity_analyzer(
+        treatment="treatment",
+        outcome="outcome",
+        confounders=["confounder_a"],
+        estimation_data=_frame(600),
+        **resolved,
+    )
 
     assert report["e_value_ci"] is None
     assert report["reading"] == "interval_unavailable"
@@ -132,7 +152,13 @@ def test_a_real_interval_still_gives_the_full_reading() -> None:
     assert estimate["ci_lower"] is not None
 
     report = tr.sensitivity_analyzer(
-        ate=estimate["ate"], ci_lower=estimate["ci_lower"], ci_upper=estimate["ci_upper"]
+        ate=estimate["ate"],
+        ci_lower=estimate["ci_lower"],
+        ci_upper=estimate["ci_upper"],
+        treatment="treatment",
+        outcome="outcome",
+        confounders=["confounder_a"],
+        estimation_data=_frame(600),
     )
 
     assert report["e_value_ci"] is not None

@@ -25,24 +25,39 @@ from src.agents.tool_composer import tool_registrations as tr
 # ---------------------------------------------------------------------------
 # Task 1 — sensitivity_analyzer: shared E-value module, benchmarked reading (2026-09-10)
 # ---------------------------------------------------------------------------
+def _continuous_treatment_frame(n: int = 600, seed: int = 355) -> pd.DataFrame:
+    """A CONTINUOUS treatment yields no naive contrast, so the reading is unbenchmarked.
+
+    #2022: the frame is what standardizes the effect, so even the unbenchmarked reading
+    needs one — without an outcome SD the E-value would move with the outcome's units.
+    """
+    rng = np.random.default_rng(seed)
+    dose = rng.normal(0.0, 1.0, n)
+    return pd.DataFrame({"dose": dose, "response": 0.3 * dose + rng.normal(0.0, 1.0, n)})
+
+
 def test_sensitivity_analyzer_matches_the_shared_module_and_reads_unbenchmarked_without_a_naive():
     from src.causal_engine import evalue
 
-    out = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
+    frame = _continuous_treatment_frame()
+    sd = float(np.std(np.asarray(frame["response"], dtype=float)))
+    bound = {"treatment": "dose", "outcome": "response", "estimation_data": frame}
+
+    out = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1, **bound)
     assert out["e_value_point"] == pytest.approx(
-        evalue.e_value_from_rr(evalue.rr_from_smd(0.5)), rel=1e-9
+        evalue.e_value_from_rr(evalue.rr_from_smd(0.5 / sd)), rel=1e-9
     )
     assert out["e_value_ci"] == pytest.approx(
-        evalue.e_value_from_rr(evalue.rr_from_smd(0.1)), rel=1e-9
+        evalue.e_value_from_rr(evalue.rr_from_smd(0.1 / sd)), rel=1e-9
     )
     assert out["reading"] == "unbenchmarked"
     assert "no universal" in out["interpretation"].lower()
     assert "robustness" not in out  # the weak/moderate/strong verdict is gone
 
-    out_big = tr.sensitivity_analyzer(ate=1.0, ci_lower=0.2)
+    out_big = tr.sensitivity_analyzer(ate=1.0, ci_lower=0.2, **bound)
     assert out_big["e_value_point"] > out["e_value_point"]
 
-    out_cross = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.0)
+    out_cross = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.0, **bound)
     assert out_cross["e_value_ci"] == pytest.approx(1.0, abs=1e-12)
 
 
@@ -66,10 +81,19 @@ def test_sensitivity_analyzer_reads_beyond_or_within_against_the_frames_own_cont
         "estimation_data": frame,
     }
 
+    # The exact arithmetic the pre-#2022 test pinned, with the two quantities that used
+    # to be caller-supplied constants now read off the frame: control-arm rate p0 and the
+    # unadjusted contrast. RR(x) = (p0 + x) / p0, benchmark = RR(naive) / RR(adjusted).
+    t = np.asarray(frame["treatment"], dtype=float)
+    y = np.asarray(frame["outcome"], dtype=float)
+    p0 = float(y[t == 0].mean())
+    naive = float(y[t == 1].mean() - p0)
+
     beyond = tr.sensitivity_analyzer(ate=0.15, ci_lower=0.08, ci_upper=0.22, **bound)
     assert beyond["reading"] == "beyond_measured_confounding"
     assert beyond["headline"] == "Robust to confounding at measured strength"
-    assert beyond["benchmark"] is not None and beyond["benchmark"] > 1.0
+    assert beyond["conversion"] == "risk_ratio"
+    assert beyond["benchmark"] == pytest.approx(((p0 + naive) / p0) / ((p0 + 0.15) / p0), rel=1e-12)
     assert beyond["benchmark_basis"] == "joint_naive_vs_adjusted"
 
     within = tr.sensitivity_analyzer(ate=0.001, ci_lower=0.0005, ci_upper=0.0015, **bound)
@@ -97,7 +121,14 @@ def test_sensitivity_analyzer_refuses_a_point_estimate_outside_its_own_ci():
     # evalue.classify raises ValueError here; the tool must surface it as a
     # structured refusal (RuntimeError subclass), never a bare crash.
     with pytest.raises(RuntimeError, match="ci must contain the point estimate"):
-        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.6, ci_upper=0.9)
+        tr.sensitivity_analyzer(
+            ate=0.5,
+            ci_lower=0.6,
+            ci_upper=0.9,
+            treatment="dose",
+            outcome="response",
+            estimation_data=_continuous_treatment_frame(),
+        )
 
 
 def test_sensitivity_analyzer_refuses_the_two_inputs_no_tool_output_carries():
@@ -126,14 +157,22 @@ def test_a_derived_baseline_risk_the_risk_ratio_path_cannot_use_falls_to_one_sha
     # An effect far larger than 1 - baseline_risk has no risk-ratio reading.
     out_of_domain = tr.sensitivity_analyzer(ate=0.95, ci_lower=0.90, ci_upper=0.99, **bound)
     assert out_of_domain["conversion"] == "standardized_difference"
-    no_frame = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
-    assert no_frame["conversion"] == "standardized_difference"
+    # #2022: with NO frame there is no outcome SD, so there is no scale to read either
+    # conversion on — the calculation is refused rather than served on the raw effect.
+    with pytest.raises(RuntimeError, match="standard deviation"):
+        tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
 
 
 def test_sensitivity_analyzer_null_finding_takes_precedence_over_unbenchmarked():
     # Spec §4.4 precedence: a CI that includes zero IS a null finding whether or not a
     # benchmark exists (the CI-bound E-value is 1.0); "unbenchmarked" would hide the null.
-    out = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.0)
+    out = tr.sensitivity_analyzer(
+        ate=0.5,
+        ci_lower=0.0,
+        treatment="dose",
+        outcome="response",
+        estimation_data=_continuous_treatment_frame(),
+    )
     assert out["reading"] == "null_finding"
     assert "includes zero" in out["interpretation"]
 
@@ -323,12 +362,16 @@ def test_sensitivity_analyzer_handles_protective_effect():
     # Protective effect (ate < 0): the shared evalue module orients the ratio to
     # the harmful side (RR >= 1), so the reading is SYMMETRIC with the harmful
     # +|ate| case. Exercises that orientation through the tool.
-    out = tr.sensitivity_analyzer(ate=-0.5, ci_lower=-0.8)
-    rr = 1.0 / math.exp(0.91 * 0.5)  # exp(-0.455) < 1.0
+    frame = _continuous_treatment_frame()
+    sd = float(np.std(np.asarray(frame["response"], dtype=float)))
+    bound = {"treatment": "dose", "outcome": "response", "estimation_data": frame}
+
+    out = tr.sensitivity_analyzer(ate=-0.5, ci_lower=-0.8, **bound)
+    rr = 1.0 / math.exp(0.91 * 0.5 / sd)  # exp(-0.455/sd) < 1.0
     rr = 1.0 / rr  # the orientation evalue applies
     expected_point = rr + math.sqrt(rr * (rr - 1.0))
     assert out["e_value_point"] == pytest.approx(expected_point, rel=1e-9)
 
     # Protective -0.5 yields the SAME point E-value as harmful +0.5 (symmetry).
-    out_harmful = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
+    out_harmful = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1, **bound)
     assert out["e_value_point"] == pytest.approx(out_harmful["e_value_point"], rel=1e-9)

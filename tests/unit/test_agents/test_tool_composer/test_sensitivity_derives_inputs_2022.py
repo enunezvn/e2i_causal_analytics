@@ -234,11 +234,70 @@ def test_a_frame_in_context_without_a_bound_treatment_or_outcome_is_refused() ->
         tr.sensitivity_analyzer(ate=0.11, ci_lower=0.10, ci_upper=0.12, estimation_data=df)
 
 
-def test_without_a_frame_the_reading_is_unbenchmarked_and_says_it_is_unstandardized() -> None:
-    report = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
-    assert report["reading"] == "unbenchmarked"
-    assert report["benchmark"] is None
-    assert "not standardized" in report["interpretation"].lower()
+def test_without_a_frame_the_calculation_is_refused_because_the_effect_has_no_scale() -> None:
+    """No frame means no outcome SD, and without one the E-value is uninterpretable.
+
+    ``evalue`` then reads the RAW effect as though it were already a standardized
+    difference, so the number moves with the outcome's UNITS. Measured on the merge-base
+    ``2b43ee85e`` (this predates the derivation fix): the same effect expressed as a
+    proportion and as percentage points gave ``e_value_point`` 1.4183 and 17910.0854 —
+    four orders of magnitude apart, with nothing in the answer to contradict either.
+    A caveat on an unsupported number is a labeling fix; the calculation is refused.
+    """
+    for ate, lo, hi in ((0.1, 0.05, 0.15), (10.0, 5.0, 15.0)):
+        with pytest.raises(ToolRefusalError, match="standard deviation"):
+            tr.sensitivity_analyzer(ate=ate, ci_lower=lo, ci_upper=hi)
+    # Point-only reporting survives — but only when a usable frame supplies the scale.
+    with pytest.raises(ToolRefusalError, match="standard deviation"):
+        tr.sensitivity_analyzer(ate=0.3, ci_lower=None)
+
+
+def test_a_supplied_but_unusable_frame_is_refused_rather_than_read_as_absent() -> None:
+    # ``_extract_dataframe_from_kwargs`` returns None for a non-DataFrame, so a malformed
+    # value would otherwise take the frame-absent path and report "no frame was supplied"
+    # about data the caller DID supply. Absent and supplied-but-unusable are different.
+    for junk in ({"t": [0, 1], "y": [0, 1]}, "estimation_data", 42):
+        with pytest.raises(ToolRefusalError, match="not a DataFrame"):
+            tr.sensitivity_analyzer(
+                ate=0.11,
+                ci_lower=0.10,
+                ci_upper=0.12,
+                treatment="treatment_arm",
+                outcome="adherence_rate",
+                estimation_data=junk,
+            )
+
+
+def _unscoreable_covariate_frame(n: int = 400, seed: int = 7) -> pd.DataFrame:
+    """Continuous treatment (no naive contrast) + a CONSTANT confounder (unscoreable).
+
+    So the benchmark has no joint basis and no covariate factor, while a covariate WAS
+    measured — the ``measured_unscoreable`` state.
+    """
+    rng = np.random.default_rng(seed)
+    dose = rng.normal(0.0, 1.0, n)
+    return pd.DataFrame(
+        {"dose": dose, "response": 0.3 * dose + rng.normal(0.0, 1.0, n), "constant_cov": 1.0}
+    )
+
+
+def test_point_only_keeps_the_measured_but_unscoreable_benchmark_basis() -> None:
+    # Whether the estimate carried sampling uncertainty must not change whether
+    # confounders were MEASURED. ``classify`` applies the covariates_measured
+    # correction; the point-only path must apply the same one.
+    frame = _unscoreable_covariate_frame()
+    bound = {
+        "treatment": "dose",
+        "outcome": "response",
+        "confounders": ["constant_cov"],
+        "estimation_data": frame,
+    }
+    with_interval = tr.sensitivity_analyzer(ate=0.3, ci_lower=0.2, ci_upper=0.4, **bound)
+    point_only = tr.sensitivity_analyzer(ate=0.3, ci_lower=None, **bound)
+
+    assert with_interval["benchmark"] is None and point_only["benchmark"] is None
+    assert with_interval["benchmark_basis"] == "measured_unscoreable"
+    assert point_only["benchmark_basis"] == with_interval["benchmark_basis"]
 
 
 # ---------------------------------------------------------------------------

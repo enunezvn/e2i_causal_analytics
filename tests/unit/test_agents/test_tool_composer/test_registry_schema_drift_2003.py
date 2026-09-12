@@ -269,6 +269,11 @@ def _call_every_tool() -> Dict[str, Dict[str, Any]]:
         ate=0.5,
         ci_lower=0.2,
         ci_upper=0.8,
+        # #2022: the naive contrast, baseline risk and outcome SD come from the frame.
+        treatment="treatment",
+        outcome="outcome",
+        confounders=["x1", "x2"],
+        estimation_data=df,
     )
     out["cate_analyzer"] = call(
         "cate_analyzer",

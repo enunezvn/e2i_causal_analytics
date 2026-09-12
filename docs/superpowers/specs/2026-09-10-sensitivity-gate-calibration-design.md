@@ -260,6 +260,12 @@ own benchmark-inputs branch measured, else 0) and is persisted in `details` with
 The chat tool `sensitivity_analyzer` has no frame and stays on `none_measured` with its own text. The CI test
 in §6 pins both sub-cases so neither can silently absorb a benchmarked case.
 
+> **SUPERSEDED by #2022 (2026-09-12).** The premise "the chat tool has no frame" was already false when this
+> was written: `PlanExecutor._maybe_autopopulate_dataframe` (`executor.py`) injects the in-context frame into
+> EVERY tool as `estimation_data`, and every tool takes `**kwargs` — the frame was there, unread. The tool now
+> derives its benchmark inputs from it and reaches every sub-case the runner does, `measured_unscoreable`
+> included. A caller with no usable frame is refused, not served `none_measured`.
+
 Status scores and weights are unchanged (PASSED 1.0, WARNING 0.6, SKIPPED excluded; sensitivity weight
 0.25). Only criticality and the labels change. The confidence score and band arithmetic are debt 2's
 second slice and are out of scope here beyond the enumeration test.
@@ -305,6 +311,18 @@ latent-confounder corroboration policy is unchanged: it suppresses the warning o
 sensitivity result (fail-open, as measured in `test_latent_warning_policy.py`).
 
 ### 4.7 Chat tool `sensitivity_analyzer` (`src/agents/tool_composer/tool_registrations.py`)
+
+> **SUPERSEDED by #2022 (2026-09-12) — do not follow the signature below.** `baseline_risk` and `naive_ate`
+> are no longer parameters and are REFUSED when supplied: no composable tool output carries either
+> (`EffectEstimate` has neither field), so every value the planner bound to them was invented. Live on the
+> Kisqali cohort that produced `baseline_risk=0.5` on a continuous outcome and `naive_ate` = the adjusted ate,
+> pinning the benchmark to 1.00 while `refutation_runner` reported 1.03 for the same estimate — one answer,
+> two contradictory E-values. The signature is now
+> `sensitivity_analyzer(ate, ci_lower=None, ci_upper=None, **{treatment, outcome, confounders})`, and the
+> naive contrast, the baseline risk (binary outcome only) and the outcome SD are derived from the in-context
+> frame with the same `evalue` helpers the runner uses. A caller with no usable frame is refused: without the
+> outcome SD the E-value is read on the raw effect and moves with the outcome's units (measured on
+> `2b43ee85e`: 1.4183 for an effect of 0.1, 17910.0854 for the same effect written as 10).
 
 Signature becomes `sensitivity_analyzer(ate, ci_lower, ci_upper=None, baseline_risk=None,
 naive_ate=None)`. The math comes from `evalue`; the risk-ratio path is used when `baseline_risk` is given.

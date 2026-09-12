@@ -1699,26 +1699,16 @@ class _SensitivityInputs(NamedTuple):
 
     The same six quantities ``RefutationRunner`` assembles before its own E-value test
     (``refutation_runner.py`` -> ``benchmark_inputs_from_frame`` + ``outcome_std_from_frame``),
-    so one estimate cannot read differently on the two engines. All-empty when no frame
-    is in context.
+    so one estimate cannot read differently on the two engines. Only ever built from a
+    real frame: without one there is no ``outcome_std`` and no E-value can be computed.
     """
 
     baseline_risk: Optional[float]
     naive_effect: Optional[float]
-    outcome_std: Optional[float]
+    outcome_std: float
     covariate_factors: Dict[str, float]
     n_rows: Optional[int]
     covariates_measured: int
-
-
-_NO_SENSITIVITY_FRAME = _SensitivityInputs(
-    baseline_risk=None,
-    naive_effect=None,
-    outcome_std=None,
-    covariate_factors={},
-    n_rows=None,
-    covariates_measured=0,
-)
 
 
 def _derive_sensitivity_inputs(
@@ -1744,11 +1734,22 @@ def _derive_sensitivity_inputs(
     construction rather than by coincidence.
 
     Fail-closed boundaries, mirroring ``_run_dowhy_refutation`` and the agent-side
-    ``sensitivity_benchmark_inputs`` rule (a MISSING input falls back, a PRESENT but
-    unusable one surfaces):
+    ``sensitivity_benchmark_inputs`` rule. EVERY one of them refuses — there is no
+    fallback, because every input this derives is load-bearing for the number reported:
 
-    * No frame at all -> empty inputs. The reading is ``unbenchmarked`` on the raw
-      effect, and the interpretation says the effect was not standardized.
+    * No frame at all -> ``ToolRefusalError``. Without the frame there is no outcome SD,
+      and ``evalue`` then reads the RAW effect as though it were already a standardized
+      difference — so the E-value moves with the outcome's UNITS. Measured on the
+      merge-base ``2b43ee85e``, which always passed ``outcome_std=None``: the same effect
+      as a proportion (0.1) and as percentage points (10) gave E-values 1.4183 and
+      17910.0854. That is the defect ``RefutationRunner`` already refuses to serve
+      ("degrading it to None sends the classifier down the SMD path on the UNSTANDARDIZED
+      effect, serving a scale-dependent, plausible-wrong number as a reading" —
+      ``refutation_runner.py``). A caveat on such a number would be a labeling fix.
+    * A value supplied under a canonical DataFrame key that is NOT a frame ->
+      ``ToolRefusalError``. ``_extract_dataframe_from_kwargs`` returns ``None`` for it,
+      which is indistinguishable from "absent" unless checked here; absent and
+      supplied-but-unusable are different facts and only the first is about the caller.
     * A frame with no bound treatment / outcome -> ``ToolRefusalError``. The frame can be
       read; serving an unstandardized, unbenchmarked E-value from it is exactly the
       plausible-wrong number this issue is about.
@@ -1758,7 +1759,26 @@ def _derive_sensitivity_inputs(
     """
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
-        return _NO_SENSITIVITY_FRAME
+        supplied = [
+            (key, kwargs[key]) for key in _DATAFRAME_KWARGS_KEYS if kwargs.get(key) is not None
+        ]
+        if supplied:
+            key, value = supplied[0]
+            raise ToolRefusalError(
+                f"sensitivity_analyzer: {key}={type(value).__name__} is not a DataFrame, so no "
+                "outcome standard deviation can be measured from it. Reading it as 'no frame "
+                "was supplied' would report a number about data the caller DID supply. "
+                "Refusing to fabricate the sensitivity benchmark inputs."
+            )
+        raise ToolRefusalError(
+            "sensitivity_analyzer requires the in-context DataFrame to compute an E-value; "
+            f"none was supplied under any of {list(_DATAFRAME_KWARGS_KEYS)!r}. Without it "
+            "there is no outcome standard deviation, and the raw effect would be read as "
+            "though it were already a standardized difference — the E-value would then move "
+            "with the outcome's units (measured: the same effect as a proportion vs "
+            "percentage points gives 1.42 vs 17910.09). Refusing to report a number that "
+            "cannot be interpreted rather than reporting it with a caveat."
+        )
     if not treatment or not outcome:
         raise ToolRefusalError(
             "sensitivity_analyzer has a data frame in context but no columns bound "
@@ -1866,15 +1886,19 @@ def sensitivity_analyzer(
 ) -> Dict[str, Any]:
     """E-values and the sensitivity READING from the shared ``evalue`` module.
 
-    Spec docs/superpowers/specs/2026-09-10-sensitivity-gate-calibration-design.md §4.7.
-    The benchmark inputs are DERIVED from the in-context frame by
-    ``_derive_sensitivity_inputs`` (#2022) — the naive contrast, the baseline risk (binary
-    outcome only) and the outcome SD, with the same ``evalue`` helpers the refutation
-    suite uses — so the two engines state ONE number for one estimate. With no frame in
-    context there is no benchmark and the reading is ``unbenchmarked``: the E-value is
-    reported with the statement that no universal threshold exists AND that the effect was
-    not standardized against an outcome SD, so it is not comparable with a frame-derived
-    one.
+    Spec docs/superpowers/specs/2026-09-10-sensitivity-gate-calibration-design.md §4.7,
+    whose "the chat tool has no frame" premise is superseded — the executor auto-injects
+    the in-context frame into every tool, so it was always there, unread.
+
+    The benchmark inputs are DERIVED from that frame by ``_derive_sensitivity_inputs``
+    (#2022) — the naive contrast, the baseline risk (binary outcome only) and the outcome
+    SD, with the same ``evalue`` helpers the refutation suite uses — so the two engines
+    state ONE number for one estimate. A caller with NO usable frame is REFUSED rather
+    than served an E-value on the raw effect: without the outcome SD that number moves
+    with the outcome's units (1.42 vs 17910.09 for one effect written two ways), and a
+    caveat on an uninterpretable number is a labeling fix, not a functional one. The
+    reading is still ``unbenchmarked`` when the frame yields no contrast to benchmark
+    against — that is a real measurement, not a missing input.
 
     ``baseline_risk`` / ``naive_ate`` are REFUSED when supplied: nothing emits them, so any
     bound value is invented (#2022). Non-finite inputs are refused too (anti-mocking: never
@@ -1918,6 +1942,15 @@ def sensitivity_analyzer(
                 "treatment / outcome / confounders instead and the quantity is derived from "
                 "the data the estimate was measured on."
             )
+    # The interval's SHAPE is a property of the caller's arguments alone, so it is
+    # decided before the frame is looked at — a malformed interval must not be reported
+    # as a missing-frame problem.
+    if ci_lower is None and ci_upper is not None:
+        raise ToolInputError(
+            f"sensitivity_analyzer got ci_upper={ci_upper!r} without ci_lower. An interval "
+            "needs both bounds (or ci_lower alone, mirrored around ate); refusing to invent "
+            "the lower bound."
+        )
     # Bound the same way ``refutation_runner`` binds them, aliases included, so the two
     # tools cannot end up reading one estimate on two different column sets (#2022).
     derived = _derive_sensitivity_inputs(
@@ -1929,12 +1962,6 @@ def sensitivity_analyzer(
         ),
     )
     if ci_lower is None:
-        if ci_upper is not None:
-            raise ToolInputError(
-                f"sensitivity_analyzer got ci_upper={ci_upper!r} without ci_lower. An interval "
-                "needs both bounds (or ci_lower alone, mirrored around ate); refusing to invent "
-                "the lower bound."
-            )
         return _point_only_sensitivity(ate, derived=derived)
     hi = float(ci_upper) if ci_upper is not None else float(ate) + (float(ate) - float(ci_lower))
     try:
@@ -1960,8 +1987,6 @@ def sensitivity_analyzer(
             "universal E-value threshold: benchmark it against the confounding the measured "
             "covariates carried."
         )
-    if derived.outcome_std is None:
-        interpretation += _UNSTANDARDIZED_CAVEAT
     return SensitivityReport(
         e_value_point=reading.e_value_point,
         e_value_ci=reading.e_value_ci,
@@ -1976,16 +2001,6 @@ def sensitivity_analyzer(
 
 _READING_INTERVAL_UNAVAILABLE = "interval_unavailable"
 
-# Appended whenever no frame was in context, so no outcome SD standardized the effect
-# (#2022). ``evalue`` then reads the RAW effect as a standardized difference, which makes
-# the E-value depend on the outcome's units — it must never be compared with the
-# frame-derived number the refutation suite reports for the same estimate.
-_UNSTANDARDIZED_CAVEAT = (
-    " No data frame was in context, so the effect was NOT standardized against the "
-    "outcome's standard deviation and this E-value is on the raw outcome scale; it is not "
-    "comparable with a frame-derived one."
-)
-
 
 def _point_only_sensitivity(ate: float, *, derived: _SensitivityInputs) -> Dict[str, Any]:
     """``sensitivity_analyzer``'s report when the estimate has no confidence interval (#2014).
@@ -1995,8 +2010,10 @@ def _point_only_sensitivity(ate: float, *, derived: _SensitivityInputs) -> Dict[
     estimate and states precision separately). No reading: ``classify`` checks "the CI
     includes zero" before beyond / within, and that check cannot be made.
 
-    ``derived`` carries the frame-derived inputs (#2022); it is all-empty when no frame was
-    in context, which is the only case that still reports no benchmark.
+    ``derived`` is always frame-derived (#2022) — a caller with no usable frame is refused
+    before reaching here. No benchmark means the frame yielded neither a naive contrast nor
+    a scoreable covariate factor, exactly as it does on the interval path; whether the
+    estimate carried sampling uncertainty never decides it.
     """
     try:
         e_point, _, conversion = evalue.point_e_value(
@@ -2014,6 +2031,13 @@ def _point_only_sensitivity(ate: float, *, derived: _SensitivityInputs) -> Dict[
         benchmark, basis = evalue.measured_confounding_benchmark(joint, derived.covariate_factors)
     except ValueError as exc:
         raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}") from exc
+    # The same correction ``evalue.classify`` applies after its own call to
+    # ``measured_confounding_benchmark``: an empty factor dict with covariates MEASURED is
+    # "measured but unscoreable", not "nothing measured". Omitting it here made one frame
+    # read ``measured_unscoreable`` with an interval and ``none_measured`` without one —
+    # sampling uncertainty deciding whether confounders existed.
+    if basis == evalue.BASIS_NONE_MEASURED and derived.covariates_measured > 0:
+        basis = evalue.BASIS_MEASURED_UNSCOREABLE
     benchmark_sentence = (
         f" The confounding the measured adjustment removed corresponds to a risk ratio of "
         f"{benchmark:.2f} ({evalue.BASIS_IN_WORDS[basis]}); no reading against it is given "
@@ -2035,9 +2059,7 @@ def _point_only_sensitivity(ate: float, *, derived: _SensitivityInputs) -> Dict[
             f"{e_point:.2f} with both treatment and outcome to explain away the point "
             "estimate. Without the interval it is unknown whether the effect is "
             "distinguishable from zero, so no robustness reading (null finding, or beyond / "
-            "within measured confounding) is given."
-            + benchmark_sentence
-            + ("" if derived.outcome_std is not None else _UNSTANDARDIZED_CAVEAT)
+            "within measured confounding) is given." + benchmark_sentence
         ),
     ).model_dump()
 
