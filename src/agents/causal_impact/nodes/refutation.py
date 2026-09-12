@@ -2041,6 +2041,8 @@ class RefutationNode:
             # gating it on the cheap observed per-refit would start a ~5x
             # longer run than estimated and orphan the worker thread.
             per_refit_hint_heavy = per_refit_hint
+            # #2029: the probe is seeded like the scored refits it calibrates.
+            probe_seed = self.runner._seed_for(query_id)
             if deadline is not None and time.monotonic() + per_refit_hint <= deadline:
                 try:
                     _cal_t0 = time.monotonic()
@@ -2052,6 +2054,7 @@ class RefutationNode:
                         method_name="placebo_treatment_refuter",
                         placebo_type="permute",
                         num_simulations=1,
+                        random_state=probe_seed,
                     )
                     per_refit_hint = time.monotonic() - _cal_t0
                 except Exception as cal_err:  # noqa: BLE001 - keep conservative hint
