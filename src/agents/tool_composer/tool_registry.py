@@ -259,7 +259,10 @@ DEPENDENCY_FIELD_MAPPINGS: dict[tuple[str, str], tuple[Optional[str], Optional[s
     # Refutation re-estimates on the same treatment/outcome/confounders; no output
     # field of the estimate is an input of the refutation suite.
     ("refutation_runner", "causal_effect_estimator"): (None, None),
-    # ate / ci_lower / ci_upper map by name.
+    # ate / ci_lower / ci_upper map by name. treatment / outcome / confounders carry no
+    # producer field either (#2022): the planner binds the same columns the estimate used,
+    # and the naive contrast, baseline risk and outcome SD are derived from the frame —
+    # the estimate never carried them.
     ("sensitivity_analyzer", "causal_effect_estimator"): (None, None),
     # Ordering only: CATE re-estimates per segment from the data.
     ("cate_analyzer", "causal_effect_estimator"): (None, None),

@@ -159,6 +159,20 @@ def _cohort_output(n_patients: int = 800) -> Dict[str, Any]:
     ).model_dump()
 
 
+def _sensitivity_frame(n: int = 400, seed: int = 2022) -> pd.DataFrame:
+    """Minimal confounded frame for ``sensitivity_analyzer``, which needs one since #2022."""
+    rng = np.random.default_rng(seed)
+    x1 = rng.normal(size=n)
+    treatment = (x1 + rng.normal(size=n) > 0).astype(int)
+    return pd.DataFrame(
+        {
+            "treatment": treatment,
+            "outcome": 0.12 * treatment + 0.5 * x1 + rng.normal(size=n),
+            "x1": x1,
+        }
+    )
+
+
 def _risk_output(n_patients: int = 1200) -> Dict[str, Any]:
     return tr.risk_scorer(
         entity_type="patient",
@@ -448,7 +462,17 @@ def test_whole_prompt_is_bounded_by_steps_times_budget(mock_llm_client):
         ("gap_calculator", lambda: _gap_output(5)),
         (
             "sensitivity_analyzer",
-            lambda: tr.sensitivity_analyzer(ate=0.12, ci_lower=0.04, ci_upper=0.20, naive_ate=0.19),
+            # #2022: no naive_ate parameter any more — the contrast and the outcome SD
+            # are derived from the frame, which is now required.
+            lambda: tr.sensitivity_analyzer(
+                ate=0.12,
+                ci_lower=0.04,
+                ci_upper=0.20,
+                treatment="treatment",
+                outcome="outcome",
+                confounders=["x1"],
+                estimation_data=_sensitivity_frame(),
+            ),
         ),
     ],
 )
