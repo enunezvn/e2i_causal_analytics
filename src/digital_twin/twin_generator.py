@@ -27,7 +27,6 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from .models.twin_models import (
     Brand,
     DigitalTwin,
-    TwinModelConfig,
     TwinModelMetrics,
     TwinPopulation,
     TwinType,
@@ -47,7 +46,6 @@ class TwinGenerator:
         twin_type: Type of entity to generate (hcp, patient, territory)
         brand: Pharmaceutical brand context
         model: Trained sklearn model
-        config: Model configuration
         metrics: Performance metrics from training
 
     Example:
@@ -111,19 +109,19 @@ class TwinGenerator:
         self,
         twin_type: TwinType,
         brand: Brand,
-        config: Optional[TwinModelConfig] = None,
     ):
         """
         Initialize twin generator.
 
+        Model hyper-parameters are not taken here: they are passed to
+        ``train(**kwargs)`` and forwarded to ``_create_model`` (#2049).
+
         Args:
             twin_type: Type of twins to generate
             brand: Brand context
-            config: Optional model configuration
         """
         self.twin_type = twin_type
         self.brand = brand
-        self.config = config
 
         # Model components (set during training)
         self.model: Optional[Any] = None
@@ -260,29 +258,29 @@ class TwinGenerator:
 
         logger.info(f"Generating {n} {self.twin_type.value} twins")
 
-        twins = []
-        features_list = []
+        # Draw every twin's features first, one np.random draw sequence in the
+        # same order as before, so a seeded population is unchanged (#2048).
+        features_list = [self._generate_features(constraints) for _ in range(n)]
+        feature_rows = [self._features_to_array(features) for features in features_list]
 
-        for _ in range(n):
-            # Generate features
-            features = self._generate_features(constraints)
-            features_list.append(features)
+        # One batched predict for the whole population instead of one per twin:
+        # the per-twin call was 23.4s of a 33.8s e2e test at n=500 (#2048).
+        if feature_rows:
+            baseline_outcomes = self.model.predict(np.vstack(feature_rows))
+        else:
+            baseline_outcomes = np.empty(0)
 
-            # Predict baseline outcome
-            X = self._features_to_array(features)
-            baseline_outcome = float(self.model.predict(X.reshape(1, -1))[0])
-
-            # Calculate propensity (simplified)
-            propensity = self._calculate_propensity(features)
-
-            twin = DigitalTwin(
+        twins = [
+            DigitalTwin(
                 twin_type=self.twin_type,
                 brand=self.brand,
                 features=features,
-                baseline_outcome=baseline_outcome,
-                baseline_propensity=propensity,
+                baseline_outcome=float(baseline_outcome),
+                # Calculate propensity (simplified)
+                baseline_propensity=self._calculate_propensity(features),
             )
-            twins.append(twin)
+            for features, baseline_outcome in zip(features_list, baseline_outcomes, strict=True)
+        ]
 
         # Calculate feature summary
         feature_summary = self._calculate_feature_summary(features_list)
