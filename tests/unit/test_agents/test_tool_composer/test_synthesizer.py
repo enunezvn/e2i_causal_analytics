@@ -227,8 +227,17 @@ class TestResultFormatting:
         assert "FAILED" in formatted
         assert "Tool execution failed" in formatted
 
-    def test_format_truncates_long_output(self, mock_llm_client, sample_decomposition):
-        """Test that long outputs are truncated"""
+    def test_format_bounds_long_output_and_states_the_elision(
+        self, mock_llm_client, sample_decomposition
+    ):
+        """A long output is bounded, and the elision is stated with its size.
+
+        Pre-#2019 this asserted the literal ``(truncated)`` marker left by
+        ``output_str[:1000]``. That cut ran through whatever sat at offset 1,000,
+        which is why it could remove a tool's whole disclosure tail; it is now a
+        structured projection, so the contract under test is the one that
+        matters: the output stays bounded AND says what it dropped.
+        """
         # Create a result with very long output
         long_result = {"data": "x" * 2000}
 
@@ -253,7 +262,13 @@ class TestResultFormatting:
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
         formatted = synthesizer._format_results(synthesis_input)
 
-        assert "(truncated)" in formatted
+        # The field is still there -- a scalar is never dropped to hit a byte
+        # target -- but its value is bounded and the elision names its size.
+        assert '"data"' in formatted
+        assert "chars)" in formatted
+        assert "structured summary" in formatted
+        assert "x" * 2000 not in formatted
+        assert len(formatted) < 2000
 
 
 class TestResponseParsing:
