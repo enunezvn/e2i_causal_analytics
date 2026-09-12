@@ -9761,6 +9761,12 @@ export interface components {
             } | null;
         };
         /**
+         * EstimateScopeEnum
+         * @description What a simulation's effect was estimated ON (#2053).
+         * @enum {string}
+         */
+        EstimateScopeEnum: "cohort" | "regions" | "unknown";
+        /**
          * EstimationDataResponse
          * @description Real estimation records loaded server-side from a gold-standard dataset.
          *
@@ -18486,15 +18492,17 @@ export interface components {
              * @description Origin of the ATE estimate: 'synthetic_uplift_v1' (synthetic-DGP-trained uplift, ~constant per brand/intervention in v1) or 'rwd_uplift' (real-world). None for legacy/error results.
              */
             data_provenance?: string | null;
+            /** @description What simulated_ate and its interval were estimated ON (#2053): 'cohort' (the whole cohort), 'regions' (target_regions), or 'unknown' (a stored simulation written before the scope was recorded, whose effect may be either). An empty target_regions means cohort-wide only when this is 'cohort'. */
+            estimate_scope: components["schemas"]["EstimateScopeEnum"];
             /**
              * Target Regions
-             * @description Regions the effect above was estimated ON (#2023). Empty means the whole cohort. When a region filter is applied, simulated_ate / its interval / the recommendation / recommended_sample_size all describe these regions — the same numbers the chat counterfactual_simulator gives for the same question.
+             * @description Regions the effect above was estimated ON (#2023). Empty unless estimate_scope is 'regions'. When a region filter is applied, simulated_ate / its interval / the recommendation / recommended_sample_size all describe these regions — the same numbers the chat counterfactual_simulator gives for the same question.
              * @default []
              */
             target_regions: string[];
             /**
              * Cohort Effect
-             * @description The cohort-wide ATE the targeted estimate was narrowed from, reported alongside it. None when nothing was narrowed (simulated_ate IS cohort-wide) or on a history read, which does not record the scope.
+             * @description The cohort-wide ATE the targeted estimate was narrowed from, reported alongside it. None unless estimate_scope is 'regions'.
              */
             cohort_effect?: number | null;
             /**
@@ -18545,6 +18553,12 @@ export interface components {
             recommendation_type: string;
             /** Data Provenance */
             data_provenance?: string | null;
+            estimate_scope: components["schemas"]["EstimateScopeEnum"];
+            /**
+             * Target Regions
+             * @default []
+             */
+            target_regions: string[];
         };
         /**
          * SimulationHistoryResponse
@@ -18586,6 +18600,14 @@ export interface components {
             created_at: string;
             /** Data Provenance */
             data_provenance?: string | null;
+            estimate_scope: components["schemas"]["EstimateScopeEnum"];
+            /**
+             * Target Regions
+             * @default []
+             */
+            target_regions: string[];
+            /** Cohort Effect */
+            cohort_effect?: number | null;
         };
         /**
          * SimulationListResponse
@@ -18664,15 +18686,17 @@ export interface components {
              * @description Origin of the ATE estimate: 'synthetic_uplift_v1' (synthetic-DGP-trained uplift, ~constant per brand/intervention in v1) or 'rwd_uplift' (real-world). None for legacy/error results.
              */
             data_provenance?: string | null;
+            /** @description What simulated_ate and its interval were estimated ON (#2053): 'cohort' (the whole cohort), 'regions' (target_regions), or 'unknown' (a stored simulation written before the scope was recorded, whose effect may be either). An empty target_regions means cohort-wide only when this is 'cohort'. */
+            estimate_scope: components["schemas"]["EstimateScopeEnum"];
             /**
              * Target Regions
-             * @description Regions the effect above was estimated ON (#2023). Empty means the whole cohort. When a region filter is applied, simulated_ate / its interval / the recommendation / recommended_sample_size all describe these regions — the same numbers the chat counterfactual_simulator gives for the same question.
+             * @description Regions the effect above was estimated ON (#2023). Empty unless estimate_scope is 'regions'. When a region filter is applied, simulated_ate / its interval / the recommendation / recommended_sample_size all describe these regions — the same numbers the chat counterfactual_simulator gives for the same question.
              * @default []
              */
             target_regions: string[];
             /**
              * Cohort Effect
-             * @description The cohort-wide ATE the targeted estimate was narrowed from, reported alongside it. None when nothing was narrowed (simulated_ate IS cohort-wide) or on a history read, which does not record the scope.
+             * @description The cohort-wide ATE the targeted estimate was narrowed from, reported alongside it. None unless estimate_scope is 'regions'.
              */
             cohort_effect?: number | null;
             /**

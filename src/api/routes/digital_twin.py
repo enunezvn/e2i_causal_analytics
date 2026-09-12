@@ -44,7 +44,7 @@ from src.api.dependencies.auth import (
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 if TYPE_CHECKING:
-    from src.digital_twin.twin_repository import TwinRepository
+    from src.digital_twin.twin_repository import StoredEstimateScope, TwinRepository
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +188,30 @@ class RecommendationEnum(str, Enum):
     DEPLOY = "deploy"
     SKIP = "skip"
     REFINE = "refine"
+
+
+class EstimateScopeEnum(str, Enum):
+    """What a simulation's effect was estimated ON (#2053)."""
+
+    COHORT = "cohort"
+    REGIONS = "regions"
+    UNKNOWN = "unknown"
+
+
+def _live_estimate_scope(target_regions: List[str]) -> EstimateScopeEnum:
+    """Scope of a simulation this request just ran: it always knows its own."""
+    return EstimateScopeEnum.REGIONS if target_regions else EstimateScopeEnum.COHORT
+
+
+def _stored_estimate_scope(row: Dict[str, Any]) -> "StoredEstimateScope":
+    """Scope recorded on a stored twin_simulations row; unknown when none was (#2053)."""
+    from src.digital_twin.twin_repository import StoredEstimateScope
+
+    return StoredEstimateScope.from_row(row)
+
+
+def _round4(value: Optional[float]) -> Optional[float]:
+    return None if value is None else round(float(value), 4)
 
 
 class FidelityGradeEnum(str, Enum):
@@ -374,11 +398,19 @@ class SimulationResponse(BaseModel):
             "None for legacy/error results."
         ),
     )
+    estimate_scope: EstimateScopeEnum = Field(
+        description=(
+            "What simulated_ate and its interval were estimated ON (#2053): 'cohort' (the "
+            "whole cohort), 'regions' (target_regions), or 'unknown' (a stored simulation "
+            "written before the scope was recorded, whose effect may be either). An empty "
+            "target_regions means cohort-wide only when this is 'cohort'."
+        ),
+    )
     target_regions: List[str] = Field(
         default=[],
         description=(
-            "Regions the effect above was estimated ON (#2023). Empty means the whole "
-            "cohort. When a region filter is applied, simulated_ate / its interval / the "
+            "Regions the effect above was estimated ON (#2023). Empty unless estimate_scope "
+            "is 'regions'. When a region filter is applied, simulated_ate / its interval / the "
             "recommendation / recommended_sample_size all describe these regions — the "
             "same numbers the chat counterfactual_simulator gives for the same question."
         ),
@@ -387,8 +419,7 @@ class SimulationResponse(BaseModel):
         default=None,
         description=(
             "The cohort-wide ATE the targeted estimate was narrowed from, reported "
-            "alongside it. None when nothing was narrowed (simulated_ate IS cohort-wide) "
-            "or on a history read, which does not record the scope."
+            "alongside it. None unless estimate_scope is 'regions'."
         ),
     )
     cohort_ci_lower: Optional[float] = Field(
@@ -421,6 +452,10 @@ class SimulationListItem(BaseModel):
     status: SimulationStatusEnum
     created_at: datetime
     data_provenance: Optional[str] = None
+    # Scope of simulated_ate (#2053); see SimulationResponse.estimate_scope.
+    estimate_scope: EstimateScopeEnum
+    target_regions: List[str] = Field(default=[])
+    cohort_effect: Optional[float] = None
 
 
 class SimulationListResponse(BaseModel):
@@ -447,6 +482,9 @@ class SimulationHistoryItem(BaseModel):
     ate_estimate: float
     recommendation_type: str
     data_provenance: Optional[str] = None
+    # Scope of ate_estimate (#2053); see SimulationResponse.estimate_scope.
+    estimate_scope: EstimateScopeEnum
+    target_regions: List[str] = Field(default=[])
 
 
 class SimulationHistoryResponse(BaseModel):
@@ -988,6 +1026,7 @@ async def run_simulation(
             effect_direction=result.effect_direction(),
             created_at=result.created_at,
             data_provenance=result.data_provenance,
+            estimate_scope=_live_estimate_scope(result.target_regions),
             target_regions=result.target_regions,
             cohort_effect=(None if result.cohort_ate is None else round(result.cohort_ate, 4)),
             cohort_ci_lower=(
@@ -1066,21 +1105,26 @@ async def list_simulations(
         offset = (page - 1) * page_size
         paginated = simulations[offset : offset + page_size]
 
-        items = [
-            SimulationListItem(
-                simulation_id=str(sim.get("simulation_id", "")),
-                intervention_type=sim.get("intervention_type", "unknown"),
-                brand=sim.get("brand", "unknown"),
-                twin_type=sim.get("twin_type", "unknown"),
-                twin_count=sim.get("twin_count", 0),
-                simulated_ate=round(sim.get("simulated_ate", 0.0), 4),
-                recommendation=RecommendationEnum(sim.get("recommendation", "refine")),
-                status=SimulationStatusEnum(sim.get("simulation_status", "completed")),
-                created_at=sim.get("created_at", datetime.now(timezone.utc)),
-                data_provenance=sim.get("data_provenance"),
+        items = []
+        for sim in paginated:
+            scope = _stored_estimate_scope(sim)
+            items.append(
+                SimulationListItem(
+                    simulation_id=str(sim.get("simulation_id", "")),
+                    intervention_type=sim.get("intervention_type", "unknown"),
+                    brand=sim.get("brand", "unknown"),
+                    twin_type=sim.get("twin_type", "unknown"),
+                    twin_count=sim.get("twin_count", 0),
+                    simulated_ate=round(sim.get("simulated_ate", 0.0), 4),
+                    recommendation=RecommendationEnum(sim.get("recommendation", "refine")),
+                    status=SimulationStatusEnum(sim.get("simulation_status", "completed")),
+                    created_at=sim.get("created_at", datetime.now(timezone.utc)),
+                    data_provenance=sim.get("data_provenance"),
+                    estimate_scope=EstimateScopeEnum(scope.scope.value),
+                    target_regions=scope.target_regions,
+                    cohort_effect=_round4(scope.cohort_ate),
+                )
             )
-            for sim in paginated
-        ]
 
         return SimulationListResponse(
             total_count=len(simulations),
@@ -1139,18 +1183,22 @@ async def get_simulation_history(
         rows = await repo.simulations.list_simulations(brand=effective_brand, limit=offset + limit)
         window = rows[offset : offset + limit]
 
-        items = [
-            SimulationHistoryItem(
-                simulation_id=str(sim.get("simulation_id", "")),
-                created_at=sim.get("created_at", datetime.now(timezone.utc)),
-                intervention_type=sim.get("intervention_type", "unknown"),
-                brand=sim.get("brand", "unknown"),
-                ate_estimate=round(sim.get("simulated_ate", 0.0), 4),
-                recommendation_type=sim.get("recommendation", "refine"),
-                data_provenance=sim.get("data_provenance"),
+        items = []
+        for sim in window:
+            scope = _stored_estimate_scope(sim)
+            items.append(
+                SimulationHistoryItem(
+                    simulation_id=str(sim.get("simulation_id", "")),
+                    created_at=sim.get("created_at", datetime.now(timezone.utc)),
+                    intervention_type=sim.get("intervention_type", "unknown"),
+                    brand=sim.get("brand", "unknown"),
+                    ate_estimate=round(sim.get("simulated_ate", 0.0), 4),
+                    recommendation_type=sim.get("recommendation", "refine"),
+                    data_provenance=sim.get("data_provenance"),
+                    estimate_scope=EstimateScopeEnum(scope.scope.value),
+                    target_regions=scope.target_regions,
+                )
             )
-            for sim in window
-        ]
 
         return SimulationHistoryResponse(
             simulations=items,
@@ -1305,6 +1353,7 @@ async def compare_scenarios(
             effect_direction=result.effect_direction(),
             created_at=result.created_at,
             data_provenance=result.data_provenance,
+            estimate_scope=_live_estimate_scope(result.target_regions),
         )
 
     try:
@@ -1406,6 +1455,7 @@ async def get_simulation(
         ):
             raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
 
+        scope = _stored_estimate_scope(result)
         eh = result.get("effect_heterogeneity") or {}
         heterogeneity = EffectHeterogeneityResponse(
             by_specialty=eh.get("by_specialty", {}),
@@ -1448,6 +1498,11 @@ async def get_simulation(
             effect_heterogeneity=heterogeneity,
             intervention_config=result.get("intervention_config") or {},
             data_provenance=result.get("data_provenance"),  # #705 H5b
+            estimate_scope=EstimateScopeEnum(scope.scope.value),  # #2053
+            target_regions=scope.target_regions,
+            cohort_effect=_round4(scope.cohort_ate),
+            cohort_ci_lower=_round4(scope.cohort_ci_lower),
+            cohort_ci_upper=_round4(scope.cohort_ci_upper),
         )
 
     except HTTPException:
