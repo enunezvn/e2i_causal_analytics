@@ -22,6 +22,7 @@ frames; the probe callables only count calls, sleep or raise.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -182,11 +183,25 @@ async def test_refusal_class(registry):
 
 
 async def test_input_rejected_class(registry):
-    def rejecting(**_: Any) -> Any:
-        # REAL guard (#1573): no usable effect estimate was supplied.
-        return tr.counterfactual_simulator(
-            intervention="speaker program", target_entities=["NE"], expected_effect=None
+    async def rejecting(**_: Any) -> Any:
+        # REAL guard, and deliberately one that BOTH tool contracts refuse, because this call
+        # has to survive a signature change landing from another branch:
+        #   here (#1573)  - expected_effect=None is no usable effect estimate;
+        #   after #2015   - "speaker program" is not a digital-twin intervention (the catalog
+        #                   holds speaker_program_invitation), and brand is required.
+        # Each signature absorbs the other's extra argument through **kwargs, so one call fits
+        # both. #2015 also makes the tool async, hence awaiting an awaitable result: a
+        # coroutine returned from a sync probe would never raise and the case would silently
+        # pass as a success.
+        result = tr.counterfactual_simulator(
+            intervention="speaker program",
+            brand="Kisqali",
+            target_entities=["NE"],
+            expected_effect=None,
         )
+        if inspect.isawaitable(result):
+            result = await result
+        return result
 
     _register(registry, "counterfactual_simulator", rejecting)
     trace = await _executor(registry).execute(_one("s", "counterfactual_simulator"))
