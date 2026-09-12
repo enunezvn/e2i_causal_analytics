@@ -721,12 +721,6 @@ class RefutationTestType(str, Enum):
 #                                    primary suite a budget failure
 NEGATIVE_CONTROL_SKIP_REASONS: frozenset = frozenset(_NEGATIVE_CONTROL_SKIP_EXPLANATIONS)
 
-# ``causal_validations.delta_percent`` is DECIMAL(8,4)
-# (database/ml/010_causal_validation_tables.sql:84): the largest value the
-# column stores. A persisted ``delta_percent`` above it fails the whole bulk
-# ``save_suite`` insert, so writers clamp to it (#2007).
-_DELTA_PERCENT_COLUMN_MAX = 9999.9999
-
 
 def _validate_negative_control_skip_reason(reason: Optional[str]) -> None:
     """``None`` or a token of ``NEGATIVE_CONTROL_SKIP_REASONS``; anything else is a
@@ -2674,12 +2668,10 @@ class RefutationRunner:
         verdict is an interval rule, not a test statistic); ``delta_percent`` is
         ``100 * |nc| / |orig|`` -- the FAILED ratio itself, so the persisted
         column carries the verdict's number (0.0 when the claimed effect is
-        exactly 0, where no ratio exists) -- CLAMPED to
-        ``_DELTA_PERCENT_COLUMN_MAX`` (9999.9999, the DECIMAL(8,4) column's
-        range) with the exact ratio in ``details["control_to_claimed_ratio"]``;
-        >= 100 is already FAILED, so saturation loses nothing the verdict
-        needs. (The other tests' ``delta_percent`` formulas share the column's
-        range limit -- pre-existing; a follow-up is filed by the dispatcher.) ``details["reading"]`` is the one
+        exactly 0, where no ratio exists) -- the EXACT ratio; the column bound
+        is applied once at the write boundary (``CausalValidationRepository``,
+        #2029) and the ratio also rides in ``details["control_to_claimed_ratio"]``.
+        ``details["reading"]`` is the one
         sentence the narrative prints and ``details["message"]`` is the same
         sentence, which ``to_legacy_format`` forwards as the legacy per-test
         ``details`` string the interpretation node reads.
@@ -2757,17 +2749,12 @@ class RefutationRunner:
                 f"effect {float(original_effect):+.3f}: the adjustment is leaking "
                 "confounding."
             )
-        # ``delta_percent`` persists to ``causal_validations.delta_percent``, a
-        # DECIMAL(8,4) (database/ml/010_causal_validation_tables.sql:84, max
-        # 9999.9999). The ratio itself is unbounded -- claimed 0.0001 against a
-        # control of 0.05 is 50000 -- and an out-of-range value fails the bulk
-        # ``save_suite`` insert, losing the WHOLE suite's persistence (codex
-        # whole-diff HIGH). The column gets the clamped value; the exact ratio
-        # rides in ``details["control_to_claimed_ratio"]``. Saturation loses
-        # nothing the verdict needs: >= 100 is already FAILED.
+        # The column bound is applied ONCE at the write boundary
+        # (CausalValidationRepository, #2029); the exact ratio also rides in
+        # details["control_to_claimed_ratio"].
         ratio = 100.0 * abs(eff) / claimed if claimed > 0.0 else 0.0
         assert np.isfinite(ratio), ratio  # claimed finite and > 0, eff finite: checked above
-        delta_percent = min(ratio, _DELTA_PERCENT_COLUMN_MAX)
+        delta_percent = ratio
         return RefutationResult(
             test_name=RefutationTestType.NEGATIVE_CONTROL_OUTCOME,
             status=status,

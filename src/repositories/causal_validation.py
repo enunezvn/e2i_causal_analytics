@@ -8,6 +8,7 @@ Database: causal_validations table (010_causal_validation_tables.sql)
 """
 
 import logging
+import math
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +21,34 @@ from src.repositories.base import BaseRepository
 from src.repositories.json_utils import to_plain_json
 
 logger = logging.getLogger(__name__)
+
+# causal_validations.delta_percent is NUMERIC(12,4) since migration 139 (#2029):
+# the largest value the column stores. Every writer clamps here, once, and keeps
+# the exact value in details_json.delta_percent_exact -- one overflowing row used
+# to fail the whole bulk save_suite insert.
+DELTA_PERCENT_COLUMN_MAX = 99999999.9999
+
+
+def _clamp_delta_percent(value: Any, details: Dict[str, Any]) -> Any:
+    """Return the column-safe delta_percent; record the exact value when clamped.
+
+    Non-finite values are returned untouched: ``inf > MAX`` is True in Python,
+    and saturating it would fabricate a bounded, plausible-looking number for a
+    value that is not a measurement.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return value
+    if not math.isfinite(v):
+        return v
+    if v > DELTA_PERCENT_COLUMN_MAX:
+        details["delta_percent_exact"] = v
+        return DELTA_PERCENT_COLUMN_MAX
+    return v
+
 
 #: Canonical namespace prefix for the causal_paths -> causal_validations
 #: linkage (#1352, migration 119). ``causal_validations.estimate_id`` is a
@@ -86,7 +115,7 @@ class CausalValidationRepository(BaseRepository):
     - original_effect: DECIMAL(12,6)
     - refuted_effect: DECIMAL(12,6)
     - p_value: DECIMAL(6,5)
-    - delta_percent: DECIMAL(8,4)
+    - delta_percent: NUMERIC(12,4) (migration 139, #2029)
     - confidence_score: DECIMAL(4,3)
     - gate_decision: gate_decision ENUM
     - test_config: JSONB
@@ -185,6 +214,8 @@ class CausalValidationRepository(BaseRepository):
         if not self.client:
             return None
 
+        details = dict(test.details)
+        delta_percent = _clamp_delta_percent(test.delta_percent, details)
         row = {
             "estimate_id": estimate_id,
             "estimate_source": estimate_source,
@@ -193,14 +224,14 @@ class CausalValidationRepository(BaseRepository):
             "original_effect": test.original_effect,
             "refuted_effect": test.refuted_effect,
             "p_value": test.p_value,
-            "delta_percent": test.delta_percent,
+            "delta_percent": delta_percent,
             "confidence_score": confidence_score,
             "gate_decision": gate_decision.value,
             # Lane 1 (owner decision 2026-09-09): JSON OBJECTS, not JSON strings,
             # so evidence is queryable (jsonb_array_length(details_json->'subset_effects'))
             # and testable in one shape; non-finite floats -> null (allow_nan=False transport).
-            "test_config": to_plain_json(test.details.get("config", {})),
-            "details_json": to_plain_json(test.details),
+            "test_config": to_plain_json(details.get("config", {})),
+            "details_json": to_plain_json(details),
             "agent_activity_id": agent_activity_id,
             "brand": brand,
             "treatment_variable": treatment,
@@ -486,6 +517,8 @@ class CausalValidationRepository(BaseRepository):
         Returns:
             Dict ready for database insertion
         """
+        details = dict(test.details)
+        delta_percent = _clamp_delta_percent(test.delta_percent, details)
         return {
             "estimate_id": estimate_id,
             "estimate_source": estimate_source,
@@ -494,11 +527,11 @@ class CausalValidationRepository(BaseRepository):
             "original_effect": test.original_effect,
             "refuted_effect": test.refuted_effect,
             "p_value": test.p_value,
-            "delta_percent": test.delta_percent,
+            "delta_percent": delta_percent,
             "confidence_score": suite.confidence_score,
             "gate_decision": suite.gate_decision.value,
             "test_config": to_plain_json({"execution_time_ms": test.execution_time_ms}),
-            "details_json": to_plain_json(test.details),
+            "details_json": to_plain_json(details),
             "agent_activity_id": agent_activity_id,
             "brand": suite.brand,
             "treatment_variable": suite.treatment_variable,

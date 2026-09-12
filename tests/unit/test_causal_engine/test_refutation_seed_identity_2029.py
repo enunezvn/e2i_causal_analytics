@@ -81,7 +81,11 @@ def test_subset_and_bootstrap_details_carry_resample_seed():
     (3 / 10), so both land on the config_below_minimum SKIPPED path after two
     real re-fits -- the seed must be recorded on that post-run path too.
     """
-    from src.causal_engine.refutation_runner import RefutationRunner, RefutationTestType
+    from src.causal_engine.refutation_runner import (
+        RefutationRunner,
+        RefutationStatus,
+        RefutationTestType,
+    )
 
     model, estimand, estimate, ate = _fitted()
     runner = RefutationRunner(
@@ -91,6 +95,11 @@ def test_subset_and_bootstrap_details_carry_resample_seed():
     sub = runner._run_data_subset_test(ate, ci, model, estimand, estimate, True, resample_seed=17)
     boot = runner._run_bootstrap_test(ate, ci, model, estimand, estimate, True, resample_seed=17)
     assert sub.test_name == RefutationTestType.DATA_SUBSET
+    # Pin the path this test claims to exercise: the post-run config_below_minimum skip.
+    assert sub.status is RefutationStatus.SKIPPED
+    assert boot.status is RefutationStatus.SKIPPED
+    assert sub.details["reason"].startswith("config_below_minimum")
+    assert boot.details["reason"].startswith("config_below_minimum")
     assert sub.details["resamples_completed"] == 2
     assert sub.details["resample_seed"] == 17
     assert boot.details["resamples_completed"] == 2
