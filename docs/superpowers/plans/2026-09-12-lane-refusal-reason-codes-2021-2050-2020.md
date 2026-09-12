@@ -1155,6 +1155,37 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 
 ---
 
+## Task 4c: The same rule for a phase that throws (#2020, found by the Task 4 quality review)
+
+> **Added 2026-09-12.** Task 4 sanitized the *total-failure* answer. The Task 4 quality review then found the same answer family reached by a second door. When a whole phase raises, `composer.py`'s four `_fail_closed` callers pass `f"Decomposition failed: {e}"`, `f"Planning failed: {e}"`, `f"Execution failed: {e}"` and `f"Unexpected error: {e}"` into `_create_error_result`. That builds `answer=f"Unable to complete analysis: {error}"` and `caveats=[error]`, so any library exception escaping a phase reaches the user verbatim. Separately, `agent.py`'s composer-exception path sets `ToolComposerOutput(error=str(e))`. This is squarely #2020's answer, not a new surface, so it stays in this lane. It is recorded as its own task so Task 4's fix round stays reviewable.
+
+**Measure before changing, site by site** (the same discipline as Task 7b):
+- Grep the tests that pin these strings, and read what each asserts.
+- For `ToolComposerOutput.error`, find every consumer (orchestrator, API routes, frontend) and establish whether it reaches a user.
+- For each phase, list what can actually raise inside it: an authored `DecompositionError` / `PlanningError` / `ExecutionError`, or anything at all.
+
+**Rule:**
+- An authored phase error (the module's own error classes, with messages the module writes) may keep its text.
+- Anything else renders `"<Phase> failed: <fixed sentence>"`. Use a phase-level sentence, not a `ReasonCode`; these are not step failures.
+- The raw exception goes to `logger.warning` / `logger.exception` with `exc_info`.
+- `agent.py`'s `error=str(e)` follows the same rule when the error reaches a user. Report it and leave it unchanged when it provably does not.
+
+**Tests:** red first. For each phase, force a library-style exception carrying a sentinel. Assert the sentinel is absent from `answer`, `caveats`, `errors` and `error`, and present in `caplog`. Add one test showing an authored phase error keeps its text.
+
+**Stop condition:** if a test or a consumer pins the raw phase text as a contract, report `NEEDS_CONTEXT` before changing it.
+
+**Leads the lead measured on 2026-09-12. They are starting points, not conclusions: trace each one to a user-visible surface.**
+- **Phase sites:** `composer.py` :550 / :563 / :577 / :593 build the phase string, which reaches `answer` at :1195 and `caveats`.
+- **Test pins:** only `test_plan_cache_eviction.py:348` pins these strings, with `"Execution failed" in (result.error or "")`. A `"<Phase> failed: <fixed sentence>"` rule keeps that green. `test_composer.py:163` only raises a `RuntimeError("Unexpected error")`, so read what it asserts before assuming it is unaffected.
+- **Answer-path consumer:** `chatbot_tools.py:29` imports `compose_query` and returns `response.answer`, the path Task 4 already sanitizes.
+- **Agent path:**
+  - `ToolComposerAgent` is reached through the orchestrator (`_agent_method_map.py:87`) and `factory.py:150`.
+  - `agent.py:457–463` returns `ToolComposerOutput(error=str(e))` and has already logged `exc_info=True` at :453.
+  - Establish whether the orchestrator or any route renders that `error` to a user. `chatbot_graph.py:2915` / `:3011` read `result.get("error")` — check whether that `result` is this output.
+  - If `error` does reach a user, it gets a fixed sentence (the log line already holds the raw text). If it does not, leave it and cite the evidence.
+
+---
+
 ## Task 5: The recorder emits the code and its details — and no text (#2050 cause 1)
 
 > **Rewritten 2026-09-12 for D1′, before dispatch.** The previous version emitted an `error_message` sentence from the recorder. Under D1′ the recorder sends NO text of any kind: the sentence is rendered at read time (Task 7), and ml/041's RPC keeps writing `NULL` into `error_message` as its second guard. Still true from the earlier correction: `step_record(step_number, result, plan, *, allowlist)` needs a REAL `ExecutionPlan`, `ExecutionStatus` values are lowercase, and `test_step_record_fields` pins the record by EXACT dict equality, so it is updated deliberately below.
@@ -2238,6 +2269,11 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 ### (a) The synthesis prompt
 
 `_format_results` writes `Error: {result.output.error}` for every failed step (about line 424). On a partial success, raw DoWhy / sklearn / driver text reaches the synthesis LLM, and from there it can reach the answer, which is exactly what Task 4 closed on the fail-closed path.
+
+> **Extraction notes from the Task 4 quality review (M6).**
+> - **Move `_TOOL_AUTHORED_CLASSES` out of `composer.py`.** `composer.py` imports `synthesizer.py`, so a helper that imported the constant from `composer.py` would be circular. Put it in `reason_codes.py` beside `EXECUTOR_ASSIGNED`. `ToolComposer._PLAN_DEFECT_CLASSES` may move with it.
+> - **Keep the helper PURE.** Have it return `(fragment_or_None, withheld_raw_or_None)`, with no tool-name prefix and no logging; each caller prefixes and logs. If the helper logged, the synthesizer path would log the same text twice.
+> - **Preserve Task 4's final rule exactly:** verbatim if trusted and non-empty, else the canonical sentence for a KNOWN code; nothing when there is no text and no code. Verbatim reasons are ordered before canonical fragments (I1).
 
 - [ ] **Step 1: One rule, one helper.** Move Task 4's decision into a single function that both the composer and the synthesizer call, so the two surfaces cannot drift. The function takes `outcome_class`, `reason_code` and the raw text, and returns the user-safe text plus whether the raw text was withheld: verbatim when `outcome_class in {"refused", "input_rejected"}` and a code is present, otherwise `"<canonical sentence> [<code>]"` with `tool_error` as the fallback code. Keep it import-light — `reason_codes.py` is imported by `errors.py`, so the helper may live there only if it imports nothing new. The caller logs the withheld raw text, as Task 4 does.
 - [ ] **Step 2: Red.** Build a partial-success trace — one succeeded step, one `error` step carrying `_DOWHY_INTERNALS` from Task 4's test, one coded `refused` step, one uncoded `refused` step — and assert on `_format_results`' output:
