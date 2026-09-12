@@ -261,7 +261,18 @@ class TestFullWorkflowRefine:
 
         # Could be any outcome but verify structure
         assert result.status == SimulationStatus.COMPLETED
-        assert result.recommended_sample_size is not None
+        # #2015: sizing is experiment_size (|effect| / the comparison-arm outcome SD), shared
+        # with the chat simulator. This engine keeps the default SyntheticEffectDataProvider,
+        # whose frame has no region column AND whose binary treatment puts every row on one
+        # side of the median split (measured: 2000 of 2000), so there is no comparison arm to
+        # measure a spread in — estimate_cohort_effect refuses the same frame identically.
+        # The contract is no number plus the stated reason, never a fabricated one; a frame
+        # the rule CAN size is pinned in
+        # tests/unit/test_digital_twin/test_simulation_engine.py::test_simulate_sizes_a_cohort_frame.
+        # The provider backs the dormant engine defaults tracked in #2025.
+        assert result.recommended_sample_size is None
+        assert "recommended_sample_size is not given" in result.recommendation_rationale
+        assert result.recommendation.value in {"deploy", "refine", "skip"}
 
 
 # =============================================================================

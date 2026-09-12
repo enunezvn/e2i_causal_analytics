@@ -256,18 +256,68 @@ class TestSimulationExecution:
         ]
         assert len(result.recommendation_rationale) > 0
 
-    def test_simulate_calculates_sample_size(self, engine, email_campaign_config):
-        """Test that simulation calculates a positive recommended sample size.
+    def test_simulate_gives_no_sample_size_for_an_unsizeable_frame(
+        self, engine, email_campaign_config
+    ):
+        """#2015: sizing is ``experiment_size`` — Cohen's d = |effect| / the outcome SD in the
+        estimate's comparison arm — shared with the chat simulator, replacing the policy's
+        two-proportion figure fed the twins' heuristic treatment propensity.
 
-        The recommended sample size now comes from the policy's two-proportion
-        power calculation (no longer the old heuristic [100, 50000] clamp), so a
-        large estimated effect can legitimately require fewer than 100 per arm.
-        We assert the structural property: a positive integer per-arm sample size.
+        This engine drives ``SyntheticEffectDataProvider``'s frame, which carries no
+        ``region`` column, so there is no comparison arm to measure a spread in:
+        ``estimate_cohort_effect`` refuses the same frame with the same message (measured).
+        The contract is then no number plus the stated reason — never a fabricated one. The
+        provider backs the dormant engine defaults tracked in #2025.
         """
         result = engine.simulate(email_campaign_config)
 
+        assert result.recommended_sample_size is None
+        assert "recommended_sample_size is not given" in result.recommendation_rationale
+        assert "region" in result.recommendation_rationale
+
+    def test_simulate_sizes_a_cohort_frame(self, sample_population, email_campaign_config):
+        """The other side of the contract, so the test above cannot pass on a blanket None: a
+        frame the rule CAN size yields a positive per-arm number, equal to the closed form
+        rebuilt from the frame's own comparison-arm spread."""
+        import math
+
+        import pandas as pd
+        from scipy.stats import norm
+
+        from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+        from src.digital_twin.effect.provider import CohortEffectDataProvider
+
+        regions = ["northeast", "south", "midwest", "west"]
+        rows = []
+        for i in range(1200):
+            treated = i % 2
+            rows.append(
+                {
+                    "region": regions[i % 4],
+                    "email_campaign_count": 8.0 + i % 3 if treated else float(i % 3),
+                    "conversion_rate": (1.3 if treated else 1.0) + 0.1 * ((i // 4) % 5),
+                    "market_share": 0.2 + 0.1 * (i % 5),
+                    "total_rx_count": 40.0 + i % 7,
+                }
+            )
+        cohort = pd.DataFrame(rows)
+        provider = CohortEffectDataProvider(cohort)
+        engine = SimulationEngine(
+            sample_population,
+            effect_provider=provider,
+            effect_estimator=CohortCausalEstimator(),
+        )
+
+        result = engine.simulate(email_campaign_config)
+
+        assert result.status == SimulationStatus.COMPLETED
         assert result.recommended_sample_size is not None
         assert result.recommended_sample_size > 0
+        assert "not given" not in result.recommendation_rationale
+        control = cohort[cohort["email_campaign_count"] <= cohort["email_campaign_count"].median()]
+        d = abs(result.simulated_ate) / control["conversion_rate"].std(ddof=1)
+        z = norm.ppf(1 - 0.05 / 2) + norm.ppf(0.80)
+        assert result.recommended_sample_size == math.ceil(2 * (z / d) ** 2)
 
     def test_simulate_sets_duration(self, engine, email_campaign_config):
         """Test that simulation preserves recommended duration."""
