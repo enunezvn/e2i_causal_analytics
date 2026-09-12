@@ -458,7 +458,9 @@ class ToolComposerAgent:
                 success=False,
                 response="",
                 confidence=0.0,
-                error=str(e),
+                # #2020: this reaches the chat answer (the orchestrator stringifies an output with
+                # an empty response); the raw text is in the log line above.
+                error="Tool composition failed: the analysis could not be completed.",
                 total_duration_ms=duration_ms,
             )
 

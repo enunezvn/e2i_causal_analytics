@@ -590,7 +590,8 @@ class ToolComposer:
                 query,
                 started_at,
                 phase_durations,
-                f"Unexpected error: {e}",
+                # #2020: arbitrary exception text; logger.exception above has it.
+                "Unexpected error: the analysis could not be completed.",
                 None,
                 composition_id=composition_id,
             )
@@ -1277,7 +1278,7 @@ class ToolComposer:
             if authored and raw and reason_code in ReasonCode:
                 trusted_reasons.append(f"{tool_name}: {raw}")
                 continue
-            # Not tool-authored, uncoded (which fails closed the same way), or authored with no text.
+            # Not trusted: not tool-authored, uncoded or carrying a code outside the closed set, or authored with no text.
             if raw:
                 logger.warning(
                     "Step %s tool %r failed with non-user-facing text (reason_code=%s): %s",

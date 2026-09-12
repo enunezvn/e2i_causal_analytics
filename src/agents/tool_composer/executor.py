@@ -461,6 +461,13 @@ class PlanExecutor:
             step_numbers.setdefault(planned.step_id, number)
 
         try:
+            # A step graph broken after planning (cycle, unknown dependency, duplicate id) is a
+            # finding about the plan, so it is named here; get_execution_order would raise it as a
+            # bare ValueError, which the catch-all below cannot tell from library text (#2020).
+            problem = plan._graph_problem()
+            if problem:
+                raise ExecutionError(f"Plan execution failed: {problem}")
+
             # Get execution order (groups of parallel steps)
             execution_groups = plan.get_execution_order()
 
@@ -506,10 +513,17 @@ class PlanExecutor:
             logger.error(f"Execution timed out after {self.timeout_seconds}s")
             trace.completed_at = datetime.now(timezone.utc)
 
-        except Exception as e:
-            logger.error(f"Execution failed: {e}")
+        except ExecutionError:
             trace.completed_at = datetime.now(timezone.utc)
-            raise ExecutionError(f"Plan execution failed: {e}") from e
+            raise
+
+        except Exception as e:
+            # #2020: library text goes to the log, not the answer.
+            logger.error(f"Execution failed: {e}", exc_info=e)
+            trace.completed_at = datetime.now(timezone.utc)
+            raise ExecutionError(
+                "Plan execution failed: execution stopped on an internal error."
+            ) from e
 
         return trace
 

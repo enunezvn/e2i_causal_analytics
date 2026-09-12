@@ -167,7 +167,10 @@ class TestErrorHandling:
 
         assert result.success is False
         assert result.error is not None
-        assert "Unexpected" in result.error
+        # The decompose phase wraps the LLM's exception; its text stays in the log (#2020). This
+        # used to pass on the leaked "Unexpected error" text, never on the composer's last arm.
+        assert result.error.startswith("Decomposition failed: ")
+        assert "Unexpected error" not in result.error
 
     @pytest.mark.asyncio
     async def test_error_result_structure(self, mock_llm_client, mock_tool_registry):

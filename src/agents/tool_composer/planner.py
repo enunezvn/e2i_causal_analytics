@@ -297,9 +297,15 @@ class ToolPlanner:
             logger.info(f"Created plan with {len(execution_steps)} steps")
             return plan
 
+        except PlanningError:
+            # Authored in this module (unknown tool, unbound column, a cycle): already user-meaningful.
+            raise
         except Exception as e:
-            logger.error(f"Planning failed: {e}")
-            raise PlanningError(f"Failed to create execution plan: {e}") from e
+            # #2020: library text (LLM client, pydantic, a missing key) goes to the log, not the answer.
+            logger.error(f"Planning failed: {e}", exc_info=e)
+            raise PlanningError(
+                "Failed to create execution plan: planning stopped on an internal error."
+            ) from e
 
     def _try_cached_plan(
         self,
@@ -691,8 +697,8 @@ class ToolPlanner:
         try:
             parsed = parse_llm_json(response)
         except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Failed to parse planning JSON: {str(response)[:200]}...")
-            raise PlanningError(f"Invalid JSON in LLM response: {e}") from e
+            logger.error(f"Failed to parse planning JSON: {str(response)[:200]}...", exc_info=e)
+            raise PlanningError("Invalid JSON in LLM response") from e
 
         if not isinstance(parsed, dict):
             raise PlanningError(
@@ -804,6 +810,14 @@ class ToolPlanner:
         for step in steps:
             if not self.registry.validate_tool_exists(step.tool_name):
                 raise PlanningError(f"Step references unknown tool: {step.tool_name}")
+
+        # Check step ids are unique. The plan model rejects duplicates too, but as pydantic
+        # ValidationError text (with the whole plan as input_value), which #2020 keeps out of the
+        # answer — so the finding is named here.
+        all_ids = [s.step_id for s in steps]
+        duplicates = sorted({sid for sid in all_ids if all_ids.count(sid) > 1})
+        if duplicates:
+            raise PlanningError(f"Plan has duplicate step id(s): {duplicates}")
 
         # Check step dependencies are valid
         step_ids = {s.step_id for s in steps}
