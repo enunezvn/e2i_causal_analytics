@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import pytest
 from econml.dml import LinearDML
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 from src.causal_engine import evalue
+from src.causal_engine.nuisance_config import linear_dml_model_t, linear_dml_model_y
 from src.ml.synthetic.config import Brand, DGPType
 from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
 from src.ml.synthetic.generators import GeneratorConfig, PatientGenerator
@@ -71,16 +71,19 @@ NULL_PAIRS = [
 
 
 def _fit(df, treatment, outcome, covariates):
+    """The PRODUCTION fit (LinearDMLWrapper): RF nuisances from ``nuisance_config``
+    (#2031, codex r1 -- leaf 50; the local leaf-5 mirror no longer matched
+    production) and ``X = W = covariates`` like the wrapper."""
     Y = df[outcome].to_numpy(dtype=float)
     T = df[treatment].to_numpy(dtype=int)
     X = df[covariates].to_numpy(dtype=float)
     m = LinearDML(
-        model_y=RandomForestRegressor(n_estimators=50, min_samples_leaf=5, random_state=42),
-        model_t=RandomForestClassifier(n_estimators=50, min_samples_leaf=5, random_state=42),
+        model_y=linear_dml_model_y(),
+        model_t=linear_dml_model_t(),
         discrete_treatment=True,
         random_state=42,
     )
-    m.fit(Y, T, X=X, W=None)
+    m.fit(Y, T, X=X, W=X)
     inf = m.ate_inference(X)
     lo, hi = (float(v) for v in inf.conf_int_mean())
     return float(inf.mean_point), (lo, hi)
