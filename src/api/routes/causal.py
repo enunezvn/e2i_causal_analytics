@@ -2109,6 +2109,12 @@ async def _run_discover_effects_task(
             q_brand = q.brand or brand
             effects[key] = _pending_effect(q, "running")
             await _publish("running", completed)
+            # #2007: fetch the declared negative-control outcome as a PASSTHROUGH
+            # column exactly like the submit endpoint does — ``_run_agent_analysis_task``
+            # splits it off into ``data_cache["negative_control_data"]`` only when it is
+            # a column of ``df``. Live cert 2026-09-11 (job 457b345f on 903b7addc): without
+            # this every discovery row read SKIPPED ``negative_control_column_missing``.
+            negative_control = _negative_control_outcome(dataset, t, o)
             try:
                 df, select_cols = await _load_agent_estimation_frame(
                     dataset=dataset,
@@ -2117,6 +2123,7 @@ async def _run_discover_effects_task(
                     covariates=q.adjustment_set,
                     limit=_DISCOVERY_ROW_CAP,
                     brand=q_brand,
+                    passthrough_columns=[negative_control] if negative_control else None,
                 )
                 # The loader EXPANDS categorical covariates (e.g. geographic_region)
                 # into one-hot dummies; the agent run must adjust on the resolved frame
