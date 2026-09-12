@@ -3635,6 +3635,17 @@ class DispatcherNode:
             "parameters": dispatch.get("parameters", {}),
             # Contract: BaseAgentState pass-through fields
             "session_id": state.get("session_id"),
+            # #2062: the turn's identity, alongside session_id. Agents that
+            # RECORD something durable (tool_composer's composer_episodes) need
+            # both to be joinable to the chat rating that judges them; without
+            # it every orchestrator-path episode landed anonymous and the
+            # composition-feedback linker could never label it. Safe to add to
+            # the generic payload: run(dict) agents ignore undeclared keys,
+            # wrapped-model agents are projected onto their declared fields by
+            # _coerce_to_input_model, and every uses_kwargs agent is
+            # resolver-backed (the resolver output REPLACES this payload), so
+            # no method(**agent_input) splat can see it.
+            "user_id": state.get("user_id"),
             "parsed_query": state.get("parsed_query"),
             # Contract: Orchestrator dispatch fields
             "dispatch_id": dispatch_id,
