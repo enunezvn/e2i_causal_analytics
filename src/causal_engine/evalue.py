@@ -907,3 +907,32 @@ def classify(
         covariates_measured=k_measured,
         benchmark_covariate=benchmark_covariate,
     )
+
+
+def point_e_value(
+    effect: float,
+    *,
+    baseline_risk: Optional[float],
+    outcome_std: Optional[float],
+    naive_effect: Optional[float] = None,
+) -> Tuple[float, float, str]:
+    """``(e_value_point, rr_point, conversion)`` for an effect with NO confidence interval.
+
+    For a caller with a point estimate and no sampling uncertainty (#2014:
+    ``causal_effect_estimator`` returns no interval when none was measured). It applies
+    :func:`classify`'s conversion rule without the CI-bound check, there being no
+    bound: the risk-ratio path only when ``baseline_risk`` is given and ``effect`` (and
+    ``naive_effect``, when given) land in the risk-difference domain. No reading is
+    returned: null / beyond / within all need the interval.
+    """
+    _validate_outcome_std(outcome_std)
+    eff = _finite("effect", effect)
+    if _use_risk_ratio_path(eff, naive_effect, baseline_risk, bound=None):
+        assert baseline_risk is not None  # guaranteed by _use_risk_ratio_path
+        rr_point = rr_from_risk_difference(eff, baseline_risk)
+        assert rr_point is not None  # guaranteed by _use_risk_ratio_path
+        conversion = "risk_ratio"
+    else:
+        rr_point = _rr_smd_path(eff, outcome_std)
+        conversion = "standardized_difference"
+    return e_value_from_rr(rr_point), float(rr_point), conversion

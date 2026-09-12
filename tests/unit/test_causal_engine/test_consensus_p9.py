@@ -41,23 +41,29 @@ class TestAgreementScore:
 
 class TestInverseVarianceWeighting:
     def _state_with_ses(self):
-        # dowhy: imprecise (SE=5.0, effect 10); econml/causalml precise (SE≈0.1).
+        # dowhy: imprecise (SE=5.0, effect 10); econml precise (SE≈0.1). CausalML is
+        # left out: it has no sampling SE (#2014, test_consensus_se_eligibility_2014.py).
         half = 1.959963984540054 * 0.1  # half-width for SE=0.1
         return {
             "dowhy_result": {"result": {"standard_error": 5.0}},
-            "econml_result": {"result": {"ate_ci_lower": 2.0 - half, "ate_ci_upper": 2.0 + half}},
-            "uplift_summary": {"ate_ci_lower": 2.1 - half, "ate_ci_upper": 2.1 + half},
+            "econml_result": {
+                "result": {
+                    "estimator": "linear_dml",
+                    "ate_ci_lower": 2.0 - half,
+                    "ate_ci_upper": 2.0 + half,
+                }
+            },
         }
 
     def test_consensus_is_precision_weighted_not_dowhy_dominated(self):
         state = self._state_with_ses()
-        effects = [("dowhy", 10.0, 1.0), ("econml", 2.0, 0.7), ("causalml", 2.1, 0.7)]
+        effects = [("dowhy", 10.0, 1.0), ("econml", 2.0, 0.7)]
         _apply_consensus(state, effects)
         assert state["consensus_weighting"] == "inverse_variance"
-        # Confidence-weighting (DoWhy conf=1.0) would give ≈5.36 (DoWhy-dominated);
-        # inverse-variance gives ≈2.05 (the precise estimators dominate).
+        # Confidence-weighting (DoWhy conf=1.0) would give ≈6.71 (DoWhy-dominated);
+        # inverse-variance gives ≈2.003 (the precise estimator dominates).
         assert state["consensus_effect"] < 3.0, (
-            f"consensus must be precision-weighted (~2.05), not DoWhy-dominated, "
+            f"consensus must be precision-weighted (~2.003), not DoWhy-dominated, "
             f"got {state['consensus_effect']}"
         )
 
@@ -70,11 +76,17 @@ class TestInverseVarianceWeighting:
         from src.causal_engine.pipeline.executors import dowhy as dowhy_mod
 
         src = inspect.getsource(dowhy_mod)
-        idx = src.index("estimate.get_standard_error()")
-        preceding = src[max(0, idx - 400) : idx]
+        # #2014: the SE is now the HC1 SE of DoWhy's own OLS fit. get_standard_error()
+        # (whose non-linear fallback is the bootstrap) must not be called at all.
+        assert "get_standard_error(" not in src.replace("``get_standard_error()``", ""), (
+            "DoWhy's get_standard_error() falls back to a bootstrap for non-linear "
+            "methods (perf regression); the executor must not call it"
+        )
+        idx = src.index("get_robustcov_results(")
+        preceding = src[max(0, idx - 600) : idx]
         assert "linear_regression" in preceding, (
-            "get_standard_error() must be guarded by a linear_regression check to "
-            "avoid DoWhy's bootstrap fallback (perf regression)"
+            "the robust SE must be guarded by a linear_regression check: only that "
+            "estimator's value is an OLS coefficient"
         )
 
     def test_falls_back_to_confidence_when_se_unavailable(self):

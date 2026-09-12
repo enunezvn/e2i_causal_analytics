@@ -283,6 +283,8 @@ _SCALAR_JSON_TYPES = {"str": "string", "float": "number", "int": "integer", "boo
 def _json_type(type_hint: str) -> dict[str, Any]:
     """JSON Schema for a registry parameter's Python type string."""
     hint = type_hint.strip()
+    if hint.startswith("Optional[") and hint.endswith("]"):
+        return {"anyOf": [_json_type(hint[len("Optional[") : -1]), {"type": "null"}]}
     if hint in _SCALAR_JSON_TYPES:
         return {"type": _SCALAR_JSON_TYPES[hint]}
     if hint == "Any":

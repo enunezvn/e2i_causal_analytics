@@ -39,6 +39,8 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+from src.causal.stats import z_score_for_confidence
+
 from .score_calculator import (
     EnergyScoreCalculator,
     EnergyScoreConfig,
@@ -870,8 +872,11 @@ class OLSWrapper(BaseEstimatorWrapper):
                     m.fit(X_with_treatment[idx], outcome[idx])
                     boot_ates.append(m.coef_[0])
                 ate_std = float(np.std(boot_ates))
-            ate_ci_lower = ate - 1.96 * ate_std
-            ate_ci_upper = ate + 1.96 * ate_std
+            # The exact 95 % quantile (#2014): with 1.96 the CI and a p-value from
+            # ``ate_std`` (the tool, /causal/treatment-effects) disagreed at the edge.
+            z = z_score_for_confidence(0.95)
+            ate_ci_lower = ate - z * ate_std
+            ate_ci_upper = ate + z * ate_std
 
             # Constant CATE (OLS gives ATE only)
             cate = np.full(len(treatment), ate)
