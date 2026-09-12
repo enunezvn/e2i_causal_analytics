@@ -861,10 +861,13 @@ and `dspy_integration.py` (L189–225). Tests `tests/unit/test_agents/test_tool_
       (60, True).
     - `test_reader_fail_open`: a failing port returns `{}`.
   - **Flag:**
-    - `test_flag_off_prompt_byte_identical`: compared against committed golden fixtures
-      `tests/unit/test_agents/test_tool_composer/fixtures/planner_tools_prompt_56f8b8589.txt` and
-      `dspy_tools_block_56f8b8589.txt`. They are generated **once**, in Step 0 below, from the pre-change
-      code on the current live registry. The test only reads files: no git, CI-safe.
+    - `test_verdicts_are_ignored_while_the_flag_is_off`: the baseline is rendered **at run time** by the
+      code under test with the flag off, and verdicts must not change it.
+      **Superseded plan step:** this was originally specified against committed golden fixtures
+      (`fixtures/*_56f8b8589.txt`, generated once in Step 0). That was wrong: a golden pinned to one
+      main sha embeds every *other* tool's prose, so #2014's rewrite of `causal_effect_estimator`'s
+      description failed all seven assertions here under the union with the flag behaving correctly.
+      Both properties are deltas; the baseline must come from the same registry at run time.
     - `test_flag_on_caveat_line_only`: the reader returns `caveat` for one tool. Exactly one added line
       per caveated tool, and the "Avg execution" line is unchanged.
   - **Production wiring (real DB, gated):** `tests/unit/test_database/learning_loop/test_reliability_wiring_realdb.py`.
@@ -878,11 +881,11 @@ and `dspy_integration.py` (L189–225). Tests `tests/unit/test_agents/test_tool_
       verdict counts.
     - `test_admin_route_uses_reader`: Task 14's route test asserts the counts come through the same reader
       (port call observed).
-- [ ] **Step 0 (before Step 1): generate the golden fixtures** with the pre-change code:
-  `cd $W && git stash list` must be empty; then
-  `$PY -c "…ToolPlanner(...)._format_tools_for_prompt()…"` and
-  `$PY -c "…format_available_tools_for_planning()…"` write the two fixture files. Commit them alone
-  (`test(tool-composer): golden tool-prompt fixtures at 56f8b8589`).
+- [x] ~~**Step 0 (before Step 1): generate the golden fixtures**~~ — **RETIRED.** The fixtures were
+  generated and committed as specified, then removed: they broke under the union the moment another
+  lane edited a tool description. There is no Step 0; the tests render their own baseline with the
+  flag off. Keep it that way — if a golden is ever wanted here, generate it from the code under test
+  inside the test, never from a past sha, and never let it carry other tools' prose.
 - [ ] **Step 2: Run.** Expect FAIL.
 - [ ] **Step 3: Implement** `wilson()`, `verdict(counts) -> Verdict`, `ToolReliabilityReader` (async, TTL 300 s,
   key `(days, include_synthetic)`) and `format_tool_block(tool, verdict_or_none)`.

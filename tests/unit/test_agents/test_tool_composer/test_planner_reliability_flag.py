@@ -3,18 +3,24 @@
 Whether a caveat line changes the LLM's tool choice has never been measured, so the integration
 ships default-off and an experiment decides it. Two things must hold until then:
 
-- with the flag unset the prompt is BYTE-IDENTICAL to what it renders today, pinned against golden
-  fixtures generated from the pre-change code (`fixtures/*_56f8b8589.txt`);
+- with the flag unset, verdicts change nothing — the flag is the only thing that can alter the
+  block;
 - with the flag set, a caveated tool adds exactly ONE line, and the declared "Avg execution" line
   is untouched — measured latency is never substituted into it.
 
-The planner and the DSPy formatter share one block formatter, so both are pinned here.
+Both are DELTA properties, so the baseline is rendered at run time from the same registry by the
+code under test. An earlier version of this file compared against goldens captured from one main
+sha (`fixtures/*_56f8b8589.txt`). Those files embedded every other tool's prose, so when #2014
+rewrote `causal_effect_estimator`'s description every assertion here failed with nothing wrong with
+the flag. A byte-golden pinned to a past sha cannot express "the flag adds one line";
+``test_the_delta_survives_a_description_change`` pins that this file now can.
+
+The planner and the DSPy formatter share one block formatter, so both are covered.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 import pytest
 
@@ -23,9 +29,8 @@ from src.agents.tool_composer.planner import ToolPlanner
 from src.agents.tool_composer.reliability import ToolReliability
 from src.tool_registry.registry import get_registry
 
-FIXTURES = Path(__file__).parent / "fixtures"
-PLANNER_GOLDEN = FIXTURES / "planner_tools_prompt_56f8b8589.txt"
-DSPY_GOLDEN = FIXTURES / "dspy_tools_block_56f8b8589.txt"
+FLAG = "TOOL_COMPOSER_RELIABILITY_IN_PLANNER"
+CAVEAT_PREFIX = "Reliability caveat:"
 
 
 @pytest.fixture
@@ -75,36 +80,17 @@ def _first_tool_name(registry) -> str:
     return registry.get_schemas_for_planning()[0]["name"]
 
 
-# ---------------------------------------------------------------------------
-# Flag off: nothing changes
-# ---------------------------------------------------------------------------
+def _baseline(render: Callable[..., str], monkeypatch: pytest.MonkeyPatch) -> str:
+    """What the code under test renders with the flag off, right now.
 
-
-def test_flag_off_planner_prompt_is_byte_identical(registry, monkeypatch):
-    monkeypatch.delenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", raising=False)
-    assert _planner(registry)._format_tools_for_prompt() == PLANNER_GOLDEN.read_text()
-
-
-def test_flag_off_dspy_block_is_byte_identical(registry, monkeypatch):
-    monkeypatch.delenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", raising=False)
-    assert format_available_tools_for_planning() == DSPY_GOLDEN.read_text()
-
-
-def test_verdicts_are_ignored_while_the_flag_is_off(registry, monkeypatch):
-    """Even handed verdicts, the flag decides. Nothing else in the pipeline may add the line."""
-    monkeypatch.delenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", raising=False)
-    name = _first_tool_name(registry)
-
-    planner_block = _planner(registry)._format_tools_for_prompt(verdicts=_caveated(name))
-    dspy_block = format_available_tools_for_planning(verdicts=_caveated(name))
-
-    assert planner_block == PLANNER_GOLDEN.read_text()
-    assert dspy_block == DSPY_GOLDEN.read_text()
-
-
-# ---------------------------------------------------------------------------
-# Flag on: exactly one line per caveated tool
-# ---------------------------------------------------------------------------
+    Asserting the baseline carries no caveat line keeps every delta assertion below honest: if the
+    line were already present with the flag off, "adds exactly one" could pass while saying nothing.
+    """
+    monkeypatch.delenv(FLAG, raising=False)
+    text = render()
+    assert CAVEAT_PREFIX not in text, "the flag is off; the block must not already carry a caveat"
+    assert text.strip(), "empty baseline would make every comparison below vacuous"
+    return text
 
 
 def _added_lines(before: str, after: str) -> List[str]:
@@ -119,47 +105,108 @@ def _added_lines(before: str, after: str) -> List[str]:
     return added
 
 
-def test_flag_on_adds_one_caveat_line_per_caveated_tool(registry, monkeypatch):
-    monkeypatch.setenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", "1")
+# ---------------------------------------------------------------------------
+# Flag off: nothing changes
+# ---------------------------------------------------------------------------
+
+
+def test_verdicts_are_ignored_while_the_flag_is_off(registry, monkeypatch):
+    """Even handed verdicts, the flag decides. Nothing else in the pipeline may add the line."""
+    planner = _planner(registry)
     name = _first_tool_name(registry)
-    golden = PLANNER_GOLDEN.read_text()
 
-    block = _planner(registry)._format_tools_for_prompt(verdicts=_caveated(name))
+    planner_baseline = _baseline(planner._format_tools_for_prompt, monkeypatch)
+    dspy_baseline = _baseline(format_available_tools_for_planning, monkeypatch)
 
-    added = _added_lines(golden, block)
+    assert planner._format_tools_for_prompt(verdicts=_caveated(name)) == planner_baseline
+    assert format_available_tools_for_planning(verdicts=_caveated(name)) == dspy_baseline
+
+
+# ---------------------------------------------------------------------------
+# Flag on: exactly one line per caveated tool
+# ---------------------------------------------------------------------------
+
+
+def test_flag_on_adds_one_caveat_line_per_caveated_tool(registry, monkeypatch):
+    planner = _planner(registry)
+    name = _first_tool_name(registry)
+    baseline = _baseline(planner._format_tools_for_prompt, monkeypatch)
+
+    monkeypatch.setenv(FLAG, "1")
+    block = planner._format_tools_for_prompt(verdicts=_caveated(name))
+
+    added = _added_lines(baseline, block)
     assert len(added) == 1
-    assert added[0].startswith("Reliability caveat:")
+    assert added[0].startswith(CAVEAT_PREFIX)
     assert "6 of 24" in added[0] and "timeout" in added[0]
     # The declared number the LLM already reads is untouched; measured latency is not substituted.
     assert [line for line in block.splitlines() if line.startswith("Avg execution:")] == [
-        line for line in golden.splitlines() if line.startswith("Avg execution:")
+        line for line in baseline.splitlines() if line.startswith("Avg execution:")
     ]
 
 
 def test_flag_on_says_nothing_about_tools_without_a_caveat(registry, monkeypatch):
-    monkeypatch.setenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", "1")
+    planner = _planner(registry)
     name = _first_tool_name(registry)
+    baseline = _baseline(planner._format_tools_for_prompt, monkeypatch)
+
     reliable = {
         name: ToolReliability.from_row(_row(name, n_succeeded=40, n_health_failures=0, n_health=40))
     }
     assert reliable[name].verdict == "reliable"
 
-    block = _planner(registry)._format_tools_for_prompt(verdicts=reliable)
-
-    assert block == PLANNER_GOLDEN.read_text()
+    monkeypatch.setenv(FLAG, "1")
+    assert planner._format_tools_for_prompt(verdicts=reliable) == baseline
 
 
 def test_flag_on_with_no_verdicts_changes_nothing(registry, monkeypatch):
     """A failed reliability read is a fail-open empty dict; the prompt must not change."""
-    monkeypatch.setenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", "1")
-    assert _planner(registry)._format_tools_for_prompt(verdicts={}) == PLANNER_GOLDEN.read_text()
+    planner = _planner(registry)
+    baseline = _baseline(planner._format_tools_for_prompt, monkeypatch)
+
+    monkeypatch.setenv(FLAG, "1")
+    assert planner._format_tools_for_prompt(verdicts={}) == baseline
 
 
 def test_flag_on_dspy_block_gets_the_same_line(registry, monkeypatch):
-    monkeypatch.setenv("TOOL_COMPOSER_RELIABILITY_IN_PLANNER", "1")
     name = _first_tool_name(registry)
+    baseline = _baseline(format_available_tools_for_planning, monkeypatch)
 
+    monkeypatch.setenv(FLAG, "1")
     block = format_available_tools_for_planning(verdicts=_caveated(name))
 
-    added = _added_lines(DSPY_GOLDEN.read_text(), block)
-    assert len(added) == 1 and added[0].startswith("Reliability caveat:")
+    added = _added_lines(baseline, block)
+    assert len(added) == 1 and added[0].startswith(CAVEAT_PREFIX)
+
+
+# ---------------------------------------------------------------------------
+# The property must survive another lane editing a tool's prose
+# ---------------------------------------------------------------------------
+
+
+def test_the_delta_survives_a_description_change(registry, monkeypatch):
+    """A tool description rewrite is someone else's business; the flag delta is ours.
+
+    This is the case the golden fixtures could not express: #2014 rewrote
+    `causal_effect_estimator`'s description and every assertion in this file failed under the
+    merge, though the flag behaved correctly throughout.
+    """
+    planner = _planner(registry)
+    name = _first_tool_name(registry)
+    rewritten = "REWRITTEN BY ANOTHER LANE - describes the same tool in different words"
+
+    schema = registry.get_schema(name)
+    assert schema is not None, f"{name} must be registered for this test to mean anything"
+    monkeypatch.setattr(schema, "description", rewritten)
+
+    baseline = _baseline(planner._format_tools_for_prompt, monkeypatch)
+    # Positive control: the rewrite really did reach the rendered block, so a pass below is the
+    # delta surviving a changed description rather than the mutation quietly not applying.
+    assert rewritten in baseline
+
+    monkeypatch.setenv(FLAG, "1")
+    block = planner._format_tools_for_prompt(verdicts=_caveated(name))
+
+    added = _added_lines(baseline, block)
+    assert len(added) == 1 and added[0].startswith(CAVEAT_PREFIX)
+    assert rewritten in block
