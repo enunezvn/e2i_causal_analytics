@@ -169,6 +169,8 @@ Expected: collection error — `ModuleNotFoundError: No module named 'src.agents
 
 - [ ] **Step 3: Create `src/agents/tool_composer/reason_codes.py`**
 
+> **Historical — Task 1 is done; do not copy this block.** The module on the branch supersedes it: `StrEnum`; 32 members; `UPSTREAM_STEP_FAILED` removed; `DEPENDENCY_UNMET` reads "did not produce a result"; `SIMULATION_INCOMPLETE`, `EFFECT_NOT_ESTIMABLE`, `AMBIGUOUS_COLUMN` / `AMBIGUOUS_GROUP_LABEL` and `NON_NUMERIC_COLUMN` added; `EXECUTOR_ASSIGNED`; and a `validate_details` that is numeric-only and fail-soft (Tasks 2b and 3 reviews). Read `src/agents/tool_composer/reason_codes.py` itself.
+
 ```python
 """The closed reason-code vocabulary for composable-tool refusals and failures (#2021).
 
@@ -1108,12 +1110,23 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 | `estimator.py:78` `uplift fit failed: {result.error_message}` | `UpliftRandomForest.estimate`'s result | **lead addition, not in D5's list:** `SimulationEngine` defaults to `TwinEffectEstimator` when no estimator is passed, which `experiment_designer/tools/simulate_intervention_tool.py:269` and `digital_twin/simulation_runner.py:96` do. **Lead-verified 2026-09-12: it is library text.** `UpliftRandomForest` inherits `estimate` from `src/causal_engine/uplift/base.py`, whose `except Exception as e` (:369) sets `error_message=str(e)` (:374), so causalml / sklearn text reaches this message. Fix it here by the rule above: keep `"TwinEffectEstimator: uplift fit failed"`, log `result.error_message`, and add no `from` (there is no exception object in hand). The AST guard does not see this site, because the text is a model attribute and not an `except` name, so pin it with a behavioral test. |
 
 **Kept verbatim — the wrapped text is authored all the way down** (the allowlist; keyed by enclosing FUNCTION name, never by line):
-- `:2014`, `:2070` sensitivity_analyzer — `evalue`'s own `raise ValueError(...)` messages are authored (lead-verified: `src/causal_engine/evalue.py` :100, :107, :166, :256, :654, :761, :814). **But each site catches ANY `ValueError`.** Before allowlisting either one, read the call it wraps (`evalue.classify` / `joint_confounding_benchmark` / `measured_confounding_benchmark`) and establish that it operates only on already-derived floats, so numpy or pandas cannot raise a foreign `ValueError` inside it. If one can, that site is fixed like the others instead. Report which, with the evidence.
+- `:2014`, `:2070` sensitivity_analyzer — `evalue`'s own `raise ValueError(...)` messages are authored (lead-verified: `src/causal_engine/evalue.py` :100, :107, :166, :256, :654, :761, :814). **Each site catches ANY `ValueError`, and the lead has shown that every one of them is authored (2026-09-12), so both stay allowlisted.**
+  - Both wrap calls on already-derived numbers only: `float(ate)`, the CI bounds, and `_SensitivityInputs` floats and ints. No frame reaches them.
+  - `evalue`'s only `math` calls on inputs are safe:
+    - `e_value_from_rr` runs `_orient(_finite(rr))` and returns early when `r <= 1` before `math.sqrt(r - 1.0)` (evalue.py:120–123), so there is no domain error.
+    - `rr_from_smd`'s `math.exp` can only overflow, which raises `OverflowError`, not `ValueError`. That lands in the executor's generic arm, which Task 4 already renders as the canonical sentence.
+  - The allowlist entry's one-line reason should cite this.
 - No existing test pins text this task removes (lead grep, 2026-09-12). The only pinned phrase in scope is `"not a DataFrame"`, which survives. `"uplift fit failed"` in `test_executor_causalml.py:732` belongs to a different path (the causalml executor) and is unaffected.
 - `:3478` power_calculator — `PowerCalculationError` is authored and pinned (`test_power_calculator_2015.py`, `match=reason`). Its `ArithmeticError` arm carries Python's own `OverflowError` text: measure what that text is and report it; do **not** change the site in this task.
 - `:3865` — `EffectDataUnavailable`, authored once `:234` / `:259` are fixed.
 - `:3987` — `result.error_message`, which is `SimulationEngine`'s authored prefix plus an authored `EffectDataUnavailable` / `EstimationError` once the estimator sites are fixed. It is a model attribute, not an `except` name, so the guard below does not see it — pin it with a behavioral test instead.
 - `src/digital_twin/effect/recommendation.py:98` — interpolates `control_outcome_sd`'s `EffectDataUnavailable`, which is authored.
+
+> **Seams, lead-verified 2026-09-12. Reuse these; do not invent new ones.**
+> - **econml sites** (`cohort_causal_estimator.py` :234, :259). No existing test patches econml. `CausalForestDML` is imported INSIDE `estimate_cohort_effect` (`from econml.dml import CausalForestDML`), so patch the attribute on `econml.dml` (`monkeypatch.setattr("econml.dml.CausalForestDML", ...)`). A fake whose `fit` raises `RuntimeError("LIBTEXT_SENTINEL")` covers :234. A fake whose `fit`/`effect` succeed and whose `ate_interval` raises on the second, target-region call covers :259. Take the cohort fixtures from `tests/unit/test_digital_twin/effect/test_cohort_causal_estimator.py`.
+> - **`estimator.py:78`**: `tests/unit/test_digital_twin/test_error_recovery.py` (:111, :215, :608) and `test_engine_real_effect.py:90` already construct `TwinEffectEstimator`. Patch `UpliftRandomForest.estimate` to return an unsuccessful result whose `error_message` is the sentinel.
+> - **evalue allowlist** (:2014, :2070). Both `except ValueError` blocks wrap calls on already-derived numbers only: `float(ate)`, the CI bounds, and `_SensitivityInputs` floats and ints (`tool_registrations.py:1722`). No frame reaches them, so pandas cannot raise inside. What remains to establish is that Python `math` inside `evalue` cannot raise its own `ValueError("math domain error")` before `evalue`'s authored guards run (see the note under the allowlist).
+> - **Non-DataFrame sites** (:1669, :1822). `test_sensitivity_derives_inputs_2022.py:260` already asserts `match="not a DataFrame"` for sensitivity; add the sentinel assertions beside it. For refutation_runner, reuse the calling pattern from `test_refutation_estimate_id_optional_2014.py` / `test_real_tools_778.py`.
 
 - [ ] **Step 1: Red — behavioral tests, one per fixed site.** Force each wrap with a sentinel: pass an object whose `.columns` raises `AttributeError("LIBTEXT_SENTINEL")`; monkeypatch the `evalue` helper, or the econml fit and `ate_interval`, to raise `RuntimeError("LIBTEXT_SENTINEL")`; use a non-numeric outcome for the pandas sites and assert pandas' own phrase is absent. For each, assert:
   - the sentinel (or pandas phrase) is NOT in `str(err)`
@@ -1284,6 +1297,11 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 ---
 
 ## Task 6: Migration ml/042 — the RPC carries the reason as structure (#2050 cause 2)
+
+> **CI and harness facts (lead-verified 2026-09-12, before dispatch).**
+> - **The real-DB suite never runs in CI.** `tests/unit/test_database/learning_loop/conftest.py:19` skips unless `E2I_DB_INTEGRATION=1`, and no workflow under `.github/` sets that variable. `backend-tests.yml` still *collects* `tests/unit/test_database/`.
+> - **So the break in `test_migration_runner.py` is latent, not a red CI.** Once 042 exists, its assertions that the pending list is exactly `[ml/041…]` (:111) and that `Applying ` appears once (:117) are wrong. They only run with the gate on, and on this droplet they skip anyway, because prod holds 039–041. Disclose it in the PR body, as planned; do not edit the shared harness.
+> - **Stall-watchdog guard.** `tests/unit/test_tests_meta/test_session_stall_watchdog_1655.py` statically scans every `@pytest.mark.timeout` the backend lane collects, gated or not, and requires the lane's 600 s window to be at least 2× the largest. The current maximum is 300 s, in this directory. **No new 042 test may carry a timeout marker above 300 s.**
 
 > **Rewritten 2026-09-12 for D1′ and D4, before dispatch.** The first version stored `left(s->>'error_message', 200)` and proved it with an in-harness test. Both are reversed. ml/041's `NULL` in the `error_message` slot is the database's deliberate second guard — `test_041_recording.py:441`, `:668–740` and `test_learning_recorder_realdb.py:363` pin it — so **042 keeps that `NULL`**. The shared `_pg` fixture skips on this droplet because prod's ledger already holds 039–041 (`base_db` skips when any of `_pg.LANE_MIGRATIONS` is in prod), so **042 is proven by a scratch rehearsal** on a throwaway container cloned from prod, and only static checks are committed.
 
