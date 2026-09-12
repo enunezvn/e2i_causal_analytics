@@ -426,7 +426,11 @@ def _subsample_for_refutation(
     ``refutation_subsampled`` / ``refutation_n_rows`` /
     ``refutation_n_rows_total`` — stamped onto every suite test's ``details``
     so each persisted evidence row (``details_json``) records
-    validated-on-subsample.
+    validated-on-subsample. ``execute`` merges the four #2006 reconstruction
+    keys (``reported_ate`` / ``reconstructed_ate`` / ``reconstruction_shift``
+    / ``reconstruction_method``, see ``_reconstruction_evidence``) into the
+    same disclosure right after the reconstruction succeeds, so one stamping
+    loop carries both onto every row.
     """
     if (
         data is None
@@ -815,6 +819,57 @@ def _reconstruct_dowhy_artifacts(
         )
 
     return model, identified_estimand, estimate
+
+
+def _reconstruction_evidence(estimate: Any, estimation_result: Dict[str, Any]) -> Dict[str, Any]:
+    """#2006: the four reconstruction-evidence keys stamped on every evidence row.
+
+    ``reported_ate`` is the estimation node's ATE, ``reconstructed_ate`` the
+    rebuilt DoWhy estimate's ``value`` (the SAME object the refuters run on),
+    ``reconstruction_shift`` their SIGNED difference (reconstructed - reported)
+    and ``reconstruction_method`` the resolved DoWhy method string. Together
+    with each refuter's own ``refuted_effect`` this makes the decomposition
+    (reconstructed - reported) vs (refit - reconstructed) readable per
+    persisted row (``details_json``).
+
+    Evidence, not a gate: the tolerance guard in ``_reconstruct_dowhy_artifacts``
+    already fails closed on a divergent reconstruction; nothing here touches a
+    verdict. When the estimate exposes no usable ``.value`` (stubs, exotic
+    estimators) ``reconstructed_ate`` and ``reconstruction_shift`` are ``None``
+    -- never a fabricated number -- while ``reported_ate`` (known from the
+    estimation node) and the method are still stamped.
+    """
+    reported_ate: Optional[float]
+    reconstructed_ate: Optional[float]
+    shift: Optional[float]
+    raw_reported = estimation_result.get("ate")
+    try:
+        reported_ate = None if raw_reported is None else float(raw_reported)
+    except (TypeError, ValueError):
+        reported_ate = None
+    raw_value = getattr(estimate, "value", None)
+    try:
+        reconstructed_ate = None if raw_value is None else float(raw_value)
+    except (TypeError, ValueError):
+        reconstructed_ate = None
+    # ``reported_ate`` is a fact of the estimation node regardless of the
+    # reconstruction; only the reconstructed value and the shift depend on
+    # ``estimate.value`` being usable.
+    if reconstructed_ate is None or reported_ate is None:
+        shift = None
+    else:
+        shift = reconstructed_ate - reported_ate
+    # Belt only: the resolver already succeeded inside the reconstruction.
+    try:
+        method: Optional[str] = _resolve_dowhy_method(estimation_result)
+    except RefutationError:
+        method = None
+    return {
+        "reported_ate": reported_ate,
+        "reconstructed_ate": reconstructed_ate,
+        "reconstruction_shift": shift,
+        "reconstruction_method": method,
+    }
 
 
 # #2007: the smallest non-null row basis on which the negative-control fit is
@@ -1967,6 +2022,21 @@ class RefutationNode:
             except ComputeBudgetExpired as be:
                 raise _queued_budget_error() from be
             per_refit_hint = time.monotonic() - _recon_t0
+            # #2006 (owner decision 2026-09-11 "F1 SHIP"): record the
+            # reconstruction evidence on EVERY persisted evidence row so the
+            # decomposition (reconstructed - reported) vs (refit - reconstructed)
+            # is readable per row from details_json alone. Disproof 2026-09-11:
+            # the reconstruction is faithful (shift +0.0004 on the live pair);
+            # the +0.02 seen live is nuisance-fit instability in the refits
+            # (#2031). This is evidence, not a gate -- no verdict changes.
+            # Merged into ``data_disclosure`` so the single stamping loop
+            # below (after the negative-control row is attached) carries it.
+            # When the rebuilt estimate exposes no usable ``.value``,
+            # ``reconstructed_ate`` / ``reconstruction_shift`` are None (never a
+            # fabricated number); ``reported_ate`` and the method are still stamped.
+            data_disclosure.update(
+                _reconstruction_evidence(estimate, cast(Dict[str, Any], estimation_result))
+            )
             # #1419: the reconstruction fit is NOT a faithful per-sim cost for
             # the POINT-refit refuters — on the live 5k subsample it measures
             # ~9-11.5 s while a placebo/rcc/subset SIM measures ~1.6-2.6 s
