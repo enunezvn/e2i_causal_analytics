@@ -16,6 +16,7 @@ import pytest
 
 from src.digital_twin.models.twin_models import (
     Brand,
+    TwinModelConfig,
     TwinModelMetrics,
     TwinPopulation,
     TwinType,
@@ -172,6 +173,55 @@ class TestTwinGeneratorInit:
         for twin_type in TwinType:
             assert twin_type in TwinGenerator.DEFAULT_FEATURES
             assert len(TwinGenerator.DEFAULT_FEATURES[twin_type]) > 0
+
+    def test_init_rejects_config_kwarg(self):
+        """TwinGenerator must not accept a `config` kwarg (#2049).
+
+        It used to accept `config: Optional[TwinModelConfig]`, store it on
+        `self.config`, and never read it — so `TwinGenerator(config=
+        TwinModelConfig(n_estimators=10))` silently trained a 100-tree model.
+        The parameter is gone; passing it is now a loud TypeError rather than a
+        silently inert hyper-parameter.
+        """
+        config = TwinModelConfig(
+            model_name="hcp_remibrutinib_twin",
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+            n_estimators=10,
+            feature_columns=["decile"],
+            target_column="prescribing_change",
+        )
+
+        with pytest.raises(TypeError):
+            TwinGenerator(
+                twin_type=TwinType.HCP,
+                brand=Brand.REMIBRUTINIB,
+                config=config,  # type: ignore[call-arg]
+            )
+
+        assert not hasattr(
+            TwinGenerator(twin_type=TwinType.HCP, brand=Brand.REMIBRUTINIB), "config"
+        )
+
+    def test_train_kwargs_are_the_hyperparameter_lever(self, hcp_training_data):
+        """Positive control for #2049: `train(**kwargs)` still reaches the estimator.
+
+        Hyper-parameters have always come from `train(**kwargs)` ->
+        `_create_model`; this pins that the supported lever actually takes
+        effect, so the removal above did not remove the only way to tune.
+        """
+        generator = TwinGenerator(twin_type=TwinType.HCP, brand=Brand.REMIBRUTINIB)
+
+        generator.train(
+            data=hcp_training_data,
+            target_col="prescribing_change",
+            n_estimators=7,
+            max_depth=3,
+        )
+
+        assert generator.model is not None
+        assert generator.model.n_estimators == 7
+        assert generator.model.max_depth == 3
 
 
 # =============================================================================

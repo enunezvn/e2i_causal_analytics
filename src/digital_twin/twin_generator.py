@@ -27,7 +27,6 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from .models.twin_models import (
     Brand,
     DigitalTwin,
-    TwinModelConfig,
     TwinModelMetrics,
     TwinPopulation,
     TwinType,
@@ -47,7 +46,6 @@ class TwinGenerator:
         twin_type: Type of entity to generate (hcp, patient, territory)
         brand: Pharmaceutical brand context
         model: Trained sklearn model
-        config: Model configuration
         metrics: Performance metrics from training
 
     Example:
@@ -111,19 +109,19 @@ class TwinGenerator:
         self,
         twin_type: TwinType,
         brand: Brand,
-        config: Optional[TwinModelConfig] = None,
     ):
         """
         Initialize twin generator.
 
+        Model hyper-parameters are not taken here: they are passed to
+        ``train(**kwargs)`` and forwarded to ``_create_model`` (#2049).
+
         Args:
             twin_type: Type of twins to generate
             brand: Brand context
-            config: Optional model configuration
         """
         self.twin_type = twin_type
         self.brand = brand
-        self.config = config
 
         # Model components (set during training)
         self.model: Optional[Any] = None
