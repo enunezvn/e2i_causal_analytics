@@ -366,43 +366,44 @@ function provenanceLabel(provenance: string): string {
   }
 }
 
-const UNKNOWN_SCOPE_NOTE =
-  'scope not recorded for this simulation — the effect may cover only the regions it was filtered to';
-
-/**
- * What an effect was estimated ON (#2053), in the page's plain wording; null when the
- * response does not say. 'unknown' is a stored simulation from before the scope was
- * recorded: its effect may be the cohort's or only the filtered regions', so it is
- * labelled neither way.
- */
-function estimateScopeNote(scope: EstimateScope | undefined, regions: string[]): string | null {
-  switch (scope) {
-    case EstimateScope.REGIONS:
-      return regions.length > 0 ? `estimated on ${regions.join(', ')}` : null;
-    case EstimateScope.COHORT:
-      return 'estimated on the whole cohort';
-    case EstimateScope.UNKNOWN:
-      return UNKNOWN_SCOPE_NOTE;
-    default:
-      return null;
-  }
+/** Regions a stored simulation was filtered to, read from its detail payload's population_filters. */
+function filteredRegions(simulation: AnySimulation): string[] {
+  const regions = 'population_filters' in simulation ? simulation.population_filters?.regions : undefined;
+  return Array.isArray(regions) ? regions.filter((r): r is string => typeof r === 'string') : [];
 }
 
-/** Short scope qualifier for a history row's ATE: regions named, unknown flagged, cohort plain. */
+/**
+ * Scope note for the headline effect (#2053); null when there is nothing worth saying.
+ * 'regions' names them. A cohort-wide effect stays a plain ATE. 'unknown' is a stored
+ * simulation from before the scope was recorded: it gets a note only when it was filtered
+ * to regions, because only then might its effect cover just those regions.
+ */
+function estimateScopeNote(
+  scope: EstimateScope | undefined,
+  targetRegions: string[],
+  filterRegions: string[]
+): string | null {
+  if (scope === EstimateScope.REGIONS && targetRegions.length > 0) {
+    return `estimated on ${targetRegions.join(', ')}`;
+  }
+  if (scope === EstimateScope.UNKNOWN && filterRegions.length > 0) {
+    return `scope not recorded — this effect may cover only ${filterRegions.join(', ')}`;
+  }
+  return null;
+}
+
+/**
+ * Region qualifier for a history row's ATE. History rows carry no population filter, so an
+ * unknown-scope row cannot tell whether it was filtered; it stays plain, like a cohort row.
+ */
 function HistoryScopeQualifier({ scope, regions }: { scope?: EstimateScope; regions?: string[] }) {
-  const note =
-    scope === EstimateScope.REGIONS && regions && regions.length > 0
-      ? regions.join(', ')
-      : scope === EstimateScope.UNKNOWN
-        ? 'scope not recorded'
-        : null;
-  if (!note) return null;
+  if (scope !== EstimateScope.REGIONS || !regions || regions.length === 0) return null;
   return (
     <span
       className="ml-1 text-xs font-normal text-[var(--color-text-tertiary)]"
-      title={scope === EstimateScope.UNKNOWN ? UNKNOWN_SCOPE_NOTE : `estimated on ${note}`}
+      title={`estimated on ${regions.join(', ')}`}
     >
-      · {note}
+      · {regions.join(', ')}
     </span>
   );
 }
@@ -435,13 +436,13 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
   // numbers above describe those regions, not the whole cohort. Say which, and keep the
   // cohort-wide effect visible so neither number is lost.
   // The backend states the scope (#2053); a stored simulation whose scope was never
-  // recorded says 'unknown' and must not read as cohort-wide. A response without the
-  // field falls back to its regions and makes no cohort claim.
+  // recorded says 'unknown' and is noted when it was region-filtered. A response without
+  // the field falls back to its regions.
   const targetRegions = simulation.target_regions ?? [];
   const scope =
     simulation.estimate_scope ?? (targetRegions.length > 0 ? EstimateScope.REGIONS : undefined);
   const scopedToRegions = scope === EstimateScope.REGIONS && targetRegions.length > 0;
-  const scopeNote = estimateScopeNote(scope, targetRegions);
+  const scopeNote = estimateScopeNote(scope, targetRegions, filteredRegions(simulation));
   if (scopedToRegions && simulation.cohort_effect != null) {
     evidence.push(
       `Cohort-wide effect (all regions): ${fmt(simulation.cohort_effect)}` +

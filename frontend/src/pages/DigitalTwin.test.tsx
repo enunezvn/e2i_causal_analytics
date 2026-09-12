@@ -569,7 +569,7 @@ describe('DigitalTwin', () => {
     expect(screen.queryByText(/scope not recorded/i)).not.toBeInTheDocument();
   });
 
-  it('says a cohort-wide result was estimated on the whole cohort (#2053)', () => {
+  it('shows a cohort-wide result as a plain ATE with no scope note (#2053)', () => {
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,
       isPending: false,
@@ -579,14 +579,15 @@ describe('DigitalTwin', () => {
     });
     render(<DigitalTwin />, { wrapper: createWrapper() });
 
-    expect(screen.getByText(/estimated on the whole cohort/i)).toBeInTheDocument();
+    expect(screen.getByText('ATE')).toBeInTheDocument();
+    expect(screen.queryByText(/estimated on/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/scope not recorded/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/cohort-wide effect \(all regions\)/i)).not.toBeInTheDocument();
   });
 
-  it('says the scope was not recorded for a stored simulation of unknown scope (#2053)', async () => {
-    // A pre-#2053 row: filtered to northeast, but whether its ATE is northeast's or the
-    // cohort's was never stored. It must not be labelled either way.
+  it('notes an unrecorded scope on a region-filtered stored simulation, naming its regions (#2053)', async () => {
+    // A pre-#2053 row filtered to northeast: whether its ATE is northeast's or the cohort's
+    // was never stored, so it may cover only northeast. It is labelled neither way.
     await openHistoryDetail({
       ...mockDetail,
       estimate_scope: EstimateScope.UNKNOWN,
@@ -595,16 +596,28 @@ describe('DigitalTwin', () => {
     });
 
     expect(
-      screen.getByText(
-        /scope not recorded for this simulation.*may cover only the regions it was filtered to/i
-      )
+      screen.getByText(/scope not recorded — this effect may cover only northeast/i)
     ).toBeInTheDocument();
     expect(screen.queryByText(/estimated on/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/whole cohort/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/ATE · /)).not.toBeInTheDocument();
   });
 
-  it('qualifies a history row ATE by its scope: regions named, unknown flagged, cohort plain (#2053)', async () => {
+  it('adds no note to an unknown-scope stored simulation that had no regions filter (#2053)', async () => {
+    await openHistoryDetail({
+      ...mockDetail,
+      estimate_scope: EstimateScope.UNKNOWN,
+      target_regions: [],
+      population_filters: { regions: [] },
+    });
+
+    expect(screen.queryByText(/scope not recorded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/estimated on/i)).not.toBeInTheDocument();
+    expect(screen.getByText('ATE')).toBeInTheDocument();
+  });
+
+  it('names a region-scoped history row and leaves unknown and cohort rows plain (#2053)', async () => {
+    // History rows carry no population filter, so an unknown row cannot tell whether it was
+    // region-filtered; only the detail view can, and only it notes the unrecorded scope.
     (useSimulationHistory as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         ...mockHistory,
@@ -644,7 +657,7 @@ describe('DigitalTwin', () => {
     const rowOf = (ate: string) =>
       screen.getByText((_, el) => el?.tagName === 'P' && !!el.textContent?.startsWith(`ATE: ${ate}`));
     expect(rowOf('0.09').textContent).toMatch(/northeast/);
-    expect(rowOf('0.01').textContent).toMatch(/scope not recorded/i);
+    expect(rowOf('0.01').textContent).toBe('ATE: 0.01');
     expect(rowOf('0.04').textContent).toBe('ATE: 0.04');
   });
 
