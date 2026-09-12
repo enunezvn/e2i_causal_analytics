@@ -1134,6 +1134,16 @@ class RefutationRunner:
                 else:
                     self.thresholds[key] = copy.deepcopy(value)
 
+    @staticmethod
+    def _seed_for(estimate_id: Optional[str]) -> Optional[int]:
+        """The ONE seed a run uses for every random refit (#2029).
+
+        Same derivation as the in-house resample loops (``_resample_seed_for``):
+        a stable 31-bit integer from the estimate id, ``None`` when there is no
+        id -- an unseeded run stays unseeded and says so in its details.
+        """
+        return _resample_seed_for(estimate_id)
+
     def run_all_tests(
         self,
         original_effect: float,
@@ -1361,6 +1371,8 @@ class RefutationRunner:
         # and seed their draws from the estimate id so a re-run reproduces its
         # evidence (None → unseeded, the pre-lane-1 behaviour).
         resample_seed = _resample_seed_for(estimate_id)
+        # #2029: the same seed feeds the two DoWhy refits.
+        random_state = self._seed_for(estimate_id)
 
         # #2005: the random_common_cause shift is scored against the reported
         # interval's SE scaled to the refit frame. ``reference_n`` is the frame
@@ -1577,6 +1589,7 @@ class RefutationRunner:
                     identified_estimand=identified_estimand,
                     estimate=estimate,
                     use_dowhy=use_dowhy,
+                    random_state=random_state,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1601,6 +1614,7 @@ class RefutationRunner:
                     use_dowhy=use_dowhy,
                     reference_n=reference_n,
                     refit_n=refit_n,
+                    random_state=random_state,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1975,11 +1989,16 @@ class RefutationRunner:
         identified_estimand: Optional[Any],
         estimate: Optional[Any],
         use_dowhy: bool,
+        *,
+        random_state: Optional[int] = None,
     ) -> RefutationResult:
         """Run placebo treatment refutation test.
 
         Replaces the treatment with random noise. If the effect disappears
         (p-value > 0.05), the original effect is likely causal.
+
+        ``random_state`` seeds DoWhy's permutations (#2029): the same estimate
+        id reproduces the same verdict; ``None`` leaves the refit unseeded.
         """
         import time
 
@@ -1995,6 +2014,11 @@ class RefutationRunner:
                     method_name="placebo_treatment_refuter",
                     placebo_type="permute",
                     num_simulations=self.config["placebo_treatment"]["num_simulations"],
+                    # #2029: DoWhy 0.14 converts an int ``random_state`` to one
+                    # RandomState shared across the simulations, so the whole
+                    # permutation sequence is reproducible from the estimate id.
+                    # (``random_seed`` would only seed numpy's GLOBAL rng.)
+                    random_state=random_state,
                 )
                 refuted_effect = float(refutation.new_effect)
                 # Iter-2 codex H4: p_value must come from real refuter output;
@@ -2052,6 +2076,7 @@ class RefutationRunner:
         details: Dict[str, Any] = {
             "message": message,
             "num_simulations": self.config["placebo_treatment"]["num_simulations"],
+            "random_state": random_state,
         }
 
         return RefutationResult(
@@ -2076,6 +2101,7 @@ class RefutationRunner:
         *,
         reference_n: Optional[int] = None,
         refit_n: Optional[int] = None,
+        random_state: Optional[int] = None,
     ) -> RefutationResult:
         """Run random common cause refutation test.
 
@@ -2092,6 +2118,8 @@ class RefutationRunner:
         a zero-width interval is an honest SKIPPED
         (``_degenerate_ci_skip_result``). ``reference_n`` / ``refit_n`` are
         the row counts of the interval's frame and of the refit frame.
+        ``random_state`` seeds DoWhy's draws of the synthetic common cause
+        (#2029); ``None`` leaves the refit unseeded.
         """
         import time
 
@@ -2129,6 +2157,12 @@ class RefutationRunner:
                 }
                 if "num_simulations" in _rcc_cfg:
                     _rcc_kwargs["num_simulations"] = _rcc_cfg["num_simulations"]
+                # #2029: DoWhy 0.14 converts an int ``random_state`` to one
+                # RandomState shared across the simulations, so the whole
+                # draw sequence is reproducible from the estimate id.
+                # (``random_seed`` would only seed numpy's GLOBAL rng.)
+                if random_state is not None:
+                    _rcc_kwargs["random_state"] = random_state
                 refutation = causal_model.refute_estimate(
                     identified_estimand,
                     estimate,
@@ -2178,6 +2212,7 @@ class RefutationRunner:
             thresholds=self.thresholds["common_cause_shift_se"],
         )
         details.update(config_details)
+        details["random_state"] = random_state
 
         execution_time = (time.time() - start_time) * 1000
 
