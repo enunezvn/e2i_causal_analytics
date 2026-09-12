@@ -55,7 +55,7 @@ from .models.composition_models import (
     SynthesisInput,
 )
 from .planner import PlanningError, ToolPlanner
-from .reason_codes import canonical_sentence
+from .reason_codes import ReasonCode, canonical_sentence
 from .serialization import dump_json_safe
 from .synthesizer import ResponseSynthesizer
 
@@ -1239,7 +1239,8 @@ class ToolComposer:
         from .models.composition_models import ComposedResponse
 
         failed_tools: List[str] = []
-        reasons: List[str] = []
+        trusted_reasons: List[str] = []
+        canonical_reasons: List[str] = []
         # #2020: what a failed step is allowed to say to the user.
         #
         # A tool-authored refusal is an honest, user-meaningful finding: #1574's gap_calculator
@@ -1269,11 +1270,13 @@ class ToolComposer:
             if not raw and not reason_code:
                 # Nothing to withhold and nothing to say: no reason fragment, as before #2020.
                 continue
-            if getattr(step, "outcome_class", None) in _TOOL_AUTHORED_CLASSES and reason_code:
-                if raw:
-                    reasons.append(f"{tool_name}: {raw}")
+            # One rule: verbatim only when tool-authored, coded AND non-empty; otherwise the code's
+            # canonical sentence.
+            authored = getattr(step, "outcome_class", None) in _TOOL_AUTHORED_CLASSES
+            if authored and reason_code and raw:
+                trusted_reasons.append(f"{tool_name}: {raw}")
                 continue
-            # Not tool-authored, or uncoded (which fails closed the same way).
+            # Not tool-authored, uncoded (which fails closed the same way), or authored with no text.
             if raw:
                 logger.warning(
                     "Step %s tool %r failed with non-user-facing text (reason_code=%s): %s",
@@ -1282,8 +1285,14 @@ class ToolComposer:
                     reason_code,
                     raw,
                 )
-            code = reason_code or "tool_error"
-            reasons.append(f"{tool_name}: {canonical_sentence(code)} [{code}]")
+            # ``reason_code`` is a plain string on the model, so only a closed-set value is rendered;
+            # anything else renders as tool_error in both the sentence and the tag.
+            code = str(reason_code) if reason_code in ReasonCode else ReasonCode.TOOL_ERROR.value
+            canonical_reasons.append(f"{tool_name}: {canonical_sentence(code)} [{code}]")
+        # Verbatim refusals FIRST: the answer is truncated from the end, canonical fragments are
+        # often longer than the raw text they replaced, and #1574's scope sits at the end of its
+        # refusal — joined last, a mixed trace can push that scope past the budget.
+        reasons = [*trusted_reasons, *canonical_reasons]
         msg = (
             f"All {execution_trace.tools_executed} tool(s) failed; no analysis could "
             "be completed. Returning a failed result rather than a fabricated answer."
