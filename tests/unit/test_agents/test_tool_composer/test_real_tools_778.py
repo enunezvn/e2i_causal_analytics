@@ -136,13 +136,17 @@ def test_cohort_builder_empty_rhs_criterion_recorded_unapplied():
 # ---------------------------------------------------------------------------
 def test_refutation_runner_fails_closed_without_dataframe():
     with pytest.raises(RuntimeError, match="Refusing to fabricate"):
-        tr.refutation_runner(estimate_id="est-123")
+        tr.refutation_runner(estimate_id="est-123", treatment="t", outcome="y")
 
 
 def test_refutation_runner_fails_closed_without_treatment_outcome():
+    # Omitting them is a signature error since #2061 (the executor refuses that plan before
+    # dispatch); a bound-but-blank column name is still refused by the tool itself.
     df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
-    with pytest.raises(RuntimeError, match="treatment|outcome"):
+    with pytest.raises(TypeError, match="treatment"):
         tr.refutation_runner(estimate_id="est-123", estimation_data=df)
+    with pytest.raises(RuntimeError, match="treatment|outcome"):
+        tr.refutation_runner(estimate_id="est-123", estimation_data=df, treatment=" ", outcome="")
 
 
 def test_refutation_runner_fails_closed_on_missing_columns():
