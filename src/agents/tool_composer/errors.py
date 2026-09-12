@@ -40,19 +40,28 @@ class _CodedError(Exception):
         # and the refusal's message is lost (#1600). Keep the refusal, log the defect.
         try:
             self.reason_code = ReasonCode(reason_code)
-        except ValueError:
+        except Exception:  # noqa: BLE001 - this constructor may not raise (see above)
+            self.reason_code = ReasonCode.TOOL_ERROR
             # The container log is the home for raw text (#2020); name the bad code, clipped.
+            # Formatting it can itself raise (a custom __str__/__repr__), so it is guarded.
+            try:
+                shown = (
+                    str.__str__(reason_code)[:64]
+                    if isinstance(reason_code, str)
+                    else repr(reason_code)[:64]
+                )
+            except Exception:  # noqa: BLE001 - an unprintable code is still logged
+                shown = "<unprintable>"
             logger.error(
                 "%s raised with reason_code %r, which is outside ReasonCode; recorded as %s",
                 type(self).__name__,
-                str(reason_code)[:64],
+                shown,
                 ReasonCode.TOOL_ERROR,
             )
-            self.reason_code = ReasonCode.TOOL_ERROR
         self.details: Dict[str, Any] = {}
         try:
             self.details = validate_details(details or {})
-        except ValueError as exc:
+        except Exception as exc:  # noqa: BLE001 - this constructor may not raise (see above)
             # The rejection reason is data-free by construction; the values are not logged.
             logger.error(
                 "%s (%s) dropped its details: %s", type(self).__name__, self.reason_code, exc

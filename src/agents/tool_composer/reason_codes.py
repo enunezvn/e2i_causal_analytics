@@ -115,9 +115,10 @@ EXECUTOR_ASSIGNED = frozenset(
 # Bounds on the structured ``details`` payload. It is persisted, so it must stay
 # structure: counts, shares and flags under prefixed snake_case keys. No strings at any
 # length — a short one still fits a column or brand name, the data this module keeps out
-# of the database. Ints stay within JavaScript's safe range: the admin page reads them.
+# of the database. Ints stay within JavaScript's safe range (Number.MAX_SAFE_INTEGER,
+# inclusive): the admin page reads them.
 _MAX_DETAIL_KEYS = 8
-_MAX_DETAIL_INT = 2**53
+_MAX_DETAIL_INT = 2**53 - 1
 _DETAIL_KEY = re.compile(r"(n|is|has|share)_[a-z0-9_]+")
 
 
@@ -154,6 +155,8 @@ def validate_details(details: Mapping[str, object]) -> Dict[str, object]:
         # The key is persisted too, so it gets the same rule as the value.
         if not isinstance(key, str) or not _DETAIL_KEY.fullmatch(key):
             raise ValueError("details key is not an n_/is_/has_/share_ snake_case identifier")
+        # A (str, Enum) key renders as its member name under str(); store the builtin value.
+        key = str.__str__(key)
         item = getattr(value, "item", None)
         if type(value).__module__ == "numpy" and callable(item):
             try:

@@ -3,6 +3,8 @@
 import copy
 import logging
 import pickle
+from collections.abc import Mapping
+from enum import Enum, StrEnum
 
 import pytest
 
@@ -136,8 +138,8 @@ def test_details_must_be_structure_only():
         pytest.param({"share_x": float("nan")}, id="nan"),
         pytest.param({"share_x": float("inf")}, id="inf"),
         pytest.param({"share_x": float("-inf")}, id="neg-inf"),
-        pytest.param({"n_rows": 2**53 + 1}, id="int-beyond-js-safe"),
-        pytest.param({"n_rows": -(2**53) - 1}, id="negative-int-beyond-js-safe"),
+        pytest.param({"n_rows": 2**53}, id="int-beyond-js-safe"),
+        pytest.param({"n_rows": -(2**53)}, id="negative-int-beyond-js-safe"),
         pytest.param({"rows": 1}, id="no-prefix-key"),
         pytest.param({"count_rows": 1}, id="unknown-prefix-key"),
         pytest.param({"n_": 1}, id="bare-prefix-key"),
@@ -163,7 +165,9 @@ def test_details_accepts_ints_finite_floats_and_booleans():
     out = validate_details(details)
     assert out == details
     assert out is not details, "the validator returns a new dict"
-    assert validate_details({"n_rows": 2**53}) == {"n_rows": 2**53}
+    # JavaScript's Number.MAX_SAFE_INTEGER is 2**53 - 1; that bound is inclusive.
+    assert validate_details({"n_rows": 2**53 - 1}) == {"n_rows": 2**53 - 1}
+    assert validate_details({"n_rows": -(2**53 - 1)}) == {"n_rows": -(2**53 - 1)}
 
 
 def test_details_key_count_is_still_bounded():
@@ -242,6 +246,91 @@ def test_an_unknown_code_is_recorded_as_a_tool_error_not_raised(caplog):
 def test_a_valid_code_string_is_still_accepted():
     err = ToolRefusalError("x", reason_code="no_usable_rows")  # type: ignore[arg-type]
     assert err.reason_code is ReasonCode.NO_USABLE_ROWS
+
+
+class _StrRaises:
+    def __str__(self):
+        raise RuntimeError("no str")
+
+
+class _StrAndReprRaise(_StrRaises):
+    def __repr__(self):
+        raise RuntimeError("no repr")
+
+
+@pytest.mark.parametrize(
+    ("code", "printable"),
+    [
+        pytest.param(_StrRaises(), True, id="str-raises"),
+        pytest.param(_StrAndReprRaise(), False, id="str-and-repr-raise"),
+    ],
+)
+def test_an_unprintable_code_still_refuses(caplog, code, printable):
+    """N1: the unknown-code handler formats the bad value; that must not raise either.
+    A non-str code is logged as its clipped repr, or as a placeholder when that raises."""
+    with caplog.at_level(logging.ERROR, logger=_ERRORS_LOGGER):
+        err = ToolRefusalError("kept", reason_code=code)  # type: ignore[arg-type]
+    assert str(err) == "kept"
+    assert err.reason_code is ReasonCode.TOOL_ERROR
+    expected = repr(code)[:64] if printable else "<unprintable>"
+    assert repr(expected) in caplog.text
+
+
+class _LenRaises(Mapping):
+    def __getitem__(self, key):
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self):
+        raise TypeError("no len")
+
+
+class _FakeNumpyScalar:
+    def item(self):
+        raise RuntimeError("item failed")
+
+
+_FakeNumpyScalar.__module__ = "numpy"
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        pytest.param(_LenRaises(), id="mapping-len-raises"),
+        pytest.param({"n_rows": _FakeNumpyScalar()}, id="numpy-item-raises-runtimeerror"),
+    ],
+)
+def test_details_that_raise_something_other_than_valueerror_still_refuse(caplog, details):
+    """N1: the constructor must not raise whatever the validator trips over."""
+    assert type(_FakeNumpyScalar()).__module__ == "numpy"
+    with caplog.at_level(logging.ERROR, logger=_ERRORS_LOGGER):
+        err = ToolRefusalError("kept", reason_code=ReasonCode.NO_USABLE_ROWS, details=details)
+    assert str(err) == "kept"
+    assert err.reason_code is ReasonCode.NO_USABLE_ROWS
+    assert err.details == {}
+    assert [r.levelno for r in caplog.records if r.name == _ERRORS_LOGGER] == [logging.ERROR]
+
+
+class _StrEnumKey(StrEnum):
+    N_ROWS = "n_rows"
+
+
+class _StrMixinKey(str, Enum):
+    N_ROWS = "n_rows"
+
+
+@pytest.mark.parametrize(
+    "key", [_StrEnumKey.N_ROWS, _StrMixinKey.N_ROWS], ids=["StrEnum", "str-Enum"]
+)
+def test_detail_keys_are_stored_as_plain_str(key):
+    """N3: a ``(str, Enum)`` key renders as its member name under ``str()``; the stored key
+    is the builtin string of its value."""
+    out = validate_details({key: 1})
+    (stored,) = out
+    assert type(stored) is str
+    assert stored == "n_rows"
 
 
 def test_the_stored_details_are_the_normalized_copy():
