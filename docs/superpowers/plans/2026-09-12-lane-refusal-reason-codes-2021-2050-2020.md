@@ -1869,6 +1869,10 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 
 ## Task 7: Render the reason on the admin observability page (#2021 D3, D1′)
 
+> **Read-side notes from the Task 3 quality review (2026-09-12).**
+> - Episodes recorded before ml/042 have no `reason_code` and `reason_details`. Read both with `.get()`, and render a null code as not recorded (`reason: null`), never as a failure or as the tool-failure sentence. That is why this task uses `known_sentence`, not `canonical_sentence`.
+> - A `refused` or `input_rejected` step carrying `tool_error` is not a contradiction. It means the tool raised with a code outside the closed set, and the `_CodedError` constructor failed soft to `TOOL_ERROR`. Render it as-is, and do not "correct" it on the page.
+
 > **Rewritten 2026-09-12 for D1′, before dispatch.** The database now holds codes, not sentences. This task turns codes into sentences at read time, from the single catalogue, on the one surface an operator reads.
 
 **Files:**
