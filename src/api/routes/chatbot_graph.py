@@ -44,7 +44,11 @@ from src.api.routes.chatbot_dspy import (
     synthesize_response_dspy,
 )
 from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
-from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
+from src.api.routes.chatbot_tools import (
+    E2I_CHATBOT_TOOLS,
+    reset_chat_session_id,
+    set_chat_session_id,
+)
 from src.api.routes.chatbot_tracer import (
     ChatbotTraceContext,
     get_chatbot_tracer,
@@ -233,6 +237,27 @@ def _timed_node(name: str, target: Any) -> Any:
 
     timed.__name__ = f"timed_{name}"
     return timed
+
+
+class _SessionBoundToolNode:
+    """Run the tools with this turn's real session bound for them (#2064).
+
+    ToolNode invokes tools with the model's args only, so ``orchestrator_tool``
+    and ``tool_composer_tool`` cannot see ``state["session_id"]`` and used to
+    invent a ``chatbot-<ts>`` id instead. Binding it in the chat-session
+    contextvar — the channel AG-UI's execute() already sets — lets them use the
+    real conversation. The binding is reset when the tools finish.
+    """
+
+    def __init__(self, tool_node: ToolNode) -> None:
+        self._tool_node = tool_node
+
+    async def ainvoke(self, state: ChatbotState, config: Optional[RunnableConfig] = None) -> Any:
+        token = set_chat_session_id(state.get("session_id"))
+        try:
+            return await self._tool_node.ainvoke(state, config)
+        finally:
+            reset_chat_session_id(token)
 
 
 def _build_latency_span_payload(
@@ -2795,7 +2820,7 @@ def create_e2i_chatbot_graph() -> Any:
     )  # Routes complex queries to specialized agents
     add_timed_node("clarify", clarify_node)  # #1407 multi-turn ask-back
     add_timed_node("generate", generate_node)
-    add_timed_node("tools", ToolNode(E2I_CHATBOT_TOOLS))
+    add_timed_node("tools", _SessionBoundToolNode(ToolNode(E2I_CHATBOT_TOOLS)))
     add_timed_node("finalize", finalize_node)
 
     # Set entry point
