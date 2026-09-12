@@ -1125,6 +1125,8 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 
 Finding 1 still applies: `StepResult` has no `error_message`. Nothing in this task reads `result.output.error`.
 
+**Serialization boundary (quality review M4, 2026-09-12).** `ToolRefusalError.details` is validated once, at construction, and stays a mutable dict — `err.details["s"] = "Kisqali"` goes through afterwards. (A `MappingProxyType` would break `__reduce__`, so the attribute is not frozen.) The recorder therefore re-runs `validate_details(dict(result.reason_details))` when it builds the record and does NOT trust the attribute. On a `ValueError` it sends `{}` and logs, the same fail-soft rule as the constructor. Add one test: a `StepResult` whose `reason_details` was mutated to carry a string is serialized with `{}`. Detail keys follow the convention `^(n|is|has|share)_[a-z0-9_]+$` from Task 2b's quality fix.
+
 **Files:**
 - Modify: `src/agents/tool_composer/learning_recorder.py` — `step_record` (starts at about line 242)
 - Test: `tests/unit/test_agents/test_tool_composer/test_learning_recorder_serializer.py` — extend in place
@@ -2357,6 +2359,7 @@ Write `cert.md` verdict word first, then the numbers:
 
 **Known gaps, deliberate.**
 - The database guards the code's format, not its member list, because the list lives in Python and a copy would drift. A static test checks every member passes the format.
+- The same split applies to `details`. Python enforces the key convention `^(n|is|has|share)_[a-z0-9_]+$`, the magnitude bound `|int| ≤ 2**53` and numpy normalization (Task 2b quality fix). `composer_structure_reason_details` enforces only what keeps TEXT out: snake_case keys, number or boolean values, at most 8 keys. The database is the second guard against text, not a copy of a naming convention that would need a migration every time it grew. Task 6's rehearsal key `"flag": true` is therefore still expected to persist.
 - Sentences are never stored, so ml/041's no-text guard stays exactly as built.
 - ml/042 is proven by a rehearsal, not a permanent real-DB test: the shared fixture could only run such a test once, pre-deploy.
 - `test_migration_runner.py`'s three-migration assertion goes stale, and is disclosed rather than fixed, to leave the shared harness untouched.
