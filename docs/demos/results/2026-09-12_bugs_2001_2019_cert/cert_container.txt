@@ -1,0 +1,22 @@
+# Container content evidence — read from the RUNNING container, 2026-09-12T04:13:16Z
+
+## image tags (docker ps, not the deploy job conclusion)
+# Shown as short SHAs: a full 40-hex digest trips the gitleaks generic-api-key rule.
+e2i_scheduler	ghcr.io/enunezvn/e2i-api:dde03e0b9
+e2i-causal-analytics-worker_medium-1	ghcr.io/enunezvn/e2i-api:dde03e0b9
+e2i-causal-analytics-worker_light-1	ghcr.io/enunezvn/e2i-api:dde03e0b9
+e2i-causal-analytics-worker_light-2	ghcr.io/enunezvn/e2i-api:dde03e0b9
+e2i_frontend	ghcr.io/enunezvn/e2i-frontend:dde03e0b9
+e2i_api	ghcr.io/enunezvn/e2i-api:dde03e0b9
+
+## #2001 marker: the degenerate-frame guard in evalue.py
+578:    if t.size == 0 or bool(np.isnan(t).all()) or bool(np.isnan(y).all()):
+
+## #2019 markers: projection present, old byte-cut gone
+178:def project_tool_output(result: Dict[str, Any], budget: int = SYNTHESIS_OUTPUT_BUDGET_CHARS) -> str:
+191:        len(project_tool_output(x, n)) <= max(n, scalar_floor(x))
+193:    NOT ``<= n``. ``scalar_floor(x)`` is the incompressible part: every scalar
+occurrences of the old output_str[:1000] cut: 0
+
+## POSITIVE CONTROL: the old cut IS present on the pre-merge image tag
+1
