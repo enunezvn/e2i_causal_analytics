@@ -1195,6 +1195,22 @@ The full repo-wide count is 16 = 5 fix + 11 keep; every raise of the three class
 - Extend Task 4b's AST guard: add `DecompositionError`, `PlanningError` and `ExecutionError` to its target classes, and `decomposer.py`, `planner.py` and `executor.py` to its scope, so these wraps cannot regress.
 - Enumerate every raise of the three classes by AST before editing. The repo-wide grep finds 16, and this list names 12.
 
+**Existing tests this touches (lead-measured 2026-09-12; decides which changes are faithful).** No test pins the full text of the five wrap messages. The tests that catch the three classes and read the message split into two groups:
+
+- **Survive unchanged.** They check a substring of an AUTHORED message, which the `except <OwnClass>: raise` pass-through keeps intact:
+  - `test_decomposer.py` :121 `"Too few sub-questions"`, :174 `"cycle"`, :201 `"unknown"`, :259 `"JSON"`
+  - `test_planner.py` :202 `"unknown"`, :249/:449 `"no tools"`, :306 `"cycle"`, :529 `"JSON"`
+  - `test_planner_semantic_binding_f6b.py` :255 `"conversion_rate"` + `"unbound column"`, :312 `"dosage"`
+
+  For the two `"JSON"` checks, keep the authored prefix `"Invalid JSON in LLM response"` in the fixed sentence.
+- **Assert the defect; update them.** `test_decomposer.py:397` and `test_planner.py:560` set the LLM client to raise `Exception("LLM error")` and assert `"LLM error" in str(exc_info.value)`. That is raw client-exception text riding the phase error to the user, exactly what this task removes. Update each to assert:
+  - the fixed sentence;
+  - `"LLM error" in caplog.text`;
+  - `isinstance(exc_info.value.__cause__, Exception)` with that text.
+
+  Name both in the commit body. This is a faithful update, not a weakening.
+- **Also run:** `test_executor_outcome_classes.py:605` (`pytest.raises(ExecutionError)`, no message check), `test_fail_closed_zero_tools_f6.py`, `test_execution_order_repair.py`, `test_planner_column_awareness.py`, `test_planner_token_budget_1365.py`, `tests/unit/test_api/test_chatbot_tools_composer_di_1557.py`, `test_plan_cache_eviction.py`, `test_composer.py`.
+
 **Rule (revised):**
 - Once the wraps above are fixed at source, the three phase classes carry only authored text, so the composer keeps `Decomposition failed: {e}` / `Planning failed: {e}` / `Execution failed: {e}` as they are.
 - Only `Unexpected error: {e}` (`composer.py:593`) still carries arbitrary exception text; it becomes a fixed sentence, and its existing `logger.exception` keeps the raw text.
