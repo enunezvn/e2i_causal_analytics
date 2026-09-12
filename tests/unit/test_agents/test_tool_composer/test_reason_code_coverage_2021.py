@@ -128,12 +128,22 @@ def test_a_threaded_reason_code_is_literal_at_every_call_site(path: Path):
 def test_the_site_count_is_what_the_lane_measured():
     """A floor, not a ceiling: new sites are fine, a silent drop to zero is not.
 
-    87, not the 94 the lane's plan quoted. That 94 came from
-    ``grep -c "ToolRefusalError\\|ToolInputError"``, which counts LINES that mention
-    either name — and 16 of those are the module and tool docstrings, the comments
-    that explain the #1600 split, and the ``from .errors import`` line. 103 matching
-    lines minus those 16 is 87, which is what walking the AST for actual ``raise``
-    statements finds. The AST is the measure; a grep over prose is not.
+    87, measured by AST on this lane's base ``0a16e9c18``: 66 ``ToolRefusalError``
+    plus 21 ``ToolInputError``. The plan's 94 was wrong for TWO independent reasons,
+    and neither alone explains the gap.
+
+    * **Method.** ``grep -c "ToolRefusalError\\|ToolInputError"`` counts LINES that
+      mention either name, and collapses several matches on one line to one. Many of
+      those lines are prose — the module and tool docstrings, the comments explaining
+      the #1600 split, the ``from .errors import``. On the lane base that is 103
+      matching lines against 87 real ``raise`` statements.
+    * **Base drift.** The 94 was measured on ``6c6a6a0ae``, which predates PR #2059
+      (``8bb85a772``, ``772733dc2`` — the #2022 sensitivity work). That commit added
+      five ``ToolRefusalError`` sites. On ``6c6a6a0ae`` grep says 94 and the AST says
+      82; on the lane base grep says 103 and the AST says 87.
+
+    The AST on the branch you are actually on is the measure; a line count against a
+    stale base is not.
     """
     total = sum(1 for path in _SOURCES for _ in _raise_sites(path))
     assert total >= 87, f"expected at least the 87 sites measured for #2021, found {total}"

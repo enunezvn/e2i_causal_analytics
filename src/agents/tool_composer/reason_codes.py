@@ -33,7 +33,8 @@ class ReasonCode(str, Enum):
     COVERAGE_GAP = "coverage_gap"
     UNKNOWN_COLUMN = "unknown_column"
     NON_NUMERIC_COLUMN = "non_numeric_column"
-    AMBIGUOUS_IDENTIFIER = "ambiguous_identifier"
+    AMBIGUOUS_COLUMN = "ambiguous_column"
+    AMBIGUOUS_GROUP_LABEL = "ambiguous_group_label"
     MISSING_DATAFRAME = "missing_dataframe"
     CI_OUTSIDE_ESTIMATE = "ci_outside_estimate"
     POINT_ESTIMATE_ONLY = "point_estimate_only"
@@ -70,7 +71,8 @@ CANONICAL_SENTENCES: Dict[ReasonCode, str] = {
     ReasonCode.COVERAGE_GAP: "the data does not cover everything the question asked about",
     ReasonCode.UNKNOWN_COLUMN: "a column the request named is not present in the data",
     ReasonCode.NON_NUMERIC_COLUMN: "a column the analysis has to average does not hold numbers",
-    ReasonCode.AMBIGUOUS_IDENTIFIER: "a name in the data refers to more than one thing, so a result cannot be attributed to it",
+    ReasonCode.AMBIGUOUS_COLUMN: "a column the request named matches more than one column in the data",
+    ReasonCode.AMBIGUOUS_GROUP_LABEL: "two or more groups share a label, so a per-group number cannot be attributed to either",
     ReasonCode.MISSING_DATAFRAME: "the real source data was not supplied to the tool",
     ReasonCode.CI_OUTSIDE_ESTIMATE: "the confidence interval is inconsistent with the point estimate",
     ReasonCode.POINT_ESTIMATE_ONLY: "no uncertainty could be computed for the estimate",

@@ -2612,7 +2612,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             "per-group mean cannot be attributed unambiguously. Refusing to fabricate: "
             "comparing the surviving labels would silently drop a real group and report "
             "a spread over the wrong basis.",
-            reason_code=ReasonCode.AMBIGUOUS_IDENTIFIER,
+            reason_code=ReasonCode.AMBIGUOUS_GROUP_LABEL,
             details={"raw_groups": raw_in_basis, "labels": len(selected)},
         )
 
@@ -2814,7 +2814,7 @@ def _refuse_unless_binary_01(
         raise ToolRefusalError(
             f"{tool}: {role} column {name!r} is ambiguous: {series.shape[1]} columns are "
             f"named {name!r} in the supplied DataFrame. Refusing to pick one.",
-            reason_code=ReasonCode.AMBIGUOUS_IDENTIFIER,
+            reason_code=ReasonCode.AMBIGUOUS_COLUMN,
         )
 
     def _shown(value: Any) -> str:
@@ -4464,7 +4464,7 @@ def risk_scorer(
             f"risk_scorer: the supplied DataFrame carries duplicate numeric column "
             f"name(s) {ambiguous!r}, so a feature cannot be addressed unambiguously. "
             "Refusing to guess which one the risk model should fit on.",
-            reason_code=ReasonCode.AMBIGUOUS_IDENTIFIER,
+            reason_code=ReasonCode.AMBIGUOUS_COLUMN,
         )
 
     max_feature_nan_share = 0.20
