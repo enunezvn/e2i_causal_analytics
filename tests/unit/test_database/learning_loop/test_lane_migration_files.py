@@ -9,6 +9,7 @@ atomicity. The real-runner replay is in ``test_migration_runner.py`` (opt-in).
 
 from __future__ import annotations
 
+import ast
 import re
 
 import pytest
@@ -40,6 +41,7 @@ def test_runner_detector_is_the_one_the_fixture_mirrors():
         ("ml/039_tool_category_cohort.sql", True),
         ("ml/040_tool_registry_startup_sync.sql", False),
         ("ml/041_composer_learning_loop_recording.sql", False),
+        ("ml/043_composer_refusal_reason_codes.sql", False),
     ],
 )
 def test_runner_branch(key, unwrapped):
@@ -49,7 +51,12 @@ def test_runner_branch(key, unwrapped):
     assert _pg.runner_unwraps(path.read_text()) is unwrapped
 
 
-@pytest.mark.parametrize("key", _pg.LANE_MIGRATIONS)
+# ml/043 is deliberately NOT in _pg.LANE_MIGRATIONS: that tuple defines the shared fixture's
+# "prod before this lane" base, which is 039-041's (D4, 2026-09-12).
+_REASON_CODES_MIGRATION = "ml/043_composer_refusal_reason_codes.sql"
+
+
+@pytest.mark.parametrize("key", [*_pg.LANE_MIGRATIONS, _REASON_CODES_MIGRATION])
 def test_no_script_level_transaction_control(key):
     path = ML / key
     if not path.exists():
@@ -59,7 +66,11 @@ def test_no_script_level_transaction_control(key):
 
 @pytest.mark.parametrize(
     "key",
-    ["ml/040_tool_registry_startup_sync.sql", "ml/041_composer_learning_loop_recording.sql"],
+    [
+        "ml/040_tool_registry_startup_sync.sql",
+        "ml/041_composer_learning_loop_recording.sql",
+        _REASON_CODES_MIGRATION,
+    ],
 )
 def test_wrapped_files_never_mention_the_unwrap_triggers(key):
     # Comments are stripped by the runner, but a mention in a comment invites a later edit that
@@ -76,10 +87,69 @@ def test_039_is_one_idempotent_statement():
     assert code == ["ALTER TYPE tool_category ADD VALUE IF NOT EXISTS 'COHORT';"]
 
 
-@pytest.mark.parametrize("name", ["rollback_040.sql", "rollback_041.sql"])
+@pytest.mark.parametrize("name", ["rollback_040.sql", "rollback_041.sql", "rollback_043.sql"])
 def test_rollbacks_are_never_auto_applied_and_hold_no_transaction_control(name):
     path = ML / "ml" / name
     assert path.exists()
     assert not [k for k in _pg.runner_migration_keys() if k.endswith(name)]
     # Applied by hand with psql --single-transaction (runbook); its own BEGIN/COMMIT would end it.
     assert _scan_for_bare_txn(path) == []
+
+
+def _select_expressions(sql: str, table: str) -> tuple:
+    """The INSERT column list and the SELECT expressions feeding it, split at top-level commas."""
+    head = sql.split(f"INSERT INTO {table} (", 1)[1]
+    # Strip line comments first: a "-- 043" marker on the column list would otherwise stick to a name.
+    column_list = re.sub(r"--[^\n]*", "", head.split(")", 1)[0])
+    columns = [c.strip() for c in column_list.replace("\n", " ").split(",")]
+    body = head.split("SELECT", 1)[1].split("FROM jsonb_array_elements(p_steps)", 1)[0]
+    parts, depth, quoted, current = [], 0, False, []
+    for ch in body:
+        if ch == "'":
+            quoted = not quoted
+        elif not quoted and ch == "(":
+            depth += 1
+        elif not quoted and ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0 and not quoted:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current).strip())
+    return columns, [re.sub(r"--[^\n]*", "", p).strip() for p in parts]
+
+
+def test_043_still_writes_no_text_into_error_message():
+    """D1′: ml/041's NULL in the error_message slot is the database's second guard. 043 keeps it."""
+    path = ML / _REASON_CODES_MIGRATION
+    if not path.exists():
+        pytest.fail(f"{_REASON_CODES_MIGRATION} is missing")
+    columns, expressions = _select_expressions(path.read_text(), "composition_steps")
+    assert len(columns) == len(expressions), (columns, expressions)
+    assert expressions[columns.index("error_message")] == "NULL"
+    assert "reason_code" in columns and "reason_details" in columns
+
+
+def test_every_reason_code_passes_the_043_format_guard():
+    """The SQL guard is a format, not a member list; every Python member must satisfy it.
+
+    Read by AST, not imported: importing the tool_composer package costs ~564 MB here.
+    """
+    path = ML / _REASON_CODES_MIGRATION
+    if not path.exists():
+        pytest.fail(f"{_REASON_CODES_MIGRATION} is missing")
+    guard = re.search(r"reason_code ~ '([^']+)'", path.read_text()).group(1)
+    source = (_pg.REPO_ROOT / "src/agents/tool_composer/reason_codes.py").read_text()
+    enum = next(
+        n
+        for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.ClassDef) and n.name == "ReasonCode"
+    )
+    values = [
+        n.value.value
+        for n in enum.body
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+    ]
+    assert len(values) >= 30
+    assert [v for v in values if not re.fullmatch(guard, v)] == []
