@@ -74,6 +74,13 @@ class ToolReliabilityRow(BaseModel):
         default=None,
         description="Refusals in the window that carry a reason code (#2021); pre-043 refusals are uncoded",
     )
+    n_most_common_refusal_reason: Optional[int] = Field(
+        default=None,
+        description=(
+            "Refusals carrying most_common_refusal_reason (#2021); ties resolve to the highest count,"
+            " then the code in ascending order; null when no refusal is coded"
+        ),
+    )
     last_executed_at: Optional[str] = None
 
 

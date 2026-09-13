@@ -411,6 +411,26 @@ def test_a_tool_row_carries_how_many_refusals_the_code_was_drawn_from():
     assert tool["n_refused_coded"] == 3
 
 
+def test_a_tool_row_carries_how_many_refusals_carry_the_most_common_code():
+    """A 1-of-3 tie winner and a 3-of-3 majority name the same code; only this count differs."""
+    verdicts = {
+        "causal_effect_estimator": _verdict(
+            n_invoked=54,
+            n_refused=50,
+            n_refused_coded=3,
+            n_most_common_refusal_reason=1,
+            most_common_refusal_reason="coverage_gap",
+        )
+    }
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert (tool["n_refused"], tool["n_refused_coded"], tool["n_most_common_refusal_reason"]) == (
+        50,
+        3,
+        1,
+    )
+
+
 def test_an_unknown_coded_refusal_count_stays_null_not_zero():
     """A database without ml/043 cannot say how many refusals were coded; 0 would claim none were."""
     verdicts = {"causal_effect_estimator": _verdict(n_refused_coded=None)}

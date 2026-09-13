@@ -136,6 +136,9 @@ class ToolReliability:
     # Refusals in the window that carry a code. Pre-043 refusals are uncoded, so the most common
     # code can name a minority of n_refused; None when the database predates ml/043.
     n_refused_coded: Optional[int] = None
+    # How many coded refusals carry most_common_refusal_reason: a 1-of-3 tie winner and a 3-of-3
+    # majority name the same code. None when the database predates ml/043 or nothing is coded.
+    n_most_common_refusal_reason: Optional[int] = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "ToolReliability":
@@ -179,6 +182,9 @@ class ToolReliability:
             most_common_refusal_reason=row.get("most_common_refusal_reason"),
             n_refused_coded=int(row["n_refused_coded"])
             if row.get("n_refused_coded") is not None
+            else None,
+            n_most_common_refusal_reason=int(row["n_most_common_refusal_reason"])
+            if row.get("n_most_common_refusal_reason") is not None
             else None,
             **counts,
         )

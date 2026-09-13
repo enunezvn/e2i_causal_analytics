@@ -204,6 +204,7 @@ class ToolComposerObservabilityService:
                     "most_common_refusal_reason": tool.most_common_refusal_reason,
                     "most_common_refusal_sentence": known_sentence(tool.most_common_refusal_reason),
                     "n_refused_coded": tool.n_refused_coded,
+                    "n_most_common_refusal_reason": tool.n_most_common_refusal_reason,
                     "last_executed_at": tool.last_executed_at,
                 }
             )

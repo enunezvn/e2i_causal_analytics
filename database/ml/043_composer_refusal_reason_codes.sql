@@ -212,9 +212,15 @@ END
 $fn$;
 
 -- ---------------------------------------------------------------------------
--- 4. get_tool_reliability: add most_common_refusal_reason. The return type changes, so the view
---    that selects from it and the function itself are dropped and recreated, and the grants and
---    view comment that DROP discards are re-applied in section 5.
+-- 4. get_tool_reliability: add most_common_refusal_reason, n_refused_coded and
+--    n_most_common_refusal_reason. The return type changes, so the view that selects from it and
+--    the function itself are dropped and recreated, and the grants and view comment that DROP
+--    discards are re-applied in section 5.
+--    The most common code and its count come from ONE ranking (refusal_codes, rn = 1), so they
+--    cannot disagree. The count exists because the code alone cannot tell a 1-1-1 tie from a
+--    3-of-3 majority, and would present a minority code as representative. Ties resolve to the
+--    highest count, then the code ascending in "C" collation, so the winner does not depend on
+--    the database locale. Both count exactly n_refused_coded's rows: coded refusals only.
 -- ---------------------------------------------------------------------------
 DROP VIEW IF EXISTS v_tool_reliability;
 DROP FUNCTION IF EXISTS get_tool_reliability(integer, boolean);
@@ -238,7 +244,8 @@ RETURNS TABLE (
     last_executed_at timestamptz,
     most_common_health_error text,
     most_common_refusal_reason text,  -- 043
-    n_refused_coded bigint  -- 043
+    n_refused_coded bigint,  -- 043
+    n_most_common_refusal_reason bigint  -- 043
 )
 LANGUAGE plpgsql
 STABLE
@@ -261,6 +268,13 @@ BEGIN
                (tp.outcome_class IS NOT NULL AND (p_include_synthetic OR NOT tp.is_synthetic)) AS counted
         FROM tool_performance tp
         WHERE tp.executed_at > now() - make_interval(days => p_days)
+    ),
+    refusal_codes AS (  -- 043
+        SELECT p.tool_id, p.reason_code, count(*) AS n,
+               row_number() OVER (PARTITION BY p.tool_id ORDER BY count(*) DESC, p.reason_code COLLATE "C") AS rn
+        FROM perf p
+        WHERE p.counted AND p.outcome_class IN ('refused', 'input_rejected') AND p.reason_code IS NOT NULL
+        GROUP BY p.tool_id, p.reason_code
     )
     SELECT
         tr.name::text,
@@ -282,13 +296,16 @@ BEGIN
         max(p.executed_at) FILTER (WHERE p.counted),
         (mode() WITHIN GROUP (ORDER BY p.error_type)
             FILTER (WHERE p.counted AND p.outcome_class IN ('timeout', 'error')))::text
-        ,(mode() WITHIN GROUP (ORDER BY p.reason_code)  -- 043
-            FILTER (WHERE p.counted AND p.outcome_class IN ('refused', 'input_rejected')))::text
+        ,rc.reason_code::text  -- 043
         ,count(*) FILTER (WHERE p.counted AND p.outcome_class IN ('refused', 'input_rejected') AND p.reason_code IS NOT NULL)  -- 043
+        ,rc.n  -- 043
     FROM tool_registry tr
     LEFT JOIN perf p ON p.tool_id = tr.tool_id
+    -- 043: at most one row per tool (rn = 1), so no aggregate above is multiplied.
+    LEFT JOIN refusal_codes rc ON rc.tool_id = tr.tool_id AND rc.rn = 1
     WHERE tr.deprecated_at IS NULL
-    GROUP BY tr.tool_id, tr.name, tr.category, tr.source_agent, tr.version, tr.avg_latency_ms
+    GROUP BY tr.tool_id, tr.name, tr.category, tr.source_agent, tr.version, tr.avg_latency_ms,
+             rc.reason_code, rc.n  -- 043
     ORDER BY tr.name;
 END
 $fn$;

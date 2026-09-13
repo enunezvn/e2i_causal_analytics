@@ -18965,6 +18965,11 @@ export interface components {
              * @description Refusals in the window that carry a reason code (#2021); pre-043 refusals are uncoded
              */
             n_refused_coded?: number | null;
+            /**
+             * N Most Common Refusal Reason
+             * @description Refusals carrying most_common_refusal_reason (#2021); ties resolve to the highest count, then the code in ascending order; null when no refusal is coded
+             */
+            n_most_common_refusal_reason?: number | null;
             /** Last Executed At */
             last_executed_at?: string | null;
         };
