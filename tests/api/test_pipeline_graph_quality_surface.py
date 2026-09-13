@@ -27,7 +27,7 @@ and we reach the response constructor — the only thing under test. No HTTP run
 
 import pytest
 
-from src.api.routes import causal as causal_module
+from src.api.routes.causal import pipelines as causal_module
 from src.api.schemas.causal import (
     ParallelPipelineRequest,
     PipelineStageConfig,

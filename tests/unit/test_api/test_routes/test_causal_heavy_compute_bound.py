@@ -33,8 +33,8 @@ from unittest.mock import patch
 import pytest
 from fastapi import BackgroundTasks
 
-from src.api.routes import causal as causal_module
 from src.api.routes.causal import hierarchical as hierarchical_module
+from src.api.routes.causal import pipelines as causal_module
 from src.api.schemas.causal import (
     AnalysisStatus,
     CausalLibrary,
