@@ -56,7 +56,7 @@ import pytest
 from econml.dml import LinearDML
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
-from src.api.routes.causal import _CAUSAL_NEGATIVE_CONTROL_OUTCOMES
+from src.api.routes.causal.datasets import _CAUSAL_NEGATIVE_CONTROL_OUTCOMES
 from src.causal_engine.nuisance_config import linear_dml_rf_params
 from src.causal_engine.refutation_runner import (
     RefutationRunner,

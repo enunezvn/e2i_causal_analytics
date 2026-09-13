@@ -685,14 +685,14 @@ def _registry_rows(brand: str = "Remibrutinib") -> list[dict]:
 
 def _patch_registry(rows: Any = None, *, error: Exception | None = None):
     """Patch the causal_paths repo factory (function-locally imported from
-    src.api.routes.causal) so no Supabase read happens."""
+    src.api.routes.causal.loaders) so no Supabase read happens."""
     repo = MagicMock()
     if error is not None:
         repo.get_distinct_questions = AsyncMock(side_effect=error)
     else:
         repo.get_distinct_questions = AsyncMock(return_value=rows or [])
     return patch(
-        "src.api.routes.causal._get_causal_path_repo",
+        "src.api.routes.causal.loaders._get_causal_path_repo",
         new=AsyncMock(return_value=repo),
     )
 

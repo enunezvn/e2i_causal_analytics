@@ -127,11 +127,11 @@ def _details(raw: Any) -> Dict[str, Any]:
 
 
 async def _frame(dataset: str, treatment: str, outcome: str, brand: Optional[str], limit: int):
-    from src.api.routes.causal import (
+    from src.api.routes.causal.datasets import (
         _CAUSAL_DATASET_SPECS,
         _brand_scoped_covariates,
-        _load_agent_estimation_frame,
     )
+    from src.api.routes.causal.loaders import _load_agent_estimation_frame
 
     spec = _CAUSAL_DATASET_SPECS[dataset]
     # The submit route brand-scopes the curated default for EVERY brand value —
@@ -354,8 +354,8 @@ async def _route_replica_pull(client, brand: str, n: int) -> Dict[str, Any]:
     the preview's pull. Read-only. Records how many merged rows were dropped and why."""
     import pandas as pd
 
-    from src.api.routes.causal import (
-        _derive_is_accepted,
+    from src.api.routes.causal.datasets import _derive_is_accepted
+    from src.api.routes.causal.loaders import (
         _load_patient_baseline_rows,
         _load_trigger_question_rows,
     )

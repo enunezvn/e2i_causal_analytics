@@ -41,6 +41,11 @@ from src.repositories.provenance import deployment_includes_synthetic
 # would bind a copy here and the patch would miss it).
 from . import agent as _agent
 from ._common import _CAUSAL_JOB_TTL_SECONDS
+
+# NOTE: this binds a SECOND reference to the one store object agent.py owns;
+# the agent task writes ``agent._agent_analysis_store``, so a test that replaces
+# the store must patch BOTH ``discovery._agent_analysis_store`` and
+# ``agent._agent_analysis_store`` or the agent side keeps writing the real store.
 from .agent import _agent_analysis_store
 from .catalog import _adjusted_partial_corr, _get_clinical_context_service
 from .datasets import (

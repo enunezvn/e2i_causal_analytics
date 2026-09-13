@@ -6,7 +6,7 @@ pass unchanged, proving P1 behavior is byte-for-byte preserved after the
 inline loop is replaced by a call to this helper.
 """
 
-from src.api.routes.causal import _coerce_estimation_row
+from src.api.routes.causal.loaders import _coerce_estimation_row
 
 
 def _row(**kw):

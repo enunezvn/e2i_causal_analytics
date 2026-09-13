@@ -7,7 +7,7 @@ These are pure-logic unit tests (no DB, no FastAPI app state)."""
 
 import pytest
 
-from src.api.routes.causal import (
+from src.api.routes.causal.datasets import (
     _ALL_CLINICAL_COVARIATES,
     _BRAND_CLINICAL_COVARIATES,
     _COLUMN_LABELS,
@@ -107,7 +107,7 @@ def test_complement_inhibitor_status_is_dual_role_treatment_and_fabhalta_modifie
     main-effect edge) and a Fabhalta-scoped effect-modifier (the covariate), with a
     text->0/1 derivation and a display label. Locks the full plumbing so a partial
     revert (e.g. treatment added but derivation dropped) fails loudly."""
-    from src.api.routes.causal import (
+    from src.api.routes.causal.datasets import (
         _CAUSAL_DATASET_SPECS,
         _CAUSAL_NUMERIC_COLUMNS,
         _CAUSAL_NUMERIC_DERIVATIONS,
@@ -133,7 +133,7 @@ def test_complement_inhibitor_status_is_dual_role_treatment_and_fabhalta_modifie
 def test_derive_is_prior_c5_maps_switch_population_to_one():
     """'prior' (the eculizumab/ravulizumab switch population) -> 1.0; 'current' and a
     NULL off-brand cell -> 0.0. The treatment contrast is prior-vs-current."""
-    from src.api.routes.causal import _derive_is_prior_c5
+    from src.api.routes.causal.datasets import _derive_is_prior_c5
 
     assert _derive_is_prior_c5("prior") == 1.0
     assert _derive_is_prior_c5("PRIOR") == 1.0  # case-insensitive, like _derive_is_accepted
@@ -155,7 +155,7 @@ def test_new_axis_is_dual_role_treatment_and_brand_modifier(
     and a brand-scoped effect-modifier (the covariate), with a derivation + display
     label — the same full plumbing as complement_inhibitor_status. A partial revert
     (treatment added but derivation dropped) fails loudly."""
-    import src.api.routes.causal as causal_mod
+    import src.api.routes.causal.datasets as causal_mod
 
     spec = causal_mod._CAUSAL_DATASET_SPECS["patient_journeys"]
     assert axis in spec["treatment"], f"{axis} missing from treatment (main-effect edge)"
@@ -174,7 +174,7 @@ def test_new_axis_is_dual_role_treatment_and_brand_modifier(
 def test_derive_is_advanced_line_maps_advanced_stages_to_one():
     """metastatic / stage_iv (advanced-line CDK4/6 burden) -> 1.0; earlier stages and a
     NULL off-brand cell -> 0.0."""
-    from src.api.routes.causal import _derive_is_advanced_line
+    from src.api.routes.causal.datasets import _derive_is_advanced_line
 
     assert _derive_is_advanced_line("metastatic") == 1.0
     assert _derive_is_advanced_line("STAGE_IV") == 1.0  # case-insensitive
@@ -186,7 +186,7 @@ def test_derive_is_advanced_line_maps_advanced_stages_to_one():
 def test_derive_is_uncontrolled_csu_maps_high_uas7_to_one():
     """UAS7 >= 28 (uncontrolled CSU) -> 1.0; controlled scores and a non-numeric / NULL
     cell -> 0.0. The threshold is the severe band of the 0-42 UAS7."""
-    from src.api.routes.causal import _derive_is_uncontrolled_csu
+    from src.api.routes.causal.datasets import _derive_is_uncontrolled_csu
 
     assert _derive_is_uncontrolled_csu(30) == 1.0
     assert _derive_is_uncontrolled_csu(28.0) == 1.0  # boundary inclusive
