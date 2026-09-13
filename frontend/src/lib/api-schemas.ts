@@ -1775,6 +1775,8 @@ export const ToolComposerStepClassSchema = z.object({
   // non-null code means a code this build does not know.
   reason_code: z.string().nullable().optional(),
   reason: z.string().nullable().optional(),
+  // #2050: the numeric diagnostics recorded with the refusal; optional so a pre-9a payload parses.
+  reason_details: z.record(z.string(), z.union([z.number(), z.boolean()])).optional(),
 });
 
 export const ToolComposerRecentFailureSchema = z.object({

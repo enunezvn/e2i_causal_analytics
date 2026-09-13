@@ -32,7 +32,7 @@ _EPISODE_COLUMNS = (
     "error_type, plan_source, entry_point, total_latency_ms, last_activity_at, "
     "tools_executed, tools_succeeded, is_synthetic"
 )
-_STEP_COLUMNS = "episode_id, step_number, tool_name, outcome_class, reason_code"
+_STEP_COLUMNS = "episode_id, step_number, tool_name, outcome_class, reason_code, reason_details"
 
 
 def _percentile(values: List[float], fraction: float) -> Optional[float]:
@@ -213,6 +213,33 @@ class ToolComposerObservabilityService:
         rows.sort(key=lambda r: (order.get(r["verdict"], 9), r["tool_name"]))
         return rows
 
+    @staticmethod
+    def _reason_details(step: Dict[str, Any]) -> Dict[str, Any]:
+        """The step's recorded details, re-checked on read; ``{}`` when absent or invalid (#2050).
+
+        ml/043's table only requires a JSON object: its RPC reducer is what keeps the details to
+        numbers and booleans, and a direct write bypasses it. So the rule that guards the write
+        guards the read too, and a payload that fails it is dropped whole, never shown in part.
+        """
+        # Function-local for the same import-weight reason as _tools.
+        from src.agents.tool_composer.reason_codes import validate_details
+
+        stored = step.get("reason_details")
+        if stored is None:
+            return {}
+        try:
+            return validate_details(stored)
+        except (TypeError, ValueError) as exc:
+            # validate_details' messages carry no values, so the reason is safe to log.
+            logger.warning(
+                "Dropped invalid reason_details on episode %s step %s (%s): %s",
+                step.get("episode_id"),
+                step.get("step_number"),
+                step.get("tool_name"),
+                exc,
+            )
+            return {}
+
     def _recent_failures(self, episodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # Function-local for the same import-weight reason as _tools.
         from src.agents.tool_composer.reason_codes import known_sentence
@@ -241,6 +268,7 @@ class ToolComposerObservabilityService:
                             "outcome_class": s.get("outcome_class"),
                             "reason_code": s.get("reason_code"),
                             "reason": known_sentence(s.get("reason_code")),
+                            "reason_details": self._reason_details(s),
                         }
                         for s in steps
                         if s.get("outcome_class") not in ("succeeded", "cache_hit")

@@ -110,10 +110,34 @@ describe('ToolComposerObservabilityResponseSchema', () => {
     });
   });
 
+  it('keeps a step class reason_details, numbers as numbers and booleans as booleans', () => {
+    const payload = PAYLOAD as unknown as { recent_failures: Record<string, unknown>[] };
+    const failure = payload.recent_failures[0] as { step_classes: Record<string, unknown>[] };
+    const details = { n_no_contrast: 3, n_non_finite: 0, share_kept: 0.25, is_scoped: true };
+    const withDetails = {
+      ...(PAYLOAD as unknown as Record<string, unknown>),
+      recent_failures: [
+        {
+          ...failure,
+          step_classes: [
+            { ...failure.step_classes[0], reason_details: details },
+            ...failure.step_classes.slice(1),
+          ],
+        },
+        ...payload.recent_failures.slice(1),
+      ],
+    };
+
+    const parsed = ToolComposerObservabilityResponseSchema.parse(withDetails);
+
+    expect(parsed.recent_failures[0].step_classes[0].reason_details).toStrictEqual(details);
+  });
+
   it('parses a payload with no refusal-reason fields at all (pre-ml/043 backend)', () => {
     const parsed = ToolComposerObservabilityResponseSchema.parse(PAYLOAD);
 
     expect(parsed.tools[0].most_common_refusal_reason).toBeUndefined();
     expect(parsed.recent_failures[0].step_classes[0].reason_code).toBeUndefined();
+    expect(parsed.recent_failures[0].step_classes[0].reason_details).toBeUndefined();
   });
 });

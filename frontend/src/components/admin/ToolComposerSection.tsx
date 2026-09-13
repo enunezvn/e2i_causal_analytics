@@ -73,6 +73,27 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
+// The numeric details recorded with a refusal, as "(key=value, …)": null when there are none.
+// Two refusals under one code share a sentence, so these are what tell them apart (#2050). Keys
+// are sorted so the same details always read the same way.
+function detailsSuffix(details: Record<string, number | boolean> | undefined): string | null {
+  const keys = Object.keys(details ?? {}).sort();
+  if (!details || keys.length === 0) {
+    return null;
+  }
+  const parts = keys.map((key) => {
+    const value = details[key];
+    const shown =
+      typeof value === 'boolean'
+        ? String(value)
+        : Number.isInteger(value)
+          ? fmtInt(value)
+          : String(value);
+    return `${key}=${shown}`;
+  });
+  return `(${parts.join(', ')})`;
+}
+
 function StepClasses({ failure }: { failure: ToolComposerRecentFailure }) {
   if (failure.step_classes.length === 0) {
     return <span className="text-[var(--color-muted-foreground)]">no step recorded</span>;
@@ -83,6 +104,7 @@ function StepClasses({ failure }: { failure: ToolComposerRecentFailure }) {
         // Prefer the catalogue sentence; a non-null code with a null sentence is a code this
         // build does not know, so show the bare code rather than inventing a sentence for it.
         const reason = step.reason ?? step.reason_code;
+        const details = detailsSuffix(step.reason_details);
         return (
           <span key={`${failure.composition_id}-${step.step_number ?? index}`}>
             {/* "; " not ", ": several catalogue sentences contain commas, so a comma join would
@@ -90,6 +112,7 @@ function StepClasses({ failure }: { failure: ToolComposerRecentFailure }) {
             {index > 0 && '; '}
             {step.tool_name ?? 'unknown'}: {(step.outcome_class ?? 'unknown').replace(/_/g, ' ')}
             {reason ? ` — ${reason}` : ''}
+            {details ? ` ${details}` : ''}
           </span>
         );
       })}

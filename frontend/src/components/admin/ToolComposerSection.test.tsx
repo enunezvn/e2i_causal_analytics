@@ -436,6 +436,107 @@ describe('ToolComposerSection', () => {
     );
   });
 
+  // #2050: the numeric details recorded with a refusal. The step-classes line is the failure's
+  // second paragraph; each step is one child span, the later ones led by the "; " join.
+  const stepTexts = (failure: HTMLElement) =>
+    Array.from(failure.querySelectorAll('p')[1].children).map((el) =>
+      (el.textContent ?? '').replace(/^; /, ''),
+    );
+
+  const withFirstFailureSteps = (steps: Record<string, unknown>[]) =>
+    payload.recent_failures.map((failure, index) =>
+      index === 0
+        ? {
+            ...failure,
+            step_classes: steps.map((step, stepIndex) => ({
+              ...failure.step_classes[stepIndex],
+              ...step,
+            })),
+          }
+        : failure,
+    );
+
+  it('keeps two refusals under one code distinguishable by their recorded details', () => {
+    // cate_analyzer's "no treatment contrast" and "no usable outcome" share one code and one
+    // sentence; only the details recorded with each refusal tell an operator which it was.
+    const sentence = 'fewer groups were present than the comparison requires';
+    const refusal = {
+      tool_name: 'cate_analyzer',
+      outcome_class: 'refused',
+      reason_code: 'insufficient_groups',
+      reason: sentence,
+    };
+    mockData({
+      ...payload,
+      recent_failures: withFirstFailureSteps([
+        {
+          ...refusal,
+          reason_details: { n_segments_named: 4, n_no_contrast: 3, n_non_finite: 0 },
+        },
+        {
+          ...refusal,
+          reason_details: { n_segments_named: 4, n_no_contrast: 0, n_non_finite: 3 },
+        },
+      ]),
+    });
+
+    render(<ToolComposerSection days={30} />);
+
+    const [first, second] = stepTexts(screen.getByTestId('recent-failure-comp_failed'));
+    expect(first).toBe(
+      `cate_analyzer: refused — ${sentence} (n_no_contrast=3, n_non_finite=0, n_segments_named=4)`,
+    );
+    expect(second).toBe(
+      `cate_analyzer: refused — ${sentence} (n_no_contrast=0, n_non_finite=3, n_segments_named=4)`,
+    );
+    expect(first).not.toBe(second);
+  });
+
+  it('formats details with sorted keys, grouped integers, plain decimals and true/false', () => {
+    mockData({
+      ...payload,
+      recent_failures: withFirstFailureSteps([
+        {
+          reason_code: 'coverage_gap',
+          reason: 'the data does not cover everything the question asked about',
+          reason_details: { share_kept: 0.25, n_rows: 12345, is_scoped: true, has_outcome: false },
+        },
+        {},
+      ]),
+    });
+
+    render(<ToolComposerSection days={30} />);
+
+    const [first] = stepTexts(screen.getByTestId('recent-failure-comp_failed'));
+    expect(first).toBe(
+      'gap_calculator: error — the data does not cover everything the question asked about' +
+        ' (has_outcome=false, is_scoped=true, n_rows=12,345, share_kept=0.25)',
+    );
+  });
+
+  it('leaves a step class unchanged when its details are an empty mapping', () => {
+    mockData({
+      ...payload,
+      recent_failures: withFirstFailureSteps([
+        {
+          reason_code: 'coverage_gap',
+          reason: 'the data does not cover everything the question asked about',
+          reason_details: {},
+        },
+        {},
+      ]),
+    });
+
+    render(<ToolComposerSection days={30} />);
+
+    const [first, second] = stepTexts(screen.getByTestId('recent-failure-comp_failed'));
+    expect(first).toBe(
+      'gap_calculator: error — the data does not cover everything the question asked about',
+    );
+    // The fixture's second step carries no details key at all (a pre-9a payload).
+    expect(second).toBe('cate_analyzer: dependency unmet');
+  });
+
   it('shows an empty state when nothing failed in the window', () => {
     mockData({ ...payload, recent_failures: [] });
 

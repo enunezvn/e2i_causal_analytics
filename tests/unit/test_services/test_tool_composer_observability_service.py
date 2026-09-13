@@ -471,6 +471,7 @@ def test_a_failed_step_class_carries_its_code_and_rendered_reason():
             "outcome_class": "refused",
             "reason_code": "coverage_gap",
             "reason": "the data does not cover everything the question asked about",
+            "reason_details": {},
         }
     ]
 
@@ -494,6 +495,116 @@ def test_a_step_with_an_unknown_code_keeps_the_code_and_invents_no_reason():
         {"tool_name": "gap_calculator", "outcome_class": "refused", "reason_code": "not_a_code"}
     )
     assert step["reason_code"] == "not_a_code" and step["reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# #2050: the numeric details recorded with a refusal reach the page
+# ---------------------------------------------------------------------------
+
+_LOGGER = "src.services.tool_composer_observability_service"
+
+
+def test_a_failed_step_class_carries_its_recorded_reason_details(caplog):
+    """ml/043 persists them; without them two diagnostics under one code read as one sentence."""
+    caplog.set_level("WARNING", logger=_LOGGER)
+    details = {"n_segments_named": 4, "n_no_contrast": 3, "n_non_finite": 0}
+
+    (step,) = _step_classes_for(
+        {
+            "tool_name": "cate_analyzer",
+            "outcome_class": "refused",
+            "reason_code": "insufficient_groups",
+            "reason_details": details,
+        }
+    )
+
+    assert step["reason_details"] == details
+    assert not [r for r in caplog.records if r.name == _LOGGER]
+
+
+@pytest.mark.parametrize(
+    "over",
+    [pytest.param({}, id="key-absent"), pytest.param({"reason_details": None}, id="null")],
+)
+def test_a_step_without_recorded_details_carries_an_empty_mapping(over, caplog):
+    caplog.set_level("WARNING", logger=_LOGGER)
+
+    (step,) = _step_classes_for({"tool_name": "gap_calculator", "outcome_class": "refused", **over})
+
+    assert step["reason_details"] == {}
+    assert not [r for r in caplog.records if r.name == _LOGGER]
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param({"n_segments_named": "Brand_Secret"}, id="string-value"),
+        pytest.param({"Treatment_Column": 3}, id="bad-key"),
+        pytest.param({f"n_key_{i}": i for i in range(9)}, id="more-than-8-keys"),
+        pytest.param({"n_no_contrast": 3, "n_brand": "Brand_Secret"}, id="one-bad-value"),
+        pytest.param({"n_rows": 2**53}, id="unsafe-integer"),
+        pytest.param(["n_no_contrast", 3], id="not-an-object"),
+        pytest.param("Brand_Secret", id="bare-string"),
+    ],
+)
+def test_an_invalid_stored_details_value_is_dropped_on_read_and_logged_without_values(
+    stored, caplog
+):
+    """The table only requires a JSON object; only the RPC reducer enforces numbers. A direct write
+    can store text, and text is what these details exist to keep off the page."""
+    caplog.set_level("WARNING", logger=_LOGGER)
+
+    (step,) = _step_classes_for(
+        {
+            "tool_name": "cate_analyzer",
+            "outcome_class": "refused",
+            "reason_code": "insufficient_groups",
+            "reason_details": stored,
+        }
+    )
+
+    assert step["reason_details"] == {}
+    warnings = [r for r in caplog.records if r.name == _LOGGER and r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "Brand_Secret" not in message and "Treatment_Column" not in message
+
+
+def test_two_refusals_under_one_code_stay_distinguishable_through_the_response_model():
+    """#2050: cate_analyzer's 'no treatment contrast' and 'no usable outcome' share one code and one
+    sentence; only the details tell them apart. The pair must survive the service and the response
+    model unchanged, booleans still booleans (bool is an int subclass, so == alone cannot tell)."""
+    from src.api.schemas.admin_tool_composer import ToolComposerObservability
+
+    failed = _episode(status="FAILED", outcome="failed")
+    no_contrast = {"n_segments_named": 4, "n_no_contrast": 3, "n_non_finite": 0, "is_scoped": True}
+    no_outcome = {"n_segments_named": 4, "n_no_contrast": 0, "n_non_finite": 3, "share_kept": 0.25}
+    steps = [
+        {"step_number": n, "tool_name": "cate_analyzer", "outcome_class": "refused",
+         "reason_code": "insufficient_groups", "reason_details": details}
+        for n, details in enumerate([no_contrast, no_outcome])
+    ]  # fmt: skip
+    rows = {
+        "composer_episodes": [failed],
+        "composition_steps": [{"episode_id": failed["episode_id"], **s} for s in steps],
+    }
+
+    out = _service(rows).overview(30)
+
+    (classes,) = [f["step_classes"] for f in out["recent_failures"]]
+    assert classes[0]["reason_code"] == classes[1]["reason_code"] == "insufficient_groups"
+    assert classes[0]["reason"] == classes[1]["reason"]
+    assert [s["reason_details"] for s in classes] == [no_contrast, no_outcome]
+
+    dumped = ToolComposerObservability.model_validate(out).model_dump(mode="json")
+
+    (dumped_classes,) = [f["step_classes"] for f in dumped["recent_failures"]]
+    assert dumped_classes == classes
+    assert dumped_classes[0]["reason_details"] != dumped_classes[1]["reason_details"]
+    first, second = (s["reason_details"] for s in dumped_classes)
+    assert type(first["is_scoped"]) is bool
+    assert type(first["n_no_contrast"]) is int and type(second["n_non_finite"]) is int
+    assert type(second["share_kept"]) is float
 
 
 def test_the_service_output_validates_against_the_response_model_unchanged():

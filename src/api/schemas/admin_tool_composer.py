@@ -6,9 +6,9 @@ is a separate, labelled field — the two are never merged, so a declared number
 as a measurement.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt
 
 
 class CompositionCounts(BaseModel):
@@ -99,6 +99,15 @@ class StepClass(BaseModel):
     reason: Optional[str] = Field(
         default=None,
         description="The catalogue sentence for a known code; null for an uncoded step or a code this build does not know",
+    )
+    # Strict members: a lax Union[bool, int, float] silently turns "3" into 3 and "true" into True,
+    # which would put a plausible number on the page where the database held text.
+    reason_details: Dict[str, Union[StrictBool, StrictInt, StrictFloat]] = Field(
+        default_factory=dict,
+        description=(
+            "Numeric diagnostics recorded with the refusal (#2050); keys follow the detail-key rule"
+            " (n_/is_/has_/share_ snake_case); empty when none were recorded"
+        ),
     )
 
 

@@ -18785,6 +18785,13 @@ export interface components {
              * @description The catalogue sentence for a known code; null for an uncoded step or a code this build does not know
              */
             reason?: string | null;
+            /**
+             * Reason Details
+             * @description Numeric diagnostics recorded with the refusal (#2050); keys follow the detail-key rule (n_/is_/has_/share_ snake_case); empty when none were recorded
+             */
+            reason_details?: {
+                [key: string]: boolean | number;
+            };
         };
         /**
          * StoppingDecision

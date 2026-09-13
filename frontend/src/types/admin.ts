@@ -210,6 +210,8 @@ export interface ToolComposerStepClass {
   // non-null code means a code this build does not know.
   reason_code?: string | null;
   reason?: string | null;
+  // #2050: the numeric diagnostics recorded with the refusal; empty or absent when none were.
+  reason_details?: Record<string, number | boolean>;
 }
 
 export interface ToolComposerRecentFailure {
