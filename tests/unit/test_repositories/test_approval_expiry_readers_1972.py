@@ -964,6 +964,11 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
             ExpertReviewRepository.get_pending_reviews,
             ExpertReviewRepository.get_expiring_reviews,
             ExpertReviewRepository.get_review_summary,
+            # get_reviews_for_dag raises too and was never listed here; the
+            # estimand-keyed readers (#1991 debt 3) join it.
+            ExpertReviewRepository.get_reviews_for_dag,
+            ExpertReviewRepository.get_reviews_for_estimand,
+            ExpertReviewRepository.get_versions,
         ):
             assert "Raises" in (fn.__doc__ or ""), fn.__name__
 

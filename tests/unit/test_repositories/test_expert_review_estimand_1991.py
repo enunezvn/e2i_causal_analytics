@@ -22,6 +22,7 @@ which is the thing these invariants are about.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
@@ -87,6 +88,19 @@ class _FakeQuery:
         self._limit = n
         return self._rec("limit", (n,))
 
+    def _matches(self, row: Dict[str, Any]) -> bool:
+        for kind, key, value in self._filters:
+            if kind == "or":
+                raise NotImplementedError(
+                    "this double does not evaluate PostgREST or= filters; the faithful "
+                    "one lives in test_approval_expiry_readers_1972.py"
+                )
+            if kind == "eq" and row.get(key) != value:
+                return False
+            if kind == "is" and row.get(key) is not None:
+                return False
+        return True
+
     async def execute(self) -> SimpleNamespace:
         if self._op in ("insert", "upsert"):
             pending = self._client._fail_insert.pop(self._table, None)
@@ -97,14 +111,16 @@ class _FakeQuery:
                 return SimpleNamespace(data=[{**self._payload, "review_id": "new-id"}])
             return SimpleNamespace(data=[self._payload])
         if self._op == "update":
+            # What was SENT (recorded even when it matches nothing) and what it
+            # CHANGED are different questions: an UPDATE answers with the rows it
+            # actually touched, so a filter that matches no seeded row returns no
+            # data -- which is exactly how a writer learns it changed nothing.
             self._client._updated.setdefault(self._table, []).append(self._payload)
-            return SimpleNamespace(data=[self._payload])
-        rows = [dict(r) for r in self._client._rows.get(self._table, [])]
-        for kind, key, value in self._filters:
-            if kind == "eq":
-                rows = [r for r in rows if r.get(key) == value]
-            elif kind == "is":
-                rows = [r for r in rows if r.get(key) is None]
+            matched = [r for r in self._client._rows.get(self._table, []) if self._matches(r)]
+            for row in matched:
+                row.update(self._payload)
+            return SimpleNamespace(data=[dict(r) for r in matched])
+        rows = [dict(r) for r in self._client._rows.get(self._table, []) if self._matches(r)]
         for column, desc in reversed(self._orders):  # last key first => stable
             rows.sort(key=lambda r: (r.get(column) is None, r.get(column) or ""), reverse=desc)
         return SimpleNamespace(data=rows[: self._limit] if self._limit else rows)
@@ -136,6 +152,10 @@ class _FakeClient:
     def calls(self, table: str) -> List[Tuple[str, Tuple[Any, ...]]]:
         return self._calls.get(table, [])
 
+    def rows(self, table: str) -> List[Dict[str, Any]]:
+        """The seeded rows AS THEY STAND -- an applied update is visible here."""
+        return self._rows.get(table, [])
+
 
 @pytest.fixture
 def fake_client() -> _FakeClient:
@@ -165,6 +185,10 @@ def test_estimand_key_matches_migration_140_expression():
     i_t = sql.index("lower(COALESCE(treatment_variable, ''))")
     i_o = sql.index("lower(COALESCE(outcome_variable, ''))")
     assert i_b < i_t < i_o and "GENERATED ALWAYS AS" in sql
+    # ... and the ':' separator between them, twice -- a key joined on anything
+    # else would look right operand for operand and still miss every row.
+    expression = sql[i_b : i_o + len("lower(COALESCE(outcome_variable, ''))")]
+    assert expression.count("|| ':' ||") == 2, expression
     assert estimand_key_for("Kisqali", "HCP_Engagement", "TRx") == "kisqali:hcp_engagement:trx"
 
 
@@ -258,6 +282,10 @@ async def test_get_reviews_for_estimand_newest_first(fake_client):
 
 @pytest.mark.unit
 async def test_append_version_inserts_then_updates_current_hash_and_snapshot(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h1"}],
+    )
     repo = ExpertReviewRepository(supabase_client=fake_client)
     ok = await repo.append_version(
         "r1",
@@ -297,6 +325,65 @@ async def test_append_version_returns_false_when_insert_fails(fake_client):
         is False
     )
     assert fake_client.updated("expert_reviews") == []  # no update when the append failed
+
+
+@pytest.mark.unit
+async def test_append_version_clears_the_snapshot_when_no_structure_is_given(fake_client):
+    """A hash with no structure to show CLEARS the review's snapshot -- deliberate.
+
+    ``dag_structure_json`` is what the review UI renders. Leaving the previous
+    structure in place under a NEW ``dag_version_hash`` would render a DAG the
+    review no longer covers: a plausible-wrong picture a reviewer cannot tell
+    from the real one. This is the opposite of ``update_dag_structure``, which
+    refuses an empty structure precisely because it is a BACKFILL of the hash
+    already on the row.
+    """
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "dag_structure_json": {"nodes": ["stale"], "edges": []},
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h3",
+        dag_structure=None,
+        adjustment_set_hash=None,
+        query_id=None,
+    )
+    assert ok is True
+    assert fake_client.updated("expert_reviews")[0]["dag_structure_json"] is None
+
+
+@pytest.mark.unit
+async def test_append_version_returns_false_when_review_is_not_pending(fake_client, caplog):
+    """A RESOLVED review is never advanced: the version row is appended (the
+    timeline is honest about the structure the run produced), but the review
+    keeps the hash it was resolved on, and False says so."""
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "approved", "dag_version_hash": "h1"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    with caplog.at_level(logging.WARNING):
+        ok = await repo.append_version(
+            "r1",
+            dag_version_hash="h2",
+            dag_structure=None,
+            adjustment_set_hash=None,
+            query_id=None,
+        )
+    assert ok is False
+    assert fake_client.inserted("expert_review_versions")[0]["dag_version_hash"] == "h2"
+    # the resolved row is untouched -- the pending-only filter matched nothing
+    assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h1"
+    assert any("no PENDING review" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.unit

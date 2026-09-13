@@ -120,11 +120,20 @@ def _apply_expiring_window(query: Any, days: int, today: Optional[date] = None) 
 def estimand_key_for(brand: Optional[str], treatment: Optional[str], outcome: Optional[str]) -> str:
     """Review identity (migration 140): ``lower(brand):treatment:outcome``, null-safe.
 
-    Mirrors the STORED GENERATED column's expression semantics operand for
+    Mirrors the STORED GENERATED column defined in
+    ``database/migrations/140_expert_reviews_estimand_key.sql`` operand for
     operand (``lower()`` over each field, ``COALESCE`` to ``''``, joined by
-    ``':'``), so a Python lookup lands on the same row PostgREST derived. Used
-    ONLY for lookups: the column is generated, so writers never send it -- an
-    insert that supplied it would be rejected outright.
+    ``':'``), so a Python lookup lands on the same row PostgREST derived --
+    change one and change the other. Used ONLY for lookups: the column is
+    generated, so writers never send it -- an insert that supplied it would be
+    rejected outright.
+
+    ASCII assumption: Postgres ``lower()`` folds case under the database
+    collation while Python ``str.lower()`` follows Unicode, so the two can
+    disagree on non-ASCII text (a Turkish dotless I, say). Brands and variable
+    names are ASCII identifiers today, which is the only case
+    test_estimand_key_matches_migration_140_expression pins; a non-ASCII brand
+    would need that equivalence re-measured against the live collation.
 
     A DAG hash is deliberately absent. The hash is the structure VERSION a
     review currently covers (expert_review_versions, migration 141), not the
@@ -813,7 +822,13 @@ class ExpertReviewRepository(BaseRepository):
 
         The review update touches ``dag_version_hash`` and ``dag_structure_json``
         only -- ``expert_reviews`` has no ``adjustment_set_hash`` column; that
-        hash lives on the version row.
+        hash lives on the version row. A ``dag_structure`` of None CLEARS the
+        review's snapshot, deliberately: the snapshot is what the review UI
+        renders, and leaving the previous structure under a NEW hash would show
+        a DAG the review no longer covers. (``update_dag_structure`` refuses an
+        empty structure for the opposite reason -- it BACKFILLS the structure of
+        the hash already on the row, so there a None would erase and replace
+        nothing.)
 
         Returns:
             True only when BOTH the append and the review's advance succeeded.
@@ -990,10 +1005,11 @@ class ExpertReviewRepository(BaseRepository):
             Summary dict with counts by status. ``pending`` / ``approved`` /
             ``rejected`` / ``superseded`` / ``expired`` partition the rows;
             ``superseded`` is a STORED status (migration 140): a review that can
-            no longer change an outcome -- the BLOCK-band pending rows that
-            migration resolved, and any review replaced by a newer one of the
-            same estimand. It is a resolution, never a queue item, so it is
-            counted apart from ``pending``. ``expiring_soon`` is
+            no longer change an outcome -- written today only by migration 140's
+            BLOCK-band resolution; a review re-opened on a new hash stays
+            ``approved`` (spec §7) and is linked from its successor's
+            ``supersedes_review_id``, not by this status. It is a resolution,
+            never a queue item, so it is counted apart from ``pending``. ``expiring_soon`` is
             a SUBSET of ``approved`` (within 14 days). ``expired`` is derived
             from ``valid_until`` via ``approval_validity`` -- the same predicate
             the gate's queries use -- and a NULL ``valid_until`` is a permanent
