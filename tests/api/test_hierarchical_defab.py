@@ -21,7 +21,7 @@ import types
 
 import pytest
 
-from src.api.routes import causal as causal_module
+from src.api.routes.causal import hierarchical as hierarchical_module
 
 pytestmark = pytest.mark.integration
 
@@ -34,7 +34,7 @@ pytestmark = pytest.mark.integration
 class TestNoNpRandomInHierarchicalSource:
     def test_execute_hierarchical_has_no_np_random(self):
         """_execute_hierarchical_analysis must not fabricate input via np.random."""
-        source = inspect.getsource(causal_module._execute_hierarchical_analysis)
+        source = inspect.getsource(hierarchical_module._execute_hierarchical_analysis)
         assert "np.random" not in source, (
             "C1 regression: np.random fabrication reintroduced in _execute_hierarchical_analysis"
         )
@@ -44,7 +44,7 @@ class TestNoNpRandomInHierarchicalSource:
 
     def test_run_hierarchical_endpoint_exposes_demo_mode(self):
         """The handler must expose a demo_mode gate (sibling-endpoint idiom)."""
-        sig = inspect.signature(causal_module.run_hierarchical_analysis)
+        sig = inspect.signature(hierarchical_module.run_hierarchical_analysis)
         assert "demo_mode" in sig.parameters, (
             "C1 regression: run_hierarchical_analysis must expose a demo_mode gate"
         )
@@ -246,7 +246,7 @@ class TestNestedCIUsesTrueSE_H6:
 
     def test_api_handler_builds_ate_std_from_cate_se(self):
         """Source pin: _execute_hierarchical_analysis must prefer seg.cate_se."""
-        source = inspect.getsource(causal_module._execute_hierarchical_analysis)
+        source = inspect.getsource(hierarchical_module._execute_hierarchical_analysis)
         # The corrected bridge must reference cate_se as the SE source.
         assert "seg.cate_se" in source, (
             "H6 regression: API hierarchical handler must feed the true SE "

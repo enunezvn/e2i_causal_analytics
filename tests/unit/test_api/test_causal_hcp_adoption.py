@@ -11,7 +11,10 @@ import pytest
 
 @pytest.mark.unit
 def test_hcp_adoption_spec_registered():
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _CAUSAL_NUMERIC_COLUMNS
+    from src.api.routes.causal.datasets import (
+        _CAUSAL_DATASET_SPECS,
+        _CAUSAL_NUMERIC_COLUMNS,
+    )
 
     assert "hcp_adoption" in _CAUSAL_DATASET_SPECS
     spec = _CAUSAL_DATASET_SPECS["hcp_adoption"]
@@ -28,7 +31,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import discovery as causal_discovery
+from src.api.routes.causal import loaders as causal_loaders
 
 
 def _fake_join_rows():
@@ -57,11 +61,11 @@ async def test_hcp_join_frame_builds_treatment_outcome_and_centrality_z():
         return profiles
 
     with (
-        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
-        patch.object(causal_routes, "_te_paged_select", side_effect=fake_paged),
-        patch.object(causal_routes, "_load_hcp_profile_centrality", side_effect=fake_profiles),
+        patch.object(causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_loaders, "_te_paged_select", side_effect=fake_paged),
+        patch.object(causal_loaders, "_load_hcp_profile_centrality", side_effect=fake_profiles),
     ):
-        df, select_cols = await causal_routes._load_agent_estimation_frame(
+        df, select_cols = await causal_loaders._load_agent_estimation_frame(
             dataset="hcp_adoption",
             treatment_var="treatment_arm",
             outcome_var="adopted",
@@ -90,11 +94,11 @@ async def test_hcp_join_empty_backdoor_question_loads_just_treatment_outcome():
         return profiles
 
     with (
-        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
-        patch.object(causal_routes, "_te_paged_select", side_effect=fake_paged),
-        patch.object(causal_routes, "_load_hcp_profile_centrality", side_effect=fake_profiles),
+        patch.object(causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_loaders, "_te_paged_select", side_effect=fake_paged),
+        patch.object(causal_loaders, "_load_hcp_profile_centrality", side_effect=fake_profiles),
     ):
-        df, select_cols = await causal_routes._load_agent_estimation_frame(
+        df, select_cols = await causal_loaders._load_agent_estimation_frame(
             dataset="hcp_adoption",
             treatment_var="peer_influence_score",
             outcome_var="adopted",
@@ -109,9 +113,11 @@ async def test_hcp_join_empty_backdoor_question_loads_just_treatment_outcome():
 @pytest.mark.asyncio
 async def test_hcp_join_rejects_disallowed_column():
     """The allowlist gate still applies on the JOIN path — an off-allowlist column 400s."""
-    with patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())):
+    with patch.object(
+        causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())
+    ):
         with pytest.raises(HTTPException) as ei:
-            await causal_routes._load_agent_estimation_frame(
+            await causal_loaders._load_agent_estimation_frame(
                 dataset="hcp_adoption",
                 treatment_var="treatment_arm",
                 outcome_var="adopted",
@@ -146,9 +152,9 @@ async def test_hcp_dataset_enumerates_only_hcp_questions():
             "confounders": ["disease_severity", "academic_hcp", "geographic_region"],
         },
     ]
-    with patch.object(causal_routes, "_get_causal_path_repo") as mk:
+    with patch.object(causal_discovery, "_get_causal_path_repo") as mk:
         mk.return_value.get_distinct_questions = AsyncMock(return_value=ssot)
-        qs = await causal_routes._discover_candidate_questions("hcp_adoption", brand="Kisqali")
+        qs = await causal_discovery._discover_candidate_questions("hcp_adoption", brand="Kisqali")
     outcomes = {q.outcome for q in qs}
     assert outcomes == {"adopted"}
     treatments = {q.treatment for q in qs}
@@ -178,9 +184,9 @@ async def test_patient_dataset_still_excludes_hcp_questions():
             "confounders": [],
         },
     ]
-    with patch.object(causal_routes, "_get_causal_path_repo") as mk:
+    with patch.object(causal_discovery, "_get_causal_path_repo") as mk:
         mk.return_value.get_distinct_questions = AsyncMock(return_value=ssot)
-        qs = await causal_routes._discover_candidate_questions("patient_journeys", brand=None)
+        qs = await causal_discovery._discover_candidate_questions("patient_journeys", brand=None)
     assert {q.outcome for q in qs} == {"treatment_initiated"}
     assert all(q.treatment != "peer_influence_score" for q in qs)
 
@@ -200,7 +206,7 @@ async def test_list_causal_variables_hcp_adoption_returns_curated_spec_no_db():
     RED before the JOIN short-circuit is added to list_causal_variables.
     """
     from src.api.dependencies.auth import TEST_USER
-    from src.api.routes.causal import list_causal_variables
+    from src.api.routes.causal.catalog import list_causal_variables
 
     # A client whose .table() raises immediately — any call == test failure.
     class _NeverCallClient:
@@ -245,7 +251,7 @@ async def test_get_causal_estimation_data_hcp_adoption_returns_400_not_500():
     RED before the JOIN guard is added to get_causal_estimation_data.
     """
     from src.api.dependencies.auth import TEST_USER
-    from src.api.routes.causal import get_causal_estimation_data
+    from src.api.routes.causal.catalog import get_causal_estimation_data
 
     # A client whose .table() raises to simulate the production 500 path.
     class _NeverCallClient:
@@ -296,7 +302,7 @@ async def test_list_causal_variables_patient_journeys_includes_labels():
     handler is updated to populate it from _COLUMN_LABELS.
     """
     from src.api.dependencies.auth import TEST_USER
-    from src.api.routes.causal import list_causal_variables
+    from src.api.routes.causal.catalog import list_causal_variables
 
     # Fake probe row: every patient_journeys candidate column is "present".
     _pj_cols = [

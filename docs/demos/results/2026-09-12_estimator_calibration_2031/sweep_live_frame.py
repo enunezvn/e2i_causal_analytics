@@ -36,7 +36,9 @@ def fit(df, t, o, covs, leaf, seed):
     return ate, lo, hi, float(np.squeeze(inf.stderr_mean))
 
 async def main():
-    from src.api.routes.causal import _DISCOVERY_ROW_CAP, _load_agent_estimation_frame, _resolve_discovery_scope
+    from src.api.routes.causal.datasets import _DISCOVERY_ROW_CAP
+    from src.api.routes.causal.discovery import _resolve_discovery_scope
+    from src.api.routes.causal.loaders import _load_agent_estimation_frame
     _, questions = await _resolve_discovery_scope(DATASET, BRAND)
     print(f"questions={len(questions)} leaves={LEAVES} seeds={SEEDS} cap={_DISCOVERY_ROW_CAP}", flush=True)
     rows_path = out / "rows_live.jsonl"; t0 = time.time(); k = 0

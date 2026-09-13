@@ -270,7 +270,7 @@ class TestStoreOutageIsHonest:
     an empty queue or zero counts, and never a raw 500. The app's catch-all
     classifies by message keyword ("connection"/"unavailable" -> 503, else
     500), which is not a contract -- so the route maps it itself, mirroring
-    routes/causal.py ("Causal data store unavailable", 503) and
+    routes/causal/catalog.py ("Causal data store unavailable", 503) and
     routes/digital_twin.py (503 + Retry-After)."""
 
     @pytest.fixture

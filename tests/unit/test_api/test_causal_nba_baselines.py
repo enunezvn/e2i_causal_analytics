@@ -13,7 +13,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import catalog as causal_catalog
+from src.api.routes.causal import loaders as causal_loaders
 
 
 def _fake_trigger_rows():
@@ -70,14 +71,14 @@ def _fake_patient_baseline_rows():
 
 def _patched_reads():
     return (
-        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())),
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_trigger_question_rows",
             AsyncMock(return_value=_fake_trigger_rows()),
         ),
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_patient_baseline_rows",
             AsyncMock(return_value=_fake_patient_baseline_rows()),
         ),
@@ -88,7 +89,7 @@ def _patched_reads():
 async def test_nba_baseline_join_builds_baseline_columns():
     p1, p2, p3 = _patched_reads()
     with p1, p2, p3:
-        df, select_cols = await causal_routes._load_agent_estimation_frame(
+        df, select_cols = await causal_loaders._load_agent_estimation_frame(
             dataset="nba_triggers",
             treatment_var="control_group_flag",
             outcome_var="action_taken",
@@ -132,13 +133,13 @@ async def test_nba_baseline_join_drops_rows_missing_baseline():
     with (
         p1,
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_trigger_question_rows",
             AsyncMock(return_value=_fake_trigger_rows()),
         ),
-        patch.object(causal_routes, "_load_patient_baseline_rows", AsyncMock(return_value=rows)),
+        patch.object(causal_loaders, "_load_patient_baseline_rows", AsyncMock(return_value=rows)),
     ):
-        df, _ = await causal_routes._load_agent_estimation_frame(
+        df, _ = await causal_loaders._load_agent_estimation_frame(
             dataset="nba_triggers",
             treatment_var="control_group_flag",
             outcome_var="action_taken",
@@ -190,8 +191,8 @@ async def test_nba_without_baselines_keeps_single_table_path():
     original = factories.get_async_supabase_client
     factories.get_async_supabase_client = _fake_factory
     try:
-        with patch.object(causal_routes, "_load_patient_baseline_rows", join_spy):
-            df, select_cols = await causal_routes._load_agent_estimation_frame(
+        with patch.object(causal_loaders, "_load_patient_baseline_rows", join_spy):
+            df, select_cols = await causal_loaders._load_agent_estimation_frame(
                 dataset="nba_triggers",
                 treatment_var="control_group_flag",
                 outcome_var="action_taken",
@@ -211,7 +212,7 @@ async def test_nba_baseline_join_rejects_disallowed_baseline():
     """Post-treatment columns can never ride in via the baseline channel."""
     p1, p2, p3 = _patched_reads()
     with p1, p2, p3, pytest.raises(HTTPException) as exc:
-        await causal_routes._load_agent_estimation_frame(
+        await causal_loaders._load_agent_estimation_frame(
             dataset="nba_triggers",
             treatment_var="control_group_flag",
             outcome_var="action_taken",
@@ -228,18 +229,18 @@ def test_resolve_baselines_unsupported_dataset_fails_400():
     """adjust_baselines=True on a dataset with no curated baseline role must be
     an honest 400, not a silent no-op."""
     with pytest.raises(HTTPException) as exc:
-        causal_routes._resolve_requested_baselines("patient_journeys", True)
+        causal_loaders._resolve_requested_baselines("patient_journeys", True)
     assert exc.value.status_code == 400
 
 
 @pytest.mark.unit
 def test_resolve_baselines_default_off_is_empty():
-    assert causal_routes._resolve_requested_baselines("nba_triggers", False) == []
+    assert causal_loaders._resolve_requested_baselines("nba_triggers", False) == []
 
 
 @pytest.mark.unit
 def test_resolve_baselines_on_returns_curated_set():
-    resolved = causal_routes._resolve_requested_baselines("nba_triggers", True)
+    resolved = causal_loaders._resolve_requested_baselines("nba_triggers", True)
     assert "disease_severity" in resolved
     assert "age_at_diagnosis" in resolved
 
@@ -281,7 +282,7 @@ async def test_list_causal_variables_nba_includes_baseline_candidates():
     original = factories.get_async_supabase_client
     factories.get_async_supabase_client = _fake_factory
     try:
-        resp = await causal_routes.list_causal_variables(dataset="nba_triggers", user=TEST_USER)
+        resp = await causal_catalog.list_causal_variables(dataset="nba_triggers", user=TEST_USER)
     finally:
         factories.get_async_supabase_client = original
 
@@ -330,7 +331,7 @@ async def test_trigger_question_rows_paged_beyond_single_limit():
         def table(self, _name):
             return _FakeQuery()
 
-    rows = await causal_routes._load_trigger_question_rows(
+    rows = await causal_loaders._load_trigger_question_rows(
         _FakeClient(), ["control_group_flag", "action_taken"], None
     )
     # First page full -> second page requested; second page short -> stop.
@@ -375,7 +376,7 @@ async def test_patient_baseline_rows_page_past_te_cap():
         def table(self, _name):
             return _FakeQuery()
 
-    rows = await causal_routes._load_patient_baseline_rows(_FakeClient(), ["disease_severity"])
+    rows = await causal_loaders._load_patient_baseline_rows(_FakeClient(), ["disease_severity"])
     page = calls[0][1] - calls[0][0] + 1
     assert len(rows) == 25 * page + 18, (
         f"paged read stopped early: {len(rows)} rows over {len(calls)} pages"

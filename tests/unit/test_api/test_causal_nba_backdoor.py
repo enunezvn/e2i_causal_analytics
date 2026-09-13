@@ -16,7 +16,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import agent as causal_agent
+from src.api.routes.causal import catalog as causal_catalog
+from src.api.routes.causal import loaders as causal_loaders
 from src.api.schemas.causal import AgentCausalAnalysisRequest
 
 
@@ -56,14 +58,14 @@ def _fake_patient_rows():
 
 def _patched_reads(patient_rows=None):
     return (
-        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())),
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_trigger_question_rows",
             AsyncMock(return_value=_fake_trigger_rows()),
         ),
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_patient_baseline_rows",
             AsyncMock(
                 return_value=patient_rows if patient_rows is not None else _fake_patient_rows()
@@ -83,7 +85,7 @@ async def test_covariates_route_through_patient_join():
     surface both confounders as real frame columns."""
     p1, p2, p3 = _patched_reads()
     with p1, p2, p3:
-        df, select_cols = await causal_routes._load_agent_estimation_frame(
+        df, select_cols = await causal_loaders._load_agent_estimation_frame(
             dataset="nba_triggers",
             treatment_var="acceptance_status",
             outcome_var="conversion_flag",
@@ -112,7 +114,7 @@ async def test_join_drops_rows_missing_covariate_value():
     rows[1] = {**rows[1], "engagement_score": None}
     p1, p2, p3 = _patched_reads(patient_rows=rows)
     with p1, p2, p3:
-        df, _ = await causal_routes._load_agent_estimation_frame(
+        df, _ = await causal_loaders._load_agent_estimation_frame(
             dataset="nba_triggers",
             treatment_var="acceptance_status",
             outcome_var="conversion_flag",
@@ -130,7 +132,7 @@ async def test_join_rejects_disallowed_covariate():
     """Only the curated backdoor pair may ride in through the covariate channel."""
     p1, p2, p3 = _patched_reads()
     with p1, p2, p3, pytest.raises(HTTPException) as exc:
-        await causal_routes._load_agent_estimation_frame(
+        await causal_loaders._load_agent_estimation_frame(
             dataset="nba_triggers",
             treatment_var="acceptance_status",
             outcome_var="conversion_flag",
@@ -148,7 +150,7 @@ async def test_covariates_and_baselines_dedupe_in_join():
     rows = [{**r, "age_at_diagnosis": 50.0} for r in _fake_patient_rows()]
     p1, p2, p3 = _patched_reads(patient_rows=rows)
     with p1, p2, p3:
-        df, select_cols = await causal_routes._load_agent_estimation_frame(
+        df, select_cols = await causal_loaders._load_agent_estimation_frame(
             dataset="nba_triggers",
             treatment_var="acceptance_status",
             outcome_var="conversion_flag",
@@ -204,11 +206,11 @@ async def test_acceptance_edge_defaults_to_ssot_backdoor():
     )
     bg = _BG()
     with (
-        patch.object(causal_routes, "_load_agent_estimation_frame", loader),
-        patch.object(causal_routes, "_run_agent_analysis_task", _fake_task),
-        patch.object(causal_routes._agent_analysis_store, "set", AsyncMock()),
+        patch.object(causal_agent, "_load_agent_estimation_frame", loader),
+        patch.object(causal_agent, "_run_agent_analysis_task", _fake_task),
+        patch.object(causal_agent._agent_analysis_store, "set", AsyncMock()),
     ):
-        await causal_routes.run_causal_agent_analysis(req, bg, user={"sub": "t"})
+        await causal_agent.run_causal_agent_analysis(req, bg, user={"sub": "t"})
         for fn, args in bg.scheduled:
             await fn(*args)
 
@@ -229,11 +231,11 @@ async def test_randomized_treatment_default_stays_unadjusted():
         limit=1500,
     )
     with (
-        patch.object(causal_routes, "_load_agent_estimation_frame", loader),
-        patch.object(causal_routes, "_run_agent_analysis_task", AsyncMock()),
-        patch.object(causal_routes._agent_analysis_store, "set", AsyncMock()),
+        patch.object(causal_agent, "_load_agent_estimation_frame", loader),
+        patch.object(causal_agent, "_run_agent_analysis_task", AsyncMock()),
+        patch.object(causal_agent._agent_analysis_store, "set", AsyncMock()),
     ):
-        await causal_routes.run_causal_agent_analysis(req, _BG(), user={"sub": "t"})
+        await causal_agent.run_causal_agent_analysis(req, _BG(), user={"sub": "t"})
 
     assert loader.await_args.kwargs["covariates"] == []
 
@@ -271,11 +273,11 @@ async def test_role_split_covariate_wins_over_baseline():
     )
     bg = _BG()
     with (
-        patch.object(causal_routes, "_load_agent_estimation_frame", loader),
-        patch.object(causal_routes, "_run_agent_analysis_task", _fake_task),
-        patch.object(causal_routes._agent_analysis_store, "set", AsyncMock()),
+        patch.object(causal_agent, "_load_agent_estimation_frame", loader),
+        patch.object(causal_agent, "_run_agent_analysis_task", _fake_task),
+        patch.object(causal_agent._agent_analysis_store, "set", AsyncMock()),
     ):
-        await causal_routes.run_causal_agent_analysis(req, bg, user={"sub": "t"})
+        await causal_agent.run_causal_agent_analysis(req, bg, user={"sub": "t"})
         for fn, args in bg.scheduled:
             await fn(*args)
 
@@ -298,7 +300,7 @@ async def test_estimation_data_rejects_patient_joined_covariates():
     confounders are not triggers columns — an honest 400 pointing at the
     join-aware agent path, never a raw PostgREST 42703 500."""
     with pytest.raises(HTTPException) as exc:
-        await causal_routes.get_causal_estimation_data(
+        await causal_catalog.get_causal_estimation_data(
             treatment_var="acceptance_status",
             outcome_var="conversion_flag",
             dataset="nba_triggers",
@@ -334,8 +336,8 @@ async def test_propose_questions_screens_rct_unadjusted():
         )
 
     loader = AsyncMock(side_effect=_fake_loader)
-    with patch.object(causal_routes, "_load_agent_estimation_frame", loader):
-        resp = await causal_routes.propose_causal_questions(
+    with patch.object(causal_catalog, "_load_agent_estimation_frame", loader):
+        resp = await causal_catalog.propose_causal_questions(
             dataset="nba_triggers", user={"sub": "t"}
         )
 
@@ -359,7 +361,7 @@ async def test_propose_questions_screens_rct_unadjusted():
 @pytest.mark.asyncio
 async def test_estimation_data_rejects_joined_column_in_question_slot():
     with pytest.raises(HTTPException) as exc:
-        await causal_routes.get_causal_estimation_data(
+        await causal_catalog.get_causal_estimation_data(
             treatment_var="disease_severity",
             outcome_var="conversion_flag",
             dataset="nba_triggers",
@@ -376,7 +378,7 @@ async def test_single_table_loader_rejects_joined_column_in_question_slot():
     """covariates=[] routes to the default single-table path — a joined column
     riding a question slot must 400 there too, never reach triggers.select."""
     with pytest.raises(HTTPException) as exc:
-        await causal_routes._load_agent_estimation_frame(
+        await causal_loaders._load_agent_estimation_frame(
             dataset="nba_triggers",
             treatment_var="disease_severity",
             outcome_var="conversion_flag",

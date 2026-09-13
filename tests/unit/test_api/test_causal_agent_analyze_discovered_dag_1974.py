@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 import pytest
 
-from src.api.routes.causal import _agent_state_to_response
+from src.api.routes.causal.agent import _agent_state_to_response
 from src.api.schemas.causal import AgentCausalAnalysisRequest
 
 PERSIST_WARNING = (

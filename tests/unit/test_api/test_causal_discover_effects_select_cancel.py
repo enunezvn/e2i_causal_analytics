@@ -26,7 +26,8 @@ import pandas as pd
 import pytest
 
 from src.api.dependencies.durable_job_store import DurableJobStore
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import agent as causal_agent
+from src.api.routes.causal import discovery as causal_routes
 from src.api.schemas.causal import (
     AgentCausalAnalysisResponse,
     CausalDAGModel,
@@ -65,7 +66,11 @@ def _wire_client():
     from src.api.dependencies.auth import require_analyst, require_viewer
 
     app = FastAPI()
-    app.include_router(causal_routes.router)
+    # The /causal prefix lives on the package aggregator, not on the
+    # per-concern sub-router (#1991 debt 4).
+    from src.api.routes.causal import router as causal_package_router
+
+    app.include_router(causal_package_router)
     app.dependency_overrides[require_viewer] = lambda: {"role": "viewer"}
     app.dependency_overrides[require_analyst] = lambda: {"role": "analyst"}
     return TestClient(app)
@@ -343,7 +348,9 @@ def task_env(monkeypatch):
         redis_factory=store._redis_factory,
     )
     monkeypatch.setattr(causal_routes, "_discover_effects_store", store)
-    monkeypatch.setattr(causal_routes, "_agent_analysis_store", agent_store)
+    # One binding: discovery reads the store through ``agent``'s namespace, so
+    # patching the agent global reaches the discovery reader too.
+    monkeypatch.setattr(causal_agent, "_agent_analysis_store", agent_store)
 
     async def identity_prerank(dataset, questions):
         return list(questions)
@@ -367,7 +374,7 @@ def task_env(monkeypatch):
         )
 
     monkeypatch.setattr(causal_routes, "_load_agent_estimation_frame", fake_load)
-    monkeypatch.setattr(causal_routes, "_run_agent_analysis_task", fake_agent)
+    monkeypatch.setattr(causal_agent, "_run_agent_analysis_task", fake_agent)
     return {"store": store, "calls": calls, "hooks": hooks}
 
 
