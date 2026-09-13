@@ -29,7 +29,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -243,7 +243,11 @@ class InterventionConfigRequest(BaseModel):
     )
     personalization_level: str = Field(default="standard", description="none, standard, high")
     target_segment: Optional[str] = Field(None, description="Target segment identifier")
-    target_deciles: List[int] = Field(default=[1, 2, 3], description="Target deciles (1-10)")
+    # Bounded here, not only on the domain InterventionConfig: an out-of-range decile used to pass
+    # request validation and fail inside /simulate's try, which returned pydantic's text (#2020).
+    target_deciles: List[Annotated[int, Field(ge=1, le=10)]] = Field(
+        default=[1, 2, 3], description="Target deciles (1-10)"
+    )
     target_specialties: List[str] = Field(default=[], description="Target specialty list")
     target_regions: List[str] = Field(default=[], description="Target region list")
     intensity_multiplier: float = Field(
@@ -1047,7 +1051,16 @@ async def run_simulation(
         # swallowed into a 500.
         raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # The handler copies a 400's detail verbatim into the client's message, and no ValueError
+        # here is authored by this route: pydantic, enum and UUID text goes to the log (#2020).
+        logger.warning("Simulation request rejected: %s", e)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The simulation request could not be processed. Check the intervention "
+                "parameters and try again."
+            ),
+        )
     except Exception as e:
         logger.error(f"Simulation failed: {e}")
         raise HTTPException(status_code=500, detail="Simulation failed")
@@ -1401,7 +1414,15 @@ async def compare_scenarios(
         # Reject fast under load (mapped to 503 + Retry-After by the app handler).
         raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # Same rule as /simulate: e.g. ``Brand(scenario.brand)`` says "'X' is not a valid Brand".
+        logger.warning("Scenario comparison request rejected: %s", e)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The scenario comparison request could not be processed. Check the scenario "
+                "parameters and try again."
+            ),
+        )
     except Exception as e:
         logger.error(f"Scenario comparison failed: {e}")
         raise HTTPException(status_code=500, detail="Scenario comparison failed")

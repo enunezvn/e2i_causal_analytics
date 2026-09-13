@@ -282,6 +282,40 @@ class TestSimulateInterventionFailsClosed:
         # The fabricator is deleted.
         assert not hasattr(tool_module, "_create_mock_result")
 
+    def test_a_failure_returns_no_exception_text_and_logs_it(
+        self, monkeypatch, tool_module, caplog
+    ):
+        """#2020 E1: the node copies both fields into the experiment_designer warnings, and the
+        orchestrator stringifies that agent's whole output into the answer."""
+        import logging
+
+        raw = (
+            "Input X contains NaN. For further information visit "
+            "https://errors.pydantic.dev/2.12/v/value_error"
+        )
+
+        def _raise(*args, **kwargs):
+            raise ValueError(raw)
+
+        monkeypatch.setattr(tool_module, "_get_or_create_twins", _raise)
+        with caplog.at_level(logging.ERROR):
+            out = tool_module.simulate_intervention.invoke(
+                {"intervention_type": "email_campaign", "brand": "Kisqali"}
+            )
+
+        assert (
+            out["recommendation_rationale"]
+            == "Simulation failed. Please check inputs and try again."
+        )
+        assert out["fidelity_warning_reason"] == "the twin simulation could not be completed"
+        for leak in ("NaN", "pydantic.dev"):
+            assert leak not in str(out), f"{leak!r} reached the tool output"
+        # Every other field of the error result is unchanged.
+        assert out["recommendation"] == "refine"
+        assert out["simulated_ate"] == 0.0
+        assert out["fidelity_warning"] is True
+        assert raw in caplog.text
+
 
 @pytest.mark.xdist_group(name="experiment_designer_tools")
 class TestDigitalTwinWorkflow:
