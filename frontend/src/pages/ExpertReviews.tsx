@@ -29,6 +29,7 @@
  */
 
 import { Fragment, useRef, useState } from 'react';
+import type { MutableRefObject } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ClipboardCheck, Inbox, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -42,8 +43,53 @@ import { LinkedReviewCard } from '@/components/expert-review/LinkedReviewCard';
 import { PrepareAssessmentsButton } from '@/components/expert-review/PrepareAssessmentsButton';
 import { ResolveForm } from '@/components/expert-review/ResolveForm';
 import { shortHash } from '@/components/expert-review/checklist';
-import { usePendingReviews, useReviewSummary } from '@/hooks/api/use-expert-review';
+import { useExpertReview, usePendingReviews, useReviewSummary } from '@/hooks/api/use-expert-review';
 import { useE2IFilters } from '@/hooks/use-e2i-filters';
+import type { PendingReviewItem } from '@/types/expert-review';
+
+/** Dates render as the calendar day, matching the linked-review card. */
+function fmtDay(value?: string | null): string | null {
+  return value ? value.slice(0, 10) : null;
+}
+
+/**
+ * The day the estimand last changed, or null when there is nothing extra to
+ * say: a review with no recorded change, or one whose last change is its own
+ * creation (the first version).
+ */
+function lastChangedDay(review: PendingReviewItem): string | null {
+  const changed = fmtDay(review.last_changed_at);
+  return changed && changed !== fmtDay(review.created_at) ? changed : null;
+}
+
+/**
+ * The expanded queue row. The pending item carries the review's own snapshot,
+ * but the VERSION TIMELINE (migration 141) lives only on the detail route, so
+ * the row fetches it here. Extracted into its own component so the hook is
+ * never called conditionally — the row mounts only while it is open.
+ */
+function ExpandedReviewRow({
+  review,
+  onClose,
+  autoAssessGuard,
+}: {
+  review: PendingReviewItem;
+  onClose: () => void;
+  autoAssessGuard: MutableRefObject<Set<string>>;
+}) {
+  const detail = useExpertReview(review.review_id);
+
+  return (
+    <TableRow>
+      <TableCell colSpan={8}>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <DagPanel structure={review.dag_structure_json} versions={detail.data?.versions} />
+          <ResolveForm review={review} onClose={onClose} autoAssessGuard={autoAssessGuard} />
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
 
 export default function ExpertReviews() {
   const [searchParams] = useSearchParams();
@@ -96,6 +142,9 @@ export default function ExpertReviews() {
           <Badge variant="secondary">Pending: {summary.data.pending}</Badge>
           <Badge variant="secondary">Approved: {summary.data.approved}</Badge>
           <Badge variant="secondary">Rejected: {summary.data.rejected}</Badge>
+          <Badge variant="secondary" title="BLOCK-band reviews resolved by migration 140">
+            Superseded: {summary.data.superseded}
+          </Badge>
           <Badge variant="secondary">Expired: {summary.data.expired}</Badge>
           <Badge variant="outline">of which expiring soon: {summary.data.expiring_soon}</Badge>
         </div>
@@ -146,6 +195,7 @@ export default function ExpertReviews() {
                   <TableHead>Outcome</TableHead>
                   <TableHead>DAG hash</TableHead>
                   <TableHead>Type</TableHead>
+                  <TableHead>Versions</TableHead>
                   <TableHead>Age (days)</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
@@ -159,6 +209,19 @@ export default function ExpertReviews() {
                       <TableCell>{review.outcome_variable ?? '—'}</TableCell>
                       <TableCell className="font-mono text-xs">{shortHash(review.dag_version_hash)}</TableCell>
                       <TableCell>{review.review_type ?? '—'}</TableCell>
+                      <TableCell>
+                        {/* A row minted before the versions table reports no
+                            count; it still has exactly one structure. */}
+                        {review.version_count ?? 1}
+                        {lastChangedDay(review) && (
+                          <div
+                            className="text-xs text-[var(--color-muted-foreground)]"
+                            title="Last structure change"
+                          >
+                            {lastChangedDay(review)}
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell>
                         {review.days_pending != null ? Math.round(review.days_pending) : '—'}
                       </TableCell>
@@ -175,18 +238,11 @@ export default function ExpertReviews() {
                       </TableCell>
                     </TableRow>
                     {openRow === review.review_id && (
-                      <TableRow>
-                        <TableCell colSpan={7}>
-                          <div className="grid gap-4 xl:grid-cols-2">
-                            <DagPanel structure={review.dag_structure_json} />
-                            <ResolveForm
-                              review={review}
-                              onClose={() => setOpenRow(null)}
-                              autoAssessGuard={autoAssessGuard}
-                            />
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                      <ExpandedReviewRow
+                        review={review}
+                        onClose={() => setOpenRow(null)}
+                        autoAssessGuard={autoAssessGuard}
+                      />
                     )}
                   </Fragment>
                 ))}

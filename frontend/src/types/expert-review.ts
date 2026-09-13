@@ -9,6 +9,10 @@
  * - A REVIEW-band causal estimate creates a `pending` expert_reviews row.
  * - An operator reads the queue and resolves (approves/rejects) it.
  *
+ * This file is a HAND-WRITTEN MIRROR of the expert-review schemas in
+ * `src/types/generated/api.ts`. No drift check covers it, so any backend schema
+ * change must be copied here by hand in the same PR that regenerates api.ts.
+ *
  * @module types/expert-review
  */
 
@@ -32,6 +36,47 @@ export interface DagStructure {
   discovery_gate_decision?: DiscoveryGate | null;
   confidence?: number | null;
   dag_version_hash?: string | null;
+}
+
+/**
+ * The structural delta between two DAG snapshots of the same estimand
+ * (#1991 debt 3, migration 141). Every list is sorted by the engine, so the
+ * same delta renders identically across calls.
+ *
+ * `adjustment_sets_*` carries the covariate delta: a covariate change with an
+ * unchanged graph is still a new version and reports `is_changed` true.
+ *
+ * Edges and adjustment sets are `string[][]` (NOT the arity-enforced 2-tuple
+ * `DagStructure.edges` uses) — that mirrors the backend's `List[List[str]]`.
+ */
+export interface DagChanges {
+  nodes_added: string[];
+  nodes_removed: string[];
+  edges_added: string[][];
+  edges_removed: string[][];
+  adjustment_sets_added: string[][];
+  adjustment_sets_removed: string[][];
+  is_changed: boolean;
+  old_hash?: string | null;
+  new_hash?: string | null;
+}
+
+/**
+ * One `expert_review_versions` row (migration 141): a structure version of a
+ * review, in timeline order.
+ *
+ * The table is a TIMELINE, not a set — a revert (A → B → A) appends a third
+ * row rather than being suppressed, so two versions may carry the same hash.
+ * `changes` is the delta against the version BEFORE it, null on the oldest.
+ */
+export interface ReviewVersion {
+  version_id: string;
+  dag_version_hash: string;
+  adjustment_set_hash?: string | null;
+  dag_structure_json?: DagStructure | null;
+  query_id?: string | null;
+  created_at?: string | null;
+  changes?: DagChanges | null;
 }
 
 /** Verdict vocabulary of the advisory agent assessment. */
@@ -76,6 +121,14 @@ export interface PendingReviewItem {
   days_pending?: number | null;
   dag_structure_json?: DagStructure | null;
   agent_assessment_json?: AgentAssessment | null;
+  /**
+   * How many structure versions this review's estimand has (#1991 debt 3).
+   * The backend always sends it (server default 1); kept OPTIONAL here so a
+   * partial row literal stays valid — read it as `version_count ?? 1`.
+   */
+  version_count?: number;
+  /** When the estimand's newest version was appended; null if never changed. */
+  last_changed_at?: string | null;
 }
 
 /**
@@ -119,6 +172,8 @@ export interface ReviewSummaryResponse {
   pending: number;
   approved: number;
   rejected: number;
+  /** BLOCK-band reviews resolved by migration 140 (#1991 debt 3). */
+  superseded: number;
   expired: number;
   expiring_soon: number;
 }
@@ -167,6 +222,13 @@ export interface ReviewRecord extends PendingReviewItem {
   checklist_json?: Record<string, unknown> | null;
   comments_json?: Record<string, unknown> | null;
   supersedes_review_id?: string | null;
+  /**
+   * Structural delta between this review's snapshot and that of the
+   * next-OLDER review of the same estimand. Populated on `history` entries
+   * only: null on the top-level `review` and on the OLDEST history entry
+   * (nothing to diff against). Computed by the detail route, never stored.
+   */
+  changes_from_previous?: DagChanges | null;
 }
 
 /**
@@ -176,4 +238,10 @@ export interface ReviewRecord extends PendingReviewItem {
 export interface ExpertReviewDetailResponse {
   review: ReviewRecord;
   history: ReviewRecord[];
+  /**
+   * This review's own `expert_review_versions` timeline (migration 141),
+   * OLDEST first, each row carrying `changes` against the one before it.
+   * Empty for a review minted before the versions table.
+   */
+  versions: ReviewVersion[];
 }

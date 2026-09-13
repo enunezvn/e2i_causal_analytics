@@ -97,6 +97,7 @@ const mockSummaryResponse: ReviewSummaryResponse = {
   pending: 1,
   approved: 4,
   rejected: 0,
+  superseded: 0,
   expired: 0,
   expiring_soon: 0,
 };
@@ -368,6 +369,7 @@ const mockDetailResponse: ExpertReviewDetailResponse = {
     created_at: '2026-07-13T10:00:00Z',
   },
   history: [],
+  versions: [],
 };
 
 describe('useExpertReview', () => {

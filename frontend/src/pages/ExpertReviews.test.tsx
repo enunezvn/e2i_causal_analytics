@@ -428,6 +428,7 @@ const DETAIL: ExpertReviewDetailResponse = {
     { review_id: 'rev-rejected', approval_status: 'rejected', created_at: '2026-07-13T10:00:00Z', reviewer_name: 'Dr. No' },
     { review_id: 'rev-older', approval_status: 'pending', created_at: '2026-07-01T10:00:00Z' },
   ],
+  versions: [],
 };
 
 describe('ExpertReviews linked review (lane 1)', () => {
@@ -653,5 +654,70 @@ describe('ExpertReviews linked review (lane 1)', () => {
     render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=%20%20') });
     expect(screen.queryByTestId('linked-review')).not.toBeInTheDocument();
     expect(vi.mocked(useExpertReview)).not.toHaveBeenCalled();
+  });
+});
+
+// #1991 debt 3 — the estimand's version timeline reaches the queue: a
+// per-review version count, the summary's `superseded` partition member, and
+// the structure diff of the newest version inside the expanded row.
+describe('ExpertReviews estimand versions (#1991 debt 3)', () => {
+  it('shows a Versions column, defaulting to 1 for a review with no count', async () => {
+    mockQueue({
+      reviews: [
+        { ...mockPending.reviews[0], review_id: 'rev-multi', version_count: 3, last_changed_at: '2026-06-09T00:00:00Z' },
+        { ...mockPending.reviews[0], review_id: 'rev-single' },
+      ],
+      total: 2,
+    });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByRole('columnheader', { name: 'Versions' })).toBeInTheDocument();
+    const rows = screen.getAllByRole('row');
+    expect(within(rows[1]).getByText('3')).toBeInTheDocument();
+    // last_changed_at is later than created_at, so the row says WHEN it last moved.
+    expect(within(rows[1]).getByText('2026-06-09')).toBeInTheDocument();
+    expect(within(rows[2]).getByText('1')).toBeInTheDocument();
+    expect(within(rows[2]).queryByText('2026-06-09')).toBeNull();
+  });
+
+  it('counts superseded reviews in the summary badges', () => {
+    vi.mocked(useReviewSummary).mockReturnValue({
+      data: { pending: 3, approved: 1, rejected: 0, superseded: 2, expired: 0, expiring_soon: 1 },
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Superseded: 2')).toBeInTheDocument();
+  });
+
+  it('renders the newest version diff in the expanded row from the detail response', async () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: {
+        review: { ...mockPending.reviews[0], approval_status: 'pending' },
+        history: [],
+        versions: [
+          { version_id: 'v1', dag_version_hash: 'aaaa1111', changes: null },
+          {
+            version_id: 'v2',
+            dag_version_hash: 'bbbb2222',
+            changes: {
+              nodes_added: ['W'],
+              nodes_removed: [],
+              edges_added: [['W', 'T']],
+              edges_removed: [],
+              adjustment_sets_added: [],
+              adjustment_sets_removed: [],
+              is_changed: true,
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    } as never);
+    renderWithRow({ dag_structure_json: STRUCTURE, version_count: 2 });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByText('Changed since the previous version')).toBeInTheDocument();
+    expect(screen.getByText('+ W')).toBeInTheDocument();
+    expect(vi.mocked(useExpertReview)).toHaveBeenCalledWith('rev-1');
   });
 });

@@ -1,9 +1,28 @@
-/** Render a review's stored DAG snapshot, or an honest fallback for pre-097 rows. */
+/**
+ * Render a review's stored DAG snapshot, or an honest fallback for pre-097 rows.
+ *
+ * When the estimand has more than one structure version (migration 141), the
+ * delta of the NEWEST version against the one before it is rendered under the
+ * graph, so an operator sees what moved since the last sign-off. A single
+ * version has nothing to diff against and renders the graph alone.
+ */
 import { CausalDAG } from '@/components/visualizations/causal/CausalDAG';
 import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
-import type { DagStructure } from '@/types/expert-review';
+import type { DagStructure, ReviewVersion } from '@/types/expert-review';
+import { DagDiff } from './DagDiff';
 
-export function DagPanel({ structure }: { structure?: DagStructure | null }) {
+export function DagPanel({
+  structure,
+  versions,
+}: {
+  structure?: DagStructure | null;
+  versions?: ReviewVersion[] | null;
+}) {
+  // `versions` is OLDEST first; the last entry carries the newest delta. Its
+  // `changes` is null on a review minted before the versions table.
+  const latest = versions && versions.length > 1 ? versions[versions.length - 1] : null;
+  const latestChanges = latest?.changes ?? null;
+
   if (!structure?.nodes?.length) {
     return (
       <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-sm text-[var(--color-muted-foreground)]">
@@ -39,6 +58,12 @@ export function DagPanel({ structure }: { structure?: DagStructure | null }) {
           Dashed/association edges were discovery-augmented (gate=
           {structure.discovery_gate_decision ?? 'unknown'}).
         </p>
+      )}
+      {latestChanges && (
+        <div className="space-y-1">
+          <h4 className="text-sm font-medium">Changed since the previous version</h4>
+          <DagDiff changes={latestChanges} />
+        </div>
       )}
     </div>
   );
