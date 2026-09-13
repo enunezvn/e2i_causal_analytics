@@ -21,8 +21,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.api.routes import causal as causal_routes
 from src.api.routes.causal import _common as causal_common
+from src.api.routes.causal import activity as causal_routes
 from src.api.routes.causal import pipelines as causal_pipelines
 from src.causal.stats import z_score_for_confidence
 

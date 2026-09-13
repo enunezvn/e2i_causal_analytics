@@ -32,7 +32,7 @@ from src.ml.synthetic.dgp.treatment_arm import ARM_CONFOUNDERS, assign_treatment
 def test_causal_route_patient_journeys_adjusts_for_arm_confounders():
     """The causal-discovery patient_journeys adjustment set must offer every
     DGP arm confounder as an available covariate."""
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
 
     covariates = set(_CAUSAL_DATASET_SPECS["patient_journeys"]["covariate"])
     missing = set(ARM_CONFOUNDERS) - covariates
@@ -49,7 +49,10 @@ def test_treatment_effects_route_adjusts_for_arm_confounders():
     treatment_arm on the patient cohorts using _TE_PATIENT_CONFOUNDERS — that
     adjustment set must also contain every DGP arm confounder (it may be a
     superset; supersets over-adjust harmlessly, a missing confounder does not)."""
-    from src.api.routes.causal import _TE_PATIENT_CONFOUNDERS, _TE_TREATMENT_VAR
+    from src.api.routes.causal.activity import (
+        _TE_PATIENT_CONFOUNDERS,
+        _TE_TREATMENT_VAR,
+    )
 
     assert _TE_TREATMENT_VAR == "treatment_arm"
     confounders = set(_TE_PATIENT_CONFOUNDERS)
@@ -123,7 +126,7 @@ def test_every_registered_arm_confounder_is_in_the_causal_allowlist():
     confounder set available as a causal covariate. Adding a Phase 2/3 arm
     without allowlisting its backdoor fails HERE rather than shipping a
     silently-confounded estimate."""
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
     from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
 
     covariates = set(_CAUSAL_DATASET_SPECS["patient_journeys"]["covariate"])
@@ -140,7 +143,7 @@ def test_every_registered_arm_confounder_is_in_the_causal_allowlist():
 def test_registered_arms_are_offered_as_treatments():
     """An arm the DGP populates but the allowlist never exposes is invisible work;
     an arm exposed without being populated is a NULL-column trap."""
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
     from src.ml.synthetic.dgp.treatment_arm import ARM_REGISTRY
 
     treatments = set(_CAUSAL_DATASET_SPECS["patient_journeys"]["treatment"])
