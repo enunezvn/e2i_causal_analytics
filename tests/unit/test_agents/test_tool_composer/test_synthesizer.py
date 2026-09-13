@@ -413,7 +413,10 @@ class TestFallbackResponse:
         # The raw text is withheld, not lost: logged once, at WARNING.
         hits = [r for r in caplog.records if "org-SENTINEL2020" in r.getMessage()]
         assert len(hits) == 1, f"expected the raw text logged once, got {len(hits)}"
-        assert hits[0].levelno == logging.WARNING
+        # Only the user surfaces are redacted: the log stays an ERROR (Sentry's event level) with
+        # its traceback, because the fallback answer hides that synthesis failed at all.
+        assert hits[0].levelno == logging.ERROR
+        assert hits[0].exc_info is not None
 
     @pytest.mark.asyncio
     async def test_fallback_with_no_successful_step_keeps_the_exception_text_out_of_the_answer(

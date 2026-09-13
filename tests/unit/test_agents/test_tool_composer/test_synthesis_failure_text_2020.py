@@ -270,6 +270,7 @@ def test_the_prompt_and_the_fail_closed_answer_cannot_drift(
         assert f"Error: {fragment}" in block
         assert f"probe_tool: {fragment}" in answer
     if withheld is not None:
+        # Withheld sentinels must stay distinctive, never substrings of a canonical sentence.
         # The fragment REPLACES the raw text: a surface that appended it would pass the checks above.
         assert withheld not in block
         assert withheld not in answer

@@ -397,8 +397,9 @@ class ResponseSynthesizer:
 
         except Exception as e:
             # LLM-client errors carry provider JSON (status, org id, error code), and a pydantic
-            # error carries the model's input: the raw text goes to the log only (#2020).
-            logger.warning("Synthesis failed; returning the fallback response: %s", e)
+            # error carries the model's input: the raw text goes to the log only (#2020). Still an
+            # ERROR with its traceback — the fallback answer hides that synthesis failed at all.
+            logger.error("Synthesis failed; returning the fallback response: %s", e, exc_info=e)
             return self._create_fallback_response(synthesis_input)
 
     def _format_results(self, synthesis_input: SynthesisInput) -> str:
