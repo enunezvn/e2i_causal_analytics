@@ -982,7 +982,7 @@ from typing import Dict, Any, List, Optional, Tuple, Literal
 from dataclasses import dataclass
 
 
-class GateDecision(str, Enum):
+class DiscoveryGateDecision(str, Enum):
     """Discovery gate decisions."""
     ACCEPT = "accept"    # Confidence >= 0.8, use discovered DAG directly
     AUGMENT = "augment"  # Confidence 0.5-0.8, add high-confidence edges to manual DAG
@@ -999,7 +999,7 @@ class GateEvaluation:
     """
 
     # === DECISION ===
-    decision: GateDecision
+    decision: DiscoveryGateDecision
     confidence: float  # Overall confidence score (0.0 to 1.0)
 
     # === EDGE ANALYSIS ===

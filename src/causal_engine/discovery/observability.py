@@ -40,7 +40,7 @@ from uuid_utils import uuid7 as uuid7_func
 from .base import (
     AlgorithmResult,
     DiscoveryConfig,
-    GateDecision,
+    DiscoveryGateDecision,
 )
 
 logger = logging.getLogger(__name__)
@@ -364,7 +364,7 @@ class DiscoveryTracer:
     async def log_gate_decision(
         self,
         parent_span: DiscoverySpan,
-        decision: GateDecision,
+        decision: DiscoveryGateDecision,
         confidence: float,
         reasons: List[str],
     ) -> None:

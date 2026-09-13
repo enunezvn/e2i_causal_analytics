@@ -8911,6 +8911,50 @@ export interface components {
             timestamp?: string;
         };
         /**
+         * DagStructureSnapshot
+         * @description The sanitized causal-graph snapshot (mig 097) with the DISCOVERY gate typed.
+         *
+         *     Mirrors ``sanitize_dag_structure`` (src/causal_engine/expert_review_gate.py):
+         *     ``nodes``/``edges`` are always coerced to plain lists (edge tuples ->
+         *     2-element string lists) before the JSONB write, and ``_DAG_SNAPSHOT_KEYS``
+         *     is exactly the optional field set below. ``extra="allow"`` keeps this
+         *     forward-compatible with a future snapshot key without a schema change.
+         */
+        DagStructureSnapshot: {
+            /**
+             * Nodes
+             * @default []
+             */
+            nodes: string[];
+            /**
+             * Edges
+             * @default []
+             */
+            edges: [
+                string,
+                string
+            ][];
+            /** Treatment Nodes */
+            treatment_nodes?: string[] | null;
+            /** Outcome Nodes */
+            outcome_nodes?: string[] | null;
+            /** Adjustment Sets */
+            adjustment_sets?: string[][] | null;
+            /** Augmented Edges */
+            augmented_edges?: [
+                string,
+                string
+            ][] | null;
+            /** Discovery Gate Decision */
+            discovery_gate_decision?: ("accept" | "review" | "reject" | "augment") | null;
+            /** Confidence */
+            confidence?: number | null;
+            /** Dag Version Hash */
+            dag_version_hash?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * DataProvenance
          * @description Where the health data in a response came from.
          *
@@ -9197,7 +9241,7 @@ export interface components {
              * Gate Decision
              * @description proceed / review / block
              */
-            gate_decision?: string | null;
+            gate_decision?: ("proceed" | "review" | "block") | null;
             /**
              * Confidence Score
              * @description 0-1 ranking signal: robustness gate + statistical significance
@@ -14777,10 +14821,7 @@ export interface components {
             created_at?: string | null;
             /** Days Pending */
             days_pending?: number | null;
-            /** Dag Structure Json */
-            dag_structure_json?: {
-                [key: string]: unknown;
-            } | null;
+            dag_structure_json?: components["schemas"]["DagStructureSnapshot"] | null;
             /** Agent Assessment Json */
             agent_assessment_json?: {
                 [key: string]: unknown;
@@ -16144,7 +16185,7 @@ export interface components {
              * Gate Decision
              * @description proceed / review / block
              */
-            gate_decision?: string | null;
+            gate_decision?: ("proceed" | "review" | "block") | null;
             /**
              * Passed
              * @description True only on a PROCEED gate
@@ -16165,7 +16206,7 @@ export interface components {
              * Expert Review Decision
              * @description ExpertReviewGate decision for the DAG structure: proceed (active structural approval) / renewal_required (approval expiring) / pending_review (queued; resolve via POST /expert-reviews/{id}/resolve) / rejected (a human rejected this structure) / blocked (no approval, no review could be queued) / unavailable (the gate could not be consulted; nothing was checked or queued). Recorded on REVIEW/BLOCK gates, and on a PROCEED gate only when a rejection was found. None when not consulted. Approval is STRUCTURAL and never promotes a borderline estimate. The run is halted (status 'failed', reason in warnings) on 'rejected' always, and on pending_review/blocked/unavailable only when CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true (default off, #1971).
              */
-            expert_review_decision?: string | null;
+            expert_review_decision?: ("proceed" | "renewal_required" | "pending_review" | "rejected" | "blocked" | "unavailable") | null;
             /**
              * Review Caveat
              * @description The band-specific expert-review caveat the agent built (#1995): the refutation band sentence followed by the HITL sentence -- the approval (reviewer + validity window; approval is STRUCTURAL and covers the DAG, not this estimate's robustness), the rejection (reviewer + reason), or the queued / blocked / unavailable variant. Present on REVIEW and BLOCK gates and on a PROCEED-gate rejection; None when the gate was not consulted. Also carried in warnings: standalone on a non-halted run, embedded verbatim in the 'Estimate withheld' halt line on a halted one.
@@ -16528,10 +16569,7 @@ export interface components {
             created_at?: string | null;
             /** Days Pending */
             days_pending?: number | null;
-            /** Dag Structure Json */
-            dag_structure_json?: {
-                [key: string]: unknown;
-            } | null;
+            dag_structure_json?: components["schemas"]["DagStructureSnapshot"] | null;
             /** Agent Assessment Json */
             agent_assessment_json?: {
                 [key: string]: unknown;

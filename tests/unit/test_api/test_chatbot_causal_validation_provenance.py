@@ -222,3 +222,59 @@ async def test_causal_analysis_tool_evidence_lookup_failure_degrades_honestly():
     assert entry["validation_status"] == "validated"
     # ... but the failed lookup must NOT masquerade as "no evidence".
     assert entry["refutation_evidence"].get("lookup_failed") is True
+
+
+# ------------------------------------------------ one vocabulary, fail-closed
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("token", ["accept", "augment", "reject", None, "bogus"])
+def test_summarize_unknown_gate_is_unknown_never_proceed(token):
+    rows = _seeded_evidence_rows(n_passed=2)
+    for r in rows:
+        r["gate_decision"] = token
+    summary = _summarize_refutation_rows(rows)
+    assert summary["gate_decision"] == "unknown"
+    assert summary["gate_unreadable_rows"] == 2
+    assert "2 of 2" in summary["note"]
+
+
+@pytest.mark.unit
+def test_summarize_mixed_unknown_and_block_still_blocks():
+    rows = _seeded_evidence_rows(n_passed=2)
+    rows[0]["gate_decision"] = None
+    rows[1]["gate_decision"] = "block"
+    summary = _summarize_refutation_rows(rows)
+    assert summary["gate_decision"] == "block"
+    assert summary["gate_unreadable_rows"] == 1
+    assert "1 of 2" in summary["note"]
+
+
+@pytest.mark.unit
+def test_summarize_proceed_only_reads_proceed_and_zero_unreadable():
+    summary = _summarize_refutation_rows(_seeded_evidence_rows(n_passed=3))
+    assert summary["gate_decision"] == "proceed"
+    assert summary["gate_unreadable_rows"] == 0
+    assert "note" not in summary
+
+
+@pytest.mark.unit
+def test_summarize_readable_proceed_plus_unreadable_is_unknown():
+    rows = _seeded_evidence_rows(n_passed=2)
+    rows[0]["gate_decision"] = "proceed"
+    rows[1]["gate_decision"] = None
+    summary = _summarize_refutation_rows(rows)
+    assert summary["gate_decision"] == "unknown"
+    assert summary["gate_unreadable_rows"] == 1
+    assert "proceed is never reported" in summary["note"]
+
+
+@pytest.mark.unit
+def test_summarize_review_plus_unreadable_still_reviews_with_note():
+    rows = _seeded_evidence_rows(n_passed=2)
+    rows[0]["gate_decision"] = "review"
+    rows[1]["gate_decision"] = None
+    summary = _summarize_refutation_rows(rows)
+    assert summary["gate_decision"] == "review"
+    assert summary["gate_unreadable_rows"] == 1
+    assert "1 of 2" in summary["note"]

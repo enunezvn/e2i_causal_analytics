@@ -350,8 +350,8 @@ class TestGraphBuilderNode:
 
         from src.causal_engine.discovery import (
             DiscoveryConfig,
+            DiscoveryGateDecision,
             DiscoveryResult,
-            GateDecision,
         )
         from src.causal_engine.discovery.gate import GateEvaluation
 
@@ -366,7 +366,7 @@ class TestGraphBuilderNode:
         }
         mock_result = DiscoveryResult(success=True, config=DiscoveryConfig())
         mock_eval = GateEvaluation(
-            decision=GateDecision.REVIEW,
+            decision=DiscoveryGateDecision.REVIEW,
             confidence=0.6,
             reasons=["ok"],
             high_confidence_edges=[],
@@ -632,8 +632,8 @@ class TestDiscoveredDagIncludesEstimandEdge:
 
         from src.causal_engine.discovery import (
             DiscoveryConfig,
+            DiscoveryGateDecision,
             DiscoveryResult,
-            GateDecision,
         )
 
         node = GraphBuilderNode()
@@ -654,7 +654,7 @@ class TestDiscoveredDagIncludesEstimandEdge:
             "persistent_180d",
             ["disease_severity", "engagement_score"],
             result,
-            {"decision": GateDecision.ACCEPT.value},
+            {"decision": DiscoveryGateDecision.ACCEPT.value},
         )
         assert dag.has_edge("treatment_arm", "persistent_180d"), "estimand edge missing"
         # Discovered confounder edges preserved and the graph stays acyclic.

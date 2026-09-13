@@ -216,7 +216,15 @@ describe('ExpertReviews brand filter and summary (lane 1)', () => {
   });
 });
 
-const STRUCTURE = {
+// #1991 debt 4: DagStructure.edges is arity-enforced (Tuple[str, str] on the
+// backend); the explicit annotation contextually types each edge literal as
+// a 2-tuple instead of widening to string[][].
+const STRUCTURE: {
+  nodes: string[];
+  edges: [string, string][];
+  treatment_nodes: string[];
+  outcome_nodes: string[];
+} = {
   nodes: ['t', 'y', 'c'],
   edges: [
     ['t', 'y'],

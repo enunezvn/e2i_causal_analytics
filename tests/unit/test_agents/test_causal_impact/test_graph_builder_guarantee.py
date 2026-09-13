@@ -22,8 +22,8 @@ from src.causal_engine.discovery.base import (
     AlgorithmResult,
     DiscoveredEdge,
     DiscoveryAlgorithmType,
+    DiscoveryGateDecision,
     DiscoveryResult,
-    GateDecision,
 )
 from src.causal_engine.discovery.gate import GateEvaluation
 
@@ -70,7 +70,7 @@ class _AcceptingRunner:
 def _accept_gate(node: GraphBuilderNode) -> None:
     node.discovery_gate.evaluate = (  # type: ignore[method-assign]
         lambda result, expected=None: GateEvaluation(
-            decision=GateDecision.ACCEPT, confidence=0.9, reasons=[]
+            decision=DiscoveryGateDecision.ACCEPT, confidence=0.9, reasons=[]
         )
     )
 
@@ -293,7 +293,7 @@ class TestEdgeProvenance:
         node._discovery_runner = _AcceptingRunner([("t", "y")])  # type: ignore[assignment]
         node.discovery_gate.evaluate = (  # type: ignore[method-assign]
             lambda result, expected=None: GateEvaluation(
-                decision=GateDecision.REJECT, confidence=0.1, reasons=[]
+                decision=DiscoveryGateDecision.REJECT, confidence=0.1, reasons=[]
             )
         )
 

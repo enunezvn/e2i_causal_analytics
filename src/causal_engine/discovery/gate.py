@@ -24,7 +24,7 @@ import networkx as nx
 
 logger = logging.getLogger(__name__)
 
-from .base import DiscoveredEdge, DiscoveryResult, GateDecision
+from .base import DiscoveredEdge, DiscoveryGateDecision, DiscoveryResult
 
 if TYPE_CHECKING:
     from .observability import DiscoverySpan, DiscoveryTracer
@@ -74,7 +74,7 @@ class GateEvaluation:
         metadata: Additional evaluation metadata
     """
 
-    decision: GateDecision
+    decision: DiscoveryGateDecision
     confidence: float
     reasons: List[str] = field(default_factory=list)
     high_confidence_edges: List[DiscoveredEdge] = field(default_factory=list)
@@ -114,9 +114,9 @@ class DiscoveryGate:
     Example:
         >>> gate = DiscoveryGate()
         >>> evaluation = gate.evaluate(discovery_result)
-        >>> if evaluation.decision == GateDecision.ACCEPT:
+        >>> if evaluation.decision == DiscoveryGateDecision.ACCEPT:
         ...     use_discovered_dag(discovery_result.ensemble_dag)
-        >>> elif evaluation.decision == GateDecision.AUGMENT:
+        >>> elif evaluation.decision == DiscoveryGateDecision.AUGMENT:
         ...     augment_manual_dag(evaluation.high_confidence_edges)
     """
 
@@ -163,7 +163,7 @@ class DiscoveryGate:
         # Check for failed discovery
         if not result.success:
             return GateEvaluation(
-                decision=GateDecision.REJECT,
+                decision=DiscoveryGateDecision.REJECT,
                 confidence=0.0,
                 reasons=["Discovery failed"],
                 metadata={
@@ -175,7 +175,7 @@ class DiscoveryGate:
         # Check minimum edges
         if result.n_edges < self.config.min_edges:
             return GateEvaluation(
-                decision=GateDecision.REJECT,
+                decision=DiscoveryGateDecision.REJECT,
                 confidence=0.0,
                 reasons=[f"Too few edges discovered: {result.n_edges} < {self.config.min_edges}"],
                 metadata=dict(diagnostic_passthrough),
@@ -243,25 +243,25 @@ class DiscoveryGate:
 
         # Make decision
         if confidence >= self.config.accept_threshold:
-            decision = GateDecision.ACCEPT
+            decision = DiscoveryGateDecision.ACCEPT
             reasons.append("High confidence - accepting discovered structure")
         elif confidence >= self.config.review_threshold:
             if len(high_conf_edges) >= self.config.min_edges:
-                decision = GateDecision.AUGMENT
+                decision = DiscoveryGateDecision.AUGMENT
                 reasons.append(
                     f"Medium confidence but {len(high_conf_edges)} high-confidence edges available for augmentation"
                 )
             else:
-                decision = GateDecision.REVIEW
+                decision = DiscoveryGateDecision.REVIEW
                 reasons.append("Medium confidence - expert review recommended")
         else:
             if len(high_conf_edges) >= self.config.min_edges:
-                decision = GateDecision.AUGMENT
+                decision = DiscoveryGateDecision.AUGMENT
                 reasons.append(
                     f"Low overall confidence but {len(high_conf_edges)} high-confidence edges available"
                 )
             else:
-                decision = GateDecision.REJECT
+                decision = DiscoveryGateDecision.REJECT
                 reasons.append("Low confidence - recommend using manual DAG")
 
         logger.info(
@@ -431,7 +431,7 @@ class DiscoveryGate:
             True if should accept
         """
         evaluation = self.evaluate(result)
-        return evaluation.decision == GateDecision.ACCEPT
+        return evaluation.decision == DiscoveryGateDecision.ACCEPT
 
     def get_augmentation_edges(
         self,
@@ -451,7 +451,7 @@ class DiscoveryGate:
         """
         evaluation = self.evaluate(result)
 
-        if evaluation.decision not in [GateDecision.ACCEPT, GateDecision.AUGMENT]:
+        if evaluation.decision not in [DiscoveryGateDecision.ACCEPT, DiscoveryGateDecision.AUGMENT]:
             return []
 
         # Filter edges not already in manual DAG
