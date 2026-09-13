@@ -296,17 +296,18 @@ class ExpertReviewGate:
         # needed for that ordering, expired approvals included.
         # A rejection covers the VERSION it was given on, not the estimand
         # (spec §7): the reviewer said "THIS structure is wrong", which is
-        # precisely what a revised structure answers. So the verdict counts
-        # here only when it was recorded against the hash under analysis --
-        # otherwise a rejected estimand could never be re-opened by revising
-        # the DAG, and this estimand-keyed read would contradict the hash-keyed
-        # ``check_rejection`` probe, which answers "not rejected" for the new
-        # structure.
-        latest_verdict, reopened = self._latest_adjudication(history)
+        # precisely what a revised structure answers -- so a rejected estimand
+        # stays re-openable by revising the DAG. The chronology that decides it
+        # is therefore ranked over the SAME-HASH rows, which is exactly the row
+        # set the hash-keyed ``check_rejection`` probe reads: the two readers
+        # share one input and cannot disagree. Filtering the VERDICT instead of
+        # the INPUT is not the same thing -- rank the whole estimand and an
+        # approval of a revised hash sits on top, hiding the rejection of this
+        # one, and the gate would queue a structure a human already refused.
+        same_hash_history = [r for r in history if r.get("dag_version_hash") == dag_hash]
+        latest_verdict, reopened = self._latest_adjudication(same_hash_history)
         superseded_by_rejection = (
-            latest_verdict is not None
-            and latest_verdict.get("approval_status") == "rejected"
-            and latest_verdict.get("dag_version_hash") == dag_hash
+            latest_verdict is not None and latest_verdict.get("approval_status") == "rejected"
         )
 
         # Check for active approval -- only if no newer rejection supersedes it.
@@ -395,8 +396,13 @@ class ExpertReviewGate:
         # than a rejection is a reviewer re-opening the structure).
         pending = [r for r in history if r.get("approval_status") == "pending"]
         structure = sanitize_dag_structure(dag_structure)
-        adjustment_set_hash = compute_adjustment_set_hash(
-            list((dag_structure or {}).get("adjustment_sets") or [])
+        # No structure in scope means the adjustment set is UNKNOWN, which
+        # migration 141 records as NULL. ``sha256("[]")`` is the canonical
+        # EMPTY set -- a different fact, and one this call cannot assert.
+        adjustment_set_hash = (
+            compute_adjustment_set_hash(list(dag_structure.get("adjustment_sets") or []))
+            if dag_structure
+            else None
         )
 
         if pending:
@@ -418,6 +424,10 @@ class ExpertReviewGate:
                     dag_structure=structure,
                     adjustment_set_hash=adjustment_set_hash,
                     query_id=requester_id,
+                    # The review now carries THIS run's hash, so it must carry
+                    # this run's evidence too -- the detail route renders the
+                    # two side by side.
+                    related_validation_ids=related_validation_ids,
                 )
                 if not appended:
                     logger.warning(
@@ -524,6 +534,10 @@ class ExpertReviewGate:
                     dag_structure=structure,
                     adjustment_set_hash=adjustment_set_hash,
                     query_id=requester_id,
+                    # Same value ``create_review`` just stored; passed for
+                    # symmetry with the append above, so the two call sites
+                    # cannot drift on what an advance carries.
+                    related_validation_ids=related_validation_ids,
                 )
                 if not appended:
                     logger.warning(

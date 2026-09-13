@@ -808,6 +808,7 @@ class ExpertReviewRepository(BaseRepository):
         dag_structure: Optional[Dict[str, Any]],
         adjustment_set_hash: Optional[str],
         query_id: Optional[str],
+        related_validation_ids: Optional[List[str]] = None,
     ) -> bool:
         """Record a new structure version on a PENDING review and make it the
         review's current hash.
@@ -820,9 +821,14 @@ class ExpertReviewRepository(BaseRepository):
         CONFLICT DO UPDATE, and ``service_role`` holds SELECT+INSERT only on this
         table (42501 otherwise).
 
-        The review update touches ``dag_version_hash`` and ``dag_structure_json``
-        only -- ``expert_reviews`` has no ``adjustment_set_hash`` column; that
-        hash lives on the version row. A ``dag_structure`` of None CLEARS the
+        The review update touches ``dag_version_hash``, ``dag_structure_json``
+        and -- when given -- ``related_validation_ids`` only; ``expert_reviews``
+        has no ``adjustment_set_hash`` column, that hash lives on the version
+        row. The evidence ids go on the REVIEW rather than the version because
+        they describe its current state: the detail route renders evidence from
+        that column, and after an advance the previous run's ids would show
+        statistics computed on a structure the review no longer covers. Omitted
+        when None, so a caller without ids in hand never NULLs the column. A ``dag_structure`` of None CLEARS the
         review's snapshot, deliberately: the snapshot is what the review UI
         renders, and leaving the previous structure under a NEW hash would show
         a DAG the review no longer covers. (``update_dag_structure`` refuses an
@@ -862,10 +868,17 @@ class ExpertReviewRepository(BaseRepository):
             logger.error(f"append_version: insert failed for review {review_id}: {e}")
             return False
 
+        advance: Dict[str, Any] = {
+            "dag_version_hash": dag_version_hash,
+            "dag_structure_json": snapshot,
+        }
+        if related_validation_ids is not None:
+            advance["related_validation_ids"] = related_validation_ids
+
         try:
             result = await (
                 self.client.table(self.table_name)
-                .update({"dag_version_hash": dag_version_hash, "dag_structure_json": snapshot})
+                .update(advance)
                 .eq("review_id", review_id)
                 .eq("approval_status", "pending")
                 .execute()

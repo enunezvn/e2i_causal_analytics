@@ -46,6 +46,7 @@ class _EstimandRepo:
         self.history = list(history or [])
         self.created: List[Dict[str, Any]] = []
         self.appended: List[tuple] = []
+        self.append_kwargs: List[Dict[str, Any]] = []
         self.structure_updates: List[tuple] = []
         self.dag_approval_calls = 0
         self.estimand_lookups: List[str] = []
@@ -75,16 +76,9 @@ class _EstimandRepo:
         self.created.append(recorded)
         return "rev-new"
 
-    async def append_version(
-        self,
-        review_id: str,
-        *,
-        dag_version_hash: str,
-        dag_structure: Optional[Dict[str, Any]] = None,
-        adjustment_set_hash: Optional[str] = None,
-        query_id: Optional[str] = None,
-    ) -> bool:
-        self.appended.append((review_id, dag_version_hash))
+    async def append_version(self, review_id: str, **kwargs: Any) -> bool:
+        self.appended.append((review_id, kwargs.get("dag_version_hash")))
+        self.append_kwargs.append({"review_id": review_id, **kwargs})
         return True
 
     async def update_dag_structure(
@@ -167,10 +161,15 @@ async def test_review_band_same_estimand_new_hash_appends_version_not_row():
         outcome="Y",
         requester_id="q",
         dag_structure={"nodes": ["T", "Y", "W"], "edges": [["W", "T"], ["T", "Y"]]},
+        related_validation_ids=["v1", "v2"],
     )
 
     assert r.decision == ReviewGateDecision.PENDING_REVIEW and r.review_id == "r1"
     assert repo.created == [] and repo.appended == [("r1", "h2")]
+    # The advanced review must point at THIS run's evidence: its hash is now h2,
+    # so related_validation_ids left on h1's run would render the wrong evidence
+    # in the review UI (src/api/routes/expert_review.py reads that column).
+    assert repo.append_kwargs[0]["related_validation_ids"] == ["v1", "v2"]
 
 
 @pytest.mark.unit
@@ -199,6 +198,10 @@ async def test_revert_to_an_earlier_hash_appends_again():
     )
 
     assert repo.appended == [("r1", "hA")]
+    # No structure in scope means the adjustment set is UNKNOWN, which migration
+    # 141 stores as NULL. sha256("[]") is the canonical EMPTY set -- a different
+    # fact, and one this call has no basis to assert.
+    assert repo.append_kwargs[0]["adjustment_set_hash"] is None
 
 
 @pytest.mark.unit
@@ -283,6 +286,84 @@ async def test_rejection_on_another_hash_of_the_estimand_does_not_block_a_new_st
     # supersedes_review_id links a SUPERSEDED APPROVAL, never a rejection (§7).
     assert repo.created[0].get("supersedes_review_id") is None
     assert repo.appended == [("rev-new", "h2")]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_newer_approval_of_another_hash_does_not_revive_a_rejected_one():
+    """Chronology is read over the SAME-HASH rows -- the rows the probe sees.
+
+    Reject h1, revise to h2, approve h2, then re-run h1. Ranking the estimand's
+    whole history would put the h2 approval on top, find no rejection "latest",
+    and mint a pending review for the structure a human already turned down --
+    while ``check_rejection(h1)`` still answers REJECTED. The two readers share
+    one row set so they cannot disagree.
+    """
+    repo = _EstimandRepo(
+        history=[
+            _approved("r2", "h2", created_at="2026-09-05T00:00:00+00:00"),
+            _rejected("r1", "h1"),
+        ]
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    r = await gate.check_approval(
+        dag_hash="h1", brand="B", treatment="T", outcome="Y", requester_id="q"
+    )
+
+    assert r.decision == ReviewGateDecision.REJECTED and r.review_id == "r1"
+    assert repo.created == [] and repo.appended == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_newer_rejection_of_another_hash_does_not_void_this_hashs_approval():
+    """The mirror of the test above (§7): h1 keeps its own approval."""
+    repo = _EstimandRepo(
+        history=[
+            _rejected("r2", "h2", created_at="2026-09-05T00:00:00+00:00"),
+            _approved("r1", "h1"),
+        ]
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    r = await gate.check_approval(
+        dag_hash="h1", brand="B", treatment="T", outcome="Y", requester_id="q"
+    )
+
+    assert r.decision == ReviewGateDecision.PROCEED and r.is_approved
+    assert r.review_id == "r1"
+    assert repo.created == [] and repo.appended == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_pending_review_of_another_hash_does_not_void_this_hashs_approval():
+    """An approved structure still clears while a REVISED one is under review.
+
+    The approval search precedes the pending branch, so re-running h1 proceeds
+    on its own approval and appends nothing to r2's timeline; re-running h2
+    lands on the open review, unchanged.
+    """
+    repo = _EstimandRepo(
+        history=[
+            _pending("r2", "h2", created_at="2026-09-05T00:00:00+00:00"),
+            _approved("r1", "h1"),
+        ]
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    on_h1 = await gate.check_approval(
+        dag_hash="h1", brand="B", treatment="T", outcome="Y", requester_id="q"
+    )
+    assert on_h1.decision == ReviewGateDecision.PROCEED and on_h1.review_id == "r1"
+    assert repo.appended == []
+
+    on_h2 = await gate.check_approval(
+        dag_hash="h2", brand="B", treatment="T", outcome="Y", requester_id="q"
+    )
+    assert on_h2.decision == ReviewGateDecision.PENDING_REVIEW and on_h2.review_id == "r2"
+    assert repo.appended == [] and repo.created == []
 
 
 @pytest.mark.unit

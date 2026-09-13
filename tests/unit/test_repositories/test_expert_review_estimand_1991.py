@@ -306,8 +306,54 @@ async def test_append_version_inserts_then_updates_current_hash_and_snapshot(fak
     upd = fake_client.updated("expert_reviews")[0]
     assert upd == {"dag_version_hash": "h2", "dag_structure_json": {"nodes": ["a"], "edges": []}}
     assert ("eq", ("approval_status", "pending")) in fake_client.calls("expert_reviews")
+    # Not given -> the column is left alone (the key is absent from the payload),
+    # never overwritten with NULL.
+    assert "related_validation_ids" not in upd
     # insert(), never upsert() -- service_role has no UPDATE on the versions table
     assert not any(method == "upsert" for method, _ in fake_client.calls("expert_review_versions"))
+
+
+@pytest.mark.unit
+async def test_append_version_repoints_the_evidence_at_the_new_versions_run(fake_client):
+    """The advanced review must cite the evidence of the run that advanced it.
+
+    ``related_validation_ids`` is the column the review detail route renders
+    evidence from (src/api/routes/expert_review.py). After an append the review
+    carries a NEW ``dag_version_hash``; leaving the previous run's validation
+    ids beside it shows a reviewer statistics computed on a structure the review
+    no longer covers. The versions table has no such column -- the ids belong to
+    the review's current state, so only the review UPDATE carries them.
+    """
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "related_validation_ids": ["v-old"],
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure=None,
+        adjustment_set_hash=None,
+        query_id="q2",
+        related_validation_ids=["v1"],
+    )
+
+    assert ok is True
+    assert fake_client.updated("expert_reviews")[0] == {
+        "dag_version_hash": "h2",
+        "dag_structure_json": None,
+        "related_validation_ids": ["v1"],
+    }
+    # The versions row is unchanged -- no such column there.
+    assert "related_validation_ids" not in fake_client.inserted("expert_review_versions")[0]
 
 
 @pytest.mark.unit
