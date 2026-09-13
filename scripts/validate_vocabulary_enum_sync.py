@@ -324,7 +324,17 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
         vocab_set = set(vocab_values)
 
         if db_set != vocab_set:
-            files_display = ", ".join(str(p.relative_to(project_root)) for p in sql_paths)
+            # relative_to() raises if a bound path lies outside project_root
+            # (e.g. a test rebinding a check to a tmp_path file) -- fall back
+            # to the absolute path rather than crashing the whole guard over
+            # a display-string nicety.
+            def _display_path(p: Path) -> str:
+                try:
+                    return str(p.relative_to(project_root))
+                except ValueError:
+                    return str(p)
+
+            files_display = ", ".join(_display_path(p) for p in sql_paths)
             errors = [
                 f"❌ MISMATCH: {enum_name}",
                 f"   SQL File(s): {files_display}",

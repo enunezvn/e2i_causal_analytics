@@ -108,6 +108,64 @@ def test_guard_red_when_alter_type_migration_not_in_binding(monkeypatch):
     assert "negative_control_outcome" in " ".join(results["refutation_test_type"].errors)
 
 
+def test_guard_red_when_python_enum_loses_a_member(monkeypatch):
+    """Independent-source proof (codex r1 MEDIUM): mutate ONLY the Python
+    enum -- the real YAML and the real SQL file are untouched -- and confirm
+    the Python-vs-YAML check catches it while the SQL-vs-YAML check for the
+    SAME vocab section stays green. A guard that only compared YAML-vs-YAML
+    (or otherwise conflated the three sources) would not distinguish this
+    from test_guard_fails_on_drift, where the YAML itself is mutated."""
+    import enum
+
+    import src.causal_engine.discovery.base as discovery_base
+
+    # Missing "augment" relative to the real enum -- the script's lazy
+    # `from src.causal_engine.discovery.base import DiscoveryGateDecision`
+    # re-reads this attribute off the (already-imported, cached) module each
+    # time run_enum_checks() executes, so patching the module attribute here
+    # is visible to it.
+    truncated_enum = enum.Enum(
+        "DiscoveryGateDecision",
+        {"ACCEPT": "accept", "REVIEW": "review", "REJECT": "reject"},
+    )
+    monkeypatch.setattr(discovery_base, "DiscoveryGateDecision", truncated_enum)
+
+    results = {r.name: r for r in _script().run_enum_checks()}
+    assert results["python:DiscoveryGateDecision"].ok is False
+    assert "augment" in " ".join(results["python:DiscoveryGateDecision"].errors)
+    assert results["ml.gate_decision"].ok is True
+
+
+def test_guard_red_when_sql_file_loses_a_label(tmp_path, monkeypatch):
+    """Independent-source proof (codex r1 MEDIUM): mutate ONLY a (tmp copy
+    of the) SQL file -- the real YAML and the real Python enum are untouched
+    -- and confirm the SQL-vs-YAML check catches it while the Python-vs-YAML
+    check for the SAME vocab section stays green."""
+    s = _script()
+    original = SQL.read_text()
+    mutated = original.replace(
+        "        'reject',   -- Low confidence, use manual DAG\n"
+        "        'augment'   -- Supplement manual DAG with high-confidence edges\n",
+        "        'reject'   -- Low confidence, use manual DAG\n",
+    )
+    assert mutated != original, "expected 'augment' fragment not found in 026 -- SQL file changed"
+
+    tmp_sql = tmp_path / "026_causal_discovery_tables_missing_augment.sql"
+    tmp_sql.write_text(mutated)
+
+    def _rebind(entry):
+        if entry[0] == "ml.gate_decision":
+            return (entry[0], tmp_sql) + tuple(entry[2:])
+        return entry
+
+    monkeypatch.setattr(s, "ENUM_CHECKS", [_rebind(entry) for entry in s.ENUM_CHECKS])
+
+    results = {r.name: r for r in s.run_enum_checks()}
+    assert results["ml.gate_decision"].ok is False
+    assert "augment" in " ".join(results["ml.gate_decision"].errors)
+    assert results["python:DiscoveryGateDecision"].ok is True
+
+
 def test_extractor_strips_comment_lines(tmp_path):
     """A commented-out example statement must not be mistaken for a real one."""
     sql = tmp_path / "commented.sql"
