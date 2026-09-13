@@ -7,10 +7,12 @@ def test_discovery_enum_is_named_distinctly():
 
     assert {m.value for m in DiscoveryGateDecision} == {"accept", "review", "reject", "augment"}
     assert {m.value for m in GateDecision} == {"proceed", "review", "block"}
-    assert DiscoveryGateDecision.__name__ != GateDecision.__name__
+    assert DiscoveryGateDecision.__name__ == "DiscoveryGateDecision"
 
 
 def test_old_name_is_gone_from_discovery():
+    import src.causal_engine.discovery as pkg
     import src.causal_engine.discovery.base as base
 
     assert not hasattr(base, "GateDecision")
+    assert not hasattr(pkg, "GateDecision")
