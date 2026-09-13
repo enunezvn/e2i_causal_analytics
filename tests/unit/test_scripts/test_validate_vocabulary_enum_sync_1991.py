@@ -55,13 +55,12 @@ def test_python_enum_matches_yaml():
     assert [m.value for m in DiscoveryGateDecision] == vocab["discovery_gate_decisions"]["values"]
 
 
-def test_guard_fails_on_drift(tmp_path, monkeypatch):
+def test_guard_fails_on_drift(tmp_path):
     s = _script()
     drifted = tmp_path / "vocab.yaml"
     vocab = yaml.safe_load(YAML.read_text())
     vocab["discovery_gate_decisions"]["values"].remove("augment")
     drifted.write_text(yaml.safe_dump(vocab))
-    monkeypatch.setattr(s, "VOCAB_PATH", drifted, raising=False)
     assert s.validate_enum_sync(vocab_path=drifted) is False
 
     # The overall guard is already red on the repo today (pre-existing,
@@ -73,7 +72,7 @@ def test_guard_fails_on_drift(tmp_path, monkeypatch):
     assert results["python:DiscoveryGateDecision"].ok is False
 
 
-def test_guard_fails_when_python_side_has_extra_value(tmp_path, monkeypatch):
+def test_guard_fails_when_python_side_has_extra_value(tmp_path):
     """Mutation on the Python-enum side: give the YAML a fifth value the Python
     enum doesn't have, so the Python-vs-YAML comparison mismatches."""
     s = _script()
@@ -81,7 +80,6 @@ def test_guard_fails_when_python_side_has_extra_value(tmp_path, monkeypatch):
     vocab = yaml.safe_load(YAML.read_text())
     vocab["discovery_gate_decisions"]["values"].append("bogus")
     drifted.write_text(yaml.safe_dump(vocab))
-    monkeypatch.setattr(s, "VOCAB_PATH", drifted, raising=False)
     assert s.validate_enum_sync(vocab_path=drifted) is False
 
     results = {r.name: r for r in s.run_enum_checks(vocab_path=drifted)}
@@ -130,6 +128,16 @@ def test_extractor_alter_type_accepts_schema_prefix(tmp_path):
     sql = tmp_path / "schema_prefixed.sql"
     sql.write_text("ALTER TYPE public.widget_status ADD VALUE 'v';\n")
     values = _script().extract_enum_from_sql(sql, "widget_status")
+    assert values == ["v"]
+
+
+def test_extractor_alter_type_without_if_not_exists(tmp_path):
+    """IF NOT EXISTS is optional in Postgres syntax and migration 138 happens
+    to use it, but the extractor's (?:IF NOT EXISTS )? group must also match
+    an ALTER TYPE statement that omits it."""
+    sql = tmp_path / "no_if_not_exists.sql"
+    sql.write_text("ALTER TYPE test_enum ADD VALUE 'v';\n")
+    values = _script().extract_enum_from_sql(sql, "test_enum")
     assert values == ["v"]
 
 
