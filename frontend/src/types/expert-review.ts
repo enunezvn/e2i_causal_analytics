@@ -25,10 +25,10 @@ export interface DagStructure {
   nodes: string[];
   /** Arity-enforced (#1991 debt 4): mirrors the backend's Tuple[str, str]. */
   edges: [string, string][];
-  treatment_nodes?: string[];
-  outcome_nodes?: string[];
-  adjustment_sets?: string[][];
-  augmented_edges?: [string, string][];
+  treatment_nodes?: string[] | null;
+  outcome_nodes?: string[] | null;
+  adjustment_sets?: string[][] | null;
+  augmented_edges?: [string, string][] | null;
   discovery_gate_decision?: DiscoveryGate | null;
   confidence?: number | null;
   dag_version_hash?: string | null;
