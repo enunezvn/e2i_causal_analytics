@@ -25,10 +25,14 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
+import type { ExpertReviewDecision } from '@/types/causal';
 
 type Variant = 'default' | 'secondary' | 'destructive' | 'outline';
 
-const DECISION_COPY: Record<string, { label: string; meaning: string; variant: Variant }> = {
+// #1991 debt 4: Record<ExpertReviewDecision, ...> is exhaustive over the
+// gate's own vocabulary — an out-of-union decision is a type error, not a
+// rendered dash.
+const DECISION_COPY: Record<ExpertReviewDecision, { label: string; meaning: string; variant: Variant }> = {
   proceed: {
     label: 'Structure approved',
     meaning:
@@ -67,7 +71,7 @@ const DECISION_COPY: Record<string, { label: string; meaning: string; variant: V
 };
 
 export interface ReviewStatusPanelProps {
-  decision?: string | null;
+  decision?: ExpertReviewDecision | null;
   reviewId?: string | null;
   discoveredDagId?: string | null;
   /**
@@ -92,8 +96,13 @@ export function ReviewStatusPanel({
 }: ReviewStatusPanelProps) {
   const [copied, setCopied] = useState(false);
   if (!decision && !discoveredDagId) return null;
-  // Own-property lookup: a plain object resolves inherited members ("toString",
-  // "constructor"), which would render an empty badge instead of the verbatim string.
+  // #1991 debt 4: `decision` is typed to the gate's own union, so every
+  // in-band value is a real DECISION_COPY key at compile time. The
+  // hasOwnProperty guard + verbatim fallback below stay as defense-in-depth
+  // for a value that reaches this component from OUTSIDE the type system
+  // (a JSON payload, a stale cache, a not-yet-migrated caller) — see the
+  // "never invents a label" / "inherited-property" tests in
+  // ReviewStatusPanel.test.tsx, which deliberately exercise exactly that.
   const copy =
     decision && Object.prototype.hasOwnProperty.call(DECISION_COPY, decision)
       ? DECISION_COPY[decision]

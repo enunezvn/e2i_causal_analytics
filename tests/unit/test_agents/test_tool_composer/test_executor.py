@@ -22,6 +22,7 @@ from src.agents.tool_composer.models.composition_models import (
     ExecutionTrace,
     SubQuestion,
 )
+from src.agents.tool_composer.reason_codes import ReasonCode
 from src.tool_registry.registry import ToolSchema
 
 
@@ -1233,7 +1234,10 @@ class TestReferenceContract1573:
 
         def declining_tool(**kwargs):
             calls["n"] += 1
-            raise ToolInputError("declined: expected_effect is None — cannot simulate a lift")
+            raise ToolInputError(
+                "declined: expected_effect is None — cannot simulate a lift",
+                reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
+            )
 
         mock_tool_registry.clear()
         schema = ToolSchema(

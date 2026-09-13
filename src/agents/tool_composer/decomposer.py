@@ -136,9 +136,15 @@ class QueryDecomposer:
             logger.info(f"Decomposed into {len(sub_questions)} sub-questions")
             return result
 
+        except DecompositionError:
+            # Authored in this module (too few sub-questions, a bad dependency): already user-meaningful.
+            raise
         except Exception as e:
-            logger.error(f"Decomposition failed: {e}")
-            raise DecompositionError(f"Failed to decompose query: {e}") from e
+            # #2020: library text (LLM client, pydantic, a missing key) goes to the log, not the answer.
+            logger.error(f"Decomposition failed: {e}", exc_info=e)
+            raise DecompositionError(
+                "the query could not be broken into sub-questions because of an internal error"
+            ) from e
 
     async def _call_llm(self, query: str) -> str:
         """Call the LLM for decomposition using LangChain interface"""
@@ -170,8 +176,8 @@ class QueryDecomposer:
         try:
             return cast(Dict[str, Any], json.loads(response))
         except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Failed to parse JSON: {str(response)[:200]}...")
-            raise DecompositionError(f"Invalid JSON in LLM response: {e}") from e
+            logger.error(f"Failed to parse JSON: {str(response)[:200]}...", exc_info=e)
+            raise DecompositionError("Invalid JSON in LLM response") from e
 
     def _build_sub_questions(self, parsed: Dict[str, Any]) -> List[SubQuestion]:
         """Build SubQuestion objects from parsed response"""

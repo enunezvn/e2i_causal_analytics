@@ -13,7 +13,7 @@ from uuid_utils import uuid7 as uuid7_func
 from src.causal_engine.discovery.base import (
     AlgorithmResult,
     DiscoveryAlgorithmType,
-    GateDecision,
+    DiscoveryGateDecision,
 )
 from src.causal_engine.discovery.observability import (
     DiscoverySpan,
@@ -273,13 +273,13 @@ class TestDiscoveryTracer:
 
         await tracer.log_gate_decision(
             parent_span=span,
-            decision=GateDecision.ACCEPT,
+            decision=DiscoveryGateDecision.ACCEPT,
             confidence=0.85,
             reasons=["High confidence", "Good agreement"],
         )
 
-        # GateDecision enum uses lowercase values
-        assert span.gate_decision == GateDecision.ACCEPT.value
+        # DiscoveryGateDecision enum uses lowercase values
+        assert span.gate_decision == DiscoveryGateDecision.ACCEPT.value
         assert span.gate_confidence == 0.85
         assert span.gate_reasons == ["High confidence", "Good agreement"]
 

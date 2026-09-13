@@ -30,6 +30,7 @@ import type {
 } from '@/types/causal';
 import { useClinicalContext, useClinicalNarrativeInsight } from '@/hooks/api';
 import { ClinicalContextPanel } from './ClinicalContextPanel';
+import { gateBadge } from './gateBadge';
 import { ReviewStatusPanel } from './ReviewStatusPanel';
 
 // The dataset each grain estimates over (mirrors the page's GRAINS list); the
@@ -48,13 +49,6 @@ function formatEffect(ate: number | null | undefined): string {
 function formatCI(lower?: number | null, upper?: number | null): string {
   if (lower === null || lower === undefined || upper === null || upper === undefined) return '—';
   return `[${lower.toFixed(3)}, ${upper.toFixed(3)}]`;
-}
-
-function gateBadge(decision?: string | null) {
-  if (decision === 'proceed') return <Badge variant="default">Proceed</Badge>;
-  if (decision === 'review') return <Badge variant="secondary">Review</Badge>;
-  if (decision === 'block') return <Badge variant="destructive">Blocked</Badge>;
-  return <Badge variant="outline">—</Badge>;
 }
 
 // Backend refutation test_name -> the viz's RefutationMethod union. The backend

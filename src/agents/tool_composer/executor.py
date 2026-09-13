@@ -43,6 +43,7 @@ from .models.composition_models import (
     ToolInput,
     ToolOutput,
 )
+from .reason_codes import ReasonCode
 from .tool_registrations import _DATAFRAME_KWARGS_KEYS
 
 logger = logging.getLogger(__name__)
@@ -460,6 +461,13 @@ class PlanExecutor:
             step_numbers.setdefault(planned.step_id, number)
 
         try:
+            # A step graph broken after planning (cycle, unknown dependency, duplicate id) is a
+            # finding about the plan, so it is named here; get_execution_order would raise it as a
+            # bare ValueError, which the catch-all below cannot tell from library text (#2020).
+            problem = plan.graph_problem()
+            if problem:
+                raise ExecutionError(problem)
+
             # Get execution order (groups of parallel steps)
             execution_groups = plan.get_execution_order()
 
@@ -505,10 +513,15 @@ class PlanExecutor:
             logger.error(f"Execution timed out after {self.timeout_seconds}s")
             trace.completed_at = datetime.now(timezone.utc)
 
-        except Exception as e:
-            logger.error(f"Execution failed: {e}")
+        except ExecutionError:
             trace.completed_at = datetime.now(timezone.utc)
-            raise ExecutionError(f"Plan execution failed: {e}") from e
+            raise
+
+        except Exception as e:
+            # #2020: library text goes to the log, not the answer.
+            logger.error(f"Execution failed: {e}", exc_info=e)
+            trace.completed_at = datetime.now(timezone.utc)
+            raise ExecutionError("the plan stopped on an internal error") from e
 
         return trace
 
@@ -574,6 +587,7 @@ class PlanExecutor:
                 ),
                 status=ExecutionStatus.SKIPPED,
                 outcome_class="dependency_unmet",
+                reason_code=ReasonCode.DEPENDENCY_UNMET.value,
                 attempts=0,
                 started_at=started_at,
                 completed_at=completed_at,
@@ -615,6 +629,7 @@ class PlanExecutor:
                 ),
                 status=ExecutionStatus.FAILED,
                 outcome_class="plan_defect",
+                reason_code=ReasonCode.REFERENCE_UNRESOLVABLE.value,
                 attempts=0,
                 error_type=type(e).__name__,
                 started_at=started_at,
@@ -709,6 +724,7 @@ class PlanExecutor:
                 ),
                 status=ExecutionStatus.SKIPPED,
                 outcome_class="circuit_open",
+                reason_code=ReasonCode.CIRCUIT_OPEN.value,
                 attempts=0,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
@@ -732,6 +748,7 @@ class PlanExecutor:
                 ),
                 status=ExecutionStatus.FAILED,
                 outcome_class="not_registered",
+                reason_code=ReasonCode.TOOL_NOT_REGISTERED.value,
                 attempts=0,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
@@ -766,6 +783,7 @@ class PlanExecutor:
                 output=ToolOutput(tool_name=step.tool_name, success=False, error=str(e)),
                 status=ExecutionStatus.FAILED,
                 outcome_class="plan_defect",
+                reason_code=ReasonCode.PLAN_DEFECT.value,
                 attempts=0,
                 error_type=type(e).__name__,
                 started_at=started_at,
@@ -874,6 +892,9 @@ class PlanExecutor:
                     ),
                     status=ExecutionStatus.FAILED,
                     outcome_class="input_rejected" if is_input_error else "refused",
+                    # Tool-authored: the guard that refused names why; never re-derived here.
+                    reason_code=e.reason_code.value,
+                    reason_details=dict(e.details),
                     attempts=attempt + 1,
                     error_type=type(e).__name__,
                     started_at=started_at,
@@ -912,6 +933,7 @@ class PlanExecutor:
                     ),
                     status=ExecutionStatus.FAILED,
                     outcome_class="timeout",
+                    reason_code=ReasonCode.TOOL_TIMEOUT.value,
                     attempts=attempt + 1,
                     error_type=type(e).__name__,
                     started_at=started_at,
@@ -932,6 +954,7 @@ class PlanExecutor:
         self.failure_tracker.record_failure(step.tool_name, last_error or "Unknown error")
 
         completed_at = datetime.now(timezone.utc)
+        last_was_timeout = isinstance(last_exc, (asyncio.TimeoutError, TimeoutError))
         return StepResult(
             step_id=step.step_id,
             sub_question_id=step.sub_question_id,
@@ -942,10 +965,11 @@ class PlanExecutor:
             ),
             status=ExecutionStatus.FAILED,
             # An async tool's wait_for timeout lands in this generic arm; only the LAST
-            # attempt decides the class.
-            outcome_class=(
-                "timeout" if isinstance(last_exc, (asyncio.TimeoutError, TimeoutError)) else "error"
-            ),
+            # attempt decides the class, and the code follows the class.
+            outcome_class="timeout" if last_was_timeout else "error",
+            reason_code=(
+                ReasonCode.TOOL_TIMEOUT if last_was_timeout else ReasonCode.TOOL_ERROR
+            ).value,
             attempts=self.max_retries + 1,
             error_type=type(last_exc).__name__ if last_exc is not None else None,
             started_at=started_at,

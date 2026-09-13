@@ -44,7 +44,7 @@ import numpy as np
 
 from src.causal.stats import z_score_for_confidence
 
-from ...refutation_runner import RefutationRunner
+from ...refutation_runner import RefutationRunner, seed_identity_for
 from ..data_resolver import resolve_estimation_dataframe
 from ..router import CausalLibrary
 from ..state import LibraryExecutionResult, PipelineConfig, PipelineState
@@ -486,6 +486,9 @@ class DoWhyExecutor(LibraryExecutor):
                 estimate=estimate,
                 treatment=treatment,
                 outcome=outcome,
+                # #2029 (lane 1b): seed from the pair identity like the agent node;
+                # the pipeline state carries no brand, and no estimate_id is invented.
+                seed_identity=seed_identity_for(brand=None, treatment=treatment, outcome=outcome),
             )
             # to_legacy_format() already carries gate_decision / needs_review /
             # overall_robust / individual_tests / confidence_adjustment. Avoid

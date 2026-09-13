@@ -580,8 +580,12 @@ class TestOrchestratorTool:
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.get_orchestrator")
-    async def test_generates_session_id_when_not_provided(self, mock_get_orchestrator):
-        """Test that a session ID is generated when not provided."""
+    async def test_invents_no_session_id_when_not_provided(self, mock_get_orchestrator):
+        """#2064: with no chat session bound and none passed, the session stays None.
+
+        This test used to assert a synthesized ``chatbot-<timestamp>`` id — a value
+        that looks like a session but belongs to no conversation.
+        """
         mock_orchestrator = MagicMock()
         mock_orchestrator.run = AsyncMock(
             return_value={
@@ -596,7 +600,8 @@ class TestOrchestratorTool:
         result = await orchestrator_tool.ainvoke({"query": "Test query"})
 
         assert result["success"] is True
-        assert result["context"]["session_id"].startswith("chatbot-")
+        assert result["context"]["session_id"] is None
+        assert mock_orchestrator.run.call_args[0][0]["session_id"] is None
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.get_orchestrator")
@@ -1008,8 +1013,12 @@ class TestToolComposerTool:
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.compose_query")
-    async def test_generates_session_id_when_not_provided(self, mock_compose_query):
-        """Test that a session ID is generated when not provided."""
+    async def test_invents_no_session_id_when_not_provided(self, mock_compose_query):
+        """#2064: with no chat session bound and none passed, the session stays None.
+
+        This test used to assert a synthesized ``composer-<timestamp>`` id — a value
+        that looks like a session but belongs to no conversation.
+        """
         # Create CompositionResult-like mock structure
         mock_result = MagicMock()
         mock_result.success = True
@@ -1027,7 +1036,8 @@ class TestToolComposerTool:
         result = await tool_composer_tool.ainvoke({"query": "Test query"})
 
         assert result["success"] is True
-        assert result["context"]["session_id"].startswith("composer-")
+        assert result["context"]["session_id"] is None
+        assert mock_compose_query.call_args.kwargs["context"]["session_id"] is None
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.compose_query")

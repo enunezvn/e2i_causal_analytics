@@ -382,6 +382,7 @@ def test_string_coerced_group_labels_that_collide_fail_closed():
         }
     )
     from src.agents.tool_composer.errors import ToolRefusalError
+    from src.agents.tool_composer.reason_codes import ReasonCode
 
     with pytest.raises(ToolRefusalError) as exc_info:
         tr.gap_calculator(
@@ -394,6 +395,8 @@ def test_string_coerced_group_labels_that_collide_fail_closed():
     assert "collapse to 2 labels under string coercion" in msg
     assert "3 distinct 'brand' groups entering this comparison" in msg
     assert "'1'" in msg
+    assert exc_info.value.reason_code is ReasonCode.AMBIGUOUS_GROUP_LABEL
+    assert exc_info.value.details == {"n_raw_groups": 3, "n_labels": 2}
 
 
 def test_collision_outside_the_requested_entities_does_not_refuse():

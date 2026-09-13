@@ -157,17 +157,19 @@ class TestErrorHandling:
         assert "plan" in result.response.failed_components
 
     @pytest.mark.asyncio
-    async def test_unexpected_error(self, mock_llm_client, mock_tool_registry):
-        """Test handling of unexpected errors"""
+    async def test_llm_error_in_decompose_fails_closed(self, mock_llm_client, mock_tool_registry):
+        """An LLM error during decomposition fails the composition without its text (#2020)"""
         # Use the LangChain interface to inject an error
-        mock_llm_client.set_error(RuntimeError("Unexpected error"))
+        mock_llm_client.set_error(RuntimeError("LLM_CLIENT_SENTINEL"))
 
         composer = ToolComposer(llm_client=mock_llm_client, tool_registry=mock_tool_registry)
         result = await composer.compose("Test query")
 
         assert result.success is False
         assert result.error is not None
-        assert "Unexpected" in result.error
+        # The decompose phase wraps the LLM's exception; its text stays in the log.
+        assert result.error.startswith("Decomposition failed: ")
+        assert "LLM_CLIENT_SENTINEL" not in result.error
 
     @pytest.mark.asyncio
     async def test_error_result_structure(self, mock_llm_client, mock_tool_registry):

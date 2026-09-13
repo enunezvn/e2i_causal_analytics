@@ -286,9 +286,9 @@ from src.causal_engine.discovery.base import (
     DiscoveredEdge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
+    DiscoveryGateDecision,
     DiscoveryResult,
     EdgeType,
-    GateDecision,
 )
 from src.causal_engine.discovery.gate import DiscoveryGate
 
@@ -519,7 +519,10 @@ class TestGuidedRecoveryWithHonestPriors:
             result = await _build_dag(_make_frame(n_rows, seed), TRUE_CONFOUNDERS)
             edges = result["edges"]
             shd = _structural_metrics(edges)["shd"]
-            if result["gate_decision"] in (GateDecision.ACCEPT.value, GateDecision.AUGMENT.value):
+            if result["gate_decision"] in (
+                DiscoveryGateDecision.ACCEPT.value,
+                DiscoveryGateDecision.AUGMENT.value,
+            ):
                 assert shd <= 1.0, (
                     f"n={n_rows} seed={seed} gate={result['gate_decision']} SHD={shd}: "
                     f"spurious={sorted(edges - TRUE_EDGES)} missing={sorted(TRUE_EDGES - edges)}"
@@ -583,7 +586,7 @@ class TestProductionWiringIsDataResponsive:
         # rejects it; the manual fallback ships the declared covariates as
         # ASSERTED common causes (labeled curated, never discovered).
         assert noise["n_discovered_edges"] == 0
-        assert noise["gate_decision"] == GateDecision.REJECT.value
+        assert noise["gate_decision"] == DiscoveryGateDecision.REJECT.value
         assert set(noise["edge_provenance"].values()) == {"curated"}
         # The real frame ships a data-selected DAG — the graphs now DIFFER
         # (measured: real recovers TRUE_EDGES exactly on this seed; noise ships
@@ -621,7 +624,7 @@ class TestProductionWiringIsDataResponsive:
         of renormalizing over a prior-determined graph. This is the decision
         basis that lets it genuinely REJECT the noise frame above."""
         result = await _build_dag(_make_frame(2000, 2000), ALL_COVARIATES, anchored=[])
-        assert result["gate_decision"] == GateDecision.ACCEPT.value
+        assert result["gate_decision"] == DiscoveryGateDecision.ACCEPT.value
         assert result["corroboration_basis"] == "bootstrap_stability"
         assert result["dag_overridden"] is False
 
@@ -646,7 +649,7 @@ class TestPostTreatmentCovariateIsNotRejected:
         # The prior wins over the data: the true direction is treatment -> mediator.
         assert ("adherence_90d", TREATMENT) in result["edges"]
         assert (TREATMENT, "adherence_90d") not in result["edges"]
-        assert result["gate_decision"] == GateDecision.ACCEPT.value
+        assert result["gate_decision"] == DiscoveryGateDecision.ACCEPT.value
 
 
 class TestGateRejectsUncorroboratedSingleAlgorithmRuns:
@@ -693,13 +696,13 @@ class TestGateRejectsUncorroboratedSingleAlgorithmRuns:
     def test_structurally_poor_uncorroborated_result_is_rejected(self) -> None:
         result = self._single_algorithm_result([("unrelated_a", "unrelated_b")])
         evaluation = DiscoveryGate().evaluate(result, expected_edges=[(TREATMENT, OUTCOME)])
-        assert evaluation.decision == GateDecision.REJECT
+        assert evaluation.decision == DiscoveryGateDecision.REJECT
         assert evaluation.metadata["corroboration_score"] == 0.0
         assert evaluation.metadata["corroboration_basis"] == "uncorroborated_single_run"
 
     def test_reversed_estimand_edge_is_rejected(self) -> None:
         result = self._single_algorithm_result([(OUTCOME, TREATMENT)])
-        assert DiscoveryGate().evaluate(result).decision == GateDecision.REJECT
+        assert DiscoveryGate().evaluate(result).decision == DiscoveryGateDecision.REJECT
 
 
 class TestBootstrapStabilityGatesNoiseAtTheDataLevel:
@@ -716,14 +719,14 @@ class TestBootstrapStabilityGatesNoiseAtTheDataLevel:
         # Non-vacuity: this seed must keep REACHING the corroboration scoring, not
         # short-circuit on the gate's min-edges check. Measured: 3 edges, REVIEW.
         assert result["n_discovered_edges"], "pin degraded to a vacuous min-edges reject"
-        assert result["gate_decision"] != GateDecision.ACCEPT.value
+        assert result["gate_decision"] != DiscoveryGateDecision.ACCEPT.value
 
     @pytest.mark.asyncio
     async def test_honest_priors_still_accept_with_bootstrap_on(self) -> None:
         """Positive control: the gate's new muscle must not reject genuine
         structure. Same pinned seed family as the capability sweep."""
         result = await _build_dag(_make_frame(500, 3), TRUE_CONFOUNDERS, bootstrap_resamples=20)
-        assert result["gate_decision"] == GateDecision.ACCEPT.value
+        assert result["gate_decision"] == DiscoveryGateDecision.ACCEPT.value
         assert result["edges"]  # discovered DAG shipped
 
 

@@ -30,7 +30,7 @@ def json_default(value: Any) -> Any:
     if isinstance(value, UUID):
         return str(value)
     if hasattr(value, "value") and not isinstance(value, (str, bytes)):
-        # Enum members (GateDecision / EdgeType / DiscoveryAlgorithmType).
+        # Enum members (DiscoveryGateDecision / EdgeType / DiscoveryAlgorithmType).
         return value.value
     return str(value)
 

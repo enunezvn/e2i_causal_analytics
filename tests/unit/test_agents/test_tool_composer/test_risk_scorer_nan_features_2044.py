@@ -36,6 +36,7 @@ import pytest
 
 from src.agents.tool_composer import tool_registrations as tr
 from src.agents.tool_composer.errors import ToolRefusalError
+from src.agents.tool_composer.reason_codes import ReasonCode
 from src.agents.tool_composer.synthesizer import (
     SYNTHESIS_OUTPUT_BUDGET_CHARS,
     project_tool_output,
@@ -231,6 +232,8 @@ def test_it_refuses_when_triage_would_score_only_a_small_minority():
     message = str(exc.value)
     assert "5 of 100" in message
     assert "Refusing" in message
+    assert exc.value.reason_code is ReasonCode.INSUFFICIENT_SAMPLE
+    assert exc.value.details == {"n_complete_rows": 5, "n_rows_in_scope": 100}
 
 
 def test_a_majority_of_the_cohort_still_scores():
@@ -361,6 +364,8 @@ def test_it_refuses_when_every_feature_is_too_incomplete_to_use():
     message = str(exc.value)
     assert "days_to_treatment" in message and "disease_severity" in message
     assert "refus" in message.lower()
+    assert exc.value.reason_code is ReasonCode.NO_USABLE_COLUMNS
+    assert set(exc.value.details) == {"n_numeric_features", "n_rows"}
 
 
 def test_it_refuses_when_no_row_is_complete_across_the_usable_features():
@@ -384,6 +389,8 @@ def test_it_refuses_when_no_row_is_complete_across_the_usable_features():
         _score(df)
     assert "0" in str(exc.value)
     assert "complete" in str(exc.value).lower()
+    assert exc.value.reason_code is ReasonCode.NO_USABLE_ROWS
+    assert exc.value.details == {"n_rows": 800, "n_usable_features": 8}
 
 
 def test_the_disclosure_survives_the_synthesis_projection_as_intact_fields():

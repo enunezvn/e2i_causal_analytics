@@ -29,9 +29,9 @@ from src.causal_engine.discovery.base import (
     DiscoveredEdge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
+    DiscoveryGateDecision,
     DiscoveryResult,
     EdgeType,
-    GateDecision,
 )
 from src.repositories.discovered_dag import (
     DiscoveredDagPersistError,
@@ -122,7 +122,7 @@ def _result(*, success: bool = True, with_metadata: bool = True) -> DiscoveryRes
         ensemble_dag=dag,
         edges=edges,
         algorithm_results=runs,
-        gate_decision=GateDecision.ACCEPT,
+        gate_decision=DiscoveryGateDecision.ACCEPT,
         gate_confidence=0.91,
         metadata=metadata,
     )
@@ -403,7 +403,7 @@ def test_payload_enum_values_are_the_db_labels():
     """The RPC casts these strings into the moved enums; they must be the
     Python enum VALUES, never the member names."""
     payload = _payload()
-    assert payload["gate_decision"] in {m.value for m in GateDecision}
+    assert payload["gate_decision"] in {m.value for m in DiscoveryGateDecision}
     assert payload["algorithm_runs"][0]["algorithm"] in {m.value for m in DiscoveryAlgorithmType}
     assert all(e["edge_type"] in {m.value for m in EdgeType} for e in payload["edges"])
     assert payload["algorithms_used"] == [a.value for a in _config().algorithms]

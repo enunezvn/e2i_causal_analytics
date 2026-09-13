@@ -44,6 +44,7 @@ from src.agents.tool_composer.models.composition_models import (
     SubQuestion,
     ToolMapping,
 )
+from src.agents.tool_composer.reason_codes import ReasonCode
 from src.tool_registry.registry import ToolParameter, ToolRegistry, ToolSchema
 
 # ---------------------------------------------------------------------------
@@ -216,6 +217,7 @@ async def test_missing_required_arguments_never_invoke_the_tool() -> None:
     assert result.outcome_class == "plan_defect", (
         f"a planner-omitted argument is a plan defect, got {result.outcome_class!r}"
     )
+    assert (result.reason_code, result.reason_details) == (ReasonCode.PLAN_DEFECT.value, {})
     assert result.attempts == 0, f"no attempt was made against the tool, got {result.attempts}"
 
 
@@ -326,7 +328,9 @@ async def test_a_tool_that_runs_and_rejects_its_input_is_still_input_rejected() 
 
     def picky_tool(value: Any, **kwargs: Any) -> Dict[str, Any]:
         invoked["picky_tool"] = invoked.get("picky_tool", 0) + 1
-        raise ToolInputError("value must not be None")
+        raise ToolInputError(
+            "value must not be None", reason_code=ReasonCode.MISSING_REQUIRED_INPUT
+        )
 
     _register(registry, "picky_tool", picky_tool, [ToolParameter("value", "str", "v", True)])
     executor = _executor(registry, max_retries=2)

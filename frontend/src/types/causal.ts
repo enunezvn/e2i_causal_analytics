@@ -15,6 +15,25 @@
  */
 
 // =============================================================================
+// GATE VOCABULARY (#1991 debt 4)
+// =============================================================================
+// Mirrors src/api/schemas/causal.py's `RefutationGate` / `ExpertReviewDecision`
+// Literals: each gate has its OWN vocabulary, matched here as a union so an
+// out-of-union value is a type error at compile time, not a rendered dash.
+
+/** `RefutationSummary.gate_decision` / leaderboard effect `gate_decision`. */
+export type RefutationGate = 'proceed' | 'review' | 'block';
+
+/** `RefutationSummary.expert_review_decision` — the structural DAG-approval gate. */
+export type ExpertReviewDecision =
+  | 'proceed'
+  | 'renewal_required'
+  | 'pending_review'
+  | 'rejected'
+  | 'blocked'
+  | 'unavailable';
+
+// =============================================================================
 // ENUMS
 // =============================================================================
 
@@ -241,7 +260,7 @@ export interface RefutationTestDetail {
 /** Robustness gate + refutation/sensitivity summary. */
 export interface RefutationSummary {
   /** proceed / review / block */
-  gate_decision?: string | null;
+  gate_decision?: RefutationGate | null;
   passed: boolean;
   needs_review: boolean;
   /**
@@ -255,7 +274,7 @@ export interface RefutationSummary {
    * unavailable — the structural verdict (#1971). Approval never promotes a
    * borderline estimate; a rejection halts the run on every band.
    */
-  expert_review_decision?: string | null;
+  expert_review_decision?: ExpertReviewDecision | null;
   /**
    * The agent's band + expert-review sentence (#1995): the approval (reviewer,
    * validity window), the rejection (reviewer, reason) or the queued / blocked /
@@ -396,7 +415,7 @@ export interface DiscoveredEffect {
   statistical_significance: boolean;
   selected_estimator?: string | null;
   /** proceed / review / block */
-  gate_decision?: string | null;
+  gate_decision?: RefutationGate | null;
   /** 0-1 ranking signal (robustness gate + significance) */
   confidence_score: number;
   /** |ate| effect magnitude */

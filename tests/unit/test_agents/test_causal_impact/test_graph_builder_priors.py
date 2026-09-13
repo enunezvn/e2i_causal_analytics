@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode
-from src.causal_engine.discovery.base import DiscoveryResult, GateDecision
+from src.causal_engine.discovery.base import DiscoveryGateDecision, DiscoveryResult
 from src.causal_engine.discovery.gate import GateEvaluation
 
 
@@ -35,7 +35,7 @@ async def test_run_discovery_seeds_confounder_edges_from_modeled_confounders(mon
         node.discovery_gate,
         "evaluate",
         lambda result, expected: GateEvaluation(
-            decision=GateDecision.REVIEW, confidence=0.5, reasons=[]
+            decision=DiscoveryGateDecision.REVIEW, confidence=0.5, reasons=[]
         ),
     )
 
@@ -80,7 +80,7 @@ async def test_run_discovery_skips_modeled_confounders_absent_from_frame(monkeyp
         node.discovery_gate,
         "evaluate",
         lambda result, expected: GateEvaluation(
-            decision=GateDecision.REVIEW, confidence=0.5, reasons=[]
+            decision=DiscoveryGateDecision.REVIEW, confidence=0.5, reasons=[]
         ),
     )
     state = {
@@ -109,7 +109,7 @@ def _capture_prior(node, monkeypatch) -> dict:
         node.discovery_gate,
         "evaluate",
         lambda result, expected: GateEvaluation(
-            decision=GateDecision.REVIEW, confidence=0.5, reasons=[]
+            decision=DiscoveryGateDecision.REVIEW, confidence=0.5, reasons=[]
         ),
     )
     return captured

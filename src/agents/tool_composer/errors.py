@@ -9,6 +9,94 @@ the other needs.
 
 from __future__ import annotations
 
+import logging
+from typing import Any, Dict, Optional
+
+from .reason_codes import ReasonCode, validate_details
+from .reason_codes import canonical_sentence as _sentence_for
+
+logger = logging.getLogger(__name__)
+
+
+class _CodedError(Exception):
+    """Mixin: a deterministic tool objection that carries a closed reason code (#2021).
+
+    The human ``message`` is preserved exactly — 96 assertions pin that prose, and
+    #1574's ``estimation_data_scope`` disclosure rides it into the fail-closed answer.
+    The code is what the learning loop aggregates and what the database stores; the
+    canonical sentence is what is shown when the raw message is not safe to show.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: ReasonCode,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(message)
+        # Neither check may raise. A raise here escapes the executor's refusal arm into its
+        # generic ``except Exception``: the step is retried, charged to the circuit breaker,
+        # and the refusal's message is lost (#1600). Keep the refusal, log the defect.
+        try:
+            self.reason_code = ReasonCode(reason_code)
+        except Exception:  # noqa: BLE001 - this constructor may not raise (see above)
+            self.reason_code = ReasonCode.TOOL_ERROR
+            # The container log is the home for raw text (#2020); name the bad code, clipped.
+            # Formatting it can itself raise (a custom __str__/__repr__), so it is guarded.
+            try:
+                shown = (
+                    str.__str__(reason_code)[:64]
+                    if isinstance(reason_code, str)
+                    else repr(reason_code)[:64]
+                )
+            except Exception:  # noqa: BLE001 - an unprintable code is still logged
+                shown = "<unprintable>"
+            logger.error(
+                "%s raised with reason_code %r, which is outside ReasonCode; recorded as %s",
+                type(self).__name__,
+                shown,
+                ReasonCode.TOOL_ERROR,
+            )
+        self.details: Dict[str, Any] = {}
+        try:
+            self.details = validate_details(details or {})
+        except Exception as exc:  # noqa: BLE001 - this constructor may not raise (see above)
+            # The rejection reason is data-free by construction; the values are not logged.
+            logger.error(
+                "%s (%s) dropped its details: %s", type(self).__name__, self.reason_code, exc
+            )
+
+    @property
+    def canonical_sentence(self) -> str:
+        return _sentence_for(self.reason_code)
+
+    def __reduce__(self) -> Any:
+        """Rebuild through the keyword contract, so the error stays picklable.
+
+        ``BaseException.__reduce__`` replays ``self.args`` POSITIONALLY. With a
+        required keyword-only ``reason_code`` that replay raises ``TypeError`` on
+        ``pickle`` or ``copy.deepcopy``, so anything that reduces the error turns a
+        refusal into a crash.
+        """
+        # A subclass whose __init__ takes a different signature must override __reduce__.
+        # The third element restores __dict__, so __notes__ and extra attributes survive.
+        return (
+            _rebuild_coded_error,
+            (type(self), self.args, self.reason_code, self.details),
+            self.__dict__,
+        )
+
+
+def _rebuild_coded_error(
+    cls: type,
+    args: tuple,
+    reason_code: ReasonCode,
+    details: Dict[str, Any],
+) -> Any:
+    """Unpickle helper for :class:`_CodedError`; module-level so it is importable."""
+    return cls(*args, reason_code=reason_code, details=details)
+
 
 class ReferenceResolutionError(Exception):
     """A plan reference (``$step_X.field`` / ``$context.field``) cannot be resolved.
@@ -28,7 +116,7 @@ class ReferenceResolutionError(Exception):
         super().__init__(f"reference '{reference}' is unresolvable: {reason}")
 
 
-class ToolInputError(ValueError):
+class ToolInputError(_CodedError, ValueError):
     """A composable tool deterministically rejects its input.
 
     Raised by a tool when an input value violates the tool's contract in a
@@ -36,10 +124,13 @@ class ToolInputError(ValueError):
     ``expected_effect=None``). The executor treats this as non-retryable:
     the step fails once, with the tool's stated reason, instead of being
     retried identically (#1573 acceptance: no ``NoneType`` retry loops).
+
+    Carries a :class:`~src.agents.tool_composer.reason_codes.ReasonCode` (#2021) so the
+    learning loop can aggregate rejections by category rather than by prose.
     """
 
 
-class ToolRefusalError(RuntimeError):
+class ToolRefusalError(_CodedError, RuntimeError):
     """A composable tool deterministically REFUSES to produce a result (#1600).
 
     The distinction from :class:`ToolInputError` is what the tool is objecting
@@ -71,6 +162,11 @@ class ToolRefusalError(RuntimeError):
     plain ``RuntimeError`` and keep retrying: that machinery is genuinely
     stochastic (bootstrap resampling, placebo simulations, no pinned
     ``random_state``), so a second attempt is not futile by construction.
+
+    Carries a :class:`~src.agents.tool_composer.reason_codes.ReasonCode` (#2021) so the
+    learning loop can aggregate refusals by category rather than by prose, and so the
+    fail-closed answer can render a data-free sentence when the raw message is not
+    safe to show (#2020).
     """
 
 

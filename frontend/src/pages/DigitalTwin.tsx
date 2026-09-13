@@ -46,6 +46,7 @@ import { toast } from '@/hooks/use-toast';
 import { useDataFreshness } from '@/hooks/use-data-freshness';
 import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator';
 import {
+  EstimateScope,
   InterventionType,
   SimulationStatus,
   FALLBACK_INTERVENTION_TYPES,
@@ -365,6 +366,48 @@ function provenanceLabel(provenance: string): string {
   }
 }
 
+/** Regions a stored simulation was filtered to, read from its detail payload's population_filters. */
+function filteredRegions(simulation: AnySimulation): string[] {
+  const regions = 'population_filters' in simulation ? simulation.population_filters?.regions : undefined;
+  return Array.isArray(regions) ? regions.filter((r): r is string => typeof r === 'string') : [];
+}
+
+/**
+ * Scope note for the headline effect (#2053); null when there is nothing worth saying.
+ * 'regions' names them. A cohort-wide effect stays a plain ATE. 'unknown' is a stored
+ * simulation from before the scope was recorded: it gets a note only when it was filtered
+ * to regions, because only then might its effect cover just those regions.
+ */
+function estimateScopeNote(
+  scope: EstimateScope | undefined,
+  targetRegions: string[],
+  filterRegions: string[]
+): string | null {
+  if (scope === EstimateScope.REGIONS && targetRegions.length > 0) {
+    return `estimated on ${targetRegions.join(', ')}`;
+  }
+  if (scope === EstimateScope.UNKNOWN && filterRegions.length > 0) {
+    return `scope not recorded — this effect may cover only ${filterRegions.join(', ')}`;
+  }
+  return null;
+}
+
+/**
+ * Region qualifier for a history row's ATE. History rows carry no population filter, so an
+ * unknown-scope row cannot tell whether it was filtered; it stays plain, like a cohort row.
+ */
+function HistoryScopeQualifier({ scope, regions }: { scope?: EstimateScope; regions?: string[] }) {
+  if (scope !== EstimateScope.REGIONS || !regions || regions.length === 0) return null;
+  return (
+    <span
+      className="ml-1 text-xs font-normal text-[var(--color-text-tertiary)]"
+      title={`estimated on ${regions.join(', ')}`}
+    >
+      · {regions.join(', ')}
+    </span>
+  );
+}
+
 /**
  * Results panel for a single real simulation (SimulationResponse shape).
  * Renders only fields the backend returns.
@@ -392,8 +435,14 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
   // Region scope (#2023). A region filter narrows the estimate itself, so the headline
   // numbers above describe those regions, not the whole cohort. Say which, and keep the
   // cohort-wide effect visible so neither number is lost.
+  // The backend states the scope (#2053); a stored simulation whose scope was never
+  // recorded says 'unknown' and is noted when it was region-filtered. A response without
+  // the field falls back to its regions.
   const targetRegions = simulation.target_regions ?? [];
-  const scopedToRegions = targetRegions.length > 0;
+  const scope =
+    simulation.estimate_scope ?? (targetRegions.length > 0 ? EstimateScope.REGIONS : undefined);
+  const scopedToRegions = scope === EstimateScope.REGIONS && targetRegions.length > 0;
+  const scopeNote = estimateScopeNote(scope, targetRegions, filteredRegions(simulation));
   if (scopedToRegions && simulation.cohort_effect != null) {
     evidence.push(
       `Cohort-wide effect (all regions): ${fmt(simulation.cohort_effect)}` +
@@ -482,9 +531,9 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
       <div>
         <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">
           Estimated Effect
-          {scopedToRegions && (
+          {scopeNote && (
             <span className="ml-2 font-normal text-[var(--color-text-tertiary)]">
-              · estimated on {targetRegions.join(', ')}
+              · {scopeNote}
             </span>
           )}
         </h4>
@@ -947,6 +996,10 @@ export default function DigitalTwin() {
                           <div className="text-right">
                             <p className="text-sm font-medium text-[var(--color-text-primary)]">
                               ATE: {sim.ate_estimate.toFixed(2)}
+                              <HistoryScopeQualifier
+                                scope={sim.estimate_scope}
+                                regions={sim.target_regions}
+                              />
                             </p>
                           </div>
                           <RecommendationBadge recommendation={sim.recommendation_type} />
@@ -967,6 +1020,10 @@ export default function DigitalTwin() {
                               <div className="flex items-center gap-3">
                                 <span className="text-xs font-medium text-[var(--color-text-primary)]">
                                   ATE: {run.ate_estimate.toFixed(2)}
+                                  <HistoryScopeQualifier
+                                    scope={run.estimate_scope}
+                                    regions={run.target_regions}
+                                  />
                                 </span>
                                 <RecommendationBadge recommendation={run.recommendation_type} />
                               </div>

@@ -12,6 +12,10 @@
  * @module types/expert-review
  */
 
+/** DAG-discovery gate vocabulary (#1991 debt 4) — its own vocabulary, distinct
+ * from `RefutationGate` / `ExpertReviewDecision` (types/causal.ts). */
+export type DiscoveryGate = 'accept' | 'review' | 'reject' | 'augment';
+
 /**
  * Sanitized causal-graph snapshot captured when the review was created
  * (mig 097). Null/absent for rows created before snapshot capture existed —
@@ -19,12 +23,13 @@
  */
 export interface DagStructure {
   nodes: string[];
-  edges: string[][];
-  treatment_nodes?: string[];
-  outcome_nodes?: string[];
-  adjustment_sets?: string[][];
-  augmented_edges?: string[][];
-  discovery_gate_decision?: string | null;
+  /** Arity-enforced (#1991 debt 4): mirrors the backend's Tuple[str, str]. */
+  edges: [string, string][];
+  treatment_nodes?: string[] | null;
+  outcome_nodes?: string[] | null;
+  adjustment_sets?: string[][] | null;
+  augmented_edges?: [string, string][] | null;
+  discovery_gate_decision?: DiscoveryGate | null;
   confidence?: number | null;
   dag_version_hash?: string | null;
 }

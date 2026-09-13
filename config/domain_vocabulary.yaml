@@ -567,6 +567,7 @@ refutation_test_types:
     - data_subset           # Test on data subset
     - bootstrap             # Bootstrap confidence
     - sensitivity_e_value   # E-value sensitivity
+    - negative_control_outcome   # Negative-control outcome (mig 138)
 
 validation_statuses:
   description: "Validation test outcome statuses"
@@ -582,6 +583,14 @@ gate_decisions:
     - proceed   # Estimate can be used
     - review    # Requires expert review
     - block     # Cannot use estimate
+
+discovery_gate_decisions:
+  description: "Causal-discovery gate decisions (discovered_dags.gate_decision, SQL type discovery_gate_decision)"
+  values:
+    - accept    # High confidence, use the discovered DAG
+    - review    # Medium confidence, requires expert validation
+    - reject    # Low confidence, use the manual DAG
+    - augment   # Supplement the manual DAG with high-confidence edges
 
 expert_review_types:
   description: "Types of expert reviews"

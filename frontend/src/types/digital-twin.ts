@@ -57,6 +57,16 @@ export enum Recommendation {
 }
 
 /**
+ * What a simulation's effect was estimated ON (#2053). UNKNOWN = a stored simulation
+ * written before the scope was recorded, whose effect may be cohort-wide or region-scoped.
+ */
+export enum EstimateScope {
+  COHORT = 'cohort',
+  REGIONS = 'regions',
+  UNKNOWN = 'unknown',
+}
+
+/**
  * Fidelity grade values
  */
 export enum FidelityGrade {
@@ -343,9 +353,15 @@ export interface SimulationResponse {
   /** Creation timestamp */
   created_at: string;
   /**
-   * Regions the effect above was estimated ON (#2023). Empty/absent = the whole cohort.
-   * When a region filter is applied, simulated_ate, its interval, the recommendation and
-   * recommended_sample_size all describe these regions.
+   * What the effect above was estimated ON (#2053): the whole cohort, target_regions, or
+   * unknown — a stored simulation written before the scope was recorded, whose effect may be
+   * either. An empty target_regions means cohort-wide only when this is 'cohort'.
+   */
+  estimate_scope?: EstimateScope;
+  /**
+   * Regions the effect above was estimated ON (#2023). Empty unless estimate_scope is
+   * 'regions'. When a region filter is applied, simulated_ate, its interval, the
+   * recommendation and recommended_sample_size all describe these regions.
    */
   target_regions?: string[];
   /** The cohort-wide ATE the targeted estimate narrowed from; absent when not narrowed. */
@@ -392,6 +408,12 @@ export interface SimulationListItem {
   status: SimulationStatus;
   /** Creation timestamp */
   created_at: string;
+  /** Scope of simulated_ate (#2053); see SimulationResponse.estimate_scope */
+  estimate_scope?: EstimateScope;
+  /** Regions simulated_ate was estimated on; empty unless estimate_scope is 'regions' */
+  target_regions?: string[];
+  /** Cohort-wide ATE a region-scoped simulated_ate narrowed from */
+  cohort_effect?: number | null;
 }
 
 /**
@@ -735,6 +757,10 @@ export interface SimulationHistoryResponse {
     brand: string;
     ate_estimate: number;
     recommendation_type: RecommendationType;
+    /** Scope of ate_estimate (#2053); see SimulationResponse.estimate_scope */
+    estimate_scope?: EstimateScope;
+    /** Regions ate_estimate was estimated on; empty unless estimate_scope is 'regions' */
+    target_regions?: string[];
   }>;
   /** Total count */
   total: number;

@@ -83,6 +83,41 @@ def reset_raw_user_query(token: "contextvars.Token[Optional[str]]") -> None:
     _raw_user_query_context.reset(token)
 
 
+# #2064: the real session of the chat turn running these tools. ToolNode invokes
+# tools with the model's args only, and the model cannot know the frontend thread
+# id, so orchestrator_tool / tool_composer_tool used to invent ``chatbot-<ts>`` /
+# ``composer-<ts>`` ids that look like sessions but belong to no conversation.
+# Each chat brain binds the real id before its tools run: copilotkit's execute()
+# (AG-UI — re-exported there as ``_session_id_context``) and chatbot_graph's tools
+# node (/chat/stream). Declared here rather than in copilotkit.py because
+# copilotkit already imports this module: no import cycle, and chatbot_graph does
+# not pull in the CopilotKit SDK to reach it.
+chat_session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "e2i_chat_session_id", default=None
+)
+
+
+def set_chat_session_id(session_id: Optional[str]) -> "contextvars.Token[Optional[str]]":
+    """Bind the real chat session for the tools running in this context."""
+    return chat_session_id_context.set(session_id or None)
+
+
+def reset_chat_session_id(token: "contextvars.Token[Optional[str]]") -> None:
+    chat_session_id_context.reset(token)
+
+
+def _resolve_session_id(tool_arg: Optional[str]) -> Optional[str]:
+    """The session a tool call belongs to — never an invented one.
+
+    The chat handler's binding wins: inside a chat turn the ``session_id`` tool
+    argument can only be a model guess (the input schema's example even offers
+    one). The argument is honoured only when no chat session is bound, i.e. a
+    direct caller. With neither, ``None``: an unattributable call records NULL
+    instead of an id that looks like a real conversation.
+    """
+    return chat_session_id_context.get() or tool_arg or None
+
+
 # Try to import Opik for tracing
 try:
     from src.mlops.opik_connector import OpikConnector
@@ -607,12 +642,22 @@ def _format_causal_path(
     }
 
 
+_REFUTATION_GATES = frozenset({"proceed", "review", "block"})
+
+
 def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Aggregate one path's ``causal_validations`` rows into a chat summary.
 
-    Gate priority mirrors ``CausalValidationRepository.get_gate_decision``
-    (block > review > proceed), extended over the full ``gate_decision`` enum
-    (reject counts as blocking, augment as review-band, accept as proceed).
+    The block > review > proceed ORDER mirrors
+    ``CausalValidationRepository.get_gate_decision``, but the fail-closed
+    behaviour below does not: block wins if any row reads block, then review
+    if any row reads review, and proceed ONLY when every row is readable (a
+    known ``gate_decision`` value); otherwise the gate is ``unknown``. The
+    column holds ONLY the refutation vocabulary (proceed / review / block);
+    any other value, including NULL, is counted in ``gate_unreadable_rows``
+    and never mapped to proceed (#1991 debt 4) — the repository method
+    itself still defaults an unreadable value to proceed, which is out of
+    scope for this lane.
     ``evidence_is_synthetic`` reads the migration-119 provenance label
     (``details_json.is_synthetic``) so seeded synthetic evidence can never
     masquerade as real RefutationSuite output in an answer.
@@ -623,13 +668,18 @@ def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str,
     def _status_count(status: str) -> int:
         return sum(1 for r in rows if r.get("status") == status)
 
-    gates = {r.get("gate_decision") for r in rows}
-    if gates & {"block", "reject"}:
+    gates = [r.get("gate_decision") for r in rows]
+    known = {g for g in gates if g in _REFUTATION_GATES}
+    unreadable = sum(1 for g in gates if g not in _REFUTATION_GATES)
+    if "block" in known:
         gate = "block"
-    elif gates & {"review", "augment"}:
+    elif "review" in known:
         gate = "review"
-    else:
+    elif known and not unreadable:
         gate = "proceed"
+    else:
+        # Fail closed: a row we cannot read is not evidence of robustness.
+        gate = "unknown"
 
     confidences = [
         float(r["confidence_score"]) for r in rows if r.get("confidence_score") is not None
@@ -648,16 +698,25 @@ def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str,
         return {}
 
     timestamps = [str(r["created_at"]) for r in rows if r.get("created_at")]
-    return {
+    summary: Dict[str, Any] = {
         "tests_total": len(rows),
         "tests_passed": _status_count("passed"),
         "tests_failed": _status_count("failed"),
         "tests_warning": _status_count("warning"),
         "gate_decision": gate,
+        "gate_unreadable_rows": unreadable,
         "confidence_score": (sum(confidences) / len(confidences)) if confidences else None,
         "evidence_is_synthetic": any(bool(_details(r).get("is_synthetic")) for r in rows),
         "latest_test_at": max(timestamps) if timestamps else None,
     }
+    if unreadable:
+        summary["note"] = (
+            f"{unreadable} of {len(rows)} persisted refutation rows carry a gate value "
+            "outside proceed/review/block and could not be read; block or review still "
+            "wins if any readable row says so, but proceed is never reported while any "
+            "row is unreadable — the gate reads 'unknown' instead."
+        )
+    return summary
 
 
 def _refutation_evidence_entry(
@@ -1594,8 +1653,8 @@ async def orchestrator_tool(
         if raw_user_query and raw_user_query != query:
             user_context["raw_user_query"] = raw_user_query
 
-        # Generate session_id if not provided
-        effective_session_id = session_id or f"chatbot-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # #2064: the real chat session, or None — never a synthesized id.
+        effective_session_id = _resolve_session_id(session_id)
 
         # Call the orchestrator
         orchestrator_result = await orchestrator.run(
@@ -1706,7 +1765,8 @@ def _composer_context(
     return {
         "brand": brand,
         "region": region,
-        "session_id": session_id or f"composer-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        # #2064: absent stays None, so an unattributable composition records NULL.
+        "session_id": session_id,
         "max_parallel": max_parallel,
         "entry_point": "chat_tool",
     }
@@ -1752,6 +1812,9 @@ async def tool_composer_tool(
         Dict with synthesized response from multiple agent outputs
     """
     logger.info(f"Tool composer: query={redact_query(query)}, brand={brand}")
+    # #2064: the real chat session, or None — used by the composition and by the
+    # orchestrator fallback below alike.
+    session_id = _resolve_session_id(session_id)
 
     try:
         # Build context for Tool Composer
@@ -1862,8 +1925,7 @@ async def tool_composer_tool(
                 fallback_result = await orchestrator.run(
                     {
                         "query": query,
-                        "session_id": session_id
-                        or f"fallback-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                        "session_id": session_id,
                         "user_context": {"brand": brand, "region": region},
                     }
                 )

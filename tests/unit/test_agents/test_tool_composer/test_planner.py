@@ -549,18 +549,23 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_llm_error_wrapped(
-        self, mock_llm_client, mock_tool_registry, sample_decomposition
+        self, mock_llm_client, mock_tool_registry, sample_decomposition, caplog
     ):
-        """Test that LLM errors are wrapped in PlanningError"""
+        """Test that LLM errors are wrapped in PlanningError, their text logged (#2020)"""
         # Use the LangChain interface to inject an error
-        mock_llm_client.set_error(Exception("LLM error"))
+        llm_error = Exception("LLM error")
+        mock_llm_client.set_error(llm_error)
 
         planner = ToolPlanner(llm_client=mock_llm_client, tool_registry=mock_tool_registry)
 
         with pytest.raises(PlanningError) as exc_info:
             await planner.plan(sample_decomposition)
 
-        assert "LLM error" in str(exc_info.value)
+        assert str(exc_info.value) == (
+            "no execution plan could be built because of an internal error"
+        )
+        assert "LLM error" in caplog.text
+        assert exc_info.value.__cause__ is llm_error
 
 
 class TestMemoryIntegration:

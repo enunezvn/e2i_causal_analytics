@@ -362,6 +362,8 @@ def test_guard_fails_on_drift(tmp_path, monkeypatch):
 Run: `.venv/bin/pytest tests/unit/test_scripts/test_validate_vocabulary_enum_sync_1991.py -n 0 -q`
 Expected: FAIL — `KeyError: 'discovery_gate_decisions'`, extractor returns `[]` for the dotted name, `validate_enum_sync() got an unexpected keyword argument`.
 
+Note (measured, post-implementation): the "extractor returns `[]` for the dotted name" part of this expectation was false. The baseline (pre-`re.escape`) extractor already matched `ml.gate_decision`, because the unescaped `.` in the regex is a wildcard that happens to match the literal `.` in the SQL text too; `re.escape` is a precision fix (stops the wildcard from matching anything else there), not a match fix. `test_sql_extractor_reads_schema_qualified_type` passed even before the extractor was touched.
+
 - [ ] **Step 3: Implement**
 
 `config/domain_vocabulary.yaml`, section 4: add `- negative_control_outcome   # Negative-control outcome (mig 138)` to `refutation_test_types.values`, and after `gate_decisions`:

@@ -35,6 +35,7 @@ import pytest
 
 from src.agents.tool_composer import tool_registrations as tr
 from src.agents.tool_composer.cache import get_cache_manager
+from src.agents.tool_composer.errors import ToolInputError, ToolRefusalError
 from src.agents.tool_composer.executor import ExecutionError, PlanExecutor
 from src.agents.tool_composer.models.composition_models import (
     DecompositionResult,
@@ -46,6 +47,7 @@ from src.agents.tool_composer.models.composition_models import (
     SubQuestion,
     ToolMapping,
 )
+from src.agents.tool_composer.reason_codes import ReasonCode
 from src.tool_registry.registry import ToolSchema, get_registry
 
 
@@ -150,6 +152,10 @@ def _classes(result: StepResult) -> Tuple[Optional[str], int, bool, Optional[str
     return (result.outcome_class, result.attempts, result.cache_hit, result.error_type)
 
 
+def _code(result: StepResult) -> Tuple[Optional[str], Dict[str, Any]]:
+    return (result.reason_code, result.reason_details)
+
+
 def _single_brand_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {"brand": ["Kisqali"] * 6, "market_share": [0.72, 0.71, 0.74, 0.73, 0.7, 0.72]}
@@ -174,7 +180,9 @@ def _refusing_gap_calculator(**_: Any) -> Any:
 async def test_succeeded_class(registry):
     _register(registry, "ok_tool", lambda **_: {"ok": True})
     trace = await _executor(registry).execute(_one("s", "ok_tool"))
-    assert _classes(trace.step_results[0]) == ("succeeded", 1, False, None)
+    result = trace.step_results[0]
+    assert _classes(result) == ("succeeded", 1, False, None)
+    assert _code(result) == (None, {})
 
 
 async def test_refusal_class(registry):
@@ -183,6 +191,7 @@ async def test_refusal_class(registry):
     result = trace.step_results[0]
     assert result.status == ExecutionStatus.FAILED
     assert _classes(result) == ("refused", 1, False, "ToolRefusalError")
+    assert _code(result) == (ReasonCode.COVERAGE_GAP.value, {})
 
 
 async def test_input_rejected_class(registry):
@@ -211,7 +220,9 @@ async def test_input_rejected_class(registry):
 
     _register(registry, "counterfactual_simulator", rejecting)
     trace = await _executor(registry).execute(_one("s", "counterfactual_simulator"))
-    assert _classes(trace.step_results[0]) == ("input_rejected", 1, False, "ToolInputError")
+    result = trace.step_results[0]
+    assert _classes(result) == ("input_rejected", 1, False, "ToolInputError")
+    assert _code(result) == (ReasonCode.INVALID_INPUT_VALUE.value, {})
     # Reported attempts is what the step SAYS; the call count is what happened.
     assert calls == [1]
 
@@ -236,20 +247,20 @@ async def test_input_rejected_class_on_the_async_path(registry, message):
     The real-guard case above is left alone deliberately: it exercises the actual tool contract
     across the #2015 transition, which a synthetic probe cannot. This one varies only the message.
     """
-    from src.agents.tool_composer.errors import ToolInputError
-
     calls: List[int] = []
 
     async def declining_async(**_: Any) -> Any:
         calls.append(1)
-        raise ToolInputError(message)
+        raise ToolInputError(message, reason_code=ReasonCode.INVALID_INPUT_VALUE)
 
     assert asyncio.iscoroutinefunction(declining_async), "this case must take the async arm"
 
     _register(registry, "power_calculator", declining_async)
     trace = await _executor(registry).execute(_one("s", "power_calculator"))
 
-    assert _classes(trace.step_results[0]) == ("input_rejected", 1, False, "ToolInputError")
+    result = trace.step_results[0]
+    assert _classes(result) == ("input_rejected", 1, False, "ToolInputError")
+    assert _code(result) == (ReasonCode.INVALID_INPUT_VALUE.value, {})
     assert calls == [1], "a retry would run it again; reported attempts alone is not proof"
 
 
@@ -278,20 +289,20 @@ async def test_input_rejected_class_on_the_sync_path(registry, message):
     says "declined", so classifying on that word alone would keep all of them green while a real
     ``ToolInputError("invalid sample size")`` was recorded as a refusal.
     """
-    from src.agents.tool_composer.errors import ToolInputError
-
     calls: List[int] = []
 
     def declining_sync(**_: Any) -> Any:
         calls.append(1)
-        raise ToolInputError(message)
+        raise ToolInputError(message, reason_code=ReasonCode.INVALID_INPUT_VALUE)
 
     assert not asyncio.iscoroutinefunction(declining_sync), "this case must take the sync arm"
 
     _register(registry, "power_calculator", declining_sync)
     trace = await _executor(registry).execute(_one("s", "power_calculator"))
 
-    assert _classes(trace.step_results[0]) == ("input_rejected", 1, False, "ToolInputError")
+    result = trace.step_results[0]
+    assert _classes(result) == ("input_rejected", 1, False, "ToolInputError")
+    assert _code(result) == (ReasonCode.INVALID_INPUT_VALUE.value, {})
     assert calls == [1], "a retry would run it again; reported attempts alone is not proof"
 
 
@@ -300,7 +311,9 @@ async def test_plan_defect_class(registry):
     _register(registry, "ok_tool", lambda **_: calls.append(1) or {"ok": True})
     plan = _one("s", "ok_tool", input_mapping={"x": "$missing.field"})
     trace = await _executor(registry).execute(plan)
-    assert _classes(trace.step_results[0]) == ("plan_defect", 0, False, "ReferenceResolutionError")
+    result = trace.step_results[0]
+    assert _classes(result) == ("plan_defect", 0, False, "ReferenceResolutionError")
+    assert _code(result) == (ReasonCode.REFERENCE_UNRESOLVABLE.value, {})
     assert calls == []
 
 
@@ -326,7 +339,9 @@ async def test_dependency_unmet_class(registry):
     )
     trace = await _executor(registry).execute(plan)
     assert [r.outcome_class for r in trace.step_results] == ["refused", "dependency_unmet"]
-    assert _classes(trace.step_results[1]) == ("dependency_unmet", 0, False, None)
+    result = trace.step_results[1]
+    assert _classes(result) == ("dependency_unmet", 0, False, None)
+    assert _code(result) == (ReasonCode.DEPENDENCY_UNMET.value, {})
     assert calls == []
 
 
@@ -341,18 +356,23 @@ async def test_cache_hit_class(registry):
         ("succeeded", 1, False, None),
         ("cache_hit", 0, True, None),
     ]
+    assert [_code(r) for r in trace.step_results] == [(None, {}), (None, {})]
     assert calls == [1]
 
 
 async def test_not_registered_class(registry):
     trace = await _executor(registry).execute(_one("s", "ghost_tool"))
-    assert _classes(trace.step_results[0]) == ("not_registered", 0, False, None)
+    result = trace.step_results[0]
+    assert _classes(result) == ("not_registered", 0, False, None)
+    assert _code(result) == (ReasonCode.TOOL_NOT_REGISTERED.value, {})
 
 
 async def test_sync_timeout_class(registry):
     _register(registry, "slow_sync", lambda **_: time.sleep(1.5) or {"late": True})
     trace = await _executor(registry, timeout_seconds=1).execute(_one("s", "slow_sync"))
-    assert _classes(trace.step_results[0]) == ("timeout", 1, False, "SyncToolTimeout")
+    result = trace.step_results[0]
+    assert _classes(result) == ("timeout", 1, False, "SyncToolTimeout")
+    assert _code(result) == (ReasonCode.TOOL_TIMEOUT.value, {})
 
 
 async def test_async_timeout_class(registry):
@@ -363,7 +383,9 @@ async def test_async_timeout_class(registry):
     _register(registry, "slow_async", slow_async)
     executor = _executor(registry, timeout_seconds=1, max_retries=1)
     trace = await executor.execute(_one("s", "slow_async"))
-    assert _classes(trace.step_results[0]) == ("timeout", 2, False, "TimeoutError")
+    result = trace.step_results[0]
+    assert _classes(result) == ("timeout", 2, False, "TimeoutError")
+    assert _code(result) == (ReasonCode.TOOL_TIMEOUT.value, {})
 
 
 async def test_retry_then_success_attempts(registry):
@@ -377,15 +399,20 @@ async def test_retry_then_success_attempts(registry):
 
     _register(registry, "flaky", flaky)
     trace = await _executor(registry).execute(_one("s", "flaky"))
-    assert _classes(trace.step_results[0]) == ("succeeded", 2, False, None)
+    result = trace.step_results[0]
+    assert _classes(result) == ("succeeded", 2, False, None)
+    assert _code(result) == (None, {})
 
 
 @pytest.mark.parametrize(
     "raised, expected",
     [
-        ([TimeoutError("first"), KeyError("last")], ("error", "KeyError")),
-        ([KeyError("first"), TimeoutError("tool's own timeout")], ("timeout", "TimeoutError")),
-        ([ValueError("a"), ValueError("b")], ("error", "ValueError")),
+        ([TimeoutError("first"), KeyError("last")], ("error", "KeyError", "tool_error")),
+        (
+            [KeyError("first"), TimeoutError("tool's own timeout")],
+            ("timeout", "TimeoutError", "tool_timeout"),
+        ),
+        ([ValueError("a"), ValueError("b")], ("error", "ValueError", "tool_error")),
     ],
 )
 async def test_error_class_keeps_last_exception_type(registry, raised, expected):
@@ -397,7 +424,9 @@ async def test_error_class_keeps_last_exception_type(registry, raised, expected)
     _register(registry, "failing", failing)
     trace = await _executor(registry, max_retries=1).execute(_one("s", "failing"))
     result = trace.step_results[0]
-    assert (result.outcome_class, result.error_type) == expected
+    # The code follows the LAST exception exactly as the class does.
+    assert (result.outcome_class, result.error_type, result.reason_code) == expected
+    assert result.reason_details == {}
     assert result.attempts == 2
 
 
@@ -418,8 +447,44 @@ async def test_circuit_open_class(registry):
         "error",
         "circuit_open",
     ]
-    assert _classes(trace.step_results[3]) == ("circuit_open", 0, False, None)
+    result = trace.step_results[3]
+    assert _classes(result) == ("circuit_open", 0, False, None)
+    assert _code(result) == (ReasonCode.CIRCUIT_OPEN.value, {})
     assert len(calls) == 3
+
+
+# ---------------------------------------------------------------------------
+# #2021: the reason code survives the executor
+# ---------------------------------------------------------------------------
+
+
+async def test_a_refusal_code_and_its_details_are_carried_not_rederived(registry):
+    def refusing(**_: Any) -> Any:
+        raise ToolRefusalError(
+            "probe: treatment column carries 4 distinct non-null values.",
+            reason_code=ReasonCode.NON_BINARY_TREATMENT,
+            details={"n_distinct": 4},
+        )
+
+    _register(registry, "refusing_probe", refusing)
+    trace = await _executor(registry).execute(_one("s", "refusing_probe"))
+    result = trace.step_results[0]
+    assert _classes(result) == ("refused", 1, False, "ToolRefusalError")
+    assert _code(result) == ("non_binary_treatment", {"n_distinct": 4})
+
+
+async def test_an_input_rejection_code_is_carried(registry):
+    def rejecting(**_: Any) -> Any:
+        raise ToolInputError(
+            "probe: expected_effect must not be None",
+            reason_code=ReasonCode.MISSING_REQUIRED_INPUT,
+        )
+
+    _register(registry, "rejecting_probe", rejecting)
+    trace = await _executor(registry).execute(_one("s", "rejecting_probe"))
+    result = trace.step_results[0]
+    assert _classes(result) == ("input_rejected", 1, False, "ToolInputError")
+    assert _code(result) == ("missing_required_input", {})
 
 
 # ---------------------------------------------------------------------------
