@@ -294,9 +294,19 @@ class ExpertReviewGate:
         # (approve A, renew as B, reject B while A's 90 days run) is superseded,
         # so the approval must not be read on its own. The whole history is
         # needed for that ordering, expired approvals included.
+        # A rejection covers the VERSION it was given on, not the estimand
+        # (spec §7): the reviewer said "THIS structure is wrong", which is
+        # precisely what a revised structure answers. So the verdict counts
+        # here only when it was recorded against the hash under analysis --
+        # otherwise a rejected estimand could never be re-opened by revising
+        # the DAG, and this estimand-keyed read would contradict the hash-keyed
+        # ``check_rejection`` probe, which answers "not rejected" for the new
+        # structure.
         latest_verdict, reopened = self._latest_adjudication(history)
         superseded_by_rejection = (
-            latest_verdict is not None and latest_verdict.get("approval_status") == "rejected"
+            latest_verdict is not None
+            and latest_verdict.get("approval_status") == "rejected"
+            and latest_verdict.get("dag_version_hash") == dag_hash
         )
 
         # Check for active approval -- only if no newer rejection supersedes it.
@@ -363,18 +373,20 @@ class ExpertReviewGate:
                 message="DAG has active expert approval",
             )
 
-        # A REJECTED verdict is durable (#1970). ``get_reviews_for_dag`` orders
-        # created_at DESC, so if the most recent adjudication of this DAG is
-        # 'rejected' a human already turned this structure down.
-        # Auto-creating a fresh pending row on the next REVIEW/BLOCK band would
-        # silently undo that decision. A NEWER approval or pending row wins:
-        # ``reopened`` comes from the ``_latest_adjudication`` call above; a
-        # genuinely newer pending row sets it and skips this block, reaching
-        # the pending branch below. A reviewer who wants to re-open the
-        # structure does so from the review UI, not by re-running. #1971
-        # gives the verdict its own decision value
-        # (REJECTED, not BLOCKED) so consumers can tell "a human said no" from
-        # "nobody has looked yet and no row could be queued".
+        # A REJECTED verdict is durable (#1970). The estimand's history comes
+        # back created_at DESC, so if the most recent adjudication is a
+        # rejection OF THIS HASH (the scoping above) a human already turned
+        # this exact structure down. Auto-creating a fresh pending row for it
+        # on the next REVIEW band would silently undo that decision. A NEWER
+        # approval or pending row wins: ``reopened`` comes from the
+        # ``_latest_adjudication`` call above; a genuinely newer pending row
+        # sets it and skips this block, reaching the pending branch below. A
+        # reviewer who wants to re-open the SAME structure does so from the
+        # review UI, not by re-running -- but a DIFFERENT structure of the same
+        # estimand is a new question and falls through to the mint below. #1971
+        # gives the verdict its own decision value (REJECTED, not BLOCKED) so
+        # consumers can tell "a human said no" from "nobody has looked yet and
+        # no row could be queued".
         if superseded_by_rejection and not reopened:
             assert latest_verdict is not None  # narrowed by superseded_by_rejection
             return self._rejection_result(latest_verdict, dag_hash)
@@ -455,6 +467,9 @@ class ExpertReviewGate:
         # new review replaces. The old approval is NOT revoked -- it keeps its
         # validity for its own hash (spec §7), so a re-run of that structure
         # still clears.
+        # ``supersedes_review_id`` links a superseded APPROVAL only (§7). A
+        # rejection of another hash is not superseded by this review -- it
+        # stands as the verdict on its own structure.
         superseded_approval = next(
             (
                 row
@@ -539,10 +554,13 @@ class ExpertReviewGate:
     ) -> tuple[Optional[Dict[str, Any]], bool]:
         """``(most recent non-pending row, a pending row is newer than it)``.
 
-        ``history`` is newest-first (``get_reviews_for_dag`` orders created_at
-        DESC; rows are created and resolved in order because the unique-pending
-        index (migration 062) allows one open review per structure at a time,
-        so creation order is adjudication order). An exact ``created_at`` tie
+        ``history`` is newest-first (``get_reviews_for_estimand`` orders
+        created_at DESC; rows are created and resolved in order because the
+        unique-pending index (migration 140) allows one pending review per
+        ESTIMAND at a time, so creation order is adjudication order -- 062's
+        per-structure index, which this replaced, gave the same property for
+        the hash-keyed read ``check_rejection`` still uses). An exact
+        ``created_at`` tie
         between a pending row and the adjudication after it is not a reopen
         (migration 134 reads it the same way). ``None`` when nothing has been
         adjudicated yet.

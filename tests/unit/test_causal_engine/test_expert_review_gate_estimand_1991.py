@@ -120,6 +120,16 @@ def _approved(
     }
 
 
+def _rejected(review_id: str, dag_hash: str, created_at: str = "2026-09-01T00:00:00+00:00"):
+    return {
+        "review_id": review_id,
+        "approval_status": "rejected",
+        "dag_version_hash": dag_hash,
+        "estimand_key": "b:t:y",
+        "created_at": created_at,
+    }
+
+
 _GRAPH = {"nodes": ["T", "Y"], "edges": [["T", "Y"]]}
 
 
@@ -239,15 +249,50 @@ async def test_expired_approval_on_another_hash_does_not_supersede():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rejection_on_the_estimand_is_still_authoritative():
+    repo = _EstimandRepo(history=[_rejected("r0", "h1")])
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    r = await gate.check_approval(
+        dag_hash="h1", brand="B", treatment="T", outcome="Y", requester_id="q"
+    )
+
+    assert r.decision == ReviewGateDecision.REJECTED and repo.created == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rejection_on_another_hash_of_the_estimand_does_not_block_a_new_structure():
+    """A rejection covers the VERSION it was given on, not the estimand (§7).
+
+    A reviewer who rejects hash A is saying "this structure is wrong", which is
+    exactly the thing a revised structure fixes. Reading the rejection as a
+    verdict on the estimand would make a rejected question un-re-openable by
+    re-running, and would put ``check_approval`` (estimand-keyed) at odds with
+    the read-only ``check_rejection`` probe (hash-keyed), which answers "not
+    rejected" for B.
+    """
+    repo = _EstimandRepo(history=[_rejected("r0", "h1")])
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    r = await gate.check_approval(
+        dag_hash="h2", brand="B", treatment="T", outcome="Y", requester_id="q"
+    )
+
+    assert r.decision == ReviewGateDecision.PENDING_REVIEW
+    assert len(repo.created) == 1
+    # supersedes_review_id links a SUPERSEDED APPROVAL, never a rejection (§7).
+    assert repo.created[0].get("supersedes_review_id") is None
+    assert repo.appended == [("rev-new", "h2")]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rejection_on_the_same_hash_beats_an_older_approval_on_that_hash():
+    """Chronology still wins WITHIN a hash: approve h1, then reject h1."""
     repo = _EstimandRepo(
         history=[
-            {
-                "review_id": "r0",
-                "approval_status": "rejected",
-                "dag_version_hash": "h1",
-                "estimand_key": "b:t:y",
-                "created_at": "2026-09-01T00:00:00+00:00",
-            }
+            _rejected("r1", "h1", created_at="2026-09-05T00:00:00+00:00"),
+            _approved("r0", "h1"),
         ]
     )
     gate = ExpertReviewGate(repository=repo, auto_create_review=True)
@@ -256,7 +301,8 @@ async def test_rejection_on_the_estimand_is_still_authoritative():
         dag_hash="h1", brand="B", treatment="T", outcome="Y", requester_id="q"
     )
 
-    assert r.decision == ReviewGateDecision.REJECTED and repo.created == []
+    assert r.decision == ReviewGateDecision.REJECTED and r.review_id == "r1"
+    assert repo.created == []
 
 
 @pytest.mark.unit

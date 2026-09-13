@@ -826,6 +826,9 @@ class TestRejectedVerdictIsDurable:
                 {
                     "review_id": "rev-rejected",
                     "approval_status": "rejected",
+                    # A rejection is recorded against the hash it was given on,
+                    # and only covers THAT structure (#1991 debt 3).
+                    "dag_version_hash": "abc123",
                     "reviewer_name": "Dr. No",
                     "concerns_raised": ["formulary_status is a collider"],
                 },
@@ -920,6 +923,8 @@ class TestCheckRejection:
         row = {
             "review_id": "rev-rejected",
             "approval_status": "rejected",
+            # A rejection covers the hash it was recorded against.
+            "dag_version_hash": "abc123",
             "reviewer_name": "Dr. No",
             "concerns_raised": ["formulary_status is a collider"],
         }
@@ -1187,6 +1192,7 @@ class TestApprovalPrecedenceIsChronological:
                 {
                     "review_id": "rev-b",
                     "approval_status": "rejected",
+                    "dag_version_hash": "abc123",
                     "reviewer_name": "Dr. No",
                     "concerns_raised": ["renewal found a collider"],
                 },

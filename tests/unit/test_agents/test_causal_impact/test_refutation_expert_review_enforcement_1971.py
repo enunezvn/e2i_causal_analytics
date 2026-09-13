@@ -159,6 +159,9 @@ def _rejected_row() -> Dict[str, Any]:
     return {
         "review_id": "rev-rejected",
         "approval_status": "rejected",
+        # A rejection is recorded against the structure version it judged, and
+        # covers only that one (#1991 debt 3).
+        "dag_version_hash": _DAG_HASH,
         "reviewer_name": "Dr. No",
         "concerns_raised": ["formulary_status is a collider, not a confounder"],
     }
