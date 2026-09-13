@@ -32,8 +32,8 @@ class DagStructureSnapshot(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    nodes: List[str] = Field(default_factory=list)
-    edges: List[Tuple[str, str]] = Field(default_factory=list)
+    nodes: List[str] = []
+    edges: List[Tuple[str, str]] = []
     treatment_nodes: Optional[List[str]] = None
     outcome_nodes: Optional[List[str]] = None
     adjustment_sets: Optional[List[List[str]]] = None

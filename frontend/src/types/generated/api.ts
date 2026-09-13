@@ -8921,10 +8921,16 @@ export interface components {
          *     forward-compatible with a future snapshot key without a schema change.
          */
         DagStructureSnapshot: {
-            /** Nodes */
-            nodes?: string[];
-            /** Edges */
-            edges?: [
+            /**
+             * Nodes
+             * @default []
+             */
+            nodes: string[];
+            /**
+             * Edges
+             * @default []
+             */
+            edges: [
                 string,
                 string
             ][];
