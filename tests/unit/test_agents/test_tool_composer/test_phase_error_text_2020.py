@@ -19,7 +19,7 @@ import json
 import logging
 import types
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 from unittest.mock import AsyncMock
 
 import pytest
@@ -32,6 +32,7 @@ from src.agents.tool_composer.decomposer import DecompositionError, QueryDecompo
 from src.agents.tool_composer.executor import ExecutionError, PlanExecutor
 from src.agents.tool_composer.models.composition_models import DecompositionResult, SubQuestion
 from src.agents.tool_composer.planner import PlanningError, ToolPlanner
+from tests.unit.ast_guards import CaughtInterpolation, caught_exception_interpolations
 
 SENTINEL = "LIBTEXT_SENTINEL"
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -328,59 +329,6 @@ async def test_agent_output_error_is_a_fixed_sentence(mock_llm_client, monkeypat
 # ---------------------------------------------------------------------------
 
 
-def _raised_class(node: ast.Raise) -> str | None:
-    exc = node.exc
-    func = exc.func if isinstance(exc, ast.Call) else exc
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    return None
-
-
-def _references(node: ast.AST, names: set[str]) -> bool:
-    return any(isinstance(n, ast.Name) and n.id in names for n in ast.walk(node))
-
-
-def caught_exception_interpolations(
-    tree: ast.AST, targets: frozenset[str]
-) -> List[Tuple[int, str, str]]:
-    """``(line, raised class, caught name)`` for each raise of a ``targets`` class whose arguments
-    reference the exception bound by an enclosing ``except … as NAME``.
-
-    Any reference counts — an f-string field, ``str()``/``repr()``, ``%`` or ``.format()`` — and so
-    does a local assigned, anywhere in the handler, from an expression that references it. ``raise
-    … from NAME`` does not: the cause is kept for the log, not rendered.
-    """
-    found: List[Tuple[int, str, str]] = []
-    for handler in ast.walk(tree):
-        if not isinstance(handler, ast.ExceptHandler) or not handler.name:
-            continue
-        body = ast.Module(body=handler.body, type_ignores=[])
-        tainted = {handler.name}
-        grew = True
-        while grew:
-            grew = False
-            for node in ast.walk(body):
-                if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-                    if not _references(node.value, tainted):
-                        continue
-                    targets_ = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    for name in (
-                        n.id for t in targets_ for n in ast.walk(t) if isinstance(n, ast.Name)
-                    ):
-                        if name not in tainted:
-                            tainted.add(name)
-                            grew = True
-        for node in ast.walk(body):
-            if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
-                continue
-            raised = _raised_class(node)
-            if raised in targets and _references(node.exc, tainted):
-                found.append((node.lineno, raised, handler.name))
-    return found
-
-
 def test_no_phase_error_interpolates_a_caught_exception():
     package = REPO_ROOT / "src" / "agents" / "tool_composer"
     violations = {
@@ -405,7 +353,7 @@ def test_no_phase_error_interpolates_a_caught_exception():
 def test_guard_flags_every_reference_form(raise_line):
     source = f"try:\n    pass\nexcept Exception as e:\n    {raise_line}\n"
     assert caught_exception_interpolations(ast.parse(source), PHASE_ERRORS) == [
-        (4, "PlanningError", "e")
+        CaughtInterpolation(4, None, ("Exception",), "PlanningError", "e")
     ]
 
 
@@ -416,7 +364,7 @@ def test_guard_follows_a_local_built_from_the_exception():
         "    raise executor.ExecutionError(message)\n"
     )
     assert caught_exception_interpolations(ast.parse(source), PHASE_ERRORS) == [
-        (6, "ExecutionError", "e")
+        CaughtInterpolation(6, None, ("Exception",), "ExecutionError", "e")
     ]
 
 

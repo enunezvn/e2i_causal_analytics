@@ -23,6 +23,7 @@ fabricated ATE.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -31,6 +32,8 @@ import pandas as pd
 
 from src.digital_twin.effect.errors import EffectDataUnavailable
 from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
+
+logger = logging.getLogger(__name__)
 
 # Pre-treatment confounders to adjust for when present in the connected cohort.
 # These are CONFOUNDERS (drivers of both the engagement treatment and the conversion
@@ -231,8 +234,11 @@ def estimate_cohort_effect(
     except EffectDataUnavailable:
         raise
     except Exception as e:  # econml/sklearn failure -> honest no-data, never a fake ATE
+        # Library text reaches the chat answer through the simulator; it goes to the log (#2020).
+        logger.warning("cohort causal estimation failed for '%s'", treatment_col, exc_info=e)
         raise EffectDataUnavailable(
-            f"cohort causal estimation failed for '{treatment_col}': {e}"
+            f"cohort causal estimation failed for '{treatment_col}': the causal forest could "
+            "not be fitted on this cohort."
         ) from e
 
     region_arr = work["region"].to_numpy(dtype=str)
@@ -256,8 +262,12 @@ def estimate_cohort_effect(
         try:
             t_lo, t_hi = cf.ate_interval(x[mask], alpha=alpha)
         except Exception as e:  # econml failure -> honest no-data, never a fake interval
+            logger.warning(
+                "target-region inference failed for '%s' on %s", treatment_col, targets, exc_info=e
+            )
             raise EffectDataUnavailable(
-                f"target-region inference failed for '{treatment_col}': {e}"
+                f"target-region inference failed for '{treatment_col}': the causal forest could "
+                "not compute an interval on the targeted rows."
             ) from e
         target_ate, target_lo, target_hi = float(np.mean(eff[mask])), float(t_lo), float(t_hi)
         target_n = int(mask.sum())

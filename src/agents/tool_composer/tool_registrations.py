@@ -55,6 +55,7 @@ and therefore still reach the executor's retrying arm unchanged.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
 import time
@@ -76,6 +77,8 @@ from src.tool_registry import (
 
 from .errors import ToolInputError, ToolRefusalError
 from .reason_codes import ReasonCode
+
+logger = logging.getLogger(__name__)
 
 # Canonical kwargs keys under which callers may supply the real DataFrame for
 # causal_effect_estimator. Listed in priority order; the first non-None value
@@ -1666,8 +1669,12 @@ def _run_dowhy_refutation(
     try:
         columns = set(df.columns)
     except Exception as exc:  # noqa: BLE001 - non-DataFrame input
+        # The text is a repr of whatever object was passed; it goes to the log (#2020).
+        logger.warning(
+            "refutation_runner: supplied data could not be read as a DataFrame", exc_info=exc
+        )
         raise ToolRefusalError(
-            f"refutation_runner: supplied data is not a DataFrame ({exc}). "
+            "refutation_runner: supplied data is not a DataFrame. "
             "Refusing to fabricate refutation results.",
             reason_code=ReasonCode.INVALID_INPUT_TYPE,
         ) from exc
@@ -1819,8 +1826,12 @@ def _derive_sensitivity_inputs(
     try:
         columns = set(df.columns)
     except Exception as exc:  # noqa: BLE001 - non-DataFrame input
+        # The text is a repr of whatever object was passed; it goes to the log (#2020).
+        logger.warning(
+            "sensitivity_analyzer: supplied data could not be read as a DataFrame", exc_info=exc
+        )
         raise ToolRefusalError(
-            f"sensitivity_analyzer: supplied data is not a DataFrame ({exc}). Refusing to "
+            "sensitivity_analyzer: supplied data is not a DataFrame. Refusing to "
             "fabricate the sensitivity benchmark inputs.",
             reason_code=ReasonCode.INVALID_INPUT_TYPE,
         ) from exc
@@ -1839,9 +1850,16 @@ def _derive_sensitivity_inputs(
         # raw effect as a standardized difference -- scale-dependent and plausible-wrong.
         outcome_std = evalue.outcome_std_from_frame(df, outcome, treatment=treatment)
     except Exception as exc:  # noqa: BLE001 - re-raised as a structured refusal
+        # pandas / numpy text, which can quote a data value, goes to the log (#2020).
+        logger.warning(
+            "sensitivity_analyzer: benchmark inputs failed for treatment=%r / outcome=%r",
+            treatment,
+            outcome,
+            exc_info=exc,
+        )
         raise ToolRefusalError(
             "sensitivity_analyzer: the sensitivity benchmark inputs could not be computed "
-            f"from the frame for treatment={treatment!r} / outcome={outcome!r}: {exc}. A "
+            f"from the frame for treatment={treatment!r} / outcome={outcome!r}. A "
             "present but unusable column is a data error to surface, not a missing input to "
             "fall back on — refusing to serve an unstandardized reading in its place.",
             reason_code=ReasonCode.NO_USABLE_COLUMNS,
@@ -2292,13 +2310,16 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
             # property of the RESOLVED inputs and identical for every segment, so
             # this must surface ONCE as a refusal (#1600) rather than be retried
             # and charged to the tool's circuit breaker as if the tool were
-            # unhealthy -- the same guard ``gap_calculator`` puts on its metric.
+            # unhealthy -- the same guard ``gap_calculator`` puts on its metric. pandas'
+            # text quotes the offending value, so it goes to the log, not the refusal (#2020).
+            logger.warning(
+                "cate_analyzer: outcome %r is not numeric", _clip_name(outcome), exc_info=exc
+            )
             raise ToolRefusalError(
                 f"cate_analyzer: outcome column {_clip_name(outcome)!r} is not numeric "
                 f"(dtype={df[outcome].dtype!s}), so no within-segment mean difference "
-                f"can be computed for {_clip_name(segment_col)!r}={_clip_name(name)!r}: "
-                f"{exc}. Refusing to fabricate a treatment effect from a non-numeric "
-                "outcome.",
+                f"can be computed for {_clip_name(segment_col)!r}={_clip_name(name)!r}. "
+                "Refusing to fabricate a treatment effect from a non-numeric outcome.",
                 reason_code=ReasonCode.NON_NUMERIC_COLUMN,
             ) from exc
         if cate_val is None:
@@ -2560,12 +2581,12 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
         # ("agg function failed [how->mean,dtype->object]"). That is
         # deterministic over the resolved inputs, so it must surface ONCE as a
         # refusal (#1600) rather than be retried and charged to the tool's
-        # circuit breaker as if the tool were unhealthy.
+        # circuit breaker as if the tool were unhealthy. pandas' text goes to the log (#2020).
+        logger.warning("gap_calculator: metric %r is not numeric", metric, exc_info=exc)
         raise ToolRefusalError(
             f"gap_calculator: metric column {metric!r} is not numeric (dtype="
             f"{df[metric].dtype!s}), so no per-{group_col!r} group mean can be "
-            f"computed: {exc}. Refusing to fabricate a comparison from a "
-            "non-numeric metric.",
+            "computed. Refusing to fabricate a comparison from a non-numeric metric.",
             reason_code=ReasonCode.NON_NUMERIC_COLUMN,
         ) from exc
 
@@ -3487,11 +3508,20 @@ def power_calculator(
             forward = time_to_event_power(effect, alpha_value, power_value, rate)
         else:
             forward = continuous_outcome_power(effect, alpha_value, power_value)
-    except (PowerCalculationError, ArithmeticError) as exc:
-        # ArithmeticError (the library raises OverflowError for an unrepresentable size) is
-        # as deterministic over the inputs as a PowerCalculationError, so it is not retried.
+    except PowerCalculationError as exc:
         raise ToolInputError(
             f"power_calculator: {exc}", reason_code=ReasonCode.INVALID_INPUT_VALUE
+        ) from exc
+    except ArithmeticError as exc:
+        # As deterministic over the inputs as a PowerCalculationError, so it is not retried. Its
+        # text is not this tool's -- the library's OverflowError for an unrepresentable size, or
+        # Python's own ("int too large to convert to float") -- so it goes to the log (#2020).
+        logger.warning("power_calculator: the design is not representable", exc_info=exc)
+        raise ToolInputError(
+            "power_calculator: the requested design is outside the range the calculation can "
+            "represent; check the effect size, alpha, power and the design's rate or cluster "
+            "size.",
+            reason_code=ReasonCode.INVALID_INPUT_VALUE,
         ) from exc
     # Minimum usable design, enforced here rather than in the shared library: the library's
     # normal-approximation arithmetic is also an INPUT to the data-preparer sufficiency gate
