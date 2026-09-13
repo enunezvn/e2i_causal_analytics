@@ -1257,7 +1257,7 @@ async def test_background_task_uses_handed_adjustment_without_registry_read(
 # recommended REDUCING treatment in the Midwest. Offline on the same 8,755 rows:
 # dropping the column from X alone recovers +0.140; running the registry's >=28
 # axis recovers +0.154. The causal page already dedups the question slots out of
-# its covariates (causal.py submit path); this page did not.
+# its covariates (causal/agent.py submit path); this page did not.
 # =============================================================================
 
 

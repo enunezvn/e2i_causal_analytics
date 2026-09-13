@@ -4,7 +4,7 @@ Calibration pin for ``RefutationRunner._run_negative_control_test`` (rule
 ``negative_control_ci_vs_zero``: PASSED when the control's CI includes 0,
 WARNING when it excludes 0 and |nc| < |original|, FAILED when it excludes 0 and
 |nc| >= |original|) and for the registry that decides WHICH arm gets a control
-(``src/api/routes/causal.py::_CAUSAL_NEGATIVE_CONTROL_OUTCOMES``, imported, not
+(``src/api/routes/causal/datasets.py::_CAUSAL_NEGATIVE_CONTROL_OUTCOMES``, imported, not
 retyped). The DGP frame, the 11 planted truths and the 9 structural nulls are
 the ones ``test_sensitivity_calibration.py`` pins (imported), at n = 1500, the
 live estimation row cap; every fit is PRODUCTION's LinearDML (RF nuisances from

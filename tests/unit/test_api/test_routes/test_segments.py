@@ -2653,9 +2653,7 @@ def _patch_ssot(repo=None, brands=None):
         ),
         patch.multiple(
             "src.api.routes.causal.datasets",
-            _list_dataset_brands=AsyncMock(
-                return_value=_SSOT_BRANDS if brands is None else brands
-            ),
+            _list_dataset_brands=AsyncMock(return_value=_SSOT_BRANDS if brands is None else brands),
         ),
     ):
         yield
@@ -2824,7 +2822,7 @@ def test_segment_datasets_route_accepts_brand_query_param():
 # curated label at all (auto-capitalized to "Trigger accepted" while the
 # clinical-context panel says "NBA trigger accepted"); and neither dropdown told
 # the user what a 0/1 option means. The API now ships a `definitions` map next
-# to `labels`, from the same causal.py SSOT, on both the registry and fallback
+# to `labels`, from the same causal/datasets.py SSOT, on both the registry and fallback
 # paths.
 # =============================================================================
 

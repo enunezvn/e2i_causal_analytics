@@ -1846,7 +1846,7 @@ async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
 #
 # Clinical-HTE rebuild (2026-06-20): the Segment Analysis page is agent-driven
 # over the curated ``patient_journeys`` gold-standard substrate (the same SSOT
-# the /causal pages use — see src/api/routes/causal.py ``_CAUSAL_DATASET_SPECS``).
+# the /causal pages use — see src/api/routes/causal/datasets.py ``_CAUSAL_DATASET_SPECS``).
 # The route loads the frame SERVER-SIDE (provenance-aware: ``apply_provenance_filter``
 # INCLUDES the is_synthetic=true gold-standard rows on this synthetic-showcase
 # deployment), bands the continuous clinical columns, and passes the prepared
@@ -2202,7 +2202,7 @@ async def _load_segment_hte_frame(
 ) -> "pd.DataFrame":  # type: ignore[name-defined] # noqa: F821
     """Load the REAL gold-standard ``patient_journeys`` frame for the HTE agent.
 
-    Mirrors ``causal.py._load_agent_estimation_frame`` for the patient_journeys
+    Mirrors ``causal/loaders.py._load_agent_estimation_frame`` for the patient_journeys
     dataset, with two deliberate differences for the segment-analysis use-case:
 
     * ``geographic_region`` is kept as a RAW string column (NOT one-hot encoded):
@@ -2229,7 +2229,7 @@ async def _load_segment_hte_frame(
     """
     import pandas as pd
 
-    # SSOT for the curated allowlist lives in causal.py (single source of truth).
+    # SSOT for the curated allowlist lives in causal/datasets.py (single source of truth).
     from src.api.routes.causal.datasets import (
         _CAUSAL_DATASET_SPECS,
         _CAUSAL_NUMERIC_DERIVATIONS,
@@ -2299,7 +2299,7 @@ async def _load_segment_hte_frame(
         fetch_cols = list(dict.fromkeys([*select_cols, "brand"]))
 
     query = client.table(_SEGMENT_HTE_DATASET).select(",".join(fetch_cols))
-    # Provenance-aware, env-gated (mirrors causal.py's loader): apply_provenance_filter
+    # Provenance-aware, env-gated (mirrors causal/loaders.py's loader): apply_provenance_filter
     # skips the is_synthetic=False predicate when deployment_includes_synthetic()
     # (E2I_INCLUDE_SYNTHETIC) is set, so on this synthetic-gold showcase it LOADS the
     # gold-standard rows. Deliberately NOT include_synthetic=True — hardcoding True

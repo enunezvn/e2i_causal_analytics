@@ -1,6 +1,6 @@
 """Column display labels: ONE leaf SSOT for every surface (2026-09-05, #1895).
 
-The curated labels used to live only in src/api/routes/causal.py, so the
+The curated labels used to live only in src/api/routes/causal.py (now the causal package), so the
 backend insight builders (src/insights/*.py) could not use them without an
 insights -> api.routes import inversion, and rendered raw column names into
 user-facing prose ("For treatment_arm -> persistent_180d ...") under headers

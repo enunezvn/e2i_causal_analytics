@@ -1,4 +1,4 @@
-"""Unit tests for the shared _coerce_estimation_row helper in causal.py.
+"""Unit tests for the shared _coerce_estimation_row helper in causal/loaders.py.
 
 These tests verify the helper's exact semantics in isolation. The existing
 _load_agent_estimation_frame tests (test_causal_brands.py etc.) continue to
