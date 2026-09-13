@@ -220,10 +220,43 @@ def test_python_side_checks_degrade_gracefully_on_import_error(monkeypatch):
 def test_ml_gate_decision_uses_a_readable_label_in_the_report(capsys):
     """The printed report shows the CURRENT type name, not the one ml/036
     renamed away from, even though CheckResult.name (used above) stays
-    "ml.gate_decision" for the SQL regex binding."""
+    "ml.gate_decision" for the SQL regex binding. This is the GREEN (✅) line;
+    see test_ml_gate_decision_label_appears_on_a_red_mismatch_line for the
+    failure-path (❌ MISMATCH:) line."""
     _script().validate_enum_sync()
     captured = capsys.readouterr()
     assert "ml.gate_decision (→ public.discovery_gate_decision after ml/036)" in captured.out
+
+
+def test_ml_gate_decision_label_appears_on_a_red_mismatch_line(tmp_path, monkeypatch, capsys):
+    """The failure-path MISMATCH line must also use the readable label, not
+    the raw binding name -- uses the same tmp-026-without-augment technique
+    as test_guard_red_when_sql_file_loses_a_label."""
+    s = _script()
+    original = SQL.read_text()
+    mutated = original.replace(
+        "        'reject',   -- Low confidence, use manual DAG\n"
+        "        'augment'   -- Supplement manual DAG with high-confidence edges\n",
+        "        'reject'   -- Low confidence, use manual DAG\n",
+    )
+    assert mutated != original, "expected 'augment' fragment not found in 026 -- SQL file changed"
+
+    tmp_sql = tmp_path / "026_missing_augment_for_label_test.sql"
+    tmp_sql.write_text(mutated)
+
+    def _rebind(entry):
+        if entry[0] == "ml.gate_decision":
+            return (entry[0], tmp_sql) + tuple(entry[2:])
+        return entry
+
+    monkeypatch.setattr(s, "ENUM_CHECKS", [_rebind(entry) for entry in s.ENUM_CHECKS])
+
+    assert s.validate_enum_sync() is False
+    captured = capsys.readouterr()
+    assert (
+        "❌ MISMATCH: ml.gate_decision (→ public.discovery_gate_decision after ml/036)"
+        in captured.out
+    )
 
 
 def test_lane_checks_are_green_on_the_repo():

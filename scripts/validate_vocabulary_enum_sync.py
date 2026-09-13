@@ -253,7 +253,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
         if not db_values:
             files_display = ", ".join(str(p) for p in sql_paths)
             errors = [
-                f"❌ ENUM NOT FOUND: {enum_name}",
+                f"❌ ENUM NOT FOUND: {label}",
                 f"   SQL File(s): {files_display}",
                 "   Could not extract ENUM definition",
                 "",
@@ -267,7 +267,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
         if not vocab_data:
             errors = [
                 f"❌ VOCAB SECTION NOT FOUND: {vocab_section}",
-                f"   ENUM: {enum_name}",
+                f"   ENUM: {label}",
                 "",
             ]
             results.append(CheckResult(enum_name, False, 0, errors, label))
@@ -283,7 +283,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
             else:
                 errors = [
                     f"❌ UNEXPECTED VOCAB STRUCTURE: {vocab_section}",
-                    f"   ENUM: {enum_name}",
+                    f"   ENUM: {label}",
                     "",
                 ]
                 results.append(CheckResult(enum_name, False, 0, errors, label))
@@ -304,7 +304,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
             else:
                 errors = [
                     f"❌ UNEXPECTED VOCAB STRUCTURE: {vocab_section}",
-                    f"   ENUM: {enum_name}",
+                    f"   ENUM: {label}",
                     "",
                 ]
                 results.append(CheckResult(enum_name, False, 0, errors, label))
@@ -313,7 +313,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
         else:
             errors = [
                 f"❌ UNKNOWN VOCAB KEY: {vocab_key}",
-                f"   ENUM: {enum_name}",
+                f"   ENUM: {label}",
                 "",
             ]
             results.append(CheckResult(enum_name, False, 0, errors, label))
@@ -336,7 +336,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
 
             files_display = ", ".join(_display_path(p) for p in sql_paths)
             errors = [
-                f"❌ MISMATCH: {enum_name}",
+                f"❌ MISMATCH: {label}",
                 f"   SQL File(s): {files_display}",
                 f"   Vocab Section: {vocab_section}",
             ]
@@ -447,7 +447,7 @@ def validate_enum_sync(vocab_path: Optional[Path] = None) -> bool:
     for result in results:
         if result.ok:
             display_name = result.label or result.name
-            print(f"✅ {display_name:<25} ({result.value_count} values)")
+            print(f"✅ {display_name:<64} ({result.value_count} values)")
             passed_checks += 1
         else:
             all_errors.extend(result.errors)
