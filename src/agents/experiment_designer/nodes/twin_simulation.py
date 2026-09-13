@@ -216,9 +216,11 @@ class TwinSimulationNode:
         except Exception as e:
             logger.error(f"Twin simulation failed: {e}", exc_info=True)
 
+            # The raw text stays in the log above: this agent's whole output, warnings and errors
+            # included, is stringified into the answer, and library text means nothing there (#2020).
             error: ErrorDetails = {
                 "node": "twin_simulation",
-                "error": str(e),
+                "error": "the twin simulation could not be completed",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "recoverable": True,
             }
@@ -226,7 +228,7 @@ class TwinSimulationNode:
 
             # Twin simulation failure is recoverable - continue with design
             state["warnings"] = state.get("warnings", []) + [
-                f"Twin simulation failed: {str(e)}. Proceeding with standard design."
+                "Twin simulation failed. Proceeding with standard design."
             ]
             state["skip_experiment"] = False
             state["status"] = "reasoning"

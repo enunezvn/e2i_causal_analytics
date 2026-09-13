@@ -243,7 +243,10 @@ class TestTwinSimulationNode:
         assert result["status"] == "reasoning"
         assert result.get("skip_experiment") is False
         assert len(result.get("errors", [])) > 0
-        assert any("Simulation failed" in w for w in result.get("warnings", []))
+        # #2020: the fixed sentence, not the exception text ("Simulation failed" here) — an exact
+        # element, so a warning that still embedded the raw text would not satisfy it.
+        assert "Twin simulation failed. Proceeding with standard design." in result["warnings"]
+        assert result["errors"][-1]["error"] == "the twin simulation could not be completed"
 
     @pytest.mark.asyncio
     async def test_latency_tracking(self, initial_state_with_twin, mock_simulation_deploy):
