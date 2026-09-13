@@ -20,6 +20,22 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+def _add_tuple_items_sibling(schema: Dict[str, Any]) -> None:
+    """OpenAPI-lint fixup (#1991 debt 4, spectral ``array-items``): pydantic
+    renders ``Tuple[str, str]`` as ``{"type": "array", "prefixItems": [...],
+    "minItems": 2, "maxItems": 2}`` with NO sibling ``items`` key, which the
+    spectral ruleset flags on any ``type: array`` schema. Add one here rather
+    than widen the type -- OpenAPI 3.1's ``items`` governs elements past the
+    prefix, which ``maxItems == len(prefixItems)`` already makes unreachable,
+    so this documents the schema for the linter without loosening the arity
+    contract. Handles both the plain field (``schema["items"]``) and the
+    ``Optional``/``anyOf``-wrapped one (each ``schema["anyOf"][i]["items"]``)."""
+    for candidate in [schema, *schema.get("anyOf", [])]:
+        inner = candidate.get("items")
+        if isinstance(inner, dict) and inner.get("type") == "array" and "items" not in inner:
+            inner["items"] = {"type": "string"}
+
+
 class DagStructureSnapshot(BaseModel):
     """The sanitized causal-graph snapshot (mig 097) with the DISCOVERY gate typed.
 
@@ -33,11 +49,13 @@ class DagStructureSnapshot(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     nodes: List[str] = []
-    edges: List[Tuple[str, str]] = []
+    edges: List[Tuple[str, str]] = Field(default=[], json_schema_extra=_add_tuple_items_sibling)
     treatment_nodes: Optional[List[str]] = None
     outcome_nodes: Optional[List[str]] = None
     adjustment_sets: Optional[List[List[str]]] = None
-    augmented_edges: Optional[List[Tuple[str, str]]] = None
+    augmented_edges: Optional[List[Tuple[str, str]]] = Field(
+        default=None, json_schema_extra=_add_tuple_items_sibling
+    )
     discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]] = None
     confidence: Optional[float] = None
     dag_version_hash: Optional[str] = None
