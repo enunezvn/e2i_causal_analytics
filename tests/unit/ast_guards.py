@@ -10,7 +10,8 @@ from it: an assignment (plain, annotated, augmented or walrus), a ``for`` target
 ``with … as`` target, a nested function whose body reads it, or a prebuilt instance of a target
 class raised by name (``err = PlanningError(f"{e}"); raise err``). ``raise … from NAME`` does not
 count: the cause is kept for the log, not rendered. Neither do ``type(NAME)``,
-``type(NAME).__name__`` or ``NAME.__class__.__name__``, which name the class and carry no text.
+``type(NAME).__name__``, ``NAME.__class__.__name__`` or ``isinstance(NAME, …)``, which name or
+test the class and carry no text.
 
 Limits, deliberately:
 
@@ -18,8 +19,12 @@ Limits, deliberately:
   ``traceback.format_exc()``, ``sys.exc_info()`` — are out of scope.
 * Each handler is analysed on its own. The walk of a handler body does not enter a nested
   ``except`` clause (that clause is visited separately with only its own name tainted), so a
-  nested handler that renders the OUTER exception is not seen. A nested clause's assignments
-  still add taint for the statements after its ``try``.
+  nested handler that renders the OUTER exception is not seen — whether the nested clause binds
+  a name of its own or is nameless (``except ValueError: raise X(str(e))``). A nested clause's
+  assignments still add taint for the statements after its ``try``.
+* Taint flows through bindings only. A mutation through a method call or an attribute store
+  (``parts.append(str(e))``, ``err.args = …``, ``d.update(m=str(e))``) does not taint the
+  receiver.
 * Rebinding is flow-sensitive but path-insensitive. An assignment of an untainted value clears
   the name for the statements after it; branches merge by union and loops run to a fixpoint, so
   a rebinding on one branch only never clears the name.
@@ -49,8 +54,7 @@ class _Taint(NamedTuple):
     names: FrozenSet[str]
     instances: FrozenSet[Tuple[str, str]]  # (name, target class) of prebuilt instances
 
-    def __or__(self, other: object) -> "_Taint":
-        assert isinstance(other, _Taint)
+    def __or__(self, other: "_Taint") -> "_Taint":
         return _Taint(self.names | other.names, self.instances | other.instances)
 
     def gen(self, names: Iterable[str]) -> "_Taint":
@@ -67,7 +71,7 @@ class _Taint(NamedTuple):
         return next((cls for bound, cls in sorted(self.instances) if bound == name), None)
 
 
-def handler_caught_types(handler: ast.ExceptHandler) -> Tuple[str, ...]:
+def _handler_caught_types(handler: ast.ExceptHandler) -> Tuple[str, ...]:
     """The class names an ``except`` clause catches, in source order; ``()`` for a bare except."""
     if handler.type is None:
         return ()
@@ -84,15 +88,14 @@ def _class_name(node: ast.AST) -> Optional[str]:
 
 
 def _is_class_introspection(node: ast.AST) -> bool:
-    """``type(N)`` and ``N.__class__`` name the class; neither renders the exception's text."""
+    """``type(N)`` and ``N.__class__`` name the class and ``isinstance(N, …)`` tests it; none
+    renders the exception's text."""
     if isinstance(node, ast.Attribute) and node.attr == "__class__":
         return True
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "type"
-        and len(node.args) == 1
-        and not node.keywords
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords):
+        return False
+    return (node.func.id == "type" and len(node.args) == 1) or (
+        node.func.id == "isinstance" and len(node.args) == 2
     )
 
 
@@ -295,7 +298,7 @@ class _Visitor(ast.NodeVisitor):
             scan = _HandlerScan(self.targets)
             scan.block(node.body, _Taint(frozenset({node.name}), frozenset()))
             function = self.functions[-1] if self.functions else None
-            caught = handler_caught_types(node)
+            caught = _handler_caught_types(node)
             self.found.extend(
                 CaughtInterpolation(line, function, caught, raised, node.name)
                 for line, raised in sorted(scan.found.items())

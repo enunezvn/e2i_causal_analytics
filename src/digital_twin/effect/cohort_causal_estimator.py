@@ -238,7 +238,7 @@ def estimate_cohort_effect(
         logger.warning("cohort causal estimation failed for '%s'", treatment_col, exc_info=e)
         raise EffectDataUnavailable(
             f"cohort causal estimation failed for '{treatment_col}': the causal forest could "
-            "not be fitted on this cohort."
+            "not estimate an effect on this cohort."
         ) from e
 
     region_arr = work["region"].to_numpy(dtype=str)
