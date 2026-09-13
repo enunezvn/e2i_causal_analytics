@@ -1,4 +1,10 @@
-"""Shared constants and small numeric/date helpers for the causal routes package."""
+"""Shared constants and small numeric/date helpers for the causal routes package.
+
+Import rule: imports nothing from the package — this is the bottom layer.
+
+Admission criterion: leaf helpers and constants read by several route modules;
+nothing with an intra-package dependency. Revisit a split past ~400 lines.
+"""
 
 import math
 from datetime import datetime

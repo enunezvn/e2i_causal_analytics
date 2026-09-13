@@ -12,7 +12,6 @@ from typing import Any, Dict, List
 
 import pytest
 
-import src.api.routes.causal as causal
 from src.api.routes.causal import datasets as causal_datasets
 from src.api.routes.causal import loaders as causal_loaders
 
@@ -81,7 +80,7 @@ async def test_list_dataset_brands_distinct_sorted_non_null(monkeypatch):
             {},  # missing key tolerated
         ],
     )
-    brands = await causal._list_dataset_brands("patient_journeys")
+    brands = await causal_datasets._list_dataset_brands("patient_journeys")
     assert brands == ["Fabhalta", "Kisqali", "Remibrutinib"]
 
 
@@ -93,7 +92,7 @@ async def test_list_dataset_brands_empty_when_store_unavailable(monkeypatch):
         return None
 
     monkeypatch.setattr(factories, "get_async_supabase_client", _none_factory)
-    assert await causal._list_dataset_brands("patient_journeys") == []
+    assert await causal_datasets._list_dataset_brands("patient_journeys") == []
 
 
 @pytest.mark.unit
@@ -116,7 +115,7 @@ async def test_load_frame_with_brand_applies_eq_filter_and_excludes_brand_column
             },
         ],
     )
-    df, select = await causal._load_agent_estimation_frame(
+    df, select = await causal_loaders._load_agent_estimation_frame(
         dataset="patient_journeys",
         treatment_var="treatment_arm",
         outcome_var="persistent_180d",
@@ -138,7 +137,7 @@ async def test_load_frame_without_brand_does_not_filter(monkeypatch):
         monkeypatch,
         [{"treatment_arm": 1.0, "persistent_180d": 1.0, "disease_severity": 0.3}],
     )
-    df, _select = await causal._load_agent_estimation_frame(
+    df, _select = await causal_loaders._load_agent_estimation_frame(
         dataset="patient_journeys",
         treatment_var="treatment_arm",
         outcome_var="persistent_180d",

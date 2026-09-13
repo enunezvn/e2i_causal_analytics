@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.api.routes import causal as causal_routes
 from src.api.routes.causal import catalog as causal_catalog
+from src.api.routes.causal import discovery as causal_routes
 from src.api.schemas.causal import DiscoveredEffect
 
 # #1991 debt 4: the route no longer builds a ClinicalContextService at import —
