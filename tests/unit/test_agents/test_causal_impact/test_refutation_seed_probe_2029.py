@@ -24,6 +24,7 @@ from src.causal_engine.refutation_runner import (
     RefutationSuite,
     RefutationTestType,
     seed_for_estimate,
+    seed_identity_for,
 )
 
 
@@ -59,6 +60,16 @@ def test_probe_seed_comes_from_the_module_function_not_the_runner_instance():
     probe = _probe_window()
     assert "seed_for_estimate(" in probe
     assert "self.runner._seed_for" not in probe
+
+
+def test_probe_source_seeds_from_the_pair_identity_with_query_id_fallback():
+    """Lane 1b (#2029): the probe (like the scored refits) is seeded from the
+    content-addressed pair identity ``brand|treatment|outcome``; the per-run
+    query id -- a uuid4 minted per analysis on the discovery path -- is only the
+    fallback when the pair is unknown."""
+    probe = _probe_window()
+    assert "seed_for_estimate(seed_identity or query_id)" in probe
+    assert "seed_for_estimate(query_id)" not in probe
 
 
 # --- the one derivation ------------------------------------------------------
@@ -166,11 +177,64 @@ async def test_execute_with_runner_double_lacking_seed_for_does_not_fail(bare_no
     assert result["gate_decision"] == "proceed"
 
 
+def _probes(model) -> list[dict]:
+    return [k for k in model.refute_kwargs if k.get("num_simulations") == 1]
+
+
 @pytest.mark.asyncio
-async def test_probe_random_state_matches_module_seed_for_the_query_id(bare_node):
+async def test_probe_random_state_matches_module_seed_for_the_pair_identity(bare_node):
+    """Lane 1b (#2029): with a pair in state the probe is seeded from the pair
+    identity (brand is absent here -> leading empty segment), NOT from the
+    query id, which changes per run."""
     n, model = bare_node
     await n.execute(_state(query_id="query-2029-seeded"))
-    probes = [k for k in model.refute_kwargs if k.get("num_simulations") == 1]
+    probes = _probes(model)
     assert probes, "the 1-sim calibration probe did not run"
-    assert probes[0]["random_state"] == seed_for_estimate("query-2029-seeded")
+    identity = seed_identity_for(brand=None, treatment="control_group_flag", outcome="action_taken")
+    assert identity == "|control_group_flag|action_taken"
+    assert probes[0]["random_state"] == seed_for_estimate(identity)
+    assert probes[0]["random_state"] != seed_for_estimate("query-2029-seeded")
     assert probes[0]["random_state"] is not None
+    assert n.runner.kwargs["seed_identity"] == identity
+    assert n.runner.kwargs["estimate_id"] == "query-2029-seeded"
+
+
+@pytest.mark.asyncio
+async def test_two_query_ids_same_pair_seed_identically(bare_node):
+    """The measured defect: two discovery runs of the same pair got different
+    seeds because each minted its own query id. Same pair -> same identity ->
+    same probe seed, whatever the query id."""
+    n, model = bare_node
+    await n.execute(_state(query_id="query-run-A", brand="Remibrutinib"))
+    kwargs_a = dict(n.runner.kwargs)
+    await n.execute(_state(query_id="query-run-B", brand="Remibrutinib"))
+    kwargs_b = dict(n.runner.kwargs)
+    probes = _probes(model)
+    assert len(probes) == 2, "one calibration probe per run expected"
+
+    identity = seed_identity_for(
+        brand="Remibrutinib", treatment="control_group_flag", outcome="action_taken"
+    )
+    assert identity == "Remibrutinib|control_group_flag|action_taken"
+    assert kwargs_a["seed_identity"] == identity
+    assert kwargs_b["seed_identity"] == identity
+    # The estimate id (persistence / tracing) still follows the run.
+    assert kwargs_a["estimate_id"] == "query-run-A"
+    assert kwargs_b["estimate_id"] == "query-run-B"
+    assert probes[0]["random_state"] == probes[1]["random_state"] == seed_for_estimate(identity)
+
+
+@pytest.mark.asyncio
+async def test_different_outcome_gives_a_different_identity_and_seed(bare_node):
+    """Negative control: a seed that ignored the identity would pass the test above."""
+    n, model = bare_node
+    await n.execute(_state(query_id="query-run-A", brand="Remibrutinib"))
+    kwargs_a = dict(n.runner.kwargs)
+    await n.execute(_state(query_id="query-run-A", brand="Remibrutinib", outcome_var="trx_count"))
+    kwargs_b = dict(n.runner.kwargs)
+    probes = _probes(model)
+    assert len(probes) == 2
+    assert kwargs_a["seed_identity"] != kwargs_b["seed_identity"]
+    assert kwargs_b["seed_identity"] == "Remibrutinib|control_group_flag|trx_count"
+    assert probes[0]["random_state"] != probes[1]["random_state"]
+    assert probes[1]["random_state"] == seed_for_estimate(kwargs_b["seed_identity"])

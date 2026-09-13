@@ -251,6 +251,7 @@ def _budget_skip_result(
     execution_time_ms: float = 0.0,
     *,
     resample_seed: Optional[int] = None,
+    seed_identity: Optional[str] = None,
 ) -> RefutationResult:
     """Honest SKIPPED when fewer than ``minimum`` re-fits completed.
 
@@ -290,8 +291,9 @@ def _budget_skip_result(
             "resamples_completed": completed,
             "resamples_requested": requested,
             "stopped_for_budget": stopped,
-            # #2029: the seed the re-fits were drawn with, persisted with the row.
-            "resample_seed": resample_seed,
+            # #2029: the seed the re-fits were drawn with (and the identity it
+            # came from), persisted with the row.
+            **_seed_details(name, resample_seed, seed_identity),
             **config_details,
         },
         execution_time_ms=execution_time_ms,
@@ -308,6 +310,7 @@ def _degenerate_skip_result(
     execution_time_ms: float = 0.0,
     *,
     resample_seed: Optional[int] = None,
+    seed_identity: Optional[str] = None,
 ) -> RefutationResult:
     """Honest SKIPPED when every re-fit returned the SAME effect (owner decision
     2026-09-09). A zero-variance distribution cannot be scored (DoWhy's normal
@@ -335,8 +338,9 @@ def _degenerate_skip_result(
             "resamples_completed": len(effects),
             "resamples_requested": requested,
             "stopped_for_budget": stopped,
-            # #2029: the seed the re-fits were drawn with, persisted with the row.
-            "resample_seed": resample_seed,
+            # #2029: the seed the re-fits were drawn with (and the identity it
+            # came from), persisted with the row.
+            **_seed_details(name, resample_seed, seed_identity),
             **config_details,
         },
         execution_time_ms=execution_time_ms,
@@ -383,6 +387,7 @@ def _degenerate_ci_skip_result(
     unscorable: str = "coverage / width ratio",
     *,
     seed: Optional[int] = None,
+    seed_identity: Optional[str] = None,
 ) -> RefutationResult:
     """Honest SKIPPED, decided BEFORE any re-fit, when the reported interval has
     no width: coverage of a point and a width ratio against ~0 cannot be scored
@@ -394,12 +399,13 @@ def _degenerate_ci_skip_result(
     vocabulary, ``original_ci_degenerate`` -- serves every interval-referenced
     test without misdescribing what was skipped.
 
-    ``seed`` (#2029): the seed the run WOULD have used; recorded on the skip
-    row too, under the key ``_SEED_KEY_BY_TEST`` assigns to ``test_name`` (the
-    same map the budget-skip loop in ``run_all_tests`` reads, so the key is
-    spelled in ONE place), so every persisted perturbation row carries its key
-    (``None`` when the run was unseeded -- present, not silently absent). A
-    test type absent from the map (the analytic tests) records no key.
+    ``seed`` / ``seed_identity`` (#2029): the seed the run WOULD have used
+    and the pair identity it came from; recorded on the skip row too, via
+    ``_seed_details`` (the one writer every seed-carrying row goes through,
+    so the key is spelled in ONE place), so every persisted perturbation row
+    carries its key (``None`` when the run was unseeded -- present, not
+    silently absent). A test type absent from the map (the analytic tests)
+    records nothing.
     """
     name = test_name.value
     details: Dict[str, Any] = {
@@ -421,10 +427,8 @@ def _degenerate_ci_skip_result(
         "resamples_completed": 0,
         "stopped_for_budget": False,
         **config_details,
+        **_seed_details(name, seed, seed_identity),
     }
-    seed_key = _SEED_KEY_BY_TEST.get(name)
-    if seed_key is not None:
-        details[seed_key] = seed
     return RefutationResult(
         test_name=test_name,
         status=RefutationStatus.SKIPPED,
@@ -644,8 +648,14 @@ def _score_common_cause_shift(
 
 def seed_for_estimate(estimate_id: Optional[str]) -> Optional[int]:
     """THE seed derivation for a refutation run (#2029): a stable 31-bit
-    integer from the estimate id; ``None`` for ``None``/``""`` (an unseeded
+    integer from the run's identity; ``None`` for ``None``/``""`` (an unseeded
     run stays unseeded and says so in its details).
+
+    The identity is normally the content-addressed PAIR identity from
+    ``seed_identity_for`` (``brand|treatment|outcome``), so the same pair
+    reproduces the same refits across runs; the per-run estimate / query id
+    (a uuid4 minted per analysis on the discovery path) is only the fallback
+    when no pair identity is known. The parameter keeps its historical name.
 
     This module-level function is the contract for OTHER modules (the
     causal_impact refutation node seeds its 1-sim calibration probe with it)
@@ -667,6 +677,28 @@ def seed_for_estimate(estimate_id: Optional[str]) -> Optional[int]:
 _resample_seed_for = seed_for_estimate
 
 
+def seed_identity_for(
+    *, brand: Optional[str], treatment: Optional[str], outcome: Optional[str]
+) -> Optional[str]:
+    """The content-addressed identity a refutation run is seeded from (#2029,
+    lane 1b): ``brand|treatment|outcome`` -- or ``None`` when either the
+    treatment or the outcome is missing (a run without a pair falls back to its
+    per-run id in ``run_all_tests``).
+
+    Identical inputs give identical refits regardless of the per-run query id.
+    Measured on the deployed image 2026-09-12: two consecutive live discovery
+    runs agreed on every ATE (11/11) and status (22/22) yet on 0/22 refit
+    values, because the seed came from ``query_id`` -- a uuid4 minted per
+    analysis. The dataset is deliberately NOT part of the identity: a changed
+    frame changes the refits anyway, and the seed is a reproducibility handle,
+    not a fingerprint of the evidence. ``brand`` may be absent (leading empty
+    segment) so brand-less callers still get a stable identity.
+    """
+    if not treatment or not outcome:
+        return None
+    return f"{brand or ''}|{treatment}|{outcome}"
+
+
 #: Spec §4 (#2029): the details_json key under which EACH perturbation test
 #: records the seed it used -- ``random_state`` for the two DoWhy refuters,
 #: ``resample_seed`` for the two in-house resample loops -- present on EVERY
@@ -679,6 +711,25 @@ _SEED_KEY_BY_TEST: Dict[str, str] = {
     "data_subset": "resample_seed",
     "bootstrap": "resample_seed",
 }
+
+
+def _seed_details(
+    test_name: str, seed: Optional[int], seed_identity: Optional[str]
+) -> Dict[str, Any]:
+    """The seed provenance every persisted PERTURBATION row carries (#2029):
+    the seed under the key ``_SEED_KEY_BY_TEST`` assigns to ``test_name`` and,
+    since lane 1b, ``seed_identity`` -- the pair identity the seed was derived
+    from (``None`` when the run fell back to its per-run id, or was unseeded).
+    Both keys are PRESENT on every row of a perturbation test (scored, post-run
+    skip, pre-run skip, budget skip) -- ``None`` says "unseeded", absence would
+    be silent. A test type absent from the map (the analytic tests) gets
+    nothing. Every writer of these keys goes through here so the spelling and
+    the "present, not absent" contract live in ONE place.
+    """
+    seed_key = _SEED_KEY_BY_TEST.get(test_name)
+    if seed_key is None:
+        return {}
+    return {seed_key: seed, "seed_identity": seed_identity}
 
 
 # ============================================================================
@@ -1180,8 +1231,10 @@ class RefutationRunner:
         """Runner-side convenience for the seed a run uses for every random
         refit (#2029); delegates to the module-level ``seed_for_estimate``.
 
-        ``run_all_tests`` derives the run's seed ONCE via that function and
-        feeds the same value to all four perturbation tests. This method is
+        ``run_all_tests`` derives the run's seed ONCE via that function --
+        normally from the pair identity (``seed_identity_for``), the estimate
+        id only as the fallback -- and feeds the same value to all four
+        perturbation tests. This method is
         NOT the contract for other modules -- they import
         ``seed_for_estimate`` directly, so a runner double without this
         attribute never breaks them.
@@ -1216,6 +1269,7 @@ class RefutationRunner:
         negative_control: Optional[Tuple[str, float, Tuple[float, float], int]] = None,
         negative_control_skip_reason: Optional[str] = None,
         negative_control_deferred: bool = False,
+        seed_identity: Optional[str] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -1235,7 +1289,16 @@ class RefutationRunner:
             treatment: Treatment variable name
             outcome: Outcome variable name
             brand: Brand context for logging
-            estimate_id: UUID for database linking
+            estimate_id: UUID for database linking (tracing, the suite and the
+                per-test details keep the real id). It is also the seed's
+                FALLBACK identity when ``seed_identity`` is not given.
+            seed_identity: #2029 (lane 1b). The content-addressed identity the
+                run's seed is derived from -- ``seed_identity_for(brand=...,
+                treatment=..., outcome=...)`` = ``brand|treatment|outcome`` --
+                so the same pair reproduces the same refits whatever the
+                per-run id. ``None`` (default) keeps the historical behaviour
+                (seed from ``estimate_id``). Every perturbation row records
+                the identity used under ``details["seed_identity"]``.
             trace_id: Opik trace ID for correlation (optional)
             deadline: Absolute ``time.monotonic()`` second by which the suite
                 must be done. Each refuter re-fits the estimator many times and
@@ -1412,9 +1475,11 @@ class RefutationRunner:
             _budget["sims"] += max(1, n_sims)
 
         # Spec §4.1: the two resample loops check the deadline between re-fits
-        # and seed their draws from the estimate id so a re-run reproduces its
-        # evidence (None → unseeded, the pre-lane-1 behaviour).
-        resample_seed = _resample_seed_for(estimate_id)
+        # and seed their draws from the run's identity so a re-run reproduces
+        # its evidence (None → unseeded, the pre-lane-1 behaviour). #2029 lane
+        # 1b: the identity is the PAIR (``seed_identity``) when the caller
+        # knows it; the per-run estimate id is only the fallback.
+        resample_seed = _resample_seed_for(seed_identity if seed_identity else estimate_id)
         # #2029: the same VALUE feeds the two DoWhy refits -- derived once,
         # aliased under the name the DoWhy refuters take it by.
         random_state = resample_seed
@@ -1635,6 +1700,7 @@ class RefutationRunner:
                     estimate=estimate,
                     use_dowhy=use_dowhy,
                     random_state=random_state,
+                    seed_identity=seed_identity,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1660,6 +1726,7 @@ class RefutationRunner:
                     reference_n=reference_n,
                     refit_n=refit_n,
                     random_state=random_state,
+                    seed_identity=seed_identity,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1684,6 +1751,7 @@ class RefutationRunner:
                     use_dowhy=use_dowhy,
                     deadline=deadline,
                     resample_seed=resample_seed,
+                    seed_identity=seed_identity,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1708,6 +1776,7 @@ class RefutationRunner:
                     use_dowhy=use_dowhy,
                     deadline=deadline,
                     resample_seed=resample_seed,
+                    seed_identity=seed_identity,
                 )
                 tests.append(test_result)
                 _record(_n, time.monotonic() - _t0)
@@ -1763,11 +1832,10 @@ class RefutationRunner:
                     ),
                 }
                 # #2029 spec §4: a budget-skipped perturbation row still carries
-                # the seed the run used under that test's key; analytic tests
-                # (sensitivity) are not in the mapping and get nothing.
-                _seed_key = _SEED_KEY_BY_TEST.get(name)
-                if _seed_key is not None:
-                    _skip_details[_seed_key] = resample_seed
+                # the seed the run used under that test's key (and the identity
+                # it came from); analytic tests (sensitivity) are not in the
+                # mapping and get nothing.
+                _skip_details.update(_seed_details(name, resample_seed, seed_identity))
                 tests.append(
                     RefutationResult(
                         test_name=RefutationTestType(name),
@@ -2043,14 +2111,17 @@ class RefutationRunner:
         use_dowhy: bool,
         *,
         random_state: Optional[int] = None,
+        seed_identity: Optional[str] = None,
     ) -> RefutationResult:
         """Run placebo treatment refutation test.
 
         Replaces the treatment with random noise. If the effect disappears
         (p-value > 0.05), the original effect is likely causal.
 
-        ``random_state`` seeds DoWhy's permutations (#2029): the same estimate
-        id reproduces the same verdict; ``None`` leaves the refit unseeded.
+        ``random_state`` seeds DoWhy's permutations (#2029): the same run
+        identity reproduces the same verdict; ``None`` leaves the refit
+        unseeded. ``seed_identity`` is the pair identity the seed came from,
+        recorded with the row (``None`` when the run fell back to its id).
         """
         import time
 
@@ -2131,7 +2202,7 @@ class RefutationRunner:
         details: Dict[str, Any] = {
             "message": message,
             "num_simulations": self.config["placebo_treatment"]["num_simulations"],
-            "random_state": random_state,
+            **_seed_details(test_name.value, random_state, seed_identity),
         }
 
         return RefutationResult(
@@ -2157,6 +2228,7 @@ class RefutationRunner:
         reference_n: Optional[int] = None,
         refit_n: Optional[int] = None,
         random_state: Optional[int] = None,
+        seed_identity: Optional[str] = None,
     ) -> RefutationResult:
         """Run random common cause refutation test.
 
@@ -2174,7 +2246,8 @@ class RefutationRunner:
         (``_degenerate_ci_skip_result``). ``reference_n`` / ``refit_n`` are
         the row counts of the interval's frame and of the refit frame.
         ``random_state`` seeds DoWhy's draws of the synthetic common cause
-        (#2029); ``None`` leaves the refit unseeded.
+        (#2029); ``None`` leaves the refit unseeded. ``seed_identity`` is the
+        pair identity the seed came from, recorded with the row.
         """
         import time
 
@@ -2197,6 +2270,7 @@ class RefutationRunner:
                     execution_time_ms=(time.time() - start_time) * 1000,
                     unscorable="the shift in SE units",
                     seed=random_state,
+                    seed_identity=seed_identity,
                 )
             try:
                 # Pass num_simulations ONLY when configured, so prod (no key set)
@@ -2271,7 +2345,7 @@ class RefutationRunner:
             thresholds=self.thresholds["common_cause_shift_se"],
         )
         details.update(config_details)
-        details["random_state"] = random_state
+        details.update(_seed_details(test_name.value, random_state, seed_identity))
 
         execution_time = (time.time() - start_time) * 1000
 
@@ -2297,6 +2371,7 @@ class RefutationRunner:
         *,
         deadline: Optional[float] = None,
         resample_seed: Optional[int] = None,
+        seed_identity: Optional[str] = None,
     ) -> RefutationResult:
         """Data-subset consistency test on REAL per-subset evidence (spec §4.1).
 
@@ -2338,6 +2413,7 @@ class RefutationRunner:
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
                 seed=resample_seed,
+                seed_identity=seed_identity,
             )
         rng = np.random.default_rng(resample_seed)
         try:
@@ -2374,6 +2450,7 @@ class RefutationRunner:
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
                 resample_seed=resample_seed,
+                seed_identity=seed_identity,
             )
 
         # "Every re-fit returned the same effect" is tested EXACTLY (max == min):
@@ -2390,6 +2467,7 @@ class RefutationRunner:
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
                 resample_seed=resample_seed,
+                seed_identity=seed_identity,
             )
 
         refuted_effect = float(np.mean(subset_effects))
@@ -2424,8 +2502,9 @@ class RefutationRunner:
                 "resamples_completed": len(subset_effects),
                 "resamples_requested": requested,
                 "stopped_for_budget": stopped,
-                # #2029: the seed the re-fits were drawn with, persisted with the row.
-                "resample_seed": resample_seed,
+                # #2029: the seed the re-fits were drawn with (and the identity
+                # it came from), persisted with the row.
+                **_seed_details(test_name.value, resample_seed, seed_identity),
                 **config_details,
             },
             execution_time_ms=execution_time,
@@ -2442,6 +2521,7 @@ class RefutationRunner:
         *,
         deadline: Optional[float] = None,
         resample_seed: Optional[int] = None,
+        seed_identity: Optional[str] = None,
     ) -> RefutationResult:
         """Bootstrap stability test on REAL per-resample evidence (spec §4.1).
 
@@ -2481,6 +2561,7 @@ class RefutationRunner:
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
                 seed=resample_seed,
+                seed_identity=seed_identity,
             )
         rng = np.random.default_rng(resample_seed)
         try:
@@ -2515,6 +2596,7 @@ class RefutationRunner:
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
                 resample_seed=resample_seed,
+                seed_identity=seed_identity,
             )
 
         # Exact degeneracy check (max == min); see _run_data_subset_test.
@@ -2528,6 +2610,7 @@ class RefutationRunner:
                 config_details,
                 execution_time_ms=(time.time() - start_time) * 1000,
                 resample_seed=resample_seed,
+                seed_identity=seed_identity,
             )
 
         refuted_effect = float(np.mean(bootstrap_effects))
@@ -2574,8 +2657,9 @@ class RefutationRunner:
                 "resamples_completed": len(bootstrap_effects),
                 "resamples_requested": requested,
                 "stopped_for_budget": stopped,
-                # #2029: the seed the re-fits were drawn with, persisted with the row.
-                "resample_seed": resample_seed,
+                # #2029: the seed the re-fits were drawn with (and the identity
+                # it came from), persisted with the row.
+                **_seed_details(test_name.value, resample_seed, seed_identity),
                 **config_details,
             },
             execution_time_ms=execution_time,

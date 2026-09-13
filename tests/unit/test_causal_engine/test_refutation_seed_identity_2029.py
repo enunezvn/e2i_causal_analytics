@@ -1,7 +1,11 @@
-"""#2029: placebo_treatment and random_common_cause are seeded from the estimate id.
+"""#2029: placebo_treatment and random_common_cause are seeded from the pair identity.
 
-Two runs with the same estimate id give byte-identical refits; two estimate ids
-differ (the positive control against a seed that ignores its input).
+The seed comes from ``seed_identity_for`` (``brand|treatment|outcome``); the
+estimate id is only the fallback when a caller passes no identity. These tests
+drive ``_seed_for`` directly, so "estimate id" below stands for whichever identity
+string the runner seeds from: two runs with the same identity give byte-identical
+refits; two identities differ (the positive control against a seed that ignores
+its input).
 """
 
 from __future__ import annotations
@@ -250,6 +254,14 @@ def test_budget_skip_rows_carry_the_seed_key_for_perturbation_tests_only(monkeyp
     assert rows["placebo_treatment"].details["random_state"] == seed
     assert "random_state" not in rows["sensitivity_e_value"].details
     assert "resample_seed" not in rows["sensitivity_e_value"].details
+    # Lane 1b: the identity travels with the seed -- PRESENT (None: this run
+    # gave no pair identity, so the seed fell back to the estimate id) on every
+    # perturbation row, budget skips included; absent on the analytic rows.
+    for n in ("placebo_treatment", "random_common_cause", "data_subset", "bootstrap"):
+        assert "seed_identity" in rows[n].details, n
+        assert rows[n].details["seed_identity"] is None, n
+    for n in ("sensitivity_e_value", "negative_control_outcome"):
+        assert "seed_identity" not in rows[n].details, n
 
 
 def test_seed_key_map_covers_every_perturbation_test_type_and_nothing_else():
@@ -265,3 +277,122 @@ def test_seed_key_map_covers_every_perturbation_test_type_and_nothing_else():
     analytic = {"sensitivity_e_value", "negative_control_outcome"}
     assert set(_SEED_KEY_BY_TEST) == {t.value for t in RefutationTestType} - analytic
     assert set(_SEED_KEY_BY_TEST.values()) == {"random_state", "resample_seed"}
+
+
+# ---------------------------------------------------------------------------
+# Lane 1b (#2029): the run is seeded from the content-addressed PAIR identity
+# ``brand|treatment|outcome``, the per-run query id only as a fallback. Measured
+# on the deployed image 2026-09-12: two consecutive live discovery runs gave
+# identical ATEs (11/11) and statuses (22/22) but refit values identical 0/22,
+# because the node seeded from ``query_id`` = a uuid4 minted per analysis.
+# ---------------------------------------------------------------------------
+
+
+def test_seed_identity_for_joins_brand_treatment_outcome():
+    from src.causal_engine.refutation_runner import seed_identity_for
+
+    assert seed_identity_for(brand="B", treatment="t", outcome="y") == "B|t|y"
+
+
+def test_seed_identity_for_without_brand_has_a_leading_empty_segment():
+    from src.causal_engine.refutation_runner import seed_identity_for
+
+    assert seed_identity_for(brand=None, treatment="t", outcome="y") == "|t|y"
+    assert seed_identity_for(brand="", treatment="t", outcome="y") == "|t|y"
+
+
+@pytest.mark.parametrize(
+    ("treatment", "outcome"),
+    [(None, "y"), ("", "y"), ("t", None), ("t", ""), (None, None)],
+)
+def test_seed_identity_for_needs_both_treatment_and_outcome(treatment, outcome):
+    from src.causal_engine.refutation_runner import seed_identity_for
+
+    assert seed_identity_for(brand="B", treatment=treatment, outcome=outcome) is None
+
+
+_PERTURBATION = ("placebo_treatment", "random_common_cause", "data_subset", "bootstrap")
+
+
+def _suite(estimate_id, seed_identity):
+    """One real-DoWhy ``run_all_tests`` on the tiny frame: 2 placebo sims, 2 rcc
+    sims, and the two resample loops at their scoring minimums (3 / 10)."""
+    from src.causal_engine.refutation_runner import RefutationRunner
+
+    model, estimand, estimate, ate = _fitted()
+    runner = RefutationRunner(
+        config={
+            "placebo_treatment": {"num_simulations": 2},
+            "random_common_cause": {"num_simulations": 2},
+            "data_subset": {"num_subsets": 3},
+            "bootstrap": {"num_bootstraps": 10},
+            "sensitivity_e_value": {"enabled": False},
+        }
+    )
+    suite = runner.run_all_tests(
+        original_effect=ate,
+        original_ci=(ate - 0.1, ate + 0.1),
+        causal_model=model,
+        identified_estimand=estimand,
+        estimate=estimate,
+        estimate_id=estimate_id,
+        seed_identity=seed_identity,
+    )
+    return {t.test_name.value: t for t in suite.tests}
+
+
+def _refit_view(rows):
+    return {
+        n: (rows[n].refuted_effect, rows[n].p_value, rows[n].status.value) for n in _PERTURBATION
+    }
+
+
+def test_same_pair_identity_different_estimate_ids_is_byte_identical():
+    """The pair identity decides the seed; the per-run estimate id does not."""
+    from src.causal_engine.refutation_runner import (
+        _SEED_KEY_BY_TEST,
+        RefutationStatus,
+        seed_for_estimate,
+    )
+
+    a = _suite("run-A", "B|t|y")
+    b = _suite("run-B", "B|t|y")
+    # Pin the path: all four perturbation tests were SCORED (a SKIPPED row's
+    # refuted_effect is the original effect, which would agree trivially).
+    for n in _PERTURBATION:
+        assert a[n].status is not RefutationStatus.SKIPPED, (n, a[n].details.get("reason"))
+    assert _refit_view(a) == _refit_view(b)
+    expected_seed = seed_for_estimate("B|t|y")
+    assert expected_seed is not None
+    for rows in (a, b):
+        for n in _PERTURBATION:
+            assert rows[n].details["seed_identity"] == "B|t|y", n
+            assert rows[n].details[_SEED_KEY_BY_TEST[n]] == expected_seed, n
+    # The estimate id still reaches the suite (persistence / tracing are unchanged).
+
+
+def test_same_estimate_id_different_identities_differ():
+    """Positive control: a seed that ignored the identity would pass the test above."""
+    from src.causal_engine.refutation_runner import seed_for_estimate
+
+    a = _suite("run-A", "B|t|y")
+    c = _suite("run-A", "B|t|z")
+    assert seed_for_estimate("B|t|y") != seed_for_estimate("B|t|z")
+    assert (
+        a["placebo_treatment"].details["random_state"]
+        != c["placebo_treatment"].details["random_state"]
+    )
+    assert a["placebo_treatment"].refuted_effect != c["placebo_treatment"].refuted_effect
+    assert c["placebo_treatment"].details["seed_identity"] == "B|t|z"
+
+
+def test_no_identity_falls_back_to_the_estimate_id():
+    from src.causal_engine.refutation_runner import _SEED_KEY_BY_TEST, seed_for_estimate
+
+    rows = _suite("run-A", None)
+    for n in _PERTURBATION:
+        assert rows[n].details[_SEED_KEY_BY_TEST[n]] == seed_for_estimate("run-A"), n
+        assert "seed_identity" in rows[n].details, n
+        assert rows[n].details["seed_identity"] is None, n
+    # Analytic rows carry neither the seed key nor the identity.
+    assert "seed_identity" not in rows["negative_control_outcome"].details
