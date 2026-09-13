@@ -23,7 +23,8 @@ import pandas as pd
 import pytest
 
 from src.api.dependencies.durable_job_store import DurableJobStore
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import agent as causal_agent
+from src.api.routes.causal import discovery as causal_routes
 from src.api.schemas.causal import AgentCausalAnalysisResponse
 from tests.unit.test_api.test_causal_discover_effects_select_cancel import (
     _completed_agent_response,
@@ -96,7 +97,7 @@ def task_env(monkeypatch):
         )
 
     monkeypatch.setattr(causal_routes, "_load_agent_estimation_frame", fake_load)
-    monkeypatch.setattr(causal_routes, "_run_agent_analysis_task", fake_agent)
+    monkeypatch.setattr(causal_agent, "_run_agent_analysis_task", fake_agent)
     return {"store": store, "loads": loads, "agent_calls": agent_calls}
 
 
