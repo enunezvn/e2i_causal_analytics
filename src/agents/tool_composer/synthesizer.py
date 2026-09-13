@@ -396,9 +396,10 @@ class ResponseSynthesizer:
             return composed
 
         except Exception as e:
-            logger.error(f"Synthesis failed: {e}")
-            # Return a fallback response
-            return self._create_fallback_response(synthesis_input, str(e))
+            # LLM-client errors carry provider JSON (status, org id, error code), and a pydantic
+            # error carries the model's input: the raw text goes to the log only (#2020).
+            logger.warning("Synthesis failed; returning the fallback response: %s", e)
+            return self._create_fallback_response(synthesis_input)
 
     def _format_results(self, synthesis_input: SynthesisInput) -> str:
         """Format execution results for the synthesis prompt"""
@@ -480,10 +481,11 @@ class ResponseSynthesizer:
                 "reasoning": "JSON parsing failed, using raw response",
             }
 
-    def _create_fallback_response(
-        self, synthesis_input: SynthesisInput, error: str
-    ) -> ComposedResponse:
-        """Create a fallback response when synthesis fails"""
+    def _create_fallback_response(self, synthesis_input: SynthesisInput) -> ComposedResponse:
+        """Create a fallback response when synthesis fails.
+
+        Takes no error text: the caller logs it, and nothing here renders it (#2020).
+        """
         # Try to extract key results
         successful_results = [
             r for r in synthesis_input.execution_trace.step_results if r.output.is_success
@@ -507,12 +509,12 @@ class ResponseSynthesizer:
 
             answer = "\n".join(answer_parts)
         else:
-            answer = f"Unable to fully answer the query. Error: {error}"
+            answer = "Unable to fully answer the query: synthesis could not be completed."
 
         return ComposedResponse(
             answer=answer,
             confidence=0.3,
-            caveats=[f"Synthesis encountered an error: {error}"],
+            caveats=["Synthesis could not be completed, so this answer was assembled without it."],
             failed_components=[
                 r.sub_question_id
                 for r in synthesis_input.execution_trace.step_results
