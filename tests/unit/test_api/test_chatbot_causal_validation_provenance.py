@@ -246,6 +246,7 @@ def test_summarize_mixed_unknown_and_block_still_blocks():
     summary = _summarize_refutation_rows(rows)
     assert summary["gate_decision"] == "block"
     assert summary["gate_unreadable_rows"] == 1
+    assert "1 of 2" in summary["note"]
 
 
 @pytest.mark.unit
@@ -253,6 +254,7 @@ def test_summarize_proceed_only_reads_proceed_and_zero_unreadable():
     summary = _summarize_refutation_rows(_seeded_evidence_rows(n_passed=3))
     assert summary["gate_decision"] == "proceed"
     assert summary["gate_unreadable_rows"] == 0
+    assert "note" not in summary
 
 
 @pytest.mark.unit
@@ -263,3 +265,14 @@ def test_summarize_readable_proceed_plus_unreadable_is_unknown():
     summary = _summarize_refutation_rows(rows)
     assert summary["gate_decision"] == "unknown"
     assert summary["gate_unreadable_rows"] == 1
+
+
+@pytest.mark.unit
+def test_summarize_review_plus_unreadable_still_reviews_with_note():
+    rows = _seeded_evidence_rows(n_passed=2)
+    rows[0]["gate_decision"] = "review"
+    rows[1]["gate_decision"] = None
+    summary = _summarize_refutation_rows(rows)
+    assert summary["gate_decision"] == "review"
+    assert summary["gate_unreadable_rows"] == 1
+    assert "1 of 2" in summary["note"]
