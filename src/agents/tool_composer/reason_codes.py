@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import re
 from enum import StrEnum
-from typing import Dict, Mapping, Union
+from typing import Dict, Mapping, Optional, Union
 
 
 class ReasonCode(StrEnum):
@@ -135,6 +135,23 @@ def canonical_sentence(code: Union[ReasonCode, str, None]) -> str:
         except ValueError:
             pass
     return CANONICAL_SENTENCES[ReasonCode.TOOL_ERROR]
+
+
+def known_sentence(code: Union[ReasonCode, str, None]) -> Optional[str]:
+    """The sentence for a code this build knows, else ``None``. For read-side display.
+
+    Unlike :func:`canonical_sentence`, an unknown code does NOT fall back to the generic
+    tool-failure sentence: an operator page must not relabel a refusal it cannot read as a tool
+    failure. The caller shows the bare code instead.
+    """
+    if isinstance(code, ReasonCode):
+        return CANONICAL_SENTENCES[code]
+    if isinstance(code, str):
+        try:
+            return CANONICAL_SENTENCES[ReasonCode(code)]
+        except ValueError:
+            return None
+    return None
 
 
 def validate_details(details: Mapping[str, object]) -> Dict[str, object]:

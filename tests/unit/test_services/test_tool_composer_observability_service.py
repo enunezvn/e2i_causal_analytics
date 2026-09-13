@@ -358,3 +358,110 @@ def test_steps_are_fetched_for_every_failed_episode_in_pages():
     asked = [f for q in service.client.queries_for("composition_steps") for f in q.filters]
     looked_up = {cid for kind, _, values in asked if kind == "in" for cid in values}
     assert len(looked_up) == 10
+
+
+# ---------------------------------------------------------------------------
+# #2021 D3 / D1′: codes come from the database; sentences are rendered here
+# ---------------------------------------------------------------------------
+
+
+def _verdict(**over: Any) -> Any:
+    from src.agents.tool_composer.reliability import ToolReliability
+
+    row = {
+        "tool_name": "causal_effect_estimator",
+        "n_invoked": 12,
+        "n_succeeded": 4,
+        "n_refused": 8,
+        "n_health_failures": 0,
+        "n_health": 4,
+        "n_retried": 0,
+        "n_synthetic": 0,
+    }
+    row.update(over)
+    return ToolReliability.from_row(row)
+
+
+def test_a_tool_row_carries_the_refusal_code_and_its_rendered_sentence():
+    verdicts = {
+        "causal_effect_estimator": _verdict(most_common_refusal_reason="non_binary_treatment")
+    }
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert tool["most_common_refusal_reason"] == "non_binary_treatment"
+    assert tool["most_common_refusal_sentence"] == (
+        "the treatment column is not a binary 0/1 indicator"
+    )
+
+
+def test_a_tool_row_carries_how_many_refusals_the_code_was_drawn_from():
+    """Most refusals recorded before ml/043 are uncoded, so the most common code can name a
+    minority; the page gets both numbers rather than a code presented as representative."""
+    verdicts = {
+        "causal_effect_estimator": _verdict(
+            n_invoked=54,
+            n_refused=50,
+            n_refused_coded=3,
+            most_common_refusal_reason="coverage_gap",
+        )
+    }
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert tool["n_refused"] == 50
+    assert tool["n_refused_coded"] == 3
+
+
+def test_an_unknown_code_shows_the_code_and_no_invented_sentence():
+    verdicts = {
+        "causal_effect_estimator": _verdict(
+            most_common_refusal_reason="a_code_this_build_does_not_know"
+        )
+    }
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert tool["most_common_refusal_reason"] == "a_code_this_build_does_not_know"
+    assert tool["most_common_refusal_sentence"] is None
+
+
+def test_a_failed_step_class_carries_its_code_and_rendered_reason():
+    failed = _episode(status="FAILED", outcome="failed")
+    steps = [
+        {
+            "episode_id": failed["episode_id"],
+            "step_number": 0,
+            "tool_name": "gap_calculator",
+            "outcome_class": "refused",
+            "reason_code": "coverage_gap",
+        }
+    ]
+    service = _service({"composer_episodes": [failed], "composition_steps": steps})
+    (row,) = service.overview(30)["recent_failures"]
+    assert row["step_classes"] == [
+        {
+            "step_number": 0,
+            "tool_name": "gap_calculator",
+            "outcome_class": "refused",
+            "reason_code": "coverage_gap",
+            "reason": "the data does not cover everything the question asked about",
+        }
+    ]
+
+
+def test_the_service_module_does_not_import_the_tool_composer_package():
+    """Measured 2026-09-12: the package costs ~564 MB and ~17 s; this module alone ~47 MB."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys, src.services.tool_composer_observability_service; "
+        "print('src.agents.tool_composer' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[3],
+    )
+    assert out.stdout.strip() == "False"

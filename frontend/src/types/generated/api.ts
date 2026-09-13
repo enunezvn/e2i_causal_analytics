@@ -16045,7 +16045,7 @@ export interface components {
             query_preview: string;
             /**
              * Step Classes
-             * @description The steps that did not succeed, with their classes
+             * @description The steps that did not succeed, with their classes, reason codes and rendered reasons
              */
             step_classes?: {
                 [key: string]: unknown;
@@ -18930,6 +18930,21 @@ export interface components {
             declared_latency_ms?: number | null;
             /** Most Common Health Error */
             most_common_health_error?: string | null;
+            /**
+             * Most Common Refusal Reason
+             * @description Most common closed reason code among this tool's refusals in the window (#2021)
+             */
+            most_common_refusal_reason?: string | null;
+            /**
+             * Most Common Refusal Sentence
+             * @description That code's catalogue sentence, rendered at read time; null for a code this build does not know
+             */
+            most_common_refusal_sentence?: string | null;
+            /**
+             * N Refused Coded
+             * @description Refusals in the window that carry a reason code (#2021); pre-043 refusals are uncoded
+             */
+            n_refused_coded?: number | null;
             /** Last Executed At */
             last_executed_at?: string | null;
         };

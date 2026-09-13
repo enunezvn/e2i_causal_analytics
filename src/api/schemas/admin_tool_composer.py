@@ -59,6 +59,18 @@ class ToolReliabilityRow(BaseModel):
         default=None, description="The registry's declared number, never a measurement"
     )
     most_common_health_error: Optional[str] = None
+    most_common_refusal_reason: Optional[str] = Field(
+        default=None,
+        description="Most common closed reason code among this tool's refusals in the window (#2021)",
+    )
+    most_common_refusal_sentence: Optional[str] = Field(
+        default=None,
+        description="That code's catalogue sentence, rendered at read time; null for a code this build does not know",
+    )
+    n_refused_coded: Optional[int] = Field(
+        default=None,
+        description="Refusals in the window that carry a reason code (#2021); pre-043 refusals are uncoded",
+    )
     last_executed_at: Optional[str] = None
 
 
@@ -78,7 +90,8 @@ class RecentFailure(BaseModel):
     plan_source: Optional[str] = None
     query_preview: str = Field(default="", description="Redacted, at most 100 characters")
     step_classes: List[Dict[str, Any]] = Field(
-        default_factory=list, description="The steps that did not succeed, with their classes"
+        default_factory=list,
+        description="The steps that did not succeed, with their classes, reason codes and rendered reasons",
     )
     last_activity_at: Optional[str] = None
     total_latency_ms: Optional[float] = None

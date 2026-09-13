@@ -14,6 +14,7 @@ from src.agents.tool_composer.reason_codes import (
     CANONICAL_SENTENCES,
     ReasonCode,
     canonical_sentence,
+    known_sentence,
     validate_details,
 )
 
@@ -468,3 +469,14 @@ def test_a_coded_error_survives_pickle_and_deepcopy():
         assert clone.details == {"n_rows": 0}
         assert clone.__notes__ == ["n"]
         assert isinstance(clone, RuntimeError)
+
+
+def test_known_sentence_renders_only_codes_this_build_knows():
+    """Read-side rendering: an unknown code must not be relabelled as a tool failure."""
+    assert (
+        known_sentence("non_binary_treatment")
+        == CANONICAL_SENTENCES[ReasonCode.NON_BINARY_TREATMENT]
+    )
+    assert known_sentence(ReasonCode.COVERAGE_GAP) == CANONICAL_SENTENCES[ReasonCode.COVERAGE_GAP]
+    assert known_sentence(None) is None
+    assert known_sentence("a_code_this_build_does_not_know") is None

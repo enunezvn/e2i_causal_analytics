@@ -32,7 +32,7 @@ _EPISODE_COLUMNS = (
     "error_type, plan_source, entry_point, total_latency_ms, last_activity_at, "
     "tools_executed, tools_succeeded, is_synthetic"
 )
-_STEP_COLUMNS = "episode_id, step_number, tool_name, outcome_class"
+_STEP_COLUMNS = "episode_id, step_number, tool_name, outcome_class, reason_code"
 
 
 def _percentile(values: List[float], fraction: float) -> Optional[float]:
@@ -175,6 +175,11 @@ class ToolComposerObservabilityService:
 
     @staticmethod
     def _tools(verdicts: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # Function-local: src.api.routes.admin imports this module at API start, and the
+        # tool_composer package's __init__ imports the composer, planner and every tool
+        # registration (measured 2026-09-12: ~564 MB / ~17 s, against ~47 MB for this module).
+        from src.agents.tool_composer.reason_codes import known_sentence
+
         rows = []
         for tool in (verdicts or {}).values():
             rows.append(
@@ -194,6 +199,11 @@ class ToolComposerObservabilityService:
                     "p95_latency_ms": tool.p95_latency_ms,
                     "declared_latency_ms": tool.declared_latency_ms,
                     "most_common_health_error": tool.most_common_health_error,
+                    # The code travels with both counts: the page must not present the most
+                    # common code as representative of refusals that were never coded.
+                    "most_common_refusal_reason": tool.most_common_refusal_reason,
+                    "most_common_refusal_sentence": known_sentence(tool.most_common_refusal_reason),
+                    "n_refused_coded": tool.n_refused_coded,
                     "last_executed_at": tool.last_executed_at,
                 }
             )
@@ -203,6 +213,9 @@ class ToolComposerObservabilityService:
         return rows
 
     def _recent_failures(self, episodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # Function-local for the same import-weight reason as _tools.
+        from src.agents.tool_composer.reason_codes import known_sentence
+
         failed = [e for e in episodes if e.get("outcome") in ("failed", "partial", "cancelled")]
         failed = failed[:_RECENT_FAILURES]
         steps_by_episode = self._fetch_steps([str(e.get("episode_id")) for e in failed])
@@ -225,6 +238,8 @@ class ToolComposerObservabilityService:
                             "step_number": s.get("step_number"),
                             "tool_name": s.get("tool_name"),
                             "outcome_class": s.get("outcome_class"),
+                            "reason_code": s.get("reason_code"),
+                            "reason": known_sentence(s.get("reason_code")),
                         }
                         for s in steps
                         if s.get("outcome_class") not in ("succeeded", "cache_hit")
