@@ -4,6 +4,8 @@ fabricated 'deploy'/'skip' off a fake effect. (The R2 fail-closed tool guarantee
 the tool itself cannot fabricate; this locks the node's handling of that.)"""
 
 import asyncio
+import logging
+from unittest.mock import patch
 
 import pytest
 
@@ -43,9 +45,6 @@ def test_disabled_node_skips_to_reasoning():
 def test_a_failure_keeps_the_exception_text_out_of_warnings_and_errors(caplog):
     """#2020 E1b: the node's except put ``str(e)`` into the warnings and errors, and the
     orchestrator stringifies this agent's whole output into the answer."""
-    import logging
-    from unittest.mock import patch
-
     from src.agents.experiment_designer.nodes.twin_simulation import TwinSimulationNode
 
     raw = (
@@ -82,3 +81,5 @@ def test_a_failure_keeps_the_exception_text_out_of_warnings_and_errors(caplog):
     assert out["status"] == "reasoning"
     assert out["skip_experiment"] is False
     assert raw in caplog.text
+    # The message alone would satisfy the check above; the traceback is what makes it debuggable.
+    assert any(r.name.endswith("twin_simulation") and r.exc_info for r in caplog.records)

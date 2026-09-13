@@ -243,9 +243,11 @@ class TestTwinSimulationNode:
         assert result["status"] == "reasoning"
         assert result.get("skip_experiment") is False
         assert len(result.get("errors", [])) > 0
-        # #2020: the fixed sentence, not the exception text ("Simulation failed" here) — an exact
-        # element, so a warning that still embedded the raw text would not satisfy it.
+        # #2020: the fixed sentence is present as an exact element, and no warning carries the
+        # exception text ("Simulation failed" here; the fixed sentence never contains it). The
+        # second check also rejects a leaking warning appended alongside the fixed one.
         assert "Twin simulation failed. Proceeding with standard design." in result["warnings"]
+        assert not any("Simulation failed" in w for w in result["warnings"])
         assert result["errors"][-1]["error"] == "the twin simulation could not be completed"
 
     @pytest.mark.asyncio
