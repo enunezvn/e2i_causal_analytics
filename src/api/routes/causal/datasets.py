@@ -2,7 +2,9 @@
 
 Which columns each dataset offers as treatment / outcome / covariate, how they
 are coerced and derived, which are categorical, and which brands a cohort holds.
-Imports only ``_common`` and non-package modules — nothing upward.
+
+Import rule: may import ``_common`` and non-package modules only; never
+``loaders`` or the package root.
 """
 
 import logging

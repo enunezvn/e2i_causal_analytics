@@ -2,8 +2,10 @@
 
 Every read that turns a Supabase cohort into a numeric DataFrame the executors
 can consume: paged selects, the HCP and NBA joins, covariate-role enforcement,
-one-hot encoding and the agent estimation frame. Imports ``datasets`` and
-non-package modules — nothing upward.
+one-hot encoding and the agent estimation frame.
+
+Import rule: may import ``_common``, ``datasets`` and non-package modules only;
+never the package root.
 """
 
 import logging
@@ -15,6 +17,14 @@ from fastapi import HTTPException
 if TYPE_CHECKING:
     from src.repositories.causal_path import CausalPathRepository
 
+# Module-level so tests can patch this seam as ``loaders.get_async_supabase_client``
+# — but ONLY for the two join paths that read it from module scope:
+# ``_load_hcp_adoption_join_frame`` and ``_load_nba_triggers_join_frame``.
+# ``_get_causal_path_repo`` and ``_load_agent_estimation_frame`` SHADOW this name
+# with their own function-local import, so patching it here does NOT reach them
+# and would be a false green; patch
+# ``src.memory.services.factories.get_async_supabase_client`` for those paths
+# (as tests/unit/test_api/test_causal_nba_baselines.py already does).
 from src.memory.services.factories import get_async_supabase_client
 from src.repositories.provenance import apply_provenance_filter
 
@@ -30,6 +40,46 @@ from .datasets import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Paged-read page size. PostgREST returns at most ~1000 rows/request by default;
+# patient cohorts have ~8.4k rows and the HCP cohorts 5k — a single unpaged
+# .select() would SILENTLY truncate the cohort to a non-representative sample and
+# misreport the ATE. We page with .range() until a short page is returned.
+_TE_PAGE_SIZE = 1000
+
+# Hard ceiling on pages so a runaway loop cannot exhaust memory; 20 pages * 1000
+# = 20k rows comfortably covers the largest cohort (~8.4k) with headroom.
+_TE_MAX_PAGES = 20
+
+
+async def _te_paged_select(
+    client: Any,
+    table: str,
+    columns: str,
+    brand: str,
+) -> List[Dict[str, Any]]:
+    """Read ALL synthetic rows for ``brand`` from ``table`` via paged .range().
+
+    Mirrors the audit.py .range() paging pattern. Returns the full row list —
+    NEVER a silently-truncated sample (the single highest-risk fabrication bug for
+    this surface). Raises on PostgREST/transport errors so the caller fail-closes.
+    """
+    rows: List[Dict[str, Any]] = []
+    for page in range(_TE_MAX_PAGES):
+        offset = page * _TE_PAGE_SIZE
+        query = (
+            client.table(table)
+            .select(columns)
+            .eq("brand", brand)
+            .eq("is_synthetic", True)
+            .range(offset, offset + _TE_PAGE_SIZE - 1)
+        )
+        result = await query.execute()
+        batch: List[Dict[str, Any]] = result.data or []
+        rows.extend(batch)
+        if len(batch) < _TE_PAGE_SIZE:
+            break
+    return rows
 
 
 async def _get_causal_path_repo() -> "CausalPathRepository":
@@ -729,44 +779,3 @@ async def _load_agent_estimation_frame(
         c for c in select_cols if c not in categorical_cols and c not in passthrough_only
     ] + dummy_names
     return frame, expanded_cols
-
-
-# Paged-read page size. PostgREST returns at most ~1000 rows/request by default;
-# patient cohorts have ~8.4k rows and the HCP cohorts 5k — a single unpaged
-# .select() would SILENTLY truncate the cohort to a non-representative sample and
-# misreport the ATE. We page with .range() until a short page is returned.
-_TE_PAGE_SIZE = 1000
-
-# Hard ceiling on pages so a runaway loop cannot exhaust memory; 20 pages * 1000
-# = 20k rows comfortably covers the largest cohort (~8.4k) with headroom.
-_TE_MAX_PAGES = 20
-
-
-async def _te_paged_select(
-    client: Any,
-    table: str,
-    columns: str,
-    brand: str,
-) -> List[Dict[str, Any]]:
-    """Read ALL synthetic rows for ``brand`` from ``table`` via paged .range().
-
-    Mirrors the audit.py .range() paging pattern. Returns the full row list —
-    NEVER a silently-truncated sample (the single highest-risk fabrication bug for
-    this surface). Raises on PostgREST/transport errors so the caller fail-closes.
-    """
-    rows: List[Dict[str, Any]] = []
-    for page in range(_TE_MAX_PAGES):
-        offset = page * _TE_PAGE_SIZE
-        query = (
-            client.table(table)
-            .select(columns)
-            .eq("brand", brand)
-            .eq("is_synthetic", True)
-            .range(offset, offset + _TE_PAGE_SIZE - 1)
-        )
-        result = await query.execute()
-        batch: List[Dict[str, Any]] = result.data or []
-        rows.extend(batch)
-        if len(batch) < _TE_PAGE_SIZE:
-            break
-    return rows
