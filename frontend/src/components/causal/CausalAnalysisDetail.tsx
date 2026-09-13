@@ -26,11 +26,11 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import type {
   AgentCausalAnalysisResponse,
   EstimatorComparison,
-  RefutationGate,
   RefutationTestDetail,
 } from '@/types/causal';
 import { useClinicalContext, useClinicalNarrativeInsight } from '@/hooks/api';
 import { ClinicalContextPanel } from './ClinicalContextPanel';
+import { gateBadge } from './gateBadge';
 import { ReviewStatusPanel } from './ReviewStatusPanel';
 
 // The dataset each grain estimates over (mirrors the page's GRAINS list); the
@@ -49,23 +49,6 @@ function formatEffect(ate: number | null | undefined): string {
 function formatCI(lower?: number | null, upper?: number | null): string {
   if (lower === null || lower === undefined || upper === null || upper === undefined) return '—';
   return `[${lower.toFixed(3)}, ${upper.toFixed(3)}]`;
-}
-
-// #1991 debt 4: Record<RefutationGate, ...> makes an out-of-union decision a
-// compile error, not a silently-missing badge.
-const GATE_BADGE: Record<
-  RefutationGate,
-  { label: string; variant: 'default' | 'secondary' | 'destructive' }
-> = {
-  proceed: { label: 'Proceed', variant: 'default' },
-  review: { label: 'Review', variant: 'secondary' },
-  block: { label: 'Blocked', variant: 'destructive' },
-};
-
-export function gateBadge(decision?: RefutationGate | null) {
-  if (!decision) return <Badge variant="outline">—</Badge>;
-  const b = GATE_BADGE[decision];
-  return <Badge variant={b.variant}>{b.label}</Badge>;
 }
 
 // Backend refutation test_name -> the viz's RefutationMethod union. The backend

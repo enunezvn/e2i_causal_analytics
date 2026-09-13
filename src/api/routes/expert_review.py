@@ -29,9 +29,10 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ValidationError
 
 from src.api.dependencies.auth import require_operator
 from src.api.dependencies.inflight_lock import InflightLock
@@ -111,6 +112,30 @@ def _store_unavailable(operation: str, exc: Exception) -> HTTPException:
     )
 
 
+_ReviewModelT = TypeVar("_ReviewModelT", bound=BaseModel)
+
+
+def _validate_review_row(model: Type[_ReviewModelT], row: Dict[str, Any]) -> _ReviewModelT:
+    """``model.model_validate(row)``, converting a schema violation in the
+    STORED row (#1991 debt 4: a snapshot with an out-of-vocabulary
+    ``discovery_gate_decision``, or any other field the typed schema now
+    rejects) into an honest 500 naming the review id and the failing field --
+    never an unhandled ``ValidationError`` (a bare 500 with no detail), and
+    never the ``_store_unavailable`` 503 (the store answered fine; the ROW
+    it returned is malformed)."""
+    try:
+        return model.model_validate(row)
+    except ValidationError as exc:
+        review_id = row.get("review_id") or row.get("id")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"expert review {review_id} has a malformed dag_structure_json: "
+                f"{exc.errors()[0].get('loc')}"
+            ),
+        ) from exc
+
+
 router = APIRouter(
     prefix="/expert-reviews",
     tags=["Expert Review"],
@@ -162,7 +187,7 @@ async def list_pending_reviews(
         rows = await repo.get_pending_reviews(brand=brand, reviewer_id=reviewer_id, limit=limit)
     except Exception as e:  # store failure (R3): honest 503, never an empty queue
         raise _store_unavailable("pending-queue read", e) from e
-    reviews = [PendingReviewItem.model_validate(row) for row in rows]
+    reviews = [_validate_review_row(PendingReviewItem, row) for row in rows]
     return PendingReviewsResponse(reviews=reviews, total=len(reviews))
 
 
@@ -552,6 +577,6 @@ async def get_expert_review(
         except Exception as e:
             raise _store_unavailable("review history read", e) from e
     return ExpertReviewDetailResponse(
-        review=ReviewRecord.model_validate(row),
-        history=[ReviewRecord.model_validate(r) for r in history_rows],
+        review=_validate_review_row(ReviewRecord, row),
+        history=[_validate_review_row(ReviewRecord, r) for r in history_rows],
     )

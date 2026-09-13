@@ -8921,16 +8921,13 @@ export interface components {
          *     forward-compatible with a future snapshot key without a schema change.
          */
         DagStructureSnapshot: {
-            /**
-             * Nodes
-             * @default []
-             */
-            nodes: string[];
-            /**
-             * Edges
-             * @default []
-             */
-            edges: string[][];
+            /** Nodes */
+            nodes?: string[];
+            /** Edges */
+            edges?: [
+                string,
+                string
+            ][];
             /** Treatment Nodes */
             treatment_nodes?: string[] | null;
             /** Outcome Nodes */
@@ -8938,7 +8935,10 @@ export interface components {
             /** Adjustment Sets */
             adjustment_sets?: string[][] | null;
             /** Augmented Edges */
-            augmented_edges?: string[][] | null;
+            augmented_edges?: [
+                string,
+                string
+            ][] | null;
             /** Discovery Gate Decision */
             discovery_gate_decision?: ("accept" | "review" | "reject" | "augment") | null;
             /** Confidence */

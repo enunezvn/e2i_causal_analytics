@@ -23,11 +23,12 @@ export type DiscoveryGate = 'accept' | 'review' | 'reject' | 'augment';
  */
 export interface DagStructure {
   nodes: string[];
-  edges: string[][];
+  /** Arity-enforced (#1991 debt 4): mirrors the backend's Tuple[str, str]. */
+  edges: [string, string][];
   treatment_nodes?: string[];
   outcome_nodes?: string[];
   adjustment_sets?: string[][];
-  augmented_edges?: string[][];
+  augmented_edges?: [string, string][];
   discovery_gate_decision?: DiscoveryGate | null;
   confidence?: number | null;
   dag_version_hash?: string | null;

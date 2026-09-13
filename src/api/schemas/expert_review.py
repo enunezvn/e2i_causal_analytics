@@ -15,7 +15,7 @@ resolves it via ``POST /{review_id}/resolve``.
 
 import json
 from datetime import date, datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -32,12 +32,12 @@ class DagStructureSnapshot(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    nodes: List[str] = []
-    edges: List[List[str]] = []
+    nodes: List[str] = Field(default_factory=list)
+    edges: List[Tuple[str, str]] = Field(default_factory=list)
     treatment_nodes: Optional[List[str]] = None
     outcome_nodes: Optional[List[str]] = None
     adjustment_sets: Optional[List[List[str]]] = None
-    augmented_edges: Optional[List[List[str]]] = None
+    augmented_edges: Optional[List[Tuple[str, str]]] = None
     discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]] = None
     confidence: Optional[float] = None
     dag_version_hash: Optional[str] = None
