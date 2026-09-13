@@ -51,12 +51,18 @@ function StepClasses({ failure }: { failure: ToolComposerRecentFailure }) {
   }
   return (
     <>
-      {failure.step_classes.map((step, index) => (
-        <span key={`${failure.composition_id}-${step.step_number ?? index}`}>
-          {index > 0 && ', '}
-          {step.tool_name ?? 'unknown'}: {(step.outcome_class ?? 'unknown').replace(/_/g, ' ')}
-        </span>
-      ))}
+      {failure.step_classes.map((step, index) => {
+        // Prefer the catalogue sentence; a non-null code with a null sentence is a code this
+        // build does not know, so show the bare code rather than inventing a sentence for it.
+        const reason = step.reason ?? step.reason_code;
+        return (
+          <span key={`${failure.composition_id}-${step.step_number ?? index}`}>
+            {index > 0 && ', '}
+            {step.tool_name ?? 'unknown'}: {(step.outcome_class ?? 'unknown').replace(/_/g, ' ')}
+            {reason ? ` — ${reason}` : ''}
+          </span>
+        );
+      })}
     </>
   );
 }
@@ -129,7 +135,21 @@ export function ToolComposerSection({ days }: { days: number }) {
                 <td className={TD}>{tool.tool_name}</td>
                 <td className={TD}>{fmtInt(tool.n_invoked)}</td>
                 <td className={TD}>{fmtInt(tool.n_succeeded)}</td>
-                <td className={TD}>{fmtInt(tool.n_refused)}</td>
+                <td className={TD}>
+                  {fmtInt(tool.n_refused)}
+                  {tool.most_common_refusal_reason
+                    ? ` — most common: ${
+                        tool.most_common_refusal_sentence ?? tool.most_common_refusal_reason
+                      }${
+                        // The count travels with the code so it is never read as representative
+                        // of every refusal; either count null means UNKNOWN (pre-ml/043), not 0,
+                        // so the whole parenthetical is omitted rather than showing "0 of n".
+                        tool.n_most_common_refusal_reason != null && tool.n_refused_coded != null
+                          ? ` (${tool.n_most_common_refusal_reason} of ${tool.n_refused_coded} coded)`
+                          : ''
+                      }`
+                    : ''}
+                </td>
                 <td className={TD}>
                   {fmtInt(tool.n_health_failures)}
                   {tool.most_common_health_error ? ` (${tool.most_common_health_error})` : ''}

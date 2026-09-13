@@ -109,6 +109,138 @@ describe('ToolComposerSection', () => {
     expect(preview.length).toBeLessThanOrEqual(101);
   });
 
+  it('shows the most common refusal reason with how many refusals it covers', () => {
+    const tools = payload.tools.map((tool, index) =>
+      index === 0
+        ? {
+            ...tool,
+            n_refused: 50,
+            most_common_refusal_reason: 'C042',
+            most_common_refusal_sentence:
+              'the data does not cover everything the question asked about',
+            n_refused_coded: 3,
+            n_most_common_refusal_reason: 1,
+          }
+        : tool,
+    );
+    mockData({ ...payload, tools });
+
+    render(<ToolComposerSection days={30} />);
+
+    const row = screen.getByRole('row', { name: /sensitivity_analyzer/ });
+    expect(
+      within(row).getByText(
+        /most common: the data does not cover everything the question asked about/,
+      ),
+    ).toBeInTheDocument();
+    expect(within(row).getByText(/\(1 of 3 coded\)/)).toBeInTheDocument();
+  });
+
+  it('renders the bare code when the reason sentence is unknown to this build', () => {
+    const tools = payload.tools.map((tool, index) =>
+      index === 0
+        ? {
+            ...tool,
+            most_common_refusal_reason: 'C999',
+            most_common_refusal_sentence: null,
+            n_refused_coded: 2,
+            n_most_common_refusal_reason: 2,
+          }
+        : tool,
+    );
+    mockData({ ...payload, tools });
+
+    render(<ToolComposerSection days={30} />);
+
+    const row = screen.getByRole('row', { name: /sensitivity_analyzer/ });
+    expect(within(row).getByText(/most common: C999/)).toBeInTheDocument();
+  });
+
+  it('omits the coded parenthetical when either count is unknown, never rendering "0 of n"', () => {
+    const tools = payload.tools.map((tool, index) =>
+      index === 0
+        ? {
+            ...tool,
+            most_common_refusal_reason: 'C042',
+            most_common_refusal_sentence: 'the treatment column is not a binary 0/1 indicator',
+            n_refused_coded: null,
+            n_most_common_refusal_reason: null,
+          }
+        : tool,
+    );
+    mockData({ ...payload, tools });
+
+    render(<ToolComposerSection days={30} />);
+
+    const row = screen.getByRole('row', { name: /sensitivity_analyzer/ });
+    expect(
+      within(row).getByText(/most common: the treatment column is not a binary 0\/1 indicator/),
+    ).toBeInTheDocument();
+    expect(within(row).queryByText(/coded/)).not.toBeInTheDocument();
+  });
+
+  it('leaves the refused cell unchanged when there is no most-common refusal reason', () => {
+    render(<ToolComposerSection days={30} />);
+
+    const row = screen.getByRole('row', { name: /sensitivity_analyzer/ });
+    const cells = within(row).getAllByRole('cell');
+    expect(cells[4].textContent).toBe('0');
+  });
+
+  it('appends the reason sentence to a step class when present', () => {
+    const recentFailures = payload.recent_failures.map((failure, index) =>
+      index === 0
+        ? {
+            ...failure,
+            step_classes: failure.step_classes.map((step, stepIndex) =>
+              stepIndex === 0
+                ? {
+                    ...step,
+                    reason_code: 'C042',
+                    reason: 'the data does not cover everything the question asked about',
+                  }
+                : step,
+            ),
+          }
+        : failure,
+    );
+    mockData({ ...payload, recent_failures: recentFailures });
+
+    render(<ToolComposerSection days={30} />);
+
+    const failure = screen.getByTestId('recent-failure-comp_failed');
+    expect(failure).toHaveTextContent(
+      'gap_calculator: error — the data does not cover everything the question asked about',
+    );
+  });
+
+  it('shows the bare reason code on a step class when the sentence is unknown to this build', () => {
+    const recentFailures = payload.recent_failures.map((failure, index) =>
+      index === 0
+        ? {
+            ...failure,
+            step_classes: failure.step_classes.map((step, stepIndex) =>
+              stepIndex === 0 ? { ...step, reason_code: 'C999', reason: null } : step,
+            ),
+          }
+        : failure,
+    );
+    mockData({ ...payload, recent_failures: recentFailures });
+
+    render(<ToolComposerSection days={30} />);
+
+    const failure = screen.getByTestId('recent-failure-comp_failed');
+    expect(failure).toHaveTextContent('gap_calculator: error — C999');
+  });
+
+  it('leaves a step class unchanged when it has no reason', () => {
+    render(<ToolComposerSection days={30} />);
+
+    const failure = screen.getByTestId('recent-failure-comp_failed');
+    expect(failure).toHaveTextContent('gap_calculator: error');
+    expect(failure).not.toHaveTextContent('gap_calculator: error —');
+  });
+
   it('shows an empty state when nothing failed in the window', () => {
     mockData({ ...payload, recent_failures: [] });
 
