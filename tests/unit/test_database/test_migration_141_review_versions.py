@@ -40,6 +40,9 @@ def test_creates_versions_table_with_fk_and_columns():
     assert "UNIQUE (review_id, dag_version_hash)" not in s
     assert "ON DELETE CASCADE" in s
     assert "idx_erv_review_created" in s
+    # A string snapshot got into expert_reviews once before (migration 137's fix); the diff
+    # path must never see a scalar here either.
+    assert "ck_erv_snapshot_object" in s
 
 
 @pytest.mark.unit

@@ -9,6 +9,14 @@
 --   consecutive rows always diff honestly for the API (dag_hash.get_dag_changes).
 --   Backfill: one version per existing review from its current hash and snapshot,
 --   so history starts full (41 reviews, all with a hash, on 2026-09-13).
+--   adjustment_set_hash is NULL on all 41 backfilled rows: expert_reviews has no such
+--   column to backfill FROM, so the review's structure hash is preserved but its
+--   adjustment-set hash is unknown until Task 4 begins appending -- every row Task 4
+--   appends going forward populates adjustment_set_hash (it is computed at append time,
+--   not derived from expert_reviews).
+--   Writers MUST use PostgREST/supabase-py insert(), never upsert(): upsert() defaults to
+--   ON CONFLICT ... DO UPDATE, which requires the UPDATE privilege on this table --
+--   service_role does not hold it (see the grants WHY below) and would get 42501.
 -- WHY no UNIQUE (review_id, dag_version_hash): a revert's third row would collide
 --   with the first row's hash under that constraint -- Task 4's PostgREST insert
 --   has no ON CONFLICT, so the insert would fail 23505 outright, and even a
@@ -19,6 +27,12 @@
 --   INSERT; ongoing idempotence for a REPEATED hash (not a revert) is a Python
 --   concern (expert_review_gate compares against the latest row), not a DB
 --   constraint's job.
+-- WHY ck_erv_snapshot_object: migration 137 found 40 expert_reviews rows where
+--   dag_structure_json had been stored as a JSON *string* scalar, not an object
+--   (src/repositories/expert_review.py once json.dumps'ed before the write). This
+--   table's diff path (dag_hash.get_dag_changes) must never see that shape again --
+--   a CHECK enforces object-or-NULL on every row from the start, including this
+--   migration's own backfill INSERT.
 -- WHY reviewer_id feeds query_id: expert_reviews.reviewer_id holds the REQUESTER
 --   query id (migration 136), which is the run that produced the structure.
 --   created_at (not updated_at, which is trigger-maintained) is the version time.
@@ -49,7 +63,11 @@
 --   target with ON CONFLICT -- see the timeline WHY above); no own transaction
 --   (run_migrations.sh wraps the file in --single-transaction and appends the
 --   ledger row).
--- REVERSE: DROP TABLE public.expert_review_versions;
+-- REVERSE (manual, not run by this file): DROP TABLE public.expert_review_versions;
+--   also DELETE FROM public.schema_migrations WHERE filename =
+--   '141_expert_review_versions.sql' -- run_migrations.sh's ledger check (line ~117)
+--   skips any file already recorded there, so leaving that row in place would make a
+--   later re-apply of this file silently no-op instead of recreating the table.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS public.expert_review_versions (
@@ -59,7 +77,10 @@ CREATE TABLE IF NOT EXISTS public.expert_review_versions (
     adjustment_set_hash VARCHAR(64),
     dag_structure_json JSONB,
     query_id TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ck_erv_snapshot_object CHECK (
+        dag_structure_json IS NULL OR jsonb_typeof(dag_structure_json) = 'object'
+    )
 );
 
 -- The ordering index for "versions of a review in time" -- this table is a timeline, not a
