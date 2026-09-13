@@ -266,6 +266,7 @@ def test_summarize_readable_proceed_plus_unreadable_is_unknown():
     summary = _summarize_refutation_rows(rows)
     assert summary["gate_decision"] == "unknown"
     assert summary["gate_unreadable_rows"] == 1
+    assert "proceed is never reported" in summary["note"]
 
 
 @pytest.mark.unit

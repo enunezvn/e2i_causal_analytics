@@ -698,7 +698,7 @@ def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str,
         return {}
 
     timestamps = [str(r["created_at"]) for r in rows if r.get("created_at")]
-    summary = {
+    summary: Dict[str, Any] = {
         "tests_total": len(rows),
         "tests_passed": _status_count("passed"),
         "tests_failed": _status_count("failed"),
@@ -712,9 +712,9 @@ def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str,
     if unreadable:
         summary["note"] = (
             f"{unreadable} of {len(rows)} persisted refutation rows carry a gate value "
-            "outside proceed/review/block and could not be read; the gate above is "
-            "computed from the readable rows only and is 'unknown' when none support "
-            "proceed."
+            "outside proceed/review/block and could not be read; block or review still "
+            "wins if any readable row says so, but proceed is never reported while any "
+            "row is unreadable — the gate reads 'unknown' instead."
         )
     return summary
 
