@@ -128,11 +128,13 @@ describe('ToolComposerSection', () => {
     render(<ToolComposerSection days={30} />);
 
     const row = screen.getByRole('row', { name: /sensitivity_analyzer/ });
-    expect(
-      within(row).getByText(
-        /most common: the data does not cover everything the question asked about/,
-      ),
-    ).toBeInTheDocument();
+    const note = within(row).getByText(
+      /most common: the data does not cover everything the question asked about/,
+    );
+    expect(note).toBeInTheDocument();
+    // The note is its own secondary line, not appended inline to the refused count: a long
+    // catalogue sentence must not widen the Refused column.
+    expect(note.tagName).toBe('DIV');
     // 50 refused, 3 coded, 1 of those 3 is the most common code: the other 47 were never coded
     // at all, and that remainder must be visible or the minority code reads as representative.
     expect(within(row).getByText(/\(1 of 3 coded; 47 uncoded\)/)).toBeInTheDocument();
