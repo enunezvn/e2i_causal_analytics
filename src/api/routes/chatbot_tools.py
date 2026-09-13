@@ -642,12 +642,17 @@ def _format_causal_path(
     }
 
 
+_REFUTATION_GATES = {"proceed", "review", "block"}
+
+
 def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Aggregate one path's ``causal_validations`` rows into a chat summary.
 
     Gate priority mirrors ``CausalValidationRepository.get_gate_decision``
-    (block > review > proceed), extended over the full ``gate_decision`` enum
-    (reject counts as blocking, augment as review-band, accept as proceed).
+    (block > review > proceed). The column holds ONLY the refutation
+    vocabulary (proceed / review / block); any other value, including NULL,
+    is reported as ``unknown`` and counted in ``gate_unreadable_rows`` —
+    never mapped to proceed (#1991 debt 4).
     ``evidence_is_synthetic`` reads the migration-119 provenance label
     (``details_json.is_synthetic``) so seeded synthetic evidence can never
     masquerade as real RefutationSuite output in an answer.
@@ -658,13 +663,18 @@ def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str,
     def _status_count(status: str) -> int:
         return sum(1 for r in rows if r.get("status") == status)
 
-    gates = {r.get("gate_decision") for r in rows}
-    if gates & {"block", "reject"}:
+    gates = [r.get("gate_decision") for r in rows]
+    known = {g for g in gates if g in _REFUTATION_GATES}
+    unreadable = sum(1 for g in gates if g not in _REFUTATION_GATES)
+    if "block" in known:
         gate = "block"
-    elif gates & {"review", "augment"}:
+    elif "review" in known:
         gate = "review"
-    else:
+    elif known and not unreadable:
         gate = "proceed"
+    else:
+        # Fail closed: a row we cannot read is not evidence of robustness.
+        gate = "unknown"
 
     confidences = [
         float(r["confidence_score"]) for r in rows if r.get("confidence_score") is not None
@@ -689,6 +699,7 @@ def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str,
         "tests_failed": _status_count("failed"),
         "tests_warning": _status_count("warning"),
         "gate_decision": gate,
+        "gate_unreadable_rows": unreadable,
         "confidence_score": (sum(confidences) / len(confidences)) if confidences else None,
         "evidence_is_synthetic": any(bool(_details(r).get("is_synthetic")) for r in rows),
         "latest_test_at": max(timestamps) if timestamps else None,
