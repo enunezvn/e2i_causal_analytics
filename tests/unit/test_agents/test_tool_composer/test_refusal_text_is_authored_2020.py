@@ -37,7 +37,7 @@ from src.digital_twin.effect.cohort_causal_estimator import (
     CohortCausalEstimator,
     estimate_cohort_effect,
 )
-from src.digital_twin.effect.errors import EffectDataUnavailable
+from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 from src.digital_twin.effect.estimator import TwinEffectEstimator
 from src.digital_twin.effect.provider import CohortEffectDataProvider, SyntheticEffectDataProvider
 from src.digital_twin.models.simulation_models import InterventionConfig
@@ -328,6 +328,9 @@ def test_cohort_fit_failure_text_is_logged_not_raised(monkeypatch, caplog):
     _assert_authored(caught.value, caplog, exact=COHORT_NOT_ESTIMABLE, library_text=SENTINEL)
     assert isinstance(caught.value.__cause__, RuntimeError)
     assert str(caught.value.__cause__) == SENTINEL
+    # #2021 9b: the cause and its counts ride along; neither reads the library exception.
+    assert caught.value.cause is EffectCause.ESTIMATION_FAILED
+    assert caught.value.details == {"n_usable_rows": 400, "is_target_inference": False}
 
 
 def test_cohort_target_region_failure_text_is_logged_not_raised(monkeypatch, caplog):
@@ -341,6 +344,12 @@ def test_cohort_target_region_failure_text_is_logged_not_raised(monkeypatch, cap
             )
     _assert_authored(caught.value, caplog, exact=TARGET_REGION_NO_INTERVAL, library_text=SENTINEL)
     assert str(caught.value.__cause__) == SENTINEL
+    assert caught.value.cause is EffectCause.TARGET_INFERENCE_FAILED
+    assert caught.value.details == {
+        "n_usable_rows": 400,
+        "is_target_inference": True,
+        "n_target_rows": 100,
+    }
 
 
 def test_targeted_effect_passes_the_authored_estimator_text_through(monkeypatch, caplog):

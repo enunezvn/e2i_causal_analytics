@@ -14,7 +14,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import pandas as pd
 
-from src.digital_twin.effect.errors import EffectDataUnavailable
+from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 
 # Canonical intervention taxonomy — the single source of truth for the
 # digital-twin intervention vocabulary (value + human label). The
@@ -279,11 +279,14 @@ class CohortEffectDataProvider:
         if treatment_col is None:
             raise EffectDataUnavailable(
                 f"CohortEffectDataProvider: intervention '{intervention_type}' is not "
-                "identified in the cohort DGP (not cohort-estimable)."
+                "identified in the cohort DGP (not cohort-estimable).",
+                cause=EffectCause.INTERVENTION_NOT_IDENTIFIED,
             )
         if treatment_col not in self._cohort.columns:
             raise EffectDataUnavailable(
-                f"CohortEffectDataProvider: cohort missing treatment column '{treatment_col}'."
+                f"CohortEffectDataProvider: cohort missing treatment column '{treatment_col}'.",
+                cause=EffectCause.REQUIRED_COLUMN_MISSING,
+                details={"n_rows": int(len(self._cohort)), "has_treatment_column": False},
             )
         # RAW cohort frame for direct causal estimation — NO synthetic injected-effect
         # handoff. region is the heterogeneity axis (effect_modifier); the present subset

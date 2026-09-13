@@ -78,6 +78,73 @@ def test_the_errors_module_imports_only_the_standard_library():
     assert imported <= set(sys.stdlib_module_names) | {"__future__"}, sorted(imported)
 
 
+def _effect_raises(tree: ast.AST):
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+            func = node.exc.func
+            if getattr(func, "id", getattr(func, "attr", None)) == "EffectDataUnavailable":
+                yield node.lineno, node.exc
+
+
+def _cause_violations(tree: ast.AST, label: str) -> list:
+    """Raises whose ``cause`` is not a literal ``EffectCause.MEMBER``."""
+    members = {c.name for c in errors.EffectCause}
+    bad = []
+    for lineno, call in _effect_raises(tree):
+        value = next((kw.value for kw in call.keywords if kw.arg == "cause"), None)
+        literal = (
+            isinstance(value, ast.Attribute)
+            and isinstance(value.value, ast.Name)
+            and value.value.id == "EffectCause"
+            and value.attr in members
+        )
+        if not literal:
+            shown = "no cause" if value is None else ast.unparse(value)
+            bad.append(f"{label}:{lineno} {shown}")
+    return bad
+
+
+def _function(tree: ast.Module, class_name: str, method: str) -> ast.FunctionDef:
+    (cls,) = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name]
+    (fn,) = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == method]
+    return fn
+
+
+def test_every_tool_path_effect_refusal_names_a_literal_cause():
+    """The estimator and the cohort provider are the tool's path (the synthetic provider and
+    the uplift estimator are not): an uncaused raise there would fall back to the generic code.
+    """
+    effect = REPO_ROOT / "src" / "digital_twin" / "effect"
+    estimator = ast.parse((effect / "cohort_causal_estimator.py").read_text(encoding="utf-8"))
+    provider = ast.parse((effect / "provider.py").read_text(encoding="utf-8"))
+    get_frame = _function(provider, "CohortEffectDataProvider", "get_training_frame")
+    # Floors, so the check cannot pass vacuously on a file it no longer understands.
+    assert len(list(_effect_raises(estimator))) >= 10
+    assert len(list(_effect_raises(get_frame))) >= 2
+    bad = _cause_violations(estimator, "cohort_causal_estimator.py") + _cause_violations(
+        get_frame, "provider.py"
+    )
+    assert bad == [], "EffectDataUnavailable raised without a literal cause:\n  " + "\n  ".join(bad)
+
+
+def test_the_cause_check_flags_a_missing_or_non_literal_cause():
+    source = """
+def f():
+    raise EffectDataUnavailable("a")
+    raise EffectDataUnavailable("b", cause=cause)
+    raise EffectDataUnavailable("c", cause="empty_cohort")
+    raise EffectDataUnavailable("d", cause=EffectCause.NOT_A_MEMBER)
+    raise EffectDataUnavailable("e", cause=EffectCause.EMPTY_COHORT)
+"""
+    bad = _cause_violations(ast.parse(source), "synthetic")
+    assert [line.split()[0] for line in bad] == [
+        "synthetic:3",
+        "synthetic:4",
+        "synthetic:5",
+        "synthetic:6",
+    ]
+
+
 def test_importing_the_errors_module_does_not_import_the_tool_composer_package():
     code = (
         "import sys, src.digital_twin.effect.errors; "
