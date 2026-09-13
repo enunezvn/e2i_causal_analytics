@@ -117,7 +117,8 @@ EXECUTOR_ASSIGNED = frozenset(
 # inclusive): the admin page reads them.
 _MAX_DETAIL_KEYS = 8
 _MAX_DETAIL_INT = 2**53 - 1
-_DETAIL_KEY = re.compile(r"(n|is|has|share)_[a-z0-9_]+")
+# At most "share_" (6) + 58 = 64 characters: ml/043's reducer silently drops keys longer than 64.
+_DETAIL_KEY = re.compile(r"(n|is|has|share)_[a-z0-9_]{1,58}")
 
 
 def canonical_sentence(code: Union[ReasonCode, str, None]) -> str:

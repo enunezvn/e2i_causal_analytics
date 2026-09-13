@@ -186,6 +186,16 @@ def test_details_key_count_is_still_bounded():
         validate_details({f"n_{i}": i for i in range(9)})
 
 
+def test_details_key_length_matches_the_043_reducer():
+    """ml/043's reducer keeps only keys matching ``^[a-z][a-z0-9_]{0,63}$`` (64 characters at
+    most) and drops longer ones silently; the Python rule must refuse them first."""
+    longest = "share_" + "x" * 58
+    assert len(longest) == 64
+    assert validate_details({longest: 1}) == {longest: 1}
+    with pytest.raises(ValueError, match="details"):
+        validate_details({longest + "x": 1})
+
+
 def test_numpy_scalars_are_normalized_to_builtins():
     """A count is often ``int(mask.sum())`` — or, without the cast, an ``np.int64`` that
     neither JSON nor a database driver takes."""

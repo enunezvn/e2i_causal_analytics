@@ -417,6 +417,7 @@ def test_a_refused_step_records_its_code_and_numeric_details_and_no_text():
     )
     record = step_record(0, result, plan, allowlist=None)
     assert record["reason_code"] == "non_binary_treatment"
+    assert type(record["reason_code"]) is str
     assert record["reason_details"] == {"n_distinct": 4}
     # D1′: the sentence is rendered at read time. The recorder sends no text, and the RPC's
     # NULL in error_message (ml/041) stays the second guard behind this one.
@@ -443,6 +444,7 @@ def test_every_failed_step_of_a_whole_record_carries_its_code():
         "missing_required_input",
         "coverage_gap",
     ]
+    assert steps[3]["reason_details"] == {"n_groups": 1}
 
 
 # The model does not validate reason_code / reason_details, and ToolRefusalError.details stays a
