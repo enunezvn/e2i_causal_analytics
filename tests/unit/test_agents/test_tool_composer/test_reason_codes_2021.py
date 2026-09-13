@@ -12,6 +12,7 @@ import pytest
 from src.agents.tool_composer.errors import ToolInputError, ToolRefusalError
 from src.agents.tool_composer.reason_codes import (
     CANONICAL_SENTENCES,
+    EXECUTOR_ASSIGNED,
     ReasonCode,
     canonical_sentence,
     known_sentence,
@@ -70,6 +71,9 @@ _WIRE_VALUES_2021 = frozenset(
         "degenerate_design",
         "simulation_incomplete",
         "effect_not_estimable",
+        "missing_required_column",
+        "no_treatment_contrast",
+        "estimator_failed",
         "missing_required_input",
         "invalid_input_type",
         "invalid_input_value",
@@ -90,11 +94,28 @@ def test_wire_values_may_grow_but_never_shrink_or_rename():
 
     upstream_step_failed removed 2026-09-12 before first deploy; never persisted.
     """
-    assert len(_WIRE_VALUES_2021) == 32
+    assert len(_WIRE_VALUES_2021) == 35
     current = {c.value for c in ReasonCode}
     assert current >= _WIRE_VALUES_2021, sorted(_WIRE_VALUES_2021 - current)
     for member in ReasonCode:
         assert member.value == member.name.lower(), member
+
+
+def test_the_twin_effect_causes_have_their_own_codes_9b():
+    """#2021 9b: three counterfactual_simulator causes had no existing code whose sentence is
+    true for them. They are tool-authored codes, never executor-assigned."""
+    sentences = {code.value: sentence for code, sentence in CANONICAL_SENTENCES.items()}
+    expected = {
+        "missing_required_column": "a column the estimate requires is not present in the data",
+        "no_treatment_contrast": (
+            "the treatment does not split the rows into a treated and a comparison group"
+        ),
+        "estimator_failed": (
+            "the effect estimator could not produce an estimate from data that passed its checks"
+        ),
+    }
+    assert {value: sentences.get(value) for value in expected} == expected
+    assert not {c.value for c in EXECUTOR_ASSIGNED} & set(expected)
 
 
 def test_a_code_formats_as_its_wire_value():

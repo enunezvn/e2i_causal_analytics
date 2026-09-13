@@ -44,6 +44,9 @@ class ReasonCode(StrEnum):
     DEGENERATE_DESIGN = "degenerate_design"
     SIMULATION_INCOMPLETE = "simulation_incomplete"
     EFFECT_NOT_ESTIMABLE = "effect_not_estimable"
+    MISSING_REQUIRED_COLUMN = "missing_required_column"
+    NO_TREATMENT_CONTRAST = "no_treatment_contrast"
+    ESTIMATOR_FAILED = "estimator_failed"
 
     # --- Tool-authored input rejections: the value is not a legal input
     MISSING_REQUIRED_INPUT = "missing_required_input"
@@ -83,6 +86,9 @@ CANONICAL_SENTENCES: Dict[ReasonCode, str] = {
     ReasonCode.DEGENERATE_DESIGN: "the study design the inputs imply is too small to support a valid comparison",
     ReasonCode.SIMULATION_INCOMPLETE: "the twin simulation did not complete",
     ReasonCode.EFFECT_NOT_ESTIMABLE: "the cohort data cannot support a causal effect estimate for this intervention",
+    ReasonCode.MISSING_REQUIRED_COLUMN: "a column the estimate requires is not present in the data",
+    ReasonCode.NO_TREATMENT_CONTRAST: "the treatment does not split the rows into a treated and a comparison group",
+    ReasonCode.ESTIMATOR_FAILED: "the effect estimator could not produce an estimate from data that passed its checks",
     ReasonCode.MISSING_REQUIRED_INPUT: "a required input was not provided",
     ReasonCode.INVALID_INPUT_TYPE: "an input was of the wrong type",
     ReasonCode.INVALID_INPUT_VALUE: "an input value was outside what the tool accepts",
