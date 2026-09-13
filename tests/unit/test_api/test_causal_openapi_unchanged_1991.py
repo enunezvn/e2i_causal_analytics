@@ -116,6 +116,13 @@ def test_causal_openapi_path_order_unchanged():
     the #1991 split it showed up as a 234-line api.ts diff that was a pure block
     move. Splitting a concern across two routers to preserve this order is the
     fix; reordering the fixture is not.
+
+    When a /api/causal endpoint is legitimately added or removed, update
+    EXPECTED_ORDER from the decorator order of the owning route module (keep
+    the aggregator's ``include_router`` order in
+    src/api/routes/causal/__init__.py unchanged), then run
+    ``make generate-types`` and commit the regenerated
+    frontend/src/types/generated/api.ts - CI byte-diffs it.
     """
     spec = app.openapi()
     assert [p for p in spec["paths"] if p.startswith("/api/causal")] == EXPECTED_ORDER
