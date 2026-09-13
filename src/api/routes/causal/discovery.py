@@ -36,17 +36,14 @@ from src.api.schemas.causal import (
 from src.insights.robustness_phrase import gate_verdict_phrase
 from src.repositories.provenance import deployment_includes_synthetic
 
-# The task calls the agent task THROUGH the module namespace so a patch on
-# ``agent._run_agent_analysis_task`` reaches this reader (a ``from .agent import``
-# would bind a copy here and the patch would miss it).
+# The task calls the agent task — and reads the agent JOB STORE — THROUGH the
+# module namespace so a patch on ``agent._run_agent_analysis_task`` or on
+# ``agent._agent_analysis_store`` reaches this reader (a ``from .agent import``
+# would bind a copy here and the patch would miss it). The store especially:
+# the agent task writes ``agent``'s global, so a second binding here would leave
+# the agent side writing the real store whenever a test replaced only this one.
 from . import agent as _agent
 from ._common import _CAUSAL_JOB_TTL_SECONDS
-
-# NOTE: this binds a SECOND reference to the one store object agent.py owns;
-# the agent task writes ``agent._agent_analysis_store``, so a test that replaces
-# the store must patch BOTH ``discovery._agent_analysis_store`` and
-# ``agent._agent_analysis_store`` or the agent side keeps writing the real store.
-from .agent import _agent_analysis_store
 from .catalog import _adjusted_partial_corr, _get_clinical_context_service
 from .datasets import (
     _CAUSAL_CATEGORICAL_COLUMNS,
@@ -515,7 +512,7 @@ async def _run_discover_effects_task(
                     auto_discover=True,
                     brand=q_brand,
                 )
-                await _agent_analysis_store.set(
+                await _agent._agent_analysis_store.set(
                     aid,
                     AgentCausalAnalysisResponse(
                         analysis_id=aid,
@@ -532,7 +529,7 @@ async def _run_discover_effects_task(
                     ),
                 )
                 await _agent._run_agent_analysis_task(aid, req, df, resolved_cov, data_source)
-                resp = await _agent_analysis_store.get(aid)
+                resp = await _agent._agent_analysis_store.get(aid)
                 if resp is None:
                     raise RuntimeError(f"agent analysis {aid} produced no cached result")
                 effects[key] = _effect_from_agent_response(t, o, resp, aid, question=q)

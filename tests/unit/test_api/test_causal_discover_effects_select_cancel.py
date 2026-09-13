@@ -348,10 +348,8 @@ def task_env(monkeypatch):
         redis_factory=store._redis_factory,
     )
     monkeypatch.setattr(causal_routes, "_discover_effects_store", store)
-    # Two bindings, one object: discovery does ``from .agent import
-    # _agent_analysis_store`` while the agent task writes ``agent``'s global.
-    # Patch BOTH or the real store stays live on the agent side.
-    monkeypatch.setattr(causal_routes, "_agent_analysis_store", agent_store)
+    # One binding: discovery reads the store through ``agent``'s namespace, so
+    # patching the agent global reaches the discovery reader too.
     monkeypatch.setattr(causal_agent, "_agent_analysis_store", agent_store)
 
     async def identity_prerank(dataset, questions):
