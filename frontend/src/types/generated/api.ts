@@ -4269,6 +4269,10 @@ export interface paths {
          *     Each row carries the metadata an operator needs to decide
          *     (treatment/outcome/brand/analysis_context/dag_version_hash) — the v1 UI is
          *     metadata + approve/reject, no DAG graph render (OD-2).
+         *
+         *     ``version_count`` / ``last_changed_at`` (#1991 debt 3) come from ONE batched
+         *     ``expert_review_versions`` read, so an operator can see that a pending
+         *     review's structure moved under them since it was queued.
          */
         get: operations["list_pending_expert_reviews"];
         put?: never;
@@ -4358,7 +4362,7 @@ export interface paths {
         };
         /**
          * Expert-review status counts
-         * @description Return status counts (pending/approved/rejected/expired/expiring_soon).
+         * @description Return status counts (pending/approved/rejected/superseded/expired/expiring_soon).
          *
          *     A store failure is 503 (R3) -- never all-zero counts with a 200.
          */
@@ -4379,15 +4383,22 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * One expert review (any status) with its same-structure history
-         * @description Return one review row in any status plus every review of the same DAG structure.
+         * One expert review (any status) with its estimand history and version timeline
+         * @description Return one review row in any status, its ESTIMAND history and its structure timeline.
          *
          *     Powers the linked-review card the causal drill-down deep-links to
          *     (``/expert-reviews?review=<id>``), so a run whose structure is pending,
-         *     approved or rejected always resolves to its record. ``history`` is the full
-         *     same-hash (and same-brand) list, newest first, expired included -- the read
-         *     ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
-         *     so it cannot shadow ``/pending`` and ``/summary``.
+         *     approved or rejected always resolves to its record.
+         *
+         *     ``history`` is every review of the same ESTIMAND (migration 140), newest
+         *     first, expired included. A row minted before that migration carries no
+         *     ``estimand_key`` and falls back to the same-hash (and same-brand) list --
+         *     the read ``ExpertReviewGate.check_rejection`` performs.
+         *
+         *     ``versions`` is this review's ``expert_review_versions`` timeline (migration
+         *     141), oldest first, each row carrying the diff against the one before it.
+         *
+         *     Declared LAST in this module so it cannot shadow ``/pending`` and ``/summary``.
          */
         get: operations["get_expert_review"];
         put?: never;
@@ -8911,6 +8922,63 @@ export interface components {
             timestamp?: string;
         };
         /**
+         * DagChanges
+         * @description The structural delta between two DAG snapshots (``get_dag_changes``).
+         *
+         *     Rendered on the review's version timeline and on its estimand history, so
+         *     an operator can see WHAT moved between two versions rather than only that
+         *     the hash changed. Every list is sorted by the engine -- a set-difference
+         *     order would render the same delta differently between two calls.
+         *
+         *     ``adjustment_sets_*`` carries the covariate delta (#1991 debt 3, spec §7): a
+         *     covariate change with an unchanged graph is still a new version of the
+         *     estimand, and reports ``is_changed`` True.
+         *
+         *     No ``json_schema_extra`` sibling is needed here (unlike
+         *     ``DagStructureSnapshot.edges``): these are ``List[List[str]]``, which
+         *     pydantic renders with a plain ``items`` key, not the ``prefixItems``-only
+         *     shape ``Tuple[str, str]`` produces and the spectral ``array-items`` rule
+         *     flags (#1991 debt 4).
+         */
+        DagChanges: {
+            /**
+             * Nodes Added
+             * @default []
+             */
+            nodes_added: string[];
+            /**
+             * Nodes Removed
+             * @default []
+             */
+            nodes_removed: string[];
+            /**
+             * Edges Added
+             * @default []
+             */
+            edges_added: string[][];
+            /**
+             * Edges Removed
+             * @default []
+             */
+            edges_removed: string[][];
+            /**
+             * Adjustment Sets Added
+             * @default []
+             */
+            adjustment_sets_added: string[][];
+            /**
+             * Adjustment Sets Removed
+             * @default []
+             */
+            adjustment_sets_removed: string[][];
+            /** Is Changed */
+            is_changed: boolean;
+            /** Old Hash */
+            old_hash?: string | null;
+            /** New Hash */
+            new_hash?: string | null;
+        };
+        /**
          * DagStructureSnapshot
          * @description The sanitized causal-graph snapshot (mig 097) with the DISCOVERY gate typed.
          *
@@ -10274,15 +10342,30 @@ export interface components {
         };
         /**
          * ExpertReviewDetailResponse
-         * @description ``GET /expert-reviews/{review_id}``: the row plus its same-structure history.
+         * @description ``GET /expert-reviews/{review_id}``: the row, its ESTIMAND history, and its
+         *     structure timeline.
          *
-         *     ``history`` is every review sharing the DAG hash (and brand), newest first,
-         *     expired rows included -- the same read the gate's rejection probe performs.
+         *     ``history`` is every review of the same ESTIMAND (migration 140), newest
+         *     first, expired rows included. It was keyed on the DAG hash before #1991
+         *     debt 3; since a covariate or structure change now ADVANCES the pending
+         *     review of an estimand instead of minting a sibling, a hash-keyed history
+         *     would drop every earlier structure of the same question. A row older than
+         *     migration 140 carries no ``estimand_key``, and falls back to the same-hash
+         *     history (the read the gate's rejection probe performs).
+         *
+         *     ``versions`` is the review's own ``expert_review_versions`` timeline
+         *     (migration 141), OLDEST first, each row carrying ``changes`` against the one
+         *     before it. Empty for a review minted before the versions table.
          */
         ExpertReviewDetailResponse: {
             review: components["schemas"]["ReviewRecord"];
             /** History */
             history: components["schemas"]["ReviewRecord"][];
+            /**
+             * Versions
+             * @default []
+             */
+            versions: components["schemas"]["ReviewVersion"][];
         };
         /**
          * ExplainRequest
@@ -14826,6 +14909,13 @@ export interface components {
             agent_assessment_json?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Version Count
+             * @default 1
+             */
+            version_count: number;
+            /** Last Changed At */
+            last_changed_at?: string | null;
         };
         /**
          * PendingReviewsResponse
@@ -16199,12 +16289,12 @@ export interface components {
             needs_review: boolean;
             /**
              * Expert Review Id
-             * @description ID of the expert-review row for this DAG structure: the queue row created/looked-up on a REVIEW or BLOCK gate, the approval row when one is active, or the rejection row when a human rejected the structure (any gate). None when no row was involved.
+             * @description ID of the expert-review row for this DAG structure: the queue row created/looked-up on a REVIEW gate, the approval row when one is active, or the rejection row when a human rejected the structure (any gate). A BLOCK gate queues nothing (#1991 debt 3) -- it has already failed statistically -- so on that band this is the rejection row or None. None when no row was involved.
              */
             expert_review_id?: string | null;
             /**
              * Expert Review Decision
-             * @description ExpertReviewGate decision for the DAG structure: proceed (active structural approval) / renewal_required (approval expiring) / pending_review (queued; resolve via POST /expert-reviews/{id}/resolve) / rejected (a human rejected this structure) / blocked (no approval, no review could be queued) / unavailable (the gate could not be consulted; nothing was checked or queued). Recorded on REVIEW/BLOCK gates, and on a PROCEED gate only when a rejection was found. None when not consulted. Approval is STRUCTURAL and never promotes a borderline estimate. The run is halted (status 'failed', reason in warnings) on 'rejected' always, and on pending_review/blocked/unavailable only when CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true (default off, #1971).
+             * @description ExpertReviewGate decision for the DAG structure: proceed (active structural approval) / renewal_required (approval expiring) / pending_review (queued; resolve via POST /expert-reviews/{id}/resolve) / rejected (a human rejected this structure) / blocked (no approval, no review could be queued) / unavailable (the gate could not be consulted; nothing was checked or queued). Recorded on a REVIEW gate; on BLOCK and PROCEED gates only when the read-only rejection probe found one (#1991 debt 3: a BLOCK band queues nothing). None when not consulted. Approval is STRUCTURAL and never promotes a borderline estimate. The run is halted (status 'failed', reason in warnings) on 'rejected' always, and on pending_review/blocked/unavailable only when CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true (default off, #1971).
              */
             expert_review_decision?: ("proceed" | "renewal_required" | "pending_review" | "rejected" | "blocked" | "unavailable") | null;
             /**
@@ -16574,6 +16664,13 @@ export interface components {
             agent_assessment_json?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Version Count
+             * @default 1
+             */
+            version_count: number;
+            /** Last Changed At */
+            last_changed_at?: string | null;
             /** Approval Status */
             approval_status?: string | null;
             /** Reviewer Id */
@@ -16604,6 +16701,7 @@ export interface components {
             } | null;
             /** Supersedes Review Id */
             supersedes_review_id?: string | null;
+            changes_from_previous?: components["schemas"]["DagChanges"] | null;
         };
         /**
          * ReviewSummaryResponse
@@ -16612,10 +16710,11 @@ export interface components {
          *     Mirrors ``ExpertReviewRepository.get_review_summary``.
          *
          *     These counts are NOT all disjoint (#1972). ``pending`` / ``approved`` /
-         *     ``rejected`` / ``expired`` partition the rows, but **``expiring_soon`` is a
-         *     subset of ``approved``** -- a row approved and within 14 days of
-         *     ``valid_until`` is counted in both. Summing all five double-counts those
-         *     rows. ``expired`` is derived from ``valid_until`` at read time and is never
+         *     ``rejected`` / ``superseded`` / ``expired`` partition the rows, but
+         *     **``expiring_soon`` is a subset of ``approved``** -- a row approved and
+         *     within 14 days of ``valid_until`` is counted in both. Summing all six
+         *     double-counts those rows.
+         *     ``expired`` is derived from ``valid_until`` at read time and is never
          *     a stored ``approval_status``. A NULL ``valid_until`` is a PERMANENT
          *     approval (the schema's ``v_active_expert_approvals`` labels it
          *     ``'permanent'``): counted in ``approved``, never in ``expired`` or
@@ -16628,10 +16727,36 @@ export interface components {
             approved: number;
             /** Rejected */
             rejected: number;
+            /** Superseded */
+            superseded: number;
             /** Expired */
             expired: number;
             /** Expiring Soon */
             expiring_soon: number;
+        };
+        /**
+         * ReviewVersion
+         * @description One ``expert_review_versions`` row (migration 141) -- a structure version
+         *     of a review, in timeline order.
+         *
+         *     The table is a TIMELINE, not a set: a revert (A -> B -> A) appends a third
+         *     row rather than being suppressed, so two versions may carry the same hash.
+         *     ``adjustment_set_hash`` is NULL on rows the migration backfilled, and
+         *     ``dag_structure_json`` is object-or-NULL by CHECK constraint.
+         */
+        ReviewVersion: {
+            /** Version Id */
+            version_id: string;
+            /** Dag Version Hash */
+            dag_version_hash: string;
+            /** Adjustment Set Hash */
+            adjustment_set_hash?: string | null;
+            dag_structure_json?: components["schemas"]["DagStructureSnapshot"] | null;
+            /** Query Id */
+            query_id?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            changes?: components["schemas"]["DagChanges"] | null;
         };
         /**
          * RocCurvePoint

@@ -224,6 +224,23 @@ def is_dag_changed(
     return old_hash != new_hash
 
 
+#: The four keys ``compute_dag_hash`` reads off a ``causal_graph`` dict, each
+#: with ``.get(key, [])`` -- so an explicit NULL reaches ``sorted(None)``.
+_HASH_INPUT_KEYS = ("nodes", "edges", "treatment_nodes", "outcome_nodes")
+
+
+def _graph_for_hash(graph: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce the hash inputs a stored snapshot may carry as NULL to empty lists.
+
+    Every other key is preserved, and a graph carrying no NULL is returned
+    unchanged -- so no hash VALUE moves; the only input whose behaviour changes
+    is one that used to raise ``TypeError``.
+    """
+    if all(graph.get(key) is not None for key in _HASH_INPUT_KEYS):
+        return graph
+    return {**graph, **{key: graph.get(key) or [] for key in _HASH_INPUT_KEYS}}
+
+
 def get_dag_changes(
     old_graph: Dict[str, Any],
     new_graph: Dict[str, Any],
@@ -231,27 +248,56 @@ def get_dag_changes(
     """
     Compare two DAGs and identify changes.
 
+    The ADJUSTMENT SETS are part of the comparison (#1991 debt 3, spec §7): an
+    expert review approves an estimand's *structure*, and the covariate set the
+    estimator conditions on is structure -- two graphs with identical nodes and
+    edges but different adjustment sets are different versions of the review, so
+    an adjustment-set-only move reports ``is_changed`` True. Each set is
+    compared as an unordered collection (sorted into a tuple), because the order
+    covariates are listed in is not part of the identity.
+
+    Every returned list is SORTED. These lists are serialized into the
+    expert-review detail response (``DagChanges``), and a raw set difference
+    iterates in hash order -- the same pair of graphs would render its diff
+    differently between two calls, and across processes with different
+    ``PYTHONHASHSEED``. Callers may rely on membership and on the order.
+
+    A missing key and an explicit ``None`` are both read as empty
+    (``.get(k) or []``): migration 141 backfilled version rows whose
+    ``dag_structure_json`` carries a NULL ``adjustment_sets``, and ``.get(k, [])``
+    would hand ``None`` to the comprehension. The same coercion is applied to
+    the two graphs handed to ``compute_dag_hash`` (``_graph_for_hash``), which
+    reads its four inputs with ``.get(k, [])`` and raised ``TypeError`` on an
+    explicit NULL -- a stored snapshot must never crash the diff. Only that
+    previously-raising input changes; a graph without a NULL hashes as before.
+
     Args:
         old_graph: Previous CausalGraph
         new_graph: Current CausalGraph
 
     Returns:
-        Dict with added/removed nodes and edges
+        Dict with added/removed nodes, edges and adjustment sets, ``is_changed``,
+        and both hashes
     """
-    old_nodes = set(old_graph.get("nodes", []))
-    new_nodes = set(new_graph.get("nodes", []))
+    old_nodes = set(old_graph.get("nodes") or [])
+    new_nodes = set(new_graph.get("nodes") or [])
 
-    old_edges = {tuple(e) for e in old_graph.get("edges", [])}
-    new_edges = {tuple(e) for e in new_graph.get("edges", [])}
+    old_edges = {tuple(e) for e in old_graph.get("edges") or []}
+    new_edges = {tuple(e) for e in new_graph.get("edges") or []}
+
+    old_adj = {tuple(sorted(a)) for a in old_graph.get("adjustment_sets") or []}
+    new_adj = {tuple(sorted(a)) for a in new_graph.get("adjustment_sets") or []}
 
     return {
-        "nodes_added": list(new_nodes - old_nodes),
-        "nodes_removed": list(old_nodes - new_nodes),
-        "edges_added": [list(e) for e in new_edges - old_edges],
-        "edges_removed": [list(e) for e in old_edges - new_edges],
-        "is_changed": old_nodes != new_nodes or old_edges != new_edges,
-        "old_hash": compute_dag_hash(causal_graph=old_graph),
-        "new_hash": compute_dag_hash(causal_graph=new_graph),
+        "nodes_added": sorted(new_nodes - old_nodes),
+        "nodes_removed": sorted(old_nodes - new_nodes),
+        "edges_added": [list(e) for e in sorted(new_edges - old_edges)],
+        "edges_removed": [list(e) for e in sorted(old_edges - new_edges)],
+        "adjustment_sets_added": [list(a) for a in sorted(new_adj - old_adj)],
+        "adjustment_sets_removed": [list(a) for a in sorted(old_adj - new_adj)],
+        "is_changed": (old_nodes != new_nodes or old_edges != new_edges or old_adj != new_adj),
+        "old_hash": compute_dag_hash(causal_graph=_graph_for_hash(old_graph)),
+        "new_hash": compute_dag_hash(causal_graph=_graph_for_hash(new_graph)),
     }
 
 

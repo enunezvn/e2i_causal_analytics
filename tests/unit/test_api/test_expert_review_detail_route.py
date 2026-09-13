@@ -47,10 +47,13 @@ class _Repo:
         row: Optional[Dict[str, Any]],
         history: Optional[List[Dict[str, Any]]] = None,
         fail: Optional[str] = None,
+        versions: Optional[List[Dict[str, Any]]] = None,
     ):
         self.row, self.history, self.fail = row, history or [], fail
+        self.versions = versions or []
         self.get_calls: List[str] = []
         self.history_calls: List[tuple] = []
+        self.version_calls: List[str] = []
 
     async def get_by_id(self, review_id: str):
         self.get_calls.append(review_id)
@@ -73,6 +76,20 @@ class _Repo:
 
     async def get_pending_reviews(self, brand=None, reviewer_id=None, limit=50):
         return []
+
+    # #1991 debt 3: the detail route reads the review's structure timeline and
+    # the queue route reads every row's versions in ONE batched call. The rows
+    # here predate migration 140/141 (no ``estimand_key``), so the history stays
+    # the same-hash fallback these tests pin; the timeline is empty unless a
+    # test seeds it.
+    async def get_versions(self, review_id: str):
+        self.version_calls.append(review_id)
+        if self.fail == "versions":
+            raise RuntimeError("connection refused")
+        return self.versions
+
+    async def get_versions_for_reviews(self, review_ids: List[str]):
+        return {}
 
 
 def _install(monkeypatch, repo: _Repo) -> None:

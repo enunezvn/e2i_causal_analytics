@@ -11,7 +11,7 @@ Endpoints (all ``require_operator`` — OD-1):
 - GET  /expert-reviews/pending            -> oldest-first pending queue
 - POST /expert-reviews/{review_id}/resolve -> approve/reject + checklist/comments
 - GET  /expert-reviews/summary            -> status counts
-- GET  /expert-reviews/{review_id}        -> one review (any status) + same-structure history
+- GET  /expert-reviews/{review_id}        -> one review (any status) + estimand history + versions
 
 Persistence: ``ExpertReviewRepository`` over an ASYNC Supabase (service-role)
 client. The repo methods are ``await self.client.table(...).execute()`` so the
@@ -40,6 +40,7 @@ from src.api.errors import user_safe_503_detail
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.expert_review import (
     AgentAssessmentResponse,
+    DagChanges,
     ExpertReviewDetailResponse,
     PendingReviewItem,
     PendingReviewsResponse,
@@ -47,7 +48,10 @@ from src.api.schemas.expert_review import (
     ResolveReviewResponse,
     ReviewRecord,
     ReviewSummaryResponse,
+    ReviewVersion,
 )
+from src.api.schemas.expert_review import _json_string_to_dict as _snapshot_dict
+from src.causal_engine.dag_hash import get_dag_changes
 
 if TYPE_CHECKING:
     from src.repositories.expert_review import ExpertReviewRepository
@@ -136,6 +140,21 @@ def _validate_review_row(model: Type[_ReviewModelT], row: Dict[str, Any]) -> _Re
         ) from exc
 
 
+def _changes_between(prev_snapshot: Any, cur_snapshot: Any) -> DagChanges:
+    """The structural delta between two stored snapshots (#1991 debt 3).
+
+    Both snapshots are the RAW column value, which is object-or-NULL by mig 141's
+    CHECK constraint and, on the review table's own column, sometimes a
+    ``json.dumps`` string (the repo's write path) -- ``_snapshot_dict`` is the
+    schema's single definition of that parse, reused here rather than duplicated.
+    A NULL becomes ``{}``: the delta against "no recorded structure" is
+    everything-added, which is what the timeline should show, not a crash.
+    """
+    prev = _snapshot_dict(prev_snapshot) or {}
+    cur = _snapshot_dict(cur_snapshot) or {}
+    return DagChanges(**get_dag_changes(prev, cur))
+
+
 router = APIRouter(
     prefix="/expert-reviews",
     tags=["Expert Review"],
@@ -181,13 +200,42 @@ async def list_pending_reviews(
     Each row carries the metadata an operator needs to decide
     (treatment/outcome/brand/analysis_context/dag_version_hash) — the v1 UI is
     metadata + approve/reject, no DAG graph render (OD-2).
+
+    ``version_count`` / ``last_changed_at`` (#1991 debt 3) come from ONE batched
+    ``expert_review_versions`` read, so an operator can see that a pending
+    review's structure moved under them since it was queued.
     """
     repo = await _get_expert_review_repo()
     try:
         rows = await repo.get_pending_reviews(brand=brand, reviewer_id=reviewer_id, limit=limit)
     except Exception as e:  # store failure (R3): honest 503, never an empty queue
         raise _store_unavailable("pending-queue read", e) from e
-    reviews = [_validate_review_row(PendingReviewItem, row) for row in rows]
+    # ONE batched versions read for the whole page (#1991 debt 3): the queue
+    # serves up to 200 rows, and a per-row get_versions would be 200 round trips.
+    try:
+        versions_by_review = await repo.get_versions_for_reviews(
+            [row["review_id"] for row in rows if row.get("review_id")]
+        )
+    except Exception as e:  # store failure (R3): honest 503, never "never changed"
+        raise _store_unavailable("pending-queue versions read", e) from e
+    reviews = []
+    for row in rows:
+        versions = versions_by_review.get(row.get("review_id"), [])
+        reviews.append(
+            _validate_review_row(
+                PendingReviewItem,
+                {
+                    **row,
+                    # No version rows means the review was minted before the
+                    # versions table (mig 141) -- it is at version 1, changed
+                    # when it was created. Never 0: that reads as "no structure".
+                    "version_count": len(versions) or 1,
+                    "last_changed_at": (
+                        versions[-1].get("created_at") if versions else row.get("created_at")
+                    ),
+                },
+            )
+        )
     return PendingReviewsResponse(reviews=reviews, total=len(reviews))
 
 
@@ -502,7 +550,7 @@ async def get_summary(
     brand: Optional[str] = Query(None, description="Filter by brand"),
     user: Dict[str, Any] = Depends(require_operator),
 ) -> ReviewSummaryResponse:
-    """Return status counts (pending/approved/rejected/expired/expiring_soon).
+    """Return status counts (pending/approved/rejected/superseded/expired/expiring_soon).
 
     A store failure is 503 (R3) -- never all-zero counts with a 200.
     """
@@ -515,6 +563,9 @@ async def get_summary(
         pending=summary.get("pending", 0),
         approved=summary.get("approved", 0),
         rejected=summary.get("rejected", 0),
+        # Partition member since migration 140 (BLOCK-band reviews resolved to
+        # ``superseded``); a resolution, never a queue item.
+        superseded=summary.get("superseded", 0),
         expired=summary.get("expired", 0),
         expiring_soon=summary.get("expiring_soon", 0),
     )
@@ -523,7 +574,7 @@ async def get_summary(
 @router.get(
     "/{review_id}",
     response_model=ExpertReviewDetailResponse,
-    summary="One expert review (any status) with its same-structure history",
+    summary="One expert review (any status) with its estimand history and version timeline",
     operation_id="get_expert_review",
     responses={
         404: {"model": ErrorResponse, "description": "Review not found"},
@@ -534,14 +585,21 @@ async def get_expert_review(
     review_id: str,
     user: Dict[str, Any] = Depends(require_operator),
 ) -> ExpertReviewDetailResponse:
-    """Return one review row in any status plus every review of the same DAG structure.
+    """Return one review row in any status, its ESTIMAND history and its structure timeline.
 
     Powers the linked-review card the causal drill-down deep-links to
     (``/expert-reviews?review=<id>``), so a run whose structure is pending,
-    approved or rejected always resolves to its record. ``history`` is the full
-    same-hash (and same-brand) list, newest first, expired included -- the read
-    ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
-    so it cannot shadow ``/pending`` and ``/summary``.
+    approved or rejected always resolves to its record.
+
+    ``history`` is every review of the same ESTIMAND (migration 140), newest
+    first, expired included. A row minted before that migration carries no
+    ``estimand_key`` and falls back to the same-hash (and same-brand) list --
+    the read ``ExpertReviewGate.check_rejection`` performs.
+
+    ``versions`` is this review's ``expert_review_versions`` timeline (migration
+    141), oldest first, each row carrying the diff against the one before it.
+
+    Declared LAST in this module so it cannot shadow ``/pending`` and ``/summary``.
     """
     # A malformed id is 404, not 503 (review 2026-09-09, measured live):
     # ``expert_reviews.review_id`` is a uuid column, so a non-UUID string makes
@@ -567,16 +625,64 @@ async def get_expert_review(
         raise _store_unavailable("review read", e) from e
     if not row:
         raise HTTPException(status_code=404, detail=f"Review {review_id} was not found.")
+    estimand_key = row.get("estimand_key")
     dag_hash = row.get("dag_version_hash")
     history_rows: List[Dict[str, Any]] = []
-    if dag_hash:
-        try:
+    try:
+        if estimand_key:
+            # The estimand IS the review's identity since migration 140: a
+            # structure change advances the SAME review, so the hash-keyed read
+            # would drop every earlier structure of this question.
+            history_rows = await repo.get_reviews_for_estimand(estimand_key)
+        elif dag_hash:
+            # Pre-140 rows carry no estimand_key; the same-hash history (the
+            # read the gate's rejection probe performs) is all there is.
             history_rows = await repo.get_reviews_for_dag(
                 dag_hash, include_expired=True, brand=row.get("brand")
             )
-        except Exception as e:
-            raise _store_unavailable("review history read", e) from e
+    except Exception as e:
+        raise _store_unavailable("review history read", e) from e
+
+    try:
+        version_rows = await repo.get_versions(canonical_id)
+    except Exception as e:  # store failure (R3): honest 503, never "never changed"
+        raise _store_unavailable("review versions read", e) from e
+
+    # Oldest-first timeline: each version diffs against the one before it, and
+    # the FIRST carries None -- it has no predecessor, and an everything-added
+    # diff there would read as a real structure change.
+    versions: List[ReviewVersion] = []
+    for index, version_row in enumerate(version_rows):
+        changes = (
+            None
+            if index == 0
+            else _changes_between(
+                version_rows[index - 1].get("dag_structure_json"),
+                version_row.get("dag_structure_json"),
+            )
+        )
+        versions.append(_validate_review_row(ReviewVersion, {**version_row, "changes": changes}))
+
+    # ``history`` is newest-first, so each row's predecessor is the NEXT element;
+    # the last (oldest) review of the estimand has none.
+    history: List[ReviewRecord] = []
+    for index, history_row in enumerate(history_rows):
+        changes_from_previous = (
+            None
+            if index + 1 >= len(history_rows)
+            else _changes_between(
+                history_rows[index + 1].get("dag_structure_json"),
+                history_row.get("dag_structure_json"),
+            )
+        )
+        history.append(
+            _validate_review_row(
+                ReviewRecord, {**history_row, "changes_from_previous": changes_from_previous}
+            )
+        )
+
     return ExpertReviewDetailResponse(
         review=_validate_review_row(ReviewRecord, row),
-        history=[_validate_review_row(ReviewRecord, r) for r in history_rows],
+        history=history,
+        versions=versions,
     )

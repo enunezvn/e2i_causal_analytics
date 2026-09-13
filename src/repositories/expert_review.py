@@ -929,6 +929,61 @@ class ExpertReviewRepository(BaseRepository):
             logger.error(f"Failed to get versions for review {review_id}: {e}")
             raise
 
+    async def get_versions_for_reviews(
+        self, review_ids: List[str]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Structure versions for MANY reviews in ONE query, grouped by review id.
+
+        The batched sibling of ``get_versions``: the pending queue renders up to
+        200 rows and needs each row's version count, which per-row calls would
+        turn into 200 round trips. Each group is in the same timeline order
+        ``get_versions`` returns -- OLDEST first, ties on ``created_at`` broken
+        by ``version_id`` -- so a caller can read the last element as the latest
+        version. The ordering is applied to the whole result set before
+        grouping, which preserves it within every group.
+
+        A review with no version rows is ABSENT from the mapping rather than
+        present with an empty list: the caller decides what "no timeline" means
+        for it (the queue reads it as version 1, changed at creation).
+
+        Args:
+            review_ids: The review ids to fetch versions for; an empty list is
+                an empty mapping and no query
+
+        Returns:
+            ``{review_id: [version rows, oldest first]}`` for the ids that have
+            versions
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R1/R3 convention of this module): an empty mapping reads as "none
+            of these reviews ever changed", which an outage must not fake. The
+            no-client early return ({}) is unchanged.
+        """
+        if not self.client or not review_ids:
+            return {}
+
+        try:
+            result = await (
+                self.client.table("expert_review_versions")
+                .select("*")
+                .in_("review_id", review_ids)
+                .order("created_at", desc=False)
+                .order("version_id", desc=False)
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"Failed to get versions for {len(review_ids)} reviews: {e}")
+            raise
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in result.data or []:
+            review_id = row.get("review_id")
+            if review_id is None:
+                continue
+            grouped.setdefault(str(review_id), []).append(row)
+        return grouped
+
     async def renew_review(
         self,
         original_review_id: str,

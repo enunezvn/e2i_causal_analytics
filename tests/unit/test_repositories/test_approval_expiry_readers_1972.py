@@ -969,6 +969,7 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
             ExpertReviewRepository.get_reviews_for_dag,
             ExpertReviewRepository.get_reviews_for_estimand,
             ExpertReviewRepository.get_versions,
+            ExpertReviewRepository.get_versions_for_reviews,
         ):
             assert "Raises" in (fn.__doc__ or ""), fn.__name__
 

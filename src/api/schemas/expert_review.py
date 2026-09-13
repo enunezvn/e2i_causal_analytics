@@ -74,6 +74,65 @@ def _json_string_to_dict(value: Any) -> Any:
     return value
 
 
+class DagChanges(BaseModel):
+    """The structural delta between two DAG snapshots (``get_dag_changes``).
+
+    Rendered on the review's version timeline and on its estimand history, so
+    an operator can see WHAT moved between two versions rather than only that
+    the hash changed. Every list is sorted by the engine -- a set-difference
+    order would render the same delta differently between two calls.
+
+    ``adjustment_sets_*`` carries the covariate delta (#1991 debt 3, spec §7): a
+    covariate change with an unchanged graph is still a new version of the
+    estimand, and reports ``is_changed`` True.
+
+    No ``json_schema_extra`` sibling is needed here (unlike
+    ``DagStructureSnapshot.edges``): these are ``List[List[str]]``, which
+    pydantic renders with a plain ``items`` key, not the ``prefixItems``-only
+    shape ``Tuple[str, str]`` produces and the spectral ``array-items`` rule
+    flags (#1991 debt 4).
+    """
+
+    nodes_added: List[str] = []
+    nodes_removed: List[str] = []
+    edges_added: List[List[str]] = []
+    edges_removed: List[List[str]] = []
+    adjustment_sets_added: List[List[str]] = []
+    adjustment_sets_removed: List[List[str]] = []
+    is_changed: bool
+    old_hash: Optional[str] = None
+    new_hash: Optional[str] = None
+
+
+class ReviewVersion(BaseModel):
+    """One ``expert_review_versions`` row (migration 141) -- a structure version
+    of a review, in timeline order.
+
+    The table is a TIMELINE, not a set: a revert (A -> B -> A) appends a third
+    row rather than being suppressed, so two versions may carry the same hash.
+    ``adjustment_set_hash`` is NULL on rows the migration backfilled, and
+    ``dag_structure_json`` is object-or-NULL by CHECK constraint.
+    """
+
+    version_id: str
+    dag_version_hash: str
+    adjustment_set_hash: Optional[str] = None
+    dag_structure_json: Optional[DagStructureSnapshot] = None
+    query_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+    #: The delta against the version before this one. None on the FIRST version:
+    #: it has no predecessor, and an everything-added diff there would read as a
+    #: real structure change.
+    changes: Optional[DagChanges] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+    @field_validator("dag_structure_json", mode="before")
+    @classmethod
+    def _parse_json_string(cls, value: Any) -> Any:
+        return _json_string_to_dict(value)
+
+
 class PendingReviewItem(BaseModel):
     """A single pending expert review.
 
@@ -98,6 +157,14 @@ class PendingReviewItem(BaseModel):
     days_pending: Optional[float] = None
     dag_structure_json: Optional[DagStructureSnapshot] = None
     agent_assessment_json: Optional[Dict[str, Any]] = None
+    #: How many structure versions this review has (#1991 debt 3). Set by the
+    #: route from the batched ``expert_review_versions`` read, NOT a column. A
+    #: review that never moved has ONE version (the mint), never zero -- zero
+    #: would read as "this review has no structure".
+    version_count: int = 1
+    #: When the structure last moved: the newest version's ``created_at``, or
+    #: the review's own ``created_at`` when it never moved.
+    last_changed_at: Optional[datetime] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -134,6 +201,11 @@ class ReviewRecord(PendingReviewItem):
     checklist_json: Optional[Dict[str, Any]] = None
     comments_json: Optional[Dict[str, Any]] = None
     supersedes_review_id: Optional[str] = None
+    #: The delta between THIS review's snapshot and that of the next-OLDER
+    #: review of the same estimand (#1991 debt 3). None for the oldest review in
+    #: the history, which has no predecessor. Set by the detail route, not a
+    #: column.
+    changes_from_previous: Optional[DagChanges] = None
 
     @field_validator("checklist_json", "comments_json", mode="before")
     @classmethod
@@ -142,14 +214,25 @@ class ReviewRecord(PendingReviewItem):
 
 
 class ExpertReviewDetailResponse(BaseModel):
-    """``GET /expert-reviews/{review_id}``: the row plus its same-structure history.
+    """``GET /expert-reviews/{review_id}``: the row, its ESTIMAND history, and its
+    structure timeline.
 
-    ``history`` is every review sharing the DAG hash (and brand), newest first,
-    expired rows included -- the same read the gate's rejection probe performs.
+    ``history`` is every review of the same ESTIMAND (migration 140), newest
+    first, expired rows included. It was keyed on the DAG hash before #1991
+    debt 3; since a covariate or structure change now ADVANCES the pending
+    review of an estimand instead of minting a sibling, a hash-keyed history
+    would drop every earlier structure of the same question. A row older than
+    migration 140 carries no ``estimand_key``, and falls back to the same-hash
+    history (the read the gate's rejection probe performs).
+
+    ``versions`` is the review's own ``expert_review_versions`` timeline
+    (migration 141), OLDEST first, each row carrying ``changes`` against the one
+    before it. Empty for a review minted before the versions table.
     """
 
     review: ReviewRecord
     history: List[ReviewRecord]
+    versions: List[ReviewVersion] = []
 
 
 class PendingReviewsResponse(BaseModel):
@@ -200,10 +283,11 @@ class ReviewSummaryResponse(BaseModel):
     Mirrors ``ExpertReviewRepository.get_review_summary``.
 
     These counts are NOT all disjoint (#1972). ``pending`` / ``approved`` /
-    ``rejected`` / ``expired`` partition the rows, but **``expiring_soon`` is a
-    subset of ``approved``** -- a row approved and within 14 days of
-    ``valid_until`` is counted in both. Summing all five double-counts those
-    rows. ``expired`` is derived from ``valid_until`` at read time and is never
+    ``rejected`` / ``superseded`` / ``expired`` partition the rows, but
+    **``expiring_soon`` is a subset of ``approved``** -- a row approved and
+    within 14 days of ``valid_until`` is counted in both. Summing all six
+    double-counts those rows.
+    ``expired`` is derived from ``valid_until`` at read time and is never
     a stored ``approval_status``. A NULL ``valid_until`` is a PERMANENT
     approval (the schema's ``v_active_expert_approvals`` labels it
     ``'permanent'``): counted in ``approved``, never in ``expired`` or
@@ -213,6 +297,11 @@ class ReviewSummaryResponse(BaseModel):
     pending: int
     approved: int
     rejected: int
+    #: STORED status (migration 140): a review that can no longer change an
+    #: outcome. A partition member alongside pending/approved/rejected/expired,
+    #: never a queue item -- written today only by migration 140's resolution of
+    #: the BLOCK-band backlog.
+    superseded: int
     #: Derived from ``valid_until`` at read time -- never a stored status.
     expired: int
     #: SUBSET of ``approved``, not a peer bucket. Do not add it to a total.

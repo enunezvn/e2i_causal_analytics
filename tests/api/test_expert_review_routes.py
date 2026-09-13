@@ -33,9 +33,13 @@ class _FakeExpertReviewRepo:
             "pending": 0,
             "approved": 0,
             "rejected": 0,
+            # Stored status since migration 140 (#1991 debt 3): a resolution,
+            # counted apart from ``pending``.
+            "superseded": 0,
             "expired": 0,
             "expiring_soon": 0,
         }
+        self.versions_by_review: Dict[str, List[Dict[str, Any]]] = {}
         self.submit_calls: List[Dict[str, Any]] = []
         self.submit_return: bool = True
         self.rows_by_id: Dict[str, Dict[str, Any]] = {}
@@ -54,6 +58,20 @@ class _FakeExpertReviewRepo:
         if self.read_error is not None:
             raise self.read_error
         return list(self.pending_rows)
+
+    async def get_versions_for_reviews(
+        self, review_ids: List[str]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """#1991 debt 3: the queue reads every row's structure versions in ONE
+        call. ``versions_by_review`` is empty by default, so each row reports
+        the never-moved shape (version 1, changed at creation)."""
+        if self.read_error is not None:
+            raise self.read_error
+        return {
+            rid: list(self.versions_by_review[rid])
+            for rid in review_ids
+            if rid in self.versions_by_review
+        }
 
     async def submit_review(
         self,
@@ -309,6 +327,7 @@ class TestReviewSummary:
             "pending": 3,
             "approved": 7,
             "rejected": 1,
+            "superseded": 38,
             "expired": 2,
             "expiring_soon": 1,
         }
@@ -318,6 +337,9 @@ class TestReviewSummary:
             "pending": 3,
             "approved": 7,
             "rejected": 1,
+            # Migration 140 resolved the BLOCK-band backlog to this status; the
+            # page must be able to show it, not fold it into another bucket.
+            "superseded": 38,
             "expired": 2,
             "expiring_soon": 1,
         }
