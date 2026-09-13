@@ -63,6 +63,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# /clinical-context and /estimation-data were registered AFTER the
+# discover-effects block in the flat module, so they cannot ride the same router
+# as the rest of catalog. Path ORDER is part of the byte-identical contract, not
+# just path content: the OpenAPI ``paths`` object preserves insertion order,
+# ``openapi-typescript`` emits frontend/src/types/generated/api.ts in that order,
+# and CI's verify-types workflow diffs that file byte-for-byte. These two ride a
+# second router the aggregator includes at their original position. Pinned by
+# test_causal_openapi_path_order_unchanged.
+context_router = APIRouter()
+
 
 # =============================================================================
 # LIBRARY ROUTING ENDPOINTS
@@ -495,7 +505,7 @@ def _get_clinical_context_service() -> "ClinicalContextService":
     return _clinical_context_service
 
 
-@router.get(
+@context_router.get(
     "/clinical-context",
     response_model=ClinicalContext,
     summary="Brand-faithful, sourced clinical context for a discovered effect",
@@ -566,7 +576,7 @@ async def get_clinical_context(
     return ClinicalContext.model_validate(payload)
 
 
-@router.get(
+@context_router.get(
     "/estimation-data",
     response_model=EstimationDataResponse,
     summary="Load real estimation records from a gold-standard dataset",

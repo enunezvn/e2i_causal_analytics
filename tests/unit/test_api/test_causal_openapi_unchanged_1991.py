@@ -29,6 +29,35 @@ from src.api.main import app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "causal_openapi_paths.json"
 
+# The pre-split route registration order, taken from the decorator order in
+# ``git show c36eb5535:src/api/routes/causal.py`` and cross-checked against the
+# path order in the tracked frontend/src/types/generated/api.ts. The two agree.
+EXPECTED_ORDER = [
+    "/api/causal/hierarchical/analyze",
+    "/api/causal/hierarchical/{analysis_id}",
+    "/api/causal/route",
+    "/api/causal/brands",
+    "/api/causal/variables",
+    "/api/causal/propose-questions",
+    "/api/causal/discover-effects/questions",
+    "/api/causal/discover-effects",
+    "/api/causal/discover-effects/{job_id}",
+    "/api/causal/discover-effects/{job_id}/cancel",
+    "/api/causal/clinical-context",
+    "/api/causal/estimation-data",
+    "/api/causal/agent-analyze",
+    "/api/causal/agent-analyze/{analysis_id}",
+    "/api/causal/pipeline/sequential",
+    "/api/causal/pipeline/parallel",
+    "/api/causal/pipeline/{pipeline_id}",
+    "/api/causal/validate",
+    "/api/causal/estimators",
+    "/api/causal/health",
+    "/api/causal/history",
+    "/api/causal/value-chains",
+    "/api/causal/treatment-effects",
+]
+
 
 def _first_diff(expected: object, actual: object, prefix: str) -> str | None:
     """Return a description of the first divergence between ``expected`` (the
@@ -74,3 +103,19 @@ def test_causal_openapi_paths_unchanged():
     for path in baseline:
         diff = _first_diff(baseline[path], now[path], prefix=path)
         assert diff is None, diff
+
+
+def test_causal_openapi_path_order_unchanged():
+    """Path ORDER is part of the wire contract, not just path content.
+
+    The OpenAPI ``paths`` object preserves insertion order, ``openapi-typescript``
+    emits frontend/src/types/generated/api.ts in that order, and CI's
+    verify-types workflow diffs the regenerated file against the tracked one
+    byte-for-byte. Registering a route at a different position is therefore a
+    failing gate even when every path, method and schema is identical - during
+    the #1991 split it showed up as a 234-line api.ts diff that was a pure block
+    move. Splitting a concern across two routers to preserve this order is the
+    fix; reordering the fixture is not.
+    """
+    spec = app.openapi()
+    assert [p for p in spec["paths"] if p.startswith("/api/causal")] == EXPECTED_ORDER

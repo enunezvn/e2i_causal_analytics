@@ -25,9 +25,22 @@ router = APIRouter(
     },
 )
 
-# Deliberate order: the order these routes had in the flat module, which drives
-# OpenAPI presentation. Do not alphabetise.
-for _sub in (hierarchical, catalog, discovery, agent, pipelines, activity):
-    router.include_router(_sub.router)
+# This order reproduces the flat file's route registration order exactly, and it
+# is load-bearing: the OpenAPI ``paths`` object preserves insertion order,
+# ``openapi-typescript`` emits frontend/src/types/generated/api.ts in that order,
+# and CI's verify-types workflow diffs that file byte-for-byte. catalog
+# contributes TWO routers because /clinical-context and /estimation-data were
+# registered after the discover-effects block. Pinned by
+# test_causal_openapi_path_order_unchanged. Do not alphabetise.
+for _sub_router in (
+    hierarchical.router,
+    catalog.router,
+    discovery.router,
+    catalog.context_router,
+    agent.router,
+    pipelines.router,
+    activity.router,
+):
+    router.include_router(_sub_router)
 
 __all__ = ["router"]
