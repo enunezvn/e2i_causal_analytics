@@ -496,6 +496,49 @@ def test_a_step_with_an_unknown_code_keeps_the_code_and_invents_no_reason():
     assert step["reason_code"] == "not_a_code" and step["reason"] is None
 
 
+def test_the_service_output_validates_against_the_response_model_unchanged():
+    """ToolReliabilityRow and StepClass forbid extra keys, so a key the service adds and the model
+    lacks would 500 the route. The real-DB route test skips on the droplet; this one does not."""
+    from src.api.schemas.admin_tool_composer import ToolComposerObservability
+
+    failed = _episode(status="FAILED", outcome="failed")
+    steps = [
+        {"step_number": 0, "tool_name": "gap_calculator", "outcome_class": "refused",
+         "reason_code": "coverage_gap"},
+        {"step_number": 1, "tool_name": "cate_analyzer", "outcome_class": "error"},
+        {"step_number": 2, "tool_name": "roi_estimator", "outcome_class": "refused",
+         "reason_code": "not_a_code"},
+    ]  # fmt: skip
+    rows = {
+        "composer_episodes": [failed],
+        "composition_steps": [{"episode_id": failed["episode_id"], **s} for s in steps],
+    }
+    verdicts = {
+        "gap_calculator": _verdict(tool_name="gap_calculator", n_refused_coded=None),
+        "cate_analyzer": _verdict(tool_name="cate_analyzer", n_refused_coded=0),
+        "causal_effect_estimator": _verdict(
+            n_refused_coded=4,
+            n_most_common_refusal_reason=2,
+            most_common_refusal_reason="non_binary_treatment",
+        ),
+    }
+    out = _service(rows).overview(30, verdicts)
+
+    dumped = ToolComposerObservability.model_validate(out).model_dump(mode="json")
+
+    assert dumped["tools"] == out["tools"]
+    assert [f["step_classes"] for f in dumped["recent_failures"]] == [
+        f["step_classes"] for f in out["recent_failures"]
+    ]
+    (step_classes,) = [f["step_classes"] for f in out["recent_failures"]]
+    assert [s["reason_code"] for s in step_classes] == ["coverage_gap", None, "not_a_code"]
+    assert sorted((t["n_refused_coded"] is None, t["n_refused_coded"]) for t in out["tools"]) == [
+        (False, 0),
+        (False, 4),
+        (True, None),
+    ]
+
+
 def test_the_service_module_does_not_import_the_tool_composer_package():
     """Measured 2026-09-12: the package costs ~564 MB and ~17 s; this module alone ~47 MB."""
     import subprocess

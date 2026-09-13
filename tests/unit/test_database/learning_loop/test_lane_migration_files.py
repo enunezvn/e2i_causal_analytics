@@ -269,6 +269,9 @@ def test_043_most_common_refusal_code_and_its_count_come_from_one_ranking():
     where = re.search(r" WHERE (.*) GROUP BY p\.tool_id, p\.reason_code$", cte)
     assert where, cte
     assert where.group(1) == _filter_body("n_refused_coded", expressions["n_refused_coded"])
+    # Per tool: without the partition, rn = 1 is one global row, so a single tool gets a code and
+    # every other tool shows NULL beside n_refused_coded > 0.
+    assert "row_number() OVER (PARTITION BY p.tool_id ORDER BY" in cte, cte
     assert 'ORDER BY count(*) DESC, p.reason_code COLLATE "C"' in cte, cte
     assert "LEFT JOIN refusal_codes rc ON rc.tool_id = tr.tool_id AND rc.rn = 1" in " ".join(
         fn.split()
