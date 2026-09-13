@@ -4,6 +4,7 @@ fails when any of its three sources drifts (mutation test)."""
 from __future__ import annotations
 
 import importlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -93,17 +94,70 @@ def test_guard_red_when_alter_type_migration_not_in_binding(monkeypatch):
     TYPE ... ADD VALUE), the extractor would only see five values while the
     YAML now has six (negative_control_outcome) -- the check must go red."""
     s = _script()
-    truncated_checks = [
-        (name, SQL_010, section, key)
-        if name == "refutation_test_type"
-        else (name, sql_file, section, key)
-        for name, sql_file, section, key in s.ENUM_CHECKS
-    ]
-    monkeypatch.setattr(s, "ENUM_CHECKS", truncated_checks)
+
+    def _truncate(entry):
+        # entries are (name, sql_file(s), vocab_section, vocab_key[, label]);
+        # only swap the sql_file(s) element, keep everything else (including
+        # an optional label) as-is.
+        if entry[0] == "refutation_test_type":
+            return (entry[0], SQL_010) + tuple(entry[2:])
+        return entry
+
+    monkeypatch.setattr(s, "ENUM_CHECKS", [_truncate(entry) for entry in s.ENUM_CHECKS])
 
     results = {r.name: r for r in s.run_enum_checks()}
     assert results["refutation_test_type"].ok is False
     assert "negative_control_outcome" in " ".join(results["refutation_test_type"].errors)
+
+
+def test_extractor_strips_comment_lines(tmp_path):
+    """A commented-out example statement must not be mistaken for a real one."""
+    sql = tmp_path / "commented.sql"
+    sql.write_text(
+        "-- ALTER TYPE test_enum ADD VALUE 'ghost';\n"
+        "CREATE TYPE test_enum AS ENUM (\n"
+        "    'real'\n"
+        ");\n"
+    )
+    values = _script().extract_enum_from_sql(sql, "test_enum")
+    assert values == ["real"]
+    assert "ghost" not in values
+
+
+def test_extractor_alter_type_accepts_schema_prefix(tmp_path):
+    """An ALTER TYPE written with an explicit schema prefix (e.g. `public.`)
+    still matches when `enum_name` itself is queried unqualified."""
+    sql = tmp_path / "schema_prefixed.sql"
+    sql.write_text("ALTER TYPE public.widget_status ADD VALUE 'v';\n")
+    values = _script().extract_enum_from_sql(sql, "widget_status")
+    assert values == ["v"]
+
+
+def test_extractor_accepts_str_path():
+    """A bare str path is ONE path, not a sequence of characters to iterate."""
+    values = _script().extract_enum_from_sql(str(SQL), "ml.gate_decision")
+    assert values == ["accept", "review", "reject", "augment"]
+
+
+def test_python_side_checks_degrade_gracefully_on_import_error(monkeypatch):
+    """If src.causal_engine can't be imported, the two Python-side checks
+    show up as explicit failed CheckResults, not a crashing traceback."""
+    s = _script()
+    monkeypatch.setitem(sys.modules, "src.causal_engine.refutation_runner", None)
+    results = {r.name: r for r in s.run_enum_checks()}
+    assert results["python:DiscoveryGateDecision"].ok is False
+    assert results["python:GateDecision"].ok is False
+    assert "import failed" in results["python:DiscoveryGateDecision"].errors[0]
+    assert "import failed" in results["python:GateDecision"].errors[0]
+
+
+def test_ml_gate_decision_uses_a_readable_label_in_the_report(capsys):
+    """The printed report shows the CURRENT type name, not the one ml/036
+    renamed away from, even though CheckResult.name (used above) stays
+    "ml.gate_decision" for the SQL regex binding."""
+    _script().validate_enum_sync()
+    captured = capsys.readouterr()
+    assert "ml.gate_decision (→ public.discovery_gate_decision after ml/036)" in captured.out
 
 
 def test_lane_checks_are_green_on_the_repo():

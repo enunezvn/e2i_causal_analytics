@@ -34,13 +34,20 @@ import yaml
 PROJECT_ROOT = Path(__file__).parent.parent
 VOCAB_PATH = PROJECT_ROOT / "config" / "domain_vocabulary.yaml"
 
-# (enum_name, sql_file(s), vocab_section, vocab_key). sql_file(s) is a single
-# Path for an enum whose full value set lives in one CREATE TYPE statement,
-# or a list of Paths when later migrations extended it via
+# (enum_name, sql_file(s), vocab_section, vocab_key[, label]). sql_file(s) is
+# a single Path for an enum whose full value set lives in one CREATE TYPE
+# statement, or a list of Paths when later migrations extended it via
 # `ALTER TYPE ... ADD VALUE` in a separate file (see extract_enum_from_sql).
+# The optional 5th element is a display-only label for the printed report,
+# for an enum whose real SQL/vocab-binding name has since been superseded
+# (see the ml.gate_decision entry below); when omitted, enum_name is used.
 # Module-level (like VOCAB_PATH) so tests can monkeypatch a single entry's
 # binding without touching the filesystem.
-ENUM_CHECKS: List[Tuple[str, Union[Path, Sequence[Path]], str, str]] = [
+EnumCheckEntry = Union[
+    Tuple[str, Union[Path, Sequence[Path]], str, str],
+    Tuple[str, Union[Path, Sequence[Path]], str, str, str],
+]
+ENUM_CHECKS: List[EnumCheckEntry] = [
     # Core schema ENUMs
     (
         "brand_type",
@@ -103,10 +110,15 @@ ENUM_CHECKS: List[Tuple[str, Union[Path, Sequence[Path]], str, str]] = [
     ),
     # Causal discovery ENUMs (#1991 debt 4)
     (
-        "ml.gate_decision",  # renamed to public.discovery_gate_decision by ml/036 (type OID unchanged)
+        # Bind by the ORIGINAL type name: ml/036 renamed it to
+        # public.discovery_gate_decision (same OID), but the SQL text here
+        # still reads "CREATE TYPE ml.gate_decision". The 5th element is a
+        # display-only label so the printed report shows the current name.
+        "ml.gate_decision",
         PROJECT_ROOT / "database" / "ml" / "026_causal_discovery_tables.sql",
         "discovery_gate_decisions",
         "values",
+        "ml.gate_decision (→ public.discovery_gate_decision after ml/036)",
     ),
 ]
 
@@ -118,6 +130,7 @@ class CheckResult(NamedTuple):
     ok: bool
     value_count: int
     errors: List[str]
+    label: str = ""  # display-only; falls back to `name` when empty (see ENUM_CHECKS)
 
 
 def load_vocabulary(path: Optional[Path] = None) -> Dict:
@@ -155,7 +168,10 @@ def extract_enum_from_sql(sql_path: Union[Path, Sequence[Path]], enum_name: str)
     Returns:
         List of ENUM values (lowercase), in the order described above.
     """
-    paths = [sql_path] if isinstance(sql_path, (str, Path)) else list(sql_path)
+    # A bare str is ONE path, not a sequence of characters to iterate; coerce
+    # every element to Path so `.exists()` etc. work regardless of whether the
+    # caller passed str, Path, or a mix of both in a list.
+    paths = [Path(sql_path)] if isinstance(sql_path, (str, Path)) else [Path(p) for p in sql_path]
 
     values: List[str] = []
     seen = set()
@@ -170,8 +186,12 @@ def extract_enum_from_sql(sql_path: Union[Path, Sequence[Path]], enum_name: str)
     # keeps the literal "." from matching any character.
     escaped_name = re.escape(enum_name)
     create_pattern = rf"CREATE\s+TYPE\s+{escaped_name}\s+AS\s+ENUM\s*\((.*?)\);"
+    # Tolerate an ALTER TYPE written with an explicit schema prefix even when
+    # `enum_name` itself was passed unqualified (e.g. querying "widget_status"
+    # should still match "ALTER TYPE public.widget_status ADD VALUE ...").
     alter_pattern = (
-        rf"ALTER\s+TYPE\s+{escaped_name}\s+ADD\s+VALUE\s+(?:IF\s+NOT\s+EXISTS\s+)?'([^']+)'"
+        rf"ALTER\s+TYPE\s+(?:[a-z_]+\.)?{escaped_name}\s+ADD\s+VALUE\s+"
+        rf"(?:IF\s+NOT\s+EXISTS\s+)?'([^']+)'"
     )
 
     for path in paths:
@@ -180,6 +200,15 @@ def extract_enum_from_sql(sql_path: Union[Path, Sequence[Path]], enum_name: str)
 
         with open(path) as f:
             content = f.read()
+
+        # Drop whole-line SQL comments before matching, so a commented-out
+        # example ALTER/CREATE TYPE statement (e.g. in explanatory prose)
+        # can't be mistaken for a real one. A value-line trailing comment
+        # (e.g. "'accept',   -- High confidence") is untouched since that
+        # line doesn't START with "--".
+        content = "\n".join(
+            line for line in content.splitlines() if not line.lstrip().startswith("--")
+        )
 
         create_match = re.search(create_pattern, content, re.DOTALL | re.IGNORECASE)
         if create_match:
@@ -213,7 +242,9 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
 
     results: List[CheckResult] = []
 
-    for enum_name, sql_file, vocab_section, vocab_key in ENUM_CHECKS:
+    for entry in ENUM_CHECKS:
+        enum_name, sql_file, vocab_section, vocab_key = entry[:4]
+        label = entry[4] if len(entry) > 4 else enum_name
         sql_paths = [sql_file] if isinstance(sql_file, (str, Path)) else list(sql_file)
 
         # Extract ENUM values from SQL
@@ -227,7 +258,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
                 "   Could not extract ENUM definition",
                 "",
             ]
-            results.append(CheckResult(enum_name, False, 0, errors))
+            results.append(CheckResult(enum_name, False, 0, errors, label))
             continue
 
         # Get vocabulary values
@@ -239,7 +270,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
                 f"   ENUM: {enum_name}",
                 "",
             ]
-            results.append(CheckResult(enum_name, False, 0, errors))
+            results.append(CheckResult(enum_name, False, 0, errors, label))
             continue
 
         # Extract values based on vocab structure
@@ -255,7 +286,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
                     f"   ENUM: {enum_name}",
                     "",
                 ]
-                results.append(CheckResult(enum_name, False, 0, errors))
+                results.append(CheckResult(enum_name, False, 0, errors, label))
                 continue
 
         elif vocab_key == "names":
@@ -276,7 +307,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
                     f"   ENUM: {enum_name}",
                     "",
                 ]
-                results.append(CheckResult(enum_name, False, 0, errors))
+                results.append(CheckResult(enum_name, False, 0, errors, label))
                 continue
 
         else:
@@ -285,7 +316,7 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
                 f"   ENUM: {enum_name}",
                 "",
             ]
-            results.append(CheckResult(enum_name, False, 0, errors))
+            results.append(CheckResult(enum_name, False, 0, errors, label))
             continue
 
         # Compare sets
@@ -309,9 +340,9 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
                 errors.append(f"   Missing in DB: {sorted(missing_in_db)}")
 
             errors.append("")
-            results.append(CheckResult(enum_name, False, 0, errors))
+            results.append(CheckResult(enum_name, False, 0, errors, label))
         else:
-            results.append(CheckResult(enum_name, True, len(db_values), []))
+            results.append(CheckResult(enum_name, True, len(db_values), [], label))
 
     # Python-enum-side checks (#1991 debt 4): the SQL/YAML checks above prove
     # the database and the vocabulary agree; this additionally proves the
@@ -323,8 +354,18 @@ def run_enum_checks(vocab_path: Optional[Path] = None) -> List[CheckResult]:
     # costs ~15s regardless of which enum is imported first; there is no
     # "lighter" submodule that avoids it. Keeping the import out of module
     # scope keeps `import scripts.validate_vocabulary_enum_sync` itself fast.
-    from src.causal_engine.discovery.base import DiscoveryGateDecision
-    from src.causal_engine.refutation_runner import GateDecision
+    try:
+        from src.causal_engine.discovery.base import DiscoveryGateDecision
+        from src.causal_engine.refutation_runner import GateDecision
+    except ImportError as exc:
+        # Report both Python-side checks as explicit failures rather than
+        # letting the whole guard crash with a traceback -- e.g. a stripped-
+        # down environment missing a heavy optional dependency should still
+        # get a readable "this check failed" report.
+        import_error = [f"❌ import failed: {exc}"]
+        results.append(CheckResult("python:DiscoveryGateDecision", False, 0, import_error))
+        results.append(CheckResult("python:GateDecision", False, 0, import_error))
+        return results
 
     python_enum_checks = [
         ("python:DiscoveryGateDecision", DiscoveryGateDecision, "discovery_gate_decisions"),
@@ -395,7 +436,8 @@ def validate_enum_sync(vocab_path: Optional[Path] = None) -> bool:
 
     for result in results:
         if result.ok:
-            print(f"✅ {result.name:<25} ({result.value_count} values)")
+            display_name = result.label or result.name
+            print(f"✅ {display_name:<25} ({result.value_count} values)")
             passed_checks += 1
         else:
             all_errors.extend(result.errors)

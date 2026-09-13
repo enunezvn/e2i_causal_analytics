@@ -134,7 +134,7 @@ diff config/archived/domain_vocabulary_v4.2.0.yaml config/domain_vocabulary.yaml
 Run the validation script to check database/vocabulary synchronization:
 
 ```bash
-python scripts/validate_vocabulary_enum_sync.py
+python -m scripts.validate_vocabulary_enum_sync
 ```
 
 **Known Differences** (documented, not errors):
