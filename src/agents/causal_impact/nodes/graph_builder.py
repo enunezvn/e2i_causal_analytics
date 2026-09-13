@@ -32,9 +32,9 @@ from src.causal_engine.discovery import (
     DiscoveryAlgorithmType,
     DiscoveryConfig,
     DiscoveryGate,
+    DiscoveryGateDecision,
     DiscoveryResult,
     DiscoveryRunner,
-    GateDecision,
 )
 
 
@@ -175,9 +175,15 @@ class GraphBuilderNode:
             )
 
             # Compute confidence based on discovery results
-            if gate_evaluation and gate_evaluation.get("decision") == GateDecision.ACCEPT.value:
+            if (
+                gate_evaluation
+                and gate_evaluation.get("decision") == DiscoveryGateDecision.ACCEPT.value
+            ):
                 confidence = gate_evaluation.get("confidence", 0.85)
-            elif gate_evaluation and gate_evaluation.get("decision") == GateDecision.AUGMENT.value:
+            elif (
+                gate_evaluation
+                and gate_evaluation.get("decision") == DiscoveryGateDecision.AUGMENT.value
+            ):
                 # Hybrid confidence
                 confidence = min(0.9, 0.85 + 0.05 * len(augmented_edges))
             else:
@@ -718,10 +724,10 @@ class GraphBuilderNode:
             ensemble_edges = set(discovery_result.ensemble_dag.edges())
         decision = gate_evaluation.get("decision") if gate_evaluation else None
         shipped_via_discovery = not dag_overridden and decision in (
-            GateDecision.ACCEPT.value,
-            GateDecision.AUGMENT.value,
+            DiscoveryGateDecision.ACCEPT.value,
+            DiscoveryGateDecision.AUGMENT.value,
         )
-        accepted = shipped_via_discovery and decision == GateDecision.ACCEPT.value
+        accepted = shipped_via_discovery and decision == DiscoveryGateDecision.ACCEPT.value
         augmented = set(augmented_edges)
 
         def _label(edge: Tuple[str, str]) -> str:
@@ -976,7 +982,7 @@ class GraphBuilderNode:
         decision = gate_evaluation.get("decision")
         augmented_edges: List[Tuple[str, str]] = []
 
-        if decision == GateDecision.ACCEPT.value:
+        if decision == DiscoveryGateDecision.ACCEPT.value:
             # Use discovered DAG directly
             logger.info("Using discovered DAG (ACCEPT)")
             if discovery_result.ensemble_dag is not None:
@@ -1063,7 +1069,7 @@ class GraphBuilderNode:
                     )
                 return dag, augmented_edges, False
 
-        elif decision == GateDecision.AUGMENT.value:
+        elif decision == DiscoveryGateDecision.AUGMENT.value:
             # Build manual DAG and augment with high-confidence discovered edges
             logger.info("Augmenting manual DAG with discovered edges (AUGMENT)")
             dag = self._construct_dag(treatment, outcome, confounders)
@@ -1086,7 +1092,7 @@ class GraphBuilderNode:
 
             return dag, augmented_edges, False
 
-        elif decision == GateDecision.REVIEW.value:
+        elif decision == DiscoveryGateDecision.REVIEW.value:
             # Use manual DAG but flag for review
             logger.info("Using manual DAG, flagged for review (REVIEW)")
             dag = self._construct_dag(treatment, outcome, confounders)

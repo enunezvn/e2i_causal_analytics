@@ -2,6 +2,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 // The "Open review" deep link is a router <Link>: render under the router-wrapped helper.
 import { fireEvent, renderWithAllProviders, screen, waitFor } from '@/test/utils';
 import { ReviewStatusPanel } from './ReviewStatusPanel';
+import type { ExpertReviewDecision } from '@/types/causal';
+
+// #1991 debt 4: `decision` is now typed to the gate's own union. These two
+// tests deliberately exercise a value from OUTSIDE that union -- exactly what
+// a JSON payload, a stale cache, or a not-yet-migrated caller can still send
+// at runtime even though TypeScript forbids it in our own call sites -- so
+// the cast is intentional, not a workaround.
+const outOfBand = (value: string) => value as unknown as ExpertReviewDecision;
 
 const SWITCH_HALT =
   'Estimate withheld: CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true requires an active expert approval of the DAG structure for a REVIEW-band estimate, and this structure holds none (gate decision: pending_review). Re-run once the review is resolved.';
@@ -59,7 +67,7 @@ describe('ReviewStatusPanel', () => {
   });
 
   it('never invents a label for an unknown decision', () => {
-    renderWithAllProviders(<ReviewStatusPanel decision="something_new" />);
+    renderWithAllProviders(<ReviewStatusPanel decision={outOfBand('something_new')} />);
     expect(screen.getByText('something_new')).toBeInTheDocument();
   });
 
@@ -67,7 +75,7 @@ describe('ReviewStatusPanel', () => {
   // approval-enforcement switch withholds the estimate on pending / blocked /
   // unavailable structures too (refutation.py:1215) — the halt must show for
   // any decision that carries one, not only a rejection.
-  it.each(['pending_review', 'blocked', 'unavailable'])(
+  it.each(['pending_review', 'blocked', 'unavailable'] as const)(
     'shows the approval-enforcement halt from the run warnings for %s',
     (decision) => {
       renderWithAllProviders(
@@ -155,7 +163,7 @@ describe('ReviewStatusPanel', () => {
   // A plain-object lookup resolves inherited members: "toString" must render
   // verbatim like any other unknown decision, never as an empty badge.
   it('renders an inherited-property decision verbatim, never an empty badge', () => {
-    renderWithAllProviders(<ReviewStatusPanel decision="toString" />);
+    renderWithAllProviders(<ReviewStatusPanel decision={outOfBand('toString')} />);
     expect(screen.getByText('toString')).toBeInTheDocument();
   });
 

@@ -14,8 +14,8 @@ from src.causal_engine.discovery.base import (
     DiscoveredEdge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
+    DiscoveryGateDecision,
     DiscoveryResult,
-    GateDecision,
 )
 from src.causal_engine.discovery.gate import (
     DiscoveryGate,
@@ -62,21 +62,21 @@ class TestGateEvaluation:
         edge = DiscoveredEdge(source="A", target="B", confidence=0.95)
 
         evaluation = GateEvaluation(
-            decision=GateDecision.ACCEPT,
+            decision=DiscoveryGateDecision.ACCEPT,
             confidence=0.85,
             reasons=["High confidence"],
             high_confidence_edges=[edge],
             warnings=[],
         )
 
-        assert evaluation.decision == GateDecision.ACCEPT
+        assert evaluation.decision == DiscoveryGateDecision.ACCEPT
         assert evaluation.confidence == 0.85
         assert len(evaluation.high_confidence_edges) == 1
 
     def test_evaluation_to_dict(self):
         """Test GateEvaluation.to_dict() serialization."""
         evaluation = GateEvaluation(
-            decision=GateDecision.REVIEW,
+            decision=DiscoveryGateDecision.REVIEW,
             confidence=0.65,
             reasons=["Medium confidence", "Expert review recommended"],
             high_confidence_edges=[],
@@ -192,7 +192,7 @@ class TestDiscoveryGate:
         """Test that high confidence results are accepted."""
         evaluation = gate.evaluate(high_confidence_result)
 
-        assert evaluation.decision == GateDecision.ACCEPT
+        assert evaluation.decision == DiscoveryGateDecision.ACCEPT
         assert evaluation.confidence >= 0.8
         assert len(evaluation.reasons) > 0
 
@@ -201,7 +201,7 @@ class TestDiscoveryGate:
         evaluation = gate.evaluate(low_confidence_result)
 
         # Low confidence should result in REJECT or AUGMENT (if high-conf edges exist)
-        assert evaluation.decision in [GateDecision.REJECT, GateDecision.REVIEW]
+        assert evaluation.decision in [DiscoveryGateDecision.REJECT, DiscoveryGateDecision.REVIEW]
         assert evaluation.confidence < 0.8
 
     def test_evaluate_failed_discovery(self, gate):
@@ -215,7 +215,7 @@ class TestDiscoveryGate:
 
         evaluation = gate.evaluate(result)
 
-        assert evaluation.decision == GateDecision.REJECT
+        assert evaluation.decision == DiscoveryGateDecision.REJECT
         assert evaluation.confidence == 0.0
         assert "Discovery failed" in evaluation.reasons
 
@@ -234,7 +234,7 @@ class TestDiscoveryGate:
 
         evaluation = gate.evaluate(result)
 
-        assert evaluation.decision == GateDecision.REJECT
+        assert evaluation.decision == DiscoveryGateDecision.REJECT
         assert "Too few edges" in evaluation.reasons[0]
 
     def test_evaluate_with_expected_edges(self, gate, high_confidence_result):
@@ -298,7 +298,7 @@ class TestDiscoveryGate:
         evaluation = gate.evaluate(result)
 
         # With strict thresholds, 0.85 confidence should not be ACCEPT
-        assert evaluation.decision != GateDecision.ACCEPT
+        assert evaluation.decision != DiscoveryGateDecision.ACCEPT
 
     def test_should_accept(self, gate, high_confidence_result):
         """Test should_accept convenience method."""
@@ -520,7 +520,7 @@ class TestCorroboration:
     def test_uncorroborated_single_run_is_rejected(self):
         result = self._single_result([("a", "b")])
         evaluation = DiscoveryGate().evaluate(result)
-        assert evaluation.decision == GateDecision.REJECT
+        assert evaluation.decision == DiscoveryGateDecision.REJECT
         assert evaluation.metadata["corroboration_score"] == 0.0
         assert evaluation.metadata["corroboration_basis"] == "uncorroborated_single_run"
         assert evaluation.high_confidence_edges == []
@@ -533,7 +533,7 @@ class TestCorroboration:
             stabilities={("t", "y"): 1.0, ("x", "t"): 0.95, ("x", "y"): 0.9},
         )
         evaluation = DiscoveryGate().evaluate(result)
-        assert evaluation.decision == GateDecision.ACCEPT
+        assert evaluation.decision == DiscoveryGateDecision.ACCEPT
         assert evaluation.metadata["corroboration_basis"] == "bootstrap_stability"
         assert evaluation.metadata["corroboration_score"] == pytest.approx(0.925)
 
@@ -545,7 +545,7 @@ class TestCorroboration:
             stabilities={("t", "y"): 1.0, ("q", "r"): 0.15},
         )
         evaluation = DiscoveryGate().evaluate(result)
-        assert evaluation.decision in (GateDecision.REJECT, GateDecision.REVIEW)
+        assert evaluation.decision in (DiscoveryGateDecision.REJECT, DiscoveryGateDecision.REVIEW)
         # The always-present required edge must not smuggle the run into
         # AUGMENT: it is prior-required, hence not augment-eligible.
         assert evaluation.high_confidence_edges == []
@@ -558,7 +558,7 @@ class TestCorroboration:
             stabilities=dict.fromkeys(edges, 1.0),
         )
         evaluation = DiscoveryGate().evaluate(result)
-        assert evaluation.decision == GateDecision.ACCEPT
+        assert evaluation.decision == DiscoveryGateDecision.ACCEPT
         assert evaluation.metadata["corroboration_basis"] == "prior_determined"
 
     def test_prior_determined_without_bootstrap_still_renormalizes(self):
@@ -568,7 +568,7 @@ class TestCorroboration:
         edges = [("t", "y"), ("c", "t"), ("c", "y")]
         result = self._single_result(edges, prior_required=edges)
         evaluation = DiscoveryGate().evaluate(result)
-        assert evaluation.decision == GateDecision.ACCEPT
+        assert evaluation.decision == DiscoveryGateDecision.ACCEPT
         assert evaluation.metadata["corroboration_basis"] == "prior_determined"
 
     def test_multi_algorithm_agreement_still_reports(self, high_confidence_result):
@@ -589,7 +589,7 @@ class TestCorroboration:
             stabilities={("t", "y"): 1.0, ("x", "y"): 0.9, ("q", "r"): 0.3},
         )
         evaluation = DiscoveryGate().evaluate(result)
-        assert evaluation.decision == GateDecision.AUGMENT
+        assert evaluation.decision == DiscoveryGateDecision.AUGMENT
         assert evaluation.metadata["corroboration_score"] == pytest.approx(0.6)
         high_conf_tuples = [(e.source, e.target) for e in evaluation.high_confidence_edges]
         assert ("x", "y") in high_conf_tuples
@@ -610,7 +610,7 @@ class TestCorroboration:
             stabilities={("t", "y"): 1.0, ("x", "y"): 0.9, ("q", "r"): 0.3},
         )
         evaluation = DiscoveryGate().evaluate(result)
-        assert evaluation.decision == GateDecision.AUGMENT
+        assert evaluation.decision == DiscoveryGateDecision.AUGMENT
         assert evaluation.confidence == pytest.approx(0.709333, abs=1e-5)
         assert len(evaluation.high_confidence_edges) == 1
         (edge,) = evaluation.high_confidence_edges

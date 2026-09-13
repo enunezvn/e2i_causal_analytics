@@ -14,9 +14,9 @@ from src.causal_engine.discovery.base import (
     DiscoveredEdge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
+    DiscoveryGateDecision,
     DiscoveryResult,
     EdgeType,
-    GateDecision,
 )
 
 
@@ -33,11 +33,11 @@ class TestEnums:
         assert DiscoveryAlgorithmType.ICA_LINGAM.value == "ica_lingam"
 
     def test_gate_decision_values(self):
-        """Test GateDecision enum has correct values."""
-        assert GateDecision.ACCEPT.value == "accept"
-        assert GateDecision.REVIEW.value == "review"
-        assert GateDecision.REJECT.value == "reject"
-        assert GateDecision.AUGMENT.value == "augment"
+        """Test DiscoveryGateDecision enum has correct values."""
+        assert DiscoveryGateDecision.ACCEPT.value == "accept"
+        assert DiscoveryGateDecision.REVIEW.value == "review"
+        assert DiscoveryGateDecision.REJECT.value == "reject"
+        assert DiscoveryGateDecision.AUGMENT.value == "augment"
 
     def test_edge_type_values(self):
         """Test EdgeType enum has correct values."""
@@ -202,14 +202,14 @@ class TestDiscoveryResult:
             config=config,
             ensemble_dag=dag,
             edges=edges,
-            gate_decision=GateDecision.ACCEPT,
+            gate_decision=DiscoveryGateDecision.ACCEPT,
             gate_confidence=0.85,
         )
 
         assert result.success is True
         assert result.n_edges == 2
         assert result.n_nodes == 3
-        assert result.gate_decision == GateDecision.ACCEPT
+        assert result.gate_decision == DiscoveryGateDecision.ACCEPT
         assert result.gate_confidence == 0.85
 
     def test_discovery_result_defaults(self):
@@ -320,7 +320,7 @@ class TestDiscoveryResult:
             config=config,
             ensemble_dag=dag,
             edges=edges,
-            gate_decision=GateDecision.REVIEW,
+            gate_decision=DiscoveryGateDecision.REVIEW,
             gate_confidence=0.7,
             session_id=session_id,
         )

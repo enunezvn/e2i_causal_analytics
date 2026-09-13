@@ -91,7 +91,13 @@ async def test_returns_the_row_and_its_same_structure_history(monkeypatch):
     assert resp.review.review_id == RID
     assert resp.review.approval_status == "rejected"
     assert resp.review.reviewer_name == "Dr. No"
-    assert resp.review.dag_structure_json == {"nodes": ["t", "y"], "edges": [["t", "y"]]}
+    # #1991: dag_structure_json is now a typed DagStructureSnapshot instance;
+    # edges are Tuple[str, str] (arity-enforced, debt-4 fix), so model_dump()
+    # renders each edge as a 2-tuple, not a 2-list.
+    assert resp.review.dag_structure_json.model_dump(exclude_none=True) == {
+        "nodes": ["t", "y"],
+        "edges": [("t", "y")],
+    }
     assert resp.review.comments_json == {"note": "engagement is post-treatment"}
     assert [r.review_id for r in resp.history] == [RID, RID_OLDER]
     # the same read the gate's rejection probe performs: expired included, brand-scoped
@@ -118,6 +124,29 @@ async def test_resolution_provenance_columns_are_surfaced(monkeypatch):
     # A pre-136 row carries neither; the reader reports None, not a stand-in.
     assert resp.history[1].reviewer_email is None
     assert resp.history[1].resolved_at is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_malformed_dag_structure_is_a_named_500_not_a_store_outage(monkeypatch):
+    """#1991 debt 4: a stored snapshot violating the typed ``DagStructureSnapshot``
+    (here, an out-of-vocabulary ``discovery_gate_decision``) must not raise an
+    unhandled ``ValidationError`` up through the route, and must not be
+    reported as a 503 "store unavailable" -- the store answered fine; the ROW
+    is malformed. The 500 must name the review id and the failing field so an
+    operator can find the bad row."""
+    bad_row = {
+        **ROW,
+        "dag_structure_json": json.dumps(
+            {"nodes": ["t", "y"], "edges": [["t", "y"]], "discovery_gate_decision": "bogus"}
+        ),
+    }
+    repo = _Repo(bad_row)
+    _install(monkeypatch, repo)
+    with pytest.raises(HTTPException) as exc_info:
+        await route_mod.get_expert_review(RID, user={})
+    assert exc_info.value.status_code == 500
+    assert RID in str(exc_info.value.detail)
 
 
 @pytest.mark.unit
