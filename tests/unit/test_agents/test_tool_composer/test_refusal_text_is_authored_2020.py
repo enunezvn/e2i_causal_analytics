@@ -250,6 +250,36 @@ def test_power_overflow_text_is_logged_not_refused(caplog, kwargs, library_text)
     assert isinstance(caught.value.__cause__, OverflowError)
 
 
+@pytest.mark.parametrize(
+    ("name", "kwargs"),
+    [
+        ("effect_size", {"effect_size": 10**400}),
+        ("alpha", {"effect_size": 0.5, "alpha": 10**400}),
+        ("power", {"effect_size": 0.5, "power": 10**400}),
+    ],
+    ids=["effect_size", "alpha", "power"],
+)
+def test_power_input_too_large_for_a_float_is_refused_with_a_code(caplog, name, kwargs):
+    # #2021: these escaped as a bare OverflowError from ``_power_number``, outside the refusal
+    # ``try`` -- uncoded, so retried and charged to the circuit breaker, with Python's text.
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(ToolInputError) as caught:
+            tr.power_calculator(**kwargs)
+    _assert_authored(
+        caught.value,
+        caplog,
+        exact=(
+            f"power_calculator: {name} is too large to be represented as a finite number. No "
+            "sample size can be computed from it."
+        ),
+        library_text="int too large",
+    )
+    assert name in str(caught.value)
+    assert "0" * 20 not in str(caught.value)
+    assert caught.value.reason_code is ReasonCode.NON_FINITE_INPUT
+    assert isinstance(caught.value.__cause__, OverflowError)
+
+
 def test_power_calculation_error_keeps_its_authored_text():
     with pytest.raises(ToolInputError) as caught:
         tr.power_calculator(effect_size=0.5, outcome_type="binary", baseline_rate=0.9)

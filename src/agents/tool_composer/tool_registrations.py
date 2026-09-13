@@ -3256,13 +3256,27 @@ def _power_number(name: str, value: Any, default: Optional[float] = None) -> Opt
             "size can be computed from it.",
             reason_code=ReasonCode.INVALID_INPUT_TYPE,
         )
-    if not math.isfinite(value):
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        # An int too large for a float (``10**400``). Uncoded, this escaped the tool as a bare
+        # OverflowError that the executor retries (#2021). Python's text is not this tool's and
+        # the value can be hundreds of digits of caller data, so neither is echoed (#2020).
+        logger.warning(
+            "power_calculator: %s is too large to represent as a float", name, exc_info=exc
+        )
+        raise ToolInputError(
+            f"power_calculator: {name} is too large to be represented as a finite number. No "
+            "sample size can be computed from it.",
+            reason_code=ReasonCode.NON_FINITE_INPUT,
+        ) from exc
+    if not math.isfinite(number):
         raise ToolInputError(
             f"power_calculator: {name} must be a finite number; got {value!r}. No sample "
             "size can be computed from it.",
             reason_code=ReasonCode.NON_FINITE_INPUT,
         )
-    return float(value)
+    return number
 
 
 def _refuse_unhonoured_power_design(kwargs: Dict[str, Any]) -> None:
