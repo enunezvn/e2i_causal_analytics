@@ -3,6 +3,7 @@
 import copy
 import logging
 import pickle
+import re
 from collections.abc import Mapping
 from enum import Enum, StrEnum
 
@@ -189,7 +190,12 @@ def test_details_key_count_is_still_bounded():
 def test_details_key_length_matches_the_043_reducer():
     """ml/043's reducer keeps only keys matching ``^[a-z][a-z0-9_]{0,63}$`` (64 characters at
     most) and drops longer ones silently; the Python rule must refuse them first."""
-    longest = "share_" + "x" * 58
+    from src.agents.tool_composer.reason_codes import _DETAIL_KEY
+
+    prefixes, max_tail = re.fullmatch(
+        r"\(([a-z|]+)\)_\[a-z0-9_\]\{1,(\d+)\}", _DETAIL_KEY.pattern
+    ).groups()
+    longest = max(prefixes.split("|"), key=len) + "_" + "x" * int(max_tail)
     assert len(longest) == 64
     assert validate_details({longest: 1}) == {longest: 1}
     with pytest.raises(ValueError, match="details"):

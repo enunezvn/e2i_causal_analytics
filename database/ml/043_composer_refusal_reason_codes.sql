@@ -8,8 +8,9 @@
 -- report the most common refusal reason per tool.
 --
 -- WHAT IS STORED - AND WHAT IS NOT. Structure only, as ml/041 established. reason_code must
--- match the snake_case format; reason_details keeps at most 8 snake_case keys whose values are
--- JSON numbers or booleans, and drops everything else. NO TEXT: the error_message slot of the
+-- match the snake_case format; reason_details keeps at most 8 keys following the Python detail-key
+-- convention (n_/is_/has_/share_ prefixes) whose values are JSON numbers or booleans, and drops
+-- everything else. NO TEXT: the error_message slot of the
 -- step INSERT stays NULL - that NULL is ml/041's guard against storing caller text, and three
 -- tests pin it. The human sentence for a code is rendered at READ time from the Python
 -- catalogue (owner decision D1', 2026-09-12), so adding a code never needs a migration.
@@ -43,7 +44,7 @@ ALTER TABLE tool_performance ADD CONSTRAINT tool_performance_reason_code_format
 COMMENT ON COLUMN composition_steps.reason_code IS
     'Closed-set code for why the step produced no result (#2021). Rendered to a sentence at read time; no message is stored.';
 COMMENT ON COLUMN composition_steps.reason_details IS
-    'Numbers and booleans only, at most 8 snake_case keys, reduced by composer_structure_reason_details.';
+    'Numbers and booleans only, at most 8 keys following the Python detail-key convention (n_/is_/has_/share_ prefixes), reduced by composer_structure_reason_details.';
 COMMENT ON COLUMN tool_performance.reason_code IS
     'Mirror of composition_steps.reason_code, for get_tool_reliability.most_common_refusal_reason.';
 
@@ -62,9 +63,9 @@ AS $fn$
          FROM (SELECT e.key, e.value
                FROM jsonb_each(CASE WHEN jsonb_typeof(p_value) = 'object'
                                     THEN p_value ELSE '{}'::jsonb END) AS e
-               WHERE e.key ~ '^[a-z][a-z0-9_]{0,63}$'
+               WHERE e.key ~ '^(n|is|has|share)_[a-z0-9_]{1,58}$'
                  AND jsonb_typeof(e.value) IN ('number', 'boolean')
-               ORDER BY e.key
+               ORDER BY e.key COLLATE "C"
                LIMIT 8) AS k),
         '{}'::jsonb);
 $fn$;
@@ -236,7 +237,8 @@ RETURNS TABLE (
     p95_latency_ms double precision,
     last_executed_at timestamptz,
     most_common_health_error text,
-    most_common_refusal_reason text  -- 043
+    most_common_refusal_reason text,  -- 043
+    n_refused_coded bigint  -- 043
 )
 LANGUAGE plpgsql
 STABLE
@@ -282,6 +284,7 @@ BEGIN
             FILTER (WHERE p.counted AND p.outcome_class IN ('timeout', 'error')))::text
         ,(mode() WITHIN GROUP (ORDER BY p.reason_code)  -- 043
             FILTER (WHERE p.counted AND p.outcome_class IN ('refused', 'input_rejected')))::text
+        ,count(*) FILTER (WHERE p.counted AND p.outcome_class IN ('refused', 'input_rejected') AND p.reason_code IS NOT NULL)  -- 043
     FROM tool_registry tr
     LEFT JOIN perf p ON p.tool_id = tr.tool_id
     WHERE tr.deprecated_at IS NULL

@@ -98,10 +98,10 @@ def test_rollbacks_are_never_auto_applied_and_hold_no_transaction_control(name):
 
 def _select_expressions(sql: str, table: str) -> tuple:
     """The INSERT column list and the SELECT expressions feeding it, split at top-level commas."""
-    head = sql.split(f"INSERT INTO {table} (", 1)[1]
-    # Strip line comments first: a "-- 043" marker on the column list would otherwise stick to a name.
-    column_list = re.sub(r"--[^\n]*", "", head.split(")", 1)[0])
-    columns = [c.strip() for c in column_list.replace("\n", " ").split(",")]
+    # Strip line comments before any scan: a "-- 043" marker would stick to a column name, and an
+    # apostrophe in a comment would flip the quote state below.
+    head = re.sub(r"--[^\n]*", "", sql.split(f"INSERT INTO {table} (", 1)[1])
+    columns = [c.strip() for c in head.split(")", 1)[0].replace("\n", " ").split(",")]
     body = head.split("SELECT", 1)[1].split("FROM jsonb_array_elements(p_steps)", 1)[0]
     parts, depth, quoted, current = [], 0, False, []
     for ch in body:
@@ -131,19 +131,27 @@ def test_043_still_writes_no_text_into_error_message():
     assert "reason_code" in columns and "reason_details" in columns
 
 
+_REASON_CODES_PY = _pg.REPO_ROOT / "src/agents/tool_composer/reason_codes.py"
+
+
 def test_every_reason_code_passes_the_043_format_guard():
     """The SQL guard is a format, not a member list; every Python member must satisfy it.
+
+    All three copies are pinned: the composition_steps CHECK, the tool_performance CHECK, and
+    composer_record_steps' CASE. A CASE looser than the CHECK would raise on a bad code and lose
+    the whole step batch instead of storing NULL.
 
     Read by AST, not imported: importing the tool_composer package costs ~564 MB here.
     """
     path = ML / _REASON_CODES_MIGRATION
     if not path.exists():
         pytest.fail(f"{_REASON_CODES_MIGRATION} is missing")
-    guard = re.search(r"reason_code ~ '([^']+)'", path.read_text()).group(1)
-    source = (_pg.REPO_ROOT / "src/agents/tool_composer/reason_codes.py").read_text()
+    guards = re.findall(r"reason_code'?\)? ~ '([^']+)'", path.read_text())
+    assert len(guards) == 3, guards
+    assert len(set(guards)) == 1, guards
     enum = next(
         n
-        for n in ast.walk(ast.parse(source))
+        for n in ast.walk(ast.parse(_REASON_CODES_PY.read_text()))
         if isinstance(n, ast.ClassDef) and n.name == "ReasonCode"
     )
     values = [
@@ -152,4 +160,42 @@ def test_every_reason_code_passes_the_043_format_guard():
         if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
     ]
     assert len(values) >= 30
-    assert [v for v in values if not re.fullmatch(guard, v)] == []
+    assert [v for v in values if not re.fullmatch(guards[0], v)] == []
+
+
+def test_043_reducer_keeps_exactly_the_python_detail_keys():
+    """composer_structure_reason_details' key rule is Python's _DETAIL_KEY (a fullmatch), anchored."""
+    path = ML / _REASON_CODES_MIGRATION
+    if not path.exists():
+        pytest.fail(f"{_REASON_CODES_MIGRATION} is missing")
+    sql_keys = re.findall(r"e\.key ~ '([^']+)'", path.read_text())
+    assert len(sql_keys) == 1, sql_keys
+    python_key = next(
+        n.value.args[0].value
+        for n in ast.walk(ast.parse(_REASON_CODES_PY.read_text()))
+        if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "_DETAIL_KEY" for t in n.targets)
+    )
+    assert sql_keys[0] == f"^{python_key}$"
+
+
+def _function_text(sql: str, name: str) -> str:
+    """From ``CREATE OR REPLACE FUNCTION <name>(`` through the line starting ``$fn$;``."""
+    start = sql.index(f"CREATE OR REPLACE FUNCTION {name}(")
+    end = sql.index("\n$fn$;", start) + len("\n$fn$;")
+    return sql[start:end]
+
+
+@pytest.mark.parametrize("name", ["composer_record_steps", "get_tool_reliability"])
+def test_rollback_043_restores_041_verbatim(name):
+    path = ML / "ml" / "rollback_043.sql"
+    if not path.exists():
+        pytest.fail("rollback_043.sql is missing")
+    m041 = (ML / "ml/041_composer_learning_loop_recording.sql").read_text()
+    rollback = path.read_text()
+    assert _function_text(rollback, name) == _function_text(m041, name)
+    for statement in (
+        r"CREATE VIEW v_tool_reliability AS\n[^\n]*\n",
+        r"COMMENT ON VIEW v_tool_reliability IS\n[^\n]*\n",
+    ):
+        assert re.search(statement, m041).group(0) in rollback
