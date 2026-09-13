@@ -62,7 +62,14 @@ def _lines(p: Path) -> int:
 
 
 def _all_py() -> list[Path]:
-    return sorted(p for p in SRC.rglob("*.py") if "__pycache__" not in p.parts)
+    assert SRC.is_dir(), SRC
+    files = sorted(p for p in SRC.rglob("*.py") if "__pycache__" not in p.parts)
+    # src/ holds ~1,000 .py files today (measured 2026-09-13). If REPO/SRC ever
+    # resolves to the wrong place, rglob silently returns few or zero files and
+    # the offenders test below passes vacuously with nothing scanned. This floor
+    # is far below the real count but far above zero, so a broken path fails loud.
+    assert len(files) >= 200, f"only {len(files)} .py files under {SRC} — path resolution broke"
+    return files
 
 
 def test_no_unpinned_file_exceeds_limit():
@@ -79,9 +86,10 @@ def test_no_unpinned_file_exceeds_limit():
 
 @pytest.mark.parametrize("rel,pin", sorted(ALLOWLIST.items()))
 def test_pinned_file_has_not_grown_and_pin_is_current(rel, pin):
+    assert rel.startswith("src/"), f"{rel}: pins must point under src/"
     p = REPO / rel
     assert p.exists(), f"{rel} is pinned but missing — delete its pin"
     n = _lines(p)
     assert n <= pin, f"{rel} grew to {n} lines (pin {pin}); shrink it, do not raise the pin"
-    assert n == pin, f"{rel} is {n} lines but pinned at {pin}; lower the pin to {n}"
     assert n > LIMIT, f"{rel} is under {LIMIT}; delete its pin"
+    assert n == pin, f"{rel} is {n} lines but pinned at {pin}; lower the pin to {n}"
