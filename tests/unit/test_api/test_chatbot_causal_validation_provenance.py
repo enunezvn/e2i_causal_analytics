@@ -236,6 +236,7 @@ def test_summarize_unknown_gate_is_unknown_never_proceed(token):
     summary = _summarize_refutation_rows(rows)
     assert summary["gate_decision"] == "unknown"
     assert summary["gate_unreadable_rows"] == 2
+    assert "2 of 2" in summary["note"]
 
 
 @pytest.mark.unit
