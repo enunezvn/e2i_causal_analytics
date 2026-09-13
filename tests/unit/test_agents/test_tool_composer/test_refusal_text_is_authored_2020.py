@@ -365,7 +365,9 @@ def test_targeted_effect_passes_the_authored_estimator_text_through(monkeypatch,
         kept=["counterfactual_simulator: target-region inference failed", "No effect is returned."],
         library_text=SENTINEL,
     )
-    assert caught.value.reason_code is ReasonCode.EFFECT_NOT_ESTIMABLE
+    # #2021 9b: the estimator's cause maps to its own code, and its counts ride along.
+    assert caught.value.reason_code is ReasonCode.ESTIMATOR_FAILED
+    assert caught.value.details["is_target_inference"] is True
 
 
 def _failed_uplift(self, *_args, **_kwargs) -> UpliftResult:
@@ -471,7 +473,9 @@ ALLOWED: Dict[AllowKey, str] = {
     ),
     ("tool_registrations.py", "_targeted_effect", ("EffectDataUnavailable",)): (
         "estimate_cohort_effect raises EffectDataUnavailable with authored text only; its econml "
-        "wraps log the library error instead (pinned above)"
+        "wraps log the library error instead (pinned above). The same raise also reads exc.cause "
+        "(a closed EffectCause, mapped to a code) and exc.details (counts and flags, re-validated "
+        "by ToolRefusalError), neither of which carries text (#2021 9b)"
     ),
     ("tool_registrations.py", "power_calculator", ("PowerCalculationError",)): (
         "power_analysis_lib raises PowerCalculationError with authored text, pinned by "

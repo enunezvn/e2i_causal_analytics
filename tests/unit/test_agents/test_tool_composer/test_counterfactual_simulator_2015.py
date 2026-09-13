@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 
 import numpy as np
 import pandas as pd
@@ -222,9 +223,15 @@ def test_a_target_region_the_cohort_does_not_cover_is_refused(engine):
     frame = _frame(no_west)
     with pytest.raises(ToolRefusalError, match="west") as caught:
         tr._targeted_effect(frame, ["west"])
-    # #2021 review: EffectDataUnavailable covers several causes (no contrast here), not
-    # only too few rows.
-    assert caught.value.reason_code is ReasonCode.EFFECT_NOT_ESTIMABLE
+    # #2021 9b: the estimator names the cause, so the code says the data does not cover the
+    # region rather than that no effect could be estimated at all.
+    assert caught.value.reason_code is ReasonCode.COVERAGE_GAP
+    assert caught.value.details == {
+        "n_target_regions": 1,
+        "n_target_regions_absent": 1,
+        "n_target_regions_one_arm": 0,
+        "n_cohort_regions": 3,
+    }
     run = SimulationEngine(
         population=_population(), effect_provider=no_west, effect_estimator=CohortCausalEstimator()
     ).simulate(InterventionConfig(intervention_type="email_campaign"), use_cache=False)
@@ -234,6 +241,23 @@ def test_a_target_region_the_cohort_does_not_cover_is_refused(engine):
     )
     assert "west" not in out.region_effects
     assert set(out.region_effects) == {"northeast", "south", "midwest"}
+
+
+def test_a_target_region_with_one_arm_is_a_coverage_gap_with_its_own_count():
+    """#2021 9b: a region present in the cohort but with treated rows only shares the code of an
+    absent region; the details tell the two apart."""
+    one_arm = _cohort()
+    one_arm.loc[one_arm["region"] == "west", "email_campaign_count"] = 100.0
+    frame = _frame(CohortEffectDataProvider(one_arm))
+    with pytest.raises(ToolRefusalError, match="west") as caught:
+        tr._targeted_effect(frame, ["west"])
+    assert caught.value.reason_code is ReasonCode.COVERAGE_GAP
+    assert caught.value.details == {
+        "n_target_regions": 1,
+        "n_target_regions_absent": 0,
+        "n_target_regions_one_arm": 1,
+        "n_cohort_regions": 4,
+    }
 
 
 def test_the_assumptions_name_the_contrast_the_estimate_answers(whole_population, provider):
@@ -301,18 +325,65 @@ async def test_an_unreachable_database_is_not_a_refusal():
     assert "connect" in f"{type(cohort_load.value).__name__} {cohort_load.value}".lower()
 
 
-def test_an_unusable_cohort_is_refused_as_an_effect_that_cannot_be_estimated(monkeypatch):
-    """#2021 review: ``cohort_provider_from_frame`` returns ``None`` for a missing column,
-    too few rows or an unestimable intervention alike, so the code names the outcome."""
+@pytest.mark.parametrize(
+    ("build", "intervention", "code", "details"),
+    [
+        pytest.param(
+            pd.DataFrame, "email_campaign", ReasonCode.NO_USABLE_ROWS, {"n_rows": 0}, id="empty"
+        ),
+        pytest.param(
+            lambda: _cohort().drop(columns="conversion_rate"),
+            "email_campaign",
+            ReasonCode.MISSING_REQUIRED_COLUMN,
+            {
+                "n_rows": 1200,
+                "has_treatment_column": True,
+                "has_outcome_column": False,
+                "has_region_column": True,
+                "n_missing_confounder_columns": 0,
+            },
+            id="missing-column",
+        ),
+        pytest.param(
+            lambda: _cohort().head(100),
+            "email_campaign",
+            ReasonCode.INSUFFICIENT_SAMPLE,
+            {
+                "n_rows": 100,
+                "n_usable_rows": 100,
+                "n_min_usable_rows": 500,
+                "n_null_treatment_rows": 0,
+                "n_null_outcome_rows": 0,
+                "n_null_region_rows": 0,
+                "n_null_confounder_rows": 0,
+            },
+            id="too-few-rows",
+        ),
+        # Unreachable from the tool (_counterfactual_inputs admits catalog values only); the
+        # loader still names it, and it keeps the generic code.
+        pytest.param(
+            _cohort, "not_a_lever", ReasonCode.EFFECT_NOT_ESTIMABLE, {}, id="not-identified"
+        ),
+    ],
+)
+def test_an_unusable_cohort_is_refused_as_an_effect_that_cannot_be_estimated(
+    monkeypatch, caplog, build, intervention, code, details
+):
+    """#2021 9b: ``assess_cohort_frame`` names why the cohort is unusable, so the code does too.
+    The message is the same for every cause; the code and details carry the difference."""
     from src.digital_twin.effect import cohort_loader
 
-    async def too_small(client, brand):
-        return _cohort().head(100)
+    async def load(client, brand):
+        return build()
 
-    monkeypatch.setattr(cohort_loader, "load_cohort_frame", too_small)
+    monkeypatch.setattr(cohort_loader, "load_cohort_frame", load)
+    caplog.set_level(logging.ERROR, logger="src.agents.tool_composer.errors")
     with pytest.raises(ToolRefusalError, match="no effect data") as caught:
-        asyncio.run(tr._load_cohort_provider(None, "email_campaign", "Kisqali"))
-    assert caught.value.reason_code is ReasonCode.EFFECT_NOT_ESTIMABLE
+        asyncio.run(tr._load_cohort_provider(None, intervention, "Kisqali"))
+    assert caught.value.reason_code is code
+    assert caught.value.details == details
+    # A details payload the refusal rejected would be dropped with an ERROR log.
+    assert not [r for r in caplog.records if r.name == "src.agents.tool_composer.errors"]
 
 
 def test_the_route_loader_still_degrades_to_none(provider):

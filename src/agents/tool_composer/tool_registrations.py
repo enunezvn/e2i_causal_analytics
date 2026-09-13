@@ -3811,23 +3811,24 @@ async def _load_cohort_provider(client: Any, intervention_type: str, brand_value
     turns a database error into ``None``: here an unreachable database must propagate (the
     executor retries it) and only an unusable cohort is refused.
     """
-    from src.digital_twin.effect.cohort_loader import (
-        cohort_provider_from_frame,
-        load_cohort_frame,
-    )
+    from src.digital_twin.effect.cohort_loader import assess_cohort_frame, load_cohort_frame
 
     cohort = await load_cohort_frame(client, brand_value)
-    provider = cohort_provider_from_frame(cohort, intervention_type)
-    if provider is None:
+    usability = assess_cohort_frame(cohort, intervention_type)
+    if usability.provider is None:
+        # One message for every cause (it is true for each); the code and details say which.
         raise ToolRefusalError(
             f"counterfactual_simulator: no effect data for intervention {intervention_type!r} "
             f"and brand {brand_value!r} — the brand's per-HCP cohort ({len(cohort)} rows) does "
             "not carry enough usable rows for this intervention's treatment channel, outcome, "
             "region and confounders, so a causal effect cannot be estimated. No effect is "
             "returned.",
-            reason_code=ReasonCode.EFFECT_NOT_ESTIMABLE,
+            reason_code=_effect_reason_code(
+                usability.cause, fallback=ReasonCode.EFFECT_NOT_ESTIMABLE
+            ),
+            details=dict(usability.details),
         )
-    return provider
+    return usability.provider
 
 
 def _counterfactual_inputs(
@@ -3945,7 +3946,8 @@ def _targeted_effect(frame: Any, regions: List[str]) -> _TargetedEffect:
     except EffectDataUnavailable as exc:
         raise ToolRefusalError(
             f"counterfactual_simulator: {exc} No effect is returned.",
-            reason_code=ReasonCode.EFFECT_NOT_ESTIMABLE,
+            reason_code=_effect_reason_code(exc.cause, fallback=ReasonCode.EFFECT_NOT_ESTIMABLE),
+            details=exc.details,
         ) from exc
     assert fit.target_ate is not None
     assert fit.target_ci_lower is not None and fit.target_ci_upper is not None
