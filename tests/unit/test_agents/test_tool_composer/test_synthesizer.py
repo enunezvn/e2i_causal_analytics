@@ -410,7 +410,7 @@ class TestFallbackResponse:
         for leak in self._PROVIDER_LEAKS:
             assert leak not in visible, f"{leak!r} reached the fallback response"
         assert response.caveats == [self._FALLBACK_CAVEAT]
-        # The raw text is withheld, not lost: logged once, at WARNING.
+        # The raw text is withheld, not lost: logged once, at ERROR.
         hits = [r for r in caplog.records if "org-SENTINEL2020" in r.getMessage()]
         assert len(hits) == 1, f"expected the raw text logged once, got {len(hits)}"
         # Only the user surfaces are redacted: the log stays an ERROR (Sentry's event level) with
