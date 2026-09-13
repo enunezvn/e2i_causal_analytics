@@ -4,7 +4,8 @@
 -- AFTER the code revert. The order is not a preference: this rollback drops
 -- composition_steps.reason_code and composition_steps.reason_details, and the deployed
 -- observability service selects both, so applying it while that code is still running makes
--- GET /admin/observability/tool-composer return 500 on every load. Revert the code first, then:
+-- GET /admin/observability/tool-composer return 500 on any load whose window contains a failed
+-- composition. Revert the code first, then:
 --
 --   docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
 --       --single-transaction < database/ml/rollback_043.sql

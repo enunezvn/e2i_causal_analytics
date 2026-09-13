@@ -75,22 +75,15 @@ function StatCard({ label, value }: { label: string; value: string }) {
 
 // The numeric details recorded with a refusal, as "(key=value, …)": null when there are none.
 // Two refusals under one code share a sentence, so these are what tell them apart (#2050). Keys
-// are sorted so the same details always read the same way.
+// are sorted so the same details always read the same way. Values render exactly and locale-free
+// (never fmtInt): under de-DE a grouped 12345 reads "12.345", a decimal, and en-US's "," group
+// separator collides with the ", " pair join.
 function detailsSuffix(details: Record<string, number | boolean> | undefined): string | null {
   const keys = Object.keys(details ?? {}).sort();
   if (!details || keys.length === 0) {
     return null;
   }
-  const parts = keys.map((key) => {
-    const value = details[key];
-    const shown =
-      typeof value === 'boolean'
-        ? String(value)
-        : Number.isInteger(value)
-          ? fmtInt(value)
-          : String(value);
-    return `${key}=${shown}`;
-  });
+  const parts = keys.map((key) => `${key}=${String(details[key])}`);
   return `(${parts.join(', ')})`;
 }
 
@@ -248,7 +241,8 @@ export function ToolComposerSection({ days }: { days: number }) {
                   {failure.failed_phase ? ` in ${failure.failed_phase}` : ''}
                   {failure.error_type ? ` (${failure.error_type})` : ''}
                 </p>
-                <p className="text-[var(--color-muted-foreground)]">
+                {/* break-words: a long detail key has no break opportunity and would overflow. */}
+                <p className="break-words text-[var(--color-muted-foreground)]">
                   <StepClasses failure={failure} />
                 </p>
                 <p

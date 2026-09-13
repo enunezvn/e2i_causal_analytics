@@ -492,14 +492,21 @@ describe('ToolComposerSection', () => {
     expect(first).not.toBe(second);
   });
 
-  it('formats details with sorted keys, grouped integers, plain decimals and true/false', () => {
+  it('formats details with sorted keys, exact locale-free numbers and true/false', () => {
+    // An operator diagnostic: no group separator (de-DE would render 12345 as "12.345", which
+    // reads as a decimal, and en-US's "," collides with the pair join) and no rounding.
     mockData({
       ...payload,
       recent_failures: withFirstFailureSteps([
         {
           reason_code: 'coverage_gap',
           reason: 'the data does not cover everything the question asked about',
-          reason_details: { share_kept: 0.25, n_rows: 12345, is_scoped: true, has_outcome: false },
+          reason_details: {
+            share_kept: 0.6666666666666666,
+            n_rows: 12345,
+            is_scoped: true,
+            has_outcome: false,
+          },
         },
         {},
       ]),
@@ -510,8 +517,27 @@ describe('ToolComposerSection', () => {
     const [first] = stepTexts(screen.getByTestId('recent-failure-comp_failed'));
     expect(first).toBe(
       'gap_calculator: error — the data does not cover everything the question asked about' +
-        ' (has_outcome=false, is_scoped=true, n_rows=12,345, share_kept=0.25)',
+        ' (has_outcome=false, is_scoped=true, n_rows=12345, share_kept=0.6666666666666666)',
     );
+  });
+
+  it('lets a long unbroken detail key wrap instead of overflowing the failure card', () => {
+    mockData({
+      ...payload,
+      recent_failures: withFirstFailureSteps([
+        {
+          reason_code: 'coverage_gap',
+          reason: 'the data does not cover everything the question asked about',
+          reason_details: { n_rows_dropped_for_missing_outcome_or_treatment_or_segment: 7 },
+        },
+        {},
+      ]),
+    });
+
+    render(<ToolComposerSection days={30} />);
+
+    const stepLine = screen.getByTestId('recent-failure-comp_failed').querySelectorAll('p')[1];
+    expect(stepLine).toHaveClass('break-words');
   });
 
   it('leaves a step class unchanged when its details are an empty mapping', () => {
