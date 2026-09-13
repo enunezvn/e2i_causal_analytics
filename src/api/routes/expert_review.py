@@ -49,8 +49,8 @@ from src.api.schemas.expert_review import (
     ReviewRecord,
     ReviewSummaryResponse,
     ReviewVersion,
+    parse_json_column,
 )
-from src.api.schemas.expert_review import _json_string_to_dict as _snapshot_dict
 from src.causal_engine.dag_hash import get_dag_changes
 
 if TYPE_CHECKING:
@@ -140,19 +140,61 @@ def _validate_review_row(model: Type[_ReviewModelT], row: Dict[str, Any]) -> _Re
         ) from exc
 
 
-def _changes_between(prev_snapshot: Any, cur_snapshot: Any) -> DagChanges:
+def _snapshot_or_500(raw: Any, review_id: Any) -> Optional[Dict[str, Any]]:
+    """A stored ``dag_structure_json`` as a dict, ``None`` when the column is NULL.
+
+    The raw value is sometimes a ``json.dumps`` string (the repo's write path),
+    so it goes through ``parse_json_column`` -- the schema's single definition of
+    how this column is read.
+
+    ``expert_reviews.dag_structure_json`` carries NO CHECK constraint (migration
+    137 added none; only the versions table's column is constrained to
+    object-or-NULL), so a stored ARRAY or number reaches here intact and
+    ``get_dag_changes`` would call ``.get`` on it -- an ``AttributeError``, which
+    surfaces as a bare 500 with no detail. Raise the same honest 500
+    ``_validate_review_row`` raises instead: the store answered fine, the ROW is
+    malformed, and the message names the row and the column so an operator can
+    find it.
+    """
+    if raw is None:
+        return None
+    parsed = parse_json_column(raw)
+    if not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"expert review {review_id} has a malformed dag_structure_json: "
+                "expected a JSON object"
+            ),
+        )
+    return parsed
+
+
+def _changes_between(
+    prev_snapshot: Any,
+    cur_snapshot: Any,
+    *,
+    prev_id: Any = None,
+    cur_id: Any = None,
+) -> DagChanges:
     """The structural delta between two stored snapshots (#1991 debt 3).
 
-    Both snapshots are the RAW column value, which is object-or-NULL by mig 141's
-    CHECK constraint and, on the review table's own column, sometimes a
-    ``json.dumps`` string (the repo's write path) -- ``_snapshot_dict`` is the
-    schema's single definition of that parse, reused here rather than duplicated.
-    A NULL becomes ``{}``: the delta against "no recorded structure" is
-    everything-added, which is what the timeline should show, not a crash.
+    A NULL snapshot diffs as ``{}``, so the delta against "no recorded
+    structure" is everything-added -- what the timeline should show, not a
+    crash. Its HASH, though, is reported as None rather than the sha256 of the
+    empty graph: that digest is a real-looking 64-character value matching no
+    row in the database, and an operator comparing it to the version's stored
+    ``dag_version_hash`` would be reading a fabricated one. No recorded
+    structure has no hash.
     """
-    prev = _snapshot_dict(prev_snapshot) or {}
-    cur = _snapshot_dict(cur_snapshot) or {}
-    return DagChanges(**get_dag_changes(prev, cur))
+    prev = _snapshot_or_500(prev_snapshot, prev_id)
+    cur = _snapshot_or_500(cur_snapshot, cur_id)
+    changes = get_dag_changes(prev or {}, cur or {})
+    if prev is None:
+        changes["old_hash"] = None
+    if cur is None:
+        changes["new_hash"] = None
+    return DagChanges(**changes)
 
 
 router = APIRouter(
@@ -659,6 +701,8 @@ async def get_expert_review(
             else _changes_between(
                 version_rows[index - 1].get("dag_structure_json"),
                 version_row.get("dag_structure_json"),
+                prev_id=version_rows[index - 1].get("review_id"),
+                cur_id=version_row.get("review_id"),
             )
         )
         versions.append(_validate_review_row(ReviewVersion, {**version_row, "changes": changes}))
@@ -673,6 +717,8 @@ async def get_expert_review(
             else _changes_between(
                 history_rows[index + 1].get("dag_structure_json"),
                 history_row.get("dag_structure_json"),
+                prev_id=history_rows[index + 1].get("review_id"),
+                cur_id=history_row.get("review_id"),
             )
         )
         history.append(

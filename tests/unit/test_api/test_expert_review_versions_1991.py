@@ -28,6 +28,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes.expert_review as route_mod
+from src.api.errors import SAFE_503_DETAIL_PREFIX
 
 RID = "1c8f3d6a-5b7e-4c21-9f0a-2d4e6b8a0c13"
 RID_OLDER = "7a2b9c40-3d1e-4f65-8a7b-0c9d2e1f3a58"
@@ -84,15 +85,6 @@ ROW_OLDER: Dict[str, Any] = {
     "approval_status": "approved",
     "dag_structure_json": SNAP_V1,
     "created_at": "2026-07-01T10:00:00+00:00",
-}
-
-# A resolved review of a DIFFERENT estimand: it must never reach this
-# estimand's history (the key, not the brand, is the identity).
-ROW_OTHER_ESTIMAND: Dict[str, Any] = {
-    **ROW,
-    "review_id": "9e8d7c6b-5a49-4382-b1c0-d9e8f7a6b5c4",
-    "estimand_key": "b:t:other",
-    "approval_status": "superseded",
 }
 
 ROW_PRE140: Dict[str, Any] = {k: v for k, v in ROW.items() if k != "estimand_key"}
@@ -239,6 +231,12 @@ def test_a_null_snapshot_diffs_against_an_empty_graph(monkeypatch):
     assert changes["edges_added"] == [["T", "Y"], ["W", "T"]]
     assert changes["adjustment_sets_added"] == [["W"]]
     assert changes["is_changed"] is True
+    # A version with NO recorded structure has NO hash. Hashing the ``{}`` the
+    # diff falls back to would emit a real-looking sha256 that matches nothing
+    # in the database -- an operator comparing it to the row's stored
+    # ``dag_version_hash`` would be reading a fabricated value.
+    assert changes["old_hash"] is None
+    assert isinstance(changes["new_hash"], str) and len(changes["new_hash"]) == 64
 
 
 @pytest.mark.unit
@@ -311,3 +309,39 @@ def test_summary_carries_the_superseded_count(monkeypatch):
     assert body["superseded"] == 38
     assert body["pending"] == 3 and body["approved"] == 7
     assert body["rejected"] == 2 and body["expired"] == 1 and body["expiring_soon"] == 4
+
+
+@pytest.mark.unit
+def test_pending_versions_store_failure_is_a_safe_503(monkeypatch):
+    """The queue's SECOND read has its own outage path. The fake's other
+    readers answer normally, so only a failing ``get_versions_for_reviews``
+    can produce this 503 -- a queue served with every row at "version 1"
+    would be a plausible-wrong page during an outage."""
+    repo = _Repo(pending=[ROW])
+
+    async def _boom(review_ids):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(repo, "get_versions_for_reviews", _boom)
+    r = _client(monkeypatch, repo).get("/api/expert-reviews/pending")
+    assert r.status_code == 503, r.text
+    detail = r.json()["detail"]
+    assert detail.startswith(SAFE_503_DETAIL_PREFIX)
+    assert "Expert-review store unavailable" in detail
+    assert "reviews" not in r.json(), "no partial queue may ride an error response"
+
+
+@pytest.mark.unit
+def test_a_non_object_snapshot_is_a_named_500_not_an_unhandled_crash(monkeypatch):
+    """``expert_reviews.dag_structure_json`` carries NO CHECK constraint (mig 137
+    added none), so a stored ARRAY reaches the diff. ``get_dag_changes`` calls
+    ``.get`` on it -- an AttributeError, which is a bare 500 with no detail. The
+    guard makes it the same honest 500 ``_validate_review_row`` raises: it names
+    the review id and the column, so an operator can find the bad row."""
+    bad_older = {**ROW_OLDER, "dag_structure_json": ["T", "Y"]}
+    repo = _detail_repo(estimand_history=[ROW, bad_older])
+    r = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}")
+    assert r.status_code == 500, r.text
+    detail = str(r.json()["detail"])
+    assert RID_OLDER in detail
+    assert "dag_structure_json" in detail

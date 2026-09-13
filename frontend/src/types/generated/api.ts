@@ -16701,6 +16701,7 @@ export interface components {
             } | null;
             /** Supersedes Review Id */
             supersedes_review_id?: string | null;
+            /** @description Structural delta between this review's snapshot and that of the next-OLDER review of the same estimand. Populated on ``history`` entries only: it is None on the top-level ``review`` (validated from the stored row, which has no predecessor in scope) and on the OLDEST history entry (nothing to diff against). Computed by the detail route, never a stored column. */
             changes_from_previous?: components["schemas"]["DagChanges"] | null;
         };
         /**

@@ -206,7 +206,7 @@ async def test_non_canonical_id_reaches_the_store_canonical(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fail", ["row", "history"])
+@pytest.mark.parametrize("fail", ["row", "history", "versions"])
 async def test_store_failure_is_503_never_an_empty_200(monkeypatch, fail):
     _install(monkeypatch, _Repo(ROW, history=[ROW], fail=fail))
     with pytest.raises(HTTPException) as ei:

@@ -61,10 +61,19 @@ class DagStructureSnapshot(BaseModel):
     dag_version_hash: Optional[str] = None
 
 
-def _json_string_to_dict(value: Any) -> Any:
+def parse_json_column(value: Any) -> Any:
     """Shared ``mode="before"`` body for JSONB columns the repo writes as
     ``json.dumps`` strings: parse a string, keep only a dict, pass anything
-    else through untouched."""
+    else through untouched.
+
+    Public because ``routes/expert_review.py`` reuses it on the RAW column value
+    before diffing two snapshots -- one definition of "how this column is read",
+    rather than a second copy in the route.
+
+    A non-string is returned AS IS, so a caller that needs a dict must check:
+    ``expert_reviews.dag_structure_json`` carries no CHECK constraint, and a
+    stored array reaches the caller unchanged.
+    """
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
@@ -130,7 +139,7 @@ class ReviewVersion(BaseModel):
     @field_validator("dag_structure_json", mode="before")
     @classmethod
     def _parse_json_string(cls, value: Any) -> Any:
-        return _json_string_to_dict(value)
+        return parse_json_column(value)
 
 
 class PendingReviewItem(BaseModel):
@@ -171,7 +180,7 @@ class PendingReviewItem(BaseModel):
     @field_validator("dag_structure_json", "agent_assessment_json", mode="before")
     @classmethod
     def _parse_json_string(cls, value: Any) -> Any:
-        return _json_string_to_dict(value)
+        return parse_json_column(value)
 
 
 class ReviewRecord(PendingReviewItem):
@@ -201,16 +210,22 @@ class ReviewRecord(PendingReviewItem):
     checklist_json: Optional[Dict[str, Any]] = None
     comments_json: Optional[Dict[str, Any]] = None
     supersedes_review_id: Optional[str] = None
-    #: The delta between THIS review's snapshot and that of the next-OLDER
-    #: review of the same estimand (#1991 debt 3). None for the oldest review in
-    #: the history, which has no predecessor. Set by the detail route, not a
-    #: column.
-    changes_from_previous: Optional[DagChanges] = None
+    changes_from_previous: Optional[DagChanges] = Field(
+        default=None,
+        description=(
+            "Structural delta between this review's snapshot and that of the "
+            "next-OLDER review of the same estimand. Populated on ``history`` "
+            "entries only: it is None on the top-level ``review`` (validated "
+            "from the stored row, which has no predecessor in scope) and on the "
+            "OLDEST history entry (nothing to diff against). Computed by the "
+            "detail route, never a stored column."
+        ),
+    )
 
     @field_validator("checklist_json", "comments_json", mode="before")
     @classmethod
     def _parse_resolution_json(cls, value: Any) -> Any:
-        return _json_string_to_dict(value)
+        return parse_json_column(value)
 
 
 class ExpertReviewDetailResponse(BaseModel):
