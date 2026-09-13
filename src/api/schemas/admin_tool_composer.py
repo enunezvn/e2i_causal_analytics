@@ -6,7 +6,7 @@ is a separate, labelled field — the two are never merged, so a declared number
 as a measurement.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -61,7 +61,10 @@ class ToolReliabilityRow(BaseModel):
     most_common_health_error: Optional[str] = None
     most_common_refusal_reason: Optional[str] = Field(
         default=None,
-        description="Most common closed reason code among this tool's refusals in the window (#2021)",
+        description=(
+            "Most common closed reason code among this tool's CODED refusals in the window (#2021);"
+            " uncoded refusals (NULL codes) are ignored, so read it with n_refused_coded"
+        ),
     )
     most_common_refusal_sentence: Optional[str] = Field(
         default=None,
@@ -72,6 +75,24 @@ class ToolReliabilityRow(BaseModel):
         description="Refusals in the window that carry a reason code (#2021); pre-043 refusals are uncoded",
     )
     last_executed_at: Optional[str] = None
+
+
+class StepClass(BaseModel):
+    """One step that did not succeed: its class and, when recorded, why."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_number: Optional[int] = None
+    tool_name: Optional[str] = None
+    outcome_class: Optional[str] = None
+    reason_code: Optional[str] = Field(
+        default=None,
+        description="The step's closed reason code (#2021); null for a step recorded without one",
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="The catalogue sentence for a known code; null for an uncoded step or a code this build does not know",
+    )
 
 
 class RecentFailure(BaseModel):
@@ -89,7 +110,7 @@ class RecentFailure(BaseModel):
     entry_point: Optional[str] = None
     plan_source: Optional[str] = None
     query_preview: str = Field(default="", description="Redacted, at most 100 characters")
-    step_classes: List[Dict[str, Any]] = Field(
+    step_classes: List[StepClass] = Field(
         default_factory=list,
         description="The steps that did not succeed, with their classes, reason codes and rendered reasons",
     )

@@ -411,6 +411,14 @@ def test_a_tool_row_carries_how_many_refusals_the_code_was_drawn_from():
     assert tool["n_refused_coded"] == 3
 
 
+def test_an_unknown_coded_refusal_count_stays_null_not_zero():
+    """A database without ml/043 cannot say how many refusals were coded; 0 would claim none were."""
+    verdicts = {"causal_effect_estimator": _verdict(n_refused_coded=None)}
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert tool["n_refused_coded"] is None
+
+
 def test_an_unknown_code_shows_the_code_and_no_invented_sentence():
     verdicts = {
         "causal_effect_estimator": _verdict(
@@ -445,6 +453,27 @@ def test_a_failed_step_class_carries_its_code_and_rendered_reason():
             "reason": "the data does not cover everything the question asked about",
         }
     ]
+
+
+def _step_classes_for(step: Dict[str, Any]) -> List[Dict[str, Any]]:
+    failed = _episode(status="FAILED", outcome="failed")
+    steps = [{"episode_id": failed["episode_id"], "step_number": 0, **step}]
+    service = _service({"composer_episodes": [failed], "composition_steps": steps})
+    (row,) = service.overview(30)["recent_failures"]
+    return row["step_classes"]
+
+
+def test_an_uncoded_step_has_no_code_and_no_reason():
+    """Every step recorded before ml/043 is uncoded: not recorded, never the tool-failure sentence."""
+    (step,) = _step_classes_for({"tool_name": "gap_calculator", "outcome_class": "refused"})
+    assert step["reason_code"] is None and step["reason"] is None
+
+
+def test_a_step_with_an_unknown_code_keeps_the_code_and_invents_no_reason():
+    (step,) = _step_classes_for(
+        {"tool_name": "gap_calculator", "outcome_class": "refused", "reason_code": "not_a_code"}
+    )
+    assert step["reason_code"] == "not_a_code" and step["reason"] is None
 
 
 def test_the_service_module_does_not_import_the_tool_composer_package():

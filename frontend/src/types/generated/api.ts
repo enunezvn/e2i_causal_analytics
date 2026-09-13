@@ -16047,9 +16047,7 @@ export interface components {
              * Step Classes
              * @description The steps that did not succeed, with their classes, reason codes and rendered reasons
              */
-            step_classes?: {
-                [key: string]: unknown;
-            }[];
+            step_classes?: components["schemas"]["StepClass"][];
             /** Last Activity At */
             last_activity_at?: string | null;
             /** Total Latency Ms */
@@ -18729,6 +18727,28 @@ export interface components {
          */
         SortOrder: "asc" | "desc";
         /**
+         * StepClass
+         * @description One step that did not succeed: its class and, when recorded, why.
+         */
+        StepClass: {
+            /** Step Number */
+            step_number?: number | null;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Outcome Class */
+            outcome_class?: string | null;
+            /**
+             * Reason Code
+             * @description The step's closed reason code (#2021); null for a step recorded without one
+             */
+            reason_code?: string | null;
+            /**
+             * Reason
+             * @description The catalogue sentence for a known code; null for an uncoded step or a code this build does not know
+             */
+            reason?: string | null;
+        };
+        /**
          * StoppingDecision
          * @description Interim analysis stopping decisions.
          * @enum {string}
@@ -18932,7 +18952,7 @@ export interface components {
             most_common_health_error?: string | null;
             /**
              * Most Common Refusal Reason
-             * @description Most common closed reason code among this tool's refusals in the window (#2021)
+             * @description Most common closed reason code among this tool's CODED refusals in the window (#2021); uncoded refusals (NULL codes) are ignored, so read it with n_refused_coded
              */
             most_common_refusal_reason?: string | null;
             /**

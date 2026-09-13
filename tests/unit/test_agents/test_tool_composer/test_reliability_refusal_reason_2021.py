@@ -31,3 +31,9 @@ def test_a_row_from_a_database_without_ml_043_reads_as_none():
     assert row.most_common_refusal_reason is None
     # Unknown, not zero: a pre-043 database cannot say how many refusals were coded.
     assert row.n_refused_coded is None
+
+
+def test_a_zero_coded_refusal_count_stays_zero_not_none():
+    """0 is a measurement (none of the refusals carried a code); None would say it is unknown."""
+    row = ToolReliability.from_row({"tool_name": "gap_calculator", **_COUNTS, "n_refused_coded": 0})
+    assert row.n_refused_coded == 0
