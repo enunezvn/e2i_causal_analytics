@@ -1350,9 +1350,11 @@ class TestReferenceContract1573:
         assert failed, "the failed step must appear in the synthesis context"
         assert "$dataset.cate_estimate" in (failed[0]["error"] or "")
 
-        # And the synthesizer's prompt formatter carries the same reason.
+        # And the synthesizer's prompt carries the same cause as its closed code. Since #2020 the
+        # planner's reference text is not trusted prompt text: it goes to the log.
         formatted = ResponseSynthesizer(llm_client=object())._format_results(synthesis_input)
-        assert "$dataset.cate_estimate" in formatted
+        assert "[reference_unresolvable]" in formatted
+        assert "$dataset.cate_estimate" not in formatted
 
     @pytest.mark.asyncio
     async def test_nested_dict_reference_still_degrades_to_none_f7(

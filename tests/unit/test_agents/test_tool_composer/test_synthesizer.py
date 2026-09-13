@@ -225,7 +225,10 @@ class TestResultFormatting:
         formatted = synthesizer._format_results(synthesis_input)
 
         assert "FAILED" in formatted
-        assert "Tool execution failed" in formatted
+        # #2020: an uncoded, non-tool-authored failure renders tool_error's canonical sentence;
+        # its raw text goes to the log, not the synthesis prompt.
+        assert "Error: the tool failed to complete [tool_error]" in formatted
+        assert "Tool execution failed" not in formatted
 
     def test_format_bounds_long_output_and_states_the_elision(
         self, mock_llm_client, sample_decomposition

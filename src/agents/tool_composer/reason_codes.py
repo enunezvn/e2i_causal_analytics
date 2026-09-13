@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import re
 from enum import StrEnum
-from typing import Dict, Mapping, Optional, Union
+from typing import Dict, Mapping, Optional, Tuple, Union
 
 
 class ReasonCode(StrEnum):
@@ -109,6 +109,41 @@ EXECUTOR_ASSIGNED = frozenset(
         ReasonCode.TOOL_NOT_REGISTERED,
     }
 )
+
+#: The only outcome classes a TOOL authors (#2020). The executor sets these two solely in the arm
+#: that catches ToolRefusalError / ToolInputError, and since #2021 always with a reason code.
+TOOL_AUTHORED_CLASSES = frozenset({"refused", "input_rejected"})
+
+
+def user_safe_failure_text(
+    outcome_class: Optional[str],
+    reason_code: Union[ReasonCode, str, None],
+    raw: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """What a failed step may say to a user or an LLM prompt (#2020), and what it withheld.
+
+    One rule, shared by the composer's fail-closed answer and the synthesis prompt so the two
+    cannot drift:
+
+    * verbatim only when the class is tool-authored, the code is a KNOWN member and the text is
+      non-empty (the refusal arm's constructor fails soft to tool_error, so an unknown code on an
+      authored class came from a foreign producer);
+    * otherwise ``"<canonical sentence> [<code>]"``, where an unknown or absent code renders as
+      tool_error in both the sentence and the tag (``reason_code`` is a plain string on the model);
+    * ``(None, None)`` when there is no text and no code.
+
+    Returns ``(fragment, withheld)``: ``withheld`` is the raw text the fragment replaced, else
+    ``None``. Pure — no prefix and no logging; each caller prefixes, and logs ``withheld``.
+    """
+    text = str(raw or "").strip()
+    if not text and not reason_code:
+        return None, None
+    known = reason_code in ReasonCode
+    if outcome_class in TOOL_AUTHORED_CLASSES and text and known:
+        return text, None
+    code = str(reason_code) if known else ReasonCode.TOOL_ERROR.value
+    return f"{canonical_sentence(code)} [{code}]", text or None
+
 
 # Bounds on the structured ``details`` payload. It is persisted, so it must stay
 # structure: counts, shares and flags under prefixed snake_case keys. No strings at any

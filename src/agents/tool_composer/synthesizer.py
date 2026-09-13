@@ -22,6 +22,7 @@ from .models.composition_models import (
     ExecutionTrace,
     SynthesisInput,
 )
+from .reason_codes import user_safe_failure_text
 
 logger = logging.getLogger(__name__)
 
@@ -421,8 +422,22 @@ class ResponseSynthesizer:
                 # fields because every tool declares its bulky containers first.
                 output_str = project_tool_output(result.output.result, self.output_budget_chars)
                 lines.append(f"Output:\n{output_str}")
-            elif result.output.error:
-                lines.append(f"Error: {result.output.error}")
+            else:
+                # #2020: the prompt gets the same text the fail-closed answer would. Raw library
+                # text reaching the synthesis LLM can reach the answer, so it goes to the log.
+                fragment, withheld = user_safe_failure_text(
+                    result.outcome_class, result.reason_code, result.output.error
+                )
+                if withheld is not None:
+                    logger.warning(
+                        "Step %s tool %r failed with non-user-facing text (reason_code=%s): %s",
+                        result.step_id,
+                        result.tool_name,
+                        result.reason_code,
+                        withheld,
+                    )
+                if fragment is not None:
+                    lines.append(f"Error: {fragment}")
 
             lines.append("")
 
