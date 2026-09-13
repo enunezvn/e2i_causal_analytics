@@ -407,7 +407,11 @@ class SynthesisInput(BaseModel):
     execution_trace: ExecutionTrace
 
     def get_context_for_synthesis(self) -> Dict[str, Any]:
-        """Prepare context for LLM synthesis"""
+        """Prepare context for LLM synthesis.
+
+        Carries RAW ``output.error``: route any prompt or answer use through
+        ``reason_codes.user_safe_failure_text`` first (#2020).
+        """
         return {
             "query": self.original_query,
             "sub_questions": [

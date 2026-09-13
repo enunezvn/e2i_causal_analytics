@@ -183,6 +183,10 @@ _INPUT_TEXT = "input contract violation: counterfactual_simulator: expected_effe
 # (outcome_class, reason_code, raw, expected fragment, expected withheld raw)
 _RULE = [
     pytest.param("refused", "coverage_gap", _REFUSAL, _REFUSAL, None, id="coded-refusal-verbatim"),
+    # The signature accepts the enum member as well as its string value.
+    pytest.param(
+        "refused", ReasonCode.COVERAGE_GAP, _REFUSAL, _REFUSAL, None, id="coded-refusal-enum-member"
+    ),
     pytest.param(
         "input_rejected",
         "missing_required_input",
@@ -265,3 +269,7 @@ def test_the_prompt_and_the_fail_closed_answer_cannot_drift(
     else:
         assert f"Error: {fragment}" in block
         assert f"probe_tool: {fragment}" in answer
+    if withheld is not None:
+        # The fragment REPLACES the raw text: a surface that appended it would pass the checks above.
+        assert withheld not in block
+        assert withheld not in answer
