@@ -4070,7 +4070,12 @@ def _simulation_results(
         raise ToolRefusalError(
             f"counterfactual_simulator: the twin simulation for {intervention_type!r} on "
             f"{brand!r} did not complete: {result.error_message}. No effect is returned.",
-            reason_code=ReasonCode.SIMULATION_INCOMPLETE,
+            # The engine keeps the effect engine's cause (#2021 9b); a run that failed for any
+            # other reason, such as too few twins, names none and stays simulation_incomplete.
+            reason_code=_effect_reason_code(
+                result.error_cause, fallback=ReasonCode.SIMULATION_INCOMPLETE
+            ),
+            details=result.error_details,
         )
 
     modifier = frame.effect_modifiers[0] if frame.effect_modifiers else "region"

@@ -299,6 +299,42 @@ def test_a_failed_engine_run_is_refused_not_reported(engine, provider):
         )
     # #2021 review: the simulation runs inside this step; no upstream step failed.
     assert caught.value.reason_code is ReasonCode.SIMULATION_INCOMPLETE
+    # #2021 9b: too few twins is not an effect cause, so it keeps the generic code.
+    assert caught.value.details == {}
+    assert failed.error_cause is None and failed.error_details == {}
+
+
+def test_an_engine_run_the_estimator_refused_keeps_its_cause(caplog):
+    """#2021 9b (Part B): the engine flattened an estimator refusal into "Effect estimation
+    failed: ...", so the tool refused every such run as simulation_incomplete — the only code
+    left for causes the loader cannot see, such as a channel with no median contrast. The
+    result now carries the cause and its counts; the message is unchanged."""
+    constant = _cohort()
+    constant["email_campaign_count"] = 3.0
+    provider = CohortEffectDataProvider(constant)
+    result = SimulationEngine(
+        population=_population(), effect_provider=provider, effect_estimator=CohortCausalEstimator()
+    ).simulate(InterventionConfig(intervention_type="email_campaign"), use_cache=False)
+    assert result.status.value == "failed"
+    caplog.set_level(logging.ERROR, logger="src.agents.tool_composer.errors")
+    with pytest.raises(
+        ToolRefusalError,
+        match="did not complete: Effect estimation failed: treatment 'email_campaign_count' has",
+    ) as caught:
+        tr._simulation_results(
+            result,
+            brand="Kisqali",
+            intervention_type="email_campaign",
+            frame=_frame(provider),
+            targeted=None,
+        )
+    assert caught.value.reason_code is ReasonCode.NO_TREATMENT_CONTRAST
+    counts = {"n_usable_rows": 1200, "n_distinct_treatment_values": 1}
+    assert caught.value.details == counts
+    assert not [r for r in caplog.records if r.name == "src.agents.tool_composer.errors"]
+    assert result.error_cause == "no_treatment_contrast"
+    assert result.error_details == counts
+    assert result.error_message.startswith("Effect estimation failed: ")
 
 
 # ---------------------------------------------------------------------------

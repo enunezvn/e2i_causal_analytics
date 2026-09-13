@@ -416,12 +416,23 @@ def _cohort_engine(monkeypatch, brand: str):
 
 
 @pytest.mark.parametrize(
-    ("build", "brand"),
-    [(_uplift_engine, "Remibrutinib"), (_cohort_engine, "Kisqali")],
+    ("build", "brand", "code", "cause", "details"),
+    [
+        # EstimationError names no cause, and its diagnostic details may hold text: never read.
+        (_uplift_engine, "Remibrutinib", ReasonCode.SIMULATION_INCOMPLETE, None, {}),
+        # #2021 9b (Part B): the engine keeps the estimator's cause and counts.
+        (
+            _cohort_engine,
+            "Kisqali",
+            ReasonCode.ESTIMATOR_FAILED,
+            "estimation_failed",
+            {"n_usable_rows": 1200, "is_target_inference": False},
+        ),
+    ],
     ids=["uplift", "cohort"],
 )
 def test_failed_simulation_refusal_carries_no_estimator_library_text(
-    monkeypatch, caplog, build, brand
+    monkeypatch, caplog, build, brand, code, cause, details
 ):
     engine, frame = build(monkeypatch, brand)
     with caplog.at_level(logging.WARNING):
@@ -443,7 +454,10 @@ def test_failed_simulation_refusal_carries_no_estimator_library_text(
         kept=["did not complete: Effect estimation failed: ", "No effect is returned."],
         library_text=SENTINEL,
     )
-    assert caught.value.reason_code is ReasonCode.SIMULATION_INCOMPLETE
+    assert caught.value.reason_code is code
+    assert caught.value.details == details
+    assert result.error_cause == cause
+    assert result.error_details == details
 
 
 # ---------------------------------------------------------------------------
