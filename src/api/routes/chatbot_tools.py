@@ -91,9 +91,9 @@ def reset_raw_user_query(token: "contextvars.Token[Optional[str]]") -> None:
 # ``composer-<ts>`` ids that look like sessions but belong to no conversation.
 # Both chat graphs' tools nodes (``SessionBoundToolNode`` below) bind the real id
 # from graph state before their tools run; copilotkit re-exports the var as
-# ``_session_id_context`` for its own readers and the chat bridge. Declared here rather than in copilotkit.py because
-# copilotkit already imports this module: no import cycle, and chatbot_graph does
-# not pull in the CopilotKit SDK to reach it.
+# ``_session_id_context`` for its own readers and the chat bridge. Declared here
+# rather than in copilotkit.py because copilotkit already imports this module: no
+# import cycle, and chatbot_graph does not pull in the CopilotKit SDK to reach it.
 chat_session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "e2i_chat_session_id", default=None
 )
@@ -120,6 +120,13 @@ def _resolve_session_id(tool_arg: Optional[str]) -> Optional[str]:
     return chat_session_id_context.get() or tool_arg or None
 
 
+def _bind_state_session(state: Any) -> "Optional[contextvars.Token[Optional[str]]]":
+    # Only a plain graph-state dict is bound; ToolCallWithContext / Send and
+    # list-of-ToolCall inputs pass through unbound (no chat graph routes tools via Send).
+    session_id = state.get("session_id") if isinstance(state, dict) else None
+    return set_chat_session_id(session_id) if session_id else None
+
+
 class SessionBoundToolNode(ToolNode):
     """A ToolNode that runs its tools with the turn's session from graph state (#2064).
 
@@ -128,8 +135,8 @@ class SessionBoundToolNode(ToolNode):
     first frame is pulled, and the handler's ``with_sse_keepalive`` pulls every
     frame in a fresh task (a copy of the handler's context), so the graph runs
     without it. ``state["session_id"]`` is bound for the duration of the tool
-    calls and reset afterwards. With no session in state nothing is bound, and a
-    tool with nothing bound records ``None``.
+    calls and reset afterwards. When state has no session, nothing is bound here
+    and the caller's binding (if any) applies.
     """
 
     async def ainvoke(
@@ -149,11 +156,6 @@ class SessionBoundToolNode(ToolNode):
         finally:
             if token is not None:
                 reset_chat_session_id(token)
-
-
-def _bind_state_session(state: Any) -> "Optional[contextvars.Token[Optional[str]]]":
-    session_id = state.get("session_id") if isinstance(state, dict) else None
-    return set_chat_session_id(session_id) if session_id else None
 
 
 # Try to import Opik for tracing

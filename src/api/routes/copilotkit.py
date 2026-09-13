@@ -142,9 +142,11 @@ Changelog:
     1.21.1 - Fixed session_id not reaching chat_node() for message persistence.
              Root cause: AG-UI LangGraph's state management may not preserve custom
              fields from RunAgentInput.state when passing to graph nodes.
-             Fix: Use Python contextvars to pass session_id across async boundaries.
-             The context var is set in execute() and read in chat_node() as the
-             primary source, with state and config.thread_id as fallbacks.
+             Fix: execute() sets a session contextvar that chat_node() reads first,
+             with state and config.thread_id as fallbacks. (#2064: on the AG-UI
+             route the var never reaches graph nodes, because with_sse_keepalive
+             pulls each frame in a fresh task with a copied context. There, graph
+             state is the channel that works.)
     1.21.0 - Added message persistence to Supabase chatbot_messages table.
              All user messages, assistant responses, tool calls, and synthesized responses
              are now persisted using ChatbotMessageRepository. This enables:
@@ -365,9 +367,11 @@ from src.utils.tool_evidence import evidence_tool_count
 
 logger = logging.getLogger(__name__)
 
-# ``_session_id_context`` (imported above) passes session_id across async
-# boundaries, because AG-UI LangGraph may not preserve custom state fields.
-# #2064: the variable is declared in chatbot_tools so the chat tools read the
+# ``_session_id_context`` (imported above) carries session_id only where no
+# keepalive wrapper sits between it and the graph, e.g. the chat bridge. On the
+# AG-UI route graph STATE is the reliable channel: with_sse_keepalive pulls each
+# frame in a fresh task with a copied context, so execute()'s binding never
+# reaches graph nodes (#2064). The variable is declared in chatbot_tools so the chat tools read the
 # same binding (tools only ever see the model's args); this name stays for its
 # existing readers here and in chat_bridge.
 
@@ -1200,8 +1204,9 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # state's run_id into _persist_message_sync as the fallback.
         state_with_session["run_id"] = run_id
 
-        # CRITICAL (v1.21.1): Also set session_id in context var for reliable cross-async access
-        # AG-UI LangGraph may not preserve custom state fields, so use contextvars as fallback
+        # Also bind the context var (v1.21.1). It does NOT reach graph nodes here
+        # (#2064: with_sse_keepalive pulls each frame in a fresh task with a copied
+        # context), so state_with_session["session_id"] above is the reliable channel.
         _session_id_context.set(persistent_session_id)
         _run_id_context.set(run_id)
         # Attribute this run's LLM usage to the chat user/session (admin
@@ -3561,8 +3566,9 @@ def create_e2i_chat_agent(
 
         messages = state.get("messages", [])
 
-        # Get session_id with priority: context var (most reliable) > state > config
-        # Context var is set in execute() and persists across async boundaries
+        # Get session_id with priority: context var > state > config. The var is
+        # set only on paths with no keepalive wrapper (e.g. the chat bridge); on the
+        # AG-UI route it is empty here and state is the channel that works (#2064).
         session_id = _session_id_context.get()
         session_id_source = "context_var" if session_id else None
 

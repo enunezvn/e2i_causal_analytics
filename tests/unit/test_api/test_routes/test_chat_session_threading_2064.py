@@ -13,15 +13,18 @@ The real session is bound by each chat brain's ``tools`` node
 also sets ``_session_id_context``, but the handler's keepalive wrapper pulls each
 frame in a fresh task, so that binding never reaches the graph's nodes.
 
-Every test here drives the production entry (the tool, a real ToolNode, or the
-compiled chatbot graph's own ``tools`` node); only the orchestrator and the
-composer behind the tools are faked.
+The AG-UI and ``/chat/stream`` graph tests drive the real graph entry points
+(``execute()`` under ``with_sse_keepalive``, or the compiled graph's own
+``tools`` node) and bind no session themselves, except to plant a stale outer
+binding. The resolver unit tests and the chat-bridge model test set the var
+directly. Only the orchestrator and the composer behind the tools are faked.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -112,8 +115,12 @@ async def test_orchestrator_tool_invents_no_session_when_none_is_bound(orchestra
 
 
 async def test_a_real_tool_node_carries_the_bound_session_into_the_tool(orchestrator):
-    """LangGraph's ToolNode, run by a compiled graph (as AG-UI's chat graph runs it),
-    sees the binding the handler made before the run started."""
+    """LangGraph's ToolNode, run by a compiled graph, sees a binding made before the run.
+
+    This models the chat bridge (``chat_bridge.py:~206``), which sets the var and
+    calls ``graph.ainvoke`` with no keepalive wrapper. It does not model AG-UI,
+    where the binding never reaches the graph (see the AG-UI tests below).
+    """
     workflow = StateGraph(MessagesState)
     workflow.add_node("tools", ToolNode(chatbot_tools.E2I_CHATBOT_TOOLS))
     workflow.add_edge(START, "tools")
@@ -250,9 +257,12 @@ async def test_an_agui_turn_gives_its_tools_the_thread_session(orchestrator, mon
         graph_factory=copilotkit.create_e2i_chat_agent,
     )
 
+    # The thread id execute() is given IS the session the tool must see (execute()
+    # swaps in its own fresh checkpoint key), so one per-test uuid serves as both.
+    session = str(uuid4())
     frames = with_sse_keepalive(
         agent.execute(
-            thread_id=REAL_SESSION,
+            thread_id=session,
             state={},
             messages=[{"id": "u-2064", "role": "user", "content": "What is the health score?"}],
             actions=[],
@@ -262,21 +272,44 @@ async def test_an_agui_turn_gives_its_tools_the_thread_session(orchestrator, mon
         pass
 
     assert len(orchestrator.payloads) == 1, "orchestrator_tool never ran"
-    assert orchestrator.payloads[0]["session_id"] == REAL_SESSION
+    assert orchestrator.payloads[0]["session_id"] == session
 
 
-async def test_the_agui_tools_node_binds_nothing_without_a_state_session(orchestrator):
-    """The compiled AG-UI graph's own ``tools`` node: no session in state, none invented."""
+def _agui_tools_graph():
+    """The compiled AG-UI graph's own ``tools`` node, mounted alone in its own state."""
     from src.api.routes import copilotkit
-    from src.api.routes.chatbot_state import ChatbotState
 
-    workflow = StateGraph(ChatbotState)
+    workflow = StateGraph(copilotkit.E2IAgentState)
     workflow.add_node("tools", copilotkit.e2i_chat_graph.nodes["tools"].bound)
     workflow.add_edge(START, "tools")
     workflow.add_edge("tools", END)
+    return workflow.compile()
 
-    await workflow.compile().ainvoke(
+
+async def test_the_agui_tools_node_binds_nothing_without_a_state_session(orchestrator):
+    """No session in state and none bound outside: none invented."""
+    await _agui_tools_graph().ainvoke(
         {"messages": [_tool_call_message("orchestrator_tool", {"query": "q"})]}
     )
 
     assert orchestrator.payloads[0]["session_id"] is None
+
+
+async def test_the_agui_tools_node_prefers_the_state_session_over_an_outer_binding(
+    orchestrator,
+):
+    """State wins over a stale binding from outside the graph, which is restored after."""
+    token = _session_id_context.set("stale")
+    try:
+        await _agui_tools_graph().ainvoke(
+            {
+                "session_id": REAL_SESSION,
+                "messages": [_tool_call_message("orchestrator_tool", {"query": "q"})],
+            }
+        )
+        after = _session_id_context.get()
+    finally:
+        _session_id_context.reset(token)
+
+    assert orchestrator.payloads[0]["session_id"] == REAL_SESSION
+    assert after == "stale"
