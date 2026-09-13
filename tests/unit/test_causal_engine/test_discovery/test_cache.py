@@ -13,9 +13,9 @@ from src.causal_engine.discovery.base import (
     DiscoveredEdge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
+    DiscoveryGateDecision,
     DiscoveryResult,
     EdgeType,
-    GateDecision,
 )
 from src.causal_engine.discovery.cache import (
     CacheConfig,
@@ -247,7 +247,7 @@ class TestDiscoveryCache:
                     algorithms=["ges"],
                 )
             ],
-            gate_decision=GateDecision.ACCEPT,
+            gate_decision=DiscoveryGateDecision.ACCEPT,
             gate_confidence=0.85,
             metadata={"runtime": 1.5},
         )

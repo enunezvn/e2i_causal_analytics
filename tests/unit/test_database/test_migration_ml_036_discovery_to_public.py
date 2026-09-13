@@ -321,13 +321,13 @@ def test_enum_labels_asserted_in_sql_match_python_enums():
     be the Python enums' values (the writer casts ``.value`` into them)."""
     from src.causal_engine.discovery.base import (
         DiscoveryAlgorithmType,
+        DiscoveryGateDecision,
         EdgeType,
-        GateDecision,
     )
 
     stripped = _stripped()
     for enum_cls, sql_type in (
-        (GateDecision, "discovery_gate_decision"),
+        (DiscoveryGateDecision, "discovery_gate_decision"),
         (EdgeType, "edge_type"),
         (DiscoveryAlgorithmType, "discovery_algorithm"),
     ):

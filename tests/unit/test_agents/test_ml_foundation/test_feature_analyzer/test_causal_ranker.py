@@ -17,8 +17,8 @@ from src.agents.ml_foundation.feature_analyzer.nodes.causal_ranker import (
 from src.causal_engine.discovery.base import (
     DiscoveryAlgorithmType,
     DiscoveryConfig,
+    DiscoveryGateDecision,
     DiscoveryResult,
-    GateDecision,
 )
 
 
@@ -146,7 +146,7 @@ class TestRankCausalDriversValidation:
             ) as MockGate:
                 mock_gate = MagicMock()
                 mock_evaluation = MagicMock()
-                mock_evaluation.decision = GateDecision.REJECT
+                mock_evaluation.decision = DiscoveryGateDecision.REJECT
                 mock_evaluation.confidence = 0.3
                 mock_evaluation.reasons = ["Test"]
                 mock_gate.evaluate.return_value = mock_evaluation
@@ -181,7 +181,7 @@ class TestRankCausalDriversExecution:
     def mock_gate_accept(self):
         """Mock gate evaluation with ACCEPT decision."""
         mock_evaluation = MagicMock()
-        mock_evaluation.decision = GateDecision.ACCEPT
+        mock_evaluation.decision = DiscoveryGateDecision.ACCEPT
         mock_evaluation.confidence = 0.85
         mock_evaluation.reasons = ["High confidence", "Good agreement"]
         return mock_evaluation
@@ -317,7 +317,7 @@ class TestRankCausalDriversExecution:
         mock_result.to_dict.return_value = {"success": False}
 
         mock_evaluation = MagicMock()
-        mock_evaluation.decision = GateDecision.REJECT
+        mock_evaluation.decision = DiscoveryGateDecision.REJECT
         mock_evaluation.confidence = 0.2
         mock_evaluation.reasons = ["Discovery failed"]
 
@@ -360,7 +360,7 @@ class TestRankCausalDriversExecution:
         mock_result.to_dict.return_value = {}
 
         mock_evaluation = MagicMock()
-        mock_evaluation.decision = GateDecision.REJECT
+        mock_evaluation.decision = DiscoveryGateDecision.REJECT
         mock_evaluation.confidence = 0.2
         mock_evaluation.reasons = []
 

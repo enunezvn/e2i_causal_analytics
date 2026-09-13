@@ -20,7 +20,7 @@ Example:
     ...     DiscoveryConfig,
     ...     DiscoveryAlgorithmType,
     ...     DiscoveryGate,
-    ...     GateDecision,
+    ...     DiscoveryGateDecision,
     ...     DiscoveryCache,
     ... )
     >>>
@@ -41,7 +41,7 @@ Example:
     >>> # Evaluate result
     >>> gate = DiscoveryGate()
     >>> evaluation = gate.evaluate(result)
-    >>> if evaluation.decision == GateDecision.ACCEPT:
+    >>> if evaluation.decision == DiscoveryGateDecision.ACCEPT:
     ...     print(f"Discovered DAG with {result.n_edges} edges")
 
 Author: E2I Causal Analytics Team
@@ -55,9 +55,9 @@ from .base import (
     DiscoveryAlgorithm,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
+    DiscoveryGateDecision,
     DiscoveryResult,
     EdgeType,
-    GateDecision,
 )
 from .cache import (
     CacheConfig,
@@ -108,7 +108,7 @@ __all__ = [
     "make_cache_key",
     # Enums
     "DiscoveryAlgorithmType",
-    "GateDecision",
+    "DiscoveryGateDecision",
     "EdgeType",
     "ImportanceType",
     # Types

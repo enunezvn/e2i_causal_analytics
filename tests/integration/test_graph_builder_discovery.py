@@ -17,8 +17,8 @@ from src.agents.causal_impact.state import CausalImpactState
 from src.causal_engine.discovery import (
     DiscoveredEdge,
     DiscoveryConfig,
+    DiscoveryGateDecision,
     DiscoveryResult,
-    GateDecision,
 )
 from src.causal_engine.discovery.gate import GateEvaluation
 
@@ -221,7 +221,7 @@ class TestGraphBuilderGateDecisions:
         mock_result = self._create_mock_discovery_result(edges)
 
         mock_evaluation = GateEvaluation(
-            decision=GateDecision.ACCEPT,
+            decision=DiscoveryGateDecision.ACCEPT,
             confidence=0.9,
             reasons=["High confidence"],
             high_confidence_edges=edges,
@@ -246,7 +246,7 @@ class TestGraphBuilderGateDecisions:
         mock_result = self._create_mock_discovery_result(edges)
 
         mock_evaluation = GateEvaluation(
-            decision=GateDecision.AUGMENT,
+            decision=DiscoveryGateDecision.AUGMENT,
             confidence=0.75,
             reasons=["Medium confidence, augmenting"],
             high_confidence_edges=[e for e in edges if e.confidence >= 0.9],
@@ -270,7 +270,7 @@ class TestGraphBuilderGateDecisions:
         )
 
         mock_evaluation = GateEvaluation(
-            decision=GateDecision.REVIEW,
+            decision=DiscoveryGateDecision.REVIEW,
             confidence=0.6,
             reasons=["Medium confidence, needs review"],
             high_confidence_edges=[],
@@ -292,7 +292,7 @@ class TestGraphBuilderGateDecisions:
         )
 
         mock_evaluation = GateEvaluation(
-            decision=GateDecision.REJECT,
+            decision=DiscoveryGateDecision.REJECT,
             confidence=0.3,
             reasons=["Low confidence"],
             high_confidence_edges=[],
@@ -507,7 +507,7 @@ class TestAcceptPathPreservesCuratedConfounders:
             edges=[DiscoveredEdge(source=s, target=t, confidence=0.95) for s, t in dag_edges],
         )
         evaluation = GateEvaluation(
-            decision=GateDecision.ACCEPT,
+            decision=DiscoveryGateDecision.ACCEPT,
             confidence=0.9,
             reasons=["High confidence"],
             high_confidence_edges=[],

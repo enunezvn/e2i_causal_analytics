@@ -397,9 +397,9 @@ class DiscoveryCache:
         from .base import (
             DiscoveredEdge,
             DiscoveryConfig,
+            DiscoveryGateDecision,
             DiscoveryResult,
             EdgeType,
-            GateDecision,
         )
 
         try:
@@ -430,7 +430,7 @@ class DiscoveryCache:
             # Reconstruct gate decision
             gate_decision = None
             if data.get("gate_decision"):
-                gate_decision = GateDecision(data["gate_decision"])
+                gate_decision = DiscoveryGateDecision(data["gate_decision"])
 
             return DiscoveryResult(
                 success=data.get("success", True),

@@ -8,7 +8,7 @@ Provides:
 - DiscoveryAlgorithm: Protocol for discovery algorithm wrappers
 - DiscoveryResult: Standardized result container
 - DiscoveryConfig: Configuration for structure learning
-- GateDecision: Decision outcomes from DiscoveryGate
+- DiscoveryGateDecision: Decision outcomes from DiscoveryGate
 
 Author: E2I Causal Analytics Team
 """
@@ -37,7 +37,7 @@ class DiscoveryAlgorithmType(str, Enum):
     ICA_LINGAM = "ica_lingam"  # ICA-based LiNGAM
 
 
-class GateDecision(str, Enum):
+class DiscoveryGateDecision(str, Enum):
     """Decision outcomes from DiscoveryGate evaluation."""
 
     ACCEPT = "accept"  # High confidence, use discovered DAG
@@ -293,7 +293,7 @@ class DiscoveryResult:
     ensemble_dag: Optional[nx.DiGraph] = None
     edges: List[DiscoveredEdge] = field(default_factory=list)
     algorithm_results: List[AlgorithmResult] = field(default_factory=list)
-    gate_decision: Optional[GateDecision] = None
+    gate_decision: Optional[DiscoveryGateDecision] = None
     gate_confidence: float = 0.0
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     session_id: Optional[UUID] = None
