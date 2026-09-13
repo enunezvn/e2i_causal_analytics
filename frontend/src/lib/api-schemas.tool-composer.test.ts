@@ -48,9 +48,13 @@ describe('ToolComposerObservabilityResponseSchema', () => {
     expect(() => ToolComposerObservabilityResponseSchema.parse(broken)).toThrow();
   });
 
-  // #2021: a plain z.object silently strips unknown keys, so a tool row or step class carrying
-  // the refusal-reason fields would parse "successfully" while quietly deleting the very data
-  // the admin page needs to show why a tool refused. These pin that the fields survive.
+  // #2021: contract pins, not a live-path guard. `getToolComposerObservability`
+  // (frontend/src/api/admin.ts:84-90) passes no `schema` to `get()`, so this response is never
+  // parsed by this schema at request time — 77e63e6c7's commit message was wrong to blame zod
+  // stripping for the fields being invisible on the page; they were simply absent from the
+  // hand-written `types/admin.ts` interfaces and unrendered in `ToolComposerSection.tsx`. These
+  // tests pin the wire contract itself (so it does not silently regress for a caller that does
+  // validate against it, now or later), independent of whether this endpoint is wired to it.
   it('keeps a tool row refusal-reason fields when present', () => {
     const payload = PAYLOAD as unknown as { tools: Record<string, unknown>[] };
     const withReason = {
@@ -58,7 +62,7 @@ describe('ToolComposerObservabilityResponseSchema', () => {
       tools: [
         {
           ...payload.tools[0],
-          most_common_refusal_reason: 'C042',
+          most_common_refusal_reason: 'non_binary_treatment',
           most_common_refusal_sentence: 'the treatment column is not a binary 0/1 indicator',
           n_refused_coded: 8,
           n_most_common_refusal_reason: 3,
@@ -70,7 +74,7 @@ describe('ToolComposerObservabilityResponseSchema', () => {
     const parsed = ToolComposerObservabilityResponseSchema.parse(withReason);
 
     expect(parsed.tools[0]).toMatchObject({
-      most_common_refusal_reason: 'C042',
+      most_common_refusal_reason: 'non_binary_treatment',
       most_common_refusal_sentence: 'the treatment column is not a binary 0/1 indicator',
       n_refused_coded: 8,
       n_most_common_refusal_reason: 3,
@@ -91,7 +95,7 @@ describe('ToolComposerObservabilityResponseSchema', () => {
           step_classes: [
             {
               ...stepClasses[0],
-              reason_code: 'C042',
+              reason_code: 'non_binary_treatment',
               reason: 'the treatment column is not a binary 0/1 indicator',
             },
             ...stepClasses.slice(1),
@@ -105,7 +109,7 @@ describe('ToolComposerObservabilityResponseSchema', () => {
     const parsed = ToolComposerObservabilityResponseSchema.parse(withReason);
 
     expect(parsed.recent_failures[0].step_classes[0]).toMatchObject({
-      reason_code: 'C042',
+      reason_code: 'non_binary_treatment',
       reason: 'the treatment column is not a binary 0/1 indicator',
     });
   });

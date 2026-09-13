@@ -12,13 +12,41 @@
  * - a failed composition names the step classes that caused it, not just that it failed.
  */
 import { useToolComposerObservability } from '@/hooks/api/use-admin';
-import type { ToolComposerRecentFailure, ToolVerdict } from '@/types/admin';
+import type { ToolComposerRecentFailure, ToolComposerToolRow, ToolVerdict } from '@/types/admin';
 
 const TH = 'px-3 py-2 text-left text-xs font-medium text-[var(--color-muted-foreground)]';
 const TD = 'px-3 py-2 text-sm text-[var(--color-foreground)]';
 
 const fmtInt = (n: number) => n.toLocaleString();
 const fmtMs = (n: number | null | undefined) => (n == null ? '—' : `${Math.round(n)} ms`);
+
+// The secondary line under a tool's refused count: null when there is nothing to add.
+//
+// A post-ml/043 backend always sends these four keys, so a tool with no coded refusal sends an
+// explicit `null` rather than omitting the key — this MUST stay a falsy check (not `!==
+// undefined`), or an explicit null renders "most common: null".
+function refusalSummary(tool: ToolComposerToolRow): string | null {
+  if (!tool.most_common_refusal_reason) {
+    return null;
+  }
+  const text = tool.most_common_refusal_sentence ?? tool.most_common_refusal_reason;
+  const k = tool.n_most_common_refusal_reason;
+  const n = tool.n_refused_coded;
+  // Both counts travel with the code so it is never read as representative of every refusal.
+  // Either being null means UNKNOWN (pre-ml/043), not 0 — the whole parenthetical, uncoded
+  // remainder included, is omitted rather than showing "0 of n" or a count computed from an
+  // unknown. A real 0 (e.g. k=0) is a number, not null, and DOES render.
+  if (k == null || n == null) {
+    return `most common: ${text}`;
+  }
+  const coded = `${fmtInt(k)} of ${fmtInt(n)} coded`;
+  // A minority code must not read as representative of every refusal: name the uncoded
+  // remainder too, unless there is none. Both counts share the same filter (ml/043), so this
+  // should never go negative — guard it anyway and treat a negative remainder like zero.
+  const uncoded = tool.n_refused - n;
+  const suffix = uncoded > 0 ? `${coded}; ${fmtInt(uncoded)} uncoded` : coded;
+  return `most common: ${text} (${suffix})`;
+}
 
 const VERDICT_LABEL: Record<ToolVerdict, string> = {
   caveat: 'Caveat',
@@ -57,7 +85,9 @@ function StepClasses({ failure }: { failure: ToolComposerRecentFailure }) {
         const reason = step.reason ?? step.reason_code;
         return (
           <span key={`${failure.composition_id}-${step.step_number ?? index}`}>
-            {index > 0 && ', '}
+            {/* "; " not ", ": several catalogue sentences contain commas, so a comma join would
+                make a step boundary indistinguishable from punctuation inside a sentence. */}
+            {index > 0 && '; '}
             {step.tool_name ?? 'unknown'}: {(step.outcome_class ?? 'unknown').replace(/_/g, ' ')}
             {reason ? ` — ${reason}` : ''}
           </span>
@@ -125,45 +155,41 @@ export function ToolComposerSection({ days }: { days: number }) {
             </tr>
           </thead>
           <tbody>
-            {tools.map((tool) => (
-              <tr key={tool.tool_name} className="border-b border-[var(--color-border)]">
-                <td className={`${TD} font-medium ${VERDICT_CLASS[tool.verdict]}`}>
-                  {tool.verdict === 'too_few_runs'
-                    ? `Too few runs to judge (n=${tool.n_health})`
-                    : VERDICT_LABEL[tool.verdict]}
-                </td>
-                <td className={TD}>{tool.tool_name}</td>
-                <td className={TD}>{fmtInt(tool.n_invoked)}</td>
-                <td className={TD}>{fmtInt(tool.n_succeeded)}</td>
-                <td className={TD}>
-                  {fmtInt(tool.n_refused)}
-                  {tool.most_common_refusal_reason
-                    ? ` — most common: ${
-                        tool.most_common_refusal_sentence ?? tool.most_common_refusal_reason
-                      }${
-                        // The count travels with the code so it is never read as representative
-                        // of every refusal; either count null means UNKNOWN (pre-ml/043), not 0,
-                        // so the whole parenthetical is omitted rather than showing "0 of n".
-                        tool.n_most_common_refusal_reason != null && tool.n_refused_coded != null
-                          ? ` (${tool.n_most_common_refusal_reason} of ${tool.n_refused_coded} coded)`
-                          : ''
-                      }`
-                    : ''}
-                </td>
-                <td className={TD}>
-                  {fmtInt(tool.n_health_failures)}
-                  {tool.most_common_health_error ? ` (${tool.most_common_health_error})` : ''}
-                </td>
-                <td className={TD}>
-                  {tool.p50_latency_ms == null && tool.p95_latency_ms == null
-                    ? '—'
-                    : `${fmtMs(tool.p50_latency_ms)} / ${fmtMs(tool.p95_latency_ms)}`}
-                </td>
-                <td className={`${TD} text-[var(--color-muted-foreground)]`}>
-                  {fmtMs(tool.declared_latency_ms)} declared
-                </td>
-              </tr>
-            ))}
+            {tools.map((tool) => {
+              const refusalNote = refusalSummary(tool);
+              return (
+                <tr key={tool.tool_name} className="border-b border-[var(--color-border)]">
+                  <td className={`${TD} font-medium ${VERDICT_CLASS[tool.verdict]}`}>
+                    {tool.verdict === 'too_few_runs'
+                      ? `Too few runs to judge (n=${tool.n_health})`
+                      : VERDICT_LABEL[tool.verdict]}
+                  </td>
+                  <td className={TD}>{tool.tool_name}</td>
+                  <td className={TD}>{fmtInt(tool.n_invoked)}</td>
+                  <td className={TD}>{fmtInt(tool.n_succeeded)}</td>
+                  <td className={TD}>
+                    {fmtInt(tool.n_refused)}
+                    {refusalNote && (
+                      <div className="text-xs text-[var(--color-muted-foreground)]">
+                        {refusalNote}
+                      </div>
+                    )}
+                  </td>
+                  <td className={TD}>
+                    {fmtInt(tool.n_health_failures)}
+                    {tool.most_common_health_error ? ` (${tool.most_common_health_error})` : ''}
+                  </td>
+                  <td className={TD}>
+                    {tool.p50_latency_ms == null && tool.p95_latency_ms == null
+                      ? '—'
+                      : `${fmtMs(tool.p50_latency_ms)} / ${fmtMs(tool.p95_latency_ms)}`}
+                  </td>
+                  <td className={`${TD} text-[var(--color-muted-foreground)]`}>
+                    {fmtMs(tool.declared_latency_ms)} declared
+                  </td>
+                </tr>
+              );
+            })}
             {tools.length === 0 && (
               <tr>
                 <td
