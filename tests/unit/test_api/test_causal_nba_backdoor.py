@@ -17,6 +17,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api.routes import causal as causal_routes
+from src.api.routes.causal import loaders as causal_loaders
 from src.api.schemas.causal import AgentCausalAnalysisRequest
 
 
@@ -56,14 +57,14 @@ def _fake_patient_rows():
 
 def _patched_reads(patient_rows=None):
     return (
-        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())),
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_trigger_question_rows",
             AsyncMock(return_value=_fake_trigger_rows()),
         ),
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_patient_baseline_rows",
             AsyncMock(
                 return_value=patient_rows if patient_rows is not None else _fake_patient_rows()

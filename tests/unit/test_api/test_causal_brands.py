@@ -14,6 +14,7 @@ import pytest
 
 import src.api.routes.causal as causal
 from src.api.routes.causal import datasets as causal_datasets
+from src.api.routes.causal import loaders as causal_loaders
 
 
 class _FakeQuery:
@@ -61,8 +62,8 @@ def _patch_client(monkeypatch, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     monkeypatch.setattr(factories, "get_async_supabase_client", _fake_factory)
     # Provenance filter is orthogonal to brand scoping — identity in the unit test.
     # Patch every module that READS it: _list_dataset_brands resolves it in
-    # ``datasets``, _load_agent_estimation_frame in the routes module.
-    for _owner in (causal_datasets, causal):
+    # ``datasets``, _load_agent_estimation_frame in ``loaders``.
+    for _owner in (causal_datasets, causal_loaders):
         monkeypatch.setattr(_owner, "apply_provenance_filter", lambda q, *a, **k: q)
     return log
 

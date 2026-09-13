@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 
 from src.api.routes import causal as causal_routes
+from src.api.routes.causal import loaders as causal_loaders
 
 
 def _fake_join_rows():
@@ -57,9 +58,9 @@ async def test_hcp_join_frame_builds_treatment_outcome_and_centrality_z():
         return profiles
 
     with (
-        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
-        patch.object(causal_routes, "_te_paged_select", side_effect=fake_paged),
-        patch.object(causal_routes, "_load_hcp_profile_centrality", side_effect=fake_profiles),
+        patch.object(causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_loaders, "_te_paged_select", side_effect=fake_paged),
+        patch.object(causal_loaders, "_load_hcp_profile_centrality", side_effect=fake_profiles),
     ):
         df, select_cols = await causal_routes._load_agent_estimation_frame(
             dataset="hcp_adoption",
@@ -90,9 +91,9 @@ async def test_hcp_join_empty_backdoor_question_loads_just_treatment_outcome():
         return profiles
 
     with (
-        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
-        patch.object(causal_routes, "_te_paged_select", side_effect=fake_paged),
-        patch.object(causal_routes, "_load_hcp_profile_centrality", side_effect=fake_profiles),
+        patch.object(causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_loaders, "_te_paged_select", side_effect=fake_paged),
+        patch.object(causal_loaders, "_load_hcp_profile_centrality", side_effect=fake_profiles),
     ):
         df, select_cols = await causal_routes._load_agent_estimation_frame(
             dataset="hcp_adoption",
@@ -109,7 +110,9 @@ async def test_hcp_join_empty_backdoor_question_loads_just_treatment_outcome():
 @pytest.mark.asyncio
 async def test_hcp_join_rejects_disallowed_column():
     """The allowlist gate still applies on the JOIN path — an off-allowlist column 400s."""
-    with patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())):
+    with patch.object(
+        causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())
+    ):
         with pytest.raises(HTTPException) as ei:
             await causal_routes._load_agent_estimation_frame(
                 dataset="hcp_adoption",

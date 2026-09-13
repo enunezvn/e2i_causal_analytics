@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api.routes import causal as causal_routes
+from src.api.routes.causal import loaders as causal_loaders
 
 
 def _fake_trigger_rows():
@@ -70,14 +71,14 @@ def _fake_patient_baseline_rows():
 
 def _patched_reads():
     return (
-        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_loaders, "get_async_supabase_client", AsyncMock(return_value=object())),
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_trigger_question_rows",
             AsyncMock(return_value=_fake_trigger_rows()),
         ),
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_patient_baseline_rows",
             AsyncMock(return_value=_fake_patient_baseline_rows()),
         ),
@@ -132,11 +133,11 @@ async def test_nba_baseline_join_drops_rows_missing_baseline():
     with (
         p1,
         patch.object(
-            causal_routes,
+            causal_loaders,
             "_load_trigger_question_rows",
             AsyncMock(return_value=_fake_trigger_rows()),
         ),
-        patch.object(causal_routes, "_load_patient_baseline_rows", AsyncMock(return_value=rows)),
+        patch.object(causal_loaders, "_load_patient_baseline_rows", AsyncMock(return_value=rows)),
     ):
         df, _ = await causal_routes._load_agent_estimation_frame(
             dataset="nba_triggers",
@@ -190,7 +191,7 @@ async def test_nba_without_baselines_keeps_single_table_path():
     original = factories.get_async_supabase_client
     factories.get_async_supabase_client = _fake_factory
     try:
-        with patch.object(causal_routes, "_load_patient_baseline_rows", join_spy):
+        with patch.object(causal_loaders, "_load_patient_baseline_rows", join_spy):
             df, select_cols = await causal_routes._load_agent_estimation_frame(
                 dataset="nba_triggers",
                 treatment_var="control_group_flag",
