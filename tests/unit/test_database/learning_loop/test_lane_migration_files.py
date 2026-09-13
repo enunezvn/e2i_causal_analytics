@@ -186,6 +186,55 @@ def _function_text(sql: str, name: str) -> str:
     return sql[start:end]
 
 
+def _split_top_level(text: str) -> list:
+    """Split at commas outside parentheses and quotes."""
+    parts, depth, quoted, current = [], 0, False, []
+    for ch in text:
+        if ch == "'":
+            quoted = not quoted
+        elif not quoted and ch == "(":
+            depth += 1
+        elif not quoted and ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0 and not quoted:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return [" ".join(p.split()) for p in parts]
+
+
+def test_043_coded_refusal_count_is_the_refusal_count_narrowed_to_coded_rows():
+    """n_refused_coded is the denominator the admin page shows beside the most common code.
+
+    It must count the same refusals as n_refused, restricted to rows that carry a code: a
+    looser filter would overstate how representative the most common code is.
+    """
+    path = ML / _REASON_CODES_MIGRATION
+    if not path.exists():
+        pytest.fail(f"{_REASON_CODES_MIGRATION} is missing")
+    fn = re.sub(r"--[^\n]*", "", _function_text(path.read_text(), "get_tool_reliability"))
+    columns = [
+        part.split()[0]
+        for part in _split_top_level(fn.split("RETURNS TABLE (", 1)[1].split("\n)\n", 1)[0])
+    ]
+    # The last SELECT before the registry join is the outer one; the perf CTE's comes first.
+    select = fn.split("RETURN QUERY", 1)[1].split("FROM tool_registry tr", 1)[0]
+    expressions = _split_top_level(select.rsplit("SELECT", 1)[1])
+    assert len(columns) == len(expressions), (columns, expressions)
+
+    def filter_body(column: str) -> str:
+        expression = expressions[columns.index(column)]
+        match = re.fullmatch(r"count\(\*\) FILTER \(WHERE (.*)\)", expression)
+        assert match, (column, expression)
+        return match.group(1)
+
+    refused = filter_body("n_refused")
+    assert refused == "p.counted AND p.outcome_class IN ('refused', 'input_rejected')"
+    assert filter_body("n_refused_coded") == refused + " AND p.reason_code IS NOT NULL"
+
+
 @pytest.mark.parametrize("name", ["composer_record_steps", "get_tool_reliability"])
 def test_rollback_043_restores_041_verbatim(name):
     path = ML / "ml" / "rollback_043.sql"

@@ -188,8 +188,8 @@ def test_details_key_count_is_still_bounded():
 
 
 def test_details_key_length_matches_the_043_reducer():
-    """ml/043's reducer keeps only keys matching ``^[a-z][a-z0-9_]{0,63}$`` (64 characters at
-    most) and drops longer ones silently; the Python rule must refuse them first."""
+    """ml/043's reducer keeps only keys matching ``_DETAIL_KEY``, anchored, and so at most 64
+    characters, and drops the rest silently; the Python rule must refuse them first."""
     from src.agents.tool_composer.reason_codes import _DETAIL_KEY
 
     prefixes, max_tail = re.fullmatch(
