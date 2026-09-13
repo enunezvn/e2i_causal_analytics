@@ -221,3 +221,34 @@ def _te_pvalue_from_z(ate: float, std_error: Optional[float]) -> Optional[float]
 
     z = abs(float(ate)) / se
     return float(2.0 * (1.0 - _scipy_stats.norm.cdf(z)))
+
+
+def _resolve_pipeline_dataframe(
+    filters: Optional[Dict[str, Any]],
+) -> Optional["pd.DataFrame"]:  # type: ignore[name-defined] # noqa: F821
+    """Rehydrate an estimation DataFrame from request filters.
+
+    Surface C accepts a DataFrame only via inline JSON-serialized records in
+    ``filters.estimation_data_records``. This preserves the existing schema
+    (``filters: Optional[Dict[str, Any]]``) without forcing a separate file
+    upload surface. Returns ``None`` when no DataFrame can be rehydrated —
+    the caller fail-closes with 503.
+
+    Per CLAUDE.md anti-mocking discipline: this helper does NOT manufacture
+    synthetic data when no DataFrame is provided. The 503 fail-close path
+    is the honest response when the data backend is absent.
+    """
+    import pandas as pd
+
+    if not isinstance(filters, dict):
+        return None
+    records = filters.get("estimation_data_records")
+    if not isinstance(records, list) or not records:
+        return None
+    try:
+        df = pd.DataFrame.from_records(records)
+    except Exception:  # noqa: BLE001 - any rehydration failure → fail-close
+        return None
+    if df.empty:
+        return None
+    return df
