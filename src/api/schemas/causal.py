@@ -20,10 +20,12 @@ from pydantic import BaseModel, ConfigDict, Field
 # GATE VOCABULARY (#1991 debt 4)
 # =============================================================================
 # Each gate's own vocabulary as a Literal, not a shared `str` -- an
-# out-of-vocabulary value is a 422 at the schema boundary, not a token that
-# silently reaches the frontend. See `RefutationGate` (robustness gate) vs.
-# `ExpertReviewDecision` (structural DAG-approval gate): they are DIFFERENT
-# vocabularies for different gates and must not be conflated.
+# out-of-vocabulary value fails validation at the schema boundary (these are
+# response models, so it surfaces as a server-side response-validation error
+# rather than reaching the frontend as a token). See `RefutationGate`
+# (robustness gate) vs. `ExpertReviewDecision` (structural DAG-approval gate):
+# they are DIFFERENT vocabularies for different gates and must not be
+# conflated.
 
 #: `ExpertReviewGate` robustness/refutation gate decision (causal_engine).
 RefutationGate = Literal["proceed", "review", "block"]
