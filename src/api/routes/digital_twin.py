@@ -1053,11 +1053,11 @@ async def run_simulation(
     except ValueError as e:
         # The handler copies a 400's detail verbatim into the client's message, and no ValueError
         # here is authored by this route: pydantic, enum and UUID text goes to the log (#2020).
-        logger.warning("Simulation request rejected: %s", e)
+        logger.warning("Simulation request rejected: %s", e, exc_info=True)
         raise HTTPException(
             status_code=400,
             detail=(
-                "The simulation request could not be processed. Check the intervention "
+                "The simulation request could not be processed. Check the request "
                 "parameters and try again."
             ),
         )
@@ -1415,7 +1415,7 @@ async def compare_scenarios(
         raise
     except ValueError as e:
         # Same rule as /simulate: e.g. ``Brand(scenario.brand)`` says "'X' is not a valid Brand".
-        logger.warning("Scenario comparison request rejected: %s", e)
+        logger.warning("Scenario comparison request rejected: %s", e, exc_info=True)
         raise HTTPException(
             status_code=400,
             detail=(

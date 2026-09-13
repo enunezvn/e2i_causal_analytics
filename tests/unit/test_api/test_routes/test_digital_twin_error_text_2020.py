@@ -32,7 +32,9 @@ from src.api.routes.digital_twin import BrandEnum, InterventionConfigRequest
 from src.digital_twin.models.simulation_models import InterventionConfig
 
 _ROUTE_LOGGER = "src.api.routes.digital_twin"
-_SIMULATE_SENTENCE = "The simulation request could not be processed. Check the intervention parameters and try again."
+_SIMULATE_SENTENCE = (
+    "The simulation request could not be processed. Check the request parameters and try again."
+)
 _COMPARE_SENTENCE = (
     "The scenario comparison request could not be processed. Check the scenario parameters and "
     "try again."
@@ -95,6 +97,9 @@ def test_a_value_error_inside_simulate_is_a_fixed_400_and_the_raw_text_is_logged
     for leak in ("Invalid decile", "pydantic.dev", "input_value", "validation error for"):
         assert leak not in resp.text, f"{leak!r} reached the response body"
     assert "Invalid decile: 11" in caplog.text
+    # A server-side ValueError lands in this arm too, so the log keeps the traceback.
+    rejected = [r for r in caplog.records if "Simulation request rejected" in r.getMessage()]
+    assert len(rejected) == 1 and rejected[0].exc_info is not None
 
 
 @pytest.mark.unit
@@ -113,3 +118,7 @@ def test_a_value_error_inside_compare_is_a_fixed_400_and_the_raw_text_is_logged(
     assert "is not a valid Brand" not in resp.text
     assert "NotABrand" not in resp.text
     assert "'NotABrand' is not a valid Brand" in caplog.text
+    rejected = [
+        r for r in caplog.records if "Scenario comparison request rejected" in r.getMessage()
+    ]
+    assert len(rejected) == 1 and rejected[0].exc_info is not None

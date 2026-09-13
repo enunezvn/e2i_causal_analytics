@@ -7,6 +7,7 @@ NOTE: Uses direct module imports to avoid triggering LLM initialization
 in the experiment_designer package __init__.py.
 """
 
+import logging
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -287,8 +288,6 @@ class TestSimulateInterventionFailsClosed:
     ):
         """#2020 E1: the node copies both fields into the experiment_designer warnings, and the
         orchestrator stringifies that agent's whole output into the answer."""
-        import logging
-
         raw = (
             "Input X contains NaN. For further information visit "
             "https://errors.pydantic.dev/2.12/v/value_error"

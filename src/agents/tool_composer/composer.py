@@ -1272,7 +1272,8 @@ class ToolComposer:
             if fragment is None:
                 # Nothing to withhold and nothing to say: no reason fragment, as before #2020.
                 continue
-            # Relies on the helper's contract: ``withheld`` is the raw text the fragment replaced, else None.
+            # Relies on the helper's contract: ``withheld`` is the raw text the fragment replaced,
+            # else None.
             if withheld is None and str(raw or "").strip():
                 # Text was present and nothing was withheld, so the fragment is the refusal itself.
                 trusted_reasons.append(f"{tool_name}: {fragment}")
