@@ -67,6 +67,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# In-memory storage (for demo — replace with a database in production).
 _pipeline_cache: Dict[str, Dict[str, Any]] = {}
 _validation_cache: Dict[str, CrossValidationResponse] = {}
 

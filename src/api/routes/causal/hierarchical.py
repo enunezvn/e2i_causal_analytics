@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# In-memory storage (for demo — replace with a database in production).
 _analysis_cache: Dict[str, HierarchicalAnalysisResponse] = {}
 
 

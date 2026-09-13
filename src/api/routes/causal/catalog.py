@@ -471,15 +471,22 @@ async def propose_causal_questions(
 # Clinical Context enrichment service (lazy real REST clients inside; see
 # src/services/clinical_context). Built on FIRST USE rather than at import
 # (#1991 debt 4) so importing this route module does not construct the four HTTP
-# clients. Tests patch the accessor —
-# ``monkeypatch.setattr(catalog, "_get_clinical_context_service", lambda: fake)``
-# — which serves both readers, since discovery calls it through this module.
-# Stateless apart from its in-process per-brand cache.
+# clients. The patch seam is this module-level cache, NOT the accessor: a test
+# seeds ``catalog._clinical_context_service`` with a stub, and the accessor's
+# ``global`` resolves in THIS module's dict no matter whose binding of the
+# function was called. That is what makes one patch point serve every reader —
+# discovery from-imports the accessor and so holds its own binding of it, which
+# a patch on the accessor would miss. Stateless apart from its in-process
+# per-brand cache.
 _clinical_context_service: Optional["ClinicalContextService"] = None
 
 
 def _get_clinical_context_service() -> "ClinicalContextService":
-    """Built on first use, not at import (#1991 debt 4): the constructor builds four HTTP clients."""
+    """Built on first use, not at import (#1991 debt 4).
+
+    The constructor builds four HTTP clients, so importing this module must not
+    pay for them; a request that actually needs context does.
+    """
     global _clinical_context_service
     if _clinical_context_service is None:
         from src.services.clinical_context import ClinicalContextService
