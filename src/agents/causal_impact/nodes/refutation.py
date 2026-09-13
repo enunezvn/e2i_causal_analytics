@@ -73,7 +73,9 @@ logger = logging.getLogger(__name__)
 # Semantics (mirrors the contract the retired SQL `can_use_estimate` promised,
 # now on the live path -- migration 133):
 #   OFF (default): post-hoc / advisory. A REVIEW band queues the DAG for review
-#       and carries the gate decision + caveat; the run continues.
+#       and carries the gate decision + caveat; the run continues. A BLOCK band
+#       queues nothing at all (#1991 debt 3): it already failed statistically,
+#       and a structural verdict could not change that.
 #   ON: a REVIEW-band run whose DAG structure holds no active expert approval
 #       (gate decision pending_review / blocked / unavailable) HALTS honestly --
 #       status='failed', current_phase='awaiting_expert_review', error_message
@@ -1229,7 +1231,7 @@ class RefutationNode:
             config: Custom test configuration (merged with defaults)
             thresholds: Custom pass/fail thresholds
             validation_repo: Repository for database persistence (optional)
-            expert_review_gate: ExpertReviewGate consulted on REVIEW/BLOCK bands
+            expert_review_gate: ExpertReviewGate consulted on the REVIEW band
                 (queue-or-lookup) and probed read-only on EVERY band for a human
                 rejection (#1971). When None, a no-repository gate is
                 constructed lazily and answers ``unavailable`` (never
@@ -1487,7 +1489,7 @@ class RefutationNode:
         creates a review row).
 
         The verdict is authoritative for the whole run: every band reuses it,
-        and the REVIEW/BLOCK consult is skipped when it is ``rejected`` (codex
+        and the REVIEW consult is skipped when it is ``rejected`` (codex
         iter-1 HIGH-1: a consult that raised after the probe found a rejection
         must not turn the run into "unavailable, carry on").
 
@@ -1531,13 +1533,17 @@ class RefutationNode:
         validation_ids: List[str],
         rejection: Optional[Any],
     ) -> Dict[str, Any]:
-        """REVIEW/BLOCK: the probe's rejection is authoritative; otherwise consult.
+        """REVIEW band: the probe's rejection is authoritative; otherwise consult.
 
         A rejection already observed is reused as-is -- no second lookup, no
         queue row (the verdict is durable, #1970). Only a structure the probe
         did not reject (or could not check) is taken to the queue-or-lookup
         consult, which may itself still find a rejection (verdict ``unknown``),
         in which case the evidence was already persisted unlinked.
+
+        The BLOCK band does NOT come here (#1991 debt 3): it is terminal for a
+        statistical reason, so it queues nothing and builds its fields from the
+        probe's rejection alone.
         """
         if rejection is not None:
             return self._review_fields(suite, ReviewGateDecision.REJECTED.value, rejection)
@@ -1557,8 +1563,9 @@ class RefutationNode:
         if suite.gate_decision == GateDecision.BLOCK:
             return (
                 f"Refutation gate is BLOCK (failed robustness, confidence={conf:.2f}). "
-                "This estimate did not pass and has been routed to expert review for "
-                "adjudication."
+                "This estimate did not pass and is not queued for review: expert "
+                "approval covers the DAG structure and cannot clear a failed "
+                "robustness suite."
             )
         if suite.gate_decision == GateDecision.REVIEW:
             return (
@@ -1675,19 +1682,18 @@ class RefutationNode:
     ) -> Dict[str, Any]:
         """Consult the ExpertReviewGate and build the review fields for state.
 
-        Called on REVIEW and BLOCK bands (queue-or-lookup: a new structure gets
-        a ``pending`` row a human can resolve; #1970 keeps a rejection durable).
-        A PROCEED band never calls this -- it uses the read-only
-        ``_check_structure_rejection`` probe and, only on a rejection, builds
-        the same fields from that result.
+        Called on the REVIEW band only (queue-or-lookup: a new structure gets a
+        ``pending`` row a human can resolve, an unchanged one is looked up;
+        #1970 keeps a rejection durable). The PROCEED and BLOCK bands never call
+        this -- they use the read-only ``_check_structure_rejection`` probe and,
+        only on a rejection, build the same fields from that result.
 
         Emits ``expert_review_decision`` (a ``ReviewGateDecision`` value;
         ``unavailable`` when the gate has no repository OR the consult raised --
         never ``proceed`` for something that was not checked, #1971), the
         band-specific ``review_caveat`` and the ``expert_review_id``.
-        ``needs_review`` is set by the caller from ``suite.needs_review`` (REVIEW
-        only), so a BLOCK row is queued without being mislabelled
-        valid-but-needs-review.
+        ``needs_review`` is set by the caller from ``suite.needs_review``, not
+        here.
 
         Args:
             validation_ids: causal_validations row ids persisted for THIS
@@ -1735,8 +1741,7 @@ class RefutationNode:
             decision = ReviewGateDecision.UNAVAILABLE.value
 
         # `needs_review` is intentionally NOT returned here: the caller's result
-        # dict sets it from ``suite.needs_review`` (True only for REVIEW), so a
-        # BLOCK row is queued without being surfaced as valid-but-needs-review.
+        # dict sets it from ``suite.needs_review`` (True only for REVIEW).
         return self._review_fields(suite, decision, review_result)
 
     async def _log_validation_outcome_signal(
@@ -2212,10 +2217,11 @@ class RefutationNode:
 
             # #1971: READ-ONLY rejection probe on EVERY band, BEFORE evidence
             # is persisted -- resolved once, reused by every band below.
-            # Before this, the gate was consulted only on REVIEW/BLOCK, so a
-            # DAG a reviewer had explicitly rejected still yielded a
-            # PROCEED-band estimate promoted to 'validated' and surfaced as
-            # completed. See _check_structure_rejection for the verdicts.
+            # Before this, the gate was consulted only on REVIEW (and, until
+            # #1991 debt 3, BLOCK), so a DAG a reviewer had explicitly rejected
+            # still yielded a PROCEED-band estimate promoted to 'validated' and
+            # surfaced as completed. See _check_structure_rejection for the
+            # verdicts.
             structure_verdict, rejection = await self._check_structure_rejection(state)
 
             # Persist validation results + SOLE-promoter path transition
@@ -2258,13 +2264,14 @@ class RefutationNode:
                 next_phase = "failed"
                 status = "failed"
                 error_message = self._format_block_reason(suite)
-                # Route BLOCKED (failed-robustness) estimates to the expert-review
-                # queue too, so a human can adjudicate or override the failure. The
-                # estimate still surfaces as failed (needs_review stays False from
-                # suite.needs_review); the queued row carries the gate=block context.
-                # A structure the probe found REJECTED is not re-consulted (#1971).
-                review_fields = await self._review_fields_for_band(
-                    state, suite, validation_ids, rejection
+                # #1991 debt 3: a BLOCK run is terminal here; a review of it could not
+                # change an outcome, so nothing is queued and the gate is not consulted.
+                # A rejection already observed by the read-only probe is still surfaced
+                # (durable, #1970).
+                review_fields = (
+                    self._review_fields(suite, ReviewGateDecision.REJECTED.value, rejection)
+                    if rejection is not None
+                    else {}
                 )
             elif suite.gate_decision == GateDecision.REVIEW:
                 logger.info(

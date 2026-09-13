@@ -129,20 +129,28 @@ class TestConsultReviewGateRouting:
         # needs_review is set by the caller from suite.needs_review, not here.
         assert "needs_review" not in fields
 
-    def test_block_band_is_also_routed_with_block_caveat(self):
-        gate = _FakeReviewGate(review_id="rev-block-1")
-        node = RefutationNode(expert_review_gate=gate)
-        state = {
-            "dag_version_hash": "h2",
-            "treatment_var": "t",
-            "outcome_var": "y",
-            "query_id": "q",
-        }
-        fields = asyncio.run(
-            node._consult_review_gate(state, _suite(GateDecision.BLOCK, confidence=0.3))
+    def test_block_band_carries_its_caveat_without_a_consult(self):
+        """#1991 debt 3: the BLOCK band no longer goes through the consult (it
+        queues nothing), so its caveat is built from the read-only probe's
+        rejection. The band sentence is still the BLOCK one, and it no longer
+        claims the estimate was routed anywhere."""
+        node = RefutationNode(expert_review_gate=_FakeReviewGate())
+        rejection = SimpleNamespace(
+            review_id="rev-block-1",
+            reviewer_name="Dr. No",
+            rejection_reason="collider",
+            is_approved=False,
         )
-        assert gate.calls[0]["dag_hash"] == "h2"
-        assert "BLOCK" in fields["review_caveat"]
+
+        fields = node._review_fields(
+            _suite(GateDecision.BLOCK, confidence=0.3), "rejected", rejection
+        )
+
+        caveat = fields["review_caveat"]
+        assert "BLOCK" in caveat
+        assert "routed to expert review" not in caveat
+        assert "is not queued for review" in caveat
+        assert "REJECTED" in caveat
         assert fields["expert_review_id"] == "rev-block-1"
 
     def test_gate_error_degrades_without_breaking_the_node(self):
@@ -230,16 +238,10 @@ class TestApprovalAwareCaveat:
         # The band wording is still present (borderline stays borderline).
         assert "REVIEW" in caveat
 
-    def test_block_band_caveat_also_acknowledges_but_stays_blocked(self):
-        gate = _ApprovedReviewGate()
-        node = RefutationNode(expert_review_gate=gate)
-        state = {"dag_version_hash": "h", "treatment_var": "t", "outcome_var": "y", "query_id": "q"}
-        fields = asyncio.run(
-            node._consult_review_gate(state, _suite(GateDecision.BLOCK, confidence=0.3))
-        )
-        caveat = fields["review_caveat"]
-        assert "BLOCK" in caveat
-        assert "expert-approved" in caveat
+    # The BLOCK-band twin of the test above was removed with #1991 debt 3: that
+    # band no longer consults the gate, so an "approved structure, blocked
+    # estimate" caveat is unreachable -- the run carries no approval note at
+    # all. test_refutation_block_never_mints_1991.py pins what it carries now.
 
     def test_pending_review_caveat_unchanged(self):
         """No active approval -> the existing band caveat, no approval note."""

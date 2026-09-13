@@ -117,6 +117,7 @@ class _ReviewRepo:
         self.rows = list(rows or [])
         self.raise_on_lookup = raise_on_lookup
         self.create_calls: List[Dict[str, Any]] = []
+        self.appended: List[tuple] = []
         self.lookups = 0
 
     async def get_dag_approval(self, dag_hash: str, brand: Optional[str] = None):
@@ -133,9 +134,22 @@ class _ReviewRepo:
             raise RuntimeError("review store unreachable")
         return list(self.rows)
 
+    async def get_reviews_for_estimand(self, estimand_key: str, include_expired: bool = True):
+        # #1991 debt 3: check_approval reads the ESTIMAND's history. An
+        # ``approval`` passed to this stand-in is part of that history (it is a
+        # row of the same estimand, approved on the hash under analysis).
+        self.lookups += 1
+        if self.raise_on_lookup:
+            raise RuntimeError("review store unreachable")
+        return ([self.approval] if self.approval else []) + list(self.rows)
+
     async def create_review(self, **kwargs: Any) -> str:
         self.create_calls.append(kwargs)
         return "rev-created"
+
+    async def append_version(self, review_id: str, **kwargs: Any) -> bool:
+        self.appended.append((review_id, kwargs.get("dag_version_hash")))
+        return True
 
     async def update_dag_structure(self, *args: Any, **kwargs: Any) -> bool:
         return True
@@ -154,6 +168,8 @@ def _approved_row() -> Dict[str, Any]:
     return {
         "review_id": "rev-approved",
         "approval_status": "approved",
+        # An approval is an approval OF this structure version (#1991 debt 3).
+        "dag_version_hash": _DAG_HASH,
         "reviewer_name": "Dr. Structure",
         "approved_at": "2026-01-01T00:00:00Z",
         "valid_until": "2099-01-01",
@@ -697,7 +713,13 @@ class TestRequireDagApprovalSwitch:
     @pytest.mark.asyncio
     async def test_on_block_band_keeps_the_block_reason(self, monkeypatch):
         """BLOCK is already terminal-failed for a statistical reason; the switch
-        must not overwrite that reason with an approval message."""
+        must not overwrite that reason with an approval message.
+
+        #1991 debt 3 flipped what this band does with the review: it used to
+        queue a row and carry ``expert_review_decision == "pending_review"``.
+        A BLOCK run now consults nothing and queues nothing -- the statistical
+        verdict stands on its own and a structural one could not change it.
+        """
         repo = _ReviewRepo(rows=[])
         gate = ExpertReviewGate(repository=repo, auto_create_review=True)
         node = _node(monkeypatch, GateDecision.BLOCK, gate, require_dag_approval=True)
@@ -707,7 +729,8 @@ class TestRequireDagApprovalSwitch:
         assert result["status"] == "failed"
         assert result["current_phase"] == "failed"
         assert "expert_review_halt" not in result
-        assert result["expert_review_decision"] == "pending_review"
+        assert result.get("expert_review_decision") is None
+        assert repo.create_calls == []
         assert "blocked due to low confidence" in result["error_message"].lower()
         assert _ENV not in result["error_message"]
 

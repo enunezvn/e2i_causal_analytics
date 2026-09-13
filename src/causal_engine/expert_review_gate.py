@@ -14,7 +14,12 @@ from datetime import date
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional
 
-from src.repositories.expert_review import ExpertReviewRepository
+from src.causal_engine.dag_hash import compute_adjustment_set_hash
+from src.repositories.expert_review import (
+    ExpertReviewRepository,
+    approval_validity,
+    estimand_key_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,8 +186,9 @@ class ExpertReviewGate:
             pass
 
     Live path (#1971): the causal_impact RefutationNode calls ``check_rejection``
-    on every refutation band (read-only) and ``check_approval`` on REVIEW/BLOCK
-    (queue-or-lookup). Whether a missing approval HALTS a run is the node's
+    on every refutation band (read-only) and ``check_approval`` on REVIEW alone
+    (queue-or-lookup; a BLOCK band queues nothing -- #1991 debt 3, it already
+    failed statistically). Whether a missing approval HALTS a run is the node's
     ``CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL`` switch; a human REJECTION always does.
     A gate without a repository answers UNAVAILABLE -- it never vouches for a
     DAG it could not look up.
@@ -226,7 +232,14 @@ class ExpertReviewGate:
         related_validation_ids: Optional[List[str]] = None,
     ) -> ReviewGateResult:
         """
-        Check if a DAG has expert approval and is valid.
+        Check whether this ESTIMAND's review clears the DAG under analysis.
+
+        Identity is the estimand (``lower(brand):treatment:outcome``, migration
+        140): an estimand holds at most one pending review, and a structure
+        change UPDATES it. Version is ``dag_hash``: a differing hash appends a
+        row to the review's version timeline (migration 141) instead of minting
+        a sibling row, and an approval is only ever an approval OF the hash it
+        was granted on.
 
         Args:
             dag_hash: SHA256 hash of the DAG structure
@@ -268,25 +281,46 @@ class ExpertReviewGate:
                 requires_action=True,
             )
 
+        # The ESTIMAND's history, newest first (#1991 debt 3). Keying the read
+        # on the estimand instead of on one hash is what lets a structure
+        # change land on the review that already exists: a hash-keyed read
+        # returns nothing for a new hash, which is how the old gate minted a
+        # second row for the same question.
+        estimand_key = estimand_key_for(brand, treatment, outcome)
+        history = await self.repository.get_reviews_for_estimand(estimand_key, include_expired=True)
+
         # Chronology first (#1971, codex iter-3): the MOST RECENT adjudication
-        # of this structure wins. An approval that is still unexpired but OLDER
-        # than a rejection (approve A, renew as B, reject B while A's 90 days
-        # run) is superseded -- ``get_dag_approval`` would still return A, so
-        # it must not be consulted on its own. The whole history is needed
-        # for that ordering, expired approvals included.
-        history = await self.repository.get_reviews_for_dag(
-            dag_hash, include_expired=True, brand=brand
-        )
+        # wins. An approval that is still unexpired but OLDER than a rejection
+        # (approve A, renew as B, reject B while A's 90 days run) is superseded,
+        # so the approval must not be read on its own. The whole history is
+        # needed for that ordering, expired approvals included.
         latest_verdict, reopened = self._latest_adjudication(history)
         superseded_by_rejection = (
             latest_verdict is not None and latest_verdict.get("approval_status") == "rejected"
         )
 
         # Check for active approval -- only if no newer rejection supersedes it.
+        # Read from the history rather than from ``get_dag_approval``: that
+        # query answers "is THIS hash approved" without the estimand's
+        # chronology, and the history already carries the answer. An approval
+        # is scoped to the hash it was granted on -- the same estimand on a
+        # DIFFERENT structure is NOT approved by it (spec §7); it re-opens a
+        # review below, and the old approval keeps its validity for its own
+        # hash.
+        today = date.today()
         approval = (
             None
             if superseded_by_rejection
-            else await self.repository.get_dag_approval(dag_hash, brand)
+            else next(
+                (
+                    row
+                    for row in history
+                    if row.get("approval_status") == "approved"
+                    and row.get("dag_version_hash") == dag_hash
+                    and approval_validity(row, today) != "expired"
+                ),
+                None,
+            )
         )
 
         if approval:
@@ -348,16 +382,53 @@ class ExpertReviewGate:
         # No usable approval - check for pending review (a pending row NEWER
         # than a rejection is a reviewer re-opening the structure).
         pending = [r for r in history if r.get("approval_status") == "pending"]
+        structure = sanitize_dag_structure(dag_structure)
+        adjustment_set_hash = compute_adjustment_set_hash(
+            list((dag_structure or {}).get("adjustment_sets") or [])
+        )
 
         if pending:
-            # Review already pending. Backfill-on-encounter (097): this
-            # short-circuit is the ONLY consult a pre-097 (structure-less)
-            # pending row will ever see for its DAG, so attach the renderable
-            # snapshot now. Best-effort — a backfill failure must never break
-            # the gate.
             pending_row = pending[0]
             review_id = pending_row.get("review_id")
-            structure = sanitize_dag_structure(dag_structure)
+
+            if review_id and pending_row.get("dag_version_hash") != dag_hash:
+                # Same question, new structure (#1991 debt 3): APPEND a version
+                # to the open review and advance it, instead of minting a
+                # sibling row. ``expert_review_versions`` is a timeline, so a
+                # revert (A -> B -> A) legitimately appends a third row; the
+                # ``!=`` above is the whole of same-hash idempotence.
+                # Best-effort: a failed append must not withhold the review id
+                # the caller needs (the repository logs the detail, and the
+                # review is still pending either way).
+                appended = await self.repository.append_version(
+                    str(review_id),
+                    dag_version_hash=dag_hash,
+                    dag_structure=structure,
+                    adjustment_set_hash=adjustment_set_hash,
+                    query_id=requester_id,
+                )
+                if not appended:
+                    logger.warning(
+                        f"Could not record structure version {dag_hash} on pending review "
+                        f"{review_id} (estimand {estimand_key}); the review stays pending "
+                        "on its previous version."
+                    )
+                return ReviewGateResult(
+                    decision=ReviewGateDecision.PENDING_REVIEW,
+                    dag_hash=dag_hash,
+                    is_approved=False,
+                    review_id=review_id,
+                    message=(
+                        "DAG review pending expert approval (structure updated to a new version)"
+                    ),
+                    requires_action=True,
+                )
+
+            # Review already pending on THIS structure. Backfill-on-encounter
+            # (097): this short-circuit is the ONLY consult a pre-097
+            # (structure-less) pending row will ever see for its DAG, so attach
+            # the renderable snapshot now. Best-effort — a backfill failure must
+            # never break the gate.
             if structure and review_id and not pending_row.get("dag_structure_json"):
                 try:
                     await self.repository.update_dag_structure(
@@ -378,16 +449,34 @@ class ExpertReviewGate:
                 requires_action=True,
             )
 
-        # No approval and no pending review
+        # No approval and no pending review. A VALID approval of this estimand
+        # on a DIFFERENT structure means the question was signed off once and
+        # the structure has since changed: re-open, recording which approval the
+        # new review replaces. The old approval is NOT revoked -- it keeps its
+        # validity for its own hash (spec §7), so a re-run of that structure
+        # still clears.
+        superseded_approval = next(
+            (
+                row
+                for row in history
+                if row.get("approval_status") == "approved"
+                and row.get("dag_version_hash") != dag_hash
+                and approval_validity(row, today) != "expired"
+            ),
+            None,
+        )
+        supersedes_review_id = (
+            str(superseded_approval["review_id"])
+            if superseded_approval and superseded_approval.get("review_id")
+            else None
+        )
+
         if self.auto_create_review and requester_id:
-            # Auto-create review request.
-            # KNOWN FOLLOW-UP (R6-F2, DEFERRED): the get_dag_approval +
-            # get_reviews_for_dag pre-checks above guard against duplicate rows
-            # within a single run, but two concurrent runs on the SAME dag_hash
-            # can both pass the check and both INSERT, creating duplicate pending
-            # rows. The robust fix is a DB UNIQUE constraint on
-            # (dag_version_hash, approval_status='pending') — out of scope here
-            # (needs a migration); tracked separately. No behavior change.
+            # Auto-create review request. The duplicate-row race the old
+            # hash-keyed pre-check could not close is now closed in the DB:
+            # migration 140's partial UNIQUE index uq_er_pending_estimand allows
+            # ONE pending review per estimand, and create_review recovers the
+            # winner's row on the 23505.
             review_id = await self.repository.create_review(
                 reviewer_id=requester_id,
                 # C1 (R6-F2): MUST be a valid ``expert_review_type`` ENUM member.
@@ -403,11 +492,29 @@ class ExpertReviewGate:
                 treatment_variable=treatment,
                 outcome_variable=outcome,
                 analysis_context=analysis_context,
-                dag_structure=sanitize_dag_structure(dag_structure),
+                dag_structure=structure,
                 related_validation_ids=related_validation_ids,
+                supersedes_review_id=supersedes_review_id,
             )
 
             if review_id:
+                # Version 1 of the new review's timeline, so every review has a
+                # first version and ``get_versions`` is never empty for a row
+                # minted after migration 141 (the backfill covers older rows).
+                # Best-effort, like the append above: the review exists and is
+                # pending whatever the timeline write did.
+                appended = await self.repository.append_version(
+                    str(review_id),
+                    dag_version_hash=dag_hash,
+                    dag_structure=structure,
+                    adjustment_set_hash=adjustment_set_hash,
+                    query_id=requester_id,
+                )
+                if not appended:
+                    logger.warning(
+                        f"Could not record the first structure version {dag_hash} on new "
+                        f"review {review_id} (estimand {estimand_key})."
+                    )
                 return ReviewGateResult(
                     decision=ReviewGateDecision.PENDING_REVIEW,
                     dag_hash=dag_hash,
