@@ -11,6 +11,8 @@ data raises; the caller surfaces a failed simulation rather than a fake ATE.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
@@ -19,6 +21,8 @@ from src.causal_engine.uplift import UpliftConfig, UpliftRandomForest
 from src.digital_twin.effect.errors import EffectDataUnavailable
 from src.digital_twin.effect.estimate import PROVENANCE_SYNTHETIC, EffectEstimate
 from src.digital_twin.effect.provider import TrainingFrame
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_TRAINING_SAMPLES = 1000
 
@@ -75,7 +79,13 @@ class TwinEffectEstimator:
         model = UpliftRandomForest(config)
         result = model.estimate(x_train, treatment, y)
         if not result.success:
-            raise EstimationError(f"TwinEffectEstimator: uplift fit failed: {result.error_message}")
+            # ``error_message`` is ``str(e)`` of whatever causalml / sklearn raised
+            # (``BaseUpliftModel.estimate``); it goes to the log, not the error (#2020).
+            logger.warning("TwinEffectEstimator: uplift fit failed: %s", result.error_message)
+            raise EstimationError(
+                "TwinEffectEstimator: uplift fit failed; the uplift model could not be fitted on "
+                "the training frame."
+            )
 
         twin_scores = _to_1d(model.predict(x_twin))
         population_ate = float(np.mean(twin_scores))

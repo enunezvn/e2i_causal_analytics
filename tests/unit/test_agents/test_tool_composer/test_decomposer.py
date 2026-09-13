@@ -387,17 +387,22 @@ class TestErrorHandling:
     """Tests for error handling"""
 
     @pytest.mark.asyncio
-    async def test_llm_error_wrapped(self, mock_llm_client):
-        """Test that LLM errors are wrapped in DecompositionError"""
+    async def test_llm_error_wrapped(self, mock_llm_client, caplog):
+        """Test that LLM errors are wrapped in DecompositionError, their text logged (#2020)"""
         # Make LLM raise an error using the LangChain interface
-        mock_llm_client.set_error(Exception("LLM error"))
+        llm_error = Exception("LLM error")
+        mock_llm_client.set_error(llm_error)
 
         decomposer = QueryDecomposer(llm_client=mock_llm_client)
 
         with pytest.raises(DecompositionError) as exc_info:
             await decomposer.decompose("Test")
 
-        assert "LLM error" in str(exc_info.value)
+        assert str(exc_info.value) == (
+            "the query could not be broken into sub-questions because of an internal error"
+        )
+        assert "LLM error" in caplog.text
+        assert exc_info.value.__cause__ is llm_error
 
     @pytest.mark.asyncio
     async def test_missing_required_field(self, mock_llm_client):

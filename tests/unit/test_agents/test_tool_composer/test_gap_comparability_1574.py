@@ -45,6 +45,7 @@ from src.agents.tool_composer.models.composition_models import (
     ToolInput,
     ToolOutput,
 )
+from src.agents.tool_composer.reason_codes import ReasonCode, canonical_sentence
 
 # The b2 wording the failure must carry, and the flat non-existence claims it
 # must never carry.
@@ -301,7 +302,17 @@ def test_unresolvable_grouping_column_guard_unchanged():
 # `ToolOutput.error` and hand the user a less informative answer than the
 # fabricated comparison it replaced.
 # ---------------------------------------------------------------------------
-def _failed_trace(plan_id: str, *, tool_name: str, error: str) -> ExecutionTrace:
+def _failed_trace(
+    plan_id: str,
+    *,
+    tool_name: str,
+    error: str,
+    outcome_class: str | None = "refused",
+    reason_code: str | None = "coverage_gap",
+    error_type: str | None = "ToolRefusalError",
+) -> ExecutionTrace:
+    # The defaults are what the executor records for the real site: `gap_calculator` raises
+    # ToolRefusalError(..., reason_code=COVERAGE_GAP), caught by the executor's refusal arm.
     now = datetime.now(timezone.utc)
     return ExecutionTrace(
         plan_id=plan_id,
@@ -315,6 +326,9 @@ def _failed_trace(plan_id: str, *, tool_name: str, error: str) -> ExecutionTrace
                 status=ExecutionStatus.FAILED,
                 started_at=now,
                 completed_at=now,
+                outcome_class=outcome_class,
+                error_type=error_type,
+                reason_code=reason_code,
             )
         ],
         tools_executed=1,
@@ -323,7 +337,9 @@ def _failed_trace(plan_id: str, *, tool_name: str, error: str) -> ExecutionTrace
     )
 
 
-def _wire_total_failure(composer: ToolComposer, *, tool_name: str, error: str) -> None:
+def _wire_total_failure(
+    composer: ToolComposer, *, tool_name: str, error: str, **step_fields: str | None
+) -> None:
     decomp = DecompositionResult(
         original_query="Kisqali vs competitors market share",
         sub_questions=[],
@@ -333,7 +349,7 @@ def _wire_total_failure(composer: ToolComposer, *, tool_name: str, error: str) -
     composer.decomposer.decompose = AsyncMock(return_value=decomp)
     composer.planner.plan = AsyncMock(return_value=plan)
     composer.executor.execute = AsyncMock(
-        return_value=_failed_trace(plan.plan_id, tool_name=tool_name, error=error)
+        return_value=_failed_trace(plan.plan_id, tool_name=tool_name, error=error, **step_fields)
     )
     composer.synthesizer.synthesize = AsyncMock(
         return_value=ComposedResponse(answer="synthesized", confidence=0.8)
@@ -376,7 +392,16 @@ async def test_total_failure_result_preserves_the_tool_reason():
 async def test_total_failure_result_without_a_reason_is_unchanged():
     """A failed step with no error text must not grow an empty ' : ' fragment."""
     composer = ToolComposer(llm_client=object(), enable_memory_contribution=False)
-    _wire_total_failure(composer, tool_name="gap_calculator", error="")
+    # No text AND no code: the one shape that still adds no reason fragment (#2020). A coded step
+    # with empty text renders its code's sentence instead.
+    _wire_total_failure(
+        composer,
+        tool_name="gap_calculator",
+        error="",
+        outcome_class=None,
+        reason_code=None,
+        error_type=None,
+    )
 
     result = await composer.compose("Kisqali vs competitors market share")
 
@@ -482,4 +507,8 @@ async def test_step_with_success_flag_but_no_result_is_reported_failed():
 
     assert result.response is not None
     assert result.response.failed_components == ["gap_calculator"]
-    assert "gap_calculator: empty result" in result.response.answer
+    tool_error = ReasonCode.TOOL_ERROR
+    assert (
+        f"gap_calculator: {canonical_sentence(tool_error)} [{tool_error.value}]"
+        in result.response.answer
+    )

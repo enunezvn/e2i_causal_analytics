@@ -28,6 +28,7 @@ import pytest
 
 from src.agents.tool_composer import tool_registrations as tr
 from src.agents.tool_composer.errors import ToolInputError, ToolRefusalError
+from src.agents.tool_composer.reason_codes import ReasonCode
 from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
 from src.digital_twin.effect.provider import CohortEffectDataProvider
 from src.digital_twin.models.simulation_models import InterventionConfig, PopulationFilter
@@ -219,8 +220,11 @@ def test_a_target_region_the_cohort_does_not_cover_is_refused(engine):
     the cohort the COHORT ATE; that must never be reported as the region's effect."""
     no_west = CohortEffectDataProvider(_cohort().query("region != 'west'"))
     frame = _frame(no_west)
-    with pytest.raises(ToolRefusalError, match="west"):
+    with pytest.raises(ToolRefusalError, match="west") as caught:
         tr._targeted_effect(frame, ["west"])
+    # #2021 review: EffectDataUnavailable covers several causes (no contrast here), not
+    # only too few rows.
+    assert caught.value.reason_code is ReasonCode.EFFECT_NOT_ESTIMABLE
     run = SimulationEngine(
         population=_population(), effect_provider=no_west, effect_estimator=CohortCausalEstimator()
     ).simulate(InterventionConfig(intervention_type="email_campaign"), use_cache=False)
@@ -261,7 +265,7 @@ def test_a_failed_engine_run_is_refused_not_reported(engine, provider):
     )
     failed = _simulate(small, [])
     assert failed.status.value == "failed"
-    with pytest.raises(ToolRefusalError, match="Insufficient twins"):
+    with pytest.raises(ToolRefusalError, match="Insufficient twins") as caught:
         tr._simulation_results(
             failed,
             brand="Kisqali",
@@ -269,6 +273,8 @@ def test_a_failed_engine_run_is_refused_not_reported(engine, provider):
             frame=_frame(provider),
             targeted=None,
         )
+    # #2021 review: the simulation runs inside this step; no upstream step failed.
+    assert caught.value.reason_code is ReasonCode.SIMULATION_INCOMPLETE
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +299,20 @@ async def test_an_unreachable_database_is_not_a_refusal():
         await load(client, "email_campaign", "Kisqali")
     assert not isinstance(cohort_load.value, (ToolRefusalError, ToolInputError))
     assert "connect" in f"{type(cohort_load.value).__name__} {cohort_load.value}".lower()
+
+
+def test_an_unusable_cohort_is_refused_as_an_effect_that_cannot_be_estimated(monkeypatch):
+    """#2021 review: ``cohort_provider_from_frame`` returns ``None`` for a missing column,
+    too few rows or an unestimable intervention alike, so the code names the outcome."""
+    from src.digital_twin.effect import cohort_loader
+
+    async def too_small(client, brand):
+        return _cohort().head(100)
+
+    monkeypatch.setattr(cohort_loader, "load_cohort_frame", too_small)
+    with pytest.raises(ToolRefusalError, match="no effect data") as caught:
+        asyncio.run(tr._load_cohort_provider(None, "email_campaign", "Kisqali"))
+    assert caught.value.reason_code is ReasonCode.EFFECT_NOT_ESTIMABLE
 
 
 def test_the_route_loader_still_degrades_to_none(provider):

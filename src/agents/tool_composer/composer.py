@@ -55,6 +55,7 @@ from .models.composition_models import (
     SynthesisInput,
 )
 from .planner import PlanningError, ToolPlanner
+from .reason_codes import ReasonCode, canonical_sentence
 from .serialization import dump_json_safe
 from .synthesizer import ResponseSynthesizer
 
@@ -66,6 +67,9 @@ logger = logging.getLogger(__name__)
 # returned to the caller verbatim (no synthesis pass to compress it).
 _MAX_FAILURE_REASON_CHARS = 2000
 _TRUNCATION_MARKER = "…(truncated)"
+# #2020: the only outcome classes a TOOL authors. The executor sets these two solely in the arm
+# that catches ToolRefusalError / ToolInputError, and since #2021 always with a reason code.
+_TOOL_AUTHORED_CLASSES = frozenset({"refused", "input_rejected"})
 
 
 def _truncate(text: str, limit: int = _MAX_FAILURE_REASON_CHARS) -> str:
@@ -586,7 +590,8 @@ class ToolComposer:
                 query,
                 started_at,
                 phase_durations,
-                f"Unexpected error: {e}",
+                # #2020: arbitrary exception text; logger.exception above has it.
+                "Unexpected error: the analysis could not be completed.",
                 None,
                 composition_id=composition_id,
             )
@@ -1235,7 +1240,19 @@ class ToolComposer:
         from .models.composition_models import ComposedResponse
 
         failed_tools: List[str] = []
-        reasons: List[str] = []
+        trusted_reasons: List[str] = []
+        canonical_reasons: List[str] = []
+        # #2020: what a failed step is allowed to say to the user.
+        #
+        # A tool-authored refusal is an honest, user-meaningful finding: #1574's gap_calculator
+        # states which entity groups the estimation data actually covered, and a one-step plan
+        # fail-closes here, before synthesis, so dropping it would leave the answer LESS
+        # informative. Those reach the user verbatim, exactly as before.
+        #
+        # Every other failure carries library internals — DoWhy/sklearn shape errors, driver
+        # messages, file paths, reprs of inputs. They mean nothing to a pharma leader, read as a
+        # crash rather than a finding, and expose implementation detail. Those are replaced by
+        # the closed code's canonical sentence, and the raw text goes to the log.
         for step in getattr(execution_trace, "step_results", None) or []:
             output = getattr(step, "output", None)
             # ``is_success`` (success AND a result present) is the model's own
@@ -1249,16 +1266,44 @@ class ToolComposer:
                 getattr(step, "tool_name", None) or getattr(output, "tool_name", None) or "unknown"
             )
             failed_tools.append(tool_name)
-            reason = str(getattr(output, "error", None) or "").strip()
-            if reason:
-                reasons.append(f"{tool_name}: {reason}")
+            raw = str(getattr(output, "error", None) or "").strip()
+            reason_code = getattr(step, "reason_code", None)
+            if not raw and not reason_code:
+                # Nothing to withhold and nothing to say: no reason fragment, as before #2020.
+                continue
+            # One rule: verbatim only when tool-authored, non-empty AND carrying a KNOWN code (the
+            # refusal arm's constructor fails soft to tool_error, so an unknown code on an authored
+            # class came from a foreign producer); otherwise the code's canonical sentence.
+            authored = getattr(step, "outcome_class", None) in _TOOL_AUTHORED_CLASSES
+            if authored and raw and reason_code in ReasonCode:
+                trusted_reasons.append(f"{tool_name}: {raw}")
+                continue
+            # Not trusted: not tool-authored, uncoded or carrying a code outside the closed set, or authored with no text.
+            if raw:
+                logger.warning(
+                    "Step %s tool %r failed with non-user-facing text (reason_code=%s): %s",
+                    getattr(step, "step_id", "?"),
+                    tool_name,
+                    reason_code,
+                    raw,
+                )
+            # ``reason_code`` is a plain string on the model, so only a closed-set value is rendered;
+            # anything else renders as tool_error in both the sentence and the tag.
+            code = str(reason_code) if reason_code in ReasonCode else ReasonCode.TOOL_ERROR.value
+            canonical_reasons.append(f"{tool_name}: {canonical_sentence(code)} [{code}]")
+        # Verbatim refusals FIRST: the answer is truncated from the end, canonical fragments are
+        # often longer than the raw text they replaced, and #1574's scope sits at the end of its
+        # refusal — joined last, a mixed trace can push that scope past the budget.
+        reasons = [*trusted_reasons, *canonical_reasons]
         msg = (
             f"All {execution_trace.tools_executed} tool(s) failed; no analysis could "
             "be completed. Returning a failed result rather than a fabricated answer."
         )
         # This answer is NOT synthesized — it is returned verbatim to the caller
-        # (``agent.py`` maps it to ``ToolComposerOutput.response``). Carrying the
-        # per-step reasons is what keeps a fail-closed tool's honest envelope
+        # (``agent.py`` maps it to ``ToolComposerOutput.response``). The per-step
+        # reasons it carries are the sanitized ones built above: a tool-authored
+        # refusal verbatim, every other failure as its code's canonical sentence.
+        # Carrying the refusal is what keeps a fail-closed tool's honest envelope
         # reaching the user: #1574's ``gap_calculator`` guard states which entity
         # groups the estimation data actually covered, and a one-step plan
         # fail-closes here, before synthesis, so dropping the reason would leave
