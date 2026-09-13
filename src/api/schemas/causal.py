@@ -17,6 +17,23 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 # =============================================================================
+# GATE VOCABULARY (#1991 debt 4)
+# =============================================================================
+# Each gate's own vocabulary as a Literal, not a shared `str` -- an
+# out-of-vocabulary value is a 422 at the schema boundary, not a token that
+# silently reaches the frontend. See `RefutationGate` (robustness gate) vs.
+# `ExpertReviewDecision` (structural DAG-approval gate): they are DIFFERENT
+# vocabularies for different gates and must not be conflated.
+
+#: `ExpertReviewGate` robustness/refutation gate decision (causal_engine).
+RefutationGate = Literal["proceed", "review", "block"]
+
+#: `ExpertReviewGate` structural DAG-approval decision (causal_engine).
+ExpertReviewDecision = Literal[
+    "proceed", "renewal_required", "pending_review", "rejected", "blocked", "unavailable"
+]
+
+# =============================================================================
 # ENUMS
 # =============================================================================
 
@@ -589,7 +606,9 @@ class RefutationTestDetail(BaseModel):
 class RefutationSummary(BaseModel):
     """Robustness gate + refutation/sensitivity summary from the agent."""
 
-    gate_decision: Optional[str] = Field(default=None, description="proceed / review / block")
+    gate_decision: Optional[RefutationGate] = Field(
+        default=None, description="proceed / review / block"
+    )
     passed: bool = Field(default=False, description="True only on a PROCEED gate")
     needs_review: bool = Field(default=False)
     expert_review_id: Optional[str] = Field(
@@ -601,7 +620,7 @@ class RefutationSummary(BaseModel):
             "(any gate). None when no row was involved."
         ),
     )
-    expert_review_decision: Optional[str] = Field(
+    expert_review_decision: Optional[ExpertReviewDecision] = Field(
         default=None,
         description=(
             "ExpertReviewGate decision for the DAG structure: proceed (active "
@@ -869,7 +888,9 @@ class DiscoveredEffect(BaseModel):
     p_value: Optional[float] = None
     statistical_significance: bool = False
     selected_estimator: Optional[str] = None
-    gate_decision: Optional[str] = Field(default=None, description="proceed / review / block")
+    gate_decision: Optional[RefutationGate] = Field(
+        default=None, description="proceed / review / block"
+    )
     confidence_score: float = Field(
         default=0.0, description="0-1 ranking signal: robustness gate + statistical significance"
     )

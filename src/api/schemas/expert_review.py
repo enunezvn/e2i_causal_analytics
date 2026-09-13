@@ -20,6 +20,29 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class DagStructureSnapshot(BaseModel):
+    """The sanitized causal-graph snapshot (mig 097) with the DISCOVERY gate typed.
+
+    Mirrors ``sanitize_dag_structure`` (src/causal_engine/expert_review_gate.py):
+    ``nodes``/``edges`` are always coerced to plain lists (edge tuples ->
+    2-element string lists) before the JSONB write, and ``_DAG_SNAPSHOT_KEYS``
+    is exactly the optional field set below. ``extra="allow"`` keeps this
+    forward-compatible with a future snapshot key without a schema change.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    nodes: List[str] = []
+    edges: List[List[str]] = []
+    treatment_nodes: Optional[List[str]] = None
+    outcome_nodes: Optional[List[str]] = None
+    adjustment_sets: Optional[List[List[str]]] = None
+    augmented_edges: Optional[List[List[str]]] = None
+    discovery_gate_decision: Optional[Literal["accept", "review", "reject", "augment"]] = None
+    confidence: Optional[float] = None
+    dag_version_hash: Optional[str] = None
+
+
 def _json_string_to_dict(value: Any) -> Any:
     """Shared ``mode="before"`` body for JSONB columns the repo writes as
     ``json.dumps`` strings: parse a string, keep only a dict, pass anything
@@ -55,7 +78,7 @@ class PendingReviewItem(BaseModel):
     analysis_context: Optional[str] = None
     created_at: Optional[datetime] = None
     days_pending: Optional[float] = None
-    dag_structure_json: Optional[Dict[str, Any]] = None
+    dag_structure_json: Optional[DagStructureSnapshot] = None
     agent_assessment_json: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(extra="ignore")

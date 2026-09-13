@@ -363,7 +363,10 @@ class TestPendingReviewsCarryDagStructure:
         resp = client.get("/api/expert-reviews/pending")
         assert resp.status_code == 200, resp.text
         item = resp.json()["reviews"][0]
-        assert item["dag_structure_json"] == _STRUCTURE
+        # #1991: dag_structure_json is now a typed DagStructureSnapshot, so the
+        # response carries every snapshot key (adjustment_sets, confidence, ...)
+        # defaulted to null -- compare only the subset _STRUCTURE sets.
+        assert {k: item["dag_structure_json"][k] for k in _STRUCTURE} == _STRUCTURE
         assert item["agent_assessment_json"]["items"][0]["verdict"] == "supports"
 
     def test_absent_structure_is_null_not_fabricated(self, client, fake_repo):

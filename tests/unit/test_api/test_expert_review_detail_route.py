@@ -91,7 +91,11 @@ async def test_returns_the_row_and_its_same_structure_history(monkeypatch):
     assert resp.review.review_id == RID
     assert resp.review.approval_status == "rejected"
     assert resp.review.reviewer_name == "Dr. No"
-    assert resp.review.dag_structure_json == {"nodes": ["t", "y"], "edges": [["t", "y"]]}
+    # #1991: dag_structure_json is now a typed DagStructureSnapshot instance.
+    assert resp.review.dag_structure_json.model_dump(exclude_none=True) == {
+        "nodes": ["t", "y"],
+        "edges": [["t", "y"]],
+    }
     assert resp.review.comments_json == {"note": "engagement is post-treatment"}
     assert [r.review_id for r in resp.history] == [RID, RID_OLDER]
     # the same read the gate's rejection probe performs: expired included, brand-scoped
