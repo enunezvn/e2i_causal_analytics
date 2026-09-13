@@ -50,19 +50,20 @@ class TestExpertReviewRepository:
     async def test_create_review_recovers_existing_pending_on_unique_violation(
         self, repo, mock_client
     ):
-        """M-reach1: when a concurrent INSERT loses the uq_er_pending_dag_brand race,
-        create_review returns the EXISTING pending review_id, not None."""
+        """M-reach1: when a concurrent INSERT loses the uq_er_pending_estimand race
+        (migration 140; it replaced uq_er_pending_dag_brand), create_review returns
+        the EXISTING pending review_id for that ESTIMAND, not None."""
         # The INSERT raises (simulated 23505 unique-constraint violation).
         mock_client.table.return_value.insert.return_value.execute = AsyncMock(
             side_effect=Exception(
-                'duplicate key value violates unique constraint "uq_er_pending_dag_brand"'
+                'duplicate key value violates unique constraint "uq_er_pending_estimand"'
             )
         )
-        # The recovery lookup (_find_pending_review_id, brand set) finds the winner's row:
-        # .select().eq().eq().eq().limit().execute()
+        # The recovery lookup (_find_pending_review_id, keyed on the estimand) finds
+        # the winner's row: .select().eq().eq().limit().execute()
         recovery_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-winner"}]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
         ) = recovery_execute
 
         review_id = await repo.create_review(
@@ -84,7 +85,7 @@ class TestExpertReviewRepository:
         # If recovery were (wrongly) attempted, it would find this row and return it.
         leak_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-stale"}]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
         ) = leak_execute
 
         review_id = await repo.create_review(
@@ -104,12 +105,12 @@ class TestExpertReviewRepository:
         """A unique violation whose winner row is already gone/resolved → None."""
         mock_client.table.return_value.insert.return_value.execute = AsyncMock(
             side_effect=Exception(
-                'duplicate key value violates unique constraint "uq_er_pending_dag_brand"'
+                'duplicate key value violates unique constraint "uq_er_pending_estimand"'
             )
         )
         recovery_execute = AsyncMock(return_value=MagicMock(data=[]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
         ) = recovery_execute
 
         review_id = await repo.create_review(

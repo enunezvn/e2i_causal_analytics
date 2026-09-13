@@ -670,17 +670,38 @@ class TestSummary:
     async def test_permanent_counts_as_approved_only(self):
         repo, _ = _repo([PERMANENT])
         got = await repo.get_review_summary()
-        assert got == {"pending": 0, "approved": 1, "rejected": 0, "expired": 0, "expiring_soon": 0}
+        assert got == {
+            "pending": 0,
+            "approved": 1,
+            "rejected": 0,
+            "superseded": 0,
+            "expired": 0,
+            "expiring_soon": 0,
+        }
 
     async def test_expired_counts_as_expired_only(self):
         repo, _ = _repo([EXPIRED])
         got = await repo.get_review_summary()
-        assert got == {"pending": 0, "approved": 0, "rejected": 0, "expired": 1, "expiring_soon": 0}
+        assert got == {
+            "pending": 0,
+            "approved": 0,
+            "rejected": 0,
+            "superseded": 0,
+            "expired": 1,
+            "expiring_soon": 0,
+        }
 
     async def test_expiring_soon_is_a_subset_of_approved(self):
         repo, _ = _repo([EXPIRING_SOON, FAR_FUTURE, PENDING, REJECTED])
         got = await repo.get_review_summary()
-        assert got == {"pending": 1, "approved": 2, "rejected": 1, "expired": 0, "expiring_soon": 1}
+        assert got == {
+            "pending": 1,
+            "approved": 2,
+            "rejected": 1,
+            "superseded": 0,
+            "expired": 0,
+            "expiring_soon": 1,
+        }
 
     async def test_summary_agrees_with_the_pure_predicate(self):
         rows = [PERMANENT, EXPIRED, EXPIRES_TODAY, EXPIRING_SOON, FAR_FUTURE, PENDING, REJECTED]
@@ -776,6 +797,7 @@ WRITERS = frozenset(
         "update_agent_assessment",
         "update_dag_structure",
         "renew_review",
+        "append_version",
     }
 )
 
@@ -931,6 +953,7 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
             "pending": 0,
             "approved": 0,
             "rejected": 0,
+            "superseded": 0,
             "expired": 0,
             "expiring_soon": 0,
         }

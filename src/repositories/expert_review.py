@@ -117,6 +117,23 @@ def _apply_expiring_window(query: Any, days: int, today: Optional[date] = None) 
     return query.gte("valid_until", start.isoformat()).lte("valid_until", end.isoformat())
 
 
+def estimand_key_for(brand: Optional[str], treatment: Optional[str], outcome: Optional[str]) -> str:
+    """Review identity (migration 140): ``lower(brand):treatment:outcome``, null-safe.
+
+    Mirrors the STORED GENERATED column's expression semantics operand for
+    operand (``lower()`` over each field, ``COALESCE`` to ``''``, joined by
+    ``':'``), so a Python lookup lands on the same row PostgREST derived. Used
+    ONLY for lookups: the column is generated, so writers never send it -- an
+    insert that supplied it would be rejected outright.
+
+    A DAG hash is deliberately absent. The hash is the structure VERSION a
+    review currently covers (expert_review_versions, migration 141), not the
+    review's identity: a covariate or structure change must UPDATE the pending
+    review of an estimand, not mint a sibling.
+    """
+    return f"{(brand or '').lower()}:{(treatment or '').lower()}:{(outcome or '').lower()}"
+
+
 class ExpertReviewRepository(BaseRepository):
     """
     Repository for expert_reviews table.
@@ -181,6 +198,7 @@ class ExpertReviewRepository(BaseRepository):
         checklist: Optional[Dict[str, Any]] = None,
         related_validation_ids: Optional[List[str]] = None,
         dag_structure: Optional[Dict[str, Any]] = None,
+        supersedes_review_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Create a new expert review request.
@@ -202,6 +220,9 @@ class ExpertReviewRepository(BaseRepository):
                 treatment/outcome) persisted as dag_structure_json (mig 097) so
                 the review UI can render the DAG under review — the hash alone
                 is one-way and not renderable
+            supersedes_review_id: The earlier review of this estimand that this
+                one replaces, when the caller is minting a successor (existing
+                column; ``renew_review`` sets it the same way)
 
         Returns:
             Created review_id or None on failure
@@ -231,7 +252,12 @@ class ExpertReviewRepository(BaseRepository):
             "checklist_json": to_plain_json(checklist) if checklist else None,
             "related_validation_ids": related_validation_ids,
             "dag_structure_json": to_plain_json(dag_structure) if dag_structure else None,
+            "supersedes_review_id": supersedes_review_id,
         }
+
+        # estimand_key is NOT in this row and must never be: migration 140 made
+        # it GENERATED ALWAYS AS ... STORED, and PostgREST rejects an insert
+        # that supplies a generated column.
 
         # Remove None values
         row = {k: v for k, v in row.items() if v is not None}
@@ -243,49 +269,49 @@ class ExpertReviewRepository(BaseRepository):
             return review_id
         except Exception as e:
             # M-reach1: a concurrent creator may have won the race and inserted the
-            # pending row first — the partial UNIQUE index uq_er_pending_dag_brand
-            # (mig 062) then rejects THIS duplicate with a 23505 unique violation.
-            # Recover ONLY for that case (return the winner's pending review); let
-            # any other failure (transient connection/timeout, schema error) surface
-            # via the error log rather than masking it behind a possibly-stale
-            # pending row (codex MEDIUM).
+            # pending row first — the partial UNIQUE index uq_er_pending_estimand
+            # (mig 140, keyed on the ESTIMAND; it replaced 062's
+            # uq_er_pending_dag_brand) then rejects THIS duplicate with a 23505
+            # unique violation. Recover ONLY for that case (return the winner's
+            # pending review); let any other failure (transient connection/timeout,
+            # schema error) surface via the error log rather than masking it behind
+            # a possibly-stale pending row (codex MEDIUM).
             err = str(e).lower()
             if "23505" in err or "unique" in err or "duplicate key" in err:
-                existing = await self._find_pending_review_id(dag_version_hash, brand)
+                key = estimand_key_for(brand, treatment_variable, outcome_variable)
+                existing = await self._find_pending_review_id(key)
                 if existing is not None:
                     logger.info(
-                        "create_review: a pending review already exists for DAG "
-                        f"{dag_version_hash} (brand={brand}); returning it "
-                        "(concurrent create / unique-violation recovery)."
+                        "create_review: a pending review already exists for estimand "
+                        f"{key}; returning it (concurrent create / unique-violation "
+                        "recovery)."
                     )
                     return existing
             logger.error(f"Failed to create expert review: {e}")
             return None
 
-    async def _find_pending_review_id(
-        self, dag_version_hash: Optional[str], brand: Optional[str]
-    ) -> Optional[str]:
-        """M-reach1: return the review_id of an existing PENDING review for this DAG
-        (+brand), if any. Brand matching mirrors the uq_er_pending_dag_brand index
-        (NULL brand normalized): a None brand matches the NULL-brand pending row, a
-        set brand matches that brand exactly.
+    async def _find_pending_review_id(self, estimand_key: str) -> Optional[str]:
+        """M-reach1: return the review_id of the existing PENDING review of this
+        ESTIMAND, if any -- the row that won the uq_er_pending_estimand race.
 
-        Note (codex LOW): the index keys on ``COALESCE(brand, '')``, so it also
-        collapses an explicit empty-string brand into the NULL bucket; this lookup
-        uses ``IS NULL`` and would NOT match a ``brand=''`` winner. Callers populate
-        brand from a real brand name or None — never an explicit empty string — so
-        this boundary is not reachable in practice.
+        The lookup is a plain equality on the generated ``estimand_key`` column,
+        which is exactly what the partial unique index keys on, so it cannot
+        disagree with the index that rejected our insert. The old brand
+        normalisation note is obsolete: migration 140's expression already
+        COALESCEs every operand to ``''``, so a NULL brand and an explicit
+        empty-string brand derive the SAME key and both are matched here (the
+        pre-140 ``IS NULL`` lookup could not match a ``brand=''`` winner).
+        Compute the argument with :func:`estimand_key_for`.
         """
-        if not self.client or not dag_version_hash:
+        if not self.client:
             return None
         try:
             query = (
                 self.client.table(self.table_name)
                 .select("review_id")
-                .eq("dag_version_hash", dag_version_hash)
+                .eq("estimand_key", estimand_key)
                 .eq("approval_status", "pending")
             )
-            query = query.eq("brand", brand) if brand else query.is_("brand", "null")
             result = await query.limit(1).execute()
             if result.data:
                 return str(result.data[0]["review_id"])
@@ -716,6 +742,165 @@ class ExpertReviewRepository(BaseRepository):
             logger.error(f"Failed to get reviews for DAG: {e}")
             raise
 
+    async def get_reviews_for_estimand(
+        self,
+        estimand_key: str,
+        include_expired: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Every review of this ESTIMAND, newest first -- the history the gate and
+        the detail route read.
+
+        Sibling of ``get_reviews_for_dag``, keyed on identity instead of on one
+        structure version (migration 140). ``include_expired`` defaults to True
+        here: this is the audit view of an estimand, and a lapsed approval is
+        part of that history, including expired rows by design. Pass False for
+        the active-approval predicate (``_apply_active_validity``).
+
+        Args:
+            estimand_key: The generated key -- build it with ``estimand_key_for``
+            include_expired: When True (default) every row is returned, expired
+                approvals included; when False, rows whose ``valid_until`` has
+                passed are dropped (a NULL ``valid_until`` is kept: permanent)
+
+        Returns:
+            Review records for the estimand, newest ``created_at`` first
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R1/R3 convention of this module): an empty history reads as "this
+            estimand was never reviewed", which an outage must not fake. The
+            no-client early return ([]) is unchanged.
+        """
+        if not self.client:
+            return []
+
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .select("*")
+                .eq("estimand_key", estimand_key)
+                .order("created_at", desc=True)
+            )
+
+            if not include_expired:
+                query = _apply_active_validity(query)
+
+            result = await query.execute()
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Failed to get reviews for estimand: {e}")
+            raise
+
+    async def append_version(
+        self,
+        review_id: str,
+        *,
+        dag_version_hash: str,
+        dag_structure: Optional[Dict[str, Any]],
+        adjustment_set_hash: Optional[str],
+        query_id: Optional[str],
+    ) -> bool:
+        """Record a new structure version on a PENDING review and make it the
+        review's current hash.
+
+        ``expert_review_versions`` is a TIMELINE (migration 141), not a set: the
+        caller appends only when the hash differs from the review's current one,
+        and a revert (A -> B -> A) appends a third row rather than being
+        suppressed -- so same-hash idempotence is the caller's gate, not a
+        constraint's. ``insert()``, never ``upsert()``: ``upsert`` defaults to ON
+        CONFLICT DO UPDATE, and ``service_role`` holds SELECT+INSERT only on this
+        table (42501 otherwise).
+
+        The review update touches ``dag_version_hash`` and ``dag_structure_json``
+        only -- ``expert_reviews`` has no ``adjustment_set_hash`` column; that
+        hash lives on the version row.
+
+        Returns:
+            True only when BOTH the append and the review's advance succeeded.
+            False when the append failed (nothing was written and the review is
+            untouched), when the review advance failed, or when it matched no
+            PENDING row -- a resolved review is not advanced, and claiming True
+            there would report a current hash the row does not carry. After a
+            False that follows a successful append the timeline is one row ahead
+            of the review; the caller re-reads rather than treating False as
+            "nothing was written".
+        """
+        if not self.client:
+            return False
+
+        snapshot = to_plain_json(dag_structure) if dag_structure else None
+        try:
+            await (
+                self.client.table("expert_review_versions")
+                .insert(
+                    {
+                        "review_id": review_id,
+                        "dag_version_hash": dag_version_hash,
+                        "dag_structure_json": snapshot,
+                        "adjustment_set_hash": adjustment_set_hash,
+                        "query_id": query_id,
+                    }
+                )
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"append_version: insert failed for review {review_id}: {e}")
+            return False
+
+        try:
+            result = await (
+                self.client.table(self.table_name)
+                .update({"dag_version_hash": dag_version_hash, "dag_structure_json": snapshot})
+                .eq("review_id", review_id)
+                .eq("approval_status", "pending")
+                .execute()
+            )
+        except Exception as e:
+            logger.error(
+                f"append_version: version row appended for review {review_id} but the "
+                f"review could not be advanced to {dag_version_hash}: {e}"
+            )
+            return False
+
+        if not result.data:
+            logger.warning(
+                f"append_version: no PENDING review {review_id} to advance to "
+                f"{dag_version_hash} (nonexistent or already resolved); the version "
+                "row was appended."
+            )
+            return False
+        return True
+
+    async def get_versions(self, review_id: str) -> List[Dict[str, Any]]:
+        """Structure versions of a review, OLDEST first; ties on ``created_at``
+        broken by ``version_id`` so a backfill that stamped several rows with the
+        same timestamp still has one stable order.
+
+        Returns:
+            The review's version rows in timeline order
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R1/R3 convention): an empty timeline reads as "the structure never
+            changed". The no-client early return ([]) is unchanged.
+        """
+        if not self.client:
+            return []
+
+        try:
+            result = await (
+                self.client.table("expert_review_versions")
+                .select("*")
+                .eq("review_id", review_id)
+                .order("created_at", desc=False)
+                .order("version_id", desc=False)
+                .execute()
+            )
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Failed to get versions for review {review_id}: {e}")
+            raise
+
     async def renew_review(
         self,
         original_review_id: str,
@@ -803,7 +988,12 @@ class ExpertReviewRepository(BaseRepository):
 
         Returns:
             Summary dict with counts by status. ``pending`` / ``approved`` /
-            ``rejected`` / ``expired`` partition the rows; ``expiring_soon`` is
+            ``rejected`` / ``superseded`` / ``expired`` partition the rows;
+            ``superseded`` is a STORED status (migration 140): a review that can
+            no longer change an outcome -- the BLOCK-band pending rows that
+            migration resolved, and any review replaced by a newer one of the
+            same estimand. It is a resolution, never a queue item, so it is
+            counted apart from ``pending``. ``expiring_soon`` is
             a SUBSET of ``approved`` (within 14 days). ``expired`` is derived
             from ``valid_until`` via ``approval_validity`` -- the same predicate
             the gate's queries use -- and a NULL ``valid_until`` is a permanent
@@ -821,6 +1011,7 @@ class ExpertReviewRepository(BaseRepository):
                 "pending": 0,
                 "approved": 0,
                 "rejected": 0,
+                "superseded": 0,
                 "expired": 0,
                 "expiring_soon": 0,
             }
@@ -840,6 +1031,7 @@ class ExpertReviewRepository(BaseRepository):
             pending = 0
             approved = 0
             rejected = 0
+            superseded = 0
             expired = 0
             expiring_soon = 0
 
@@ -850,6 +1042,8 @@ class ExpertReviewRepository(BaseRepository):
                     pending += 1
                 elif status == "rejected":
                     rejected += 1
+                elif status == "superseded":
+                    superseded += 1
                 elif status == "approved":
                     # ONE definition (#1972): approval_validity() is the same
                     # predicate _apply_active_validity() sends to PostgREST.
@@ -869,6 +1063,7 @@ class ExpertReviewRepository(BaseRepository):
                 "pending": pending,
                 "approved": approved,
                 "rejected": rejected,
+                "superseded": superseded,
                 "expired": expired,
                 "expiring_soon": expiring_soon,
             }
