@@ -106,15 +106,6 @@ _FALSY = frozenset({"", "0", "false", "no", "off"})
 # error -- neither may bless a path.
 #
 # Known residue (reported to the dispatcher, not hidden):
-#   * src/repositories/expert_review.py: ExpertReviewRepository.get_reviews_for_dag
-#     (the probe's one read; also get_dag_approval) SWALLOWS its own exception
-#     (logger.error + return []), so a read error INSIDE the repository reads
-#     as "no history" = 'clear' rather than 'unknown'. The probe's 'unknown'
-#     branch fires only on an exception that reaches it. Needed change, in
-#     that file (another lane): let get_reviews_for_dag / get_dag_approval
-#     RAISE on a query error instead of returning [] / None -- the gate and
-#     this node already handle a raise (consult -> 'unavailable', probe ->
-#     'unknown'); no other consumer change is required (codex iter-2 HIGH-1).
 #   * A reviewer rejecting the structure in the window between the probe and
 #     CausalPathRepository.set_validation_status (src/repositories/causal_path.py,
 #     which conditions the UPDATE only on path_id + current status) is not

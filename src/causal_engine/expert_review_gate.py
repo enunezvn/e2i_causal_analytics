@@ -501,7 +501,9 @@ class ExpertReviewGate:
             # hash-keyed pre-check could not close is now closed in the DB:
             # migration 140's partial UNIQUE index uq_er_pending_estimand allows
             # ONE pending review per estimand, and create_review recovers the
-            # winner's row on the 23505.
+            # winner's row on the 23505 -- so ``review_id`` below is the id of a
+            # review this call may or may not have inserted, and nothing here
+            # may claim it was newly created.
             review_id = await self.repository.create_review(
                 reviewer_id=requester_id,
                 # C1 (R6-F2): MUST be a valid ``expert_review_type`` ENUM member.
@@ -523,11 +525,16 @@ class ExpertReviewGate:
             )
 
             if review_id:
-                # Version 1 of the new review's timeline, so every review has a
-                # first version and ``get_versions`` is never empty for a row
-                # minted after migration 141 (the backfill covers older rows).
-                # Best-effort, like the append above: the review exists and is
-                # pending whatever the timeline write did.
+                # On the insert path this is version 1 of the new review's
+                # timeline, so every review minted after migration 141 has a
+                # first version and ``get_versions`` is never empty (the
+                # backfill covers older rows). Its review UPDATE rewrites the
+                # hash and snapshot ``create_review`` just stored -- redundant,
+                # not a second distinct write. On the 23505-recovery path the
+                # append is the part that MATTERS: this run's structure becomes
+                # a version on the WINNER's review rather than being lost.
+                # Best-effort either way, like the append above: the review
+                # exists and is pending whatever the timeline write did.
                 appended = await self.repository.append_version(
                     str(review_id),
                     dag_version_hash=dag_hash,
@@ -549,7 +556,10 @@ class ExpertReviewGate:
                     dag_hash=dag_hash,
                     is_approved=False,
                     review_id=review_id,
-                    message="New DAG detected. Expert review request created.",
+                    # Neutral on WHO created the row: on the 23505-recovery
+                    # path a concurrent run inserted it and this one only
+                    # added its structure version.
+                    message="Expert review pending for this DAG structure",
                     requires_action=True,
                 )
 
