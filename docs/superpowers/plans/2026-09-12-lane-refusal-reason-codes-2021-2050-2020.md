@@ -40,7 +40,7 @@ Verified 2026-09-12 against `origin/main` `0a16e9c18`. **Read this section befor
 |---|----------|
 | D1 | ~~`composition_steps.error_message` receives the canonical catalogue sentence~~ — **superseded by D1′**. |
 | D1′ | **Render at read time.** Persist `reason_code` + numeric `reason_details` only. `error_message` stays NULL, so ml/041's no-error-text guard and the three tests that pin it are untouched. The admin page renders the sentence from `CANONICAL_SENTENCES`; adding a code never needs a migration. |
-| D4 | **ml/042 is proven by a scratch rehearsal**, not an in-harness test: the shared `_pg` fixture skips whenever prod already holds any of `LANE_MIGRATIONS` (prod has 039–041, so every learning-loop DB test skips on this droplet), and an in-harness 042 test would run at most once, pre-deploy, anyway. Rehearse on a throwaway container cloned from prod's image and schema; commit only the static CI checks for 042; leave the shared harness untouched. |
+| D4 | **ml/043 is proven by a scratch rehearsal**, not an in-harness test: the shared `_pg` fixture skips whenever prod already holds any of `LANE_MIGRATIONS` (prod has 039–041, so every learning-loop DB test skips on this droplet), and an in-harness 043 test would run at most once, pre-deploy, anyway. Rehearse on a throwaway container cloned from prod's image and schema; commit only the static CI checks for 043; leave the shared harness untouched. |
 | L1 | *(lead call, 2026-09-12)* `details` values are finite numbers or booleans only, keys are snake_case. Task 1 as first planned allowed strings up to 64 characters, which fits a column or brand name — exactly the data D1/D1′ keep out. All 15 detail values at the 7 current sites are integers, so tightening breaks nothing. Applied as a Task 1 fix after its spec review. |
 | D2 | **All 87 raise sites** get a code in this lane, enforced by an AST test that fails if any raise site lacks one. |
 | D3 | The admin observability route **does** surface the codes (per-tool `most_common_refusal_reason`, per-step `reason_code`). |
@@ -60,8 +60,8 @@ Verified 2026-09-12 against `origin/main` `0a16e9c18`. **Read this section befor
 | `src/agents/tool_composer/executor.py` | assign a code on every failure arm | 3 |
 | `src/agents/tool_composer/composer.py` | fail-closed answer: verbatim for refusals, canonical for everything else | 4 |
 | `src/agents/tool_composer/learning_recorder.py` | emit `reason_code` + numeric `reason_details` — no text | 5 |
-| `database/ml/042_composer_refusal_reason_codes.sql` *(new)* | reason columns; RPC carries code + details, `error_message` stays NULL; reliability function | 6 |
-| `database/ml/rollback_042.sql` *(new)* | reverse of 042 | 6 |
+| `database/ml/043_composer_refusal_reason_codes.sql` *(new)* | reason columns; RPC carries code + details, `error_message` stays NULL; reliability function | 6 |
+| `database/ml/rollback_043.sql` *(new)* | reverse of 043 | 6 |
 | `src/agents/tool_composer/reliability.py` | `most_common_refusal_reason` on `ToolReliability` | 7 |
 | `src/api/schemas/admin_tool_composer.py` | wire fields | 7 |
 | `src/services/tool_composer_observability_service.py` | map the new fields | 7 |
@@ -1389,30 +1389,32 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 
 ---
 
-## Task 6: Migration ml/042 — the RPC carries the reason as structure (#2050 cause 2)
+## Task 6: Migration ml/043 — the RPC carries the reason as structure (#2050 cause 2)
+
+> **Renumbered 042 → 043 (lead, 2026-09-12 23:58Z).** `origin/main` (#2053, merged into this branch as `38d60e9fe`) took `database/ml/042_twin_simulations_estimate_scope.sql` + `rollback_042.sql`. That migration only alters `twin_simulations`, which does not overlap this task. `_pg.LANE_MIGRATIONS` still lists only 039–041. Step 0 still applies: re-confirm `043` is free before writing.
 
 > **CI and harness facts (lead-verified 2026-09-12, before dispatch).**
 > - **The real-DB suite never runs in CI.** `tests/unit/test_database/learning_loop/conftest.py:19` skips unless `E2I_DB_INTEGRATION=1`, and no workflow under `.github/` sets that variable. `backend-tests.yml` still *collects* `tests/unit/test_database/`.
-> - **So the break in `test_migration_runner.py` is latent, not a red CI.** Once 042 exists, its assertions that the pending list is exactly `[ml/041…]` (:111) and that `Applying ` appears once (:117) are wrong. They only run with the gate on, and on this droplet they skip anyway, because prod holds 039–041. Disclose it in the PR body, as planned; do not edit the shared harness.
-> - **Stall-watchdog guard.** `tests/unit/test_tests_meta/test_session_stall_watchdog_1655.py` statically scans every `@pytest.mark.timeout` the backend lane collects, gated or not, and requires the lane's 600 s window to be at least 2× the largest. The current maximum is 300 s, in this directory. **No new 042 test may carry a timeout marker above 300 s.**
+> - **So the break in `test_migration_runner.py` is latent, not a red CI.** Once 043 exists, its assertions that the pending list is exactly `[ml/041…]` (:111) and that `Applying ` appears once (:117) are wrong. They only run with the gate on, and on this droplet they skip anyway, because prod holds 039–041. Disclose it in the PR body, as planned; do not edit the shared harness.
+> - **Stall-watchdog guard.** `tests/unit/test_tests_meta/test_session_stall_watchdog_1655.py` statically scans every `@pytest.mark.timeout` the backend lane collects, gated or not, and requires the lane's 600 s window to be at least 2× the largest. The current maximum is 300 s, in this directory. **No new 043 test may carry a timeout marker above 300 s.**
 
-> **Rewritten 2026-09-12 for D1′ and D4, before dispatch.** The first version stored `left(s->>'error_message', 200)` and proved it with an in-harness test. Both are reversed. ml/041's `NULL` in the `error_message` slot is the database's deliberate second guard — `test_041_recording.py:441`, `:668–740` and `test_learning_recorder_realdb.py:363` pin it — so **042 keeps that `NULL`**. The shared `_pg` fixture skips on this droplet because prod's ledger already holds 039–041 (`base_db` skips when any of `_pg.LANE_MIGRATIONS` is in prod), so **042 is proven by a scratch rehearsal** on a throwaway container cloned from prod, and only static checks are committed.
+> **Rewritten 2026-09-12 for D1′ and D4, before dispatch.** The first version stored `left(s->>'error_message', 200)` and proved it with an in-harness test. Both are reversed. ml/041's `NULL` in the `error_message` slot is the database's deliberate second guard — `test_041_recording.py:441`, `:668–740` and `test_learning_recorder_realdb.py:363` pin it — so **043 keeps that `NULL`**. The shared `_pg` fixture skips on this droplet because prod's ledger already holds 039–041 (`base_db` skips when any of `_pg.LANE_MIGRATIONS` is in prod), so **043 is proven by a scratch rehearsal** on a throwaway container cloned from prod, and only static checks are committed.
 
-**Why #2050 cause 2 is still the thing fixed here.** Cause 2 was "the RPC drops the reason on the floor". Under D1′ the reason is the code and its numeric details, and 042 makes the RPC carry both into `composition_steps` and the code into `tool_performance`. The `NULL` it keeps is for *text*, which D1′ never sends.
+**Why #2050 cause 2 is still the thing fixed here.** Cause 2 was "the RPC drops the reason on the floor". Under D1′ the reason is the code and its numeric details, and 043 makes the RPC carry both into `composition_steps` and the code into `tool_performance`. The `NULL` it keeps is for *text*, which D1′ never sends.
 
 **Files:**
-- Create: `database/ml/042_composer_refusal_reason_codes.sql`
-- Create: `database/ml/rollback_042.sql`
+- Create: `database/ml/043_composer_refusal_reason_codes.sql`
+- Create: `database/ml/rollback_043.sql`
 - Modify: `tests/unit/test_database/learning_loop/test_lane_migration_files.py` — static; runs in CI
-- Create, **untracked** (like every prior cert): `docs/demos/results/2026-09-12_lane_refusal_codes_cert/rehearse_042.py` and its transcript
+- Create, **untracked** (like every prior cert): `docs/demos/results/2026-09-12_lane_refusal_codes_cert/rehearse_043.py` and its transcript
 
 Facts this task relies on, all verified on `0a16e9c18`:
-- `_pg.build_base` restores prod's full schema dump, so the throwaway base already contains ml/041's `composer_record_steps` and `get_tool_reliability`; only its ledger omits the lane keys. Apply 042 directly with `_pg.apply_migration` — do NOT call `_pg.migrate`.
-- ml/041 revokes every function and view from `PUBLIC, anon, authenticated` and grants only `service_role`, and it sets no function comments. `DROP FUNCTION` discards an ACL, and a recreated function is executable by `PUBLIC` by default, so 042 must re-apply those grants.
-- `scripts/run_migrations.sh` skips `rollback_*.sql` by glob and runs on every deploy (`deploy.yml`), so 042 is applied automatically, wrapped in one transaction with its ledger row.
-- `test_lane_migration_files.py` forbids the runner's unwrap-trigger WORDS anywhere in a wrapped file, comments included. Do not write them in 042 or its rollback.
+- `_pg.build_base` restores prod's full schema dump, so the throwaway base already contains ml/041's `composer_record_steps` and `get_tool_reliability`; only its ledger omits the lane keys. Apply 043 directly with `_pg.apply_migration` — do NOT call `_pg.migrate`.
+- ml/041 revokes every function and view from `PUBLIC, anon, authenticated` and grants only `service_role`, and it sets no function comments. `DROP FUNCTION` discards an ACL, and a recreated function is executable by `PUBLIC` by default, so 043 must re-apply those grants.
+- `scripts/run_migrations.sh` skips `rollback_*.sql` by glob and runs on every deploy (`deploy.yml`), so 043 is applied automatically, wrapped in one transaction with its ledger row.
+- `test_lane_migration_files.py` forbids the runner's unwrap-trigger WORDS anywhere in a wrapped file, comments included. Do not write them in 043 or its rollback.
 
-- [ ] **Step 0: Confirm `042` is still free**
+- [ ] **Step 0: Confirm `043` is still free**
 
 ```bash
 cd /home/enunez/Projects/e2i_causal_analytics && git fetch origin main --quiet && \
@@ -1420,7 +1422,7 @@ cd /home/enunez/Projects/e2i_causal_analytics && git fetch origin main --quiet &
   ls .worktrees/*/database/ml/04[2-9]_* 2>/dev/null; echo "(nothing above = free)"
 ```
 
-If `042` is taken, use the next free number consistently in both filenames, the ledger key and every step below.
+If `043` is taken, use the next free number consistently in both filenames, the ledger key and every step below.
 
 - [ ] **Step 1: Write the failing static tests**
 
@@ -1429,24 +1431,24 @@ In `tests/unit/test_database/learning_loop/test_lane_migration_files.py`:
 (a) Add to the `test_runner_branch` parameter list:
 
 ```python
-        ("ml/042_composer_refusal_reason_codes.sql", False),
+        ("ml/043_composer_refusal_reason_codes.sql", False),
 ```
 
-(b) Change `test_no_script_level_transaction_control`'s parametrize to cover 042 explicitly:
+(b) Change `test_no_script_level_transaction_control`'s parametrize to cover 043 explicitly:
 
 ```python
-# ml/042 is deliberately NOT in _pg.LANE_MIGRATIONS: that tuple defines the shared fixture's
+# ml/043 is deliberately NOT in _pg.LANE_MIGRATIONS: that tuple defines the shared fixture's
 # "prod before this lane" base, which is 039-041's (D4, 2026-09-12).
-_REASON_CODES_MIGRATION = "ml/042_composer_refusal_reason_codes.sql"
+_REASON_CODES_MIGRATION = "ml/043_composer_refusal_reason_codes.sql"
 
 
 @pytest.mark.parametrize("key", [*_pg.LANE_MIGRATIONS, _REASON_CODES_MIGRATION])
 def test_no_script_level_transaction_control(key):
 ```
 
-(c) Add `_REASON_CODES_MIGRATION` to the `test_wrapped_files_never_mention_the_unwrap_triggers` list, and `"rollback_042.sql"` to the `test_rollbacks_are_never_auto_applied_and_hold_no_transaction_control` list.
+(c) Add `_REASON_CODES_MIGRATION` to the `test_wrapped_files_never_mention_the_unwrap_triggers` list, and `"rollback_043.sql"` to the `test_rollbacks_are_never_auto_applied_and_hold_no_transaction_control` list.
 
-(d) Append two tests that pin 042's two invariants where CI can see them (the real-DB tests never run in CI):
+(d) Append two tests that pin 043's two invariants where CI can see them (the real-DB tests never run in CI):
 
 ```python
 def _select_expressions(sql: str, table: str) -> tuple:
@@ -1471,8 +1473,8 @@ def _select_expressions(sql: str, table: str) -> tuple:
     return columns, [re.sub(r"--[^\n]*", "", p).strip() for p in parts]
 
 
-def test_042_still_writes_no_text_into_error_message():
-    """D1′: ml/041's NULL in the error_message slot is the database's second guard. 042 keeps it."""
+def test_043_still_writes_no_text_into_error_message():
+    """D1′: ml/041's NULL in the error_message slot is the database's second guard. 043 keeps it."""
     path = ML / _REASON_CODES_MIGRATION
     if not path.exists():
         pytest.fail(f"{_REASON_CODES_MIGRATION} is missing")
@@ -1482,7 +1484,7 @@ def test_042_still_writes_no_text_into_error_message():
     assert "reason_code" in columns and "reason_details" in columns
 
 
-def test_every_reason_code_passes_the_042_format_guard():
+def test_every_reason_code_passes_the_043_format_guard():
     """The SQL guard is a format, not a member list; every Python member must satisfy it.
 
     Read by AST, not imported: importing the tool_composer package costs ~564 MB here.
@@ -1515,19 +1517,19 @@ cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes && \
   -n 0 -p no:cacheprovider -q --timeout=300 -rf > /tmp/t6_red.log 2>&1; echo "EXIT=$?"; grep -E "^FAILED" /tmp/t6_red.log
 ```
 
-Expected: every 042 and `rollback_042` parameter fails with `… is missing` or an `assert path.exists()`, and the two new tests fail with `… is missing`. Any `FileNotFoundError`, `IndexError` or `AttributeError` is a broken test, not the red.
+Expected: every 043 and `rollback_043` parameter fails with `… is missing` or an `assert path.exists()`, and the two new tests fail with `… is missing`. Any `FileNotFoundError`, `IndexError` or `AttributeError` is a broken test, not the red.
 
-- [ ] **Step 3: Write `database/ml/042_composer_refusal_reason_codes.sql`**
+- [ ] **Step 3: Write `database/ml/043_composer_refusal_reason_codes.sql`**
 
 Sections 1, 2, 4 and 5 are given in full. Section 3 is a COPY of ml/041's function with four marked edits, and Step 4 proves the copy is otherwise exact.
 
 ```sql
 -- ============================================================================
--- ml/042 - refusal reason codes on the recording path (#2021, #2050)
+-- ml/043 - refusal reason codes on the recording path (#2021, #2050)
 --
 -- WHY. A refusal's reason was not persisted. ml/041's composer_record_steps recorded the
 -- outcome class and exception type, but nothing a reader could aggregate "why tools fail" by.
--- 042 records the CLOSED reason code (src/agents/tool_composer/reason_codes.py) and its
+-- 043 records the CLOSED reason code (src/agents/tool_composer/reason_codes.py) and its
 -- numeric details, and mirrors the code into tool_performance so get_tool_reliability can
 -- report the most common refusal reason per tool.
 --
@@ -1539,7 +1541,7 @@ Sections 1, 2, 4 and 5 are given in full. Section 3 is a COPY of ml/041's functi
 -- catalogue (owner decision D1', 2026-09-12), so adding a code never needs a migration.
 --
 -- Applied by scripts/run_migrations.sh inside one transaction with its ledger row
--- (key: ml/042_composer_refusal_reason_codes.sql). Re-applying it changes nothing.
+-- (key: ml/043_composer_refusal_reason_codes.sql). Re-applying it changes nothing.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -1595,7 +1597,7 @@ $fn$;
 
 -- ---------------------------------------------------------------------------
 -- 3. composer_record_steps: carry the code and the details. The error_message slot stays NULL.
---    Copied from ml/041 with four edits, each marked "-- 042". CREATE OR REPLACE with an
+--    Copied from ml/041 with four edits, each marked "-- 043". CREATE OR REPLACE with an
 --    unchanged signature keeps the function's grants; section 5 re-asserts them anyway.
 -- ---------------------------------------------------------------------------
 <COPY HERE: ml/041's CREATE OR REPLACE FUNCTION composer_record_steps(p_seed jsonb, p_steps jsonb)
@@ -1639,22 +1641,22 @@ The `<COPY HERE: …>` lines are instructions to you, not SQL. Replace each with
 
 **Edits to the copied `composer_record_steps`:**
 
-- **E1** — in the `INSERT INTO composition_steps (` column list, change the last line `error_message, retry_count, outcome_class, attempts, cache_hit, error_type` to end `…, cache_hit, error_type, reason_code, reason_details  -- 042`.
+- **E1** — in the `INSERT INTO composition_steps (` column list, change the last line `error_message, retry_count, outcome_class, attempts, cache_hit, error_type` to end `…, cache_hit, error_type, reason_code, reason_details  -- 043`.
 - **E2** — the SELECT's last expression is the `CASE WHEN (s->>'error_type') ~ … END`. Add a comma after its `END`, then append:
   ```sql
-              CASE WHEN (s->>'reason_code') ~ '^[a-z][a-z0-9_]{0,63}$' THEN s->>'reason_code' END,  -- 042
-              composer_structure_reason_details(s->'reason_details')  -- 042
+              CASE WHEN (s->>'reason_code') ~ '^[a-z][a-z0-9_]{0,63}$' THEN s->>'reason_code' END,  -- 043
+              composer_structure_reason_details(s->'reason_details')  -- 043
   ```
-- **E3** — leave the `NULL,` in the `error_message` slot unchanged, and put this line directly above it: `            -- error_message: NULL by design (ml/041's guard; D1' sends no text)  -- 042`.
-- **E4** — in the `INSERT INTO tool_performance (` column list append `, reason_code` after `executed_at`, and in its SELECT append `, cs.reason_code` after `COALESCE(cs.completed_at, now())`. Mark both lines `-- 042`.
+- **E3** — leave the `NULL,` in the `error_message` slot unchanged, and put this line directly above it: `            -- error_message: NULL by design (ml/041's guard; D1' sends no text)  -- 043`.
+- **E4** — in the `INSERT INTO tool_performance (` column list append `, reason_code` after `executed_at`, and in its SELECT append `, cs.reason_code` after `COALESCE(cs.completed_at, now())`. Mark both lines `-- 043`.
 
 **Edits to the copied `get_tool_reliability`:**
 
-- **R1** — in `RETURNS TABLE (`, change `most_common_health_error text` to `most_common_health_error text,` and add the line `    most_common_refusal_reason text  -- 042`.
-- **R2** — in the `perf` CTE, change `tp.error_type, tp.is_synthetic,` to `tp.error_type, tp.reason_code, tp.is_synthetic,  -- 042`.
+- **R1** — in `RETURNS TABLE (`, change `most_common_health_error text` to `most_common_health_error text,` and add the line `    most_common_refusal_reason text  -- 043`.
+- **R2** — in the `perf` CTE, change `tp.error_type, tp.is_synthetic,` to `tp.error_type, tp.reason_code, tp.is_synthetic,  -- 043`.
 - **R3** — after the `most_common_health_error` expression (`(mode() … FILTER (WHERE p.counted AND p.outcome_class IN ('timeout', 'error')))::text`), add:
   ```sql
-          ,(mode() WITHIN GROUP (ORDER BY p.reason_code)  -- 042
+          ,(mode() WITHIN GROUP (ORDER BY p.reason_code)  -- 043
               FILTER (WHERE p.counted AND p.outcome_class IN ('refused', 'input_rejected')))::text
   ```
 
@@ -1664,34 +1666,34 @@ The `<COPY HERE: …>` lines are instructions to you, not SQL. Replace each with
 cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes && \
 fn() { awk -v n="$2" '$0 ~ "CREATE OR REPLACE FUNCTION "n"\\(" {f=1} f {print} f && /^\$fn\$;/ {exit}' "$1"; } && \
 for f in composer_record_steps get_tool_reliability; do
-  echo "=== $f: 041 -> 042 ==="
-  diff <(fn database/ml/041_composer_learning_loop_recording.sql $f) <(fn database/ml/042_composer_refusal_reason_codes.sql $f)
+  echo "=== $f: 041 -> 043 ==="
+  diff <(fn database/ml/041_composer_learning_loop_recording.sql $f) <(fn database/ml/043_composer_refusal_reason_codes.sql $f)
 done
 ```
 
-Expected: `composer_record_steps` shows only the E1–E4 lines and `get_tool_reliability` only R1–R3. Every changed line on the 042 side carries `-- 042`, except the SQL continuation lines inside E2 and R3, and the `most_common_health_error text,` comma. Any other difference means the copy was edited: restore it from ml/041.
+Expected: `composer_record_steps` shows only the E1–E4 lines and `get_tool_reliability` only R1–R3. Every changed line on the 043 side carries `-- 043`, except the SQL continuation lines inside E2 and R3, and the `most_common_health_error text,` comma. Any other difference means the copy was edited: restore it from ml/041.
 
-- [ ] **Step 5: Write `database/ml/rollback_042.sql`**
+- [ ] **Step 5: Write `database/ml/rollback_043.sql`**
 
 Follow `rollback_041.sql`'s shape.
 
 ```sql
 -- ============================================================================
--- E2I Causal Analytics - ROLLBACK for ml/042_composer_refusal_reason_codes.sql
+-- E2I Causal Analytics - ROLLBACK for ml/043_composer_refusal_reason_codes.sql
 -- NOT a forward migration: scripts/run_migrations.sh skips rollback_*.sql. Apply by hand,
 -- AFTER the code revert:
 --
 --   docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
---       --single-transaction < database/ml/rollback_042.sql
+--       --single-transaction < database/ml/rollback_043.sql
 --
 -- Returns composer_record_steps and get_tool_reliability (and v_tool_reliability) to their
 -- ml/041 definitions, copied verbatim, re-applies ml/041's grants for them, and drops every
--- object ml/042 created. Reason codes and details recorded since 042 are lost. Deletes the
--- ml/042 ledger row, so re-deploying the code re-applies 042. Idempotent: every drop is
+-- object ml/043 created. Reason codes and details recorded since 043 are lost. Deletes the
+-- ml/043 ledger row, so re-deploying the code re-applies 043. Idempotent: every drop is
 -- IF EXISTS and every recreation replaces, so a second run changes nothing.
 -- ============================================================================
 
-DELETE FROM public.schema_migrations WHERE filename = 'ml/042_composer_refusal_reason_codes.sql';
+DELETE FROM public.schema_migrations WHERE filename = 'ml/043_composer_refusal_reason_codes.sql';
 
 DROP VIEW IF EXISTS v_tool_reliability;
 DROP FUNCTION IF EXISTS get_tool_reliability(integer, boolean);
@@ -1724,7 +1726,7 @@ REVOKE ALL ON v_tool_reliability FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON v_tool_reliability TO service_role;
 ```
 
-Prove the verbatim copies with the Step 4 `fn` helper: `diff <(fn …041… $f) <(fn database/ml/rollback_042.sql $f)` must print NOTHING for both functions.
+Prove the verbatim copies with the Step 4 `fn` helper: `diff <(fn …041… $f) <(fn database/ml/rollback_043.sql $f)` must print NOTHING for both functions.
 
 - [ ] **Step 6: Run the static tests green**
 
@@ -1747,10 +1749,10 @@ docker ps --filter name=e2i-learnloop-pg- --format '{{.Names}} {{.Status}}'   # 
 mkdir -p /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes/docs/demos/results/2026-09-12_lane_refusal_codes_cert
 ```
 
-Create `docs/demos/results/2026-09-12_lane_refusal_codes_cert/rehearse_042.py`:
+Create `docs/demos/results/2026-09-12_lane_refusal_codes_cert/rehearse_043.py`:
 
 ```python
-"""D4 rehearsal: ml/042 on a throwaway Postgres cloned from prod's image and schema.
+"""D4 rehearsal: ml/043 on a throwaway Postgres cloned from prod's image and schema.
 
 Never writes supabase-db (ProdReadOnly runs only approved read statements). Calls the RPCs as
 service_role through the same port the real-DB tests use, so a missing GRANT fails here and not
@@ -1764,8 +1766,8 @@ from datetime import datetime, timedelta, timezone
 
 from tests.unit.test_database.learning_loop import _pg
 
-M042 = _pg.REPO_ROOT / "database/ml/042_composer_refusal_reason_codes.sql"
-SENTINEL = "PT-SENTINEL-042"
+M043 = _pg.REPO_ROOT / "database/ml/043_composer_refusal_reason_codes.sql"
+SENTINEL = "PT-SENTINEL-043"
 MD5_STEPS = "select md5(prosrc) from pg_proc where proname = 'composer_record_steps'"
 MD5_RELIABILITY = (
     "select md5(prosrc || pg_get_function_result(oid)) from pg_proc "
@@ -1809,9 +1811,9 @@ def record(conn, cid, steps):
 def rehearse(conn):
     before_steps, before_rel = conn.rows(MD5_STEPS), conn.rows(MD5_RELIABILITY)
 
-    check("apply 042 (wrapped)", _pg.apply_migration(conn, M042) == "wrapped")
-    _pg.apply_migration(conn, M042)
-    check("re-apply 042 is a no-op", True)
+    check("apply 043 (wrapped)", _pg.apply_migration(conn, M043) == "wrapped")
+    _pg.apply_migration(conn, M043)
+    check("re-apply 043 is a no-op", True)
 
     cols = conn.rows(
         "select table_name || '.' || column_name || ':' || data_type || ':' || is_nullable "
@@ -1867,7 +1869,7 @@ def rehearse(conn):
         "refused|coverage_gap", "refused|non_binary_treatment", "refused|-", "succeeded|-",
     ]), str(perf))
 
-    # mode() must ignore NULL codes: 3 uncoded refusals (the shape of every pre-042 row) against
+    # mode() must ignore NULL codes: 3 uncoded refusals (the shape of every pre-043 row) against
     # 2 coded ones must still report the code, not NULL.
     record(conn, "rehearsal_b", [
         step(0, "causal_effect_estimator", "refused", reason_code="non_binary_treatment"),
@@ -1899,10 +1901,10 @@ def rehearse(conn):
     check("sentinel stored nowhere", SENTINEL not in blob)
 
     for attempt in ("first", "second"):
-        proc = _pg.apply_rollback(conn, "rollback_042.sql")
-        check(f"rollback_042 {attempt} run", proc.returncode == 0, proc.stderr.decode()[-500:])
-        check(f"rollback_042 {attempt}: record_steps body is ml/041's", conn.rows(MD5_STEPS) == before_steps)
-        check(f"rollback_042 {attempt}: reliability is ml/041's", conn.rows(MD5_RELIABILITY) == before_rel)
+        proc = _pg.apply_rollback(conn, "rollback_043.sql")
+        check(f"rollback_043 {attempt} run", proc.returncode == 0, proc.stderr.decode()[-500:])
+        check(f"rollback_043 {attempt}: record_steps body is ml/041's", conn.rows(MD5_STEPS) == before_steps)
+        check(f"rollback_043 {attempt}: reliability is ml/041's", conn.rows(MD5_RELIABILITY) == before_rel)
     left = conn.rows(
         "select count(*) from information_schema.columns where table_schema = 'public' "
         "and column_name in ('reason_code', 'reason_details')"
@@ -1916,7 +1918,7 @@ def rehearse(conn):
     gone = conn.rows("select count(*) from pg_proc where proname = 'composer_structure_reason_details'")
     check("rollback dropped the reducer", gone == ["0"], str(gone))
 
-    check("re-apply 042 after rollback", _pg.apply_migration(conn, M042) == "wrapped")
+    check("re-apply 043 after rollback", _pg.apply_migration(conn, M043) == "wrapped")
 
 
 def main():
@@ -1927,7 +1929,7 @@ def main():
     try:
         log = _pg.build_base(pg, prod)
         check("base restored with no unexpected errors", not log.unexpected, str(log.unexpected[:5]))
-        conn = _pg.clone(pg, "rehearsal_042")
+        conn = _pg.clone(pg, "rehearsal_043")
         try:
             rehearse(conn)
         finally:
@@ -1948,8 +1950,8 @@ Run it with the worktree as cwd, capturing the SCRIPT's exit code rather than `t
 ```bash
 cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes && \
   C=docs/demos/results/2026-09-12_lane_refusal_codes_cert && \
-  /home/enunez/Projects/e2i_causal_analytics/.venv/bin/python $C/rehearse_042.py 2>&1 | tee $C/rehearsal_042_transcript.txt; \
-  echo "REHEARSAL_EXIT=${PIPESTATUS[0]}" | tee -a $C/rehearsal_042_transcript.txt
+  /home/enunez/Projects/e2i_causal_analytics/.venv/bin/python $C/rehearse_043.py 2>&1 | tee $C/rehearsal_043_transcript.txt; \
+  echo "REHEARSAL_EXIT=${PIPESTATUS[0]}" | tee -a $C/rehearsal_043_transcript.txt
 ```
 
 Expected: every line `PASS`, then `REHEARSAL OK` and `REHEARSAL_EXIT=0`. A `FAIL` line is a real finding. Stop and report it with the transcript; do not edit a `check` to pass.
@@ -1958,30 +1960,30 @@ Expected: every line `PASS`, then `REHEARSAL OK` and `REHEARSAL_EXIT=0`. A `FAIL
 
 ```bash
 cd /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-refusal-codes && git branch --show-current && \
-  git add database/ml/042_composer_refusal_reason_codes.sql database/ml/rollback_042.sql \
+  git add database/ml/043_composer_refusal_reason_codes.sql database/ml/rollback_043.sql \
           tests/unit/test_database/learning_loop/test_lane_migration_files.py && \
-  git commit -m "feat(db): ml/042 records refusal reason codes as structure (#2050 cause 2, #2021)
+  git commit -m "feat(db): ml/043 records refusal reason codes as structure (#2050 cause 2, #2021)
 
 ml/041's composer_record_steps kept the outcome class and exception type but nothing a reader
-could aggregate 'why tools fail' by. 042 carries the closed reason_code and numeric-only
+could aggregate 'why tools fail' by. 043 carries the closed reason_code and numeric-only
 reason_details into composition_steps, mirrors the code into tool_performance, and recreates
 get_tool_reliability with most_common_refusal_reason, re-applying the grants DROP discards.
 The error_message slot stays NULL: that is ml/041's guard against storing caller text, and the
 sentence is rendered at read time (owner decision D1'). Proven by a rehearsal on a throwaway
-prod clone (D4); static checks for 042 and rollback_042 run in CI.
+prod clone (D4); static checks for 043 and rollback_043 run in CI.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 ```
 
-**Known consequence, not fixed here (D4: harness untouched).** `test_migration_runner.py` (opt-in, real DB) asserts the runner applies exactly three lane migrations. With 042 in `database/ml/`, a replay on a pre-lane base would apply four. That module already skips on this droplet and never runs in CI. Say so in the PR body.
+**Known consequence, not fixed here (D4: harness untouched).** `test_migration_runner.py` (opt-in, real DB) asserts the runner applies exactly three lane migrations. With 043 in `database/ml/`, a replay on a pre-lane base would apply four. That module already skips on this droplet and never runs in CI. Say so in the PR body.
 
 ---
 
 ## Task 7: Render the reason on the admin observability page (#2021 D3, D1′)
 
 > **Read-side notes from the Task 3 quality review (2026-09-12).**
-> - Episodes recorded before ml/042 have no `reason_code` and `reason_details`. Read both with `.get()`, and render a null code as not recorded (`reason: null`), never as a failure or as the tool-failure sentence. That is why this task uses `known_sentence`, not `canonical_sentence`.
+> - Episodes recorded before ml/043 have no `reason_code` and `reason_details`. Read both with `.get()`, and render a null code as not recorded (`reason: null`), never as a failure or as the tool-failure sentence. That is why this task uses `known_sentence`, not `canonical_sentence`.
 > - A `refused` or `input_rejected` step carrying `tool_error` is not a contradiction. It means the tool raised with a code outside the closed set, and the `_CodedError` constructor failed soft to `TOOL_ERROR`. Render it as-is, and do not "correct" it on the page.
 
 > **Rewritten 2026-09-12 for D1′, before dispatch.** The database now holds codes, not sentences. This task turns codes into sentences at read time, from the single catalogue, on the one surface an operator reads.
@@ -2056,7 +2058,7 @@ def test_from_row_carries_the_most_common_refusal_reason():
     assert row.most_common_refusal_reason == "non_binary_treatment"
 
 
-def test_a_row_from_a_database_without_ml_042_reads_as_none():
+def test_a_row_from_a_database_without_ml_043_reads_as_none():
     row = ToolReliability.from_row({"tool_name": "gap_calculator", **_COUNTS})
     assert row.most_common_refusal_reason is None
 ```
@@ -2199,7 +2201,7 @@ and in `from_row`, beside `most_common_health_error=row.get("most_common_health_
             most_common_refusal_reason=row.get("most_common_refusal_reason"),
 ```
 
-`row.get` is why a database without ml/042 still serves the page.
+`row.get` is why a database without ml/043 still serves the page.
 
 `src/api/schemas/admin_tool_composer.py` — on `ToolReliabilityRow`, after `most_common_health_error`:
 
@@ -2357,7 +2359,7 @@ Claude-Session: https://claude.ai/code/session_01SnzgDeMLxZN48UsJXTaazb"
 
 ## Task 8: Whole-lane verification, push, and the live certificate
 
-> **Rewritten 2026-09-12 for D1′ and D4.** Deploy applies ml/042 automatically (`deploy.yml` runs `scripts/run_migrations.sh`); nothing is applied by hand. **Each outward action needs the owner's explicit go at the time: the push and PR, the merge, any PAID call in the live certificate, and every issue comment or close.**
+> **Rewritten 2026-09-12 for D1′ and D4.** Deploy applies ml/043 automatically (`deploy.yml` runs `scripts/run_migrations.sh`); nothing is applied by hand. **Each outward action needs the owner's explicit go at the time: the push and PR, the merge, any PAID call in the live certificate, and every issue comment or close.**
 
 **Files:**
 - Create, untracked: `docs/demos/results/2026-09-12_lane_refusal_codes_cert/cert.md` (beside Task 6's rehearsal transcript)
@@ -2400,7 +2402,7 @@ Write the body to a file and create the PR with `--body-file`. Then re-read it w
 - owner decisions D1′, D4, D5 and D6, and lead calls L1, R1 and P1
 - Task 7b's per-site findings for the Digital Twin API, including the sites left unchanged and the evidence for each
 - the latent three-migration assertion in `test_migration_runner.py`
-- `rollback_042.sql`'s runbook
+- `rollback_043.sql`'s runbook
 
 End the body with the attribution block.
 
@@ -2423,7 +2425,7 @@ cd /home/enunez/Projects/e2i_causal_analytics && git fetch origin main --quiet &
   gh api "repos/enunezvn/e2i_causal_analytics/actions/workflows/deploy.yml/runs?per_page=6" --jq '[.workflow_runs[]|select(.status!="completed")]|length' && \
   docker inspect e2i_api --format '{{.Config.Image}} {{.State.StartedAt}} {{.State.Health.Status}}' && \
   docker exec -e PGOPTIONS='-c default_transaction_read_only=on' supabase-db psql -U postgres -d postgres -X -tA \
-    -c "select filename from public.schema_migrations where filename = 'ml/042_composer_refusal_reason_codes.sql'"
+    -c "select filename from public.schema_migrations where filename = 'ml/043_composer_refusal_reason_codes.sql'"
 ```
 
 The gate passes only when: non-terminal deploys = 0, the container tag equals `main`'s full sha, it is healthy, and the ledger row is present. Trust the container and the ledger, not the deploy job's conclusion.
@@ -2437,7 +2439,7 @@ Before the FIRST paid call:
 
 Write `cert.md` verdict word first, then the numbers:
 
-1. **Deploy:** the container tag and StartedAt before and after, and the `ml/042` ledger row.
+1. **Deploy:** the container tag and StartedAt before and after, and the `ml/043` ledger row.
 2. **#2050 — the persisted row.** Force a refusal through a composed question: a 4-valued treatment column gives `non_binary_treatment`. Then:
    ```sql
    SELECT step_number, tool_name, outcome_class, error_type, reason_code, reason_details, error_message
@@ -2493,6 +2495,6 @@ Write `cert.md` verdict word first, then the numbers:
 - The database guards the code's format, not its member list, because the list lives in Python and a copy would drift. A static test checks every member passes the format.
 - The same split applies to `details`. Python enforces the key convention `^(n|is|has|share)_[a-z0-9_]+$`, the magnitude bound `|int| ≤ 2**53` and numpy normalization (Task 2b quality fix). `composer_structure_reason_details` enforces only what keeps TEXT out: snake_case keys, number or boolean values, at most 8 keys. The database is the second guard against text, not a copy of a naming convention that would need a migration every time it grew. Task 6's rehearsal key `"flag": true` is therefore still expected to persist.
 - Sentences are never stored, so ml/041's no-text guard stays exactly as built.
-- ml/042 is proven by a rehearsal, not a permanent real-DB test: the shared fixture could only run such a test once, pre-deploy.
+- ml/043 is proven by a rehearsal, not a permanent real-DB test: the shared fixture could only run such a test once, pre-deploy.
 - `test_migration_runner.py`'s three-migration assertion goes stale, and is disclosed rather than fixed, to leave the shared harness untouched.
 - `ReferenceResolutionError` is not a coded error; the executor assigns its code.
