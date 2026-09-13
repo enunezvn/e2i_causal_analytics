@@ -115,7 +115,7 @@ assertions.
    The fix lands where the temporal knowledge actually lives — the API's
    dataset specs, whose curated ``covariate`` role lists are pre-treatment by
    curation (the 2026-06-29 overcontrol review): ``_require_covariate_role``
-   in routes/causal.py makes the loaders' covariate slot role-AWARE (a
+   in routes/causal/loaders.py makes the loaders' covariate slot role-AWARE (a
    requested covariate must hold the covariate role; previously the
    role-insensitive union ``treatment|outcome|covariate`` admitted
    ``adherent_180d``/``treatment_initiated``/``discontinued_180d`` as

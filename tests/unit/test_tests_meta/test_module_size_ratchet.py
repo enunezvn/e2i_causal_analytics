@@ -1,9 +1,11 @@
 """Module-size ratchet (#1991 debt 4): no file under src/ may exceed LIMIT lines unless it is
 pinned here at its current size, and a pinned file may only shrink.
 
-Why a ratchet and not a hard cap: 32 files already exceed the limit (measured 2026-09-13,
-excluding src/api/routes/causal.py which this test intentionally leaves unpinned).
-A hard cap would either fail forever or exempt them forever. Pins can only move DOWN:
+Why a ratchet and not a hard cap: 32 files already exceed the limit (measured 2026-09-13).
+A hard cap would either fail forever or exempt them forever. src/api/routes/causal.py was
+the one deliberate omission while it was being split; it is now the ``causal/`` package and
+every module in it is under LIMIT, so nothing there needs a pin and the ratchet simply guards
+against regrowth. Pins can only move DOWN:
 the test fails if a pinned file grows past its pin AND if a pin is above the file's
 actual size (so the number on record is always the real one). Delete a pin when the
 file drops under LIMIT.

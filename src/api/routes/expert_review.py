@@ -59,8 +59,8 @@ logger = logging.getLogger(__name__)
 # value). The app's catch-all classifies exceptions by message keyword
 # ("connection"/"unavailable" -> 503, otherwise a generic 500), which is not a
 # contract, so these routes map a store failure themselves with the existing
-# HTTPException(503) pattern (routes/causal.py, routes/digital_twin.py). The
-# app's StarletteHTTPException handler MASKS a 503 detail unless it is marked
+# HTTPException(503) pattern (routes/causal/catalog.py, routes/digital_twin.py).
+# The app's StarletteHTTPException handler MASKS a 503 detail unless it is marked
 # with errors.user_safe_503_detail(); this one names no internals, so it is
 # marked and reaches the client as the response ``message``. The handler
 # forwards HTTPException headers (#1999), so the 503 sends the ``Retry-After``

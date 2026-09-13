@@ -99,7 +99,7 @@ async def _prerank_questions(
 # DISCOVER EFFECTS — validated-effects leaderboard (async submit -> poll)
 # =============================================================================
 
-# Cross-worker job store (Redis-backed; mirrors _agent_analysis_store). Each job
+# Cross-worker job store (Redis-backed; mirrors agent._agent_analysis_store). Each job
 # runs the agent for a set of candidate questions and ranks the VALIDATED effects.
 _discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJobStore(
     "causal:discover_effects", DiscoverEffectsResponse, ttl_seconds=_CAUSAL_JOB_TTL_SECONDS

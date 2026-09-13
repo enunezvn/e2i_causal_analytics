@@ -43,7 +43,10 @@ GOVERNED_FILES = [
     # logger.<level>() call, so every module that inherited the flat file's code
     # AND carries a ``logger`` is governed — the whole package except _common.py
     # (constants + pure numeric helpers, no logger, no request surface) and
-    # __init__.py (the aggregator router only).
+    # __init__.py (the aggregator router only). Caution: QUERY_NAMES includes
+    # ``question``, and discovery/agent handle causal QUESTION objects (a
+    # treatment/outcome pair), not user query text — examine a hit in those two
+    # before wrapping it in redact_query.
     "src/api/routes/causal/activity.py",
     "src/api/routes/causal/agent.py",
     "src/api/routes/causal/catalog.py",

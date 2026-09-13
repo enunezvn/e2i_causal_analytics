@@ -20,8 +20,8 @@ precise ``cycle_affects_identification`` field (e.g. injected via the synthetic
 NOTE ON BUILDER SIGNATURE: the real builders are
     _sequential_output_to_response(pipeline_id, request, output, *, state=None)
     _parallel_output_to_response(pipeline_id, request, output, *, state=None)
-(verified against src/api/routes/causal.py). The synthetic ``output`` carries
-libraries_used=["networkx","dowhy"] so _enforce_data_required_fail_close passes
+(verified against src/api/routes/causal/pipelines.py). The synthetic ``output``
+carries libraries_used=["networkx","dowhy"] so _enforce_data_required_fail_close passes
 and we reach the response constructor — the only thing under test. No HTTP run.
 """
 
