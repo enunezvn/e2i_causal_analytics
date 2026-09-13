@@ -253,3 +253,13 @@ def test_summarize_proceed_only_reads_proceed_and_zero_unreadable():
     summary = _summarize_refutation_rows(_seeded_evidence_rows(n_passed=3))
     assert summary["gate_decision"] == "proceed"
     assert summary["gate_unreadable_rows"] == 0
+
+
+@pytest.mark.unit
+def test_summarize_readable_proceed_plus_unreadable_is_unknown():
+    rows = _seeded_evidence_rows(n_passed=2)
+    rows[0]["gate_decision"] = "proceed"
+    rows[1]["gate_decision"] = None
+    summary = _summarize_refutation_rows(rows)
+    assert summary["gate_decision"] == "unknown"
+    assert summary["gate_unreadable_rows"] == 1

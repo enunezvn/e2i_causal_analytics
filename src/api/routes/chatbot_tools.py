@@ -642,17 +642,22 @@ def _format_causal_path(
     }
 
 
-_REFUTATION_GATES = {"proceed", "review", "block"}
+_REFUTATION_GATES = frozenset({"proceed", "review", "block"})
 
 
 def _summarize_refutation_rows(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Aggregate one path's ``causal_validations`` rows into a chat summary.
 
-    Gate priority mirrors ``CausalValidationRepository.get_gate_decision``
-    (block > review > proceed). The column holds ONLY the refutation
-    vocabulary (proceed / review / block); any other value, including NULL,
-    is reported as ``unknown`` and counted in ``gate_unreadable_rows`` —
-    never mapped to proceed (#1991 debt 4).
+    The block > review > proceed ORDER mirrors
+    ``CausalValidationRepository.get_gate_decision``, but the fail-closed
+    behaviour below does not: block wins if any row reads block, then review
+    if any row reads review, and proceed ONLY when every row is readable (a
+    known ``gate_decision`` value); otherwise the gate is ``unknown``. The
+    column holds ONLY the refutation vocabulary (proceed / review / block);
+    any other value, including NULL, is counted in ``gate_unreadable_rows``
+    and never mapped to proceed (#1991 debt 4) — the repository method
+    itself still defaults an unreadable value to proceed, which is out of
+    scope for this lane.
     ``evidence_is_synthetic`` reads the migration-119 provenance label
     (``details_json.is_synthetic``) so seeded synthetic evidence can never
     masquerade as real RefutationSuite output in an answer.
