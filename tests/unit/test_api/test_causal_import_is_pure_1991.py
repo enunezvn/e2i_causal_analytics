@@ -28,11 +28,25 @@ import importlib
 import sys
 from unittest.mock import patch
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 _PREFIX = "src.api.routes.causal"
 _PARENT = "src.api.routes"
 
 
 def test_import_does_not_construct_clinical_context_service():
+    # Deliberately IN-PROCESS (sys.modules surgery), not a subprocess like the
+    # isolation guard in tests/unit/test_scripts/test_seed_falkordb_import_
+    # isolation_1761.py: measured here, a cold subprocess import of this
+    # package takes ~12-17s (fastapi/pydantic/the whole dependency closure
+    # cold) against a ~0.1-0.2s warm in-process re-import once the interpreter
+    # already has those modules cached. A subprocess per test would turn this
+    # into a slow test for no gain — the property under test (no HTTP client
+    # construction) is fully observable via the patched __init__ without
+    # paying for a second interpreter. Do not "simplify" this into a
+    # subprocess call.
     saved = {
         k: sys.modules[k] for k in list(sys.modules) if k == _PREFIX or k.startswith(_PREFIX + ".")
     }
