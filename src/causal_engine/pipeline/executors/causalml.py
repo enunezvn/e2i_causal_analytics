@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..data_resolver import resolve_estimation_dataframe
 from ..router import CausalLibrary
@@ -317,6 +317,66 @@ def _extract_uplift_inputs_from_state(
     return X_df, treatment_arr, y_arr, feature_names, treatment_groups
 
 
+def _binarization_notice(y_arr: Any, outcome_var: str) -> Tuple[Optional[str], bool, int]:
+    """Name CausalML's internal recoding when it changes what `ate` means (#2067).
+
+    CausalML binarizes ANY outcome at zero before fitting --
+    ``causalml/inference/tree/uplift.pyx:459`` runs
+    ``y = (y > 0).astype(Y_TYPE)``. #2063 refuses the case where that
+    collapses the outcome to a single class. The case NOT refused there is
+    the one this reports: an outcome with values on both sides of zero
+    binarizes cleanly, the fit succeeds, and the executor reports a risk
+    difference on the derived indicator ``(y > 0)`` under the field name
+    ``ate``. Nothing is fabricated -- the number is a real estimate of a
+    real quantity -- but it is not an average treatment effect on the
+    column the caller named.
+
+    A warning, not a refusal: on a genuinely binary 0/1 outcome the same
+    number IS the ATE, and binary flags are most of this platform's
+    outcomes. The condition is ``distinct > 2``, with no invented
+    threshold -- it states what the estimator did rather than judging
+    whether the result is useful, which is the same restraint #2063 took
+    when it refused to guess a near-degenerate cutoff. The breadth is
+    deliberate: a 3-level ordinal outcome is warned too, because the
+    binarized estimand is not the one its column names.
+
+    The statistics are computed over non-NaN values only, for the reason
+    the collapse gate above already documents: over NaN they print ``nan``
+    and NaN counts as a distinct outcome value. A NaN-bearing column that
+    reaches here is passed on to the uplift wrapper's own ``Input y
+    contains NaN`` check with the NaN intact.
+
+    Args:
+        y_arr: the outcome array already in hand (no second extraction).
+        outcome_var: the outcome column name, for the message.
+
+    Returns:
+        Tuple of (warning or None, whether binarization recodes the
+        outcome, distinct non-NaN outcome values).
+    """
+    import numpy as np
+
+    y_valid = y_arr[~np.isnan(y_arr)]
+    distinct = int(len(np.unique(y_valid)))
+    if distinct <= 2:
+        return None, False, distinct
+
+    binarized = (y_valid > 0).astype(float)
+    positive_fraction = float(binarized.mean())
+    information_lost = float(np.abs(y_valid - binarized).mean())
+    message = (
+        f"CausalML binarized outcome '{outcome_var}' at zero before fitting "
+        f"(causalml/inference/tree/uplift.pyx:459 runs `y = (y > 0)`). "
+        f"The outcome has {distinct} distinct values, so the reported `ate` "
+        f"is a risk difference on the derived indicator (y > 0), NOT an "
+        f"average treatment effect on '{outcome_var}'. "
+        f"frac(y > 0) = {positive_fraction:.4f}; "
+        f"mean|y - (y > 0)| = {information_lost:.4f}. "
+        f"Estimate this outcome with DoWhy/EconML for an ATE on its own scale."
+    )
+    return message, True, distinct
+
+
 def _resolve_control_name(treatment_arr: Any) -> str:
     """Pick the control label that ``UpliftConfig.control_name`` must reference.
 
@@ -551,6 +611,16 @@ class CausalMLExecutor(LibraryExecutor):
                 treatment_groups,
             ) = _extract_uplift_inputs_from_state(state)
 
+            # #2067: say what CausalML's internal `y = (y > 0)` did to this
+            # outcome, BEFORE the fit, on the array already in hand. The
+            # collapse gate computes its statistics inside the refusal
+            # branch, so nothing is reusable from it on the passing path.
+            binarization_warning, outcome_binarized, outcome_distinct_values = _binarization_notice(
+                y_arr, str(state.get("outcome_var"))
+            )
+            if binarization_warning is not None:
+                warnings.append(binarization_warning)
+
             # Deterministic random_state: stable value so repeated calls
             # against the same state produce repeatable fits. NOT a seeded
             # synthetic-data injection — `random_state` is passed to the
@@ -626,6 +696,11 @@ class CausalMLExecutor(LibraryExecutor):
                 # remain available for callers that need them.
                 "observed_treatment_groups": treatment_groups,
                 "control_name": control_name,
+                # #2067: the discriminator the API route needs to name the
+                # estimand this `ate` actually belongs to, without re-deriving
+                # it from data it no longer has.
+                "outcome_binarized": outcome_binarized,
+                "outcome_distinct_values": outcome_distinct_values,
             }
 
             # When EconML produced upstream CATE estimates, propagate the
