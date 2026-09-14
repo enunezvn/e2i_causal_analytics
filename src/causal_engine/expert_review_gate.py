@@ -428,8 +428,13 @@ class ExpertReviewGate:
             review_id = pending_row.get("review_id")
 
             current_hash = pending_row.get("dag_version_hash")
-            match = await self._match_last_recorded_version(
-                review_id, dag_hash, adjustment_set_hash
+            # Only a row with an id has a timeline to read (and only it can be
+            # appended to at all) -- a query keyed on a missing id would be a
+            # wasted round trip whose failure this method deliberately swallows.
+            match = (
+                await self._match_last_recorded_version(review_id, dag_hash, adjustment_set_hash)
+                if review_id
+                else _VersionMatch.NOT_RECORDED
             )
             # What "the structure changed" MEANS is the PAIR (codex round-1
             # HIGH): ``compute_dag_hash`` deliberately EXCLUDES adjustment sets,
