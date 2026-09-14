@@ -10,6 +10,7 @@ import pytest
 from src.causal_engine.dag_hash import (
     adjustment_hash_from_snapshot,
     compute_adjustment_set_hash,
+    effective_adjustment_hash,
     get_dag_changes,
 )
 
@@ -156,3 +157,33 @@ class TestAdjustmentHashFromSnapshot:
         bug. Only the READER of stored data forgives."""
         with pytest.raises(TypeError):
             compute_adjustment_set_hash([None])  # type: ignore[list-item]
+
+
+@pytest.mark.unit
+class TestEffectiveAdjustmentHash:
+    """The ONE precedence rule the gate and the API share (#1991 debt 3):
+    the stored ``adjustment_set_hash`` wins when the column carries one, else
+    whatever the snapshot beside it PROVES via ``adjustment_hash_from_snapshot``,
+    else None when neither half knows anything."""
+
+    def test_stored_hash_wins_even_when_the_snapshot_derives_a_different_hash(self):
+        stored = compute_adjustment_set_hash([["W"]])
+        snapshot = {"adjustment_sets": [["Z"]]}
+        assert effective_adjustment_hash(stored, snapshot) == stored
+        assert effective_adjustment_hash(stored, snapshot) != adjustment_hash_from_snapshot(
+            snapshot
+        )
+
+    def test_null_stored_falls_back_to_the_snapshots_derived_hash(self):
+        snapshot = {"adjustment_sets": [["W"], ["Z"]]}
+        assert effective_adjustment_hash(None, snapshot) == compute_adjustment_set_hash(
+            [["W"], ["Z"]]
+        )
+
+    def test_null_stored_and_null_snapshot_is_unknown(self):
+        assert effective_adjustment_hash(None, None) is None
+
+    def test_null_stored_and_malformed_snapshot_is_unknown(self):
+        """A malformed snapshot proves nothing -- it is never mistaken for the
+        canonical empty set (codex round 5, finding 2)."""
+        assert effective_adjustment_hash(None, {"adjustment_sets": [None]}) is None

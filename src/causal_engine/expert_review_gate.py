@@ -14,7 +14,7 @@ from datetime import date
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional
 
-from src.causal_engine.dag_hash import adjustment_hash_from_snapshot, compute_adjustment_set_hash
+from src.causal_engine.dag_hash import compute_adjustment_set_hash, effective_adjustment_hash
 from src.repositories.expert_review import (
     ExpertReviewRepository,
     approval_validity,
@@ -443,9 +443,12 @@ class ExpertReviewGate:
             if dag_structure
             else None
         )
-        # Whether this run SAW a structure at all -- the difference between
-        # "the covariates are X" and "this run makes no claim about them".
-        # The pending branch below turns on it (codex round 5).
+        # Whether this run SAW a structure at all -- the same "not recorded"
+        # vs "no covariates" distinction ``effective_adjustment_hash`` draws
+        # for a stored row, stated directly here rather than inferred from
+        # ``compute_adjustment_set_hash`` never returning None for a real
+        # (possibly empty) ``adjustment_sets`` list. The pending branch below
+        # turns on it (codex round 5).
         run_knows_structure = adjustment_set_hash is not None
 
         if pending:
@@ -919,13 +922,13 @@ class ExpertReviewGate:
             return _VersionMatch.UNKNOWN
         if not latest:
             return _VersionMatch.NOT_RECORDED
-        adjustment_hash = latest.get("adjustment_set_hash")
-        if adjustment_hash is None:
-            # The one shared derivation (codex round 4): the review detail and
-            # the pending queue prove a NULL-adjustment version's compatibility
-            # with the very same function, so "what a snapshot says about the
-            # covariates" has a single answer across the gate and the API.
-            adjustment_hash = adjustment_hash_from_snapshot(latest.get("dag_structure_json"))
+        # The one shared rule (codex round 4): the review detail and the
+        # pending queue prove a NULL-adjustment version's compatibility with
+        # this very function, so "what a version row actually names about the
+        # covariates" has a single answer across the gate and the API.
+        adjustment_hash = effective_adjustment_hash(
+            latest.get("adjustment_set_hash"), latest.get("dag_structure_json")
+        )
         recorded = (str(latest.get("dag_version_hash") or ""), adjustment_hash)
         if recorded == (dag_hash, adjustment_set_hash):
             return _VersionMatch.SAME

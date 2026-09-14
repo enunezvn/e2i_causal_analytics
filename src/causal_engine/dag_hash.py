@@ -217,6 +217,34 @@ def adjustment_hash_from_snapshot(snapshot: Any) -> Optional[str]:
     return compute_adjustment_set_hash([list(s) for s in adjustment_sets])
 
 
+def effective_adjustment_hash(adjustment_set_hash: Optional[str], snapshot: Any) -> Optional[str]:
+    """The covariate set a ``(adjustment_set_hash, snapshot)`` half NAMES, or None.
+
+    The stored adjustment hash when the column carries one; otherwise whatever
+    the snapshot beside it PROVES, via ``adjustment_hash_from_snapshot``; None
+    when neither half knows. A NULL adjustment column is "not recorded", not
+    "no covariates", so the snapshot is the evidence -- and a NULL (or
+    malformed) snapshot beside it proves nothing at all.
+
+    This is the ONE rule the expert-review gate and the API share: the gate's
+    version-match consult and the API's review-detail / pending-queue version
+    selection each ask the same question of a stored version row -- "which
+    covariate set does this row actually name?" -- and must get the same
+    answer.
+
+    Args:
+        adjustment_set_hash: the stored ``adjustment_set_hash`` column, or None
+        snapshot: the ``dag_structure_json`` snapshot recorded beside it
+
+    Returns:
+        A 64-character SHA256 hex digest, or None when neither half proves a
+        covariate set.
+    """
+    if adjustment_set_hash is not None:
+        return adjustment_set_hash
+    return adjustment_hash_from_snapshot(snapshot)
+
+
 def compute_dag_hash_from_dot(dot_string: str) -> str:
     """
     Compute DAG hash from DOT format string.

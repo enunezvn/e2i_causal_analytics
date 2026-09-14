@@ -51,7 +51,7 @@ from src.api.schemas.expert_review import (
     ReviewVersion,
     parse_json_column,
 )
-from src.causal_engine.dag_hash import adjustment_hash_from_snapshot, get_dag_changes
+from src.causal_engine.dag_hash import effective_adjustment_hash, get_dag_changes
 
 if TYPE_CHECKING:
     from src.repositories.expert_review import ExpertReviewRepository
@@ -197,20 +197,6 @@ def _changes_between(
     return DagChanges(**changes)
 
 
-def _effective_adjustment(adjustment_set_hash: Optional[str], snapshot: Any) -> Optional[str]:
-    """The covariate set a ``(adjustment_set_hash, snapshot)`` half NAMES, or None.
-
-    The stored adjustment hash when the column carries one; otherwise whatever
-    the snapshot beside it PROVES, via the one derivation the gate and the API
-    share; None when neither half knows. A NULL adjustment column is "not
-    recorded", not "no covariates", so the snapshot is the evidence -- and a
-    NULL snapshot beside it proves nothing at all.
-    """
-    if adjustment_set_hash is not None:
-        return adjustment_set_hash
-    return adjustment_hash_from_snapshot(snapshot)
-
-
 def _current_version_index(
     entries: Sequence[Tuple[Optional[str], Optional[str], Any]],
     dag_version_hash: Optional[str],
@@ -235,7 +221,7 @@ def _current_version_index(
     ``changes`` is the B -> A delta the reviewer is actually being shown.
 
     THE RULE: compare the EFFECTIVE adjustment on BOTH sides (codex round 5).
-    ``_effective_adjustment`` reads the stored hash when there is one and
+    ``effective_adjustment_hash`` reads the stored hash when there is one and
     otherwise derives it from the snapshot beside it, so each side is asked the
     same question -- "which covariate set does this actually name?" -- rather
     than one side being taken at face value and the other cross-examined. Two
@@ -283,12 +269,12 @@ def _current_version_index(
     """
     if not dag_version_hash:
         return None
-    wanted = _effective_adjustment(adjustment_set_hash, review_snapshot)
+    wanted = effective_adjustment_hash(adjustment_set_hash, review_snapshot)
     for index in reversed(range(len(entries))):
         entry_hash, entry_adjustment, snapshot = entries[index]
         if entry_hash != dag_version_hash:
             continue
-        if _effective_adjustment(entry_adjustment, snapshot) == wanted:
+        if effective_adjustment_hash(entry_adjustment, snapshot) == wanted:
             return index
     return None
 
