@@ -73,8 +73,8 @@ logger = logging.getLogger(__name__)
 # Semantics (mirrors the contract the retired SQL `can_use_estimate` promised,
 # now on the live path -- migration 133):
 #   OFF (default): post-hoc / advisory. A REVIEW band queues the DAG for review and carries the
-#       gate decision + caveat; the run continues. A BLOCK band queues nothing at all (#1991 debt 3)
-#       : it already failed statistically, and a structural verdict could not change that.
+#       gate decision + caveat; the run continues. A BLOCK band queues nothing (#1991 debt 3):
+#       it already failed statistically, and a structural verdict could not change that.
 #   ON: a REVIEW-band run whose DAG structure holds no active expert approval
 #       (gate decision pending_review / blocked / unavailable) HALTS honestly --
 #       status='failed', current_phase='awaiting_expert_review', error_message
