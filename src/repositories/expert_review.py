@@ -1112,6 +1112,14 @@ class ExpertReviewRepository(BaseRepository):
         not done: a mint or an advance is rare, and a duplicated version row
         overstates how often the DAG changed without misreporting what it is.
 
+        A second, cheaper residual: when the gate needs an APPEND but not an
+        advance -- the timeline's latest is an orphan pair from a lost race while
+        the review already carries this run's pair -- the advance below re-writes
+        the pair the row already has. The compare-and-set holds (the row is still
+        on it), so nothing is lost or overwritten; the only cost is that
+        ``agent_assessment_json`` is cleared and the advisory grading has to be
+        rebuilt on the next request.
+
         Returns:
             True only when BOTH the append and the review's advance succeeded.
             False when the append failed (nothing was written and the review is

@@ -253,7 +253,7 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
       // 409 detail verbatim onto the `message` field api-client reads).
       resolveApi.mockRejectedValue(
         new Error(
-          'Review rev-1 has advanced to a new DAG structure since this form was opened; ' +
+          'Review rev-1 has advanced to a new structure version since this form was opened; ' +
             'reload the review and resolve the current version.'
         )
       );

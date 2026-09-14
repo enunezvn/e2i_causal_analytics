@@ -187,7 +187,7 @@ def test_stale_hash_on_a_still_pending_review_is_409(monkeypatch):
     # That the REAL app maps a 409 detail to the ``message`` field the frontend
     # api-client reads is pinned in tests/api/test_expert_review_routes.py.
     detail = r.json()["detail"]
-    assert "advanced to a new DAG structure" in detail
+    assert "advanced to a new structure version" in detail
     assert "reload the review" in detail
 
 
@@ -271,7 +271,7 @@ def test_an_adjustment_only_advance_on_a_still_pending_review_is_409(monkeypatch
         },
     )
     assert r.status_code == 409, r.text
-    assert "advanced to a new DAG structure" in r.json()["detail"]
+    assert "advanced to a new structure version" in r.json()["detail"]
 
 
 @pytest.mark.unit

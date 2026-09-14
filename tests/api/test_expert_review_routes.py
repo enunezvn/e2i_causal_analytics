@@ -365,7 +365,7 @@ class TestResolveReview:
         )
         assert resp.status_code == 409, resp.text
         message = resp.json()["message"]
-        assert "advanced to a new DAG structure" in message
+        assert "advanced to a new structure version" in message
         assert "reload the review" in message
 
 

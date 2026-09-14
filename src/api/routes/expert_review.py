@@ -364,7 +364,7 @@ async def resolve_review(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"Review {review_id} has advanced to a new DAG structure since this "
+                    f"Review {review_id} has advanced to a new structure version since this "
                     "form was opened; reload the review and resolve the current version."
                 ),
             )

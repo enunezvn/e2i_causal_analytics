@@ -520,13 +520,19 @@ class ExpertReviewGate:
             # that nothing is appended -- so flipping it is a product decision,
             # not a refactor.
             #
-            # Residual on the other side: an outage stacked on a lost race
-            # (UNKNOWN where the timeline in fact already holds this pair, and
-            # the row asserts a change) appends a duplicate row instead of
-            # repairing advance-only. It needs both faults at once, and a
-            # duplicate overstates how often the DAG changed without
-            # misreporting what it is -- the same trade ``append_version``
-            # documents for two concurrent appends.
+            # Residual on the other side, an outage STACKED on a lost race: a
+            # STRANDED review (row on pair C, timeline latest B, because B's
+            # compare-and-set lost) is re-run on B while the timeline cannot be
+            # read. The row positively contradicts this run -- C is known and is
+            # not B -- so ``row_asserts_change`` is True and UNKNOWN appends. But
+            # the timeline already HOLDS B, so that append duplicates it, where a
+            # readable timeline would have answered SAME and repaired the row
+            # advance-only. Two faults are needed at once, and the outcome is a
+            # duplicate version row, not a wrong one: it overstates how often the
+            # DAG changed without misreporting what it is -- the same trade
+            # ``append_version`` documents for two concurrent appends. The review
+            # itself still lands on the right structure, which is what a
+            # resolution binds to.
             row_pair_differs = (current_hash, current_adjustment) != (
                 dag_hash,
                 adjustment_set_hash,
