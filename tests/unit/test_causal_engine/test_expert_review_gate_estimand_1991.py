@@ -28,7 +28,11 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from src.causal_engine.dag_hash import compute_adjustment_set_hash
-from src.causal_engine.expert_review_gate import ExpertReviewGate, ReviewGateDecision
+from src.causal_engine.expert_review_gate import (
+    ExpertReviewGate,
+    ReviewGateDecision,
+    _VersionMatch,
+)
 from src.repositories.expert_review import estimand_key_for
 
 
@@ -1471,3 +1475,31 @@ async def test_a_latest_version_with_malformed_adjustment_data_does_not_break_th
     assert result.decision is ReviewGateDecision.PENDING_REVIEW
     assert repo.appended == [("r1", "h1")]
     assert repo.append_kwargs[0]["adjustment_set_hash"] == compute_adjustment_set_hash([["W"]])
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_version_match_is_unknown_without_a_repository(caplog):
+    """A gate with no repository can read no timeline, so "is this structure
+    already recorded" is UNKNOWN -- the same answer a failed read gets, and the
+    one whose call sites are already written for it.
+
+    ``check_approval`` returns UNAVAILABLE before it ever consults, so this is
+    unreachable through the public path; the guard exists so the method's own
+    contract holds for a direct caller (and so its type does).
+
+    It must reach that answer from the GUARD, not by calling a method on None
+    and letting the read's ``except`` catch the AttributeError. Both return
+    UNKNOWN, so only the log tells them apart -- and the difference matters:
+    that warning says the review STORE could not be read, which is an outage to
+    investigate. "This gate was never given a repository" is a configuration
+    fact the caller already knows, and logging it as a store failure would put
+    a phantom outage in front of whoever reads the warnings.
+    """
+    gate = ExpertReviewGate(repository=None, auto_create_review=True)
+
+    with caplog.at_level("WARNING"):
+        match = await gate._match_last_recorded_version("r1", "h1", None)
+
+    assert match is _VersionMatch.UNKNOWN
+    assert not [r for r in caplog.records if "latest structure version" in r.getMessage()]

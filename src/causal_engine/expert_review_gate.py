@@ -452,12 +452,16 @@ class ExpertReviewGate:
             pending_row = pending[0]
             review_id = pending_row.get("review_id")
 
-            current_hash = pending_row.get("dag_version_hash")
+            # Both halves are OPTIONAL by the schema: migration 141's backfill
+            # skips a NULL hash, so a pending row can carry one. The
+            # compare-and-set below matches NULL explicitly rather than
+            # skipping it (``match_nullable_column``).
+            current_hash: Optional[str] = pending_row.get("dag_version_hash")
             # The review row's OWN adjustment half (migration 142). Before it,
             # the row could not say which adjustment set it was on, which is why
             # every guard keyed on it -- resolution, the assessment persist, the
             # advance's compare-and-set -- missed an ADJUSTMENT-ONLY advance.
-            current_adjustment = pending_row.get("adjustment_set_hash")
+            current_adjustment: Optional[str] = pending_row.get("adjustment_set_hash")
             # Only a row with an id has a timeline to read (and only it can be
             # appended to at all) -- a query keyed on a missing id would be a
             # wasted round trip whose failure this method deliberately swallows.
@@ -903,10 +907,16 @@ class ExpertReviewGate:
         Returns:
             SAME when the last recorded version is this pair, DIFFERENT when it
             is another pair, NOT_RECORDED when the review has no timeline at all,
-            UNKNOWN when the timeline could not be read
+            UNKNOWN when the timeline could not be read, and when the gate has
+            no repository at all -- unreachable through ``check_approval``,
+            which returns before ever consulting one, so the guard is for the
+            type and for any future direct caller
         """
+        repository = self.repository
+        if repository is None:
+            return _VersionMatch.UNKNOWN
         try:
-            latest = await self.repository.get_latest_version(str(review_id))
+            latest = await repository.get_latest_version(str(review_id))
         except Exception as read_err:  # noqa: BLE001 - the consult must not break
             logger.warning(
                 f"Could not read the latest structure version of review {review_id} "

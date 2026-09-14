@@ -411,7 +411,11 @@ async def list_pending_reviews(
         raise _store_unavailable("pending-queue versions read", e) from e
     reviews = []
     for row in rows:
-        versions = versions_by_review.get(row.get("review_id"), [])
+        # The batched read above keyed only on rows that HAVE an id, so a row
+        # whose id is missing or not a string has no versions by construction --
+        # the same answer the lookup would give, said without asking.
+        review_id = row.get("review_id")
+        versions = versions_by_review.get(review_id, []) if isinstance(review_id, str) else []
         reviews.append(
             _validate_review_row(
                 PendingReviewItem,

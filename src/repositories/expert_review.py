@@ -25,28 +25,29 @@ from src.repositories.json_utils import to_plain_json
 logger = logging.getLogger(__name__)
 
 
-def _match_adjustment_hash(query: Any, adjustment_set_hash: Optional[str]) -> Any:
-    """Filter ``query`` on ``expert_reviews.adjustment_set_hash`` (migration 142),
-    matching NULL EXPLICITLY.
+def match_nullable_column(query: Any, column: str, value: Optional[str]) -> Any:
+    """Filter ``query`` on a NULLABLE identity column, matching NULL EXPLICITLY.
 
-    ONE definition of "the review is still on this adjustment set", shared by the
-    three guards that bind to the review row -- ``submit_review``'s resolution
-    filter, ``update_agent_assessment``'s persist guard and ``advance_review``'s
-    compare-and-set. Codex round 2 found all three missing an ADJUSTMENT-ONLY
-    advance for the same reason, so they get one filter rather than three
-    chances to drift.
+    ONE definition of "the review is still on this value", shared by every guard
+    that binds to the review row -- ``submit_review``'s resolution filter,
+    ``update_agent_assessment``'s persist guard and ``advance_review``'s
+    compare-and-set -- across both halves of the pair: ``adjustment_set_hash``
+    (migration 142) and ``dag_version_hash``, which migration 141's backfill
+    itself treats as nullable. Codex round 2 found three guards missing an
+    ADJUSTMENT-ONLY advance for the same reason, so they get one filter rather
+    than three chances to drift.
 
-    A known hash is an ``eq``. An UNKNOWN one (None) is ``is_``, which postgrest
-    2.27 renders as ``adjustment_set_hash=is.null`` (verified: its ``is_`` maps a
-    Python None to the string ``"null"`` before building the filter). ``eq`` can
-    NOT express this -- PostgREST would compare against the literal text
-    ``"None"`` and match nothing -- and OMITTING the filter is worse: it matches
-    every row, which is the defect being closed. "Unknown" is a precondition to
-    check, not one to skip.
+    A known value is an ``eq``. An UNKNOWN one (None) is ``is_``, which postgrest
+    2.27 renders as ``<column>=is.null`` (verified: its ``is_`` maps a Python
+    None to the string ``"null"`` before building the filter). ``eq`` can NOT
+    express this -- PostgREST would compare against the literal text ``"None"``
+    and match nothing -- and OMITTING the filter is worse: it matches every row,
+    which is the defect being closed. "Unknown" is a precondition to check, not
+    one to skip.
     """
-    if adjustment_set_hash is None:
-        return query.is_("adjustment_set_hash", "null")
-    return query.eq("adjustment_set_hash", adjustment_set_hash)
+    if value is None:
+        return query.is_(column, "null")
+    return query.eq(column, value)
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +500,9 @@ class ExpertReviewRepository(BaseRepository):
                 .eq("approval_status", "pending")
                 .eq("dag_version_hash", expected_dag_version_hash)
             )
-            result = await _match_adjustment_hash(query, expected_adjustment_set_hash).execute()
+            result = await match_nullable_column(
+                query, "adjustment_set_hash", expected_adjustment_set_hash
+            ).execute()
             # FIX B (codex HIGH): a zero-row update (nonexistent or already-resolved
             # review_id) matches nothing — supabase-py returns the updated rows in
             # ``result.data`` (same convention as base.py:131), so empty data means
@@ -547,7 +550,7 @@ class ExpertReviewRepository(BaseRepository):
         the review UI then showed a grading of covariates the review no longer
         covers, marked ``persisted: true``. When ``for_dag_version_hash`` is
         given, BOTH halves filter the UPDATE (``for_adjustment_set_hash`` via
-        eq-or-IS-NULL, see :func:`_match_adjustment_hash`).
+        eq-or-IS-NULL, see :func:`match_nullable_column`).
 
         The two are given TOGETHER or not at all. ``for_dag_version_hash=None``
         means "this row has no version to bind to" -- a pre-141 row that never
@@ -583,7 +586,7 @@ class ExpertReviewRepository(BaseRepository):
             )
             if for_dag_version_hash is not None:
                 query = query.eq("dag_version_hash", for_dag_version_hash)
-                query = _match_adjustment_hash(query, for_adjustment_set_hash)
+                query = match_nullable_column(query, "adjustment_set_hash", for_adjustment_set_hash)
             result = await query.execute()
             if not result.data:
                 logger.warning(
@@ -998,7 +1001,7 @@ class ExpertReviewRepository(BaseRepository):
         dag_structure: Optional[Dict[str, Any]],
         adjustment_set_hash: Optional[str],
         related_validation_ids: Optional[List[str]] = None,
-        expected_current_hash: str,
+        expected_current_hash: Optional[str],
         expected_current_adjustment_hash: Optional[str],
     ) -> bool:
         """Move a PENDING review onto a structure version, as a COMPARE-AND-SET on
@@ -1043,7 +1046,8 @@ class ExpertReviewRepository(BaseRepository):
             related_validation_ids: This run's evidence, when the caller has it
             expected_current_hash: The DAG hash the caller READ before deciding
                 (keyword-only and required: an advance that cannot name what it
-                is replacing is not a compare-and-set)
+                is replacing is not a compare-and-set). None means the row's
+                hash is NOT RECORDED -- matched with IS NULL, never skipped
             expected_current_adjustment_hash: The adjustment half it read, None
                 for "still unknown" -- matched with IS NULL, never skipped
 
@@ -1081,9 +1085,15 @@ class ExpertReviewRepository(BaseRepository):
                 .update(advance)
                 .eq("review_id", review_id)
                 .eq("approval_status", "pending")
-                .eq("dag_version_hash", expected_current_hash)
             )
-            result = await _match_adjustment_hash(query, expected_current_adjustment_hash).execute()
+            # BOTH halves of the pair through the same eq-or-IS-NULL filter: a
+            # pending row whose hash was never recorded is a row to compare
+            # against, not one to skip -- an ``eq`` on None would match nothing
+            # and strand it (an appended version row the review never reaches).
+            query = match_nullable_column(query, "dag_version_hash", expected_current_hash)
+            result = await match_nullable_column(
+                query, "adjustment_set_hash", expected_current_adjustment_hash
+            ).execute()
         except Exception as e:
             logger.error(
                 f"advance_review: review {review_id} could not be advanced to "
@@ -1110,7 +1120,7 @@ class ExpertReviewRepository(BaseRepository):
         adjustment_set_hash: Optional[str],
         query_id: Optional[str],
         related_validation_ids: Optional[List[str]] = None,
-        expected_current_hash: str,
+        expected_current_hash: Optional[str],
         expected_current_adjustment_hash: Optional[str],
     ) -> bool:
         """Record a new structure version on a PENDING review and make it the
@@ -1157,7 +1167,9 @@ class ExpertReviewRepository(BaseRepository):
         The caller passes the pair it READ before deciding to append. BOTH are
         required now (the optional-CAS path is gone): every caller reads the
         review row before deciding, so a caller with no pair in hand is a caller
-        that has not made the decision this method executes.
+        that has not made the decision this method executes. Either half may be
+        None -- "the row does not record this" is a precondition to match with
+        IS NULL, not one to skip (see :func:`match_nullable_column`).
 
         On a lost race the version row it already inserted STAYS: the
         timeline is a record of the structures runs produced, and it may

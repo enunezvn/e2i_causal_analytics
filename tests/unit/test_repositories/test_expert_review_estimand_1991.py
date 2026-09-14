@@ -1394,3 +1394,107 @@ async def test_append_version_does_not_advance_when_the_record_fails(fake_client
     assert ok is False
     assert fake_client.updated("expert_reviews") == []
     assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h1"
+
+
+# --------------------------------------------------------------------------
+# The compare-and-set matches a NOT-RECORDED half explicitly (#1991 debt 3)
+#
+# ``expert_reviews.dag_version_hash`` is nullable -- migration 141's backfill
+# filters ``IS NOT NULL``, which is only needed because NULLs are possible -- so
+# the pair CAS must be able to name "this row records no hash". An ``eq`` on
+# None cannot: PostgREST would compare against the literal text "None" and match
+# nothing, so a NULL-hash pending row could take an appended version row and
+# then never advance onto it. Both halves route through
+# ``match_nullable_column`` for the one reason its docstring gives.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_advance_review_matches_an_unrecorded_hash_with_is_null(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": None,
+                "adjustment_set_hash": None,
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.advance_review(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure={"nodes": ["T", "Y"]},
+        adjustment_set_hash="adj-B",
+        expected_current_hash=None,
+        expected_current_adjustment_hash=None,
+    )
+
+    assert ok is True, "a pending row that records no hash is still advanceable"
+    calls = fake_client.calls("expert_reviews")
+    assert ("is_", ("dag_version_hash", "null")) in calls
+    assert not any(m == "eq" and a[0] == "dag_version_hash" for m, a in calls)
+    row = fake_client.rows("expert_reviews")[0]
+    assert row["dag_version_hash"] == "h2" and row["adjustment_set_hash"] == "adj-B"
+
+
+@pytest.mark.unit
+async def test_advance_review_still_matches_a_known_hash_with_eq(fake_client):
+    """The other half of the same filter: a recorded hash is an ``eq``, so the
+    NULL case above is a narrowing and not a loosening."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": None,
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.advance_review(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure=None,
+        adjustment_set_hash=None,
+        expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
+    )
+
+    assert ok is True
+    calls = fake_client.calls("expert_reviews")
+    assert ("eq", ("dag_version_hash", "h1")) in calls
+    assert not any(m == "is_" and a[0] == "dag_version_hash" for m, a in calls)
+
+
+@pytest.mark.unit
+async def test_advance_review_refuses_an_unrecorded_hash_against_a_row_that_has_one(fake_client):
+    """ "Not recorded" is a PRECONDITION, not a wildcard: a row that has since
+    learned its hash must not be advanced by a caller that read no hash."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": None,
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.advance_review(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure=None,
+        adjustment_set_hash=None,
+        expected_current_hash=None,
+        expected_current_adjustment_hash=None,
+    )
+
+    assert ok is False
+    assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h1"
