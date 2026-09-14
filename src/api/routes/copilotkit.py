@@ -339,11 +339,7 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
-from src.api.routes.chat_identity import (
-    authorize_chat_identity,
-    bind_verified_request_user,
-    owned_thread_id,
-)
+from src.api.routes import chat_identity
 from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
@@ -4708,7 +4704,7 @@ async def copilotkit_custom_handler(
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
                 # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
-                thread_id = owned_thread_id(body_data, body_json, request, TESTING_MODE)
+                thread_id = chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
                 if thread_id is None:
                     return JSONResponse(status_code=403, content={"error": "threadId not yours"})
                 state = body_data.get("state") or body_json.get("state") or {}
@@ -4863,7 +4859,7 @@ async def copilotkit_custom_handler(
     # and the gate runs. #2077: ``bind_verified_request_user`` reports that AND
     # carries the verified id into the attribution channel, which only the gate
     # used to populate — a middleware-authenticated sub-path left chat NULL-owned.
-    if method != "OPTIONS" and not bind_verified_request_user(request):
+    if method != "OPTIONS" and not chat_identity.bind_verified_request_user(request):
         try:
             await _require_auth_for_copilotkit_execution(request)
         except AuthError as auth_exc:
@@ -4880,6 +4876,10 @@ async def copilotkit_custom_handler(
         body_bytes = await request.body()
     except:  # noqa: E722
         body_bytes = b""
+
+    # #2077: same thread-ownership policy as the root branch, which never ran here.
+    if method != "OPTIONS" and chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE):
+        return JSONResponse(status_code=403, content={"error": "threadId not yours"})
 
     # For all other paths, delegate to SDK handler
     # ALWAYS reconstruct request since we consumed the body above (line 1219)
@@ -5131,7 +5131,7 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], chat_request: Cha
             detail="Authenticated user identity is missing.",
         )
 
-    return authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
+    return chat_identity.authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:

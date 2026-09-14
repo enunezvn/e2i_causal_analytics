@@ -1819,12 +1819,12 @@ class TestChatIdentityFromToken:
         assert getattr(_fake_stream, "seen_user_id", None) == "real-token-user"
 
     # ---------------------------------------------------------------- #2077
-    # A supplied session_id carries an owner claim of its own: the DB derives
-    # ``chatbot_messages/chatbot_message_feedback.computed_user_id`` as
-    # ``CAST(SPLIT_PART(session_id,'~',1) AS UUID)`` (database/chat/031:44) and the
-    # RLS policies read ONLY that column (database/chat/030:133). Guarding the body
-    # ``user_id`` alone therefore left the same impersonation open one field over:
-    # the caller's turn would persist under the named user and be readable by them.
+    # A supplied session_id carries an owner claim of its own: it selects the
+    # conversation the turn is written to, and since migration 123 a message
+    # inherits ``computed_user_id`` from that parent conversation
+    # (database/migrations/123_chatbot_message_owner_inherit.sql:34-46), which the
+    # RLS policies read (database/chat/030:133). Guarding the body ``user_id``
+    # alone therefore left the same impersonation open one field over.
     # Same policy as the body field — 403, skipped in TESTING_MODE.
 
     VICTIM = "46d40f52-39ac-4b79-b3a4-1f1292059a00"
@@ -2058,6 +2058,99 @@ class TestAgUiThreadOwnership:
         response = await self._run("7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50", monkeypatch)
 
         assert isinstance(response, StreamingResponse)
+
+    # ----------------------------------------------------- SDK execution sub-paths
+    # The installed SDK reads a raw ``threadId`` on both ``agent/{name}`` and
+    # ``agents/execute`` (copilotkit/integrations/fastapi.py:107,195), the adapter
+    # writes it into graph state, and an EXISTING conversation is accepted without
+    # checking its owner — so a foreign session lets the turn's messages inherit
+    # that owner (migration 123 derives computed_user_id from the parent
+    # conversation). The root branch's check never ran on these paths.
+
+    async def _run_sdk(self, path, body, monkeypatch):
+        import json as _json
+        from unittest.mock import MagicMock
+
+        from fastapi.responses import JSONResponse
+
+        import src.api.routes.copilotkit as ck
+
+        monkeypatch.setattr(ck, "TESTING_MODE", False)
+        self.sdk_called = False
+
+        async def _fake_sdk_handler(request, sdk):
+            self.sdk_called = True
+            return JSONResponse(content={"reached": "execution"})
+
+        monkeypatch.setattr(ck, "sdk_handler", _fake_sdk_handler)
+
+        raw = _json.dumps(body).encode()
+        scope = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": f"/api/copilotkit/{path}",
+            "raw_path": f"/api/copilotkit/{path}".encode(),
+            "query_string": b"",
+            "headers": [],
+            "server": ("testserver", 80),
+            "client": ("testclient", 12345),
+            "root_path": "",
+            "path_params": {"path": path},
+            "state": {},
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+
+        request = Request(scope, receive)
+        request.state.user = {"id": self.CALLER, "email": "caller@example.com"}
+        return await ck.copilotkit_custom_handler(request, MagicMock(), path=path)
+
+    @pytest.mark.asyncio
+    async def test_sdk_agent_path_rejects_a_foreign_session(self, monkeypatch):
+        response = await self._run_sdk(
+            "agent/default",
+            {"threadId": f"{self.VICTIM}~s", "state": {}, "messages": []},
+            monkeypatch,
+        )
+
+        assert response.status_code == 403
+        assert self.sdk_called is False, "the SDK executed on a foreign session"
+
+    @pytest.mark.asyncio
+    async def test_sdk_agents_execute_rejects_a_foreign_session(self, monkeypatch):
+        response = await self._run_sdk(
+            "agents/execute",
+            {"threadId": f"{self.VICTIM}~s", "name": "default", "state": {}},
+            monkeypatch,
+        )
+
+        assert response.status_code == 403
+        assert self.sdk_called is False, "the SDK executed on a foreign session"
+
+    @pytest.mark.asyncio
+    async def test_sdk_path_still_delegates_the_callers_own_session(self, monkeypatch):
+        response = await self._run_sdk(
+            "agent/default",
+            {"threadId": f"{self.CALLER}~s", "state": {}, "messages": []},
+            monkeypatch,
+        )
+
+        assert response.status_code == 200
+        assert self.sdk_called is True
+
+    @pytest.mark.asyncio
+    async def test_sdk_path_still_delegates_a_bare_thread(self, monkeypatch):
+        response = await self._run_sdk(
+            "agent/default",
+            {"threadId": "7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50", "state": {}},
+            monkeypatch,
+        )
+
+        assert response.status_code == 200
+        assert self.sdk_called is True
 
 
 class TestPlaceholderActionProvenance:

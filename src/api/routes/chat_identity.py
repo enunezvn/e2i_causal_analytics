@@ -36,6 +36,7 @@ of failing loudly. Both sources already reject non-uuids and the anonymous
 sentinel, and nothing here may loosen that.
 """
 
+import json
 import logging
 import uuid
 from typing import Any, Dict, Optional, Protocol
@@ -118,14 +119,14 @@ def reject_identity_mismatch(
     Finding 1 [HIGH IDOR] made ``ChatRequest.user_id`` non-authoritative and
     rejected a mismatching one with 403. #2077: the supplied ``session_id``
     carries an owner claim of exactly the same weight, and it was unguarded.
-    ``chatbot_messages`` and ``chatbot_message_feedback`` derive
-    ``computed_user_id`` as ``CAST(SPLIT_PART(session_id,'~',1) AS UUID)``
-    (``database/chat/031_chatbot_message_feedback.sql:44``) and their RLS policies
-    read ONLY that column (``030_chatbot_rls_policies.sql:133``), so a caller
-    supplying ``{victim}~{uuid}`` persists their own turn under the victim's
-    ownership — and, once #2077 threads identity to the tools, records the
-    victim as the owner of the resulting composition too. The prefix is compared
-    raw, exactly as the generated column splits it.
+    Since migration 123 a message's ``computed_user_id`` is inherited from its
+    parent conversation's ``user_id``
+    (``database/migrations/123_chatbot_message_owner_inherit.sql:34-46``) rather
+    than split from the prefix, and the RLS policies read ONLY that column
+    (``database/chat/030_chatbot_rls_policies.sql:133``) — so supplying
+    ``{victim}~{uuid}`` either opens a conversation owned by the victim or writes
+    into the victim's existing one, and the turn's messages inherit that owner.
+    The prefix is compared raw, the way every consumer splits it.
 
     Skipped in TESTING_MODE, which deliberately bypasses real auth — the same
     exemption the body-``user_id`` check has always had.
@@ -179,29 +180,76 @@ def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode
     return str(token_user_id)
 
 
-def owned_thread_id(
-    body_data: Dict[str, Any], body_json: Dict[str, Any], request: Any, testing_mode: bool
-) -> Optional[str]:
-    """The AG-UI turn's thread id, or None when it claims someone else's ownership.
+def _thread_ids(body: Any) -> list:
+    """Every ``threadId`` a CopilotKit body can carry, across the shapes in use.
 
-    ``agent/run`` accepts ``threadId`` from the request body in either of two
-    shapes and it becomes the session the turn PERSISTS under, whose prefix
-    decides ``computed_user_id`` and therefore who can read the rows. CopilotKit
-    mints bare uuids and the frontend passes ``CopilotContext.threadId`` through
-    untouched, so no legitimate caller sends a prefix at all. None means reject;
-    the caller answers 403 rather than raising, because an exception here would
-    be swallowed into the ungated SDK fallthrough.
+    ``agent/run`` reads it top level or nested under ``body``; the SDK's
+    ``agent/{name}`` and ``agents/execute`` read it top level
+    (``copilotkit/integrations/fastapi.py:107,195``). Any of them is a claim, so
+    all of them are checked.
     """
-    thread_id = body_data.get("threadId") or body_json.get("threadId")
-    if not testing_mode and thread_id:
-        state = getattr(request, "state", None)
-        user = getattr(state, "user", None) if state is not None else None
-        token_user_id = user.get("id") if isinstance(user, dict) else None
+    if not isinstance(body, dict):
+        return []
+    nested = body.get("body")
+    candidates = [body.get("threadId")]
+    if isinstance(nested, dict):
+        candidates.append(nested.get("threadId"))
+    return [c for c in candidates if isinstance(c, str) and c]
+
+
+def _claims_another_owner(body: Any, request: Any, testing_mode: bool) -> bool:
+    """Does this body name a thread whose owner prefix is not the caller?
+
+    The thread id becomes the session the turn PERSISTS under. Since migration
+    123 a message inherits ``computed_user_id`` from its parent conversation, and
+    an EXISTING conversation is accepted without an owner check, so a foreign
+    prefix either opens a conversation owned by someone else or writes into
+    theirs. CopilotKit mints bare uuids and the frontend passes
+    ``CopilotContext.threadId`` through untouched, so no legitimate caller sends
+    a prefix at all. TESTING_MODE is exempt, as every other claim check is.
+    """
+    if testing_mode:
+        return False
+    state = getattr(request, "state", None)
+    user = getattr(state, "user", None) if state is not None else None
+    token_user_id = user.get("id") if isinstance(user, dict) else None
+    if not token_user_id:
+        return False
+    for thread_id in _thread_ids(body):
         claimed = thread_id.split("~", 1)[0] if "~" in thread_id else None
-        if claimed and token_user_id and claimed != token_user_id:
+        if claimed and claimed != token_user_id:
             logger.warning(
                 "[CopilotKit] Rejected threadId mismatch (possible impersonation): "
                 "threadId owner prefix does not match authenticated identity"
             )
-            return None
-    return thread_id or str(uuid.uuid4())
+            return True
+    return False
+
+
+def owned_thread_id(body_json: Dict[str, Any], request: Any, testing_mode: bool) -> Optional[str]:
+    """The AG-UI turn's thread id, or None when it claims someone else's ownership.
+
+    None means reject; the caller answers 403 rather than raising, because an
+    exception here would be swallowed by the handler's broad except into the
+    ungated SDK fallthrough.
+    """
+    if _claims_another_owner(body_json, request, testing_mode):
+        return None
+    nested = body_json.get("body") if isinstance(body_json.get("body"), dict) else {}
+    return nested.get("threadId") or body_json.get("threadId") or str(uuid.uuid4())
+
+
+def sdk_thread_denied(body_bytes: bytes, request: Any, testing_mode: bool) -> bool:
+    """Whether the SDK sub-path body claims a thread the caller does not own.
+
+    The root branch's check never ran here: ``agent/{name}`` and
+    ``agents/execute`` reach the third-party handler through the fallthrough,
+    which delegates the body verbatim. Read the same bytes the SDK will read —
+    the stream is already buffered at this point, so nothing is consumed. An
+    unparseable body names no thread and is left to the SDK to reject.
+    """
+    try:
+        body = json.loads(body_bytes) if body_bytes else None
+    except (ValueError, TypeError):
+        return False
+    return _claims_another_owner(body, request, testing_mode)
