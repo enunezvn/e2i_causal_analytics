@@ -289,7 +289,7 @@ async def test_experiment_designer_arun_lands_activity_row():
 
     marker = f"883b-expd-{uuid.uuid4().hex[:12]}"
     agent = ExperimentDesignerAgent(enable_mlflow=False)
-    session_id = None
+    activity_id = None
     client = get_supabase_client()
     try:
         output = await agent.arun(
@@ -301,26 +301,38 @@ async def test_experiment_designer_arun_lands_activity_row():
                 enable_validity_audit=True,
             )
         )
-        session_id = agent.last_memory_session_id
-        assert session_id, (
-            "arun() recorded no memory session id — the memory contribution "
-            "did not run (#883 PR B: experiment_designer wiring)"
+        # #2099: the agent no longer mints a session, so the stored row is
+        # found by this run's marker rather than by an invented id. The row
+        # itself — not the id — is the proof the contribution ran.
+        assert agent.last_memory_session_id is None, (
+            "experiment_designer minted a session id again; "
+            "ExperimentDesignerInput carries no session concept (#2099)"
         )
 
-        rows = (
+        candidates = (
             client.table("agent_activities")
             .select("activity_id, agent_name, activity_type, input_data, analysis_results")
             .eq("agent_name", "experiment_designer")
             .eq("activity_type", "experiment_design")
-            .contains("input_data", {"session_id": session_id})
+            .order("activity_timestamp", desc=True)
+            .limit(200)
             .execute()
         ).data or []
+        rows = [
+            r
+            for r in candidates
+            if marker in ((r.get("input_data") or {}).get("business_question") or "")
+        ]
         assert len(rows) == 1, (
             "arun() landed no schema-correct experiment_design row in "
             "agent_activities (#883 PR B: contribute_to_memory unwired and/or "
             "the payload wrote nonexistent columns — PGRST204 swallowed)"
         )
         row = rows[0]
+        activity_id = row["activity_id"]
+        assert (row.get("input_data") or {}).get("session_id") is None, (
+            "the stored row carries an invented session id (#2099)"
+        )
         assert marker in (row["input_data"].get("business_question") or "")
         assert row["analysis_results"].get("design_type") == output.design_type
 
@@ -344,10 +356,8 @@ async def test_experiment_designer_arun_lands_activity_row():
             )
             reset_memory_hooks()
     finally:
-        if session_id:
-            client.table("agent_activities").delete().eq(
-                "agent_name", "experiment_designer"
-            ).contains("input_data", {"session_id": session_id}).execute()
+        if activity_id:
+            client.table("agent_activities").delete().eq("activity_id", activity_id).execute()
 
 
 # =============================================================================

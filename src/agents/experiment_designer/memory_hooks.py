@@ -63,7 +63,7 @@ class ExperimentDesignRecord:
 
     # Identity
     record_id: str
-    session_id: str
+    session_id: Optional[str]
     timestamp: datetime
 
     # Design context
@@ -516,14 +516,18 @@ class ExperimentDesignerMemoryHooks:
 
     async def cache_experiment_design(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         business_question: Optional[str] = None,
     ) -> bool:
         """Cache experiment design in working memory.
 
         Args:
-            session_id: Session ID for the design
+            session_id: Session ID for the design, or None. Without a session
+                the session-keyed entry is skipped (#2099): its key embeds the
+                id, so a session-less write lands under a key no reader can ask
+                for. The question-hash entry -- the key the reuse path actually
+                reads -- is written either way.
             result: Experiment design result to cache
             business_question: Optional question for additional cache key
 
@@ -534,13 +538,14 @@ class ExperimentDesignerMemoryHooks:
             return False
 
         try:
-            # Cache session result
-            session_key = f"experiment_designer:session:{session_id}"
             cache_data = {
                 "result": result,
                 "cached_at": datetime.now(timezone.utc).isoformat(),
             }
-            await self._wm_set_json(session_key, cache_data, self.CACHE_TTL_SECONDS)
+            # Cache session result
+            if session_id is not None:
+                session_key = f"experiment_designer:session:{session_id}"
+                await self._wm_set_json(session_key, cache_data, self.CACHE_TTL_SECONDS)
 
             # Also cache by question hash for reuse
             if business_question:
@@ -618,7 +623,7 @@ class ExperimentDesignerMemoryHooks:
 
     async def store_experiment_design(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
         brand: Optional[str] = None,
@@ -626,7 +631,8 @@ class ExperimentDesignerMemoryHooks:
         """Store experiment design in episodic memory.
 
         Args:
-            session_id: Session ID for the design
+            session_id: Session ID for the design, or None for an honest NULL
+                session on the stored row (#2099)
             result: Experiment design result
             state: Full state from design workflow
             brand: Optional brand context
@@ -838,7 +844,7 @@ class ExperimentDesignerMemoryHooks:
         normalized = question.lower().strip()
         return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
-    def _generate_record_id(self, session_id: str, result: Dict[str, Any]) -> str:
+    def _generate_record_id(self, session_id: Optional[str], result: Dict[str, Any]) -> str:
         """Generate unique record ID for episodic memory."""
         content = f"{session_id}:{result.get('design_type', 'RCT')}"
         content += f":{result.get('overall_validity_score', 0)}"
@@ -954,7 +960,7 @@ class ExperimentDesignerMemoryHooks:
 async def contribute_to_memory(
     result: Dict[str, Any],
     state: Dict[str, Any],
-    session_id: str,
+    session_id: Optional[str],
     brand: Optional[str] = None,
 ) -> Dict[str, int]:
     """Contribute experiment design results to CognitiveRAG's memory systems.
@@ -966,7 +972,8 @@ async def contribute_to_memory(
     Args:
         result: Experiment design result
         state: Full design state
-        session_id: Session identifier
+        session_id: Session identifier, or None when the caller had no session
+            (#2099) -- the stored row then records an honest NULL
         brand: Optional brand context
 
     Returns:
@@ -983,7 +990,9 @@ async def contribute_to_memory(
         business_question=business_question,
     )
     if cache_success:
-        counts["working"] = 2  # Session cache + question cache
+        # Question cache always; the session cache only when there is a session
+        # to key it on (#2099).
+        counts["working"] = 2 if session_id is not None else 1
 
     # 2. Store in episodic memory
     record_id = await hooks.store_experiment_design(
