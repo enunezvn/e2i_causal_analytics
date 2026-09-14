@@ -923,6 +923,25 @@ def _extract_library_payload(
         qini = result_payload.get("qini")
         if isinstance(qini, (int, float)):
             payload["qini"] = float(qini)
+        # #2067: name the estimand this `ate` belongs to, next to the number.
+        # CausalML binarizes any outcome at zero before fitting, so on a
+        # non-binary outcome `ate` is a risk difference on the derived
+        # indicator (y > 0), not an ATE on the column the caller named. The
+        # executor decides this before the fit; a payload that carries no
+        # discriminator gets no estimand claim rather than a guessed one.
+        binarized = result_payload.get("outcome_binarized")
+        if isinstance(binarized, bool):
+            payload["identified_estimand"] = (
+                "risk_difference_on_indicator_y_gt_0" if binarized else "ate"
+            )
+            distinct = result_payload.get("outcome_distinct_values")
+            if isinstance(distinct, int):
+                payload["outcome_distinct_values"] = distinct
+        # The executor's honesty marker (these are mean model-predicted
+        # uplift figures, not identification-validated) was dropped here.
+        provenance = result_payload.get("data_provenance")
+        if isinstance(provenance, str):
+            payload["data_provenance"] = provenance
     elif library == "networkx":
         n_nodes = result_payload.get("n_nodes")
         if isinstance(n_nodes, (int, float)):
