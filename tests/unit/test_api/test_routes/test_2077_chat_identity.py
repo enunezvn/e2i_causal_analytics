@@ -333,3 +333,33 @@ async def test_tool_composer_tool_records_null_when_no_identity_is_available(
 
     assert failing_composer[0]["user_id"] is None
     assert orchestrator.payloads[0]["user_id"] is None
+
+
+# ------------------------------------------- gap 3: the model stops guessing sessions
+
+
+def test_neither_tool_schema_offers_the_model_a_session_to_guess():
+    """Inside chat the argument was already ignored; the schema still advertised it
+    (example ``sess_abc123``), spending tokens on a value the model cannot know."""
+    for schema in (chatbot_tools.OrchestratorToolInput, chatbot_tools.ToolComposerToolInput):
+        assert "session_id" not in schema.model_fields, schema.__name__
+        example = schema.model_config["json_schema_extra"]["example"]
+        assert "session_id" not in example, schema.__name__
+
+
+def test_neither_tool_accepts_a_session_argument():
+    import inspect
+
+    for fn in (chatbot_tools.orchestrator_tool, chatbot_tools.tool_composer_tool):
+        params = inspect.signature(fn.coroutine).parameters
+        assert "session_id" not in params, fn.name
+
+
+async def test_a_session_the_model_invents_is_ignored_entirely(orchestrator):
+    """It is dropped by the schema now, not merely outranked by the binding."""
+    result = await chatbot_tools.orchestrator_tool.ainvoke(
+        {"query": "Why is TRx moving?", "session_id": "sess_abc123"}
+    )
+
+    assert orchestrator.payloads[0]["session_id"] is None
+    assert result["context"]["session_id"] is None
