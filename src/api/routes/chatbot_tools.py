@@ -87,11 +87,11 @@ def reset_raw_user_query(token: "contextvars.Token[Optional[str]]") -> None:
 # tools with the model's args only, and the model cannot know the frontend thread
 # id, so orchestrator_tool / tool_composer_tool used to invent ``chatbot-<ts>`` /
 # ``composer-<ts>`` ids that look like sessions but belong to no conversation.
-# Each chat brain binds the real id before its tools run: copilotkit's execute()
-# (AG-UI — re-exported there as ``_session_id_context``) and chatbot_graph's tools
-# node (/chat/stream). Declared here rather than in copilotkit.py because
-# copilotkit already imports this module: no import cycle, and chatbot_graph does
-# not pull in the CopilotKit SDK to reach it.
+# Both graphs' tools node (``SessionBoundToolNode`` in chat_session_binding) binds
+# the real id from graph state before the tools run; copilotkit re-exports the var
+# as ``_session_id_context`` for its own readers and the chat bridge. Declared here
+# rather than in copilotkit.py because copilotkit already imports this module: no
+# import cycle, and chatbot_graph does not pull in the CopilotKit SDK to reach it.
 chat_session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "e2i_chat_session_id", default=None
 )
