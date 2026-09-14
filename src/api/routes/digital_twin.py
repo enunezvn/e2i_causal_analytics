@@ -963,8 +963,8 @@ async def run_simulation(
             # region-targeted question with that region's own estimate (#2023). Scope the
             # estimator to the filtered regions so both surfaces state the same number.
             # This moves the ATE, CI, SE, recommendation and sample size onto the targeted
-            # regions; the subgroup heterogeneity below stays twin-weighted and
-            # simulation_confidence still rewards twin count (both pre-#2023).
+            # regions; the subgroup heterogeneity below now reports only the axes the
+            # estimate resolves (#2054). simulation_confidence still rewards twin count.
             target_regions = list(pop_filter.regions) if pop_filter else []
 
             def _do_sim():

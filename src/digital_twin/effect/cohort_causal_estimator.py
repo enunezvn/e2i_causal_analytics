@@ -341,11 +341,12 @@ class CohortCausalEstimator:
         # regions when there are any (with the cohort-wide estimate kept alongside), else
         # cohort-wide. What this carries to: the ATE, its interval, the SE derived from it,
         # the DEPLOY/REFINE/SKIP policy and the experiment size.
-        # It does NOT re-weight the engine's subgroup heterogeneity (by_specialty /
-        # by_decile / by_adoption_stage average region CATEs over the GENERATED TWINS, a
-        # different weighting from this cohort-row-weighted headline) or the simulation
-        # confidence heuristic (which still rewards twin count). Both predate #2023 and
-        # are unchanged by it.
+        # The subgroup heterogeneity the engine reports is now on the same footing: it
+        # comes from ``cate_by_axis`` below, which declares region alone and carries the
+        # cohort rows behind each region's effect, so by_specialty / by_decile /
+        # by_adoption_stage are no longer averaged over the GENERATED TWINS (#2054).
+        # Still outstanding from #2054: the simulation confidence heuristic rewards twin
+        # count, which is a compute knob rather than evidence about the effect.
         if eff.target_regions:
             assert eff.target_ate is not None  # set whenever target_regions is non-empty
             assert eff.target_ci_lower is not None and eff.target_ci_upper is not None
