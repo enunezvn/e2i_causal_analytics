@@ -520,3 +520,127 @@ async def test_submit_review_refuses_a_stale_hash_and_leaves_the_row_pending(fak
     assert row["approval_status"] == "pending" and row["dag_version_hash"] == "h2"
     assert "valid_until" not in row and "resolved_at" not in row
     assert any("matched no rows" in r.getMessage() for r in caplog.records)
+
+
+# --------------------------------------------------------------------------
+# H2 -- the latest recorded version, and a compare-and-set advance
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_get_latest_version_reads_the_last_row_by_created_then_version_id(fake_client):
+    """The mirror of ``get_versions``' order, read from the OTHER end in ONE query:
+    the caller needs only the newest row, so the whole timeline must not be
+    fetched to take its last element."""
+    fake_client.seed(
+        "expert_review_versions",
+        [
+            {"version_id": "v1", "review_id": "r1", "created_at": "2026-09-01T00:00:00+00:00"},
+            {"version_id": "v3", "review_id": "r1", "created_at": "2026-09-02T00:00:00+00:00"},
+            {"version_id": "v4", "review_id": "r1", "created_at": "2026-09-02T00:00:00+00:00"},
+            {"version_id": "vz", "review_id": "r9", "created_at": "2099-01-01T00:00:00+00:00"},
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    latest = await repo.get_latest_version("r1")
+    assert latest is not None and latest["version_id"] == "v4"
+    calls = fake_client.calls("expert_review_versions")
+    assert ("order", ("created_at", True)) in calls
+    assert ("order", ("version_id", True)) in calls
+    assert ("limit", (1,)) in calls
+    # ... and the oldest-first reader is unchanged, so the two agree on the order
+    assert [v["version_id"] for v in await repo.get_versions("r1")] == ["v1", "v3", "v4"]
+
+
+@pytest.mark.unit
+async def test_get_latest_version_is_none_when_the_review_has_no_timeline(fake_client):
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    assert await repo.get_latest_version("r1") is None
+    assert await ExpertReviewRepository(supabase_client=None).get_latest_version("r1") is None
+
+
+@pytest.mark.unit
+async def test_get_latest_version_reraises_a_read_failure(fake_client, caplog):
+    """R1/R3: 'no version recorded' is what the caller reads as 'nothing to
+    compare, append', so an outage must never look like it."""
+
+    class _Boom(_FakeClient):
+        def table(self, name: str):
+            raise RuntimeError("connection refused")
+
+    repo = ExpertReviewRepository(supabase_client=_Boom())
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError):
+        await repo.get_latest_version("r1")
+    assert any("latest version" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.unit
+async def test_append_version_advance_is_a_compare_and_set_on_the_current_hash(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h1"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure=None,
+        adjustment_set_hash=None,
+        query_id=None,
+        expected_current_hash="h1",
+    )
+    assert ok is True
+    assert ("eq", ("dag_version_hash", "h1")) in fake_client.calls("expert_reviews")
+    assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h2"
+
+
+@pytest.mark.unit
+async def test_append_version_cas_mismatch_leaves_the_review_on_the_winners_hash(
+    fake_client, caplog
+):
+    """Two concurrent appends: the other one advanced the review to h3 first, so
+    this one must not drag it back to h2. The version row it already inserted
+    stays as a timeline fact."""
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h3"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    with caplog.at_level(logging.WARNING):
+        ok = await repo.append_version(
+            "r1",
+            dag_version_hash="h2",
+            dag_structure=None,
+            adjustment_set_hash=None,
+            query_id=None,
+            expected_current_hash="h1",
+        )
+    assert ok is False
+    assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h3"
+    assert fake_client.inserted("expert_review_versions")[0]["dag_version_hash"] == "h2"
+    assert any("concurrent" in r.getMessage().lower() for r in caplog.records)
+
+
+@pytest.mark.unit
+async def test_append_version_without_an_expected_hash_does_not_filter_on_it(fake_client):
+    """The compare-and-set is opt-in: a caller that has not read the current hash
+    keeps the pending-only behaviour."""
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h1"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure=None,
+        adjustment_set_hash=None,
+        query_id=None,
+    )
+    assert ok is True
+    assert not any(
+        key == "dag_version_hash"
+        for method, (key, _) in [
+            (m, a) for m, a in fake_client.calls("expert_reviews") if m == "eq"
+        ]
+    )

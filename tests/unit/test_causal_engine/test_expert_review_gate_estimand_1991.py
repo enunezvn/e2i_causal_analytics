@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from src.causal_engine.dag_hash import compute_adjustment_set_hash
 from src.causal_engine.expert_review_gate import ExpertReviewGate, ReviewGateDecision
 from src.repositories.expert_review import estimand_key_for
 
@@ -42,8 +43,16 @@ class _EstimandRepo:
     assert which estimand the row lands on.
     """
 
-    def __init__(self, history: Optional[List[Dict[str, Any]]] = None) -> None:
+    def __init__(
+        self,
+        history: Optional[List[Dict[str, Any]]] = None,
+        latest_version: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.history = list(history or [])
+        #: What ``get_latest_version`` answers -- None means "this review has no
+        #: timeline yet", which is a fresh insert (or a pre-141 row).
+        self.latest_version = latest_version
+        self.latest_version_reads: List[str] = []
         self.created: List[Dict[str, Any]] = []
         self.appended: List[tuple] = []
         self.append_kwargs: List[Dict[str, Any]] = []
@@ -75,6 +84,10 @@ class _EstimandRepo:
         )
         self.created.append(recorded)
         return "rev-new"
+
+    async def get_latest_version(self, review_id: str) -> Optional[Dict[str, Any]]:
+        self.latest_version_reads.append(review_id)
+        return dict(self.latest_version) if self.latest_version is not None else None
 
     async def append_version(self, review_id: str, **kwargs: Any) -> bool:
         self.appended.append((review_id, kwargs.get("dag_version_hash")))
@@ -419,3 +432,250 @@ async def test_absent_brand_keys_on_the_empty_brand_bucket():
 
     assert repo.created[0]["estimand_key"] == ":t:y"
     assert repo.estimand_lookups == [":t:y"]
+
+
+# --------------------------------------------------------------------------
+# H2 / H4 (codex round-1): what "changed" means is the (hash, adjustment) PAIR
+# --------------------------------------------------------------------------
+
+
+def _version(dag_hash: str, adjustment_sets=None, *, adjustment_set_hash="__derive__"):
+    """A timeline row as ``get_latest_version`` returns it."""
+    snapshot = {"nodes": ["T", "Y"], "edges": [["T", "Y"]]}
+    if adjustment_sets is not None:
+        snapshot["adjustment_sets"] = adjustment_sets
+    row = {
+        "version_id": "v1",
+        "review_id": "r1",
+        "dag_version_hash": dag_hash,
+        "dag_structure_json": snapshot,
+    }
+    if adjustment_set_hash == "__derive__":
+        row["adjustment_set_hash"] = (
+            compute_adjustment_set_hash(list(adjustment_sets)) if adjustment_sets else None
+        )
+    else:
+        row["adjustment_set_hash"] = adjustment_set_hash
+    return row
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_recovered_mint_does_not_append_the_winners_pair_twice():
+    """Two concurrent mints of the SAME structure both recover the winner's
+    review from the 23505. The winner already recorded (hash, adjustment set);
+    the loser must add nothing -- a second identical row is not a version, it is
+    a duplicate that makes the timeline lie about how often the DAG changed."""
+    repo = _EstimandRepo(history=[], latest_version=_version("h1", [["W"]]))
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    r = await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+    )
+
+    assert r.decision == ReviewGateDecision.PENDING_REVIEW
+    assert repo.appended == []
+    assert repo.latest_version_reads  # the check was actually made
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fresh_mint_still_records_version_one_and_pins_its_own_hash():
+    """No timeline yet -> version 1, with the compare-and-set naming the hash
+    ``create_review`` just stored."""
+    repo = _EstimandRepo(history=[], latest_version=None)
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure=_GRAPH,
+    )
+
+    assert repo.appended == [("rev-new", "h1")]
+    assert repo.append_kwargs[0]["expected_current_hash"] == "h1"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_adjustment_set_change_on_the_same_dag_appends_a_version():
+    """H4: ``compute_dag_hash`` EXCLUDES adjustment sets, so a covariate change
+    leaves the hash equal. Comparing only the hash kept that change off the
+    timeline entirely -- the reviewer never saw the estimand's covariates move."""
+    repo = _EstimandRepo(history=[_pending("r1", "h1")], latest_version=_version("h1", [["W"]]))
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    r = await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["W", "X"]]},
+    )
+
+    assert r.decision == ReviewGateDecision.PENDING_REVIEW and r.review_id == "r1"
+    assert repo.appended == [("r1", "h1")]
+    kwargs = repo.append_kwargs[0]
+    assert kwargs["adjustment_set_hash"] == compute_adjustment_set_hash([["W", "X"]])
+    # the snapshot must advance too, or the review renders the old covariates
+    assert kwargs["dag_structure"]["adjustment_sets"] == [["W", "X"]]
+    assert kwargs["expected_current_hash"] == "h1"
+    assert "structure updated to a new version" in r.message
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_identical_pair_on_a_pending_review_appends_nothing():
+    repo = _EstimandRepo(history=[_pending("r1", "h1")], latest_version=_version("h1", [["W"]]))
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    r = await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+    )
+
+    assert r.decision == ReviewGateDecision.PENDING_REVIEW
+    assert repo.appended == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_backfilled_version_without_an_adjustment_hash_derives_it_from_the_snapshot():
+    """Migration 141's backfill wrote ``adjustment_set_hash = NULL``. Reading
+    that as "no adjustment set" would make every first re-encounter of an
+    unchanged DAG look like a covariate change and append a spurious version."""
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1")],
+        latest_version=_version("h1", [["W"]], adjustment_set_hash=None),
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+    )
+
+    assert repo.appended == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_backfilled_version_derives_a_DIFFERENT_set_and_still_appends():
+    """Positive control for the derivation: the same NULL-hash row whose
+    snapshot carries OTHER covariates must not be read as unchanged."""
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1")],
+        latest_version=_version("h1", [["W"]], adjustment_set_hash=None),
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["Z"]]},
+    )
+
+    assert repo.appended == [("r1", "h1")]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_new_hash_pins_the_advance_to_the_hash_the_gate_read():
+    """The compare-and-set the repository applies: of two interleaved appends,
+    the one whose read is stale must not drag the review backwards."""
+    repo = _EstimandRepo(history=[_pending("r1", "h1")], latest_version=_version("h1"))
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h2",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure=_GRAPH,
+    )
+
+    assert repo.appended == [("r1", "h2")]
+    assert repo.append_kwargs[0]["expected_current_hash"] == "h1"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_unreadable_timeline_appends_nothing_and_still_answers(caplog):
+    """A failed version read must not become a duplicate append.
+
+    ``get_latest_version`` re-raises a client error (R1/R3) because None reads as
+    "nothing recorded, append". The gate answers that with the conservative
+    choice: append nothing and stay available. The review keeps the version it
+    carries -- which is the version a resolution binds to -- and the next run
+    re-reads and appends, so nothing is lost, whereas appending on a comparison
+    that never happened writes the duplicate row this check exists to prevent.
+    """
+
+    class _BlindRepo(_EstimandRepo):
+        async def get_latest_version(self, review_id: str):
+            raise RuntimeError("connection refused")
+
+    repo = _BlindRepo(history=[_pending("r1", "h1")])
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    with caplog.at_level("WARNING"):
+        r = await gate.check_approval(
+            dag_hash="h1",
+            brand="B",
+            treatment="T",
+            outcome="Y",
+            requester_id="q",
+            dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+        )
+
+    assert r.decision == ReviewGateDecision.PENDING_REVIEW and r.review_id == "r1"
+    assert repo.appended == []
+    assert any("latest structure version" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_unreadable_timeline_still_advances_a_review_on_another_hash(caplog):
+    """Positive control: the review's OWN hash is read from the history, not from
+    the timeline, so a genuinely new structure is still recorded when the version
+    read fails -- the conservative skip covers only the pair comparison."""
+
+    class _BlindRepo(_EstimandRepo):
+        async def get_latest_version(self, review_id: str):
+            raise RuntimeError("connection refused")
+
+    repo = _BlindRepo(history=[_pending("r1", "h1")])
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    with caplog.at_level("WARNING"):
+        await gate.check_approval(
+            dag_hash="h2",
+            brand="B",
+            treatment="T",
+            outcome="Y",
+            requester_id="q",
+            dag_structure=_GRAPH,
+        )
+
+    assert repo.appended == [("r1", "h2")]

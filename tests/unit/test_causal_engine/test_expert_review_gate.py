@@ -30,6 +30,13 @@ class TestExpertReviewGate:
         # get_reviews_for_dag -- a rejection is recorded against a hash.
         repo.get_reviews_for_estimand = AsyncMock(return_value=[])
         repo.append_version = AsyncMock(return_value=True)
+        # #1991 debt 3 (codex round-1): before appending, the gate reads the
+        # review's LAST recorded version and appends only when this run's
+        # (hash, adjustment-set) pair differs from it. None = no timeline yet,
+        # which is every mint in this class. A MagicMock here would make the
+        # read UNREADABLE, which the gate deliberately treats as "already
+        # recorded" -- so the default must be an explicit empty answer.
+        repo.get_latest_version = AsyncMock(return_value=None)
         return repo
 
     @pytest.fixture

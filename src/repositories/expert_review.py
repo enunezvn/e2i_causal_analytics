@@ -830,6 +830,7 @@ class ExpertReviewRepository(BaseRepository):
         adjustment_set_hash: Optional[str],
         query_id: Optional[str],
         related_validation_ids: Optional[List[str]] = None,
+        expected_current_hash: Optional[str] = None,
     ) -> bool:
         """Record a new structure version on a PENDING review and make it the
         review's current hash.
@@ -856,6 +857,21 @@ class ExpertReviewRepository(BaseRepository):
         empty structure for the opposite reason -- it BACKFILLS the structure of
         the hash already on the row, so there a None would erase and replace
         nothing.)
+
+        ``expected_current_hash`` makes the advance a COMPARE-AND-SET (codex
+        round-1 HIGH): the review UPDATE also carries
+        ``dag_version_hash = expected_current_hash``, so of two interleaved
+        appends (insert h2, insert h3, advance h3, advance h2) the second advance
+        matches zero rows instead of dragging the review back to a structure a
+        later run superseded. The caller passes the hash it READ before deciding
+        to append. On a lost race the version row it already inserted STAYS: the
+        timeline is a record of the structures runs produced, and it may
+        therefore hold a row the review never pointed at. Its LAST row is still
+        the truth of what was last recorded, and the review's own
+        ``dag_version_hash`` is what a resolution binds to (``submit_review``'s
+        ``expected_dag_version_hash``) -- so an orphan version row can never
+        widen what a reviewer signed off. Omitted, the advance keeps the
+        pending-only filter alone.
 
         Returns:
             True only when BOTH the append and the review's advance succeeded.
@@ -897,13 +913,15 @@ class ExpertReviewRepository(BaseRepository):
             advance["related_validation_ids"] = related_validation_ids
 
         try:
-            result = await (
+            query = (
                 self.client.table(self.table_name)
                 .update(advance)
                 .eq("review_id", review_id)
                 .eq("approval_status", "pending")
-                .execute()
             )
+            if expected_current_hash is not None:
+                query = query.eq("dag_version_hash", expected_current_hash)
+            result = await query.execute()
         except Exception as e:
             logger.error(
                 f"append_version: version row appended for review {review_id} but the "
@@ -912,13 +930,61 @@ class ExpertReviewRepository(BaseRepository):
             return False
 
         if not result.data:
-            logger.warning(
-                f"append_version: no PENDING review {review_id} to advance to "
-                f"{dag_version_hash} (nonexistent or already resolved); the version "
-                "row was appended."
-            )
+            if expected_current_hash is not None:
+                logger.warning(
+                    f"append_version: review {review_id} is no longer on "
+                    f"{expected_current_hash}, so it was not advanced to {dag_version_hash} "
+                    "(a concurrent advance won, or the review was resolved); the version "
+                    "row was appended and the caller should re-read."
+                )
+            else:
+                logger.warning(
+                    f"append_version: no PENDING review {review_id} to advance to "
+                    f"{dag_version_hash} (nonexistent or already resolved); the version "
+                    "row was appended."
+                )
             return False
         return True
+
+    async def get_latest_version(self, review_id: str) -> Optional[Dict[str, Any]]:
+        """The LAST structure version recorded for a review, or None.
+
+        The other end of ``get_versions``' order -- newest ``created_at`` first,
+        ties broken by ``version_id`` -- taken in ONE query with ``limit(1)``
+        rather than by fetching a whole timeline to read its last element. The
+        gate compares the run's ``(dag_version_hash, adjustment_set_hash)`` pair
+        against this row to decide whether anything actually changed, which is
+        what keeps two concurrent same-structure mints from appending the same
+        pair twice (the 23505 recovery hands both of them the winner's review).
+
+        Returns:
+            The newest version row, or None when the review has no timeline (a
+            fresh insert, or a pre-141 row the backfill skipped) or no client
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R1/R3 convention of this module): None reads as "nothing recorded
+            yet, append", so an outage must not fake it into a duplicate append.
+        """
+        if not self.client:
+            return None
+
+        try:
+            result = await (
+                self.client.table("expert_review_versions")
+                .select("*")
+                .eq("review_id", review_id)
+                .order("created_at", desc=True)
+                .order("version_id", desc=True)
+                .limit(1)
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"Failed to get the latest version for review {review_id}: {e}")
+            raise
+
+        rows = result.data or []
+        return dict(rows[0]) if rows else None
 
     async def get_versions(self, review_id: str) -> List[Dict[str, Any]]:
         """Structure versions of a review, OLDEST first; ties on ``created_at``

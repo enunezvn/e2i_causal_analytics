@@ -23,6 +23,21 @@ from src.repositories.expert_review import (
 
 logger = logging.getLogger(__name__)
 
+
+class _VersionMatch(Enum):
+    """How a run's structure compares with a review's last RECORDED version.
+
+    Three states, not a boolean, because the pending branch and the mint path
+    need different answers for "the review has no timeline yet": a mint records
+    version 1 there, while an unchanged hash with nothing recorded appends
+    nothing (there is no recorded pair to contradict it).
+    """
+
+    SAME = "same"
+    DIFFERENT = "different"
+    NOT_RECORDED = "not_recorded"
+
+
 # Keys of the in-state CausalGraph that are persisted with an auto-created
 # review (mig 097). Bounded on purpose: enough to RENDER the DAG in the review
 # UI and GROUND the advisory agent assessment — not the dag_dot blob or any
@@ -409,12 +424,30 @@ class ExpertReviewGate:
             pending_row = pending[0]
             review_id = pending_row.get("review_id")
 
-            if review_id and pending_row.get("dag_version_hash") != dag_hash:
+            current_hash = pending_row.get("dag_version_hash")
+            match = await self._match_last_recorded_version(
+                review_id, dag_hash, adjustment_set_hash
+            )
+            # What "the structure changed" MEANS is the PAIR (codex round-1
+            # HIGH): ``compute_dag_hash`` deliberately EXCLUDES adjustment sets,
+            # so comparing the hash alone kept every covariate-only change off
+            # the timeline -- the reviewer never saw the estimand's adjustment
+            # set move under an unchanged DAG. The pair is compared against the
+            # LAST RECORDED version, not against the review row, because
+            # ``expert_reviews`` has no adjustment-set column.
+            # The review's own hash still counts on its own: when it disagrees
+            # with this run, the review must be advanced even if the timeline
+            # already holds the pair (a previous advance lost its race), or it
+            # would stay on a structure nothing will move it off.
+            # With no timeline at all (recorded is None) an unchanged hash
+            # appends nothing, exactly as before: there is no recorded pair to
+            # contradict it.
+            hash_changed = current_hash != dag_hash
+            if review_id and (hash_changed or match is _VersionMatch.DIFFERENT):
                 # Same question, new structure (#1991 debt 3): APPEND a version
                 # to the open review and advance it, instead of minting a
                 # sibling row. ``expert_review_versions`` is a timeline, so a
-                # revert (A -> B -> A) legitimately appends a third row; the
-                # ``!=`` above is the whole of same-hash idempotence.
+                # revert (A -> B -> A) legitimately appends a third row.
                 # Best-effort: a failed append must not withhold the review id
                 # the caller needs (the repository logs the detail, and the
                 # review is still pending either way).
@@ -428,6 +461,10 @@ class ExpertReviewGate:
                     # this run's evidence too -- the detail route renders the
                     # two side by side.
                     related_validation_ids=related_validation_ids,
+                    # Compare-and-set on the hash READ above: two interleaved
+                    # appends must not let the loser's advance overwrite the
+                    # winner's (insert h2, insert h3, advance h3, advance h2).
+                    expected_current_hash=current_hash,
                 )
                 if not appended:
                     logger.warning(
@@ -535,22 +572,40 @@ class ExpertReviewGate:
                 # a version on the WINNER's review rather than being lost.
                 # Best-effort either way, like the append above: the review
                 # exists and is pending whatever the timeline write did.
-                appended = await self.repository.append_version(
-                    str(review_id),
-                    dag_version_hash=dag_hash,
-                    dag_structure=structure,
-                    adjustment_set_hash=adjustment_set_hash,
-                    query_id=requester_id,
-                    # Same value ``create_review`` just stored; passed for
-                    # symmetry with the append above, so the two call sites
-                    # cannot drift on what an advance carries.
-                    related_validation_ids=related_validation_ids,
+                #
+                # ... but ONLY when it is not already recorded (codex round-1
+                # HIGH): on that recovery path ``review_id`` is a review this
+                # call may not have inserted, and two concurrent mints of the
+                # SAME structure both recover the winner's id. Appending
+                # unconditionally gave the winner's timeline two identical rows,
+                # which reads as "the DAG changed twice" in the review UI. A
+                # fresh insert has no timeline (recorded is None) and still
+                # records version 1.
+                match = await self._match_last_recorded_version(
+                    review_id, dag_hash, adjustment_set_hash
                 )
-                if not appended:
-                    logger.warning(
-                        f"Could not record the first structure version {dag_hash} on new "
-                        f"review {review_id} (estimand {estimand_key})."
+                if match is not _VersionMatch.SAME:
+                    appended = await self.repository.append_version(
+                        str(review_id),
+                        dag_version_hash=dag_hash,
+                        dag_structure=structure,
+                        adjustment_set_hash=adjustment_set_hash,
+                        query_id=requester_id,
+                        # Same value ``create_review`` just stored; passed for
+                        # symmetry with the append above, so the two call sites
+                        # cannot drift on what an advance carries.
+                        related_validation_ids=related_validation_ids,
+                        # ``create_review`` stored this hash a moment ago, so the
+                        # compare-and-set normally holds; it refuses only if
+                        # something advanced the review in between, which is
+                        # exactly the write this must not undo.
+                        expected_current_hash=dag_hash,
                     )
+                    if not appended:
+                        logger.warning(
+                            f"Could not record the first structure version {dag_hash} on new "
+                            f"review {review_id} (estimand {estimand_key})."
+                        )
                 return ReviewGateResult(
                     decision=ReviewGateDecision.PENDING_REVIEW,
                     dag_hash=dag_hash,
@@ -571,6 +626,62 @@ class ExpertReviewGate:
             message="DAG requires expert approval before analysis can proceed",
             requires_action=True,
         )
+
+    async def _match_last_recorded_version(
+        self, review_id: Any, dag_hash: str, adjustment_set_hash: Optional[str]
+    ) -> "_VersionMatch":
+        """How this run's ``(dag_version_hash, adjustment_set_hash)`` pair compares
+        with the review's LAST RECORDED structure version.
+
+        This is the thing that decides whether anything actually changed.
+        ``expert_reviews`` carries no adjustment-set column -- that hash lives on
+        the version row (migration 141) -- so the timeline is the only place the
+        previous adjustment set can be read.
+
+        A version row written by migration 141's BACKFILL has
+        ``adjustment_set_hash = NULL``, which is not "no adjustment set": the
+        hash was simply never computed for it. Where the row kept a structure
+        snapshot, the hash is DERIVED from it with the same function the writer
+        uses, so the first re-encounter of an unchanged DAG is recognised as
+        unchanged instead of appending a spurious version. A NULL hash with no
+        usable snapshot stays None -- genuinely unknown, which differs from every
+        computed hash and from the canonical empty set ``sha256("[]")``.
+
+        A read FAILURE is reported as SAME, not as NOT_RECORDED: it is logged and
+        read as "nothing new to record". Skipping an append cannot corrupt
+        anything -- the review stays pending on the version it already carries,
+        that version is what a resolution binds to (``submit_review``), and the
+        next run re-reads and appends -- whereas appending on a comparison that
+        never happened writes the duplicate row this check exists to prevent. The
+        consult itself stays available, which a propagated error would not leave.
+
+        Returns:
+            SAME when the last recorded version is this pair (or is unreadable),
+            DIFFERENT when it is another pair, NOT_RECORDED when the review has
+            no timeline at all
+        """
+        try:
+            latest = await self.repository.get_latest_version(str(review_id))
+        except Exception as read_err:  # noqa: BLE001 - the consult must not break
+            logger.warning(
+                f"Could not read the latest structure version of review {review_id} "
+                f"({read_err}); treating this run's structure as already recorded, so "
+                "nothing is appended and the review keeps the version it carries"
+            )
+            return _VersionMatch.SAME
+        if not latest:
+            return _VersionMatch.NOT_RECORDED
+        adjustment_hash = latest.get("adjustment_set_hash")
+        if adjustment_hash is None:
+            snapshot = latest.get("dag_structure_json")
+            if isinstance(snapshot, dict):
+                adjustment_hash = compute_adjustment_set_hash(
+                    list(snapshot.get("adjustment_sets") or [])
+                )
+        recorded = (str(latest.get("dag_version_hash") or ""), adjustment_hash)
+        if recorded == (dag_hash, adjustment_set_hash):
+            return _VersionMatch.SAME
+        return _VersionMatch.DIFFERENT
 
     @staticmethod
     def _latest_adjudication(
