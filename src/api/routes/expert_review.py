@@ -320,9 +320,8 @@ def _last_changed_at(row: Dict[str, Any], versions: List[Dict[str, Any]]) -> Any
     additionally validates it and turns a malformed snapshot into a named 500
     rather than a derivation; migration 141's object-or-NULL CHECK makes that
     unreachable for rows this table can hold. It only parses; it validates
-    nothing and cannot raise, and a
-    value that is not an object comes back as something the derivation reads as
-    "proves nothing".
+    nothing and cannot raise, and a value that is not an object comes back as
+    something the derivation reads as "proves nothing".
     """
     index = _current_version_index(
         [
