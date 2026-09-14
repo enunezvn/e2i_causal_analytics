@@ -103,8 +103,9 @@ def resolve_session_user_id(session_id: Optional[str]) -> Optional[str]:
     ``session_id`` from it, so a prefix-first rule let one caller persist a turn
     under another user's ownership (``chatbot_conversations.user_id`` is written
     from this attribution, and migration 123's trigger turns it into the
-    ``computed_user_id`` the RLS policies read). The prefix still answers for
-    ``/chat/stream``'s own ``{user}~{uuid}`` ids, which set no verified channel.
+    ``computed_user_id`` the RLS policies read). Every chat entry point now binds
+    the verified channel, so the prefix answers only where none was bound at all
+    — a direct caller, or a background task replaying a session.
     A disagreement is logged, not raised — the request-level guards reject it;
     this is the last honest read, not the gate.
     """

@@ -12,11 +12,13 @@ why chat LLM usage has been recording ``surface='other', user_id=NULL`` since
 2026-08-16. Two channels do survive into the tools:
 
 * the session itself, for the ``{user}~{session}`` ids ``/chat/stream`` mints
-  (and their ``~bridge`` shadow, which splits the same way ``computed_user_id``
-  does); and
-* the auth gate's verified id, set in the REQUEST task by
-  ``_require_auth_for_copilotkit_execution`` — the only one that names the user
-  behind an AG-UI turn, whose thread ids are bare uuids with no prefix.
+  (and their ``~bridge`` shadow, which splits on the first ``~`` the way every
+  consumer of the prefix does); and
+* the verified id, set in the REQUEST task — by the AG-UI auth gate
+  (``_require_auth_for_copilotkit_execution``), by ``authorize_chat_identity``
+  on ``/chat`` and ``/chat/stream``, and by ``bind_verified_request_user`` on the
+  SDK sub-paths. It is the only channel that names the user behind an AG-UI turn,
+  whose thread ids are bare uuids with no prefix.
 
 The verified id OUTRANKS the session prefix. A prefix is a claim the caller
 makes, not a credential: AG-UI reads ``threadId`` straight from the request body
