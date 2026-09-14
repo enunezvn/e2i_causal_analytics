@@ -333,11 +333,18 @@ def _binarization_notice(y_arr: Any, outcome_var: str) -> Tuple[Optional[str], b
 
     A warning, not a refusal: on a genuinely binary 0/1 outcome the same
     number IS the ATE, and binary flags are most of this platform's
-    outcomes. The condition is ``distinct > 2``, with no invented
-    threshold -- it states what the estimator did rather than judging
-    whether the result is useful, which is the same restraint #2063 took
-    when it refused to guess a near-degenerate cutoff. The breadth is
-    deliberate: a 3-level ordinal outcome is warned too, because the
+    outcomes. No threshold is invented -- the condition is the recoding
+    itself, ``(y > 0) != y`` on the non-NaN values, which states what the
+    estimator did rather than judging whether the result is useful (the
+    same restraint #2063 took when it declined to guess a near-degenerate
+    cutoff).
+
+    The discriminator is deliberately NOT ``distinct > 2``. A two-valued
+    outcome such as ``{0, 2}`` or ``{-1, 1}`` passes the collapse gate and
+    the distinct-count test alike, yet binarization changes its values, so
+    the fitted quantity is a risk difference on the indicator and calling
+    it an ATE would be a false label. Breadth in the other direction is
+    deliberate too: a 3-level ordinal outcome is warned, because the
     binarized estimand is not the one its column names.
 
     The statistics are computed over non-NaN values only, for the reason
@@ -358,10 +365,13 @@ def _binarization_notice(y_arr: Any, outcome_var: str) -> Tuple[Optional[str], b
 
     y_valid = y_arr[~np.isnan(y_arr)]
     distinct = int(len(np.unique(y_valid)))
-    if distinct <= 2:
+    binarized = (y_valid > 0).astype(y_valid.dtype)
+    if np.array_equal(y_valid, binarized):
+        # The recoding is the identity here: the values already ARE the
+        # 0/1 indicator (in any dtype, and `-0.0 == 0.0`), so the fitted
+        # quantity is the ATE on the column the caller named.
         return None, False, distinct
 
-    binarized = (y_valid > 0).astype(float)
     positive_fraction = float(binarized.mean())
     information_lost = float(np.abs(y_valid - binarized).mean())
     message = (
