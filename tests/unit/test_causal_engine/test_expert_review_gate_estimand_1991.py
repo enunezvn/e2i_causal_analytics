@@ -679,3 +679,124 @@ async def test_an_unreadable_timeline_still_advances_a_review_on_another_hash(ca
         )
 
     assert repo.appended == [("r1", "h2")]
+
+
+# --------------------------------------------------------------------------
+# M5 -- check_rejection reads the SAME rows as check_approval
+# --------------------------------------------------------------------------
+
+
+class _RecordingRepo(_EstimandRepo):
+    """Also records what the legacy hash-keyed reader was asked for."""
+
+    def __init__(self, history=None) -> None:
+        super().__init__(history=history)
+        self.dag_reads: List[tuple] = []
+
+    async def get_reviews_for_dag(
+        self, dag_hash: str, include_expired: bool = False, brand: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        self.dag_reads.append((dag_hash, include_expired, brand))
+        rows = [r for r in self.history if r.get("dag_version_hash") == dag_hash]
+        return [r for r in rows if brand is None or r.get("brand") == brand]
+
+
+def _rejected_row(review_id: str, dag_hash: str, brand: str, *, treatment="T", outcome="Y"):
+    return {
+        "review_id": review_id,
+        "approval_status": "rejected",
+        "dag_version_hash": dag_hash,
+        "brand": brand,
+        "treatment_variable": treatment,
+        "outcome_variable": outcome,
+        "estimand_key": estimand_key_for(brand, treatment, outcome),
+        "created_at": "2026-09-01T00:00:00+00:00",
+        "concerns_raised": ["formulary_status is a collider"],
+        "reviewer_name": "Dr. No",
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rejection_probe_is_case_insensitive_on_the_brand():
+    """The probe missed rejections purely on brand CASE: rows are stored with the
+    brand as the caller wrote it ("Remibrutinib") and probed with whatever the
+    run carries ("remibrutinib"), and ``get_reviews_for_dag`` filters with an
+    exact-case ``.eq``. The estimand key lowercases every operand, which is what
+    ``check_approval`` already reads -- so the two readers now cannot disagree."""
+    repo = _RecordingRepo(history=[_rejected_row("r0", "h1", "Remibrutinib")])
+    gate = ExpertReviewGate(repository=repo)
+
+    result = await gate.check_rejection("h1", brand="remibrutinib", treatment="T", outcome="Y")
+
+    assert result is not None and result.decision == ReviewGateDecision.REJECTED
+    assert result.review_id == "r0"
+    assert repo.estimand_lookups == ["remibrutinib:t:y"]
+    assert repo.dag_reads == []  # the hash-keyed reader is no longer consulted
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rejection_probe_without_a_brand_does_not_read_another_brands_rejection():
+    """With brand None the old probe applied NO brand filter at all, so another
+    brand's rejection of a structurally identical DAG halted this run. The empty
+    brand is its own estimand bucket (``:t:y``)."""
+    repo = _RecordingRepo(history=[_rejected_row("r0", "h1", "Kisqali")])
+    gate = ExpertReviewGate(repository=repo)
+
+    assert await gate.check_rejection("h1", treatment="T", outcome="Y") is None
+    assert repo.estimand_lookups == [":t:y"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rejection_probe_matches_the_empty_brand_bucket_it_reads():
+    """Positive control for the bucket: a rejection recorded WITHOUT a brand is
+    found by a brand-less probe."""
+    repo = _RecordingRepo(history=[_rejected_row("r0", "h1", "")])
+    gate = ExpertReviewGate(repository=repo)
+
+    result = await gate.check_rejection("h1", treatment="T", outcome="Y")
+    assert result is not None and result.review_id == "r0"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rejection_probe_only_counts_the_hash_under_analysis():
+    """A rejection of ANOTHER structure of the same estimand does not halt this
+    one (spec §7) -- the estimand read is filtered to this hash, exactly the
+    ``same_hash_history`` slice ``check_approval`` ranks."""
+    repo = _RecordingRepo(history=[_rejected_row("r0", "hOTHER", "B")])
+    gate = ExpertReviewGate(repository=repo)
+
+    assert await gate.check_rejection("h1", brand="B", treatment="T", outcome="Y") is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rejection_probe_without_treatment_or_outcome_keeps_the_legacy_read():
+    """Callers that have no estimand in hand (``can_proceed``-style, older tests)
+    must keep working: with neither variable the hash-keyed reader is used, with
+    the brand it was given."""
+    repo = _RecordingRepo(history=[_rejected_row("r0", "h1", "B")])
+    gate = ExpertReviewGate(repository=repo)
+
+    result = await gate.check_rejection("h1", brand="B")
+    assert result is not None and result.review_id == "r0"
+    assert repo.dag_reads == [("h1", True, "B")]
+    assert repo.estimand_lookups == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rejection_probe_takes_the_estimand_path_with_only_one_variable():
+    """One variable is still an estimand (the key COALESCEs the missing operand),
+    and the node always has both -- a partial call must not silently fall back to
+    the brand-blind legacy read."""
+    repo = _RecordingRepo(history=[_rejected_row("r0", "h1", "B", outcome="")])
+    gate = ExpertReviewGate(repository=repo)
+
+    result = await gate.check_rejection("h1", brand="B", treatment="T")
+    assert result is not None and result.review_id == "r0"
+    assert repo.estimand_lookups == ["b:t:"]
+    assert repo.dag_reads == []

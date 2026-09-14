@@ -1504,7 +1504,19 @@ class RefutationNode:
         if gate is None or probe is None or not dag_hash or not getattr(gate, "repository", None):
             return _STRUCTURE_UNCHECKED, None
         try:
-            rejection = await probe(dag_hash, brand=state.get("brand"))
+            # The estimand, not just the hash + brand (#1991 debt 3, codex
+            # round-1 MEDIUM): with treatment and outcome the probe reads the
+            # ESTIMAND's history -- the same rows the REVIEW-band consult ranks --
+            # instead of a hash-keyed read whose exact-case brand filter missed a
+            # rejection stored under a differently-cased brand, and which applied
+            # no brand filter at all when the run carries none. Same state keys
+            # the consult itself uses.
+            rejection = await probe(
+                dag_hash,
+                brand=state.get("brand"),
+                treatment=state.get("treatment_var"),
+                outcome=state.get("outcome_var"),
+            )
         except Exception as probe_err:  # noqa: BLE001 - probe must never break the node
             logger.warning(
                 "Expert-review rejection check failed (%s); the structure's rejection "

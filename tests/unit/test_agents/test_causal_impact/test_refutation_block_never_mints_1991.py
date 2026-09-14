@@ -96,6 +96,12 @@ class _ReviewRepo:
         self.appended.append((review_id, kwargs.get("dag_version_hash")))
         return True
 
+    async def get_latest_version(self, review_id: str) -> Optional[Dict[str, Any]]:
+        """No timeline yet -- the gate reads this before appending and treats an
+        UNREADABLE answer as "already recorded", so a missing method here would
+        make every "nothing was appended" assertion pass vacuously."""
+        return None
+
     async def update_dag_structure(self, *args: Any, **kwargs: Any) -> bool:
         return True
 
@@ -278,3 +284,40 @@ async def test_block_band_caveat_no_longer_promises_a_queue(monkeypatch):
     assert caveat, "positive control: a rejected BLOCK run always carries a caveat"
     assert "routed to expert review" not in caveat
     assert "is not queued for review" in caveat
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_rejection_probe_is_given_the_runs_estimand(monkeypatch):
+    """M5 (codex round-1): the probe must read the rows ``check_approval`` reads.
+
+    That read is keyed on the estimand, so the node has to hand over the
+    treatment and outcome it already carries -- without them the probe falls back
+    to the hash-keyed, exact-case-brand read that missed a rejection stored under
+    "Remibrutinib" and probed as "remibrutinib".
+    """
+    calls: List[Dict[str, Any]] = []
+
+    class _RecordingGate(ExpertReviewGate):
+        async def check_rejection(self, dag_hash, brand=None, treatment=None, outcome=None):
+            calls.append(
+                {
+                    "dag_hash": dag_hash,
+                    "brand": brand,
+                    "treatment": treatment,
+                    "outcome": outcome,
+                }
+            )
+            return None
+
+    gate = _RecordingGate(repository=_ReviewRepo(), auto_create_review=True)
+    await _node(monkeypatch, GateDecision.BLOCK, gate).execute(_state())
+
+    assert calls == [
+        {
+            "dag_hash": _DAG_HASH,
+            "brand": "Kisqali",
+            "treatment": "rep_visits",
+            "outcome": "trx",
+        }
+    ]

@@ -313,9 +313,12 @@ class ExpertReviewGate:
         # (spec §7): the reviewer said "THIS structure is wrong", which is
         # precisely what a revised structure answers -- so a rejected estimand
         # stays re-openable by revising the DAG. The chronology that decides it
-        # is therefore ranked over the SAME-HASH rows, which is exactly the row
-        # set the hash-keyed ``check_rejection`` probe reads: the two readers
-        # share one input and cannot disagree. Filtering the VERDICT instead of
+        # is therefore ranked over the SAME-HASH rows -- and ``check_rejection``,
+        # given this run's treatment/outcome, now derives its input the SAME way
+        # (the estimand's history filtered to this hash) instead of by a
+        # hash-keyed read whose exact-case brand filter could miss the very row
+        # ranked here (codex round-1 MEDIUM). One input, one chronology: the two
+        # readers cannot disagree. Filtering the VERDICT instead of
         # the INPUT is not the same thing -- rank the whole estimand and an
         # approval of a revised hash sits on top, hiding the rejection of this
         # one, and the gate would queue a structure a human already refused.
@@ -693,9 +696,9 @@ class ExpertReviewGate:
         created_at DESC; rows are created and resolved in order because the
         unique-pending index (migration 140) allows one pending review per
         ESTIMAND at a time, so creation order is adjudication order -- 062's
-        per-structure index, which this replaced, gave the same property for
-        the hash-keyed read ``check_rejection`` still uses). An exact
-        ``created_at`` tie
+        per-structure index, which this replaced, gave the same property for the
+        hash-keyed read ``check_rejection`` falls back to when it is given no
+        estimand). An exact ``created_at`` tie
         between a pending row and the adjudication after it is not a reopen
         (migration 134 reads it the same way). ``None`` when nothing has been
         adjudicated yet.
@@ -748,6 +751,8 @@ class ExpertReviewGate:
         self,
         dag_hash: str,
         brand: Optional[str] = None,
+        treatment: Optional[str] = None,
+        outcome: Optional[str] = None,
     ) -> Optional[ReviewGateResult]:
         """READ-ONLY: did a human REJECT this DAG structure? (#1971)
 
@@ -758,7 +763,28 @@ class ExpertReviewGate:
         adjudication of the structure wins (an older still-unexpired approval
         never masks a newer rejection -- codex iter-3), and a pending row
         newer than that rejection means a reviewer re-opened the structure.
-        Never creates a review row. One read (the full history).
+        Never creates a review row. One read.
+
+        Given a ``treatment`` or an ``outcome`` -- the refutation node always has
+        both -- the read is the SAME read ``check_approval`` makes (codex round-1
+        MEDIUM): the ESTIMAND's history, filtered to this hash, which is exactly
+        its ``same_hash_history`` slice. Sharing one input is what makes "the two
+        can never disagree" true rather than aspirational. The hash-keyed read it
+        used before could not match it on two counts: its brand filter is an
+        exact-case ``.eq``, so a rejection stored as "Remibrutinib" was invisible
+        to a run carrying "remibrutinib" (the estimand key lowercases every
+        operand), and with ``brand=None`` it applied NO brand filter at all, so
+        ANOTHER brand's rejection of a structurally identical DAG halted this run
+        (the empty brand is its own estimand bucket, ``:treatment:outcome``).
+
+        With neither variable there is no estimand to key on, and the legacy
+        hash-keyed read is kept so other callers keep working.
+
+        Args:
+            dag_hash: SHA256 hash of the DAG structure under analysis
+            brand: Brand context
+            treatment: Treatment variable of the run's estimand
+            outcome: Outcome variable of the run's estimand
 
         Returns:
             The REJECTED ``ReviewGateResult`` (reviewer, review id, reason) when
@@ -770,9 +796,19 @@ class ExpertReviewGate:
         if not self.repository:
             return None
 
-        history = await self.repository.get_reviews_for_dag(
-            dag_hash, include_expired=True, brand=brand
-        )
+        if treatment or outcome:
+            estimand_key = estimand_key_for(brand, treatment, outcome)
+            estimand_history = await self.repository.get_reviews_for_estimand(
+                estimand_key, include_expired=True
+            )
+            # A rejection covers the VERSION it was given on, not the estimand
+            # (spec §7), so rank the SAME-HASH rows -- ``check_approval``'s
+            # ``same_hash_history``, built from the same read.
+            history = [r for r in estimand_history if r.get("dag_version_hash") == dag_hash]
+        else:
+            history = await self.repository.get_reviews_for_dag(
+                dag_hash, include_expired=True, brand=brand
+            )
         latest_verdict, reopened = self._latest_adjudication(history)
         if (
             latest_verdict is not None

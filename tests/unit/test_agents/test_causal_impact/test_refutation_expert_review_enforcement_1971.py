@@ -455,7 +455,14 @@ class _ProbeFindsRejectionThenConsultRaises(ExpertReviewGate):
 class _ProbeRaisesThenConsultFindsRejection(ExpertReviewGate):
     """check_rejection raises, check_approval (real) then finds the rejection."""
 
-    async def check_rejection(self, dag_hash, brand=None):  # type: ignore[override]
+    async def check_rejection(  # type: ignore[override]
+        self, dag_hash, brand=None, treatment=None, outcome=None
+    ):
+        # The node now hands over the run's estimand too (#1991 debt 3, codex
+        # round-1 MEDIUM). The signature must ACCEPT it: a TypeError here would
+        # be caught by the node's own probe guard and read as the degraded
+        # "unknown" this test is trying to produce deliberately -- a pass for the
+        # wrong reason.
         raise RuntimeError("transient store error on the probe")
 
 
