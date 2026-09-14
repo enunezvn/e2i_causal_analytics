@@ -39,9 +39,13 @@ MATCH_WINDOW = timedelta(minutes=30)
 #: The enum values chatbot_message_feedback stores (src/agents/feedback_learner/rating_utils.py).
 _SUCCESS_BY_RATING = {"thumbs_up": True, "thumbs_down": False}
 
-_EPISODE_COLUMNS = "episode_id, composition_id, session_id, created_at, success, feedback_at"
-#: computed_user_id is selected because _same_owner reads it; a column the matcher uses but the
-#: query never asks for is how the T14 ordering defect happened.
+#: user_id is selected because _same_owner reads it (#2062): it is the episode side of the owner
+#: gate, and a column the matcher uses but the query never asks for is how the T14 ordering
+#: defect happened.
+_EPISODE_COLUMNS = (
+    "episode_id, composition_id, session_id, user_id, created_at, success, feedback_at"
+)
+#: computed_user_id is selected for the same reason, on the rating side.
 _FEEDBACK_COLUMNS = "session_id, computed_user_id, rating, created_at"
 
 
@@ -55,23 +59,32 @@ def _parse(value: Any) -> Optional[datetime]:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
 
 
-def _owner(value: Any) -> Optional[str]:
-    """The user a session belongs to. Chat session ids are ``<user-uuid>~<session>``."""
-    if not isinstance(value, str) or not value:
-        return None
-    return value.split("~", 1)[0] or None
-
-
 def _same_owner(episode: Dict[str, Any], rating: Dict[str, Any]) -> bool:
     """Defence in depth: never label across users when both sides name one.
 
-    On the chat path this cannot differ — a session has exactly one owner
-    (``chatbot_conversations.user_id`` is NOT NULL) and the feedback table derives
-    ``computed_user_id`` from the session id itself — but the composer is reachable from entry
-    points where ``user_id`` is whatever the caller passed, so the check is worth its two lines.
+    Both sides name the owner of the CONVERSATION, which is what makes them comparable:
+
+    - the rating's ``computed_user_id`` is a trigger-set copy of
+      ``chatbot_conversations.user_id`` (migration ``123_chatbot_message_owner_inherit.sql``);
+    - the episode's ``user_id`` is the chat user the orchestrator threads into the composer's
+      context when it dispatches (#2069).
+
+    The session id is NOT consulted. Until #2062 this compared ``computed_user_id`` with the text
+    before ``~`` in the episode's session id, from a time when the column WAS
+    ``SPLIT_PART(session_id,'~',1)``. Migration 123 retired that expression, and its own header
+    records why the prefix is not an owner: the chat UI mints bare-uuid thread ids, so the prefix
+    was the thread's own random uuid for 836 of 874 message rows. Scored against the live
+    conversations, the prefix comparison rejected 526 of 635. A prefix that most sessions do not
+    carry is not evidence of an owner, so it is not kept as a fallback either.
+
+    Absent on either side returns True: the check could not run, which is not the same as the
+    check failing. This is the SECONDARY guard — strict session equality in
+    :func:`match_episodes` is the primary one and has already held by the time this is reached.
+    Compared as text because the two columns differ in type: ``composer_episodes.user_id`` is
+    VARCHAR(100) (ml/013), ``computed_user_id`` is uuid.
     """
-    rating_owner = rating.get("computed_user_id") or _owner(rating.get("session_id"))
-    episode_owner = _owner(episode.get("session_id"))
+    rating_owner = rating.get("computed_user_id")
+    episode_owner = episode.get("user_id")
     if rating_owner is None or episode_owner is None:
         return True
     return str(rating_owner) == str(episode_owner)
