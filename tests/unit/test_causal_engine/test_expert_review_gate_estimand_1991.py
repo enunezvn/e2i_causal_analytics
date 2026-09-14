@@ -681,6 +681,46 @@ async def test_an_unreadable_timeline_still_advances_a_review_on_another_hash(ca
     assert repo.appended == [("r1", "h2")]
 
 
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_mint_records_version_one_even_when_the_timeline_is_unreadable(caplog):
+    """On the MINT path the conservative skip is NOT self-repairing.
+
+    The pending branch repairs itself because the review's OWN hash carries the
+    change: the next run sees hash_changed and appends. A fresh mint has no such
+    signal -- ``create_review`` just stored this very hash, so every later run of
+    the same structure computes hash_changed=False and finds nothing recorded,
+    and skips again. Version 1 would never be written; the first row the timeline
+    ever got would be a LATER structure, which the diff renders as the origin
+    (changes=None) instead of as the change it was.
+
+    So an unreadable read is its own state: the mint appends. A duplicate row
+    during a store outage is the lesser harm -- it is one extra row in a
+    timeline, against an estimand whose first structure is missing for good.
+    """
+
+    class _BlindRepo(_EstimandRepo):
+        async def get_latest_version(self, review_id: str):
+            raise RuntimeError("connection refused")
+
+    repo = _BlindRepo(history=[])
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    with caplog.at_level("WARNING"):
+        r = await gate.check_approval(
+            dag_hash="h1",
+            brand="B",
+            treatment="T",
+            outcome="Y",
+            requester_id="q",
+            dag_structure=_GRAPH,
+        )
+
+    assert r.decision == ReviewGateDecision.PENDING_REVIEW and r.review_id == "rev-new"
+    assert repo.created and repo.appended == [("rev-new", "h1")]
+    assert repo.append_kwargs[0]["expected_current_hash"] == "h1"
+
+
 # --------------------------------------------------------------------------
 # M5 -- check_rejection reads the SAME rows as check_approval
 # --------------------------------------------------------------------------

@@ -27,15 +27,25 @@ logger = logging.getLogger(__name__)
 class _VersionMatch(Enum):
     """How a run's structure compares with a review's last RECORDED version.
 
-    Three states, not a boolean, because the pending branch and the mint path
-    need different answers for "the review has no timeline yet": a mint records
-    version 1 there, while an unchanged hash with nothing recorded appends
-    nothing (there is no recorded pair to contradict it).
+    Four states, not a boolean, because the pending branch and the mint path
+    need different answers to two of them.
+
+    "The review has no timeline yet" (NOT_RECORDED): a mint records version 1
+    there, while an unchanged hash with nothing recorded appends nothing (there
+    is no recorded pair to contradict it).
+
+    "The timeline could not be read" (UNKNOWN) is deliberately NOT folded into
+    either. Skipping is safe on the pending branch, where the review's own hash
+    still carries a change to the next run -- but on the mint path nothing would
+    ever carry it, so a skip there loses version 1 permanently. Keeping the
+    states apart lets each call site answer for itself without either of them
+    testing for an outage.
     """
 
     SAME = "same"
     DIFFERENT = "different"
     NOT_RECORDED = "not_recorded"
+    UNKNOWN = "unknown"
 
 
 # Keys of the in-state CausalGraph that are persisted with an auto-created
@@ -447,9 +457,14 @@ class ExpertReviewGate:
             # with this run, the review must be advanced even if the timeline
             # already holds the pair (a previous advance lost its race), or it
             # would stay on a structure nothing will move it off.
-            # With no timeline at all (recorded is None) an unchanged hash
-            # appends nothing, exactly as before: there is no recorded pair to
-            # contradict it.
+            # Only a POSITIVE "the pair differs" appends here, so an unchanged
+            # hash appends nothing when there is no timeline at all
+            # (NOT_RECORDED: no recorded pair to contradict it) and nothing when
+            # the timeline could not be read (UNKNOWN). The second is safe
+            # precisely because this branch has the review's OWN hash to fall
+            # back on: a real change still shows up as ``hash_changed`` on the
+            # next run, so the skip repairs itself. The mint path has no such
+            # signal and answers UNKNOWN the other way.
             hash_changed = current_hash != dag_hash
             if review_id and (hash_changed or match is _VersionMatch.DIFFERENT):
                 # Same question, new structure (#1991 debt 3): APPEND a version
@@ -587,8 +602,12 @@ class ExpertReviewGate:
                 # SAME structure both recover the winner's id. Appending
                 # unconditionally gave the winner's timeline two identical rows,
                 # which reads as "the DAG changed twice" in the review UI. A
-                # fresh insert has no timeline (recorded is None) and still
-                # records version 1.
+                # fresh insert has no timeline (NOT_RECORDED) and still records
+                # version 1 -- and so does a run that could not READ the timeline
+                # (UNKNOWN): only a POSITIVE "already recorded" suppresses the
+                # mint's append, because nothing else would ever write version 1
+                # for this structure (the review's own hash is already this hash,
+                # so no later run can notice the gap).
                 match = await self._match_last_recorded_version(
                     review_id, dag_hash, adjustment_set_hash
                 )
@@ -655,28 +674,39 @@ class ExpertReviewGate:
         usable snapshot stays None -- genuinely unknown, which differs from every
         computed hash and from the canonical empty set ``sha256("[]")``.
 
-        A read FAILURE is reported as SAME, not as NOT_RECORDED: it is logged and
-        read as "nothing new to record". Skipping an append cannot corrupt
-        anything -- the review stays pending on the version it already carries,
-        that version is what a resolution binds to (``submit_review``), and the
-        next run re-reads and appends -- whereas appending on a comparison that
-        never happened writes the duplicate row this check exists to prevent. The
-        consult itself stays available, which a propagated error would not leave.
+        A read FAILURE is its own answer, UNKNOWN, rather than a guess at one of
+        the others: it is logged, the consult stays available (a propagated error
+        would not leave it so), and each call site decides. The right decision is
+        not the same on both.
+
+        On the PENDING branch, skipping is safe and SELF-REPAIRING -- but only
+        because the review's own ``dag_version_hash`` still carries the change:
+        the next run sees it differ and appends, so nothing is lost and the
+        duplicate row this check exists to prevent is not written.
+
+        On the MINT path there is no such signal. ``create_review`` has just
+        stored this very hash, so every later run of the same structure computes
+        an unchanged hash and finds nothing recorded, and skips for the same
+        reason -- version 1 would never be written, and the first row the
+        timeline ever got would be a LATER structure, which the diff then renders
+        as the origin rather than as the change it was. So a mint appends on
+        UNKNOWN: one redundant row during an outage is the lesser harm.
 
         Returns:
-            SAME when the last recorded version is this pair (or is unreadable),
-            DIFFERENT when it is another pair, NOT_RECORDED when the review has
-            no timeline at all
+            SAME when the last recorded version is this pair, DIFFERENT when it
+            is another pair, NOT_RECORDED when the review has no timeline at all,
+            UNKNOWN when the timeline could not be read
         """
         try:
             latest = await self.repository.get_latest_version(str(review_id))
         except Exception as read_err:  # noqa: BLE001 - the consult must not break
             logger.warning(
                 f"Could not read the latest structure version of review {review_id} "
-                f"({read_err}); treating this run's structure as already recorded, so "
-                "nothing is appended and the review keeps the version it carries"
+                f"({read_err}); whether this run's structure is already recorded is "
+                "UNKNOWN -- a mint records it anyway, an open review keeps the version "
+                "it carries and the next run re-reads"
             )
-            return _VersionMatch.SAME
+            return _VersionMatch.UNKNOWN
         if not latest:
             return _VersionMatch.NOT_RECORDED
         adjustment_hash = latest.get("adjustment_set_hash")
