@@ -274,6 +274,17 @@ def _thread_ids(body: Any) -> List[str]:
     return [c for c in candidates if isinstance(c, str) and c]
 
 
+def _token_user_id(request: Any) -> Optional[str]:
+    """The verified id the middleware or the auth gate attached, or None.
+
+    ``request.state.user`` is the one identity on a chat request that the caller
+    did not supply; everything else in the body is a claim.
+    """
+    state = getattr(request, "state", None)
+    user = getattr(state, "user", None) if state is not None else None
+    return user.get("id") if isinstance(user, dict) else None
+
+
 def _claims_another_owner(body: Any, request: Any, testing_mode: bool) -> bool:
     """Does this body name a thread whose owner prefix is not the caller?
 
@@ -287,9 +298,7 @@ def _claims_another_owner(body: Any, request: Any, testing_mode: bool) -> bool:
     """
     if testing_mode:
         return False
-    state = getattr(request, "state", None)
-    user = getattr(state, "user", None) if state is not None else None
-    token_user_id = user.get("id") if isinstance(user, dict) else None
+    token_user_id = _token_user_id(request)
     if not token_user_id:
         return False
     for thread_id in _thread_ids(body):
@@ -303,17 +312,48 @@ def _claims_another_owner(body: Any, request: Any, testing_mode: bool) -> bool:
     return False
 
 
-def owned_thread_id(body_json: Dict[str, Any], request: Any, testing_mode: bool) -> Optional[str]:
+async def _claims_a_foreign_conversation(body: Any, request: Any, testing_mode: bool) -> bool:
+    """Does this body name an EXISTING conversation the caller does not own (#2107)?
+
+    The companion to ``_claims_another_owner``, which answers the same question
+    about the ``{owner}~`` prefix — syntax the caller supplies. This one reads
+    the stored owner, so it is the half that covers the bare uuids CopilotKit
+    actually mints. Same TESTING_MODE exemption, and the same never-raises
+    contract: ``thread_owner_denied`` swallows its own failures.
+    """
+    if testing_mode:
+        return False
+    token_user_id = _token_user_id(request)
+    if not token_user_id:
+        return False
+    for thread_id in _thread_ids(body):
+        if await thread_owner_denied(thread_id, token_user_id):
+            return True
+    return False
+
+
+async def owned_thread_id(
+    body_json: Dict[str, Any], request: Any, testing_mode: bool
+) -> Optional[str]:
     """The AG-UI turn's thread id, or None when it claims someone else's ownership.
 
     None means reject; the caller answers 403 rather than raising, because an
     exception here would be swallowed by the handler's broad except into the
     ungated SDK fallthrough.
+
+    Two claims, both refused: a foreign ``{owner}~`` prefix (#2077) and, since
+    #2107, a bare id that already names someone else's conversation. A thread
+    nobody has opened yet is still accepted — that is the arbitrary-thread
+    support #1405 documented, and every new browser turn depends on it.
     """
     if _claims_another_owner(body_json, request, testing_mode):
         return None
     claimed = _thread_ids(body_json)
-    return claimed[0] if claimed else str(uuid.uuid4())
+    if not claimed:
+        return str(uuid.uuid4())
+    if await _claims_a_foreign_conversation(body_json, request, testing_mode):
+        return None
+    return claimed[0]
 
 
 def sdk_thread_denied(body_bytes: bytes, request: Any, testing_mode: bool) -> bool:

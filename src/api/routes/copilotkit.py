@@ -4704,7 +4704,7 @@ async def copilotkit_custom_handler(
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
                 # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
-                thread_id = chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
+                thread_id = await chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
                 if thread_id is None:
                     return JSONResponse(status_code=403, content={"error": "threadId not yours"})
                 state = body_data.get("state") or body_json.get("state") or {}
