@@ -69,9 +69,18 @@ def _frame(cohort: pd.DataFrame):
 def test_subgroup_axes_names_exactly_the_heterogeneity_dimensions():
     """The declaration vocabulary and the reported dimensions must not drift apart:
     an axis name that no ``by_*`` field consumes would be declared and never reported."""
-    assert set(SUBGROUP_AXES) == {
-        name.removeprefix("by_") for name in EffectHeterogeneity.model_fields
+    dimensions = {
+        name.removeprefix("by_")
+        for name in EffectHeterogeneity.model_fields
+        if name.startswith("by_")
     }
+    assert set(SUBGROUP_AXES) == dimensions, (
+        "SUBGROUP_AXES and EffectHeterogeneity's by_* dimensions have drifted. A NEW "
+        "dimension needs its name in SUBGROUP_AXES and an estimator that declares it in "
+        "cate_by_axis, or nothing will ever resolve it and the engine will report {}. A "
+        "REMOVED dimension must come out of SUBGROUP_AXES. A field on EffectHeterogeneity "
+        "that is not a by_* subgroup dimension is not an axis and does not belong here."
+    )
 
 
 def test_declaration_defaults_to_empty_so_an_undeclared_estimate_resolves_nothing():

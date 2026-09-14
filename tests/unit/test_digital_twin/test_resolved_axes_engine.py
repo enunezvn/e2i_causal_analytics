@@ -12,7 +12,9 @@ whose only content is the twin draw. Measured on the base commit with the real
     100,000            0.00207         0.23339
 
 Region is invariant because it is what the estimate resolves; the other axes decay
-towards zero like sampling noise. Those three axes are therefore not reported at all, and
+towards zero like sampling noise. (The design doc's table reads 0.01376 / 0.00287 at the
+same twin counts: it drove an extracted copy of ``calc_group_stats`` over a different twin
+draw. The decay and region's invariance are the finding; the digits are harness-specific.) Those three axes are therefore not reported at all, and
 ``by_region`` is reported from the COHORT rows the effect was estimated on.
 
 The synthetic path (``TwinEffectEstimator``) declares every axis and keeps reporting all
@@ -162,3 +164,21 @@ def test_a_single_targeted_regions_subgroup_equals_the_headline(cohort):
         by_region = result.effect_heterogeneity.by_region
         assert set(by_region) == {region}
         assert by_region[region]["ate"] == pytest.approx(result.simulated_ate, abs=1e-9)
+
+
+def test_the_engine_reports_every_axis_in_the_declaration_vocabulary(cohort):
+    """Guards the wiring between `SUBGROUP_AXES` and the `by_*` fields: an axis added to the
+    vocabulary and declared by an estimator must actually reach the response. Before the
+    engine looped over `SUBGROUP_AXES` it called four hardcoded `axis_stats`, so a fifth
+    axis would have been declared and silently never reported."""
+    from src.digital_twin.effect.estimate import SUBGROUP_AXES
+
+    result = _engine(cohort, _population(300)).simulate(_config(), use_cache=False)
+    reported = {
+        name.removeprefix("by_")
+        for name in type(result.effect_heterogeneity).model_fields
+        if name.startswith("by_")
+    }
+    assert reported == set(SUBGROUP_AXES)
+    for axis in SUBGROUP_AXES:
+        assert isinstance(getattr(result.effect_heterogeneity, f"by_{axis}"), dict)

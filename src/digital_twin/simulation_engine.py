@@ -26,6 +26,7 @@ import pandas as pd
 
 from src.causal_engine.errors import EstimationError
 from src.digital_twin.effect import (
+    SUBGROUP_AXES,
     EffectDataProvider,
     EffectDataUnavailable,
     EffectEstimate,
@@ -385,26 +386,13 @@ class SimulationEngine:
         """
         heterogeneity = EffectHeterogeneity()
 
-        # Group by specialty
-        specialty_groups: dict[str, List[float]] = {}
-        decile_groups: dict[str, List[float]] = {}
-        region_groups: dict[str, List[float]] = {}
-        adoption_groups: dict[str, List[float]] = {}
+        # One bucket per axis, keyed by the twin's value on it. Driven by SUBGROUP_AXES so an
+        # axis added there is grouped and reported without a second edit here.
+        twin_groups: dict[str, dict[str, List[float]]] = {axis: {} for axis in SUBGROUP_AXES}
 
         for twin, effect in zip(twins, effects, strict=False):
-            features = twin.features
-
-            specialty = features.get("specialty", "unknown")
-            specialty_groups.setdefault(specialty, []).append(effect)
-
-            decile = str(features.get("decile", "unknown"))
-            decile_groups.setdefault(decile, []).append(effect)
-
-            region = features.get("region", "unknown")
-            region_groups.setdefault(region, []).append(effect)
-
-            adoption = features.get("adoption_stage", "unknown")
-            adoption_groups.setdefault(adoption, []).append(effect)
+            for axis, groups in twin_groups.items():
+                groups.setdefault(str(twin.features.get(axis, "unknown")), []).append(effect)
 
         # Calculate stats for each group
         def calc_group_stats(groups: dict[str, List[float]]) -> dict[str, dict[str, float]]:
@@ -424,6 +412,16 @@ class SimulationEngine:
             WITHIN a group, under this estimate, is exactly zero. Reporting a twin-draw
             std instead would describe the twin mixture, not the effect."""
             counts = estimate.n_by_axis.get(axis, {})
+            if not counts:
+                # A declared axis with no evidence counts reports nothing (fail-closed).
+                # That is a bug in the estimator, not a data condition, so say so loudly
+                # rather than let a resolved axis vanish from the response in silence.
+                logger.warning(
+                    "%s declared cate_by_axis[%r] with no n_by_axis counts; reporting no "
+                    "subgroup effects for that axis",
+                    estimate.estimator_type,
+                    axis,
+                )
             return {
                 name: {"ate": float(ate), "std": 0.0, "n": int(counts[name])}
                 for name, ate in estimate.cate_by_axis[axis].items()
@@ -438,10 +436,11 @@ class SimulationEngine:
             # Declared with nothing precomputed: the per-twin scores resolve this axis.
             return calc_group_stats(groups)
 
-        heterogeneity.by_specialty = axis_stats("specialty", specialty_groups)
-        heterogeneity.by_decile = axis_stats("decile", decile_groups)
-        heterogeneity.by_region = axis_stats("region", region_groups)
-        heterogeneity.by_adoption_stage = axis_stats("adoption_stage", adoption_groups)
+        # Every axis in SUBGROUP_AXES gets reported, so a new one cannot be declared by an
+        # estimator and then silently dropped here. An axis with no matching ``by_<axis>``
+        # field fails loudly on assignment rather than being ignored.
+        for axis, groups in twin_groups.items():
+            setattr(heterogeneity, f"by_{axis}", axis_stats(axis, groups))
 
         return heterogeneity
 

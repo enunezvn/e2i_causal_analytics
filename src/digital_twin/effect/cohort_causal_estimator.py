@@ -376,6 +376,15 @@ class CohortCausalEstimator:
             if eff.target_regions
             else list(eff.cate_by_region)
         )
+        # A declared axis mapping to an EMPTY dict means "resolved by the per-twin scores",
+        # which for this estimator would put the region step function back through the twin
+        # grouping and resurrect the cohort-ATE fallback under an uncovered region's label.
+        # Whenever the forest produced region CATEs, at least one must survive the scoping.
+        assert declared_regions or not eff.cate_by_region, (
+            f"target_regions {eff.target_regions} matched none of the cohort's regions "
+            f"{sorted(eff.cate_by_region)}; an empty region declaration would read as "
+            "per-twin-resolved."
+        )
         cate_by_axis = {"region": {r: eff.cate_by_region[r] for r in declared_regions}}
         n_by_axis = {"region": {r: eff.n_by_region[r] for r in declared_regions}}
 
