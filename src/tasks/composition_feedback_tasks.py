@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,11 @@ _SUCCESS_BY_RATING = {"thumbs_up": True, "thumbs_down": False}
 #: gate, and a column the matcher uses but the query never asks for is how the T14 ordering
 #: defect happened.
 _EPISODE_COLUMNS = (
-    "episode_id, composition_id, session_id, user_id, created_at, success, feedback_at"
+    "episode_id, composition_id, session_id, user_id, created_at, success, feedback_at, feedback_id"
 )
-#: computed_user_id is selected for the same reason, on the rating side.
-_FEEDBACK_COLUMNS = "session_id, computed_user_id, rating, created_at"
+#: computed_user_id is selected for the same reason, on the rating side. id is the value that
+#: BECOMES the claim: it is what gets written to composer_episodes.feedback_id (ml/044).
+_FEEDBACK_COLUMNS = "id, session_id, computed_user_id, rating, created_at"
 
 
 def _parse(value: Any) -> Optional[datetime]:
@@ -91,7 +92,9 @@ def _same_owner(episode: Dict[str, Any], rating: Dict[str, Any]) -> bool:
 
 
 def match_episodes(
-    episodes: List[Dict[str, Any]], ratings: List[Dict[str, Any]]
+    episodes: List[Dict[str, Any]],
+    ratings: List[Dict[str, Any]],
+    claims: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Assign each rating to the one composition it followed, by composition_id.
 
@@ -102,11 +105,32 @@ def match_episodes(
     A rating claims the nearest eligible composition that started at or before it, within the
     window, in the same session and owned by the same user. A composition already claimed by an
     earlier rating is not reconsidered.
+
+    ``claims`` is the attribution already RECORDED on the episodes — composition_id to the
+    ``feedback_id`` (ml/044) written when that composition was labelled. It is what makes the
+    assignment survive its rating (#2035). Without it every run rebuilt the claims from the
+    ratings that still exist, so deleting one rating handed its composition to another:
+
+        A@10:00 and B@10:10, R1@10:11 and R2@10:12. Run 1 gives B←R1 and A←R2; B's write lands,
+        A's fails. R1 is deleted — ratings cascade from both chatbot_messages and
+        chatbot_conversations. Run 2 rebuilt gives B←R2, B is skipped as already labelled, and A
+        never gets its retry.
+
+    So a recorded claim does two things, and both are needed: its composition is never
+    re-offered (even though the label alone would already exclude it from the WRITE, matching
+    sees every recent episode), and the rating that made it is SPENT — it cannot slide onto a
+    neighbouring composition, whether or not it still exists. Keys and ids are compared as text:
+    ``feedback_id`` is a bigint that a driver may return as int or str on either side.
+
+    Pure: it takes no client. That purity is why the defect above was reproducible in seconds.
     """
     claimed: Dict[str, Dict[str, Any]] = {}
-    taken: set = set()
+    taken: set = {str(key) for key in (claims or {})}
+    spent: set = {str(value) for value in (claims or {}).values() if value is not None}
 
     for rating in sorted(ratings, key=lambda r: str(r.get("created_at") or "")):
+        if str(rating.get("id")) in spent:
+            continue
         given = _parse(rating.get("created_at"))
         if given is None:
             continue
@@ -114,7 +138,7 @@ def match_episodes(
         best: Optional[tuple] = None
         for episode in episodes:
             composition_id = episode.get("composition_id")
-            if not composition_id or composition_id in taken:
+            if not composition_id or str(composition_id) in taken:
                 continue
             if rating.get("session_id") != episode.get("session_id"):
                 continue
@@ -128,10 +152,42 @@ def match_episodes(
                 best = (distance, composition_id)
 
         if best is not None:
-            taken.add(best[1])
+            taken.add(str(best[1]))
             claimed[best[1]] = rating
 
     return claimed
+
+
+def _result(labelled: int, considered: int, failed: int) -> Dict[str, Any]:
+    """The task's one result shape.
+
+    ``failed`` used to be absent on all four early exits, so a run that lost a retry returned
+    ``{"labelled": 0, "considered": N}`` — byte-identical to a clean no-op, and unusable as the
+    "inspect when failed > 0" signal #2035 asks callers to watch.
+    """
+    return {"labelled": labelled, "considered": considered, "failed": failed}
+
+
+def _warn_on_vanished_claims(claims: Mapping[str, Any], ratings: List[Dict[str, Any]]) -> None:
+    """Report a recorded claim whose rating is gone from the window.
+
+    ml/044 deliberately has no foreign key, so the id dangles rather than cascading the episode
+    away or being nulled back into the #2035 starvation. Dangling is the intended durable trace,
+    but it should never be SILENT: this is the one place that can notice it.
+
+    A surviving rating is always in the window when its episode is — a rating matches at most
+    MATCH_WINDOW after the composition it labels, so both sides of a live pair fall inside the
+    same lookback. An id with no rating therefore means the rating was deleted, not aged out.
+    """
+    surviving = {str(r.get("id")) for r in ratings if r.get("id") is not None}
+    for composition_id, feedback_id in claims.items():
+        if str(feedback_id) not in surviving:
+            logger.warning(
+                "composition feedback linker: %s is labelled by rating %s, which no longer "
+                "exists; the label stands and the claim is kept, but its rating was deleted",
+                composition_id,
+                feedback_id,
+            )
 
 
 def link_composition_feedback(
@@ -145,7 +201,7 @@ def link_composition_feedback(
         client = get_supabase_client()
     if client is None:
         logger.warning("composition feedback linker: no database client; nothing labelled")
-        return {"labelled": 0, "considered": 0}
+        return _result(0, 0, 0)
 
     since = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
 
@@ -161,7 +217,7 @@ def link_composition_feedback(
         logger.warning(
             f"composition feedback linker: episode read failed ({type(e).__name__}: {e})"
         )
-        return {"labelled": 0, "considered": 0}
+        return _result(0, 0, 0)
 
     # Only unlabelled episodes are WRITTEN. Matching still sees every episode (below), because a
     # rating already spent on a labelled composition must not become available again tomorrow.
@@ -171,7 +227,7 @@ def link_composition_feedback(
         if episode.get("success") is None and episode.get("feedback_at") is None
     ]
     if not pending:
-        return {"labelled": 0, "considered": 0}
+        return _result(0, 0, 0)
 
     try:
         ratings = (
@@ -183,14 +239,24 @@ def link_composition_feedback(
         ).data or []
     except Exception as e:  # noqa: BLE001
         logger.warning(f"composition feedback linker: rating read failed ({type(e).__name__}: {e})")
-        return {"labelled": 0, "considered": len(pending)}
+        return _result(0, len(pending), 0)
 
     # Matched against EVERY recent episode, not just the unlabelled ones: a rating that already
     # labelled a composition is spent, and stays spent. Matching only the unlabelled ones made
     # attribution hold within a pass but not across them — the nightly rerun then handed the same
     # rating to the next-oldest composition, which is both a wrong label and a rerun that changed
     # something it promised not to.
-    claimed = match_episodes(episodes, ratings)
+    # The attribution already recorded on the episodes (ml/044). Rebuilding it from the
+    # surviving ratings instead is #2035: one deleted rating moved a claim and starved a failed
+    # write of its retry.
+    claims = {
+        episode["composition_id"]: episode["feedback_id"]
+        for episode in episodes
+        if episode.get("composition_id") and episode.get("feedback_id") is not None
+    }
+    _warn_on_vanished_claims(claims, ratings)
+
+    claimed = match_episodes(episodes, ratings, claims=claims)
 
     labelled = 0
     failed = 0
@@ -209,6 +275,10 @@ def link_composition_feedback(
                         "success": success,
                         # feedback_at only: the rating is the signal, the comment is free text.
                         "feedback_at": rating.get("created_at"),
+                        # The claim, in the SAME single-row UPDATE as the label it explains:
+                        # with PostgREST each execute() is its own transaction, so writing them
+                        # separately could leave a label whose attribution never landed (#2035).
+                        "feedback_id": rating.get("id"),
                     }
                 )
                 .eq("composition_id", episode.get("composition_id"))
@@ -235,7 +305,7 @@ def link_composition_feedback(
         labelled,
         len(pending),
     )
-    return {"labelled": labelled, "considered": len(pending), "failed": failed}
+    return _result(labelled, len(pending), failed)
 
 
 try:  # pragma: no cover - the Celery app is not importable in every test context
