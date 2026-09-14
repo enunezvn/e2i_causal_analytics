@@ -1185,3 +1185,165 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         assert "collapse" not in msg, msg
         assert "DoWhy" not in msg, msg
         assert "not a binarization problem" in msg, msg
+
+
+# =============================================================================
+# Binarized-but-not-collapsed outcome (#2067) — warn, never refuse
+# =============================================================================
+
+
+def _make_binarizable_outcome_frame(
+    pattern: list[float], reps: int, seed: int = 2067
+) -> pd.DataFrame:
+    """A frame whose outcome repeats ``pattern`` — exact distinct count and frac.
+
+    Repeating the pattern preserves both ``len(np.unique(y))`` and
+    ``frac(y > 0)`` exactly, so the tests can assert the warning's numbers
+    to four decimals without re-deriving them from a random draw.
+    """
+    y = np.array(pattern * reps, dtype=float)
+    n = len(y)
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame(
+        {
+            "marketing_spend": np.arange(n) % 2,
+            "sales": y,
+            "age": rng.normal(50.0, 10.0, size=n),
+            "income": rng.normal(60000.0, 15000.0, size=n),
+        }
+    )
+
+
+def _fake_fit_uplift_model(*args: Any, **kwargs: Any) -> tuple:
+    """Stand in for the real CausalML fit with a REAL ``UpliftResult``.
+
+    #2067's warning is emitted before the fit and says nothing about the
+    fit's numbers, so these tests do not need to pay for a real forest.
+    The double lives in the test; the executor keeps calling the production
+    wrapper in every other path.
+    """
+    from src.causal_engine.uplift.base import UpliftModelType, UpliftResult
+
+    x_df = kwargs.get("X_df", args[0] if args else None)
+    n = len(x_df)
+    return (
+        UpliftResult(
+            model_type=UpliftModelType.UPLIFT_RANDOM_FOREST,
+            success=True,
+            uplift_scores=np.linspace(-0.1, 0.1, n),
+            ate=0.02,
+            att=0.02,
+            atc=0.02,
+            ate_std=0.01,
+            ate_ci_lower=0.0,
+            ate_ci_upper=0.04,
+            treatment_groups=["1"],
+            feature_importances={"age": 0.5, "income": 0.5},
+        ),
+        UpliftModelType.UPLIFT_RANDOM_FOREST.value,
+    )
+
+
+async def _execute_on_outcome(pattern: list[float], reps: int) -> Dict[str, Any]:
+    """Run the executor over a frame with the given outcome pattern."""
+    executor = CausalMLExecutor()
+    state = _make_pipeline_state(
+        filters={"dataframe": _make_binarizable_outcome_frame(pattern, reps)},
+        confounders=["age", "income"],
+    )
+    with (
+        patch(
+            "src.causal_engine.pipeline.executors.causalml._fit_uplift_model",
+            side_effect=_fake_fit_uplift_model,
+        ),
+        patch(
+            "src.causal_engine.pipeline.executors.causalml._compute_uplift_metrics_safe",
+            return_value={"auuc": 0.51, "qini": 0.02},
+        ),
+    ):
+        return await executor.execute(state, _make_pipeline_config())
+
+
+def _binarization_warnings(result: Dict[str, Any]) -> list:
+    return [w for w in (result["warnings"] or []) if "binarized outcome" in w]
+
+
+class TestCausalMLWarnsWhenBinarizationRecodesTheOutcome:
+    """#2067: an outcome that binarizes WITHOUT collapsing is silently recoded.
+
+    #2063 refuses only the collapse. `[-1, 2, -3, 4, 0]` passes that gate,
+    CausalML fits `P(y > 0)`, and the executor reports the resulting risk
+    difference under the field name `ate` — a plausible number under a label
+    that describes a different estimand. The estimate is not fabricated, so
+    this is a warning (and an estimand in the payload), not a refusal: on a
+    genuinely binary outcome the same number IS the ATE.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mixed_sign_outcome_warns_once_on_the_success_path(self):
+        result = await _execute_on_outcome([-1.0, 2.0, -3.0, 4.0, 0.0], reps=12)
+
+        assert result["success"] is True, result.get("error")
+        expected = (
+            "CausalML binarized outcome 'sales' at zero before fitting "
+            "(causalml/inference/tree/uplift.pyx:459 runs `y = (y > 0)`). "
+            "The outcome has 5 distinct values, so the reported `ate` is a "
+            "risk difference on the derived indicator (y > 0), NOT an average "
+            "treatment effect on 'sales'. frac(y > 0) = 0.4000; "
+            "mean|y - (y > 0)| = 1.6000. Estimate this outcome with "
+            "DoWhy/EconML for an ATE on its own scale."
+        )
+        assert result["warnings"] == [expected], result["warnings"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_sign_outcome_marks_the_payload_as_binarized(self):
+        result = await _execute_on_outcome([-1.0, 2.0, -3.0, 4.0, 0.0], reps=12)
+
+        assert result["result"]["outcome_binarized"] is True
+        assert result["result"]["outcome_distinct_values"] == 5
+
+    @pytest.mark.asyncio
+    async def test_count_outcome_with_zeros_warns_with_its_own_fraction(self):
+        # The issue's unmeasured item #2: a count outcome takes the same path.
+        result = await _execute_on_outcome([0.0, 1.0, 2.0, 3.0, 5.0, 0.0, 2.0], reps=9)
+
+        warns = _binarization_warnings(result)
+        assert result["success"] is True, result.get("error")
+        assert len(warns) == 1, result["warnings"]
+        assert "The outcome has 5 distinct values" in warns[0], warns[0]
+        assert "frac(y > 0) = 0.7143" in warns[0], warns[0]
+        assert result["result"]["outcome_binarized"] is True
+
+    @pytest.mark.asyncio
+    async def test_genuinely_binary_outcome_is_not_warned(self):
+        # Anti-false-positive: for a 0/1 outcome the reported `ate` IS the ATE,
+        # and a warning on it would teach the reader to ignore the warning.
+        result = await _execute_on_outcome([0.0, 1.0], reps=30)
+
+        assert result["success"] is True, result.get("error")
+        assert _binarization_warnings(result) == [], result["warnings"]
+        assert result["result"]["outcome_binarized"] is False
+        assert result["result"]["outcome_distinct_values"] == 2
+
+    @pytest.mark.asyncio
+    async def test_three_level_outcome_is_warned(self):
+        # Deliberate breadth of `> 2`: CausalML's binarization of a 3-level
+        # ordinal response is a defensible risk difference, just not on the
+        # column the caller named.
+        result = await _execute_on_outcome([0.0, 1.0, 2.0], reps=20)
+
+        warns = _binarization_warnings(result)
+        assert len(warns) == 1, result["warnings"]
+        assert "The outcome has 3 distinct values" in warns[0], warns[0]
+        assert "frac(y > 0) = 0.6667" in warns[0], warns[0]
+
+    @pytest.mark.asyncio
+    async def test_collapsing_outcome_is_still_refused_and_never_warned(self):
+        # Guards against the warning shadowing #2063's refusal: an all-positive
+        # continuous outcome must still fail closed before any fit.
+        result = await _execute_on_outcome([0.3, 0.9], reps=30)
+
+        assert result["success"] is False
+        assert "collapses" in (result["error"] or ""), result["error"]
+        assert _binarization_warnings(result) == [], result["warnings"]
+        assert result["result"] is None
