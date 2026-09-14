@@ -8,7 +8,6 @@ Performance Target: <5s per experiment check
 """
 
 import logging
-import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -152,15 +151,13 @@ class ExperimentMonitorAgent:
 
         Args:
             input_data: ExperimentMonitorInput with monitoring parameters
-            session_id: Optional session ID for memory tracking (generates UUID if not provided)
+            session_id: Optional session ID for memory tracking. None is passed
+                straight through so the writer records an honest NULL (#2076);
+                the hook is its only consumer here.
 
         Returns:
             ExperimentMonitorOutput with monitoring results
         """
-        # Generate session ID if not provided
-        if session_id is None:
-            session_id = str(uuid.uuid4())
-
         # Build initial state
         initial_state: ExperimentMonitorState = {
             "query": input_data.query,

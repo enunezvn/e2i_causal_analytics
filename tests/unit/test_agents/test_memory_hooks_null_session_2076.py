@@ -48,6 +48,9 @@ class HookCase:
     skipped: tuple[str, ...] = ()
     #: Other hook methods to double so the test stays hermetic.
     others: tuple[str, ...] = ()
+    #: Cache writes whose key does NOT embed the session. They must still happen
+    #: when there is no session — guarding them would break a live read/write pair.
+    unkeyed_cache: tuple[str, ...] = ()
     #: Counter keys that must stay 0 because their write was skipped.
     zero_counts: tuple[str, ...] = ()
     #: True when the hook also calls the module-level ``persist_agent_activity``.
@@ -89,8 +92,10 @@ CASES: List[HookCase] = [
         hooks_cls="ExperimentMonitorMemoryHooks",
         episodic="store_monitoring_check",
         result={"alerts": []},
-        # ``cache_monitoring_status`` keys on experiment_ids, not the session.
-        others=("cache_monitoring_status", "store_alert", "cache_alert"),
+        # ``cache_monitoring_status`` keys on ``experiment_monitor:status:{ids}``,
+        # not on the session, so it must still run without one.
+        unkeyed_cache=("cache_monitoring_status",),
+        others=("store_alert", "cache_alert"),
     ),
     HookCase(
         module=f"{_AGENTS}.explainer.memory_hooks",
@@ -114,8 +119,10 @@ CASES: List[HookCase] = [
         hooks_cls="HealthScoreMemoryHooks",
         episodic="store_health_check",
         result={},
-        # ``cache_health_check`` keys on check_scope, not the session.
-        others=("cache_health_check",),
+        # ``cache_health_check`` keys on ``health_score:cache:{check_scope}`` — the
+        # very key ``_get_cached_health`` reads back by scope on every run — so it
+        # must still run without a session.
+        unkeyed_cache=("cache_health_check",),
     ),
     HookCase(
         module=f"{_AGENTS}.heterogeneous_optimizer.memory_hooks",
@@ -253,6 +260,9 @@ async def _contribute(case: HookCase, session_id: Optional[str] = None) -> tuple
         mocks[name] = AsyncMock(return_value=True)
     for name in case.others:
         mocks[name] = AsyncMock(return_value=None)
+    # Returns True so a WRONGLY guarded write shows up as working_cached == 0.
+    for name in case.unkeyed_cache:
+        mocks[name] = AsyncMock(return_value=True)
 
     kwargs: Dict[str, Any] = {"result": case.result, "memory_hooks": hooks}
     params = inspect.signature(mod.contribute_to_memory).parameters
@@ -314,3 +324,26 @@ async def test_present_session_is_passed_through_unchanged(case: HookCase):
         mocks[name].assert_awaited()
     for key in case.zero_counts:
         assert counts[key] == 1, f"{case.agent}: {key} must still count a real session's write"
+
+
+_UNKEYED = [c for c in CASES if c.unkeyed_cache]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", _UNKEYED, ids=[c.agent for c in _UNKEYED])
+async def test_absent_session_still_writes_unkeyed_caches(case: HookCase):
+    """A cache whose key does not embed the session is NOT collateral of #2076.
+
+    ``health_score`` is the live example: the route calls ``check_health(scope=...)``
+    with no session at all, and ``_get_cached_health`` reads the same
+    ``health_score:cache:{check_scope}`` key back on the next run. Guarding that
+    write on the session would silently stop every production run from filling a
+    cache it still reads.
+    """
+    counts, mocks = await _contribute(case)
+
+    for name in case.unkeyed_cache:
+        mocks[name].assert_awaited_once()
+    assert counts["working_cached"] == 1, (
+        f"{case.agent}: a cache not keyed on the session must still be written"
+    )

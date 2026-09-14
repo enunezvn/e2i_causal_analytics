@@ -596,13 +596,14 @@ async def contribute_to_memory(
 
     check_scope = state.get("check_scope", "full")
 
-    # 1. Always cache in working memory
-    # Skipped without a session (#2076): the cache key embeds the session id, so a
-    # session-less write would land under a key no reader can ever ask for.
-    if session_id is not None:
-        cached = await memory_hooks.cache_health_check(check_scope, result)
-        if cached:
-            counts["working_cached"] = 1
+    # 1. Always cache in working memory. NOT guarded on the session (#2076): the
+    # key is ``health_score:cache:{check_scope}`` and ``_get_cached_health`` reads
+    # it back BY SCOPE on every run. Production reaches here with no session at all
+    # (the route calls ``check_health(scope=...)``), so a session guard here would
+    # stop every live run from filling a cache it still reads.
+    cached = await memory_hooks.cache_health_check(check_scope, result)
+    if cached:
+        counts["working_cached"] = 1
 
     # 2. Store in episodic memory (only significant events)
     memory_id = await memory_hooks.store_health_check(

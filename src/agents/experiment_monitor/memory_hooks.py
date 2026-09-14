@@ -732,13 +732,12 @@ async def contribute_to_memory(
 
     experiment_ids = state.get("experiment_ids")
 
-    # 1. Always cache in working memory
-    # Skipped without a session (#2076): the cache key embeds the session id, so a
-    # session-less write would land under a key no reader can ever ask for.
-    if session_id is not None:
-        cached = await memory_hooks.cache_monitoring_status(experiment_ids, result)
-        if cached:
-            counts["working_cached"] = 1
+    # 1. Always cache in working memory. NOT guarded on the session (#2076): the
+    # key is ``experiment_monitor:status:{experiment_ids}``, so this write is
+    # session-independent and must happen whether or not a session is in play.
+    cached = await memory_hooks.cache_monitoring_status(experiment_ids, result)
+    if cached:
+        counts["working_cached"] = 1
 
     # 2. Store alerts in episodic memory
     alerts = result.get("alerts", [])
