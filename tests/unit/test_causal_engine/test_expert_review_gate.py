@@ -15,6 +15,14 @@ from src.causal_engine import (
     ReviewGateResult,
     check_dag_approval,
 )
+from src.causal_engine.dag_hash import compute_adjustment_set_hash
+
+#: What a run whose structure carries NO adjustment sets computes -- the
+#: canonical EMPTY set sha256("[]"), a different fact from NULL (UNKNOWN). The
+#: backfill rows below state it so their version identity MATCHES the run's and
+#: the consult reaches the backfill short-circuit; a row left at NULL is the
+#: separate ADVANCE case (codex round 2), pinned in its own test below.
+_EMPTY_ADJUSTMENT = compute_adjustment_set_hash([])
 
 
 class TestExpertReviewGate:
@@ -387,6 +395,7 @@ class _PendingRepo(_CapturingRepo):
         super().__init__()
         self._pending_row = pending_row
         self.structure_updates: list[tuple] = []
+        self.advances: list[tuple] = []
 
     async def get_reviews_for_dag(self, dag_hash, include_expired=False, brand=None):
         return [self._pending_row]
@@ -397,6 +406,17 @@ class _PendingRepo(_CapturingRepo):
     async def update_dag_structure(self, review_id, dag_structure, related_validation_ids=None):
         self.structure_updates.append((review_id, dag_structure, related_validation_ids))
         return True
+
+    async def advance_review(self, review_id, **kwargs):
+        """Codex round 2: the gate advances a review whose own version identity
+        differs from the run's -- including a row whose adjustment half is still
+        UNKNOWN (NULL) against a run that computed one. Recorded so the backfill
+        tests can assert they did NOT take that path."""
+        self.advances.append((review_id, kwargs))
+        return True
+
+    async def get_latest_version(self, review_id):
+        return None
 
 
 class TestPendingRowStructureBackfill:
@@ -415,6 +435,7 @@ class TestPendingRowStructureBackfill:
                 # Pending on THIS structure: the backfill path. A DIFFERING hash
                 # appends a version instead (#1991 debt 3).
                 "dag_version_hash": "deadbeef",
+                "adjustment_set_hash": _EMPTY_ADJUSTMENT,
                 "dag_structure_json": None,
             }
         )
@@ -450,6 +471,7 @@ class TestPendingRowStructureBackfill:
                 "review_id": "rev-has",
                 "approval_status": "pending",
                 "dag_version_hash": "deadbeef",
+                "adjustment_set_hash": _EMPTY_ADJUSTMENT,
                 "dag_structure_json": {"nodes": ["t"], "edges": []},
             }
         )
@@ -475,6 +497,7 @@ class TestPendingRowStructureBackfill:
                 "review_id": "rev-old",
                 "approval_status": "pending",
                 "dag_version_hash": "deadbeef",
+                "adjustment_set_hash": _EMPTY_ADJUSTMENT,
                 "dag_structure_json": None,
             }
         )
@@ -487,6 +510,49 @@ class TestPendingRowStructureBackfill:
         )
 
         assert result.decision == ReviewGateDecision.PENDING_REVIEW
+
+    @pytest.mark.asyncio
+    async def test_a_row_whose_adjustment_half_is_unknown_is_advanced_not_backfilled(self):
+        """Codex round 2: a pre-142 row carries NULL -- UNKNOWN, not "no
+        adjustment set". The run computed one, so the row's version identity
+        genuinely differs and the gate ADVANCES it instead of backfilling.
+
+        That is not a lost backfill: the advance writes the snapshot AND the
+        adjustment half, so it does strictly more than update_dag_structure. It
+        has to happen, or the row never learns its second half and every guard
+        keyed on it (resolution, the assessment persist, the compare-and-set)
+        keeps matching half an identity -- the defect round 2 found.
+        """
+        repo = _PendingRepo(
+            {
+                "review_id": "rev-legacy",
+                "approval_status": "pending",
+                "dag_version_hash": "deadbeef",
+                "adjustment_set_hash": None,
+                "dag_structure_json": None,
+            }
+        )
+        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+        result = await gate.check_approval(
+            "deadbeef",
+            requester_id="agent",
+            dag_structure={"nodes": ["t", "y"], "edges": [("t", "y")]},
+            related_validation_ids=["val-1"],
+        )
+
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert repo.structure_updates == [], "the advance supersedes the backfill here"
+        assert len(repo.advances) == 1
+        review_id, kwargs = repo.advances[0]
+        assert review_id == "rev-legacy"
+        assert kwargs["adjustment_set_hash"] == _EMPTY_ADJUSTMENT
+        # The compare-and-set expects the UNKNOWN it read, matched IS NULL.
+        assert kwargs["expected_current_adjustment_hash"] is None
+        assert kwargs["expected_current_hash"] == "deadbeef"
+        # The renderable snapshot still lands -- the backfill's whole purpose.
+        assert kwargs["dag_structure"]["edges"] == [["t", "y"]]
+        assert repo.create_kwargs is None
 
 
 class TestExpertReviewGateCanProceed:

@@ -35,11 +35,12 @@ class _VersionMatch(Enum):
     is no recorded pair to contradict it).
 
     "The timeline could not be read" (UNKNOWN) is deliberately NOT folded into
-    either. Skipping is safe on the pending branch, where the review's own hash
-    still carries a change to the next run -- but on the mint path nothing would
-    ever carry it, so a skip there loses version 1 permanently. Keeping the
-    states apart lets each call site answer for itself without either of them
-    testing for an outage.
+    either. Skipping is safe on the pending branch, because this answer decides
+    only whether to APPEND: whether to ADVANCE is a separate decision read from
+    the review ROW, which the same outage does not hide (codex round 2). On the
+    mint path nothing would ever carry the change, so a skip there loses version
+    1 permanently. Keeping the states apart lets each call site answer for itself
+    without either of them testing for an outage.
     """
 
     SAME = "same"
@@ -438,6 +439,11 @@ class ExpertReviewGate:
             review_id = pending_row.get("review_id")
 
             current_hash = pending_row.get("dag_version_hash")
+            # The review row's OWN adjustment half (migration 142). Before it,
+            # the row could not say which adjustment set it was on, which is why
+            # every guard keyed on it -- resolution, the assessment persist, the
+            # advance's compare-and-set -- missed an ADJUSTMENT-ONLY advance.
+            current_adjustment = pending_row.get("adjustment_set_hash")
             # Only a row with an id has a timeline to read (and only it can be
             # appended to at all) -- a query keyed on a missing id would be a
             # wasted round trip whose failure this method deliberately swallows.
@@ -446,55 +452,124 @@ class ExpertReviewGate:
                 if review_id
                 else _VersionMatch.NOT_RECORDED
             )
+            # TWO INDEPENDENT DECISIONS (codex round 2), not one.
+            #
             # What "the structure changed" MEANS is the PAIR (codex round-1
             # HIGH): ``compute_dag_hash`` deliberately EXCLUDES adjustment sets,
             # so comparing the hash alone kept every covariate-only change off
             # the timeline -- the reviewer never saw the estimand's adjustment
-            # set move under an unchanged DAG. The pair is compared against the
-            # LAST RECORDED version, not against the review row, because
-            # ``expert_reviews`` has no adjustment-set column.
-            # The review's own hash still counts on its own: when it disagrees
-            # with this run, the review must be advanced even if the timeline
-            # already holds the pair (a previous advance lost its race), or it
-            # would stay on a structure nothing will move it off.
+            # set move under an unchanged DAG.
+            #
+            # This used to be ONE question, ``hash_changed OR pair_differs``,
+            # answered with one write. That conflated two facts that can
+            # disagree:
+            #
+            #   APPEND_NEEDED -- the TIMELINE is missing the structure this run
+            #   produced. Measured against the LAST RECORDED version.
+            #
+            #   ADVANCE_NEEDED -- the REVIEW ROW is not on the structure this run
+            #   produced. Measured against the row's own pair, which it can only
+            #   now state in full (migration 142).
+            #
+            # They come apart exactly where round 2's third finding lives: two
+            # adjustment-only advances race from (h1, A), both append, one loses
+            # the compare-and-set, and the loser's review is left BEHIND its own
+            # timeline -- on a pair the timeline already holds. Appending again
+            # would add a duplicate row saying what the timeline already says;
+            # the right repair is an advance with NO append. Under the old single
+            # question that run found its pair already recorded and its own hash
+            # unchanged, and skipped: the strand was permanent, with no outage
+            # required.
+            #
             # Only a POSITIVE "the pair differs" appends here, so an unchanged
-            # hash appends nothing when there is no timeline at all
+            # pair appends nothing when there is no timeline at all
             # (NOT_RECORDED: no recorded pair to contradict it) and nothing when
             # the timeline could not be read (UNKNOWN). The second is safe
-            # precisely because this branch has the review's OWN hash to fall
-            # back on: a real change still shows up as ``hash_changed`` on the
-            # next run, so the skip repairs itself. The mint path has no such
-            # signal and answers UNKNOWN the other way.
-            hash_changed = current_hash != dag_hash
-            if review_id and (hash_changed or match is _VersionMatch.DIFFERENT):
+            # precisely because the ADVANCE decision is independent and reads the
+            # review row, which no outage hides: a real change still moves the
+            # row on the next run. The mint path has no such signal and answers
+            # UNKNOWN the other way.
+            row_pair_differs = (current_hash, current_adjustment) != (
+                dag_hash,
+                adjustment_set_hash,
+            )
+            # What the ROW can POSITIVELY assert has changed -- the fallback
+            # signal when the timeline cannot vouch for itself. A NULL adjustment
+            # half asserts nothing: it means UNKNOWN, not "no adjustment set", so
+            # it can neither confirm nor deny that the timeline already holds
+            # this run's pair, and appending on it would write the duplicate row
+            # the version read exists to prevent. The hash half, and a KNOWN
+            # adjustment half that differs, are both real evidence of a change.
+            row_asserts_change = current_hash != dag_hash or (
+                current_adjustment is not None and current_adjustment != adjustment_set_hash
+            )
+            # A POSITIVE "the timeline holds another pair" appends. So does the
+            # row's own evidence when the timeline cannot vouch for itself --
+            # NOT_RECORDED (no timeline at all) and UNKNOWN (unreadable) both
+            # mean "nothing recorded contradicts this", and a structure the run
+            # actually produced must still reach the timeline. Only a POSITIVE
+            # SAME suppresses the append, which is exactly the strand case: the
+            # timeline already holds this pair and the review does not, so the
+            # repair is the advance below and appending would duplicate a row.
+            append_needed = bool(review_id) and (
+                match is _VersionMatch.DIFFERENT
+                or (match is not _VersionMatch.SAME and row_asserts_change)
+            )
+            advance_needed = bool(review_id) and row_pair_differs
+
+            if append_needed or advance_needed:
                 # Same question, new structure (#1991 debt 3): APPEND a version
                 # to the open review and advance it, instead of minting a
                 # sibling row. ``expert_review_versions`` is a timeline, so a
                 # revert (A -> B -> A) legitimately appends a third row.
-                # Best-effort: a failed append must not withhold the review id
+                # Best-effort: a failed write must not withhold the review id
                 # the caller needs (the repository logs the detail, and the
                 # review is still pending either way).
-                appended = await self.repository.append_version(
-                    str(review_id),
-                    dag_version_hash=dag_hash,
-                    dag_structure=structure,
-                    adjustment_set_hash=adjustment_set_hash,
-                    query_id=requester_id,
-                    # The review now carries THIS run's hash, so it must carry
-                    # this run's evidence too -- the detail route renders the
-                    # two side by side.
-                    related_validation_ids=related_validation_ids,
-                    # Compare-and-set on the hash READ above: two interleaved
-                    # appends must not let the loser's advance overwrite the
-                    # winner's (insert h2, insert h3, advance h3, advance h2).
-                    expected_current_hash=current_hash,
-                )
-                if not appended:
-                    logger.warning(
-                        f"Could not record structure version {dag_hash} on pending review "
-                        f"{review_id} (estimand {estimand_key}); the review stays pending "
-                        "on its previous version."
+                #
+                # The compare-and-set names the PAIR read above. Both writes use
+                # it, so whichever runs, exactly one of two racing runs wins and
+                # the loser is logged rather than overwriting a winner.
+                if append_needed:
+                    # ``append_version`` ALREADY advances, so an append never
+                    # needs a second write -- one structure, one row, one move.
+                    written = await self.repository.append_version(
+                        str(review_id),
+                        dag_version_hash=dag_hash,
+                        dag_structure=structure,
+                        adjustment_set_hash=adjustment_set_hash,
+                        query_id=requester_id,
+                        # The review now carries THIS run's pair, so it must
+                        # carry this run's evidence too -- the detail route
+                        # renders the two side by side.
+                        related_validation_ids=related_validation_ids,
+                        expected_current_hash=current_hash,
+                        expected_current_adjustment_hash=current_adjustment,
                     )
+                    if not written:
+                        logger.warning(
+                            f"Could not record structure version ({dag_hash}, "
+                            f"{adjustment_set_hash}) on pending review {review_id} (estimand "
+                            f"{estimand_key}); the review stays pending on its previous version."
+                        )
+                else:
+                    # The repair path: the timeline already holds this pair, the
+                    # review does not. Advance WITHOUT appending.
+                    written = await self.repository.advance_review(
+                        str(review_id),
+                        dag_version_hash=dag_hash,
+                        dag_structure=structure,
+                        adjustment_set_hash=adjustment_set_hash,
+                        related_validation_ids=related_validation_ids,
+                        expected_current_hash=current_hash,
+                        expected_current_adjustment_hash=current_adjustment,
+                    )
+                    if not written:
+                        logger.warning(
+                            f"Could not advance pending review {review_id} (estimand "
+                            f"{estimand_key}) from ({current_hash}, {current_adjustment}) to "
+                            f"({dag_hash}, {adjustment_set_hash}); it stays on its previous "
+                            "version and the next run re-reads."
+                        )
                 return ReviewGateResult(
                     decision=ReviewGateDecision.PENDING_REVIEW,
                     dag_hash=dag_hash,
@@ -582,6 +657,11 @@ class ExpertReviewGate:
                 dag_structure=structure,
                 related_validation_ids=related_validation_ids,
                 supersedes_review_id=supersedes_review_id,
+                # The minted row carries its WHOLE version identity from the
+                # start (migration 142), so every guard keyed on it works from
+                # its first moment rather than from its first advance -- and the
+                # version-1 append below has a PAIR to compare-and-set against.
+                adjustment_set_hash=adjustment_set_hash,
             )
 
             if review_id:
@@ -622,11 +702,17 @@ class ExpertReviewGate:
                         # symmetry with the append above, so the two call sites
                         # cannot drift on what an advance carries.
                         related_validation_ids=related_validation_ids,
-                        # ``create_review`` stored this hash a moment ago, so the
+                        # ``create_review`` stored this PAIR a moment ago, so the
                         # compare-and-set normally holds; it refuses only if
                         # something advanced the review in between, which is
-                        # exactly the write this must not undo.
+                        # exactly the write this must not undo. On the
+                        # 23505-recovery path the winner stored ITS own pair --
+                        # if that differs, the compare-and-set fails honestly and
+                        # the next run repairs the row through the advance-only
+                        # path above, rather than this one silently overwriting a
+                        # structure it did not produce.
                         expected_current_hash=dag_hash,
+                        expected_current_adjustment_hash=adjustment_set_hash,
                     )
                     if not appended:
                         logger.warning(
@@ -660,10 +746,13 @@ class ExpertReviewGate:
         """How this run's ``(dag_version_hash, adjustment_set_hash)`` pair compares
         with the review's LAST RECORDED structure version.
 
-        This is the thing that decides whether anything actually changed.
-        ``expert_reviews`` carries no adjustment-set column -- that hash lives on
-        the version row (migration 141) -- so the timeline is the only place the
-        previous adjustment set can be read.
+        This decides ONE of the pending branch's two questions: whether the
+        TIMELINE is missing the structure this run produced (append). Whether the
+        REVIEW ROW is on it (advance) is the other, and is read from the row's
+        own pair -- ``expert_reviews.adjustment_set_hash`` since migration 142.
+        The two columns are not redundant: the version row's is the HISTORY, the
+        review's is its CURRENT state, and a lost compare-and-set can leave them
+        disagreeing (codex round 2, finding 3).
 
         A version row written by migration 141's BACKFILL has
         ``adjustment_set_hash = NULL``, which is not "no adjustment set": the
@@ -680,9 +769,10 @@ class ExpertReviewGate:
         not the same on both.
 
         On the PENDING branch, skipping is safe and SELF-REPAIRING -- but only
-        because the review's own ``dag_version_hash`` still carries the change:
-        the next run sees it differ and appends, so nothing is lost and the
-        duplicate row this check exists to prevent is not written.
+        because the ADVANCE decision beside it is independent: it compares the
+        review row's own pair, which no timeline outage hides, so a real change
+        still moves the row on this very run. Nothing is lost, and the duplicate
+        row this check exists to prevent is not written.
 
         On the MINT path there is no such signal. ``create_review`` has just
         stored this very hash, so every later run of the same structure computes
