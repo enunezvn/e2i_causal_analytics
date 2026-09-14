@@ -287,7 +287,7 @@ class PredictionSynthesizerMemoryHooks:
 
     async def cache_prediction(
         self,
-        session_id: str,
+        session_id: Optional[str],
         entity_id: str,
         entity_type: str,
         prediction_target: str,
@@ -297,7 +297,8 @@ class PredictionSynthesizerMemoryHooks:
         Cache prediction result in working memory.
 
         Args:
-            session_id: Session identifier
+            session_id: Session identifier, or None. The entity cache is written
+                either way; only the session-keyed copy needs a session (#2076).
             entity_id: Entity being predicted
             entity_type: Type of entity
             prediction_target: What was predicted
@@ -322,13 +323,18 @@ class PredictionSynthesizerMemoryHooks:
                 json.dumps(prediction_result, default=str),
             )
 
-            # Also cache by session
-            session_key = f"prediction_synthesizer:session:{session_id}"
-            await redis.setex(
-                session_key,
-                self.CACHE_TTL_SECONDS,
-                json.dumps(prediction_result, default=str),
-            )
+            # Also cache by session -- but ONLY when there is one (#2076). The
+            # entity key above carries no session and is read back by
+            # ``_get_cached_predictions`` on every run, so it must never be
+            # collateral of a missing session; this copy would land under
+            # ``prediction_synthesizer:session:None`` and no reader could ask for it.
+            if session_id is not None:
+                session_key = f"prediction_synthesizer:session:{session_id}"
+                await redis.setex(
+                    session_key,
+                    self.CACHE_TTL_SECONDS,
+                    json.dumps(prediction_result, default=str),
+                )
 
             logger.debug(f"Cached prediction for entity {entity_type}:{entity_id}")
             return True
@@ -655,10 +661,10 @@ async def contribute_to_memory(
     entity_type = state.get("entity_type", "")
     prediction_target = state.get("prediction_target", "")
 
-    # 1. Cache in working memory
-    # Skipped without a session (#2076): the cache key embeds the session id, so a
-    # session-less write would land under a key no reader can ever ask for.
-    if session_id is not None and entity_id and entity_type and prediction_target:
+    # 1. Cache in working memory. NOT guarded on the session (#2076):
+    # ``cache_prediction`` writes an entity key that carries no session and is read
+    # back by every run, and guards its session-keyed copy internally.
+    if entity_id and entity_type and prediction_target:
         cached = await memory_hooks.cache_prediction(
             session_id=session_id,
             entity_id=entity_id,

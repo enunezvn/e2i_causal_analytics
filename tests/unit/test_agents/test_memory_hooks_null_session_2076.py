@@ -53,6 +53,9 @@ class HookCase:
     unkeyed_cache: tuple[str, ...] = ()
     #: Counter keys that must stay 0 because their write was skipped.
     zero_counts: tuple[str, ...] = ()
+    #: Writes NOT keyed on the session: they must still run and record a null
+    #: session field rather than being skipped.
+    null_passthrough: tuple[str, ...] = ()
     #: True when the hook also calls the module-level ``persist_agent_activity``.
     activity: bool = False
 
@@ -146,7 +149,7 @@ CASES: List[HookCase] = [
         # ``track_routing_decision`` is NOT session-keyed: it lpushes onto the
         # global ``orchestrator:routing_decisions`` list and carries the session
         # only as a payload field, where a null is honest. It still runs.
-        others=("track_routing_decision",),
+        null_passthrough=("track_routing_decision",),
         zero_counts=("working_cached", "conversation_stored"),
     ),
     HookCase(
@@ -155,8 +158,11 @@ CASES: List[HookCase] = [
         episodic="store_prediction",
         result={},
         state={"entity_id": "e1", "entity_type": "hcp", "prediction_target": "trx"},
-        skipped=("cache_prediction",),
-        zero_counts=("working_cached",),
+        # ``cache_prediction`` is HALF-keyed: an entity key with no session in it
+        # (read back by ``_get_cached_predictions``) plus a session-keyed copy. It
+        # must still be called; it guards only the session copy internally. The
+        # key-level pin lives in ``test_cache_prediction_*`` below.
+        unkeyed_cache=("cache_prediction",),
     ),
     HookCase(
         module=f"{_AGENTS}.resource_optimizer.memory_hooks",
@@ -260,6 +266,8 @@ async def _contribute(case: HookCase, session_id: Optional[str] = None) -> tuple
         mocks[name] = AsyncMock(return_value=True)
     for name in case.others:
         mocks[name] = AsyncMock(return_value=None)
+    for name in case.null_passthrough:
+        mocks[name] = AsyncMock(return_value=True)
     # Returns True so a WRONGLY guarded write shows up as working_cached == 0.
     for name in case.unkeyed_cache:
         mocks[name] = AsyncMock(return_value=True)
@@ -275,7 +283,9 @@ async def _contribute(case: HookCase, session_id: Optional[str] = None) -> tuple
         for name, mock in mocks.items():
             stack.enter_context(patch.object(hooks, name, mock))
         if case.activity:
-            stack.enter_context(patch.object(mod, "persist_agent_activity", return_value=None))
+            mocks["persist_agent_activity"] = stack.enter_context(
+                patch.object(mod, "persist_agent_activity", return_value=None)
+            )
         counts = await mod.contribute_to_memory(**kwargs)
 
     return counts, mocks
@@ -347,3 +357,92 @@ async def test_absent_session_still_writes_unkeyed_caches(case: HookCase):
     assert counts["working_cached"] == 1, (
         f"{case.agent}: a cache not keyed on the session must still be written"
     )
+
+
+_NULL_THROUGH = [c for c in CASES if c.null_passthrough or c.activity]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", _NULL_THROUGH, ids=[c.agent for c in _NULL_THROUGH])
+async def test_absent_session_still_runs_unkeyed_writes_with_a_null_field(case: HookCase):
+    """A write that carries the session as a PAYLOAD field keeps running.
+
+    ``track_routing_decision`` lpushes onto a global list and the activity writers
+    put the id in ``input_data``; neither builds a key from it. Skipping them would
+    throw away real signal, so they run and record an honest null.
+    """
+    _, mocks = await _contribute(case)
+
+    for name in case.null_passthrough:
+        mocks[name].assert_awaited_once()
+        assert mocks[name].await_args.kwargs["session_id"] is None
+
+    if case.activity:
+        activity = mocks["persist_agent_activity"]
+        activity.assert_called_once()
+        assert activity.call_args.kwargs["input_data"]["session_id"] is None
+
+
+# ===========================================================================
+# prediction_synthesizer: the HALF-keyed cache, pinned at the Redis-key level
+# ===========================================================================
+
+
+class _FakeRedis:
+    """Records every setex key so the two halves can be told apart."""
+
+    def __init__(self) -> None:
+        self.keys: List[str] = []
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        self.keys.append(key)
+
+
+def _hooks_with_fake_redis():
+    from src.agents.prediction_synthesizer.memory_hooks import PredictionSynthesizerMemoryHooks
+
+    redis = _FakeRedis()
+    working = AsyncMock()
+    working.get_client = AsyncMock(return_value=redis)
+    hooks = PredictionSynthesizerMemoryHooks()
+    hooks._working_memory = working
+    return hooks, redis
+
+
+_ENTITY_KEY = "prediction_synthesizer:entity:hcp:e1:trx"
+
+
+@pytest.mark.asyncio
+async def test_cache_prediction_without_session_still_writes_the_entity_key():
+    """The entity cache carries no session, so it must not be collateral of #2076."""
+    hooks, redis = _hooks_with_fake_redis()
+
+    ok = await hooks.cache_prediction(
+        session_id=None,
+        entity_id="e1",
+        entity_type="hcp",
+        prediction_target="trx",
+        prediction_result={"p": 1},
+    )
+
+    assert ok is True
+    assert _ENTITY_KEY in redis.keys, "the session-less run starved the entity cache"
+    assert not [k for k in redis.keys if k.startswith("prediction_synthesizer:session:")], (
+        f"a session-keyed copy was written without a session: {redis.keys}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cache_prediction_with_session_writes_both_keys():
+    """With a session, both halves are written exactly as before."""
+    hooks, redis = _hooks_with_fake_redis()
+
+    await hooks.cache_prediction(
+        session_id="s-2076",
+        entity_id="e1",
+        entity_type="hcp",
+        prediction_target="trx",
+        prediction_result={"p": 1},
+    )
+
+    assert redis.keys == [_ENTITY_KEY, "prediction_synthesizer:session:s-2076"]

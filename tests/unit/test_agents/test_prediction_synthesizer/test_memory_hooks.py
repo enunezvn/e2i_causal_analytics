@@ -559,15 +559,21 @@ class TestContributeToMemory:
 
     @pytest.mark.asyncio
     async def test_contribute_without_session_id(self, sample_prediction_result, sample_state):
-        """#2076: an absent session ID is left as None, never minted."""
-        counts = await contribute_to_memory(
-            result=sample_prediction_result,
-            state=sample_state,
-            session_id=None,
-        )
+        """#2076: an absent session ID reaches the episodic writer as None."""
+        hooks = PredictionSynthesizerMemoryHooks()
+        store = AsyncMock(return_value="mem-1")
 
-        # Should complete without error
+        with patch.object(hooks, "store_prediction", store):
+            counts = await contribute_to_memory(
+                result=sample_prediction_result,
+                state=sample_state,
+                memory_hooks=hooks,
+                session_id=None,
+            )
+
         assert isinstance(counts, dict)
+        store.assert_awaited_once()
+        assert store.await_args.kwargs["session_id"] is None
 
     @pytest.mark.asyncio
     async def test_contribute_skips_caching_without_entity_info(self, sample_prediction_result):
