@@ -422,7 +422,7 @@ def _rv(
 def test_current_version_id_picks_the_pair_match_not_the_last_row():
     """The orphan state: the review is on C, the timeline ends on B."""
     versions = [_rv(VID_A, HASH_V1, ADJ_A), _rv(VID_C, HASH_C, ADJ_C), _rv(VID_B, HASH_B, ADJ_B)]
-    assert route_mod._current_version_id(versions, HASH_C, ADJ_C) == VID_C
+    assert route_mod._current_version_id(versions, HASH_C, ADJ_C, None) == VID_C
 
 
 @pytest.mark.unit
@@ -430,7 +430,7 @@ def test_current_version_id_matches_a_null_adjustment_on_both_sides():
     """A review whose adjustment is UNKNOWN matches the row that is also
     unknown -- None equals None, it is not a wildcard."""
     versions = [_rv(VID_A, HASH_V1, None), _rv(VID_B, HASH_V2, ADJ_B)]
-    assert route_mod._current_version_id(versions, HASH_V1, None) == VID_A
+    assert route_mod._current_version_id(versions, HASH_V1, None, None) == VID_A
 
 
 @pytest.mark.unit
@@ -440,24 +440,25 @@ def test_current_version_id_falls_back_to_a_null_adjustment_row_that_proves_it()
     SNAPSHOT still names the covariate set, and it derives to the review's
     hash -- same structure, same covariates: that row IS the current version."""
     versions = [_rv(VID_A, HASH_V1, None, SNAP_C)]
-    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_C) == VID_A
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_C, None) == VID_A
 
 
 @pytest.mark.unit
 def test_current_version_id_prefers_the_exact_pair_over_the_null_fallback():
-    """The NULL row is COMPATIBLE (its snapshot derives to the review's hash),
-    so this pins a preference, not a disqualification."""
+    """The NULL row is COMPATIBLE -- its snapshot derives to the review's hash,
+    so both rows name the same covariate set. Equal effective values, so this
+    pins the tie-break (the LAST one wins), not a disqualification."""
     versions = [_rv(VID_A, HASH_V1, None, SNAP_C), _rv(VID_C, HASH_V1, ADJ_SNAP_C)]
-    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_C) == VID_C
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_C, None) == VID_C
 
 
 @pytest.mark.unit
 def test_current_version_id_is_none_when_no_row_carries_the_reviews_structure():
     versions = [_rv(VID_A, HASH_V1, ADJ_A)]
-    assert route_mod._current_version_id(versions, HASH_V2, ADJ_B) is None
+    assert route_mod._current_version_id(versions, HASH_V2, ADJ_B, None) is None
     # A review with no hash at all names no version either.
-    assert route_mod._current_version_id(versions, None, None) is None
-    assert route_mod._current_version_id([], HASH_V1, ADJ_A) is None
+    assert route_mod._current_version_id(versions, None, None, None) is None
+    assert route_mod._current_version_id([], HASH_V1, ADJ_A, None) is None
 
 
 @pytest.mark.unit
@@ -467,7 +468,7 @@ def test_current_version_id_takes_the_LAST_match_on_a_revert():
     delta the reviewer is being asked to approve."""
     a2 = "bbbbbbb4-0000-4000-8000-000000000004"
     versions = [_rv(VID_A, HASH_V1, ADJ_A), _rv(VID_B, HASH_V2, ADJ_B), _rv(a2, HASH_V1, ADJ_A)]
-    assert route_mod._current_version_id(versions, HASH_V1, ADJ_A) == a2
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_A, None) == a2
     # and the null-adjustment fallback takes the last PROVABLE one too
     n1 = "bbbbbbb5-0000-4000-8000-000000000005"
     n2 = "bbbbbbb6-0000-4000-8000-000000000006"
@@ -476,6 +477,7 @@ def test_current_version_id_takes_the_LAST_match_on_a_revert():
             [_rv(n1, HASH_V1, None, SNAP_C), _rv(n2, HASH_V1, None, SNAP_C)],
             HASH_V1,
             ADJ_SNAP_C,
+            None,
         )
         == n2
     )
@@ -615,7 +617,7 @@ def test_current_version_id_refuses_a_null_adjustment_row_that_proves_nothing():
     provable current version is the honest answer; the panel then shows the
     graph with no diff."""
     versions = [_rv(vid, h, adj, snap) for vid, h, adj, snap, _at in _UNPROVABLE_TIMELINE]
-    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_B) is None
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_B, None) is None
 
 
 @pytest.mark.unit
@@ -623,7 +625,7 @@ def test_current_version_id_refuses_a_backfilled_row_naming_other_covariates():
     """Same DAG hash, but the snapshot's adjustment sets are not the review's:
     ``compute_dag_hash`` excludes covariates, so the hash alone cannot see it."""
     versions = [_rv(VID_A, HASH_V1, None, SNAP_C)]
-    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_B) is None
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_B, None) is None
 
 
 @pytest.mark.unit
@@ -631,7 +633,7 @@ def test_a_dict_snapshot_without_adjustment_sets_proves_the_EMPTY_set():
     """Absent covariates inside a real snapshot is a fact -- the empty set --
     unlike a NULL snapshot, which is the absence of any structure at all."""
     versions = [_rv(VID_A, HASH_V1, None, {"nodes": ["T", "Y"], "edges": [["T", "Y"]]})]
-    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_A) == VID_A
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_A, None) == VID_A
     assert ADJ_SNAP_A == compute_adjustment_set_hash([])
 
 
@@ -679,4 +681,156 @@ def test_pending_last_changed_at_accepts_a_backfilled_row_whose_snapshot_proves_
     item = _client(monkeypatch, repo).get("/api/expert-reviews/pending").json()["reviews"][0]
     assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
         2026, 7, 14, 10, 0, tzinfo=timezone.utc
+    )
+
+
+# --------------------------------------------------------------------------
+# The rule compares the EFFECTIVE adjustment on BOTH sides (codex round 5)
+# --------------------------------------------------------------------------
+#
+# ``effective(adjustment, snapshot)`` is the adjustment hash when the column
+# carries one, else what the snapshot DERIVES, else None. Comparing it on both
+# sides subsumes the round-4 fallback (a known review vs a NULL row that proves
+# it) AND closes round 5's finding 1: a review whose own adjustment column is
+# NULL but whose SNAPSHOT names its covariates is not "unknown", so an
+# information-free ``(h, NULL, NULL)`` row no longer matches it by default.
+
+# Codex round 5's sequence, as the timeline it leaves behind. A post-141/142
+# review carries (h, NULL, snapshot A); its backfilled version carries the
+# same; a structureless run of h then recorded (h, NULL, NULL snapshot).
+_STRUCTURELESS_TAIL = [
+    (VID_A, HASH_V1, None, SNAP_C, V1_AT),
+    (VID_B, HASH_V1, None, None, V3_AT),
+]
+
+
+@pytest.mark.unit
+def test_current_version_id_prefers_the_backfill_that_proves_the_reviews_snapshot():
+    """The review's adjustment column is NULL, but its SNAPSHOT names the
+    covariate set -- so the review is NOT unknown, and the row that proves the
+    same set wins over the later row that proves nothing.
+
+    Before this rule the exact NULL == NULL match took the LAST such row, which
+    is the information-free one: the panel showed the review's real graph beside
+    "the previous snapshot disappeared"."""
+    versions = [_rv(vid, h, adj, snap) for vid, h, adj, snap, _at in _STRUCTURELESS_TAIL]
+    assert route_mod._current_version_id(versions, HASH_V1, None, SNAP_C) == VID_A
+
+
+@pytest.mark.unit
+def test_current_version_id_refuses_a_null_row_when_the_review_has_a_snapshot():
+    """The same sequence with the backfill absent: nothing proves the review's
+    covariate set, so there is no current version. Silence, not the wrong
+    delta."""
+    versions = [_rv(VID_B, HASH_V1, None, None)]
+    assert route_mod._current_version_id(versions, HASH_V1, None, SNAP_C) is None
+
+
+@pytest.mark.unit
+def test_current_version_id_matches_when_BOTH_sides_are_genuinely_unknown():
+    """The legitimate no-structure recording, preserved: a review that carries
+    no snapshot and no adjustment hash still matches the row that carries
+    neither. None == None means "both sides are genuinely unknown", which is a
+    match -- it is only not a WILDCARD."""
+    versions = [_rv(VID_B, HASH_V1, None, None)]
+    assert route_mod._current_version_id(versions, HASH_V1, None, None) == VID_B
+
+
+@pytest.mark.unit
+def test_current_version_id_matches_a_known_row_from_the_reviews_snapshot_alone():
+    """The other direction the effective rule subsumes: the review's column is
+    NULL but its snapshot derives C, and the recorded row states C outright.
+    Same structure, same covariates -- the round-4 fallback could not see this,
+    because it only ran when the REVIEW's hash was known."""
+    versions = [_rv(VID_C, HASH_V1, ADJ_SNAP_C, None)]
+    assert route_mod._current_version_id(versions, HASH_V1, None, SNAP_C) == VID_C
+
+
+@pytest.mark.unit
+def test_detail_names_the_backfill_not_the_structureless_tail(monkeypatch):
+    """End to end on codex round 5's sequence: the detail names the row that
+    proves the review's covariates, and the timeline keeps both rows."""
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_V1,
+        "adjustment_set_hash": None,
+        "dag_structure_json": SNAP_C,
+    }
+    versions = [_paired(vid, h, adj, snap, at) for vid, h, adj, snap, at in _STRUCTURELESS_TAIL]
+    repo = _Repo(row, estimand_history=[row], versions=versions)
+    r = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["current_version_id"] == VID_A
+    assert [v["version_id"] for v in body["versions"]] == [VID_A, VID_B]
+
+
+@pytest.mark.unit
+def test_detail_current_version_id_is_null_when_only_a_structureless_row_remains(monkeypatch):
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_V1,
+        "adjustment_set_hash": None,
+        "dag_structure_json": SNAP_C,
+    }
+    versions = [_paired(VID_B, HASH_V1, None, None, V3_AT)]
+    repo = _Repo(row, estimand_history=[row], versions=versions)
+    body = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}").json()
+    assert body["current_version_id"] is None
+
+
+@pytest.mark.unit
+def test_pending_last_changed_at_dates_the_backfill_not_the_structureless_tail(monkeypatch):
+    """The queue reads the same rule over RAW rows, and its review snapshot is
+    the raw column read through ``parse_json_column``. The structureless row is
+    the NEWEST, so taking it would date a move that never happened."""
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_V1,
+        "adjustment_set_hash": None,
+        "dag_structure_json": SNAP_C,
+    }
+    versions = [_paired(vid, h, adj, snap, at) for vid, h, adj, snap, at in _STRUCTURELESS_TAIL]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    item = _client(monkeypatch, repo).get("/api/expert-reviews/pending").json()["reviews"][0]
+    assert item["version_count"] == 2
+    assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
+        2026, 7, 13, 10, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.unit
+def test_pending_last_changed_at_falls_back_when_only_a_structureless_row_remains(monkeypatch):
+    """No provable current version, so the change date is unknown and the
+    review's own creation is the honest answer -- never the tail's."""
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_V1,
+        "adjustment_set_hash": None,
+        "dag_structure_json": SNAP_C,
+        "created_at": V2_AT,
+    }
+    versions = [_paired(VID_B, HASH_V1, None, None, V3_AT)]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    item = _client(monkeypatch, repo).get("/api/expert-reviews/pending").json()["reviews"][0]
+    assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
+        2026, 7, 14, 10, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.unit
+def test_pending_last_changed_at_still_dates_a_genuinely_unknown_pair(monkeypatch):
+    """The legitimate case through the queue: a review with no snapshot and no
+    adjustment hash still dates itself by the row that recorded the same."""
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_V1,
+        "adjustment_set_hash": None,
+        "dag_structure_json": None,
+    }
+    versions = [_paired(VID_B, HASH_V1, None, None, V3_AT)]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    item = _client(monkeypatch, repo).get("/api/expert-reviews/pending").json()["reviews"][0]
+    assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone.utc
     )

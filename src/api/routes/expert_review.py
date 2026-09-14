@@ -197,10 +197,25 @@ def _changes_between(
     return DagChanges(**changes)
 
 
+def _effective_adjustment(adjustment_set_hash: Optional[str], snapshot: Any) -> Optional[str]:
+    """The covariate set a ``(adjustment_set_hash, snapshot)`` half NAMES, or None.
+
+    The stored adjustment hash when the column carries one; otherwise whatever
+    the snapshot beside it PROVES, via the one derivation the gate and the API
+    share; None when neither half knows. A NULL adjustment column is "not
+    recorded", not "no covariates", so the snapshot is the evidence -- and a
+    NULL snapshot beside it proves nothing at all.
+    """
+    if adjustment_set_hash is not None:
+        return adjustment_set_hash
+    return adjustment_hash_from_snapshot(snapshot)
+
+
 def _current_version_index(
     entries: Sequence[Tuple[Optional[str], Optional[str], Any]],
     dag_version_hash: Optional[str],
     adjustment_set_hash: Optional[str],
+    review_snapshot: Any,
 ) -> Optional[int]:
     """Which timeline entry is the review's CURRENT version (codex round 3).
 
@@ -215,27 +230,40 @@ def _current_version_index(
     The review's identity is the PAIR: ``compute_dag_hash`` excludes adjustment
     sets, so the DAG hash alone cannot see a covariate-only advance. Among the
     entries carrying the review's hash we therefore take the LAST whose
-    adjustment hash is equal as well (None == None: unknown matches unknown, it
-    is not a wildcard). The LAST, because a revert A -> B -> A appends A a
-    second time and the review then points at the NEWER A -- whose ``changes``
-    is the B -> A delta the reviewer is actually being shown.
+    covariate set is equal as well. The LAST, because a revert A -> B -> A
+    appends A a second time and the review then points at the NEWER A -- whose
+    ``changes`` is the B -> A delta the reviewer is actually being shown.
 
-    Fallback: when the review's adjustment hash is KNOWN (migration 142) but no
-    entry carries it, a same-hash entry whose adjustment hash is NULL can still
-    be the version -- migration 141 backfilled every pre-existing version that
-    way, and those rows usually DO carry a snapshot that names the covariate
-    set. The fallback must PROVE it (codex round 4): the entry qualifies only
-    when ``adjustment_hash_from_snapshot`` derives the review's own hash from
-    its snapshot, and the LAST qualifying entry wins.
+    THE RULE: compare the EFFECTIVE adjustment on BOTH sides (codex round 5).
+    ``_effective_adjustment`` reads the stored hash when there is one and
+    otherwise derives it from the snapshot beside it, so each side is asked the
+    same question -- "which covariate set does this actually name?" -- rather
+    than one side being taken at face value and the other cross-examined. Two
+    sides are equal when their effective values are, and None == None matches
+    only when BOTH are genuinely unknown: unknown matches unknown, it is not a
+    wildcard.
 
-    An unexamined NULL row is not safe, because the advance path can create one
-    that is not this review's structure: with the timeline unreadable a run
-    appends nothing (a NULL-adjustment row of the same DAG hash contradicts
-    nothing) yet still ADVANCES the review onto its own covariate set, leaving
-    the review on a pair no recorded row carries and a same-hash NULL row that
-    describes some other structure. Naming it would render that row's delta --
-    typically "the previous snapshot disappeared" -- beside the review's real
-    graph. A NULL or non-dict snapshot proves nothing and never qualifies.
+    Why EFFECTIVE and not the raw columns: a NULL adjustment half means "not
+    recorded", NOT "conditions on nothing" -- the canonical empty set is a real
+    hash, ``sha256("[]")``. Migration 141 backfilled every pre-existing version
+    with a NULL hash while COPYING its snapshot, so on those rows the snapshot
+    is the only place the covariate set is written down. Reading NULL as a value
+    equal to another NULL therefore matched rows that name different structures.
+
+    This one rule subsumes the round-4 fallback (a review that has learned its
+    hash still resolves to the backfilled row whose snapshot derives it) and
+    closes round 5's finding 1 from the other side: a review whose OWN adjustment
+    column is NULL but whose snapshot names A is not unknown, so an
+    information-free ``(h, NULL, NULL)`` row -- which a structureless run used to
+    record -- no longer matches it. Naming that row would render "the previous
+    snapshot disappeared" beside the reviewer's real graph A, and would date the
+    queue's "last changed" to a move that never happened. It also works in the
+    direction the fallback could not: a NULL-adjustment review whose snapshot
+    derives C matches a row that states C outright.
+
+    A LEGITIMATE no-structure recording still matches: when the review carries
+    neither a hash nor a snapshot and the row carries neither either, both
+    effective values are None and the row IS the review's version.
 
     An EMPTY ``dag_version_hash`` is treated as absent, like None: the column
     the entries carry is NOT NULL and non-empty, so no entry could match it
@@ -246,33 +274,21 @@ def _current_version_index(
     and no change date rather than guess.
 
     Takes normalized ``(dag_version_hash, adjustment_set_hash, snapshot)``
-    triples, not the entries themselves, so the ONE definition of this rule
-    serves both the detail route (validated ``ReviewVersion`` models) and the
-    pending queue (raw stored rows, which it deliberately never validates -- it
-    reads one timestamp off them, and a malformed row must not 500 the whole
-    queue; a snapshot that is not a dict simply proves nothing).
+    triples plus the REVIEW's own snapshot, not the entries themselves, so the
+    ONE definition of this rule serves both the detail route (validated
+    ``ReviewVersion`` models) and the pending queue (raw stored rows, which it
+    deliberately never validates -- it reads one timestamp off them, and a
+    malformed row must not 500 the whole queue; a snapshot that is not a dict,
+    or whose adjustment data is malformed, simply proves nothing).
     """
     if not dag_version_hash:
         return None
-    same_structure = [
-        i
-        for i, (entry_hash, _adjustment, _snapshot) in enumerate(entries)
-        if entry_hash == dag_version_hash
-    ]
-    for index in reversed(same_structure):
-        _entry_hash, entry_adjustment, _snapshot = entries[index]
-        if entry_adjustment == adjustment_set_hash:
-            return index
-    if adjustment_set_hash is None:
-        # The review's adjustment is UNKNOWN; the loop above already tried
-        # every entry that is also unknown. There is nothing weaker to fall
-        # back to.
-        return None
-    for index in reversed(same_structure):
-        _entry_hash, entry_adjustment, snapshot = entries[index]
-        if entry_adjustment is None and (
-            adjustment_hash_from_snapshot(snapshot) == adjustment_set_hash
-        ):
+    wanted = _effective_adjustment(adjustment_set_hash, review_snapshot)
+    for index in reversed(range(len(entries))):
+        entry_hash, entry_adjustment, snapshot = entries[index]
+        if entry_hash != dag_version_hash:
+            continue
+        if _effective_adjustment(entry_adjustment, snapshot) == wanted:
             return index
     return None
 
@@ -281,6 +297,7 @@ def _current_version_id(
     versions: List[ReviewVersion],
     dag_version_hash: Optional[str],
     adjustment_set_hash: Optional[str],
+    review_snapshot: Any,
 ) -> Optional[str]:
     """The ``version_id`` of the review's current version, or None.
 
@@ -301,6 +318,7 @@ def _current_version_id(
         ],
         dag_version_hash,
         adjustment_set_hash,
+        review_snapshot,
     )
     return None if index is None else versions[index].version_id
 
@@ -313,9 +331,10 @@ def _last_changed_at(row: Dict[str, Any], versions: List[Dict[str, Any]]) -> Any
     when nothing matches -- including the empty timeline of a review minted
     before migration 141.
 
-    The snapshot the NULL-adjustment fallback has to prove itself against goes
-    through ``parse_json_column`` -- the module's single definition of how this
-    column is read, and what the detail route's validated model applies too, so
+    Every snapshot the rule weighs -- the version rows' AND the review's own,
+    which is what names its covariate set when its adjustment column is NULL --
+    goes through ``parse_json_column``, the module's single definition of how
+    this column is read, and what the detail route's validated model applies too, so
     the two callers read the same stored row the same way. The detail
     additionally validates it and turns a malformed snapshot into a named 500
     rather than a derivation; migration 141's object-or-NULL CHECK makes that
@@ -334,6 +353,7 @@ def _last_changed_at(row: Dict[str, Any], versions: List[Dict[str, Any]]) -> Any
         ],
         row.get("dag_version_hash"),
         row.get("adjustment_set_hash"),
+        parse_json_column(row.get("dag_structure_json")),
     )
     return row.get("created_at") if index is None else versions[index].get("created_at")
 
@@ -985,6 +1005,13 @@ async def get_expert_review(
         # The review row -- not the tail of the timeline -- is the authority on
         # which version is under review; see ``_current_version_id``.
         current_version_id=_current_version_id(
-            versions, review.dag_version_hash, review.adjustment_set_hash
+            versions,
+            review.dag_version_hash,
+            review.adjustment_set_hash,
+            # The review's OWN snapshot, as a plain dict: when its adjustment
+            # column is NULL this is the only place its covariate set is
+            # written down, and the rule needs the EFFECTIVE value on this side
+            # too. ``model_dump()`` matches how the entries' snapshots are read.
+            None if review.dag_structure_json is None else review.dag_structure_json.model_dump(),
         ),
     )
