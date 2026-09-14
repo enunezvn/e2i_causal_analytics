@@ -433,6 +433,9 @@ class ExpertReviewGate:
         # No structure in scope means the adjustment set is UNKNOWN, which
         # migration 141 records as NULL. ``sha256("[]")`` is the canonical
         # EMPTY set -- a different fact, and one this call cannot assert.
+        # Not ``adjustment_hash_from_snapshot``: that one reads a STORED
+        # snapshot, whose mere existence proves a structure was recorded. This
+        # reads the LIVE graph, where absence is the question itself.
         adjustment_set_hash = (
             compute_adjustment_set_hash(list(dag_structure.get("adjustment_sets") or []))
             if dag_structure

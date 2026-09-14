@@ -254,9 +254,14 @@ def _current_version_index(
     """
     if not dag_version_hash:
         return None
-    same_structure = [i for i, entry in enumerate(entries) if entry[0] == dag_version_hash]
+    same_structure = [
+        i
+        for i, (entry_hash, _adjustment, _snapshot) in enumerate(entries)
+        if entry_hash == dag_version_hash
+    ]
     for index in reversed(same_structure):
-        if entries[index][1] == adjustment_set_hash:
+        _entry_hash, entry_adjustment, _snapshot = entries[index]
+        if entry_adjustment == adjustment_set_hash:
             return index
     if adjustment_set_hash is None:
         # The review's adjustment is UNKNOWN; the loop above already tried
@@ -264,7 +269,7 @@ def _current_version_index(
         # back to.
         return None
     for index in reversed(same_structure):
-        _h, entry_adjustment, snapshot = entries[index]
+        _entry_hash, entry_adjustment, snapshot = entries[index]
         if entry_adjustment is None and (
             adjustment_hash_from_snapshot(snapshot) == adjustment_set_hash
         ):
@@ -311,9 +316,13 @@ def _last_changed_at(row: Dict[str, Any], versions: List[Dict[str, Any]]) -> Any
     The snapshot the NULL-adjustment fallback has to prove itself against goes
     through ``parse_json_column`` -- the module's single definition of how this
     column is read, and what the detail route's validated model applies too, so
-    the two callers cannot disagree about the same stored row. It only parses;
-    it validates nothing and cannot raise, and a value that is not an object
-    comes back as something the derivation reads as "proves nothing".
+    the two callers read the same stored row the same way. The detail
+    additionally validates it and turns a malformed snapshot into a named 500
+    rather than a derivation; migration 141's object-or-NULL CHECK makes that
+    unreachable for rows this table can hold. It only parses; it validates
+    nothing and cannot raise, and a
+    value that is not an object comes back as something the derivation reads as
+    "proves nothing".
     """
     index = _current_version_index(
         [

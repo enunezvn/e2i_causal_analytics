@@ -526,9 +526,14 @@ def test_detail_current_version_id_is_null_when_no_row_matches(monkeypatch):
 @pytest.mark.unit
 def test_detail_current_version_id_falls_back_to_a_backfilled_version(monkeypatch):
     """Migration 141 backfilled versions carry NULL adjustment hashes; a review
-    that has since learned its own (migration 142) still resolves to them."""
-    row = {**ROW, "dag_version_hash": HASH_V1, "adjustment_set_hash": ADJ_SNAP_A}
-    repo = _Repo(row, estimand_history=[row], versions=[_paired(VID_A, HASH_V1, None, SNAP_A)])
+    that has since learned its own (migration 142) still resolves to them --
+    when the row's snapshot derives that hash.
+
+    Seeded with a NON-EMPTY adjustment set on purpose: the empty-set hash is
+    what ANY dict snapshot derives, so an empty seed could not tell "derived
+    from THIS snapshot's covariates" from "any dict qualifies"."""
+    row = {**ROW, "dag_version_hash": HASH_V1, "adjustment_set_hash": ADJ_SNAP_C}
+    repo = _Repo(row, estimand_history=[row], versions=[_paired(VID_A, HASH_V1, None, SNAP_C)])
     body = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}").json()
     assert body["current_version_id"] == VID_A
 
