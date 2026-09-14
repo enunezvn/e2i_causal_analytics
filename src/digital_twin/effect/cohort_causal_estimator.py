@@ -56,6 +56,10 @@ class CohortCausalEffect:
     ate_ci_upper: float
     cate_by_region: dict[str, float]
     n: int
+    # Usable cohort rows behind each region's CATE (#2054) — the evidence base for that
+    # per-region effect, so a caller reporting it can report what it rests on. Same keys
+    # as ``cate_by_region``.
+    n_by_region: dict[str, int]
     treatment_col: str
     outcome_col: str
     adjustment_set: list[str] = field(default_factory=list)
@@ -245,6 +249,8 @@ def estimate_cohort_effect(
     cate_by_region = {
         c: float(np.mean(eff[region_arr == c])) for c in cats if (region_arr == c).any()
     }
+    # Evidence base per region: the usable cohort rows the CATE above averages over.
+    n_by_region = {c: int((region_arr == c).sum()) for c in cate_by_region}
 
     targets = list(dict.fromkeys(str(r) for r in target_regions))
     target_ate = target_lo = target_hi = None
@@ -278,6 +284,7 @@ def estimate_cohort_effect(
         ate_ci_lower=float(lo),
         ate_ci_upper=float(hi),
         cate_by_region=cate_by_region,
+        n_by_region=n_by_region,
         n=int(len(work)),
         treatment_col=treatment_col,
         outcome_col=outcome_col,
@@ -352,6 +359,25 @@ class CohortCausalEstimator:
             n_train = eff.n
             cohort_ate = cohort_ci_lower = cohort_ci_upper = None
 
+        # This estimate resolves REGION and nothing else (#2054). The forest's heterogeneity
+        # axis X is region alone, so ``per_twin_uplift`` below is a STEP FUNCTION of region:
+        # every twin in a region carries the identical value. Declaring the other axes would
+        # let the engine average that step function over the twins' specialty / decile /
+        # adoption_stage draws, and since those are drawn independently of region every group
+        # converges to the same twin-mixture mean — the apparent spread is sampling noise in
+        # the twin draw, not an effect (measured: specialty spread 0.049 at 100 twins falling
+        # to 0.002 at 100k, while region spread is exactly invariant).
+        # Scoped to the targeted regions when there are any: those are the rows this estimate
+        # was computed on, and a region outside that scope was not estimated here. The
+        # evidence is COHORT rows, so these numbers do not move with the twin count.
+        declared_regions = (
+            [r for r in eff.target_regions if r in eff.cate_by_region]
+            if eff.target_regions
+            else list(eff.cate_by_region)
+        )
+        cate_by_axis = {"region": {r: eff.cate_by_region[r] for r in declared_regions}}
+        n_by_axis = {"region": {r: eff.n_by_region[r] for r in declared_regions}}
+
         # Per-twin uplift = the twin's region CATE (honest, data-driven heterogeneity);
         # twins in a region absent from the cohort fall back to the headline ATE.
         if twin_population is not None and "region" in getattr(twin_population, "columns", []):
@@ -378,4 +404,6 @@ class CohortCausalEstimator:
             cohort_ate=cohort_ate,
             cohort_ci_lower=cohort_ci_lower,
             cohort_ci_upper=cohort_ci_upper,
+            cate_by_axis=cate_by_axis,
+            n_by_axis=n_by_axis,
         )
