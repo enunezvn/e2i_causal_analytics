@@ -91,10 +91,21 @@ def test_reverse_block_deletes_the_ledger_row_and_warns_about_pending_collisions
         and "140_expert_reviews_estimand_key.sql" in reverse
     )
     assert "uq_er_pending_dag_brand" in reverse
-    # the collision precondition, named before the restoring UPDATE
+    # The collision precondition covers EVERY row that will be pending after the
+    # reverse, and is stated BEFORE the CREATE UNIQUE INDEX line -- not just
+    # before the restoring UPDATE. Two pending reviews of one estimand-keyed
+    # queue can share (dag_version_hash, brand) and differ only in
+    # treatment/outcome: legal under uq_er_pending_estimand, forbidden under the
+    # restored uq_er_pending_dag_brand. So the index creation is itself the first
+    # statement that can fail, on rows nobody is restoring.
     assert "collide" in reverse or "collision" in reverse
-    assert reverse.index("pending row minted after") < reverse.index(
+    precondition = reverse.index("PRECONDITION")
+    assert precondition < reverse.index("CREATE UNIQUE INDEX uq_er_pending_dag_brand")
+    assert precondition < reverse.index(
         "UPDATE public.expert_reviews SET approval_status = 'pending'"
     )
+    # ... and it names both populations, not only the rows being restored
+    lowered = reverse.lower()
+    assert "already pending" in lowered and "restor" in lowered
     # every added line is still a comment: the executable body is untouched
     assert "DELETE FROM" not in _sql().upper()

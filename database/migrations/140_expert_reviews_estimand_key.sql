@@ -47,15 +47,21 @@
 --   lookups by hash stay valid.
 -- REVERSE (manual, not run by this file): DROP INDEX IF EXISTS
 --   idx_er_estimand_created; DROP INDEX IF EXISTS uq_er_pending_estimand;
+--   PRECONDITION for BOTH statements below: uq_er_pending_dag_brand keys on
+--     (dag_version_hash, COALESCE(brand,'')), which is COARSER than the estimand
+--     it replaces -- two pending reviews of the same brand and structure that
+--     differ only in treatment/outcome are legal under uq_er_pending_estimand
+--     and forbidden under the restored index. So check for collisions across
+--     EVERY row that will be pending after the reverse: the rows ALREADY PENDING
+--     (minted since this migration, which can collide with EACH OTHER -- the
+--     CREATE UNIQUE INDEX below then fails before anything is restored) AND the
+--     superseded rows the UPDATE restores (which can collide with those and with
+--     one another). Resolve or exclude every colliding row FIRST; otherwise the
+--     reverse fails mid-transaction, or a restored row takes a queue slot a live
+--     pending review is using.
 --   CREATE UNIQUE INDEX uq_er_pending_dag_brand ON public.expert_reviews
 --     USING btree (dag_version_hash, COALESCE(brand, ''::character varying))
 --     WHERE ((approval_status)::text = 'pending'::text);
---   PRECONDITION for the restore below: uq_er_pending_dag_brand keys on
---     (dag_version_hash, COALESCE(brand,'')), so before restoring the superseded
---     rows to pending, check that no pending row minted after this migration
---     would collide with them under that restored index -- restoring must
---     exclude or resolve those first, or the UPDATE fails mid-transaction (or
---     takes a slot the live queue is using).
 --   UPDATE public.expert_reviews SET approval_status = 'pending',
 --     resolved_at = NULL,
 --     comments_json = comments_json - 'superseded_reason'
