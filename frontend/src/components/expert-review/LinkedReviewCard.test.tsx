@@ -54,6 +54,7 @@ const DETAIL: ExpertReviewDetailResponse = {
     },
   },
   history: [],
+  current_version_id: 'v2',
   versions: [
     { version_id: 'v1', dag_version_hash: 'aaaa1111', changes: null },
     {
@@ -95,6 +96,21 @@ describe('LinkedReviewCard DAG panel', () => {
     expect(screen.getByText('Changed since the previous version')).toBeInTheDocument();
     expect(screen.getByText('+ W')).toBeInTheDocument();
     expect(screen.getByText('+ W → T')).toBeInTheDocument();
+  });
+
+  it('renders the delta of the version the DETAIL names, not the last entry', () => {
+    // The card's panel must honour `current_version_id`: with the review on v1
+    // (the FIRST version, nothing to diff against) the v2 delta is a timeline
+    // fact belonging to a version the review is not on.
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: { ...DETAIL, current_version_id: 'v1' },
+      isLoading: false,
+      isError: false,
+    } as never);
+    renderCard();
+    expect(screen.getByTestId('causal-dag')).toBeInTheDocument();
+    expect(screen.queryByText('Changed since the previous version')).toBeNull();
+    expect(screen.queryByText('+ W')).toBeNull();
   });
 
   it('renders no diff for a review with a single version', () => {

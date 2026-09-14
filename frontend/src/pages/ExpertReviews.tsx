@@ -26,7 +26,9 @@
  * - A Versions column reports how many structure versions the estimand has,
  *   with the day it last changed when that postdates its creation.
  * - Expanding a row fetches that review's detail for the version TIMELINE
- *   (the queue item does not carry it) and renders the newest structure diff.
+ *   (the queue item does not carry it) and renders the CURRENT version's
+ *   structure diff. Once that detail has loaded, the graph, the diff and the
+ *   resolve form all come from it, so the operator approves the pair they saw.
  *
  * Honest states: loading spinner, error banner, and an EmptyState (no hardcoded
  * SAMPLE_ data) when the live queue is empty.
@@ -84,11 +86,21 @@ function ExpandedReviewRow({
   autoAssessGuard: MutableRefObject<Set<string>>;
 }) {
   const detail = useExpertReview(review.review_id);
-  // The graph renders from the queue item's own snapshot, so a failed detail
-  // read costs only the DIFF. Say so when there IS a diff to lose: with the
-  // Versions cell still reporting >1, a silently missing diff is
-  // indistinguishable from a single-version review. One version loses nothing,
-  // so the failure stays quiet there.
+  // ONE snapshot behind all three of the graph, the diff and the resolve form
+  // (codex round 3, HIGH). The queue item was read at its own moment and a
+  // concurrent run may have advanced the review since; mixing its snapshot with
+  // the detail's timeline would show a delta that does not belong to the graph,
+  // and let the form echo a version pair the operator never saw. Once the
+  // detail has loaded it is the authority on all three (`ReviewRecord` extends
+  // `PendingReviewItem`, so the form takes it unchanged); until then — and on a
+  // failed read — graph and form fall back to the queue item TOGETHER, and no
+  // diff is shown, because nothing has named the current version.
+  const shown = detail.data?.review ?? review;
+  // The graph still renders from a snapshot, so a failed detail read costs only
+  // the DIFF. Say so when there IS a diff to lose: with the Versions cell still
+  // reporting >1, a silently missing diff is indistinguishable from a
+  // single-version review. One version loses nothing, so the failure stays
+  // quiet there.
   const historyFailed = detail.isError && (review.version_count ?? 1) > 1;
 
   return (
@@ -96,7 +108,11 @@ function ExpandedReviewRow({
       <TableCell colSpan={8}>
         <div className="grid gap-4 xl:grid-cols-2">
           <div className="space-y-2">
-            <DagPanel structure={review.dag_structure_json} versions={detail.data?.versions} />
+            <DagPanel
+              structure={shown.dag_structure_json}
+              versions={detail.data?.versions}
+              currentVersionId={detail.data?.current_version_id}
+            />
             {historyFailed && (
               <WarningBanner
                 title="Version history unavailable"
@@ -104,7 +120,7 @@ function ExpandedReviewRow({
               />
             )}
           </div>
-          <ResolveForm review={review} onClose={onClose} autoAssessGuard={autoAssessGuard} />
+          <ResolveForm review={shown} onClose={onClose} autoAssessGuard={autoAssessGuard} />
         </div>
       </TableCell>
     </TableRow>

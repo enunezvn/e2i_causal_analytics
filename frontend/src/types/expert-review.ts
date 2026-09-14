@@ -267,6 +267,22 @@ export interface ExpertReviewDetailResponse {
    * This review's own `expert_review_versions` timeline (migration 141),
    * OLDEST first, each row carrying `changes` against the one before it.
    * Empty for a review minted before the versions table.
+   *
+   * A set of FACTS, not a queue: it may END on a row the review is NOT on (a
+   * run that recorded its version and then lost the compare-and-set advance
+   * leaves an orphan after the winner), so `versions[versions.length - 1]` is
+   * not "the version under review". Use `current_version_id`.
    */
   versions: ReviewVersion[];
+  /**
+   * The `version_id` of the timeline entry carrying the review's CURRENT
+   * version identity — the pair (`dag_version_hash`, `adjustment_set_hash`) the
+   * review row itself holds. The ONLY entry whose `changes` describes what the
+   * reviewer is being asked to approve.
+   *
+   * Null when no entry carries that pair (a review minted before the versions
+   * table, or one whose first version was never recorded): render no delta at
+   * all rather than a plausible-wrong one.
+   */
+  current_version_id?: string | null;
 }

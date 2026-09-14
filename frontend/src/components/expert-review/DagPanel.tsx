@@ -1,10 +1,17 @@
 /**
  * Render a review's stored DAG snapshot, or an honest fallback for pre-097 rows.
  *
- * When the estimand has more than one structure version (migration 141), the
- * delta of the NEWEST version against the one before it is rendered under the
- * graph, so an operator sees what moved since the last sign-off. A single
- * version has nothing to diff against and renders the graph alone.
+ * Under the graph it renders the delta of the version the review is CURRENTLY
+ * on (migration 141), so an operator sees exactly what moved since the last
+ * sign-off of the structure they are being asked to approve.
+ *
+ * The caller NAMES that version (`currentVersionId`, from the detail
+ * response); the panel never picks one itself. The timeline is a set of facts
+ * and may end on a row the review is not on — a run that recorded its version
+ * and then lost the compare-and-set advance leaves an orphan after the winner —
+ * so the last entry's delta can describe a losing structure. With no name, or
+ * a name that is not in the timeline, the panel shows the graph alone: silence
+ * is the honest answer, even with a long timeline visibly on offer.
  */
 import { CausalDAG } from '@/components/visualizations/causal/CausalDAG';
 import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
@@ -14,12 +21,19 @@ import { DagDiff } from './DagDiff';
 export function DagPanel({
   structure,
   versions,
+  currentVersionId,
 }: {
   structure?: DagStructure | null;
   versions?: ReviewVersion[] | null;
+  /**
+   * `ExpertReviewDetailResponse.current_version_id` — which timeline entry the
+   * review is on. Undefined (not yet loaded) or null (no entry carries the
+   * review's version pair) both mean NO delta.
+   */
+  currentVersionId?: string | null;
 }) {
-  // `versions` is OLDEST first; the last entry carries the newest delta. Its
-  // `changes` is null on a review minted before the versions table.
+  // Only the named entry's delta. Its `changes` is null on the FIRST version
+  // (nothing to diff against) and on a review minted before the versions table.
   //
   // `is_changed` false is near-unreachable by construction — the engine appends
   // a version only when the structure or the covariate set moved — but the flag
@@ -27,8 +41,10 @@ export function DagPanel({
   // heading promising a change the panel cannot show. (DagDiff's own
   // "no structural change" copy is for a caller that asks for a named delta;
   // here the honest answer is silence.)
-  const latest = versions && versions.length > 1 ? versions[versions.length - 1] : null;
-  const latestChanges = latest?.changes?.is_changed ? latest.changes : null;
+  const current = currentVersionId
+    ? versions?.find((v) => v.version_id === currentVersionId)
+    : undefined;
+  const currentChanges = current?.changes?.is_changed ? current.changes : null;
 
   if (!structure?.nodes?.length) {
     return (
@@ -66,10 +82,10 @@ export function DagPanel({
           {structure.discovery_gate_decision ?? 'unknown'}).
         </p>
       )}
-      {latestChanges && (
+      {currentChanges && (
         <div className="space-y-1">
           <h4 className="text-sm font-medium">Changed since the previous version</h4>
-          <DagDiff changes={latestChanges} />
+          <DagDiff changes={currentChanges} />
         </div>
       )}
     </div>
