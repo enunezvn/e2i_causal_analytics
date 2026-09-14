@@ -107,7 +107,14 @@ def test_run2_retries_the_failed_write_when_the_claim_was_recorded():
 
 @pytest.mark.unit
 def test_without_the_recorded_claim_the_surviving_rating_relabels_the_wrong_composition():
-    """The defect, pinned so the fix is not silently reverted: this is run 2 with no claims."""
+    """The defect, pinned so the fix is not silently reverted: this is run 2 with no claims.
+
+    Deliberately GREEN both before and after #2035: it is the CONTRAST for the test above, which
+    runs the same two episodes WITH the claim. It asserts what the no-claims path still does, not
+    what is wrong with it. A change that legitimately alters the no-claims path — dropping the
+    ``claims=None`` default, or matching on something other than nearest-preceding — should
+    DELETE this test rather than update it, because there is then no contrast left to draw.
+    """
     episodes = [
         _episode("A", 20),
         _episode("B", 10, success=True, feedback_at=_iso(9), feedback_id=R1_ID),
@@ -301,22 +308,71 @@ def test_a_claim_whose_rating_has_vanished_is_logged_at_warning(caplog):
 
 
 @pytest.mark.unit
+def test_no_warning_when_every_recorded_claim_still_has_its_rating(caplog):
+    """The ordinary case must be silent, or the warning is noise nobody reads.
+
+    Mutation-checked: making _warn_on_vanished_claims fire unconditionally fails this test.
+    """
+    db = FakeDB(
+        [
+            _episode("A", 20),
+            _episode("B", 10, success=True, feedback_at=_iso(9), feedback_id=R1_ID),
+        ],
+        _run1_ratings(),  # R1 is still alive, so B's recorded claim still resolves
+    )
+    with caplog.at_level(logging.WARNING, logger=tasks.logger.name):
+        tasks.link_composition_feedback(client=db)
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.unit
+def test_a_dangling_claim_is_warned_even_when_nothing_is_pending(caplog):
+    """The steady state is that EVERY episode is already labelled, so pending is empty.
+
+    If the check sits behind the no-pending exit it never runs in exactly the case it is for:
+    a fully-labelled window in which one claim's rating has since been deleted.
+    """
+    db = FakeDB(
+        [_episode("B", 10, success=True, feedback_at=_iso(9), feedback_id=R1_ID)],
+        [],  # R1 deleted, and nothing else rated
+    )
+    with caplog.at_level(logging.WARNING, logger=tasks.logger.name):
+        result = tasks.link_composition_feedback(client=db)
+
+    assert result == {"labelled": 0, "considered": 0, "failed": 0}
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(str(R1_ID) in message and "B" in message for message in warnings), warnings
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
-    "db, expected_considered",
+    "make_db, expected_considered, expect_warning",
     [
-        (FakeDB(read_fails={"composer_episodes"}), 0),
-        (FakeDB([], []), 0),
-        (FakeDB(_run1_episodes(), [], read_fails={"chatbot_message_feedback"}), 2),
+        (lambda: FakeDB(read_fails={"composer_episodes"}), 0, True),
+        (lambda: FakeDB([], []), 0, False),
+        (lambda: FakeDB(_run1_episodes(), [], read_fails={"chatbot_message_feedback"}), 2, True),
     ],
     ids=["episode-read-failed", "nothing-pending", "rating-read-failed"],
 )
-def test_every_early_exit_reports_failed(db, expected_considered):
+def test_every_early_exit_reports_failed(make_db, expected_considered, expect_warning, caplog):
     """``failed`` absent on an early exit made a starved run byte-identical to a clean no-op, and
-    the issue's own mitigation ("treat failed > 0 as the signal to inspect") unusable."""
-    result = tasks.link_composition_feedback(client=db)
+    the issue's own mitigation ("treat failed > 0 as the signal to inspect") unusable.
+
+    The doubles are built HERE, not in the parametrize list: constructed at collection time they
+    would be shared across the whole session and mutated by whichever test ran first.
+    """
+    db = make_db()
+    with caplog.at_level(logging.WARNING, logger=tasks.logger.name):
+        result = tasks.link_composition_feedback(client=db)
+
     assert result["failed"] == 0
     assert result["considered"] == expected_considered
     assert set(result) == {"labelled", "considered", "failed"}
+    # `failed` counts WRITE attempts. A read failure aborts the run before any write is
+    # attempted, so it is reported in the log and not in the count — see _result's docstring.
+    warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert bool(warned) is expect_warning, warned
 
 
 @pytest.mark.unit

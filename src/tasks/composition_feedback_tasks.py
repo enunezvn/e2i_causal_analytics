@@ -164,6 +164,14 @@ def _result(labelled: int, considered: int, failed: int) -> Dict[str, Any]:
     ``failed`` used to be absent on all four early exits, so a run that lost a retry returned
     ``{"labelled": 0, "considered": N}`` — byte-identical to a clean no-op, and unusable as the
     "inspect when failed > 0" signal #2035 asks callers to watch.
+
+    ``failed`` counts WRITE ATTEMPTS that did not land — one per composition that had a rating to
+    apply and did not receive it. It deliberately does NOT count the two read failures, which
+    abort the run before any write is attempted: reporting ``failed=1`` there would name a
+    composition that was never written to, and would break the reading that ``failed <=
+    considered`` bounds how many labels this run lost. A read failure is a RUN-level fault and is
+    reported in the log at WARNING instead, which is the channel that separates it from a clean
+    no-op returning the same numbers (``test_every_early_exit_reports_failed`` pins that).
     """
     return {"labelled": labelled, "considered": considered, "failed": failed}
 
@@ -226,9 +234,10 @@ def link_composition_feedback(
         for episode in episodes
         if episode.get("success") is None and episode.get("feedback_at") is None
     ]
-    if not pending:
-        return _result(0, 0, 0)
-
+    # The ratings are read BEFORE the no-pending exit, and the one extra SELECT on an idle night
+    # is the price of the divergence check below. The steady state of a healthy window is that
+    # every episode is already labelled — pending empty — which is exactly when a claim whose
+    # rating has been deleted is the only thing left to notice.
     try:
         ratings = (
             client.table("chatbot_message_feedback")
@@ -241,14 +250,9 @@ def link_composition_feedback(
         logger.warning(f"composition feedback linker: rating read failed ({type(e).__name__}: {e})")
         return _result(0, len(pending), 0)
 
-    # Matched against EVERY recent episode, not just the unlabelled ones: a rating that already
-    # labelled a composition is spent, and stays spent. Matching only the unlabelled ones made
-    # attribution hold within a pass but not across them — the nightly rerun then handed the same
-    # rating to the next-oldest composition, which is both a wrong label and a rerun that changed
-    # something it promised not to.
-    # The attribution already recorded on the episodes (ml/044). Rebuilding it from the
-    # surviving ratings instead is #2035: one deleted rating moved a claim and starved a failed
-    # write of its retry.
+    # The attribution already recorded on the episodes (ml/044). Rebuilding it from the surviving
+    # ratings instead is #2035: one deleted rating moved a claim and starved a failed write of
+    # its retry.
     claims = {
         episode["composition_id"]: episode["feedback_id"]
         for episode in episodes
@@ -256,6 +260,14 @@ def link_composition_feedback(
     }
     _warn_on_vanished_claims(claims, ratings)
 
+    if not pending:
+        return _result(0, 0, 0)
+
+    # Matched against EVERY recent episode, not just the unlabelled ones: a rating that already
+    # labelled a composition is spent, and stays spent. Matching only the unlabelled ones made
+    # attribution hold within a pass but not across them — the nightly rerun then handed the same
+    # rating to the next-oldest composition, which is both a wrong label and a rerun that changed
+    # something it promised not to.
     claimed = match_episodes(episodes, ratings, claims=claims)
 
     labelled = 0
