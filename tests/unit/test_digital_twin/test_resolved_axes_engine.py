@@ -12,10 +12,13 @@ whose only content is the twin draw. Measured on the base commit with the real
     100,000            0.00207         0.23339
 
 Region is invariant because it is what the estimate resolves; the other axes decay
-towards zero like sampling noise. (The design doc's table reads 0.01376 / 0.00287 at the
-same twin counts: it drove an extracted copy of ``calc_group_stats`` over a different twin
-draw. The decay and region's invariance are the finding; the digits are harness-specific.) Those three axes are therefore not reported at all, and
-``by_region`` is reported from the COHORT rows the effect was estimated on.
+towards zero like sampling noise. The design doc's table reads 0.01376 / 0.00287 at the
+same twin counts, because it drove an extracted copy of ``calc_group_stats`` over a
+different twin draw. The decay and region's invariance are the finding here; the digits
+themselves are specific to the harness that produced them.
+
+Those three axes are therefore not reported at all, and ``by_region`` is reported from the
+COHORT rows the effect was estimated on.
 
 The synthetic path (``TwinEffectEstimator``) declares every axis and keeps reporting all
 four — ``test_simulation_engine.py::TestHeterogeneousEffects`` pins that.
@@ -168,22 +171,47 @@ def test_a_single_targeted_regions_subgroup_equals_the_headline(cohort):
         assert by_region[region]["ate"] == pytest.approx(result.simulated_ate, abs=1e-9)
 
 
-def test_the_engine_reports_every_axis_in_the_declaration_vocabulary(cohort):
-    """Guards the wiring between `SUBGROUP_AXES` and the `by_*` fields: an axis added to the
-    vocabulary and declared by an estimator must actually reach the response. Before the
-    engine looped over `SUBGROUP_AXES` it called four hardcoded `axis_stats`, so a fifth
-    axis would have been declared and silently never reported."""
-    from src.digital_twin.effect.estimate import SUBGROUP_AXES
+def test_the_engine_reports_every_axis_in_the_declaration_vocabulary():
+    """Guards the wiring between ``SUBGROUP_AXES`` and the ``by_*`` fields: an axis in the
+    vocabulary that an estimator declares must actually reach the response. An axis the loop
+    skips leaves its field at the model default ``{}``, which is indistinguishable from an
+    axis no estimator resolves — so this declares a DISTINCT sentinel effect per axis and
+    requires each one to arrive in its own field. Checking the fields are dicts would not
+    catch a skipped axis; the default already is one.
+    """
+    from src.digital_twin.effect.estimate import SUBGROUP_AXES, EffectEstimate
 
-    result = _engine(cohort, _population(300)).simulate(_config(), use_cache=False)
+    sentinel = {axis: {f"group_of_{axis}": 0.11 * (i + 1)} for i, axis in enumerate(SUBGROUP_AXES)}
+    estimate = EffectEstimate(
+        ate=0.2,
+        ate_ci_lower=0.1,
+        ate_ci_upper=0.3,
+        att=None,
+        atc=None,
+        per_twin_uplift=np.full(20, 0.2),
+        auuc=None,
+        qini=None,
+        feature_importances=None,
+        n_train=1000,
+        estimator_type="sentinel_estimator",
+        data_provenance="synthetic_uplift_v1",
+        cate_by_axis=sentinel,
+        n_by_axis={axis: {f"group_of_{axis}": 17} for axis in SUBGROUP_AXES},
+    )
+
+    het = SimulationEngine._calculate_heterogeneity(
+        None, _labelled_twins("specialty", ["a", "b"]), [0.2] * 20, estimate
+    )
+
     reported = {
-        name.removeprefix("by_")
-        for name in type(result.effect_heterogeneity).model_fields
-        if name.startswith("by_")
+        name.removeprefix("by_") for name in type(het).model_fields if name.startswith("by_")
     }
     assert reported == set(SUBGROUP_AXES)
-    for axis in SUBGROUP_AXES:
-        assert isinstance(getattr(result.effect_heterogeneity, f"by_{axis}"), dict)
+    for axis, groups in sentinel.items():
+        got = getattr(het, f"by_{axis}")
+        assert set(got) == set(groups), f"by_{axis} did not receive its own declaration"
+        assert got[f"group_of_{axis}"]["ate"] == pytest.approx(groups[f"group_of_{axis}"])
+        assert got[f"group_of_{axis}"]["n"] == 17
 
 
 def _axis_estimate(n_twins: int):

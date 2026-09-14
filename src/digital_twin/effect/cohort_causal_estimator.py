@@ -376,17 +376,23 @@ class CohortCausalEstimator:
             if eff.target_regions
             else list(eff.cate_by_region)
         )
-        # A declared axis mapping to an EMPTY dict means "resolved by the per-twin scores",
-        # which for this estimator would put the region step function back through the twin
-        # grouping and resurrect the cohort-ATE fallback under an uncovered region's label.
-        # Whenever the forest produced region CATEs, at least one must survive the scoping.
+        # With nothing to declare the axis key is OMITTED, never mapped to an empty dict: an
+        # empty mapping is the signal for "resolved by the per-twin scores", which for this
+        # estimator would put the region step function back through the twin grouping and
+        # resurrect the cohort-ATE fallback under an uncovered region's label. Absent means
+        # unresolved, and the engine then reports {} — the fail-closed answer.
+        cate_by_axis: dict[str, dict[str, float]] = {}
+        n_by_axis: dict[str, dict[str, int]] = {}
+        if declared_regions:
+            cate_by_axis["region"] = {r: eff.cate_by_region[r] for r in declared_regions}
+            n_by_axis["region"] = {r: eff.n_by_region[r] for r in declared_regions}
+        # Targeting that matches no cohort region is fail-closed above rather than wrong, but
+        # it is still a bug: ``estimate_cohort_effect`` rejects an uncovered target region, so
+        # every target reaching here is a region the forest produced a CATE for.
         assert declared_regions or not eff.cate_by_region, (
             f"target_regions {eff.target_regions} matched none of the cohort's regions "
-            f"{sorted(eff.cate_by_region)}; an empty region declaration would read as "
-            "per-twin-resolved."
+            f"{sorted(eff.cate_by_region)}."
         )
-        cate_by_axis = {"region": {r: eff.cate_by_region[r] for r in declared_regions}}
-        n_by_axis = {"region": {r: eff.n_by_region[r] for r in declared_regions}}
 
         # Per-twin uplift = the twin's region CATE (honest, data-driven heterogeneity);
         # twins in a region absent from the cohort fall back to the headline ATE.

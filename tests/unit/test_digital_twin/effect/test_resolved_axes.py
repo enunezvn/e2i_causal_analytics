@@ -181,3 +181,49 @@ def test_cohort_declaration_is_invariant_to_the_twin_count():
         # magnitude below the twin-count-driven spread this pins out (0.049 -> 0.002).
         assert cate["region"] == pytest.approx(first_cate["region"], abs=1e-12, rel=0)
         assert n == first_n  # cohort row counts are exact
+
+
+def test_a_non_string_region_column_still_yields_a_declared_region_axis():
+    """The region declaration must never come back as an EMPTY mapping, which would read as
+    "resolved by the per-twin scores" and send the region step function through the twin
+    grouping. ``_usable_rows`` coerces the region column to str, so the CATE keys and the
+    row-count keys derive from that one coerced Series and cannot disagree — pinned here
+    with an int region column, the case where a mismatch would show up."""
+    rng = np.random.default_rng(11)
+    frames = []
+    for code, tau in {1: 0.40, 2: 0.10, 3: 0.25}.items():  # int labels, not str
+        n = 300
+        market = rng.uniform(0.0, 1.0, n)
+        eng_logit = 1.6 * (market - 0.5) + rng.normal(0.0, 0.5, n)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "region": code,
+                    "engagement_score": 10.0 / (1.0 + np.exp(-eng_logit)),
+                    "market_share": market,
+                    "total_rx_count": rng.poisson(60, n).astype(float),
+                    "_tau": tau,
+                }
+            )
+        )
+    cohort = pd.concat(frames, ignore_index=True)
+    assert cohort["region"].dtype == "int64"
+    t_bin = (cohort["engagement_score"] > cohort["engagement_score"].median()).astype(float)
+    cohort["conversion_rate"] = (
+        0.2
+        + 0.8 * cohort["market_share"]
+        + cohort["_tau"] * t_bin
+        + rng.normal(0, 0.05, len(cohort))
+    )
+    cohort = cohort.drop(columns="_tau")
+
+    estimate = CohortCausalEstimator().estimate(
+        CohortEffectDataProvider(cohort).get_training_frame(
+            "digital_engagement", brand="Kisqali", twin_type="hcp"
+        ),
+        pd.DataFrame({"region": ["1", "2", "3"] * 50}),
+    )
+
+    assert estimate.cate_by_axis["region"], "an empty declaration reads as per-twin-resolved"
+    assert set(estimate.cate_by_axis["region"]) == {"1", "2", "3"}
+    assert estimate.n_by_axis["region"] == {"1": 300, "2": 300, "3": 300}
