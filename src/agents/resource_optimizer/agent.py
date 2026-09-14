@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
@@ -171,16 +170,18 @@ class ResourceOptimizerAgent:
             run_scenarios: Whether to run scenario analysis
             scenario_count: Number of scenarios to generate
             query: Original query text
-            session_id: Optional session identifier for memory context
+            session_id: Optional session identifier for memory context; None
+                records an honest NULL instead of a minted id (#2099)
 
         Returns:
             ResourceOptimizerOutput with optimal allocations
         """
         start_time = time.time()
 
-        # Generate session ID if not provided
-        if session_id is None:
-            session_id = str(uuid.uuid4())
+        # No session is minted here (#2099): an invented uuid would key the
+        # working-memory reads on a conversation that does not exist and land in
+        # episodic_memories.session_id as an identity no caller can ever match.
+        # The column is nullable; None flows through to an honest NULL.
 
         # Retrieve memory context if enabled
         memory_context = None
