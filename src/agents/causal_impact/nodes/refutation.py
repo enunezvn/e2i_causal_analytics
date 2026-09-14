@@ -72,10 +72,9 @@ logger = logging.getLogger(__name__)
 #
 # Semantics (mirrors the contract the retired SQL `can_use_estimate` promised,
 # now on the live path -- migration 133):
-#   OFF (default): post-hoc / advisory. A REVIEW band queues the DAG for review
-#       and carries the gate decision + caveat; the run continues. A BLOCK band
-#       queues nothing at all (#1991 debt 3): it already failed statistically,
-#       and a structural verdict could not change that.
+#   OFF (default): post-hoc / advisory. A REVIEW band queues the DAG for review and carries the
+#       gate decision + caveat; the run continues. A BLOCK band queues nothing at all (#1991 debt
+#       3): it already failed statistically, and a structural verdict could not change that.
 #   ON: a REVIEW-band run whose DAG structure holds no active expert approval
 #       (gate decision pending_review / blocked / unavailable) HALTS honestly --
 #       status='failed', current_phase='awaiting_expert_review', error_message
@@ -1479,10 +1478,9 @@ class RefutationNode:
         rejected. Uses ``ExpertReviewGate.check_rejection`` (read-only; never
         creates a review row).
 
-        The verdict is authoritative for the whole run: every band reuses it,
-        and the REVIEW consult is skipped when it is ``rejected`` (codex
-        iter-1 HIGH-1: a consult that raised after the probe found a rejection
-        must not turn the run into "unavailable, carry on").
+        The verdict is authoritative for the whole run: every band reuses it, and the REVIEW
+        consult is skipped when it is ``rejected`` (codex iter-1 HIGH-1: a consult that raised
+        after the probe found a rejection must not turn the run into "unavailable, carry on").
 
         A probe that FAILS yields ``unknown`` (codex iter-1 HIGH-2): the
         estimate is not withheld on that account (the default is advisory, and
@@ -1492,10 +1490,9 @@ class RefutationNode:
         still find can never arrive after the path was moved. Logged at
         WARNING so the degradation is observable.
 
-        ``unchecked`` (no gate, a bare no-repository gate, a duck-typed
-        stand-in without the probe, or no ``dag_version_hash``): there is no
-        review store to honour, so the estimate proceeds as before -- but,
-        like ``unknown``, it persists unlinked and moves no path (codex iter-2
+        ``unchecked`` (no gate, a bare no-repository gate, a duck-typed stand-in without the probe,
+        or no ``dag_version_hash``): there is no review store to honour, so the estimate proceeds
+        as before -- but, like ``unknown``, it persists unlinked and moves no path (codex iter-2
         HIGH-3: no successful check, no real-path mutation).
         """
         gate = self.expert_review_gate
@@ -1504,13 +1501,12 @@ class RefutationNode:
         if gate is None or probe is None or not dag_hash or not getattr(gate, "repository", None):
             return _STRUCTURE_UNCHECKED, None
         try:
-            # The estimand, not just the hash + brand (#1991 debt 3, codex
-            # round-1 MEDIUM): with treatment and outcome the probe reads the
-            # ESTIMAND's history -- the same rows the REVIEW-band consult ranks --
-            # instead of a hash-keyed read whose exact-case brand filter missed a
-            # rejection stored under a differently-cased brand, and which applied
-            # no brand filter at all when the run carries none. Same state keys
-            # the consult itself uses.
+            # The estimand, not just the hash + brand (#1991 debt 3, codex round-1 MEDIUM): with
+            # treatment and outcome the probe reads the ESTIMAND's history -- the same rows the
+            # REVIEW-band consult ranks -- instead of a hash-keyed read whose exact-case brand
+            # filter missed a rejection stored under a differently-cased brand, and which applied
+            # no brand filter at all when the run carries none. Same state keys the consult itself
+            # uses.
             rejection = await probe(
                 dag_hash,
                 brand=state.get("brand"),
@@ -1538,15 +1534,13 @@ class RefutationNode:
     ) -> Dict[str, Any]:
         """REVIEW band: the probe's rejection is authoritative; otherwise consult.
 
-        A rejection already observed is reused as-is -- no second lookup, no
-        queue row (the verdict is durable, #1970). Only a structure the probe
-        did not reject (or could not check) is taken to the queue-or-lookup
-        consult, which may itself still find a rejection (verdict ``unknown``),
-        in which case the evidence was already persisted unlinked.
+        A rejection already observed is reused as-is -- no second lookup, no queue row (the verdict
+        is durable, #1970). Only a structure the probe did not reject (or could not check) is taken
+        to the queue-or-lookup consult, which may itself still find a rejection (verdict
+        ``unknown``), in which case the evidence was already persisted unlinked.
 
-        The BLOCK band does NOT come here (#1991 debt 3): it is terminal for a
-        statistical reason, so it queues nothing and builds its fields from the
-        probe's rejection alone.
+        The BLOCK band does NOT come here (#1991 debt 3): it is terminal for a statistical reason,
+        so it queues nothing and builds its fields from the probe's rejection alone.
         """
         if rejection is not None:
             return self._review_fields(suite, ReviewGateDecision.REJECTED.value, rejection)
@@ -1685,18 +1679,17 @@ class RefutationNode:
     ) -> Dict[str, Any]:
         """Consult the ExpertReviewGate and build the review fields for state.
 
-        Called on the REVIEW band only (queue-or-lookup: a new structure gets a
-        ``pending`` row a human can resolve, an unchanged one is looked up;
-        #1970 keeps a rejection durable). The PROCEED and BLOCK bands never call
-        this -- they use the read-only ``_check_structure_rejection`` probe and,
-        only on a rejection, build the same fields from that result.
+        Called on the REVIEW band only (queue-or-lookup: a new structure gets a ``pending`` row a
+        human can resolve, an unchanged one is looked up; #1970 keeps a rejection durable). The
+        PROCEED and BLOCK bands never call this -- they use the read-only
+        ``_check_structure_rejection`` probe and, only on a rejection, build the same fields from
+        that result.
 
         Emits ``expert_review_decision`` (a ``ReviewGateDecision`` value;
         ``unavailable`` when the gate has no repository OR the consult raised --
         never ``proceed`` for something that was not checked, #1971), the
         band-specific ``review_caveat`` and the ``expert_review_id``.
-        ``needs_review`` is set by the caller from ``suite.needs_review``, not
-        here.
+        ``needs_review`` is set by the caller from ``suite.needs_review``, not here.
 
         Args:
             validation_ids: causal_validations row ids persisted for THIS
@@ -2218,13 +2211,11 @@ class RefutationNode:
             # Convert to legacy format for backward compatibility
             refutation_results = cast(RefutationResults, suite.to_legacy_format())
 
-            # #1971: READ-ONLY rejection probe on EVERY band, BEFORE evidence
-            # is persisted -- resolved once, reused by every band below.
-            # Before this, the gate was consulted only on REVIEW (and, until
-            # #1991 debt 3, BLOCK), so a DAG a reviewer had explicitly rejected
-            # still yielded a PROCEED-band estimate promoted to 'validated' and
-            # surfaced as completed. See _check_structure_rejection for the
-            # verdicts.
+            # #1971: READ-ONLY rejection probe on EVERY band, BEFORE evidence is persisted --
+            # resolved once, reused by every band below. Before this, the gate was consulted only
+            # on REVIEW (and, until #1991 debt 3, BLOCK), so a DAG a reviewer had explicitly
+            # rejected still yielded a PROCEED-band estimate promoted to 'validated' and surfaced
+            # as completed. See _check_structure_rejection for the verdicts.
             structure_verdict, rejection = await self._check_structure_rejection(state)
 
             # Persist validation results + SOLE-promoter path transition
@@ -2267,10 +2258,9 @@ class RefutationNode:
                 next_phase = "failed"
                 status = "failed"
                 error_message = self._format_block_reason(suite)
-                # #1991 debt 3: a BLOCK run is terminal here; a review of it could not
-                # change an outcome, so nothing is queued and the gate is not consulted.
-                # A rejection already observed by the read-only probe is still surfaced
-                # (durable, #1970).
+                # #1991 debt 3: a BLOCK run is terminal here; a review of it could not change an
+                # outcome, so nothing is queued and the gate is not consulted. A rejection already
+                # observed by the read-only probe is still surfaced (durable, #1970).
                 review_fields = (
                     self._review_fields(suite, ReviewGateDecision.REJECTED.value, rejection)
                     if rejection is not None

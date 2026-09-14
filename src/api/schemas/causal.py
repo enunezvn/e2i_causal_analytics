@@ -616,28 +616,25 @@ class RefutationSummary(BaseModel):
     expert_review_id: Optional[str] = Field(
         default=None,
         description=(
-            "ID of the expert-review row for this DAG structure: the queue row "
-            "created/looked-up on a REVIEW gate, the approval row when one is "
-            "active, or the rejection row when a human rejected the structure "
-            "(any gate). A BLOCK gate queues nothing (#1991 debt 3) -- it has "
-            "already failed statistically -- so on that band this is the "
-            "rejection row or None. None when no row was involved."
+            "ID of the expert-review row for this DAG structure: the queue row created/looked-up "
+            "on a REVIEW gate, the approval row when one is active, or the rejection row when a "
+            "human rejected the structure (any gate). A BLOCK gate queues nothing (#1991 debt 3) "
+            "-- it has already failed statistically -- so on that band this is the rejection row "
+            "or None. None when no row was involved."
         ),
     )
     expert_review_decision: Optional[ExpertReviewDecision] = Field(
         default=None,
         description=(
-            "ExpertReviewGate decision for the DAG structure: proceed (active "
-            "structural approval) / renewal_required (approval expiring) / "
-            "pending_review (queued; resolve via POST /expert-reviews/{id}/resolve) / "
-            "rejected (a human rejected this structure) / blocked (no approval, no "
-            "review could be queued) / unavailable (the gate could not be consulted; "
-            "nothing was checked or queued). Recorded on a REVIEW gate; on BLOCK and "
-            "PROCEED gates only when the read-only rejection probe found one (#1991 "
-            "debt 3: a BLOCK band queues nothing). None when not consulted. "
-            "Approval is STRUCTURAL and never promotes a borderline estimate. The run "
-            "is halted (status 'failed', reason in warnings) on 'rejected' always, "
-            "and on pending_review/blocked/unavailable only when "
+            "ExpertReviewGate decision for the DAG structure: proceed (active structural approval) "
+            "/ renewal_required (approval expiring) / pending_review (queued; resolve via POST "
+            "/expert-reviews/{id}/resolve) / rejected (a human rejected this structure) / blocked "
+            "(no approval, no review could be queued) / unavailable (the gate could not be "
+            "consulted; nothing was checked or queued). Recorded on a REVIEW gate; on BLOCK and "
+            "PROCEED gates only when the read-only rejection probe found one (#1991 debt 3: a "
+            "BLOCK band queues nothing). None when not consulted. Approval is STRUCTURAL and never "
+            "promotes a borderline estimate. The run is halted (status 'failed', reason in "
+            "warnings) on 'rejected' always, and on pending_review/blocked/unavailable only when "
             "CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true (default off, #1971)."
         ),
     )
