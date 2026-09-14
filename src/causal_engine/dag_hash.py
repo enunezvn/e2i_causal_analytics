@@ -181,6 +181,22 @@ def adjustment_hash_from_snapshot(snapshot: Any) -> Optional[str]:
     must never be read as the canonical empty set. Callers that need to PROVE a
     row is compatible therefore get None here and must decline.
 
+    This READS STORED DATA and therefore NEVER RAISES (codex round 5, finding
+    2). Migration 141's ``ck_erv_snapshot_object`` constrains the OUTER JSON
+    type only, so ``{"adjustment_sets": [null]}`` is a row the table can hold,
+    and handing it to ``compute_adjustment_set_hash`` raised ``TypeError``. The
+    pending queue derives hashes OUTSIDE its 503-guarded database read, so one
+    such version row aborted the whole queue response. The shape is validated
+    first -- ``adjustment_sets`` must be absent, NULL, or a list whose every
+    item is a list of strings -- and anything else is unprovable, which is what
+    an unknown covariate set already means. Not the empty set: that is a real
+    fact a malformed row does not establish.
+
+    ``compute_adjustment_set_hash`` itself is unchanged. It is the WRITER's
+    function, given a real ``CausalGraph.adjustment_sets``, and must keep
+    raising on a caller's bug rather than hashing nonsense. Only this reader of
+    stored data forgives.
+
     Args:
         snapshot: a stored ``dag_structure_json`` value, dict or NULL
 
@@ -190,7 +206,15 @@ def adjustment_hash_from_snapshot(snapshot: Any) -> Optional[str]:
     """
     if not isinstance(snapshot, dict):
         return None
-    return compute_adjustment_set_hash(list(snapshot.get("adjustment_sets") or []))
+    adjustment_sets = snapshot.get("adjustment_sets")
+    if adjustment_sets is None:
+        adjustment_sets = []
+    if not isinstance(adjustment_sets, list):
+        return None
+    for candidate in adjustment_sets:
+        if not isinstance(candidate, list) or not all(isinstance(v, str) for v in candidate):
+            return None
+    return compute_adjustment_set_hash([list(s) for s in adjustment_sets])
 
 
 def compute_dag_hash_from_dot(dot_string: str) -> str:

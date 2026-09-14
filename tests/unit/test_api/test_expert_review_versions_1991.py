@@ -834,3 +834,53 @@ def test_pending_last_changed_at_still_dates_a_genuinely_unknown_pair(monkeypatc
     assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
         2026, 7, 15, 10, 0, tzinfo=timezone.utc
     )
+
+
+@pytest.mark.unit
+def test_pending_survives_a_version_row_with_malformed_adjustment_data(monkeypatch):
+    """Codex round 5, finding 2. ``{"adjustment_sets": [null]}`` satisfies
+    migration 141's outer-object CHECK, so the table can hold it -- and the
+    queue derives hashes OUTSIDE its 503-guarded database read, so one such row
+    raising TypeError aborted the WHOLE pending response.
+
+    It proves nothing, so it names no version and the review dates itself by its
+    own creation. The rows are still counted: they WERE recorded."""
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_V1,
+        "adjustment_set_hash": ADJ_SNAP_C,
+        "created_at": V2_AT,
+    }
+    versions = [_paired(VID_B, HASH_V1, None, {"adjustment_sets": [None]}, V3_AT)]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    r = _client(monkeypatch, repo).get("/api/expert-reviews/pending")
+    assert r.status_code == 200, r.text
+    item = r.json()["reviews"][0]
+    assert item["version_count"] == 1
+    assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
+        2026, 7, 14, 10, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.unit
+def test_a_malformed_snapshot_on_the_REVIEW_row_is_the_named_500_not_a_TypeError(monkeypatch):
+    """The other side the derivation now reads: the review's OWN snapshot.
+
+    ``expert_reviews.dag_structure_json`` carries no CHECK constraint, so this
+    shape is storable, and ``_last_changed_at`` derives from it BEFORE the row
+    is validated -- the derivation raising TypeError there aborted the queue
+    with an unhandled error. It now proves nothing, so the route reaches its own
+    validation and answers the named 500 it already had for a malformed review
+    snapshot. That behaviour is unchanged and deliberate; only the unhandled
+    crash in front of it is gone."""
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_V1,
+        "adjustment_set_hash": None,
+        "dag_structure_json": {"adjustment_sets": [["A", 1]]},
+    }
+    versions = [_paired(VID_B, HASH_V1, None, None, V3_AT)]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    r = _client(monkeypatch, repo).get("/api/expert-reviews/pending")
+    assert r.status_code == 500
+    assert "malformed dag_structure_json" in r.json()["detail"]

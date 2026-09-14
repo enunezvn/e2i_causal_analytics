@@ -1431,3 +1431,43 @@ async def test_a_failed_record_only_write_is_logged_and_still_returns_the_review
 
     assert r.decision == ReviewGateDecision.PENDING_REVIEW and r.review_id == "r1"
     assert any("r1" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_latest_version_with_malformed_adjustment_data_does_not_break_the_gate():
+    """Codex round 5, finding 2, at the gate's own reader.
+
+    ``_match_last_recorded_version`` derives a NULL-adjustment version's hash
+    from its snapshot, and ``{"adjustment_sets": [null]}`` -- a row migration
+    141's outer-object CHECK admits -- used to raise TypeError out of
+    ``check_approval`` entirely. The read's try/except covers the repository
+    call, not the derivation after it.
+
+    It proves nothing, so the recorded pair is (h1, UNKNOWN), which is not this
+    run's pair: DIFFERENT, so the structure is appended and the review advanced.
+    No exception anywhere."""
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1", adjustment_set_hash=None)],
+        latest_version={
+            "version_id": "v1",
+            "review_id": "r1",
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": None,
+            "dag_structure_json": {"nodes": ["T", "Y"], "adjustment_sets": [None]},
+        },
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    result = await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+    )
+
+    assert result.decision is ReviewGateDecision.PENDING_REVIEW
+    assert repo.appended == [("r1", "h1")]
+    assert repo.append_kwargs[0]["adjustment_set_hash"] == compute_adjustment_set_hash([["W"]])

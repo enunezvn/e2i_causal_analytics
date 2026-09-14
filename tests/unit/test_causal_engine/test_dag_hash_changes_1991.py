@@ -114,3 +114,45 @@ class TestAdjustmentHashFromSnapshot:
     def test_a_non_dict_snapshot_is_unknown(self):
         for value in ("[]", [["W"]], 7, True):
             assert adjustment_hash_from_snapshot(value) is None
+
+    def test_malformed_nested_data_is_unknown_and_never_raises(self):
+        """Codex round 5, finding 2. Migration 141's ``ck_erv_snapshot_object``
+        checks the OUTER JSON type only, so ``{"adjustment_sets": [null]}`` is a
+        row this table can hold -- and the hash computation raised TypeError on
+        it. That derivation now runs in the pending queue, OUTSIDE the 503-
+        guarded database read, so one such row aborted the whole queue response.
+
+        Malformed nested data proves nothing, which is exactly what an unknown
+        covariate set is. It is never an exception, and never the canonical
+        EMPTY set either -- that is a real fact this row does not establish.
+        """
+        unprovable = [
+            {"adjustment_sets": [None]},
+            {"adjustment_sets": "x"},
+            {"adjustment_sets": 7},
+            {"adjustment_sets": {"a": ["W"]}},
+            {"adjustment_sets": [["A", 1]]},
+            {"adjustment_sets": [["A"], None]},
+            {"adjustment_sets": [["A"], "B"]},
+            {"adjustment_sets": [[["A"]]]},
+        ]
+        for snapshot in unprovable:
+            assert adjustment_hash_from_snapshot(snapshot) is None, snapshot
+
+    def test_a_well_formed_snapshot_beside_the_malformed_ones_still_derives(self):
+        """The positive control: the validation rejects the malformed shapes
+        above WITHOUT turning every snapshot into "unknown"."""
+        assert adjustment_hash_from_snapshot(
+            {"adjustment_sets": [["B", "A"], ["C"]]}
+        ) == compute_adjustment_set_hash([["B", "A"], ["C"]])
+        assert adjustment_hash_from_snapshot(
+            {"adjustment_sets": [[]]}
+        ) == compute_adjustment_set_hash([[]])
+
+    def test_the_writers_contract_is_unchanged(self):
+        """``compute_adjustment_set_hash`` is the WRITER's function and keeps its
+        strict contract -- it is given a real ``CausalGraph.adjustment_sets``,
+        not a stored column, and must not start silently swallowing a caller's
+        bug. Only the READER of stored data forgives."""
+        with pytest.raises(TypeError):
+            compute_adjustment_set_hash([None])  # type: ignore[list-item]
