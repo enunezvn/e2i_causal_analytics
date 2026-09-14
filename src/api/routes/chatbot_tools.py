@@ -27,6 +27,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.tool_composer import compose_query
+from src.api.routes.chat_identity import _composer_context, resolve_tool_user_id
 from src.api.routes.chatbot_dspy import (
     CHATBOT_DSPY_ROUTING_ENABLED,
     VALID_AGENTS,
@@ -106,16 +107,16 @@ def reset_chat_session_id(token: "contextvars.Token[Optional[str]]") -> None:
     chat_session_id_context.reset(token)
 
 
-def _resolve_session_id(tool_arg: Optional[str]) -> Optional[str]:
+def _resolve_session_id() -> Optional[str]:
     """The session a tool call belongs to — never an invented one.
 
-    The chat handler's binding wins: inside a chat turn the ``session_id`` tool
-    argument can only be a model guess (the input schema's example even offers
-    one). The argument is honoured only when no chat session is bound, i.e. a
-    direct caller. With neither, ``None``: an unattributable call records NULL
-    instead of an id that looks like a real conversation.
+    The turn's tools node binds it (#2064/#2077). #2077 removed the ``session_id``
+    tool argument this used to fall back on: inside chat it could only ever be a
+    model guess, and it was already outranked by the binding. Unbound means
+    ``None`` — an unattributable call records NULL instead of an id that looks
+    like a real conversation.
     """
-    return chat_session_id_context.get() or tool_arg or None
+    return chat_session_id_context.get()
 
 
 # Try to import Opik for tracing
@@ -350,10 +351,6 @@ class OrchestratorToolInput(BaseModel):
         default=None,
         description="Region context for the query, resolved case-insensitively against the actual data values (e.g., Northeast)",
     )
-    session_id: Optional[str] = Field(
-        default=None,
-        description="Session ID for context continuity",
-    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -362,7 +359,6 @@ class OrchestratorToolInput(BaseModel):
                 "target_agent": "causal_impact",
                 "brand": "Kisqali",
                 "region": "Northeast",
-                "session_id": "sess_abc123",
             }
         }
     )
@@ -384,10 +380,6 @@ class ToolComposerToolInput(BaseModel):
             "Region context for the query, resolved case-insensitively against the "
             "actual geographic_region values in the data (US census regions)."
         ),
-    )
-    session_id: Optional[str] = Field(
-        default=None,
-        description="Session ID for context continuity",
     )
     data_source: Optional[str] = Field(
         default=None,
@@ -411,7 +403,6 @@ class ToolComposerToolInput(BaseModel):
                 "query": "Compare TRx trends across Kisqali, Fabhalta, and Remibrutinib, then explain causal factors",
                 "brand": None,
                 "region": "Northeast",
-                "session_id": "sess_abc123",
                 "max_parallel": 3,
             }
         }
@@ -1575,7 +1566,6 @@ async def orchestrator_tool(
     target_agent: Optional[str] = None,
     brand: Optional[str] = None,
     region: Optional[str] = None,
-    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute a query through the E2I orchestrator and 22-agent system.
@@ -1602,7 +1592,6 @@ async def orchestrator_tool(
         target_agent: Optional specific agent to route to
         brand: Brand context, resolved case-insensitively against the actual data values
         region: Region context, resolved case-insensitively against the actual data values
-        session_id: Session ID for context continuity
 
     Returns:
         Dict with orchestrator response, agents dispatched, and confidence
@@ -1654,13 +1643,16 @@ async def orchestrator_tool(
             user_context["raw_user_query"] = raw_user_query
 
         # #2064: the real chat session, or None — never a synthesized id.
-        effective_session_id = _resolve_session_id(session_id)
+        effective_session_id = _resolve_session_id()
 
         # Call the orchestrator
         orchestrator_result = await orchestrator.run(
             {
                 "query": query,
                 "session_id": effective_session_id,
+                # #2077: the turn's user, or None — reaches composer_episodes.user_id
+                # through the dispatcher, and is what #2095's owner gate compares.
+                "user_id": resolve_tool_user_id(effective_session_id),
                 "user_context": user_context,
             }
         )
@@ -1754,30 +1746,11 @@ def _resolve_cohort_frame(
     return cohort_resolution.resolve_cohort_frame(brand, region, data_source=data_source)
 
 
-def _composer_context(
-    *,
-    brand: Optional[str],
-    region: Optional[str],
-    session_id: Optional[str],
-    max_parallel: int,
-) -> Dict[str, Any]:
-    """The context the chat tool hands the Tool Composer, marked with who called (spec §5.3)."""
-    return {
-        "brand": brand,
-        "region": region,
-        # #2064: absent stays None, so an unattributable composition records NULL.
-        "session_id": session_id,
-        "max_parallel": max_parallel,
-        "entry_point": "chat_tool",
-    }
-
-
 @tool(args_schema=ToolComposerToolInput)
 async def tool_composer_tool(
     query: str,
     brand: Optional[str] = None,
     region: Optional[str] = None,
-    session_id: Optional[str] = None,
     max_parallel: int = 3,
     data_source: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1805,7 +1778,6 @@ async def tool_composer_tool(
         query: Multi-faceted query requiring decomposition
         brand: Brand context, resolved case-insensitively against the actual data values
         region: Region context, resolved case-insensitively against the actual data values
-        session_id: Session ID for context continuity
         max_parallel: Maximum parallel tool executions (1-5)
 
     Returns:
@@ -1814,12 +1786,16 @@ async def tool_composer_tool(
     logger.info(f"Tool composer: query={redact_query(query)}, brand={brand}")
     # #2064: the real chat session, or None — used by the composition and by the
     # orchestrator fallback below alike.
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id()
 
     try:
         # Build context for Tool Composer
         context: Dict[str, Any] = _composer_context(
-            brand=brand, region=region, session_id=session_id, max_parallel=max_parallel
+            brand=brand,
+            region=region,
+            session_id=session_id,
+            user_id=resolve_tool_user_id(session_id),
+            max_parallel=max_parallel,
         )
 
         # Issue #810: KPI-aware data resolution. When the query targets a defined
@@ -1926,6 +1902,8 @@ async def tool_composer_tool(
                     {
                         "query": query,
                         "session_id": session_id,
+                        # #2077: same identity as the composition it replaces.
+                        "user_id": resolve_tool_user_id(session_id),
                         "user_context": {"brand": brand, "region": region},
                     }
                 )

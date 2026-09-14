@@ -339,6 +339,7 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
+from src.api.routes import chat_identity
 from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
@@ -4703,9 +4704,9 @@ async def copilotkit_custom_handler(
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
                 # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
-                thread_id = (
-                    body_data.get("threadId") or body_json.get("threadId") or str(uuid.uuid4())
-                )
+                thread_id = chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
+                if thread_id is None:
+                    return JSONResponse(status_code=403, content={"error": "threadId not yours"})
                 state = body_data.get("state") or body_json.get("state") or {}
                 messages = body_data.get("messages") or body_json.get("messages") or []
                 actions = (
@@ -4851,15 +4852,14 @@ async def copilotkit_custom_handler(
     # non-OPTIONS request that does is execution- or state-shaped. OPTIONS (CORS
     # preflight) is exempt, matching the middleware.
     #
-    # FAIL-SAFE guard: skip re-auth ONLY when identity is already known-good. A
-    # successful ``_require_auth_for_copilotkit_execution`` sets
-    # ``request.state.user`` (both the TESTING_MODE and JWT branches), while
-    # every failure raises BEFORE any assignment — so ``request.state.user is
-    # None`` reliably means "identity not yet established". Guarding on it
-    # avoids the duplicate Supabase round-trip when the root-POST branch already
-    # authenticated and then fell through here on a later exception, WITHOUT
-    # ever letting an unauthenticated sub-path pass: unknown identity ⇒ gate runs.
-    if method != "OPTIONS" and getattr(request.state, "user", None) is None:
+    # FAIL-SAFE guard: skip re-auth ONLY when identity is already known-good.
+    # ``_require_auth_for_copilotkit_execution`` sets ``request.state.user`` on
+    # success, as does JWTAuthMiddleware, and every failure raises BEFORE any
+    # assignment — so no user there reliably means "identity not yet established"
+    # and the gate runs. #2077: ``bind_verified_request_user`` reports that AND
+    # carries the verified id into the attribution channel, which only the gate
+    # used to populate — a middleware-authenticated sub-path left chat NULL-owned.
+    if method != "OPTIONS" and not chat_identity.bind_verified_request_user(request):
         try:
             await _require_auth_for_copilotkit_execution(request)
         except AuthError as auth_exc:
@@ -4876,6 +4876,10 @@ async def copilotkit_custom_handler(
         body_bytes = await request.body()
     except:  # noqa: E722
         body_bytes = b""
+
+    # #2077: same thread-ownership policy as the root branch, which never ran here.
+    if method != "OPTIONS" and chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE):
+        return JSONResponse(status_code=403, content={"error": "threadId not yours"})
 
     # For all other paths, delegate to SDK handler
     # ALWAYS reconstruct request since we consumed the body above (line 1219)
@@ -5093,7 +5097,7 @@ _EMPTY_STREAM_FALLBACK = (
 )
 
 
-def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Optional[str]) -> str:
+def _resolve_chat_identity(authenticated_user: Dict[str, Any], chat_request: ChatRequest) -> str:
     """Resolve the authoritative chat identity from the authenticated token.
 
     Finding 1 [HIGH IDOR]: ``ChatRequest.user_id`` was a required request-body
@@ -5103,21 +5107,21 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
     is always taken from the authenticated token (``require_viewer`` →
     ``user["id"]``).
 
-    For backward compatibility the body may still carry ``user_id``; if it is
-    present and disagrees with the token identity it is treated as an
-    impersonation attempt and rejected with 403 (skipped in testing mode, which
-    deliberately bypasses real auth).
+    The body may still carry ``user_id`` for backward compatibility, and it may
+    carry a ``session_id`` whose ``{owner}~`` prefix is an owner claim of exactly
+    the same weight. Either one disagreeing with the token identity is an
+    impersonation attempt; ``reject_identity_mismatch`` (chat_identity, #2077)
+    holds that policy and raises 403, skipped in testing mode.
 
     Args:
         authenticated_user: The user dict from ``require_viewer``.
-        body_user_id: The (optional, non-authoritative) ``user_id`` from the body.
+        chat_request: The request, whose ``user_id`` / ``session_id`` are claims.
 
     Returns:
         The authoritative user id to use for all downstream calls.
 
     Raises:
-        HTTPException: 403 if a mismatching body ``user_id`` is supplied
-            (production only).
+        HTTPException: 403 if either claim disagrees (production only).
     """
     token_user_id = (authenticated_user or {}).get("id")
     if not token_user_id:
@@ -5127,17 +5131,7 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
             detail="Authenticated user identity is missing.",
         )
 
-    if body_user_id and body_user_id != token_user_id and not TESTING_MODE:
-        logger.warning(
-            "[Chatbot] Rejected user_id mismatch (possible impersonation): "
-            "body user_id does not match authenticated identity"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Request user_id does not match the authenticated user.",
-        )
-
-    return str(token_user_id)
+    return chat_identity.authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:
@@ -5437,7 +5431,7 @@ async def stream_chat(
         }
     """
     # Finding 1: derive identity from the authenticated token, never the body.
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+    authenticated_user_id = _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
@@ -5513,7 +5507,7 @@ async def chat(
     # Finding 1: derive identity from the authenticated token, never the body.
     # (Outside the try/except so a 403 propagates instead of being swallowed
     # into a 200 error body.)
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+    authenticated_user_id = _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
