@@ -357,8 +357,11 @@ ADJ_A = "a" * 64
 ADJ_B = "b" * 64
 ADJ_C = "c" * 64
 
-HASH_B = "b" * 64
-HASH_C = "c" * 64
+# DISTINCT from every ADJ_* above, deliberately: with HASH_C == ADJ_C the orphan
+# pins below would survive a helper that compared the DAG hash against the
+# adjustment field and vice versa.
+HASH_B = "5" * 64
+HASH_C = "6" * 64
 
 # The orphan timeline the gate's CAS permits (gate test ~:1295): both runs read
 # A; C inserted AND advanced; B inserted afterwards and LOST its advance. The

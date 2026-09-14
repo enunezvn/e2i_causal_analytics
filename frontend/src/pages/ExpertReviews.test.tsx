@@ -771,17 +771,22 @@ describe('ExpertReviews estimand versions (#1991 debt 3)', () => {
         review: {
           ...mockPending.reviews[0],
           approval_status: 'pending',
-          dag_version_hash: 'h1aaaa',
+          // BOTH halves differ from the queue item's: the detail's structure has
+          // a fourth node, and the DAG hash covers nodes and edges, so it cannot
+          // be the queue's hash.
+          dag_version_hash: 'h2bbbb-detail',
           adjustment_set_hash: 'zzzz-detail',
           dag_structure_json: STRUCTURE_ADVANCED,
         },
         history: [],
+        // NOT the tail: the named entry is the middle one, so the diff assertion
+        // below pins SELECTION BY ID, not "the last version".
         current_version_id: 'v2',
         versions: [
           { version_id: 'v1', dag_version_hash: 'h1aaaa', adjustment_set_hash: 'wwww-queue', changes: null },
           {
             version_id: 'v2',
-            dag_version_hash: 'h1aaaa',
+            dag_version_hash: 'h2bbbb-detail',
             adjustment_set_hash: 'zzzz-detail',
             changes: {
               nodes_added: ['W'],
@@ -790,6 +795,21 @@ describe('ExpertReviews estimand versions (#1991 debt 3)', () => {
               edges_removed: [],
               adjustment_sets_added: [['W']],
               adjustment_sets_removed: [],
+              is_changed: true,
+            },
+          },
+          // The orphan a lost compare-and-set left after the current version.
+          {
+            version_id: 'v3',
+            dag_version_hash: 'h3cccc-orphan',
+            adjustment_set_hash: 'yyyy-orphan',
+            changes: {
+              nodes_added: ['ORPHAN'],
+              nodes_removed: ['W'],
+              edges_added: [],
+              edges_removed: [],
+              adjustment_sets_added: [],
+              adjustment_sets_removed: [['W']],
               is_changed: true,
             },
           },
@@ -802,7 +822,7 @@ describe('ExpertReviews estimand versions (#1991 debt 3)', () => {
       dag_version_hash: 'h1aaaa',
       adjustment_set_hash: 'wwww-queue',
       dag_structure_json: STRUCTURE,
-      version_count: 2,
+      version_count: 3,
     });
 
     const user = userEvent.setup();
@@ -811,14 +831,16 @@ describe('ExpertReviews estimand versions (#1991 debt 3)', () => {
     // the DETAIL's graph (4 nodes), not the queue item's (3)
     const dag = await screen.findByTestId('causal-dag');
     expect(dag).toHaveAttribute('data-nodes', '4');
-    // the current version's delta
+    // the CURRENT version's delta, not the orphan tail's
     expect(screen.getByText('Changed since the previous version')).toBeInTheDocument();
     expect(screen.getByText('+ W')).toBeInTheDocument();
+    expect(screen.queryByText('+ ORPHAN')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: /approve/i }));
     expect(mutate).toHaveBeenCalledTimes(1);
     const [vars] = mutate.mock.calls[0];
-    expect(vars.body.dag_version_hash).toBe('h1aaaa');
+    // the DETAIL's pair, both halves — never the queue item's
+    expect(vars.body.dag_version_hash).toBe('h2bbbb-detail');
     expect(vars.body.adjustment_set_hash).toBe('zzzz-detail');
   });
 

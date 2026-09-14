@@ -114,8 +114,11 @@ describe('LinkedReviewCard DAG panel', () => {
   });
 
   it('renders no diff for a review with a single version', () => {
+    // The review is ON that one version (`v1`), so the silence is the
+    // FIRST-version case — nothing to diff against — and not the unrelated
+    // "the named id is missing from the timeline" path.
     vi.mocked(useExpertReview).mockReturnValue({
-      data: { ...DETAIL, versions: [DETAIL.versions[0]] },
+      data: { ...DETAIL, current_version_id: 'v1', versions: [DETAIL.versions[0]] },
       isLoading: false,
       isError: false,
     } as never);
