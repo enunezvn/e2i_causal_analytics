@@ -25,7 +25,7 @@ as text, so a non-uuid must never be returned — both sources reject non-uuids 
 the anonymous sentinel already.
 """
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from src.utils.llm_attribution import get_authenticated_user_id, user_id_from_session
 
@@ -33,3 +33,28 @@ from src.utils.llm_attribution import get_authenticated_user_id, user_id_from_se
 def resolve_tool_user_id(session_id: Optional[str]) -> Optional[str]:
     """The user this tool call belongs to, or None — never a fabricated id."""
     return user_id_from_session(session_id) or get_authenticated_user_id()
+
+
+def _composer_context(
+    *,
+    brand: Optional[str],
+    region: Optional[str],
+    session_id: Optional[str],
+    user_id: Optional[str],
+    max_parallel: int,
+) -> Dict[str, Any]:
+    """The context the chat tool hands the Tool Composer, marked with who called (spec §5.3).
+
+    It lives beside the resolvers because what it carries IS the episode's
+    identity: composer_episodes keys its session and owner on these two values.
+    """
+    return {
+        "brand": brand,
+        "region": region,
+        # #2064/#2077: absent stays None, so an unattributable composition
+        # records NULL rather than looking attributed.
+        "session_id": session_id,
+        "user_id": user_id,
+        "max_parallel": max_parallel,
+        "entry_point": "chat_tool",
+    }

@@ -164,7 +164,7 @@ async def test_tool_composer_tool_invents_no_session_when_none_is_bound(
 
 def test_composer_context_passes_an_absent_session_through_as_none():
     context = chatbot_tools._composer_context(
-        brand=None, region=None, session_id=None, max_parallel=3
+        brand=None, region=None, session_id=None, user_id=None, max_parallel=3
     )
     assert context["session_id"] is None
 

@@ -27,6 +27,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.tool_composer import compose_query
+from src.api.routes.chat_identity import _composer_context, resolve_tool_user_id
 from src.api.routes.chatbot_dspy import (
     CHATBOT_DSPY_ROUTING_ENABLED,
     VALID_AGENTS,
@@ -1661,6 +1662,9 @@ async def orchestrator_tool(
             {
                 "query": query,
                 "session_id": effective_session_id,
+                # #2077: the turn's user, or None — reaches composer_episodes.user_id
+                # through the dispatcher, and is what #2095's owner gate compares.
+                "user_id": resolve_tool_user_id(effective_session_id),
                 "user_context": user_context,
             }
         )
@@ -1754,24 +1758,6 @@ def _resolve_cohort_frame(
     return cohort_resolution.resolve_cohort_frame(brand, region, data_source=data_source)
 
 
-def _composer_context(
-    *,
-    brand: Optional[str],
-    region: Optional[str],
-    session_id: Optional[str],
-    max_parallel: int,
-) -> Dict[str, Any]:
-    """The context the chat tool hands the Tool Composer, marked with who called (spec §5.3)."""
-    return {
-        "brand": brand,
-        "region": region,
-        # #2064: absent stays None, so an unattributable composition records NULL.
-        "session_id": session_id,
-        "max_parallel": max_parallel,
-        "entry_point": "chat_tool",
-    }
-
-
 @tool(args_schema=ToolComposerToolInput)
 async def tool_composer_tool(
     query: str,
@@ -1819,7 +1805,11 @@ async def tool_composer_tool(
     try:
         # Build context for Tool Composer
         context: Dict[str, Any] = _composer_context(
-            brand=brand, region=region, session_id=session_id, max_parallel=max_parallel
+            brand=brand,
+            region=region,
+            session_id=session_id,
+            user_id=resolve_tool_user_id(session_id),
+            max_parallel=max_parallel,
         )
 
         # Issue #810: KPI-aware data resolution. When the query targets a defined
@@ -1926,6 +1916,8 @@ async def tool_composer_tool(
                     {
                         "query": query,
                         "session_id": session_id,
+                        # #2077: same identity as the composition it replaces.
+                        "user_id": resolve_tool_user_id(session_id),
                         "user_context": {"brand": brand, "region": region},
                     }
                 )

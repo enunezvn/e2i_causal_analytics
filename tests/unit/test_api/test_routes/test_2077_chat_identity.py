@@ -245,3 +245,91 @@ async def test_the_auth_gate_channel_survives_the_keepalive_wrapper_and_attribut
 
     assert seen["attribution_user"] is None, "get_attribution() unexpectedly survived"
     assert seen["resolved_user"] == USER
+
+
+# ------------------------------------------- gap 2: the resolved user reaches the episode
+
+
+BARE_THREAD = "cf6b364a-11f1-4b26-a5c0-f6559d06f659"  # the shape CopilotKit mints
+
+
+@pytest.fixture
+def failing_composer(monkeypatch) -> list[dict]:
+    """Capture the composer context, then fail so the orchestrator fallback also runs."""
+    contexts: list[dict] = []
+
+    async def compose_query(*, query, context):
+        contexts.append(context)
+        raise RuntimeError("composition failed")
+
+    monkeypatch.setattr(chatbot_tools, "compose_query", compose_query)
+    monkeypatch.setattr(chatbot_tools.kpi_resolution, "recognize_kpi", lambda query: None)
+    monkeypatch.setattr(chatbot_tools, "_resolve_cohort_frame", lambda *args: None)
+    return contexts
+
+
+@pytest.fixture
+def no_authenticated_user():
+    from src.utils.llm_attribution import set_authenticated_user
+
+    set_authenticated_user(None)
+    yield
+    set_authenticated_user(None)
+
+
+async def test_orchestrator_tool_records_the_user_behind_the_session(
+    orchestrator, no_authenticated_user
+):
+    token = chat_session_id_context.set(REAL_SESSION)
+    try:
+        await chatbot_tools.orchestrator_tool.ainvoke({"query": "Why is TRx moving?"})
+    finally:
+        chat_session_id_context.reset(token)
+
+    assert orchestrator.payloads[0]["user_id"] == USER
+
+
+async def test_an_agui_thread_records_the_auth_gates_user(orchestrator, no_authenticated_user):
+    """A bare thread id carries no prefix, so only the verified gate names the user."""
+    from src.utils.llm_attribution import set_authenticated_user
+
+    set_authenticated_user(USER)
+    token = chat_session_id_context.set(BARE_THREAD)
+    try:
+        await chatbot_tools.orchestrator_tool.ainvoke({"query": "Why is TRx moving?"})
+    finally:
+        chat_session_id_context.reset(token)
+
+    assert orchestrator.payloads[0]["user_id"] == USER
+
+
+async def test_orchestrator_tool_records_null_rather_than_a_fabricated_user(
+    orchestrator, no_authenticated_user
+):
+    await chatbot_tools.orchestrator_tool.ainvoke({"query": "Why is TRx moving?"})
+
+    assert orchestrator.payloads[0]["user_id"] is None
+    assert orchestrator.payloads[0]["session_id"] is None
+
+
+async def test_tool_composer_tool_records_the_user_on_the_composition(
+    orchestrator, failing_composer, no_authenticated_user
+):
+    token = chat_session_id_context.set(REAL_SESSION)
+    try:
+        await chatbot_tools.tool_composer_tool.ainvoke({"query": "Compare TRx and explain why"})
+    finally:
+        chat_session_id_context.reset(token)
+
+    assert failing_composer[0]["user_id"] == USER
+    # The orchestrator fallback behind a failed composition records it too.
+    assert orchestrator.payloads[0]["user_id"] == USER
+
+
+async def test_tool_composer_tool_records_null_when_no_identity_is_available(
+    orchestrator, failing_composer, no_authenticated_user
+):
+    await chatbot_tools.tool_composer_tool.ainvoke({"query": "Compare TRx and explain why"})
+
+    assert failing_composer[0]["user_id"] is None
+    assert orchestrator.payloads[0]["user_id"] is None
