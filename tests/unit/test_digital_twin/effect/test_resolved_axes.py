@@ -179,5 +179,5 @@ def test_cohort_declaration_is_invariant_to_the_twin_count():
     for cate, n in declarations[1:]:
         # abs=1e-12 is the repeated-fit float jitter (~4e-18 measured), twelve orders of
         # magnitude below the twin-count-driven spread this pins out (0.049 -> 0.002).
-        assert cate["region"] == pytest.approx(first_cate["region"], abs=1e-12)
+        assert cate["region"] == pytest.approx(first_cate["region"], abs=1e-12, rel=0)
         assert n == first_n  # cohort row counts are exact

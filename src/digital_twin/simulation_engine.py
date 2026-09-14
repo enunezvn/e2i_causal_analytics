@@ -54,6 +54,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Subgroup axes whose twin feature is a NUMBER rather than a label, so its group key is
+# stringified: decile 1 and "1" are the same decile. Every other axis in SUBGROUP_AXES keys
+# on the feature value itself, which is what it has always done — see _calculate_heterogeneity.
+_NUMERIC_AXES = frozenset({"decile"})
+
 
 class SimulationEngine:
     """
@@ -392,7 +397,11 @@ class SimulationEngine:
 
         for twin, effect in zip(twins, effects, strict=False):
             for axis, groups in twin_groups.items():
-                groups.setdefault(str(twin.features.get(axis, "unknown")), []).append(effect)
+                key = twin.features.get(axis, "unknown")
+                # A LABEL axis keys on the value itself. ``features`` is ``Dict[str, Any]``,
+                # so coercing would merge distinct labels — int 1 with str "1" — into one
+                # group whose ATE is the average of two different effects.
+                groups.setdefault(str(key) if axis in _NUMERIC_AXES else key, []).append(effect)
 
         # Calculate stats for each group
         def calc_group_stats(groups: dict[str, List[float]]) -> dict[str, dict[str, float]]:

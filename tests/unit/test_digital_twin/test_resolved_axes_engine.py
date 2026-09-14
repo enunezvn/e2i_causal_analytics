@@ -133,7 +133,9 @@ def test_cohort_path_reports_only_region_and_is_invariant_to_twin_count(cohort):
         for region, stats in other.items():
             # abs=1e-12 is repeated-fit float jitter, twelve orders below the
             # twin-count-driven spread this pins out (0.049 -> 0.002 on by_specialty).
-            assert stats["ate"] == pytest.approx(reported[0][region]["ate"], abs=1e-12)
+            # rel=0 states the absolute-only intent explicitly (pytest already treats
+            # an abs-only approx that way; measured, and its tolerance property says so).
+            assert stats["ate"] == pytest.approx(reported[0][region]["ate"], abs=1e-12, rel=0)
             assert stats["n"] == reported[0][region]["n"]
 
 
@@ -182,3 +184,74 @@ def test_the_engine_reports_every_axis_in_the_declaration_vocabulary(cohort):
     assert reported == set(SUBGROUP_AXES)
     for axis in SUBGROUP_AXES:
         assert isinstance(getattr(result.effect_heterogeneity, f"by_{axis}"), dict)
+
+
+def _axis_estimate(n_twins: int):
+    """An estimate that declares every axis resolved by its per-twin scores — the synthetic
+    path's declaration, which sends the engine through the twin grouping."""
+    from src.digital_twin.effect.estimate import SUBGROUP_AXES, EffectEstimate
+
+    return EffectEstimate(
+        ate=0.2,
+        ate_ci_lower=0.1,
+        ate_ci_upper=0.3,
+        att=None,
+        atc=None,
+        per_twin_uplift=np.full(n_twins, 0.2),
+        auuc=None,
+        qini=None,
+        feature_importances=None,
+        n_train=1000,
+        estimator_type="uplift_random_forest",
+        data_provenance="synthetic_uplift_v1",
+        cate_by_axis={axis: {} for axis in SUBGROUP_AXES},
+    )
+
+
+def _labelled_twins(axis: str, labels):
+    return [
+        DigitalTwin(
+            twin_type=TwinType.HCP,
+            brand=Brand.KISQALI,
+            features={axis: label},
+            baseline_outcome=0.2,
+            baseline_propensity=0.5,
+        )
+        for label in labels
+        for _ in range(10)  # the min-sample gate keeps groups of >= 10
+    ]
+
+
+@pytest.mark.parametrize("axis", ["specialty", "region", "adoption_stage"])
+def test_a_label_axis_keys_on_the_feature_value_not_its_string_form(axis):
+    """``DigitalTwin.features`` is ``Dict[str, Any]``, so a label axis can carry an int as
+    well as a str. Stringifying the group key MERGES ``1`` and ``"1"`` into one group whose
+    ATE is the average of two different effects — a silent change to the synthetic path,
+    where these subgroup numbers are real. Only ``decile`` was ever stringified."""
+    twins = _labelled_twins(axis, [1, "1"])
+    effects = [0.1] * 10 + [0.3] * 10
+
+    het = SimulationEngine._calculate_heterogeneity(
+        None, twins, effects, _axis_estimate(len(twins))
+    )
+
+    reported = getattr(het, f"by_{axis}")
+    assert len(reported) == 2, f"{axis}: {reported}"
+    assert {stats["n"] for stats in reported.values()} == {10}
+    assert sorted(stats["ate"] for stats in reported.values()) == pytest.approx([0.1, 0.3])
+
+
+def test_decile_keys_on_the_string_form_as_it_always_has():
+    """``decile`` is numeric, so its key has always been stringified: int ``1`` and str
+    ``"1"`` are the same decile and share a group. Pinned so the axis-driven loop cannot
+    quietly stop coercing it either."""
+    twins = _labelled_twins("decile", [1, "1"])
+    effects = [0.1] * 10 + [0.3] * 10
+
+    het = SimulationEngine._calculate_heterogeneity(
+        None, twins, effects, _axis_estimate(len(twins))
+    )
+
+    assert set(het.by_decile) == {"1"}
+    assert het.by_decile["1"]["n"] == 20
+    assert het.by_decile["1"]["ate"] == pytest.approx(0.2)
