@@ -33,7 +33,8 @@ from unittest.mock import patch
 import pytest
 from fastapi import BackgroundTasks
 
-from src.api.routes import causal as causal_module
+from src.api.routes.causal import hierarchical as hierarchical_module
+from src.api.routes.causal import pipelines as causal_module
 from src.api.schemas.causal import (
     AnalysisStatus,
     CausalLibrary,
@@ -181,7 +182,7 @@ async def test_hierarchical_analyze_rejects_when_saturated(_heavy_compute_one_sl
         _FakeAnalyzer,
     ):
         with pytest.raises(HeavyComputeSaturated):
-            await causal_module.run_hierarchical_analysis(
+            await hierarchical_module.run_hierarchical_analysis(
                 _hierarchical_request(),
                 background_tasks=BackgroundTasks(),
                 async_mode=False,
@@ -242,7 +243,7 @@ async def test_hierarchical_analyze_succeeds_when_slot_free(_heavy_compute_one_s
         ),
         patch.object(np.random, "seed", lambda *a, **k: None),
     ):
-        result = await causal_module.run_hierarchical_analysis(
+        result = await hierarchical_module.run_hierarchical_analysis(
             _hierarchical_request(),
             background_tasks=BackgroundTasks(),
             async_mode=False,

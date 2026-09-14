@@ -56,7 +56,7 @@ def _base_state(**overrides):
 
 @pytest.mark.unit
 def test_completed_run_maps_dag_effect_and_estimator():
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     resp = _agent_state_to_response(
         analysis_id="a1",
@@ -89,7 +89,7 @@ def test_completed_run_maps_dag_effect_and_estimator():
 def test_naive_vs_adjusted_fields_pass_through():
     """The unadjusted diff-in-means foil + the confounding bias it removes must
     reach the API response so the page can show 'adjustment removed X bias'."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["estimation_result"].update(
@@ -118,7 +118,7 @@ def test_naive_vs_adjusted_fields_pass_through():
 def test_naive_fields_default_none_when_estimator_did_not_emit_them():
     """A non-binary treatment (or an old result) carries no naive contrast — the
     response must surface None, never a fabricated 0."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     resp = _agent_state_to_response(
         analysis_id="n2",
@@ -139,7 +139,7 @@ def test_estimator_comparison_surfaced_when_multiple_evaluated():
     """The Auto path fits + energy-scores several estimators; that comparison
     lived in state but was dropped at the API boundary. Surface it so the UI can
     explain WHY the winner won — not just show its name."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     estimation = {
         "ate": 0.12,
@@ -206,7 +206,7 @@ def test_estimator_comparison_surfaced_when_multiple_evaluated():
 def test_estimator_comparison_none_for_single_forced_estimator():
     """A forced/explicit method evaluates exactly one estimator — a 1-row
     'comparison' conveys nothing, so it collapses to None (verifier guard)."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     estimation = {
         "ate": 0.12,
@@ -237,7 +237,7 @@ def test_estimator_comparison_none_for_single_forced_estimator():
 
 @pytest.mark.unit
 def test_review_band_is_needs_review_not_passed():
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state(
         refutation_results={"gate_decision": "review", "tests_passed": 1, "total_tests": 3}
@@ -257,7 +257,7 @@ def test_review_band_is_needs_review_not_passed():
 
 @pytest.mark.unit
 def test_no_estimate_fails_closed_with_honest_warning():
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     # An empty estimation_result => the agent could not estimate -> fail-closed,
     # NEVER a fabricated ATE.
@@ -276,7 +276,7 @@ def test_no_estimate_fails_closed_with_honest_warning():
 
 @pytest.mark.unit
 def test_blocked_gate_fails_closed():
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state(
         refutation_results={"gate_decision": "block", "tests_passed": 0, "total_tests": 3}
@@ -311,7 +311,7 @@ def test_dag_source_discovered_surfaces_confounders():
     """When guided discovery ran and the gate ACCEPTED, the DAG is reported as
     'discovered' and the data-identified adjustment set is surfaced as
     discovered_confounders (so the FE can honestly say 'learned from data')."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 5}  # presence => discovery actually ran
@@ -336,7 +336,7 @@ def test_dag_source_prior_asserted_when_every_edge_is_prior_implied():
     be credited with the structure: the same graph comes back from a pure-noise
     frame. Provenance must say 'prior_asserted', and no declared covariate may be
     echoed back as a discovered confounder."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 3}
@@ -367,7 +367,7 @@ def test_dag_source_prior_asserted_when_every_edge_is_prior_implied():
 def test_discovered_confounders_excludes_the_declared_ones():
     """A confounder the caller declared is not a finding. Only the part of the
     backdoor set the data added beyond the declaration is reported."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 5}
@@ -409,7 +409,7 @@ def test_dag_source_domain_knowledge_when_accept_overridden_by_fallback():
     HONEST source — 'domain_knowledge', NOT 'discovered' — so the FE never claims
     a human-curated DAG was learned from data, and no data-identified confounders
     are attributed to a structure the data never produced."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 5}  # discovery ran
@@ -431,7 +431,7 @@ def test_dag_source_domain_knowledge_when_accept_overridden_by_fallback():
 def test_dag_source_domain_knowledge_when_discovery_absent():
     """No discovery in the state -> the agent's domain DAG; no data-identified
     confounders are claimed (discovered_confounders stays empty)."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     resp = _agent_state_to_response(
         analysis_id="m1",
@@ -452,7 +452,7 @@ def test_dag_source_prior_asserted_when_augment_ships_only_prior_implied_edges()
     set, that label overstates the data's contribution exactly the way
     'discovered' did on the ACCEPT path (fixed in #1879). Same rule, same
     label: prior_asserted."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 3}
@@ -481,7 +481,7 @@ def test_dag_source_augmented_when_augment_carries_edges_beyond_priors():
     """Positive control for the augment collapse: an augment-gate DAG that DOES
     carry edges beyond the priors keeps the 'augmented' label and reports the
     genuinely data-added confounder."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 5}
@@ -518,7 +518,7 @@ def test_discovered_confounders_are_sorted_and_deduplicated():
     """The reported findings list is deterministic: sorted, no duplicates —
     regardless of adjustment-set order or repeats. Pins the contract change
     from #1879 (was insertion-ordered) so stored-response diffs stay stable."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 6}
@@ -588,7 +588,7 @@ def test_refutation_individual_tests_surfaced_in_response():
     """The agent computes per-test refutation results; the response must carry
     them (regression: they were previously dropped, so the drill-down table
     showed the misleading 'enable refutation tests' empty-state)."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state(
         refutation_results={
@@ -624,7 +624,7 @@ def test_refutation_individual_tests_surfaced_in_response():
 def test_refutation_tests_empty_when_refutation_did_not_run():
     """No individual_tests -> empty list (the FE then shows the honest 'did not
     run' state, never a fabricated row)."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     resp = _agent_state_to_response(
         analysis_id="r2",
@@ -639,7 +639,7 @@ def test_refutation_tests_empty_when_refutation_did_not_run():
 
 @pytest.mark.unit
 def test_refutation_tests_helper_skips_malformed_and_coerces_floats():
-    from src.api.routes.causal import _refutation_tests_from_state
+    from src.api.routes.causal.agent import _refutation_tests_from_state
 
     out = _refutation_tests_from_state(
         {
@@ -666,7 +666,7 @@ def test_refutation_sensitivity_test_surfaced_under_contract_key_not_raw_enum():
     'sensitivity_e_value'. We must surface the CONTRACT KEY so the FE labels it
     'Unobserved Common Cause' — using the inner value made the FE fall back to
     'Random Common Cause' and duplicate that row."""
-    from src.api.routes.causal import _refutation_tests_from_state
+    from src.api.routes.causal.agent import _refutation_tests_from_state
 
     out = _refutation_tests_from_state(
         {
@@ -697,7 +697,7 @@ def test_refutation_three_state_status_surfaced_and_optional():
     so the FE can render a WARNING distinctly from a FAILURE (the two-state
     ``passed`` collapsed both to a red X). Absent status (legacy cached
     payloads) -> None, and the FE falls back to ``passed``."""
-    from src.api.routes.causal import _refutation_tests_from_state
+    from src.api.routes.causal.agent import _refutation_tests_from_state
 
     out = _refutation_tests_from_state(
         {
@@ -739,7 +739,7 @@ async def test_agent_analyze_passes_expanded_geo_dummies_as_covariates():
 
     import pandas as pd
 
-    from src.api.routes import causal as causal_routes
+    from src.api.routes.causal import agent as causal_routes
 
     frame = pd.DataFrame(
         {
@@ -831,7 +831,7 @@ def test_adjust_baselines_request_field_defaults_false():
 def test_adjustment_type_and_baselines_map_to_response():
     """An efficiency run must reach the client labeled as VARIANCE REDUCTION —
     never as confounding adjustment — with the baseline set it adjusted for."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["estimation_result"].update(
@@ -856,7 +856,7 @@ def test_adjustment_type_and_baselines_map_to_response():
 def test_adjustment_type_defaults_none_for_legacy_states():
     """Old agent states carry no adjustment_type — the response must surface
     None (unknown), never fabricate a label."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     resp = _agent_state_to_response(
         analysis_id="l1",
@@ -895,7 +895,7 @@ def test_latent_confounding_warning_reaches_response_warnings():
     Uses the real warning builder so the pin breaks if either end of the
     seam drifts."""
     from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     warning = GraphBuilderNode._latent_confounding_warning("treatment_arm", "persistent_180d")
     state = _base_state(warnings=[warning])
@@ -931,7 +931,7 @@ def test_dag_source_discovered_when_anchored_channel_is_empty():
     genuine data contribution, so the label is 'discovered' where the legacy
     single-channel state (same edges, no anchored key) reads 'prior_asserted'.
     The declared covariate is still not echoed back as a finding."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 3}
@@ -960,7 +960,7 @@ def test_dag_source_prior_asserted_tracks_the_anchored_channel():
     """When a caller genuinely anchors a confounder, its two common-cause edges
     are prior-implied again: a DAG carrying nothing beyond them (plus the
     estimand) must NOT be credited to the data."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["discovery_result"] = {"n_edges": 3}
@@ -988,7 +988,7 @@ def test_dag_source_prior_asserted_tracks_the_anchored_channel():
 def test_edge_provenance_passes_through_to_the_dag_model():
     """graph_builder's per-edge provenance ships on the response DAG; malformed
     entries are dropped rather than failing the mapping."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state()
     state["causal_graph"]["edge_provenance"] = [
@@ -1021,7 +1021,7 @@ def test_edge_provenance_passes_through_to_the_dag_model():
 
 @pytest.mark.unit
 def test_edge_provenance_defaults_empty_on_legacy_states():
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     resp = _agent_state_to_response(
         analysis_id="f4d",
@@ -1054,7 +1054,7 @@ def test_route_initial_state_keys_are_declared_in_state_schema():
     import inspect
 
     from src.agents.causal_impact.state import CausalImpactState
-    from src.api.routes import causal as causal_routes
+    from src.api.routes.causal import agent as causal_routes
 
     tree = ast.parse(inspect.getsource(causal_routes))
     keys: set = set()
@@ -1132,7 +1132,7 @@ async def test_agent_analysis_task_records_mlflow_run():
     e2i_causal/causal_impact experiments existed in MLflow."""
     from unittest.mock import AsyncMock, patch
 
-    from src.api.routes import causal as causal_routes
+    from src.api.routes.causal import agent as causal_routes
 
     _RecordingTracker.calls = {}
     final_state = _base_state()
@@ -1193,7 +1193,7 @@ async def test_agent_analysis_task_survives_tracker_failure():
     the stored response with a failed record."""
     from unittest.mock import AsyncMock, patch
 
-    from src.api.routes import causal as causal_routes
+    from src.api.routes.causal import agent as causal_routes
 
     final_state = _base_state()
 
@@ -1239,7 +1239,7 @@ async def test_agent_analysis_task_survives_tracker_failure():
 def test_expert_review_decision_travels_with_its_row_id():
     """#1971: the gate's verdict is surfaced next to the review id so consumers
     can tell pending_review from an active structural approval."""
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     state = _base_state(
         refutation_results={"gate_decision": "review", "tests_passed": 1, "total_tests": 3},
@@ -1260,7 +1260,7 @@ def test_expert_review_decision_travels_with_its_row_id():
 
 @pytest.mark.unit
 def test_expert_review_decision_is_none_when_gate_not_consulted():
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     resp = _agent_state_to_response(
         analysis_id="a4",

@@ -464,7 +464,7 @@ class OrchestratorMemoryHooks:
 
     async def store_orchestration(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         brand: Optional[str] = None,
         region: Optional[str] = None,
@@ -569,7 +569,7 @@ class OrchestratorMemoryHooks:
 
     async def track_routing_decision(
         self,
-        session_id: str,
+        session_id: Optional[str],
         query_pattern: str,
         intent: str,
         agents_selected: List[str],
@@ -685,7 +685,8 @@ async def contribute_to_memory(
         result: OrchestratorOutput dictionary
         state: OrchestratorState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (uses state value if not provided)
+        session_id: Session identifier; falls back to the state value, else
+            None, which records an honest NULL (#2076)
         brand: Optional brand context
         region: Optional region context
 
@@ -696,13 +697,16 @@ async def contribute_to_memory(
         - conversation_stored: 1 if conversation turn stored, 0 otherwise
         - routing_tracked: 1 if routing decision tracked, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_orchestrator_memory_hooks()
 
     if session_id is None:
-        session_id = state.get("session_id") or str(uuid.uuid4())
+        # No mint (#2076). An absent session id stays None: the episodic writer
+        # coerces it to an honest NULL for the nullable ``session_id`` column
+        # rather than recording a uuid that belongs to no conversation. A falsy
+        # state value normalises to None too, so the session-KEYED Redis writes
+        # below are skipped instead of keyed on an empty string.
+        session_id = state.get("session_id") or None
 
     counts = {
         "episodic_stored": 0,
@@ -720,13 +724,16 @@ async def contribute_to_memory(
     query_id = result.get("query_id", "unknown")
 
     # 1. Cache in working memory
-    cached = await memory_hooks.cache_orchestration_result(
-        session_id=session_id,
-        query_id=query_id,
-        result=result,
-    )
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_orchestration_result(
+            session_id=session_id,
+            query_id=query_id,
+            result=result,
+        )
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store conversation turn
     query = state.get("query", "")
@@ -734,7 +741,9 @@ async def contribute_to_memory(
     intent = result.get("intent_classified")
     agents = result.get("agents_dispatched", [])
 
-    if query and response:
+    # Skipped without a session (#2076): the conversation turn is stored under
+    # ``session:{session_id}:messages``, a key no reader can ever ask for.
+    if session_id is not None and query and response:
         stored = await memory_hooks.store_conversation_turn(
             session_id=session_id,
             query=query,

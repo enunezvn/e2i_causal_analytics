@@ -25,7 +25,7 @@ from src.ml.synthetic.generators import GeneratorConfig, PatientGenerator
 
 pytestmark = pytest.mark.heavy_ml
 
-N_ROWS = 1500  # the live estimation row cap (routes/causal.py ``limit=1500``)
+N_ROWS = 1500  # the live estimation row cap (routes/causal/catalog.py ``limit=1500``)
 # Arm -> outcome pairs with a STRUCTURALLY zero effect: the arm is neither a direct
 # target of the outcome nor an input to the function that builds it, nor upstream of
 # any such input. Verified 2026-09-10 against the generator code (line numbers as of

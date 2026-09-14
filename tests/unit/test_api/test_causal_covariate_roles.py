@@ -33,7 +33,8 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import datasets as causal_datasets
+from src.api.routes.causal import loaders as causal_loaders
 
 pytestmark = pytest.mark.unit
 
@@ -42,7 +43,7 @@ async def _guard_verdict(**kwargs) -> HTTPException | None:
     """Run the loader and return the 400 'not permitted' guard rejection, or
     None when the request passed the guard (whatever happened downstream)."""
     try:
-        await causal_routes._load_agent_estimation_frame(**kwargs)
+        await causal_loaders._load_agent_estimation_frame(**kwargs)
     except HTTPException as exc:
         if exc.status_code == 400 and "not permitted" in str(exc.detail):
             return exc
@@ -119,7 +120,7 @@ class TestPatientJourneysCovariateRoleGuard:
 
     @pytest.mark.asyncio
     async def test_full_curated_covariate_list_still_accepted(self) -> None:
-        spec = causal_routes._CAUSAL_DATASET_SPECS["patient_journeys"]
+        spec = causal_datasets._CAUSAL_DATASET_SPECS["patient_journeys"]
         exc = await _guard_verdict(
             dataset="patient_journeys",
             treatment_var="treatment_arm",
