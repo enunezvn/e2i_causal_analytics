@@ -1031,14 +1031,24 @@ async def test_a_row_with_an_unknown_adjustment_set_learns_it_without_appending(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_a_run_without_a_structure_sets_the_adjustment_half_back_to_unknown():
-    """The honest direction of the same rule. This run has no structure in scope,
-    so it knows NO adjustment set -- None, which is UNKNOWN, not empty. That
-    differs from the row's stored hash, so the row is advanced to unknown.
+async def test_a_run_without_a_structure_on_an_unchanged_hash_writes_nothing():
+    """FLIPPED (codex round 5, finding 1). T9 read this run as the honest
+    direction of the rule above: no structure in scope means no adjustment set,
+    which "differs from" the row's stored hash, so the row was advanced to
+    unknown.
 
-    Leaving the previous hash would be the plausible-wrong alternative: a value
-    describing covariates this run cannot vouch for, sitting beside a snapshot it
-    just cleared. Migration 141 records unknown as NULL for the same reason.
+    That conflated two different things. UNKNOWN is not a different VALUE; it is
+    the ABSENCE of a claim. A run that carried no structure has not discovered
+    that the covariates changed -- it has discovered nothing about them. Letting
+    it advance overwrote a KNOWN covariate set with unknown, and (codex's
+    sequence, pinned below) recorded information-free version rows that the
+    detail route then named, putting "the structure disappeared" beside the
+    reviewer's real graph.
+
+    So when the run knows no structure AND its DAG hash is the row's, it asserts
+    nothing and writes nothing -- no append, no record, no advance. The review is
+    still PENDING on the structure it already had. A CHANGED hash is a different
+    case and still writes; see the pin two below.
     """
     repo = _EstimandRepo(
         history=[_pending("r1", "h1", adjustment_set_hash="adj-W")],
@@ -1054,6 +1064,55 @@ async def test_a_run_without_a_structure_sets_the_adjustment_half_back_to_unknow
     )
     gate = ExpertReviewGate(repository=repo, auto_create_review=True)
 
+    result = await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure=None,
+    )
+
+    assert repo.appended == [] and repo.recorded == [] and repo.advanced == []
+    assert repo.created == [], "the open review is still the estimand's review"
+    # Still the pending answer the caller needs, with the review id.
+    assert result.decision is ReviewGateDecision.PENDING_REVIEW
+    assert result.review_id == "r1"
+    assert result.message == "DAG review pending expert approval"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_structureless_run_does_not_record_a_null_version_over_a_backfill():
+    """Codex round 5's exact sequence, at the gate.
+
+    Post-141/142 a pending review carries ``(h, NULL, snapshot A)`` and its
+    backfilled version row carries the same. A REVIEW run supplies ``h`` WITHOUT
+    structure. The gate DERIVES A's adjustment hash from the backfilled row, so
+    the pair comparison called it DIFFERENT and appended -- while the review
+    row's own pair already equalled the run's ``(h, None)``, so nothing advanced
+    and ``record_version`` wrote ``(h, NULL, NULL snapshot)`` onto the timeline.
+    The selector's exact NULL-pair match then named that row.
+
+    The run knew no structure and the hash did not move: it asserts nothing, so
+    the timeline keeps the backfill and the review keeps snapshot A.
+    """
+    snapshot_a = {"nodes": ["T", "Y", "W"], "edges": [["T", "Y"]], "adjustment_sets": [["W"]]}
+    row = {**_pending("r1", "h1", adjustment_set_hash=None), "dag_structure_json": snapshot_a}
+    repo = _EstimandRepo(
+        history=[row],
+        latest_version={
+            "version_id": "v1",
+            "review_id": "r1",
+            "dag_version_hash": "h1",
+            # Migration 141 backfilled the hash half as NULL but COPIED the
+            # snapshot, which is why the gate can derive A from it at all.
+            "adjustment_set_hash": None,
+            "dag_structure_json": snapshot_a,
+        },
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
     await gate.check_approval(
         dag_hash="h1",
         brand="B",
@@ -1063,10 +1122,40 @@ async def test_a_run_without_a_structure_sets_the_adjustment_half_back_to_unknow
         dag_structure=None,
     )
 
-    assert repo.appended == [], "the timeline's latest is already (h1, unknown)"
-    assert repo.advanced == [("r1", "h1")]
-    kwargs = repo.advance_kwargs[0]
+    assert repo.recorded == [], "an information-free version row is not a fact"
+    assert repo.appended == [] and repo.advanced == []
+    assert repo.structure_updates == [], "the row keeps snapshot A; nothing cleared it"
+    assert row["dag_structure_json"] == snapshot_a
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_structureless_run_on_a_NEW_hash_still_appends_and_advances():
+    """The other side of the reversal, unchanged. A new DAG hash with unknown
+    structure is a real -- if incomplete -- fact: the run positively discovered
+    that the structure moved, even though it cannot say to which covariates. The
+    row and the appended version agree on ``(h2, NULL, NULL)``, so nothing is
+    rendered against a snapshot it does not have."""
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1", adjustment_set_hash="adj-W")],
+        latest_version=_version("h1", [["W"]], adjustment_set_hash="adj-W"),
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h2",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure=None,
+    )
+
+    assert repo.appended == [("r1", "h2")]
+    kwargs = repo.append_kwargs[0]
     assert kwargs["adjustment_set_hash"] is None
+    assert kwargs["dag_structure"] is None
+    assert kwargs["expected_current_hash"] == "h1"
     assert kwargs["expected_current_adjustment_hash"] == "adj-W"
 
 

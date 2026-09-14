@@ -443,6 +443,10 @@ class ExpertReviewGate:
             if dag_structure
             else None
         )
+        # Whether this run SAW a structure at all -- the difference between
+        # "the covariates are X" and "this run makes no claim about them".
+        # The pending branch below turns on it (codex round 5).
+        run_knows_structure = adjustment_set_hash is not None
 
         if pending:
             pending_row = pending[0]
@@ -571,6 +575,42 @@ class ExpertReviewGate:
                 or (match is _VersionMatch.UNKNOWN and row_asserts_change)
             )
             advance_needed = bool(review_id) and row_pair_differs
+
+            # A run that saw NO structure asserts NOTHING about the structure
+            # (codex round 5, finding 1) -- this REVERSES one T9 decision.
+            #
+            # T9 read a structureless run as the honest direction of the pair
+            # rule: it knows no adjustment set, None is not the row's hash, so
+            # the row was advanced to unknown. But UNKNOWN is not a different
+            # VALUE; it is the ABSENCE of a claim. Such a run has not discovered
+            # that the covariates moved -- it has discovered nothing about them,
+            # and "differs from" is the wrong verb for it.
+            #
+            # The harm was concrete. Post-141/142 a pending review carries
+            # ``(h, NULL, snapshot A)`` beside a backfilled version row carrying
+            # the same. A structureless run of ``h`` DERIVES A from that row, so
+            # the append decision called the timeline DIFFERENT, while the review
+            # row's own pair already equalled the run's ``(h, None)`` so nothing
+            # advanced -- and ``record_version`` wrote an information-free
+            # ``(h, NULL, NULL)`` row that the detail route's selector then named,
+            # rendering "the structure disappeared" beside the reviewer's real
+            # graph A. Later structureless runs read that tail as SAME, so it
+            # persisted. It also overwrote a KNOWN covariate set with unknown
+            # wherever the row did carry one.
+            #
+            # A CHANGED DAG hash is NOT this case and still writes: a new hash
+            # with unknown structure is a real, if incomplete, fact -- the run
+            # positively discovered that the structure moved -- and the row and
+            # the appended version then agree on ``(h2, NULL, NULL)``, so nothing
+            # is rendered against a snapshot the review does not have.
+            if not run_knows_structure and current_hash == dag_hash:
+                logger.debug(
+                    f"Run on pending review {review_id} (estimand {estimand_key}) carried no "
+                    f"structure and the DAG hash {dag_hash} is unchanged; it asserts nothing, "
+                    "so the review keeps its recorded structure and the timeline is untouched."
+                )
+                append_needed = False
+                advance_needed = False
 
             if append_needed or advance_needed:
                 # Same question, new structure (#1991 debt 3): APPEND a version
