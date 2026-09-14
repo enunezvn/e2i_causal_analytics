@@ -55,18 +55,26 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
 }));
 // #2081: Home renders <CausalValueChains brand region /> (which calls
 // useCausalValueChains) and reads useGraphStats directly — two REAL,
-// unmocked TanStack queries this file otherwise takes no notice of. Unlike
-// every other hook above, use-graph's queryFns (src/hooks/api/use-graph.ts)
-// never thread TanStack's `signal` through to axios, so queryClient
-// cancellation cannot actually abort the in-flight XHR. useCausalValueChains
-// also RE-FETCHES on brand/region change, which selectBrand() triggers mid
-// test. Captured evidence (20x + 30x + 20x local loops, one full-output run):
-// real `GET /graph/stats` and `GET /causal/value-chains` calls fire during
-// these tests and can still be resolving when the test/environment tears
-// down, matching CI's `ReferenceError: ProgressEvent is not defined` from
-// mswjs's XMLHttpRequestController.respondWith. Mock both, consistent with
-// every other Home dependency this file already isolates, so no real
-// network call originates from this file at all.
+// unmocked TanStack queries this file otherwise takes no notice of. Every
+// other Home dependency above is mocked at its OWN hook module, so its API
+// function never runs; useAgentStatus is likewise real but its API function
+// (getAgentStatus) goes through the already-mocked getValidated below, so it
+// never reaches the network either. use-graph is the only pair whose network
+// call is left genuinely unmocked. It also matters that use-graph's queryFns
+// (src/hooks/api/use-graph.ts) never thread TanStack's `signal` through to
+// axios, so queryClient cancellation cannot actually abort the in-flight XHR
+// once it starts (this is not unique to use-graph — useKPIList's queryFn
+// omits it too — it only matters here because use-graph is the one hook pair
+// whose request actually fires). useCausalValueChains also RE-FETCHES on
+// brand/region change, which selectBrand() triggers mid test, so a request
+// can still be resolving when the test/environment tears down, matching
+// CI's `ReferenceError: ProgressEvent is not defined` from mswjs's
+// XMLHttpRequestController.respondWith (mechanism + evidence: commit body).
+// Mock both, so no real network call originates from this file at all.
+//
+// ExecutiveSummary.tsx:70 is a second useGraphStats consumer (destructures
+// isLoading/error) also rendered by Home — mocking the hook moves it from
+// its loading state to loaded-empty in every test here.
 vi.mock('@/hooks/api/use-graph', () => ({
   useGraphStats: vi.fn(),
   useCausalValueChains: vi.fn(),
@@ -142,7 +150,11 @@ function resetHomeHookDefaults() {
     data: undefined,
     isLoading: false,
   });
-  (useGraphStats as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+  (useGraphStats as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+  });
   (useCausalValueChains as ReturnType<typeof vi.fn>).mockReturnValue({
     data: undefined,
     isLoading: false,
@@ -224,7 +236,8 @@ function bannerStat(label: string): string | null | undefined {
 // each test's QueryClient so afterEach can cancel + clear it. cancelQueries()
 // cannot abort an in-flight XHR here (use-graph's queryFns don't thread
 // TanStack's `signal` to axios — see the vi.mock comment above), so this does
-// NOT by itself fix the flake; it only stops a *mocked* hook's resolved data
+// NOT by itself fix the flake; it only stops a real query's resolved data
+// (its API function is mocked, but the TanStack query around it is real)
 // from being written into a torn-down QueryClient's cache.
 let activeQueryClient: QueryClient | undefined;
 
@@ -245,6 +258,15 @@ describe('Home automatic brand scoping of the KPI grid', () => {
     activeQueryClient?.cancelQueries();
     activeQueryClient?.clear();
     activeQueryClient = undefined;
+  });
+
+  // #2081: the flake is a teardown race (a real query still resolving after
+  // the test ends), so a regression that deletes the use-graph vi.mock above
+  // would not fail any assertion in THIS suite today — the mock's absence is
+  // otherwise invisible. Pin it directly.
+  it('mocks useGraphStats and useCausalValueChains (guards the #2081 fix)', () => {
+    expect(vi.isMockFunction(useGraphStats)).toBe(true);
+    expect(vi.isMockFunction(useCausalValueChains)).toBe(true);
   });
 
   // ==========================================================================
