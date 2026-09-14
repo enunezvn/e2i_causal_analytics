@@ -5,6 +5,14 @@
 --               chat/031_chatbot_message_feedback.sql (chatbot_message_feedback)
 -- ============================================================================
 --
+-- NUMBERING: 044, not 043. On main, `ls database/ml/` ends at 042, so 043 reads as free -- but
+-- 043 was already written by the refusal-reason-codes lane (043_composer_refusal_reason_codes.sql
+-- + rollback_043.sql, commit 2e06d19f7 on claude/2021-2050-2020-refusal-reason-codes), which is
+-- 20+ commits ahead of main with no open PR. That branch's earlier PR #2083 DID merge, without
+-- carrying its 043 files, which is why main looks clear. The live ledger agrees that neither is
+-- applied yet: public.schema_migrations holds ml/040, ml/041 and ml/042 only. 043 stays with the
+-- lane that wrote it first.
+--
 -- The nightly linker (src/tasks/composition_feedback_tasks.py) recomputed the rating-to-
 -- composition assignment on every run instead of recording it. The only durable trace was on
 -- the composition side: success and feedback_at. Attribution that is reconstructed can change.
