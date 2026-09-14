@@ -1120,3 +1120,39 @@ async def test_a_mint_without_a_structure_stores_an_unknown_adjustment_half():
 
     assert repo.created[0]["adjustment_set_hash"] is None
     assert repo.append_kwargs[0]["expected_current_adjustment_hash"] is None
+
+
+# --------------------------------------------------------------------------
+# UNKNOWN is not an empty timeline
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_unreadable_timeline_is_still_NOT_treated_as_an_empty_one():
+    """The other half of the distinction, so the fix cannot be over-applied.
+
+    UNKNOWN keeps its conservatism: there may be a version row this run cannot
+    see, so an append on no row-side evidence would write the duplicate the read
+    exists to prevent. Only NOT_RECORDED -- a POSITIVE empty timeline -- appends
+    without evidence.
+    """
+
+    class _BlindRepo(_EstimandRepo):
+        async def get_latest_version(self, review_id: str):
+            raise RuntimeError("connection refused")
+
+    adjustment = compute_adjustment_set_hash([["W"]])
+    repo = _BlindRepo(history=[_pending("r1", "h1", adjustment_set_hash=adjustment)])
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+    )
+
+    assert repo.appended == [] and repo.advanced == []

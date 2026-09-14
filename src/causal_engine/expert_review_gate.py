@@ -30,17 +30,22 @@ class _VersionMatch(Enum):
     Four states, not a boolean, because the pending branch and the mint path
     need different answers to two of them.
 
-    "The review has no timeline yet" (NOT_RECORDED): a mint records version 1
-    there, while an unchanged hash with nothing recorded appends nothing (there
-    is no recorded pair to contradict it).
+    "The review has no timeline yet" (NOT_RECORDED) and "the timeline could not
+    be read" (UNKNOWN) read alike -- "nothing recorded contradicts this run" --
+    but they are opposites: the first KNOWS the timeline is empty, the second
+    knows nothing at all. The PENDING branch currently treats them the same,
+    appending on either only when the review ROW itself contradicts the run;
+    ``check_approval`` documents the gap that costs and why closing it is a
+    product decision. The MINT path already separates them: it appends on
+    UNKNOWN, because nothing else would ever carry the change there and a skip
+    would lose version 1 permanently.
 
-    "The timeline could not be read" (UNKNOWN) is deliberately NOT folded into
-    either. Skipping is safe on the pending branch, because this answer decides
-    only whether to APPEND: whether to ADVANCE is a separate decision read from
-    the review ROW, which the same outage does not hide (codex round 2). On the
-    mint path nothing would ever carry the change, so a skip there loses version
-    1 permanently. Keeping the states apart lets each call site answer for itself
-    without either of them testing for an outage.
+    On the pending branch this answer decides only whether to APPEND. Whether to
+    ADVANCE is a separate decision read from the review ROW, which no timeline
+    outage hides (codex round 2), so the review still moves onto this run's
+    structure even when the append is deferred. Keeping the states apart lets
+    each call site answer for itself without either of them testing for an
+    outage.
     """
 
     SAME = "same"
@@ -481,36 +486,60 @@ class ExpertReviewGate:
             # unchanged, and skipped: the strand was permanent, with no outage
             # required.
             #
-            # Only a POSITIVE "the pair differs" appends here, so an unchanged
-            # pair appends nothing when there is no timeline at all
-            # (NOT_RECORDED: no recorded pair to contradict it) and nothing when
-            # the timeline could not be read (UNKNOWN). The second is safe
-            # precisely because the ADVANCE decision is independent and reads the
-            # review row, which no outage hides: a real change still moves the
-            # row on the next run. The mint path has no such signal and answers
-            # UNKNOWN the other way.
+            # The append rule, one state at a time:
+            #
+            #   DIFFERENT                append. The timeline positively holds
+            #                            another pair.
+            #   SAME                     do NOT append. The timeline already
+            #                            holds this pair, so a second row would
+            #                            duplicate it -- this is the strand case,
+            #                            and the repair is the advance below,
+            #                            alone.
+            #   NOT_RECORDED / UNKNOWN   append only on the ROW's own positive
+            #                            evidence (``row_asserts_change``).
+            #                            Neither state can confirm the timeline
+            #                            lacks this pair, so a blind append risks
+            #                            the duplicate the version read exists to
+            #                            prevent -- but a row that positively
+            #                            contradicts this run is evidence no
+            #                            outage can hide.
+            #
+            # KNOWN GAP, deliberately left pending a decision rather than fixed
+            # here: NOT_RECORDED is not the same fact as UNKNOWN. It KNOWS the
+            # timeline is empty, so an append there could not duplicate anything.
+            # Treating it like UNKNOWN loses version 1 for a review whose row
+            # merely LEARNS its adjustment half (hash equal, row half NULL, run
+            # half computed): ``row_asserts_change`` is False, so nothing is
+            # appended, the advance then makes the row equal the run's pair, and
+            # no later run ever sees a difference to trigger the append again.
+            # Splitting NOT_RECORDED out would fix it, but two pins from this
+            # feature's own commit (78a44e0bc) assert the opposite --
+            # ``test_same_hash_appends_nothing`` and
+            # ``test_a_pending_review_of_another_hash_does_not_void_this_hashs_approval``
+            # both run an UNCHANGED pair against an empty timeline and require
+            # that nothing is appended -- so flipping it is a product decision,
+            # not a refactor.
+            #
+            # Residual on the other side: an outage stacked on a lost race
+            # (UNKNOWN where the timeline in fact already holds this pair, and
+            # the row asserts a change) appends a duplicate row instead of
+            # repairing advance-only. It needs both faults at once, and a
+            # duplicate overstates how often the DAG changed without
+            # misreporting what it is -- the same trade ``append_version``
+            # documents for two concurrent appends.
             row_pair_differs = (current_hash, current_adjustment) != (
                 dag_hash,
                 adjustment_set_hash,
             )
-            # What the ROW can POSITIVELY assert has changed -- the fallback
-            # signal when the timeline cannot vouch for itself. A NULL adjustment
-            # half asserts nothing: it means UNKNOWN, not "no adjustment set", so
+            # What the ROW can POSITIVELY assert has changed -- the only evidence
+            # UNKNOWN has to go on. A NULL adjustment half asserts NOTHING: it
+            # means the row's adjustment set is unknown, not that it has none, so
             # it can neither confirm nor deny that the timeline already holds
-            # this run's pair, and appending on it would write the duplicate row
-            # the version read exists to prevent. The hash half, and a KNOWN
-            # adjustment half that differs, are both real evidence of a change.
+            # this run's pair. The hash half, and a KNOWN adjustment half that
+            # differs, are both real evidence of a change.
             row_asserts_change = current_hash != dag_hash or (
                 current_adjustment is not None and current_adjustment != adjustment_set_hash
             )
-            # A POSITIVE "the timeline holds another pair" appends. So does the
-            # row's own evidence when the timeline cannot vouch for itself --
-            # NOT_RECORDED (no timeline at all) and UNKNOWN (unreadable) both
-            # mean "nothing recorded contradicts this", and a structure the run
-            # actually produced must still reach the timeline. Only a POSITIVE
-            # SAME suppresses the append, which is exactly the strand case: the
-            # timeline already holds this pair and the review does not, so the
-            # repair is the advance below and appending would duplicate a row.
             append_needed = bool(review_id) and (
                 match is _VersionMatch.DIFFERENT
                 or (match is not _VersionMatch.SAME and row_asserts_change)
@@ -768,11 +797,12 @@ class ExpertReviewGate:
         would not leave it so), and each call site decides. The right decision is
         not the same on both.
 
-        On the PENDING branch, skipping is safe and SELF-REPAIRING -- but only
+        On the PENDING branch, deferring the append under UNKNOWN is safe
         because the ADVANCE decision beside it is independent: it compares the
-        review row's own pair, which no timeline outage hides, so a real change
-        still moves the row on this very run. Nothing is lost, and the duplicate
-        row this check exists to prevent is not written.
+        review row's own pair, which no timeline outage hides, so the review
+        still moves onto this run's structure NOW. Only the timeline row waits,
+        and a row that positively contradicts this run appends even under
+        UNKNOWN.
 
         On the MINT path there is no such signal. ``create_review`` has just
         stored this very hash, so every later run of the same structure computes
@@ -793,8 +823,10 @@ class ExpertReviewGate:
             logger.warning(
                 f"Could not read the latest structure version of review {review_id} "
                 f"({read_err}); whether this run's structure is already recorded is "
-                "UNKNOWN -- a mint records it anyway, an open review keeps the version "
-                "it carries and the next run re-reads"
+                "UNKNOWN -- a mint records it anyway; on an open review only the "
+                "APPEND is deferred (unless the review row itself contradicts this "
+                "run, which is evidence the outage cannot hide), while the advance "
+                "onto this structure still happens now"
             )
             return _VersionMatch.UNKNOWN
         if not latest:
