@@ -144,9 +144,7 @@ Changelog:
              fields from RunAgentInput.state when passing to graph nodes.
              Fix: execute() sets a session contextvar that chat_node() reads first,
              with state and config.thread_id as fallbacks. (#2064: on the AG-UI
-             route the var never reaches graph nodes, because with_sse_keepalive
-             pulls each frame in a fresh task with a copied context. There, graph
-             state is the channel that works.)
+             route keepalive copies the context, so graph state is the channel.)
     1.21.0 - Added message persistence to Supabase chatbot_messages table.
              All user messages, assistant responses, tool calls, and synthesized responses
              are now persisted using ChatbotMessageRepository. This enables:
@@ -341,11 +339,8 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
-from src.api.routes.chatbot_tools import (
-    E2I_CHATBOT_TOOLS,
-    SessionBoundToolNode,
-    set_raw_user_query,
-)
+from src.api.routes.chat_session_binding import SessionBoundToolNode
+from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
 from src.api.routes.synthesis_guard import (
     build_superlative_correction,
@@ -368,12 +363,10 @@ from src.utils.tool_evidence import evidence_tool_count
 logger = logging.getLogger(__name__)
 
 # ``_session_id_context`` (imported above) carries session_id only where no
-# keepalive wrapper sits between it and the graph, e.g. the chat bridge. On the
-# AG-UI route graph STATE is the reliable channel: with_sse_keepalive pulls each
-# frame in a fresh task with a copied context, so execute()'s binding never
-# reaches graph nodes (#2064). The variable is declared in chatbot_tools so the chat tools read the
-# same binding (tools only ever see the model's args); this name stays for its
-# existing readers here and in chat_bridge.
+# keepalive wrapper sits between it and the graph, e.g. the chat bridge; on the
+# AG-UI route keepalive copies the context per frame, so graph STATE is the real
+# channel there (#2064). The variable is declared in chatbot_tools so the chat
+# tools read the same binding; the name stays for readers here and chat_bridge.
 
 # Per-run discriminator for frontend_message_id stamping: the session key is
 # the conversation threadId, so overlapping streams in the same conversation
@@ -1205,8 +1198,7 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         state_with_session["run_id"] = run_id
 
         # Also bind the context var (v1.21.1). It does NOT reach graph nodes here
-        # (#2064: with_sse_keepalive pulls each frame in a fresh task with a copied
-        # context), so state_with_session["session_id"] above is the reliable channel.
+        # (#2064: keepalive copies the context), so state above is the real channel.
         _session_id_context.set(persistent_session_id)
         _run_id_context.set(run_id)
         # Attribute this run's LLM usage to the chat user/session (admin
@@ -3566,9 +3558,8 @@ def create_e2i_chat_agent(
 
         messages = state.get("messages", [])
 
-        # Get session_id with priority: context var > state > config. The var is
-        # set only on paths with no keepalive wrapper (e.g. the chat bridge); on the
-        # AG-UI route it is empty here and state is the channel that works (#2064).
+        # Get session_id with priority: context var > state > config. The var is set
+        # only where no keepalive wrapper intervenes; here it is empty (#2064).
         session_id = _session_id_context.get()
         session_id_source = "context_var" if session_id else None
 
@@ -4267,8 +4258,6 @@ def create_e2i_chat_agent(
     # in test_copilotkit_classifier_stream_leak_1636.py fails loudly if the two
     # drift apart.
     workflow.add_node("chat", chat_node)
-    # #2064: execute()'s session binding does not reach graph nodes (see
-    # SessionBoundToolNode), so the tools take the session from graph state.
     workflow.add_node(_TOOL_NODE_NAME, SessionBoundToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("synthesize", synthesize_node)
 

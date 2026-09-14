@@ -33,6 +33,7 @@ from langgraph.graph import END, StateGraph
 from src.agents.factory import build_agent_roster_block
 from src.agents.multi_faceted import is_multi_faceted_facet_score
 from src.api.routes.chat_bridge import build_bridge_preamble, run_conversational_bridge
+from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_dspy import (
     CHATBOT_COGNITIVE_RAG_ENABLED,
     CHATBOT_DSPY_SYNTHESIS_ENABLED,
@@ -43,7 +44,7 @@ from src.api.routes.chatbot_dspy import (
     synthesize_response_dspy,
 )
 from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
-from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, SessionBoundToolNode
+from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.routes.chatbot_tracer import (
     ChatbotTraceContext,
     get_chatbot_tracer,

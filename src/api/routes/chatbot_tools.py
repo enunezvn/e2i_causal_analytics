@@ -23,9 +23,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.tool_composer import compose_query
@@ -89,9 +87,9 @@ def reset_raw_user_query(token: "contextvars.Token[Optional[str]]") -> None:
 # tools with the model's args only, and the model cannot know the frontend thread
 # id, so orchestrator_tool / tool_composer_tool used to invent ``chatbot-<ts>`` /
 # ``composer-<ts>`` ids that look like sessions but belong to no conversation.
-# Both chat graphs' tools nodes (``SessionBoundToolNode`` below) bind the real id
-# from graph state before their tools run; copilotkit re-exports the var as
-# ``_session_id_context`` for its own readers and the chat bridge. Declared here
+# Both graphs' tools node (``SessionBoundToolNode`` in chat_session_binding) binds
+# the real id from graph state before the tools run; copilotkit re-exports the var
+# as ``_session_id_context`` for its own readers and the chat bridge. Declared here
 # rather than in copilotkit.py because copilotkit already imports this module: no
 # import cycle, and chatbot_graph does not pull in the CopilotKit SDK to reach it.
 chat_session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
@@ -118,44 +116,6 @@ def _resolve_session_id(tool_arg: Optional[str]) -> Optional[str]:
     instead of an id that looks like a real conversation.
     """
     return chat_session_id_context.get() or tool_arg or None
-
-
-def _bind_state_session(state: Any) -> "Optional[contextvars.Token[Optional[str]]]":
-    # Only a plain graph-state dict is bound; ToolCallWithContext / Send and
-    # list-of-ToolCall inputs pass through unbound (no chat graph routes tools via Send).
-    session_id = state.get("session_id") if isinstance(state, dict) else None
-    return set_chat_session_id(session_id) if session_id else None
-
-
-class SessionBoundToolNode(ToolNode):
-    """A ToolNode that runs its tools with the turn's session from graph state (#2064).
-
-    Both chat graphs use it. A binding made outside the graph does not reach the
-    tools on the browser route: AG-UI's ``execute()`` binds the session while its
-    first frame is pulled, and the handler's ``with_sse_keepalive`` pulls every
-    frame in a fresh task (a copy of the handler's context), so the graph runs
-    without it. ``state["session_id"]`` is bound for the duration of the tool
-    calls and reset afterwards. When state has no session, nothing is bound here
-    and the caller's binding (if any) applies.
-    """
-
-    async def ainvoke(
-        self, input: Any, config: Optional[RunnableConfig] = None, **kwargs: Any
-    ) -> Any:
-        token = _bind_state_session(input)
-        try:
-            return await super().ainvoke(input, config, **kwargs)
-        finally:
-            if token is not None:
-                reset_chat_session_id(token)
-
-    def invoke(self, input: Any, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
-        token = _bind_state_session(input)
-        try:
-            return super().invoke(input, config, **kwargs)
-        finally:
-            if token is not None:
-                reset_chat_session_id(token)
 
 
 # Try to import Opik for tracing
