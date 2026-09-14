@@ -251,7 +251,8 @@ class CohortConstructorAgent:
             environment: Execution environment (development/staging/production)
             executed_by: User or system identifier
             session_id: Optional session identifier for memory correlation
-                (#883 PR B); when omitted the memory hook generates a UUID.
+                (#883 PR B). When omitted the memory hook records an honest NULL
+                rather than generating a UUID (#2076).
 
         Returns:
             Tuple of (eligible_df, execution_result)
