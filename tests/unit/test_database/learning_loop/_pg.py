@@ -47,6 +47,8 @@ LANE_MIGRATIONS = (
     "ml/039_tool_category_cohort.sql",
     "ml/040_tool_registry_startup_sync.sql",
     "ml/041_composer_learning_loop_recording.sql",
+    # ml/042 is NOT here: it alters twin_simulations, which no learning-loop fixture touches.
+    "ml/044_composer_episodes_feedback_id.sql",
 )
 
 # The runner's un-wrap detector (scripts/run_migrations.sh), applied per line after stripping

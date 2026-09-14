@@ -33,7 +33,7 @@ pytestmark = [
     pytest.mark.timeout(300),
 ]
 
-UPTO = "ml/041_composer_learning_loop_recording.sql"
+UPTO = "ml/044_composer_episodes_feedback_id.sql"
 SESSION = "11111111-1111-1111-1111-111111111111~sess-1"
 
 

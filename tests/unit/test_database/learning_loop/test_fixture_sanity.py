@@ -1,6 +1,7 @@
 """The throwaway database is a faithful copy of prod for everything the learning loop touches.
 
-Every later real-DB test in this package (migrations ml/039–041, the recording RPCs, the
+Every later real-DB test in this package (migrations ml/039–041 and ml/044, the recording
+RPCs, the
 registry sync client) runs against a clone of ``base_db``, so this module proves the copy
 before anything depends on it:
 
