@@ -1,6 +1,6 @@
 """Column display labels: ONE leaf SSOT for every surface (2026-09-05, #1895).
 
-The curated labels used to live only in src/api/routes/causal.py, so the
+The curated labels used to live only in src/api/routes/causal.py (now the causal package), so the
 backend insight builders (src/insights/*.py) could not use them without an
 insights -> api.routes import inversion, and rendered raw column names into
 user-facing prose ("For treatment_arm -> persistent_180d ...") under headers
@@ -34,7 +34,7 @@ def test_leaf_module_imports_without_the_api_package():
 def test_route_module_re_exports_the_same_objects():
     # Six existing test modules import the SSOT through the route; the move
     # must not fork the dictionaries.
-    from src.api.routes.causal import _COLUMN_DEFINITIONS, _COLUMN_LABELS, _column_label
+    from src.api.routes.causal.datasets import _COLUMN_DEFINITIONS, _COLUMN_LABELS, _column_label
 
     assert _COLUMN_LABELS is column_labels.COLUMN_LABELS
     assert _COLUMN_DEFINITIONS is column_labels.COLUMN_DEFINITIONS

@@ -1,9 +1,10 @@
-"""ml/039–041 through the real ``scripts/run_migrations.sh``, failure first, and the rollbacks.
+""":data:`_pg.LANE_MIGRATIONS` through the real ``scripts/run_migrations.sh``, failure first,
+and the rollbacks.
 
 Spec §9: on a fresh prod-faithful copy the runner is first pointed at a repository copy whose
-041 fails, which must leave 039 and 040 applied and recorded and nothing of 041 (body and
-ledger row share one transaction); the real files then apply exactly 041, and a further run
-has nothing pending. Direct re-application is a no-op for data. The rollbacks return every
+041 fails, which must leave everything before it applied and recorded and nothing of 041 (body
+and ledger row share one transaction); the real files then apply exactly what was left pending
+— 041 and 044 — and a further run has nothing pending. Direct re-application is a no-op for data. The rollbacks return every
 lane object to its pre-migration definition (compared with the base copy of prod, object by
 object), refuse when rows would violate the restored constraints, and are idempotent.
 
@@ -37,7 +38,36 @@ pytestmark = [
 ]
 
 ML = _pg.REPO_ROOT / "database" / "ml"
-LEDGER = "select filename from public.schema_migrations where filename like 'ml/04%' or filename like 'ml/039%' order by 1"
+
+# Every expectation below is DERIVED from _pg.LANE_MIGRATIONS, never spelled out: the tuple grows
+# (ml/044 for #2035) and a hard-coded count, pending list or ledger literal then asserts the
+# previous lane.
+#
+# The ledger query is scoped to the lane's own keys for the same reason. It used to match
+# "ml/04%", which also caught ml/042_twin_simulations_estimate_scope.sql — a NON-lane migration
+# that build_base writes into the rebuilt ledger, so the opening `== []` below had already become
+# false when #2053 landed. That went unseen because this whole module self-skips wherever prod
+# already carries the lane (see conftest's base_db).
+LEDGER = _pg.LANE_MIGRATIONS_IN_LEDGER
+
+#: The file the failure-first case corrupts, and what that implies for the two runner passes.
+BROKEN_KEY = "ml/041_composer_learning_loop_recording.sql"
+_BREAK_AT = _pg.LANE_MIGRATIONS.index(BROKEN_KEY)
+#: Applied and recorded before the failure; the broken file and everything after it is not.
+APPLIED_BEFORE_FAILURE = list(_pg.LANE_MIGRATIONS[:_BREAK_AT])
+PENDING_AFTER_FAILURE = list(_pg.LANE_MIGRATIONS[_BREAK_AT:])
+
+#: Rollback files, newest first — the order they must be applied in. ml/039 has none (an enum
+#: value cannot be removed), so it is filtered out rather than listed as an exception.
+ROLLBACKS = tuple(
+    name
+    for name in (f"rollback_{key.split('/')[1][:3]}.sql" for key in reversed(_pg.LANE_MIGRATIONS))
+    if (ML / name).exists()
+)
+#: What the ledger still claims once every available rollback has run.
+LEDGER_AFTER_ROLLBACKS = [
+    key for key in _pg.LANE_MIGRATIONS if f"rollback_{key.split('/')[1][:3]}.sql" not in ROLLBACKS
+]
 NEW_FUNCTIONS = (
     "select coalesce(string_agg(p.oid::regprocedure::text, ',' order by 1), 'none') from pg_proc p "
     "where p.pronamespace = 'public'::regnamespace "
@@ -71,7 +101,7 @@ def _repo_copy(tmp_path, *, break_041: bool):
     shutil.copytree(_pg.REPO_ROOT / "scripts", repo / "scripts")
     shutil.copytree(_pg.REPO_ROOT / "database", repo / "database")
     if break_041:
-        target = repo / "database" / "ml" / "041_composer_learning_loop_recording.sql"
+        target = repo / "database" / BROKEN_KEY
         target.write_text(target.read_text() + "\nSELECT 1/0;\n")
     return repo
 
@@ -84,12 +114,9 @@ def test_runner_failure_first_then_real_files_then_nothing_pending(clone_db, tmp
     broken = _repo_copy(tmp_path, break_041=True)
     failed = _pg.run_runner(db, broken, shims)
     assert failed.returncode != 0, _out(failed)
-    assert "Applying ml/039_tool_category_cohort.sql ... " in _out(failed)
-    assert "Migration ml/041_composer_learning_loop_recording.sql failed" in _out(failed)
-    assert db.rows(LEDGER) == [
-        "ml/039_tool_category_cohort.sql",
-        "ml/040_tool_registry_startup_sync.sql",
-    ]
+    assert f"Applying {_pg.LANE_MIGRATIONS[0]} ... " in _out(failed)
+    assert f"Migration {BROKEN_KEY} failed" in _out(failed)
+    assert db.rows(LEDGER) == APPLIED_BEFORE_FAILURE
     # 040 is in; nothing of 041 is (its body and ledger row share one transaction).
     assert db.rows(
         "select to_regprocedure('sync_tool_registry(jsonb,jsonb,integer)') is not null"
@@ -109,18 +136,14 @@ def test_runner_failure_first_then_real_files_then_nothing_pending(clone_db, tmp
     pending = _pg.run_runner(db, _pg.REPO_ROOT, shims, "--dry-run")
     assert pending.returncode == 0, _out(pending)
     assert [line for line in _out(pending).splitlines() if "[PENDING]" in line] == [
-        "[PENDING] ml/041_composer_learning_loop_recording.sql"
+        f"[PENDING] {key}" for key in PENDING_AFTER_FAILURE
     ]
 
     real = _pg.run_runner(db, _pg.REPO_ROOT, shims)
     assert real.returncode == 0, _out(real)
-    assert _out(real).count("Applying ") == 1
-    assert "Applied 1 migration(s) successfully." in _out(real)
-    assert db.rows(LEDGER) == [
-        "ml/039_tool_category_cohort.sql",
-        "ml/040_tool_registry_startup_sync.sql",
-        "ml/041_composer_learning_loop_recording.sql",
-    ]
+    assert _out(real).count("Applying ") == len(PENDING_AFTER_FAILURE)
+    assert f"Applied {len(PENDING_AFTER_FAILURE)} migration(s) successfully." in _out(real)
+    assert db.rows(LEDGER) == list(_pg.LANE_MIGRATIONS)
 
     again = _pg.run_runner(db, _pg.REPO_ROOT, shims)
     assert again.returncode == 0, _out(again)
@@ -138,7 +161,11 @@ SNAPSHOT = (
 
 def test_direct_reapply_is_a_no_op_for_data(clone_db):
     db = clone_db("reapply_all")
-    _pg.migrate(db, "ml/041_composer_learning_loop_recording.sql")
+    # Migrated through the WHOLE lane before the snapshot. Seeding at an intermediate migration
+    # made the comparison fail for the wrong reason: a later ADD COLUMN (ml/044's feedback_id)
+    # shows up in row_to_json as a new null key, which is schema drift between the two
+    # snapshots, not the data change this test is looking for.
+    _pg.migrate(db, _pg.LANE_MIGRATIONS[-1])
     with db.connect() as conn:
         tools = conn.execute(
             "select jsonb_agg(jsonb_build_object('name', name, 'description', description, "
@@ -223,7 +250,9 @@ def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, clone_d
     shims = tmp_path / "shims"
     # Migrated the way a deploy does, so the ledger rows the rollbacks must remove exist.
     forward = _pg.run_runner(db, _pg.REPO_ROOT, shims)
-    assert forward.returncode == 0 and "Applied 3 migration(s)" in _out(forward), _out(forward)
+    assert forward.returncode == 0 and (
+        f"Applied {len(_pg.LANE_MIGRATIONS)} migration(s)" in _out(forward)
+    ), _out(forward)
     expected = _aspects(base_db)
     for aspect in ROLLBACK_ASPECTS:
         if not EQUIVALENCE_QUERIES[aspect][1]:
@@ -237,7 +266,7 @@ def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, clone_d
     stamps_migrated = db.rows(stamps)
 
     for attempt in ("first", "second"):
-        for name in ("rollback_041.sql", "rollback_040.sql"):
+        for name in ROLLBACKS:
             proc = _pg.apply_rollback(db, name)
             assert proc.returncode == 0, (attempt, name, proc.stderr.decode())
         got = _aspects(db)
@@ -255,12 +284,13 @@ def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, clone_d
             else line
             for line in _enums(base_db)
         ]
-        assert db.rows(LEDGER) == ["ml/039_tool_category_cohort.sql"], attempt
+        assert db.rows(LEDGER) == LEDGER_AFTER_ROLLBACKS, attempt
 
-    # The ledger no longer claims 040/041: re-deploying the learning-loop code re-applies them.
+    # The ledger no longer claims the rolled-back migrations: re-deploying the learning-loop code
+    # re-applies exactly those.
     replay = _pg.run_runner(db, _pg.REPO_ROOT, shims)
     assert replay.returncode == 0, _out(replay)
-    assert "Applied 2 migration(s) successfully." in _out(replay)
+    assert f"Applied {len(ROLLBACKS)} migration(s) successfully." in _out(replay)
     assert db.rows(
         "select (to_regprocedure('sync_tool_registry(jsonb,jsonb,integer)') is not null)::text"
         " || ',' || (to_regprocedure('composer_record_steps(jsonb,jsonb)') is not null)::text"

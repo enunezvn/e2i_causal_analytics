@@ -232,7 +232,7 @@ class TestSubclassWorkaroundsRemoved:
         # first-class PipelineInput.estimation_data field).
         import inspect
 
-        import src.api.routes.causal as causal_routes
+        import src.api.routes.causal.pipelines as causal_routes
 
         for sym in ("_SurfaceCSequentialPipeline", "_SurfaceCParallelPipeline"):
             cls = getattr(causal_routes, sym, None)

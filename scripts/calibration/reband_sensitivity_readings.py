@@ -82,7 +82,7 @@ DATASET_BY_PAIR: Dict[Tuple[str, str], str] = {
 }
 
 # Physical table + brand column behind each dataset, for the population COUNT that
-# decides whether a "full table" pull was complete (mirrors routes/causal.py
+# decides whether a "full table" pull was complete (mirrors routes/causal/datasets.py
 # ``_CAUSAL_PHYSICAL_TABLE`` / ``_CAUSAL_BRAND_COLUMN`` and the hcp JOIN loader).
 POPULATION_TABLE: Dict[str, Tuple[str, str]] = {
     "patient_journeys": ("patient_journeys", "brand"),
@@ -127,11 +127,11 @@ def _details(raw: Any) -> Dict[str, Any]:
 
 
 async def _frame(dataset: str, treatment: str, outcome: str, brand: Optional[str], limit: int):
-    from src.api.routes.causal import (
+    from src.api.routes.causal.datasets import (
         _CAUSAL_DATASET_SPECS,
         _brand_scoped_covariates,
-        _load_agent_estimation_frame,
     )
+    from src.api.routes.causal.loaders import _load_agent_estimation_frame
 
     spec = _CAUSAL_DATASET_SPECS[dataset]
     # The submit route brand-scopes the curated default for EVERY brand value —
@@ -153,9 +153,9 @@ async def _frame(dataset: str, treatment: str, outcome: str, brand: Optional[str
     return df, covs
 
 
-FULL_TABLE_LIMIT = (
-    20000  # the route's own ceiling for a whole-table read (routes/causal.py ``limit(20000)``)
-)
+# The route's own ceiling for a whole-table read
+# (routes/causal/datasets.py ``limit(20000)``).
+FULL_TABLE_LIMIT = 20000
 
 
 async def _cached_frame(
@@ -354,8 +354,8 @@ async def _route_replica_pull(client, brand: str, n: int) -> Dict[str, Any]:
     the preview's pull. Read-only. Records how many merged rows were dropped and why."""
     import pandas as pd
 
-    from src.api.routes.causal import (
-        _derive_is_accepted,
+    from src.api.routes.causal.datasets import _derive_is_accepted
+    from src.api.routes.causal.loaders import (
         _load_patient_baseline_rows,
         _load_trigger_question_rows,
     )

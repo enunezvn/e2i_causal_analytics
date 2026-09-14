@@ -101,12 +101,36 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
             approval_status,
             checklist,
             comments: comments ? { note: comments } : undefined,
+            // The version THIS form displayed (#1991 debt 3). The backend
+            // resolves the review only while it still carries this hash, so a
+            // structure a concurrent run appended (the version timeline) cannot
+            // be approved by a form opened on the previous one — it answers 409
+            // and the banner below tells the reviewer to reload. The column is
+            // nullable; an unhashed row names no version and is refused (422)
+            // rather than resolved blind (no such row exists live).
+            dag_version_hash: review.dag_version_hash ?? '',
+            // The other half of that version (#1991 debt 3, codex round 2). The
+            // backend's DAG hash EXCLUDES adjustment sets, so a covariate-only
+            // advance leaves the hash equal and the hash alone would have let
+            // this form approve covariates it never displayed. `?? null` is
+            // load-bearing: the key must be PRESENT with a JSON null, because a
+            // missing key is a 422 and an explicit null is the review's own
+            // "no known adjustment set".
+            adjustment_set_hash: review.adjustment_set_hash ?? null,
           },
         },
         { onSuccess: onClose }
       );
     },
-    [resolve, review.review_id, checklist, comments, onClose]
+    [
+      resolve,
+      review.review_id,
+      review.dag_version_hash,
+      review.adjustment_set_hash,
+      checklist,
+      comments,
+      onClose,
+    ]
   );
 
   return (

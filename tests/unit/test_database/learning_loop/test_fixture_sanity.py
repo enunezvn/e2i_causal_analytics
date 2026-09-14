@@ -1,8 +1,8 @@
 """The throwaway database is a faithful copy of prod for everything the learning loop touches.
 
-Every later real-DB test in this package (migrations ml/039–041, the recording RPCs, the
-registry sync client) runs against a clone of ``base_db``, so this module proves the copy
-before anything depends on it:
+Every later real-DB test in this package (the lane migrations in ``_pg.LANE_MIGRATIONS``, the
+recording RPCs, the registry sync client) runs against a clone of ``base_db``, so this module
+proves the copy before anything depends on it:
 
 * it lives in a throwaway, memory-capped container of prod's own image, bound to 127.0.0.1, and
   the live ``supabase-db`` is only ever read (spec §9, dispatcher constraint 2026-09-11);

@@ -253,7 +253,7 @@ def test_every_curated_treatment_is_a_treatment_the_platform_actually_offers():
     patient-journeys-only check would flag it as invented.
     """
     # Function-local: importing the causal router pulls in the whole API surface.
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
 
     offered: dict[str, list[str]] = {}
     for dataset, spec in _CAUSAL_DATASET_SPECS.items():

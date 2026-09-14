@@ -7,7 +7,7 @@ THE RULING (owner decision, 2026-07-30): STRONG semantics + dual evidence.
 content-addressed synthetic refutation evidence seeded behind them; real paths
 enter as 'pending' and only the RefutationNode promotes them (separate lane).
 
-HARD INVARIANT: ``src/api/routes/causal.py`` (get_causal_value_chains, the
+HARD INVARIANT: ``src/api/routes/causal/activity.py`` (get_causal_value_chains, the
 Home dashboard) filters ``.eq("validation_status", "validated")``. There must
 NEVER be a moment — mid-migration or after — where validated rows lack
 evidence or the dashboard's row count blinks. These text-level assertions lock

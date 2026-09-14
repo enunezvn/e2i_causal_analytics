@@ -388,7 +388,7 @@ class HeterogeneousOptimizerMemoryHooks:
 
     async def store_cate_analysis(
         self,
-        session_id: str,
+        session_id: Optional[str],
         analysis_result: Dict[str, Any],
         brand: Optional[str] = None,
         region: Optional[str] = None,
@@ -677,7 +677,7 @@ async def contribute_to_memory(
         result: HeterogeneousOptimizerOutput dictionary
         state: HeterogeneousOptimizerState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
         brand: Optional brand context
         region: Optional region context
 
@@ -687,13 +687,8 @@ async def contribute_to_memory(
         - semantic_stored: Number of segment profiles stored
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_heterogeneous_optimizer_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
@@ -708,9 +703,12 @@ async def contribute_to_memory(
         return counts
 
     # 1. Cache in working memory
-    cached = await memory_hooks.cache_cate_analysis(session_id, result)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_cate_analysis(session_id, result)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_cate_analysis(

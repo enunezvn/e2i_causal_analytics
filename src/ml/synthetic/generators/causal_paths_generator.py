@@ -75,7 +75,7 @@ _TRIGGER_EDGES: Tuple[Tuple[str, str, List[str]], ...] = (
 # confounded effects for five commercial levers on the patient cohort
 # (copay_support / psp_enrolled / rep_detailing_high / sample_dropped /
 # trigger_accepted — the treatment_arm.ARM_REGISTRY SSOT), and
-# ``_CAUSAL_DATASET_SPECS['patient_journeys']`` (src/api/routes/causal.py)
+# ``_CAUSAL_DATASET_SPECS['patient_journeys']`` (src/api/routes/causal/datasets.py)
 # ALREADY allowlists every arm as a treatment AND its backdoor confounders. But
 # the discovery leaderboard enumerates ONLY (treatment, outcome) pairs present in
 # ``causal_paths`` (``_discover_candidate_questions``), and until now only

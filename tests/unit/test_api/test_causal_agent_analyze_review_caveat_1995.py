@@ -77,7 +77,7 @@ def _block_state(**overrides):
 
 
 def _response(state):
-    from src.api.routes.causal import _agent_state_to_response
+    from src.api.routes.causal.agent import _agent_state_to_response
 
     return _agent_state_to_response(
         analysis_id="a-1995",

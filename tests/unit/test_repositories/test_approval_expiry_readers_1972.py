@@ -670,17 +670,38 @@ class TestSummary:
     async def test_permanent_counts_as_approved_only(self):
         repo, _ = _repo([PERMANENT])
         got = await repo.get_review_summary()
-        assert got == {"pending": 0, "approved": 1, "rejected": 0, "expired": 0, "expiring_soon": 0}
+        assert got == {
+            "pending": 0,
+            "approved": 1,
+            "rejected": 0,
+            "superseded": 0,
+            "expired": 0,
+            "expiring_soon": 0,
+        }
 
     async def test_expired_counts_as_expired_only(self):
         repo, _ = _repo([EXPIRED])
         got = await repo.get_review_summary()
-        assert got == {"pending": 0, "approved": 0, "rejected": 0, "expired": 1, "expiring_soon": 0}
+        assert got == {
+            "pending": 0,
+            "approved": 0,
+            "rejected": 0,
+            "superseded": 0,
+            "expired": 1,
+            "expiring_soon": 0,
+        }
 
     async def test_expiring_soon_is_a_subset_of_approved(self):
         repo, _ = _repo([EXPIRING_SOON, FAR_FUTURE, PENDING, REJECTED])
         got = await repo.get_review_summary()
-        assert got == {"pending": 1, "approved": 2, "rejected": 1, "expired": 0, "expiring_soon": 1}
+        assert got == {
+            "pending": 1,
+            "approved": 2,
+            "rejected": 1,
+            "superseded": 0,
+            "expired": 0,
+            "expiring_soon": 1,
+        }
 
     async def test_summary_agrees_with_the_pure_predicate(self):
         rows = [PERMANENT, EXPIRED, EXPIRES_TODAY, EXPIRING_SOON, FAR_FUTURE, PENDING, REJECTED]
@@ -776,6 +797,16 @@ WRITERS = frozenset(
         "update_agent_assessment",
         "update_dag_structure",
         "renew_review",
+        "append_version",
+        # Split out of append_version in codex round 2, and a WRITER for the
+        # same reason it is: it performs the review UPDATE and returns a bool
+        # whose False is a fail-closed non-success (lost compare-and-set,
+        # resolved review, or persistence error), never a plausible-wrong read.
+        # The caller re-reads; nothing downstream mistakes it for data.
+        "advance_review",
+        # The other half of the same split: the timeline INSERT alone. Same
+        # contract -- a False is a failed write, logged, never data.
+        "record_version",
     }
 )
 
@@ -931,6 +962,7 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
             "pending": 0,
             "approved": 0,
             "rejected": 0,
+            "superseded": 0,
             "expired": 0,
             "expiring_soon": 0,
         }
@@ -941,6 +973,12 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
             ExpertReviewRepository.get_pending_reviews,
             ExpertReviewRepository.get_expiring_reviews,
             ExpertReviewRepository.get_review_summary,
+            # get_reviews_for_dag raises too and was never listed here; the
+            # estimand-keyed readers (#1991 debt 3) join it.
+            ExpertReviewRepository.get_reviews_for_dag,
+            ExpertReviewRepository.get_reviews_for_estimand,
+            ExpertReviewRepository.get_versions,
+            ExpertReviewRepository.get_versions_for_reviews,
         ):
             assert "Raises" in (fn.__doc__ or ""), fn.__name__
 
@@ -972,9 +1010,23 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
 
 
 class TestSubmitReviewResolvesOnlyPending:
+    """Every call here passes the row's OWN version identity -- ``dag_version_hash``
+    and, since codex round 2 made the binding a PAIR, ``adjustment_set_hash``
+    (None: these fixture rows carry none, so the filter is IS NULL and matches).
+    The version filter therefore always matches, so a False is attributable to
+    the PENDING filter these tests exist to pin, and never to the binding added
+    later. Verified the same way as before: deleting the pending filter from
+    ``submit_review`` turns all three red."""
+
     async def test_pending_row_is_resolved(self):
         repo, client = _repo([PENDING])
-        ok = await repo.submit_review(PENDING["review_id"], "approved", {"c": True})
+        ok = await repo.submit_review(
+            PENDING["review_id"],
+            "approved",
+            {"c": True},
+            expected_dag_version_hash=PENDING["dag_version_hash"],
+            expected_adjustment_set_hash=None,
+        )
         assert ok is True
         assert client.rows[0]["approval_status"] == "approved"
         assert ("eq", "approval_status", "pending") in client.log, client.log
@@ -986,14 +1038,33 @@ class TestSubmitReviewResolvesOnlyPending:
         older = dict(FAR_FUTURE, review_id="rev-older")
         newer = dict(FAR_FUTURE, review_id="rev-newer")
         repo, client = _repo([older, newer])
-        ok = await repo.submit_review("rev-older", "rejected", {"c": False})
+        # The row's OWN hash, so the version filter matches and the PENDING
+        # filter is what makes this False -- the thing this test is about.
+        ok = await repo.submit_review(
+            "rev-older",
+            "rejected",
+            {"c": False},
+            expected_dag_version_hash=older["dag_version_hash"],
+            expected_adjustment_set_hash=None,
+        )
         assert ok is False
         assert client.rows[0]["approval_status"] == "approved", "the row must be untouched"
         assert ("eq", "approval_status", "pending") in client.log, client.log
 
     async def test_rejected_row_cannot_be_flipped_to_approved(self):
         repo, client = _repo([REJECTED])
-        assert await repo.submit_review(REJECTED["review_id"], "approved", {"c": True}) is False
+        # Again the row's own hash: a mismatched one would also return False,
+        # and the pin would pass without the pending filter ever being consulted.
+        assert (
+            await repo.submit_review(
+                REJECTED["review_id"],
+                "approved",
+                {"c": True},
+                expected_dag_version_hash=REJECTED["dag_version_hash"],
+                expected_adjustment_set_hash=None,
+            )
+            is False
+        )
         assert client.rows[0]["approval_status"] == "rejected"
 
     def test_docstring_states_pending_only_is_enforced(self):

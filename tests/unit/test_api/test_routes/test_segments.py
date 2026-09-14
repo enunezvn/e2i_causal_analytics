@@ -4,6 +4,7 @@ Tests all endpoints and helper functions in src/api/routes/segments.py.
 Mocks all external dependencies to ensure unit test isolation.
 """
 
+import contextlib
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -369,7 +370,7 @@ def test_get_segment_datasets_route_not_shadowed_by_analysis_id():
     app.include_router(router)
 
     with patch(
-        "src.api.routes.causal._list_dataset_brands",
+        "src.api.routes.causal.datasets._list_dataset_brands",
         new=AsyncMock(return_value=["Remibrutinib", "Fabhalta", "Kisqali"]),
     ):
         client = TestClient(app)
@@ -2528,7 +2529,7 @@ def test_patient_journeys_allowlist_exposes_adherence_outcomes():
     - adherent_180d / low_gap_180d ARE in _CAUSAL_NUMERIC_COLUMNS so the executors
       can coerce them to float (they land in the frame as SMALLINT 0/1).
     """
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _CAUSAL_NUMERIC_COLUMNS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS, _CAUSAL_NUMERIC_COLUMNS
 
     spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
     # Binary outcomes are offered as outcome candidates.
@@ -2634,12 +2635,28 @@ def _fake_repo(rows_for_brand=_ssot_rows):
     return repo
 
 
+@contextlib.contextmanager
 def _patch_ssot(repo=None, brands=None):
-    return patch.multiple(
-        "src.api.routes.causal",
-        _get_causal_path_repo=AsyncMock(return_value=repo or _fake_repo()),
-        _list_dataset_brands=AsyncMock(return_value=_SSOT_BRANDS if brands is None else brands),
-    )
+    """Patch the two causal SSOT helpers the segments routes import function-locally.
+
+    They live on DIFFERENT owning modules since the causal package split (#1991
+    debt 4), so one target cannot cover both: ``_get_causal_path_repo`` is read by
+    ``_segment_question_options`` / ``_segment_question_adjustment`` (both
+    ``from src.api.routes.causal.loaders import ...``) and ``_list_dataset_brands``
+    by ``get_segment_datasets`` (``from src.api.routes.causal.datasets import ...``).
+    Patch each on the module its reader actually imports from.
+    """
+    with (
+        patch.multiple(
+            "src.api.routes.causal.loaders",
+            _get_causal_path_repo=AsyncMock(return_value=repo or _fake_repo()),
+        ),
+        patch.multiple(
+            "src.api.routes.causal.datasets",
+            _list_dataset_brands=AsyncMock(return_value=_SSOT_BRANDS if brands is None else brands),
+        ),
+    ):
+        yield
 
 
 @pytest.mark.unit
@@ -2703,7 +2720,7 @@ async def test_segment_datasets_all_brands_drops_brand_distinct_axes():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_segment_datasets_treatment_order_follows_curated_spec():
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
     from src.api.routes.segments import get_segment_datasets
 
     spec_order = {
@@ -2719,7 +2736,7 @@ async def test_segment_datasets_treatment_order_follows_curated_spec():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_segment_datasets_falls_back_to_curated_lists_when_ssot_unavailable():
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
     from src.api.routes.segments import get_segment_datasets
 
     broken = MagicMock()
@@ -2805,14 +2822,14 @@ def test_segment_datasets_route_accepts_brand_query_param():
 # curated label at all (auto-capitalized to "Trigger accepted" while the
 # clinical-context panel says "NBA trigger accepted"); and neither dropdown told
 # the user what a 0/1 option means. The API now ships a `definitions` map next
-# to `labels`, from the same causal.py SSOT, on both the registry and fallback
+# to `labels`, from the same causal/datasets.py SSOT, on both the registry and fallback
 # paths.
 # =============================================================================
 
 
 @pytest.mark.unit
 def test_sample_dropped_label_names_the_promotional_lever():
-    from src.api.routes.causal import _COLUMN_LABELS
+    from src.api.routes.causal.datasets import _COLUMN_LABELS
 
     label = _COLUMN_LABELS["sample_dropped"]
     assert label != "Sample dropped", "reads as 'excluded from the sample'"
@@ -2822,7 +2839,7 @@ def test_sample_dropped_label_names_the_promotional_lever():
 
 @pytest.mark.unit
 def test_trigger_accepted_has_a_curated_label():
-    from src.api.routes.causal import _COLUMN_LABELS
+    from src.api.routes.causal.datasets import _COLUMN_LABELS
 
     assert _COLUMN_LABELS["trigger_accepted"] == "NBA trigger accepted"
 
@@ -2831,7 +2848,7 @@ def test_trigger_accepted_has_a_curated_label():
 def test_commercial_arm_labels_agree_with_clinical_context_panel():
     """The dropdown label (causal._COLUMN_LABELS) and the clinical-context panel
     label (brand_map) name the same column; they must not drift apart."""
-    from src.api.routes.causal import _COLUMN_LABELS
+    from src.api.routes.causal.datasets import _COLUMN_LABELS
     from src.services.clinical_context.brand_map import _COMMERCIAL_TREATMENT_CONTEXT
 
     checked = 0
@@ -2844,7 +2861,7 @@ def test_commercial_arm_labels_agree_with_clinical_context_panel():
 
 @pytest.mark.unit
 def test_every_patient_grain_option_has_a_definition():
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _COLUMN_DEFINITIONS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS, _COLUMN_DEFINITIONS
 
     spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
     for col in [*spec["treatment"], *spec["outcome"]]:
@@ -2862,7 +2879,7 @@ def test_outcome_definitions_do_not_claim_unshipped_restrictions():
     no initiator filter — so the definition must not promise "initiators only" or
     anchor the window on an initiation the row may not have. low_gap_180d's
     documented semantic (migration 088) is gap_days <= 30, not a "longest" gap."""
-    from src.api.routes.causal import _COLUMN_DEFINITIONS
+    from src.api.routes.causal.datasets import _COLUMN_DEFINITIONS
 
     for col in ("persistent_180d", "discontinued_180d"):
         text = _COLUMN_DEFINITIONS[col].lower()

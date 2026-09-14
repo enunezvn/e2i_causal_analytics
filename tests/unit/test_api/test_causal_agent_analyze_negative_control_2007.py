@@ -21,8 +21,8 @@ from unittest.mock import AsyncMock, patch
 import pandas as pd
 import pytest
 
-from src.api.routes import causal as causal_routes
-from src.api.routes.causal import (
+from src.api.routes.causal import agent as causal_routes
+from src.api.routes.causal.datasets import (
     _CAUSAL_DATASET_SPECS,
     _CAUSAL_NEGATIVE_CONTROL_OUTCOMES,
     _negative_control_outcome,
@@ -120,7 +120,7 @@ class TestNegativeControlOutcome:
         # Fail-closed: a registry value outside the spec's outcome list is
         # refused at the resolver (the loader would never see it).
         monkeypatch.setitem(
-            causal_routes._CAUSAL_NEGATIVE_CONTROL_OUTCOMES,
+            _CAUSAL_NEGATIVE_CONTROL_OUTCOMES,
             "patient_journeys",
             {"copay_support": "not_an_outcome_column"},
         )

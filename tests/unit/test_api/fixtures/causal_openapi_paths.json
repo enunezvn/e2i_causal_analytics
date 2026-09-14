@@ -1,0 +1,1848 @@
+{
+  "/api/causal/agent-analyze": {
+    "post": {
+      "description": "Submit a causal_impact agent run (async) and return a pending handle.\n\nLeverages the agent: it builds the causal DAG, selects an estimator\nDATA-DRIVENLY via the energy-score router across the registry (or the forced\none when ``estimator`` is set), estimates the treatment->outcome effect, and\nruns refutation + sensitivity. That work takes MINUTES, so it runs as a\nBackgroundTask and the client polls ``GET /causal/agent-analyze/{id}`` (same\nsubmit->poll shape as the hierarchical / pipeline endpoints).\n\nData is validated + loaded SYNCHRONOUSLY here, so bad columns / no data\nfail-closed immediately with the right HTTP status (400/404/503); only the\nheavy agent run is deferred. Fail-closed throughout \u2014 never a fabricated ATE.",
+      "operationId": "run_causal_agent_analysis",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AgentCausalAnalysisRequest"
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCausalAnalysisResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Run the causal_impact agent end-to-end (DAG + effect + refutation)",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/agent-analyze/{analysis_id}": {
+    "get": {
+      "description": "Poll a submitted agent run. 404 until the submit registered it; then\npending -> running -> completed / needs_review / failed.",
+      "operationId": "get_causal_agent_analysis",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "analysis_id",
+          "required": true,
+          "schema": {
+            "title": "Analysis Id",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCausalAnalysisResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "summary": "Poll a causal_impact agent run by id",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/brands": {
+    "get": {
+      "description": "Return the distinct brands present in ``dataset`` for the discovery page's\nbrand dropdown. Data-driven: only brands with real rows are offered; selecting\none scopes the discovery run's cohort to that brand.",
+      "operationId": "list_causal_brands",
+      "parameters": [
+        {
+          "description": "Gold-standard dataset to enumerate brands for (e.g. patient_journeys)",
+          "in": "query",
+          "name": "dataset",
+          "required": false,
+          "schema": {
+            "default": "patient_journeys",
+            "description": "Gold-standard dataset to enumerate brands for (e.g. patient_journeys)",
+            "title": "Dataset",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CausalBrandsResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "List the brands present in a gold-standard dataset's cohort",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/clinical-context": {
+    "get": {
+      "description": "Return the drug + mechanism of action (ChEMBL), the disease's real pivotal\nendpoints (ClinicalTrials.gov), and a real-world-evidence citation (PubMed)\nfor ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.\n\nWith ``treatment``, the response also frames the specific analysis being\ninterrogated (treatment -> outcome), the literature search follows that\nanalysis instead of the brand alone, and ``causal_evidence`` carries the\npublic-knowledge-graph evidence for it: the Open Targets indication edge and\nliterature whose abstracts were verified to name both entities. A commercial\ntreatment lever (copay, PSP, detailing) returns an explicit\n``commercial_lever`` state instead of the drug's evidence (#1763).\n\nAdditive narrative ONLY \u2014 does not touch the causal estimate or its\nadjustment set. Degrades gracefully (static fallbacks) when an upstream API\nis down; never fabricates a citation. The payload's ``honesty_label`` states\nthe synthetic-estimate / real-context boundary.",
+      "operationId": "get_causal_clinical_context",
+      "parameters": [
+        {
+          "description": "Brand to enrich (e.g. Kisqali / Fabhalta / Remibrutinib)",
+          "in": "query",
+          "name": "brand",
+          "required": true,
+          "schema": {
+            "description": "Brand to enrich (e.g. Kisqali / Fabhalta / Remibrutinib)",
+            "title": "Brand",
+            "type": "string"
+          }
+        },
+        {
+          "description": "The synthetic outcome column the effect uses (e.g. persistent_180d); mapped to the real pivotal endpoint.",
+          "in": "query",
+          "name": "outcome",
+          "required": true,
+          "schema": {
+            "description": "The synthetic outcome column the effect uses (e.g. persistent_180d); mapped to the real pivotal endpoint.",
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        {
+          "description": "The synthetic treatment column the analysis estimates the effect of (e.g. treatment_arm / copay_support). Optional: with it the context is framed for THAT analysis and the literature search follows it; without it the response is the brand-level view.",
+          "in": "query",
+          "name": "treatment",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The synthetic treatment column the analysis estimates the effect of (e.g. treatment_arm / copay_support). Optional: with it the context is framed for THAT analysis and the literature search follows it; without it the response is the brand-level view.",
+            "title": "Treatment"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClinicalContext"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Brand-faithful, sourced clinical context for a discovered effect",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/discover-effects": {
+    "post": {
+      "description": "Run the causal_impact agent across the dataset's candidate questions and\nrank the VALIDATED effects (discovered DAG + estimator + refutation gate) by\nconfidence then impact. Heavy (minutes per effect) -> async: returns a pending\njob; poll ``GET /causal/discover-effects/{job_id}``. Fail-closed per question.\n\n``brand`` (optional) scopes the cohort to one brand \u2014 a plain row subset, so\neach candidate is validated on that brand's patients only. ``questions``\n(optional body) restricts the run to a subset of the SSOT candidates; stop a\nrun early with ``POST /causal/discover-effects/{job_id}/cancel``.",
+      "operationId": "discover_causal_effects",
+      "parameters": [
+        {
+          "description": "Gold-standard dataset",
+          "in": "query",
+          "name": "dataset",
+          "required": false,
+          "schema": {
+            "default": "patient_journeys",
+            "description": "Gold-standard dataset",
+            "title": "Dataset",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Optional brand to scope the cohort to (e.g. Kisqali). None = all brands. The candidate questions are unchanged; only the rows the agent estimates on are subset to this brand.",
+          "in": "query",
+          "name": "brand",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional brand to scope the cohort to (e.g. Kisqali). None = all brands. The candidate questions are unchanged; only the rows the agent estimates on are subset to this brand.",
+            "title": "Brand"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DiscoverEffectsRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. `questions` names a SUBSET of GET /causal/discover-effects/questions to run; omit it (or send `{}`) to run every candidate.",
+              "title": "Body"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverEffectsResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Discover & rank the agent's VALIDATED causal effects (async submit -> poll)",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/discover-effects/questions": {
+    "get": {
+      "description": "What ``POST /causal/discover-effects`` WOULD run for this scope, with the\ncurated display labels, so the user can pick a subset up front (each question\nis minutes of agent time). Declared BEFORE ``GET /discover-effects/{job_id}``\nso the literal ``questions`` segment is never captured as a job id.",
+      "operationId": "list_discover_causal_questions",
+      "parameters": [
+        {
+          "description": "Gold-standard dataset",
+          "in": "query",
+          "name": "dataset",
+          "required": false,
+          "schema": {
+            "default": "patient_journeys",
+            "description": "Gold-standard dataset",
+            "title": "Dataset",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Optional brand scope \u2014 same semantics as POST /causal/discover-effects.",
+          "in": "query",
+          "name": "brand",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional brand scope \u2014 same semantics as POST /causal/discover-effects.",
+            "title": "Brand"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverQuestionsResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "List the SSOT candidate questions a discover-effects run would validate",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/discover-effects/{job_id}": {
+    "get": {
+      "operationId": "get_discover_causal_effects",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "job_id",
+          "required": true,
+          "schema": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverEffectsResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Poll a discover-effects job",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/discover-effects/{job_id}/cancel": {
+    "post": {
+      "description": "Cooperative cancel. The question in flight finishes (its estimators run\nsynchronously and cannot be interrupted \u2014 up to a few minutes); the run then\nstops, keeps every finished row and marks the unrun ones ``cancelled``.\nIdempotent, and a no-op on a job that already ended \u2014 including one whose\ntask died (reported `failed`, never \"stopping after the current question\":\nthere is no current question).",
+      "operationId": "cancel_discover_causal_effects",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "job_id",
+          "required": true,
+          "schema": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverEffectsResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Stop a discover-effects job at its next question boundary",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/estimation-data": {
+    "get": {
+      "description": "Load REAL estimation rows for the requested variables, server-side.\n\nThe frontend posts the returned ``estimation_data_records`` into a pipeline\nrequest's ``filters`` so the (unchanged) parallel/sequential pipeline can\nestimate a real effect. Requested columns are validated against the\ndataset's curated allowlist (an arbitrary column/table cannot be read), and\nrows missing a treatment/outcome value are dropped. Never fabricates data:\nif no usable rows exist the endpoint fails closed with 503.",
+      "operationId": "get_causal_estimation_data",
+      "parameters": [
+        {
+          "description": "Treatment column to load",
+          "in": "query",
+          "name": "treatment_var",
+          "required": true,
+          "schema": {
+            "description": "Treatment column to load",
+            "title": "Treatment Var",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Outcome column to load",
+          "in": "query",
+          "name": "outcome_var",
+          "required": true,
+          "schema": {
+            "description": "Outcome column to load",
+            "title": "Outcome Var",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Gold-standard dataset",
+          "in": "query",
+          "name": "dataset",
+          "required": false,
+          "schema": {
+            "default": "patient_journeys",
+            "description": "Gold-standard dataset",
+            "title": "Dataset",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Comma-separated covariate columns (confounders)",
+          "in": "query",
+          "name": "covariates",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Comma-separated covariate columns (confounders)",
+            "title": "Covariates"
+          }
+        },
+        {
+          "description": "Max rows to load",
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "default": 4000,
+            "description": "Max rows to load",
+            "maximum": 20000,
+            "minimum": 100,
+            "title": "Limit",
+            "type": "integer"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimationDataResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Load real estimation records from a gold-standard dataset",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/estimators": {
+    "get": {
+      "description": "List available causal estimators.\n\nArgs:\n    library: Optional filter by library\n\nReturns:\n    EstimatorListResponse with estimator information",
+      "operationId": "list_estimators",
+      "parameters": [
+        {
+          "description": "Filter by library",
+          "in": "query",
+          "name": "library",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CausalLibrary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Filter by library",
+            "title": "Library"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimatorListResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "summary": "List available estimators",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/health": {
+    "get": {
+      "description": "Health check for causal inference engine.\n\nReturns:\n    CausalHealthResponse with component status",
+      "operationId": "causal_health_check",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CausalHealthResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "summary": "Causal engine health check",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/hierarchical/analyze": {
+    "post": {
+      "description": "Run hierarchical CATE analysis (EconML within CausalML segments).\n\nThis endpoint performs Pattern 4 from multi-library synergies:\n- Segments data using uplift scores (quantile, k-means, threshold)\n- Estimates CATE within each segment using EconML\n- Aggregates segment CATEs with nested confidence intervals\n- Computes heterogeneity statistics (I\u00b2, \u03c4\u00b2)\n\nFail-closed contract (C1): the default path resolves a real DataFrame from\n``request.filters.estimation_data_records`` and raises 503 when none is\npresent \u2014 it NEVER fabricates input data. Pass ``demo_mode=true`` for a\nclearly-labeled pinned-zero placeholder.\n\nArgs:\n    request: Hierarchical analysis configuration\n    background_tasks: FastAPI background tasks\n    async_mode: If True, runs analysis asynchronously\n    demo_mode: If True, return clearly-labeled placeholder values\n\nReturns:\n    HierarchicalAnalysisResponse with segment-level CATE results",
+      "operationId": "run_hierarchical_analysis",
+      "parameters": [
+        {
+          "description": "Run asynchronously",
+          "in": "query",
+          "name": "async_mode",
+          "required": false,
+          "schema": {
+            "default": false,
+            "description": "Run asynchronously",
+            "title": "Async Mode",
+            "type": "boolean"
+          }
+        },
+        {
+          "description": "If true, return pinned-zero placeholder results labeled with is_demo=true (for UI demonstrations only). Default is false: the endpoint runs the real analyzer over inline estimation_data_records or fails with 503.",
+          "in": "query",
+          "name": "demo_mode",
+          "required": false,
+          "schema": {
+            "default": false,
+            "description": "If true, return pinned-zero placeholder results labeled with is_demo=true (for UI demonstrations only). Default is false: the endpoint runs the real analyzer over inline estimation_data_records or fails with 503.",
+            "title": "Demo Mode",
+            "type": "boolean"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/HierarchicalAnalysisRequest"
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HierarchicalAnalysisResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Run hierarchical CATE analysis",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/hierarchical/{analysis_id}": {
+    "get": {
+      "description": "Get results of a hierarchical analysis by ID.\n\nArgs:\n    analysis_id: Unique analysis identifier\n\nReturns:\n    HierarchicalAnalysisResponse with analysis results",
+      "operationId": "get_hierarchical_analysis",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "analysis_id",
+          "required": true,
+          "schema": {
+            "title": "Analysis Id",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HierarchicalAnalysisResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "summary": "Get hierarchical analysis results",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/history": {
+    "get": {
+      "description": "Return recent completed causal analyses for the Analysis History tab.\n\n#931: feeds the previously-unwired History tab from REAL\n``causal_analysis_completed`` episodic_memories rows (newest first). ATE,\nconfidence and model are read from each row's ``raw_content`` when present;\nwhen a field is missing it stays ``None`` (never fabricated). An empty store\nyields an honest empty history rather than a synthesized series.",
+      "operationId": "get_causal_analysis_history",
+      "parameters": [
+        {
+          "description": "Maximum history items to return",
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "default": 20,
+            "description": "Maximum history items to return",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CausalAnalysisHistoryResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Recent completed causal analyses",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/pipeline/parallel": {
+    "post": {
+      "description": "Run parallel multi-library analysis.\n\nExecutes multiple causal libraries simultaneously and computes\nconsensus results weighted by confidence.\n\nArgs:\n    request: Parallel pipeline configuration\n    demo_mode: If True, return clearly-labeled placeholder values\n\nReturns:\n    ParallelPipelineResponse with library results and consensus",
+      "operationId": "run_parallel_pipeline",
+      "parameters": [
+        {
+          "description": "If true, return pinned-zero placeholder results labeled with is_demo=true (for UI demonstrations only). Default is false: the endpoint runs real estimator selection or fails with 503.",
+          "in": "query",
+          "name": "demo_mode",
+          "required": false,
+          "schema": {
+            "default": false,
+            "description": "If true, return pinned-zero placeholder results labeled with is_demo=true (for UI demonstrations only). Default is false: the endpoint runs real estimator selection or fails with 503.",
+            "title": "Demo Mode",
+            "type": "boolean"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ParallelPipelineRequest"
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParallelPipelineResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Run parallel multi-library analysis",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/pipeline/sequential": {
+    "post": {
+      "description": "Run sequential multi-library pipeline.\n\nExecutes causal analysis stages in sequence:\nNetworkX \u2192 DoWhy \u2192 EconML \u2192 CausalML\n\nEach stage can pass results to the next for validation and refinement.\n\nArgs:\n    request: Pipeline configuration\n    background_tasks: FastAPI background tasks\n    async_mode: If True, runs asynchronously\n    demo_mode: If True, return clearly-labeled placeholder values\n\nReturns:\n    SequentialPipelineResponse with stage results and consensus",
+      "operationId": "run_sequential_pipeline",
+      "parameters": [
+        {
+          "description": "Run asynchronously",
+          "in": "query",
+          "name": "async_mode",
+          "required": false,
+          "schema": {
+            "default": false,
+            "description": "Run asynchronously",
+            "title": "Async Mode",
+            "type": "boolean"
+          }
+        },
+        {
+          "description": "If true, return pinned-zero placeholder results labeled with is_demo=true (for UI demonstrations only). Default is false: the endpoint runs real estimator selection or fails with 503.",
+          "in": "query",
+          "name": "demo_mode",
+          "required": false,
+          "schema": {
+            "default": false,
+            "description": "If true, return pinned-zero placeholder results labeled with is_demo=true (for UI demonstrations only). Default is false: the endpoint runs real estimator selection or fails with 503.",
+            "title": "Demo Mode",
+            "type": "boolean"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SequentialPipelineRequest"
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SequentialPipelineResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Run sequential multi-library pipeline",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/pipeline/{pipeline_id}": {
+    "get": {
+      "description": "Get status of a pipeline execution.\n\nArgs:\n    pipeline_id: Unique pipeline identifier\n\nReturns:\n    Pipeline status and results",
+      "operationId": "get_pipeline_status",
+      "parameters": [
+        {
+          "in": "path",
+          "name": "pipeline_id",
+          "required": true,
+          "schema": {
+            "title": "Pipeline Id",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Response Get Pipeline Status",
+                "type": "object"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "summary": "Get pipeline status",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/propose-questions": {
+    "get": {
+      "description": "Rank candidate treatment->outcome questions by a DATA-DRIVEN screening\nsignal, so the agent PROPOSES the question instead of the analyst guessing\nfrom blind dropdowns.\n\nFor each allowed (treatment, outcome) pair the adjusted partial correlation\n(controlling for the dataset's curated covariates) is computed and ranked by\nmagnitude. This is a SCREENING signal \u2014 NOT a validated causal effect; the\nuser confirms a question and the full agent analysis builds the DAG,\nestimates, and refutes it. Fail-closed: unknown dataset 404, no store 503.",
+      "operationId": "propose_causal_questions",
+      "parameters": [
+        {
+          "description": "Gold-standard dataset to propose questions for",
+          "in": "query",
+          "name": "dataset",
+          "required": false,
+          "schema": {
+            "default": "patient_journeys",
+            "description": "Gold-standard dataset to propose questions for",
+            "title": "Dataset",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeQuestionsResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Propose data-ranked candidate causal questions for a dataset",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/route": {
+    "post": {
+      "description": "Route a causal query to the appropriate library.\n\nUses NLP classification to determine the best causal library:\n- \"Does X cause Y?\" \u2192 DoWhy (causal identification)\n- \"How does effect vary?\" \u2192 EconML (heterogeneous effects)\n- \"Who should we target?\" \u2192 CausalML (uplift modeling)\n- \"How does impact flow?\" \u2192 NetworkX (system dependencies)\n\nArgs:\n    request: Query routing request\n\nReturns:\n    RouteQueryResponse with recommended library and estimators",
+      "operationId": "route_causal_query",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RouteQueryRequest"
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteQueryResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Route causal query to library",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/treatment-effects": {
+    "get": {
+      "description": "Return a REAL average treatment effect for one (cohort, brand) cell.\n\nLoads a confounded cohort frame from the DB (patient_journeys for the patient\ncohorts; hcp_brand_adoption JOIN hcp_profiles for hcp_adoption), then runs the\nEXISTING DoWhy+EconML sequential pipeline to recover a de-confounded ATE + CI\n+ p_value + n. Honors the synthetic-showcase substrate (is_synthetic=true).\n\nFail-closed: 422 on an unknown cohort/brand; 503 when the cohort frame cannot\nbe resolved (no rows) or the pipeline yields no usable estimate; 408 on\ntimeout; 503 (Retry-After) when the heavy-compute slot is saturated. NEVER\nfabricates an effect.",
+      "operationId": "get_treatment_effect",
+      "parameters": [
+        {
+          "description": "Cohort: initiation | persistence | discontinuation | hcp_adoption",
+          "in": "query",
+          "name": "cohort",
+          "required": true,
+          "schema": {
+            "description": "Cohort: initiation | persistence | discontinuation | hcp_adoption",
+            "title": "Cohort",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Brand: Remibrutinib | Fabhalta | Kisqali",
+          "in": "query",
+          "name": "brand",
+          "required": true,
+          "schema": {
+            "description": "Brand: Remibrutinib | Fabhalta | Kisqali",
+            "title": "Brand",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TreatmentEffectResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Estimate the treatment effect for a (cohort, brand) cell",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/validate": {
+    "post": {
+      "description": "Run cross-library validation (DoWhy \u2194 CausalML).\n\nCompares effect estimates between libraries to validate results.\n\nArgs:\n    request: Cross-validation configuration\n    demo_mode: If True, return clearly-labeled placeholder values\n\nReturns:\n    CrossValidationResponse with agreement metrics",
+      "operationId": "run_cross_validation",
+      "parameters": [
+        {
+          "description": "If true, return pinned-zero placeholder results labeled with is_demo=true (for UI demonstrations only). Default is false: the endpoint runs real estimator selection or fails with 503.",
+          "in": "query",
+          "name": "demo_mode",
+          "required": false,
+          "schema": {
+            "default": false,
+            "description": "If true, return pinned-zero placeholder results labeled with is_demo=true (for UI demonstrations only). Default is false: the endpoint runs real estimator selection or fails with 503.",
+            "title": "Demo Mode",
+            "type": "boolean"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CrossValidationRequest"
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrossValidationResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Run cross-library validation",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/value-chains": {
+    "get": {
+      "description": "Return the strongest REAL discovered causal value chains from ``causal_paths``.\n\nThese are the live, dataset-derived chains the causal engine has *validated*\n(DoWhy backdoor estimation) \u2014 NOT a seeded graph fixture. Scoped by the Home\ndashboard's brand/region selectors, ranked by ``|effect| x confidence``, and\nde-duplicated by full pathway so the top-N are distinct value chains. Honors\nthe synthetic-showcase provenance flag (``E2I_INCLUDE_SYNTHETIC``): on a\nsynthetic-gold instance the synthetic chains ARE the substrate; on a strict\nreal-data instance they are excluded verbatim.",
+      "operationId": "get_causal_value_chains",
+      "parameters": [
+        {
+          "description": "Scope to a brand; omit or 'All' for the portfolio view",
+          "in": "query",
+          "name": "brand",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scope to a brand; omit or 'All' for the portfolio view",
+            "title": "Brand"
+          }
+        },
+        {
+          "description": "Scope to a region; omit or 'All US' for all regions",
+          "in": "query",
+          "name": "region",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scope to a region; omit or 'All US' for all regions",
+            "title": "Region"
+          }
+        },
+        {
+          "description": "Max distinct chains (top by |effect| x confidence)",
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "default": 3,
+            "description": "Max distinct chains (top by |effect| x confidence)",
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CausalChainResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "Top discovered causal value chains (brand/region scoped)",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  },
+  "/api/causal/variables": {
+    "get": {
+      "description": "Return treatment/outcome/covariate candidates for the causal-discovery\ndropdowns.\n\nCandidates are the curated causally-meaningful columns for ``dataset``,\nintersected with the columns actually present in the live table \u2014 so the\ndropdowns are data-driven and never offer a non-existent column.\n\nCovariate candidates are additionally BRAND-scoped through the same\n``_brand_scoped_covariates`` gate the estimation paths use. Before this\n(2026-07-13 clinical-faithfulness review) the candidate surface was\nbrand-blind: a Fabhalta (PNH) question was offered ``urticaria_severity_uas7``\n\u2014 an urticaria activity score whose column is NULL for every Fabhalta row \u2014\nwhich estimation then silently dropped. Offer and estimation now agree.\n``columns`` (the raw schema inventory) is deliberately NOT scoped.",
+      "operationId": "list_causal_variables",
+      "parameters": [
+        {
+          "description": "Gold-standard dataset to enumerate (e.g. patient_journeys)",
+          "in": "query",
+          "name": "dataset",
+          "required": false,
+          "schema": {
+            "default": "patient_journeys",
+            "description": "Gold-standard dataset to enumerate (e.g. patient_journeys)",
+            "title": "Dataset",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Brand the analysis will be scoped to. Covariate candidates are brand-scoped: a brand's own clinical biomarkers are offered only for that brand; omitted (all-brands) offers the universals only \u2014 mirroring what the estimation paths actually adjust for.",
+          "in": "query",
+          "name": "brand",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Brand the analysis will be scoped to. Covariate candidates are brand-scoped: a brand's own clinical biomarkers are offered only for that brand; omitted (all-brands) offers the universals only \u2014 mirroring what the estimation paths actually adjust for.",
+            "title": "Brand"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CausalVariablesResponse"
+              }
+            }
+          },
+          "description": "Successful Response"
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Authentication required"
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationErrorResponse"
+              }
+            }
+          },
+          "description": "Validation error"
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorResponse"
+              }
+            }
+          },
+          "description": "Internal server error"
+        }
+      },
+      "security": [
+        {
+          "HTTPBearer": []
+        }
+      ],
+      "summary": "List causal variables for a gold-standard dataset",
+      "tags": [
+        "Causal Inference"
+      ]
+    }
+  }
+}

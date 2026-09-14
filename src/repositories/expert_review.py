@@ -19,8 +19,14 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Literal, Mapping, Optional
 
-from src.repositories.base import BaseRepository
+from src.repositories.expert_review_versions import ExpertReviewVersionTimeline
 from src.repositories.json_utils import to_plain_json
+from src.repositories.query_utils import match_nullable_column
+
+# ``match_nullable_column`` is the ONE definition of "the review is still on this value", shared by
+# ``submit_review``, ``update_agent_assessment`` and ``advance_review`` across both halves of the
+# pair -- ``adjustment_set_hash`` (migration 142) and ``dag_version_hash`` (nullable, migration 141)
+# -- so the three guards cannot drift apart (codex round 2).
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +123,33 @@ def _apply_expiring_window(query: Any, days: int, today: Optional[date] = None) 
     return query.gte("valid_until", start.isoformat()).lte("valid_until", end.isoformat())
 
 
-class ExpertReviewRepository(BaseRepository):
+def estimand_key_for(brand: Optional[str], treatment: Optional[str], outcome: Optional[str]) -> str:
+    """Review identity (migration 140): ``lower(brand):treatment:outcome``, null-safe.
+
+    Mirrors the STORED GENERATED column defined in
+    ``database/migrations/140_expert_reviews_estimand_key.sql`` operand for
+    operand (``lower()`` over each field, ``COALESCE`` to ``''``, joined by
+    ``':'``), so a Python lookup lands on the same row PostgREST derived --
+    change one and change the other. Used ONLY for lookups: the column is
+    generated, so writers never send it -- an insert that supplied it would be
+    rejected outright.
+
+    ASCII assumption: Postgres ``lower()`` folds case under the database
+    collation while Python ``str.lower()`` follows Unicode, so the two can
+    disagree on non-ASCII text (a Turkish dotless I, say). Brands and variable
+    names are ASCII identifiers today, which is the only case
+    test_estimand_key_matches_migration_140_expression pins; a non-ASCII brand
+    would need that equivalence re-measured against the live collation.
+
+    A DAG hash is deliberately absent. The hash is the structure VERSION a
+    review currently covers (expert_review_versions, migration 141), not the
+    review's identity: a covariate or structure change must UPDATE the pending
+    review of an estimand, not mint a sibling.
+    """
+    return f"{(brand or '').lower()}:{(treatment or '').lower()}:{(outcome or '').lower()}"
+
+
+class ExpertReviewRepository(ExpertReviewVersionTimeline):
     """
     Repository for expert_reviews table.
 
@@ -131,6 +163,11 @@ class ExpertReviewRepository(BaseRepository):
     ``expired`` is derived at read time, and every reader goes through
     ``_apply_active_validity`` / ``_apply_expiring_window`` /
     ``approval_validity`` (#1972).
+
+    Structure versions and the pair compare-and-set that moves a review onto
+    one live in :class:`ExpertReviewVersionTimeline`, which this class
+    inherits: ``record_version``, ``append_version``, ``advance_review``,
+    ``get_latest_version``, ``get_versions``, ``get_versions_for_reviews``.
 
     Database Schema (expert_reviews):
     - review_id: UUID PRIMARY KEY
@@ -181,6 +218,8 @@ class ExpertReviewRepository(BaseRepository):
         checklist: Optional[Dict[str, Any]] = None,
         related_validation_ids: Optional[List[str]] = None,
         dag_structure: Optional[Dict[str, Any]] = None,
+        supersedes_review_id: Optional[str] = None,
+        adjustment_set_hash: Optional[str] = None,
     ) -> Optional[str]:
         """
         Create a new expert review request.
@@ -202,6 +241,18 @@ class ExpertReviewRepository(BaseRepository):
                 treatment/outcome) persisted as dag_structure_json (mig 097) so
                 the review UI can render the DAG under review — the hash alone
                 is one-way and not renderable
+            supersedes_review_id: The earlier review of this estimand that this
+                one replaces, when the caller is minting a successor (existing
+                column; ``renew_review`` sets it the same way)
+            adjustment_set_hash: The adjustment-set half of the structure's
+                version identity (migration 142). Stored beside
+                ``dag_version_hash`` so the minted row carries its WHOLE
+                identity from the start -- the version-1 append's
+                compare-and-set has a pair to expect, and every guard keyed on
+                the row (resolution, the assessment persist, the advance) can
+                bind to both halves. None means the adjustment set is UNKNOWN
+                (no structure in scope), and is omitted from the payload so the
+                column's NULL stands for exactly that.
 
         Returns:
             Created review_id or None on failure
@@ -231,7 +282,17 @@ class ExpertReviewRepository(BaseRepository):
             "checklist_json": to_plain_json(checklist) if checklist else None,
             "related_validation_ids": related_validation_ids,
             "dag_structure_json": to_plain_json(dag_structure) if dag_structure else None,
+            "supersedes_review_id": supersedes_review_id,
+            # The adjustment-set half of the version identity (migration 142).
+            # Stripped when None by the rule below, like every other unset
+            # column: an omitted key leaves the column NULL, which is what
+            # "unknown adjustment set" IS -- and it keeps the payload minimal.
+            "adjustment_set_hash": adjustment_set_hash,
         }
+
+        # estimand_key is NOT in this row and must never be: migration 140 made
+        # it GENERATED ALWAYS AS ... STORED, and PostgREST rejects an insert
+        # that supplies a generated column.
 
         # Remove None values
         row = {k: v for k, v in row.items() if v is not None}
@@ -243,49 +304,49 @@ class ExpertReviewRepository(BaseRepository):
             return review_id
         except Exception as e:
             # M-reach1: a concurrent creator may have won the race and inserted the
-            # pending row first — the partial UNIQUE index uq_er_pending_dag_brand
-            # (mig 062) then rejects THIS duplicate with a 23505 unique violation.
-            # Recover ONLY for that case (return the winner's pending review); let
-            # any other failure (transient connection/timeout, schema error) surface
-            # via the error log rather than masking it behind a possibly-stale
-            # pending row (codex MEDIUM).
+            # pending row first — the partial UNIQUE index uq_er_pending_estimand
+            # (mig 140, keyed on the ESTIMAND; it replaced 062's
+            # uq_er_pending_dag_brand) then rejects THIS duplicate with a 23505
+            # unique violation. Recover ONLY for that case (return the winner's
+            # pending review); let any other failure (transient connection/timeout,
+            # schema error) surface via the error log rather than masking it behind
+            # a possibly-stale pending row (codex MEDIUM).
             err = str(e).lower()
             if "23505" in err or "unique" in err or "duplicate key" in err:
-                existing = await self._find_pending_review_id(dag_version_hash, brand)
+                key = estimand_key_for(brand, treatment_variable, outcome_variable)
+                existing = await self._find_pending_review_id(key)
                 if existing is not None:
                     logger.info(
-                        "create_review: a pending review already exists for DAG "
-                        f"{dag_version_hash} (brand={brand}); returning it "
-                        "(concurrent create / unique-violation recovery)."
+                        "create_review: a pending review already exists for estimand "
+                        f"{key}; returning it (concurrent create / unique-violation "
+                        "recovery)."
                     )
                     return existing
             logger.error(f"Failed to create expert review: {e}")
             return None
 
-    async def _find_pending_review_id(
-        self, dag_version_hash: Optional[str], brand: Optional[str]
-    ) -> Optional[str]:
-        """M-reach1: return the review_id of an existing PENDING review for this DAG
-        (+brand), if any. Brand matching mirrors the uq_er_pending_dag_brand index
-        (NULL brand normalized): a None brand matches the NULL-brand pending row, a
-        set brand matches that brand exactly.
+    async def _find_pending_review_id(self, estimand_key: str) -> Optional[str]:
+        """M-reach1: return the review_id of the existing PENDING review of this
+        ESTIMAND, if any -- the row that won the uq_er_pending_estimand race.
 
-        Note (codex LOW): the index keys on ``COALESCE(brand, '')``, so it also
-        collapses an explicit empty-string brand into the NULL bucket; this lookup
-        uses ``IS NULL`` and would NOT match a ``brand=''`` winner. Callers populate
-        brand from a real brand name or None — never an explicit empty string — so
-        this boundary is not reachable in practice.
+        The lookup is a plain equality on the generated ``estimand_key`` column,
+        which is exactly what the partial unique index keys on, so it cannot
+        disagree with the index that rejected our insert. The old brand
+        normalisation note is obsolete: migration 140's expression already
+        COALESCEs every operand to ``''``, so a NULL brand and an explicit
+        empty-string brand derive the SAME key and both are matched here (the
+        pre-140 ``IS NULL`` lookup could not match a ``brand=''`` winner).
+        Compute the argument with :func:`estimand_key_for`.
         """
-        if not self.client or not dag_version_hash:
+        if not self.client:
             return None
         try:
             query = (
                 self.client.table(self.table_name)
                 .select("review_id")
-                .eq("dag_version_hash", dag_version_hash)
+                .eq("estimand_key", estimand_key)
                 .eq("approval_status", "pending")
             )
-            query = query.eq("brand", brand) if brand else query.is_("brand", "null")
             result = await query.limit(1).execute()
             if result.data:
                 return str(result.data[0]["review_id"])
@@ -304,6 +365,9 @@ class ExpertReviewRepository(BaseRepository):
         validity_days: int = DEFAULT_VALIDITY_DAYS,
         reviewer_name: Optional[str] = None,
         reviewer_email: Optional[str] = None,
+        *,
+        expected_dag_version_hash: str,
+        expected_adjustment_set_hash: Optional[str],
     ) -> bool:
         """
         Submit a completed expert review.
@@ -314,6 +378,30 @@ class ExpertReviewRepository(BaseRepository):
         zero rows and returns False (the route surfaces that as 404). Before
         this the filter was ``review_id`` alone and the pending-only claim was
         documentation, not enforcement.
+
+        The resolution is also bound to the STRUCTURE VERSION the reviewer saw
+        (codex round-1 HIGH): the UPDATE carries
+        ``dag_version_hash = expected_dag_version_hash``, so an approval of the
+        form opened on h1 can never land on a review a concurrent run has since
+        advanced to h2 (``append_version``). Pending-only and hash-bound are the
+        same mechanism -- one UPDATE whose filters ARE the precondition -- and a
+        mismatch matches zero rows and returns False, which the route
+        disambiguates into 409 (pending but advanced) vs 404 (gone or already
+        resolved). A row whose ``dag_version_hash`` is NULL (the column is
+        nullable; no such row exists live, measured 2026-09-14) therefore
+        matches no hash and is refused rather than resolved blind.
+
+        That binding is to the PAIR, not to the hash alone (codex round-2 HIGH
+        1). ``compute_dag_hash`` EXCLUDES adjustment sets, so an ADJUSTMENT-ONLY
+        advance -- (h1, adj-W) to (h1, adj-Z), the same DAG with different
+        covariates -- leaves the hash untouched, and a hash-only filter matched
+        it: a reviewer approved covariates their form never displayed. The
+        UPDATE now also carries ``adjustment_set_hash`` (migration 142), matched
+        the way the value requires: ``eq`` for a known hash, ``is_`` (IS NULL)
+        for None. None is matched EXPLICITLY rather than by omitting the filter,
+        because an omitted filter matches every row and would restore exactly
+        the defect this closes -- "the review's adjustment set is unknown" is a
+        precondition to check, not one to skip.
 
         Resolution provenance (lane 1, codex whole-diff HIGH F1 + iter-2 HIGH
         F1): BOTH statuses stamp ``resolved_at = now()`` (migration 136;
@@ -339,10 +427,21 @@ class ExpertReviewRepository(BaseRepository):
             validity_days: Days until review expires (default 90)
             reviewer_name: Display name of the resolving operator, if known
             reviewer_email: Email of the resolving operator, if known
+            expected_dag_version_hash: The structure version the reviewer's form
+                displayed; the resolution applies only while the review still
+                carries it (keyword-only and required -- a caller that cannot
+                name the version it is resolving must not resolve)
+            expected_adjustment_set_hash: The other half of that version, the
+                adjustment-set hash the form displayed. Keyword-only and
+                REQUIRED, though its VALUE may be None: None asserts "the review
+                carried no known adjustment set", which is a precondition the
+                UPDATE checks with IS NULL, not an absence of one
 
         Returns:
-            True if exactly this pending row was resolved, False otherwise
-            (nonexistent, already resolved, or persistence error)
+            True if exactly this pending row was resolved AT THE EXPECTED
+            VERSION, False otherwise (nonexistent, already resolved, advanced to
+            another structure -- including one whose DAG is unchanged and only
+            the adjustment set moved -- or persistence error)
         """
         if not self.client:
             return False
@@ -380,13 +479,16 @@ class ExpertReviewRepository(BaseRepository):
         update_data["reviewer_email"] = reviewer_email
 
         try:
-            result = await (
+            query = (
                 self.client.table(self.table_name)
                 .update(update_data)
                 .eq("review_id", review_id)
                 .eq("approval_status", "pending")
-                .execute()
+                .eq("dag_version_hash", expected_dag_version_hash)
             )
+            result = await match_nullable_column(
+                query, "adjustment_set_hash", expected_adjustment_set_hash
+            ).execute()
             # FIX B (codex HIGH): a zero-row update (nonexistent or already-resolved
             # review_id) matches nothing — supabase-py returns the updated rows in
             # ``result.data`` (same convention as base.py:131), so empty data means
@@ -394,8 +496,10 @@ class ExpertReviewRepository(BaseRepository):
             # would make the route 200 a record it never changed.
             if not result.data:
                 logger.warning(
-                    f"submit_review matched no rows for {review_id} "
-                    "(nonexistent or already-resolved); returning False"
+                    f"submit_review matched no rows for {review_id} at version "
+                    f"({expected_dag_version_hash}, {expected_adjustment_set_hash}) "
+                    "(nonexistent, already-resolved, or advanced to another structure); "
+                    "returning False"
                 )
                 return False
             logger.info(f"Submitted review {review_id} with status {approval_status}")
@@ -408,31 +512,73 @@ class ExpertReviewRepository(BaseRepository):
         self,
         review_id: str,
         assessment: Dict[str, Any],
+        *,
+        for_dag_version_hash: Optional[str] = None,
+        for_adjustment_set_hash: Optional[str] = None,
     ) -> bool:
         """Cache an advisory agent assessment on the review row (mig 097).
 
         Writes ``agent_assessment_json`` ONLY — never touches
         ``checklist_json``, which remains the human reviewer's own record.
 
+        ``for_dag_version_hash`` binds the write to the structure the assessment
+        actually GRADED (codex round-1 HIGH): the build reads a DAG snapshot and
+        its linked refutation evidence, and a concurrent run can advance the
+        review while it runs. Filtering the UPDATE on the hash makes a build of
+        the superseded structure match zero rows instead of overwriting the new
+        version's cache with a grading of the old one. Zero rows is the existing
+        False contract, which the route reports as ``persisted: false`` — the
+        assessment is still returned to whoever asked for it.
+
+        The guard is on the PAIR (codex round-2 HIGH 2). A build that graded
+        (h1, adj-W) still persisted after an ADJUSTMENT-ONLY advance to
+        (h1, adj-Z) had cleared the cache, because the DAG hash never moved --
+        the review UI then showed a grading of covariates the review no longer
+        covers, marked ``persisted: true``. When ``for_dag_version_hash`` is
+        given, BOTH halves filter the UPDATE (``for_adjustment_set_hash`` via
+        eq-or-IS-NULL, see :func:`match_nullable_column`).
+
+        The two are given TOGETHER or not at all. ``for_dag_version_hash=None``
+        means "this row has no version to bind to" -- a pre-141 row that never
+        carried a hash -- and applies NO version filter, the pre-#1991
+        behaviour. Filtering the adjustment half alone there would refuse every
+        write instead of guarding one.
+
+        Args:
+            review_id: The review whose cache is written
+            assessment: The advisory grading payload
+            for_dag_version_hash: When given, write only while the review still
+                carries this structure version
+            for_adjustment_set_hash: The adjustment-set half of that version.
+                Read together with ``for_dag_version_hash``: it applies only
+                when that one is given, and a None value there means the review
+                must still carry an UNKNOWN adjustment set (IS NULL), not that
+                the half is unchecked
+
         Returns:
             True when exactly this row was updated; False on zero-row match
-            (nonexistent review) or persistence error — fail-closed, mirroring
-            ``submit_review``.
+            (nonexistent review, or one whose structure moved) or persistence
+            error — fail-closed, mirroring ``submit_review``.
         """
         if not self.client:
             return False
 
         try:
-            result = await (
+            query = (
                 self.client.table(self.table_name)
                 # #1992: JSON OBJECT, not a json.dumps'ed string.
                 .update({"agent_assessment_json": to_plain_json(assessment)})
                 .eq("review_id", review_id)
-                .execute()
             )
+            if for_dag_version_hash is not None:
+                query = query.eq("dag_version_hash", for_dag_version_hash)
+                query = match_nullable_column(query, "adjustment_set_hash", for_adjustment_set_hash)
+            result = await query.execute()
             if not result.data:
                 logger.warning(
-                    f"update_agent_assessment matched no rows for {review_id}; returning False"
+                    f"update_agent_assessment matched no rows for {review_id} "
+                    f"(version filter: {for_dag_version_hash}, {for_adjustment_set_hash}); "
+                    "returning False"
                 )
                 return False
             return True
@@ -716,6 +862,55 @@ class ExpertReviewRepository(BaseRepository):
             logger.error(f"Failed to get reviews for DAG: {e}")
             raise
 
+    async def get_reviews_for_estimand(
+        self,
+        estimand_key: str,
+        include_expired: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Every review of this ESTIMAND, newest first -- the history the gate and
+        the detail route read.
+
+        Sibling of ``get_reviews_for_dag``, keyed on identity instead of on one
+        structure version (migration 140). ``include_expired`` defaults to True
+        here: this is the audit view of an estimand, and a lapsed approval is
+        part of that history, including expired rows by design. Pass False for
+        the active-approval predicate (``_apply_active_validity``).
+
+        Args:
+            estimand_key: The generated key -- build it with ``estimand_key_for``
+            include_expired: When True (default) every row is returned, expired
+                approvals included; when False, rows whose ``valid_until`` has
+                passed are dropped (a NULL ``valid_until`` is kept: permanent)
+
+        Returns:
+            Review records for the estimand, newest ``created_at`` first
+
+        Raises:
+            The underlying client error on a query failure, after logging it
+            (R1/R3 convention of this module): an empty history reads as "this
+            estimand was never reviewed", which an outage must not fake. The
+            no-client early return ([]) is unchanged.
+        """
+        if not self.client:
+            return []
+
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .select("*")
+                .eq("estimand_key", estimand_key)
+                .order("created_at", desc=True)
+            )
+
+            if not include_expired:
+                query = _apply_active_validity(query)
+
+            result = await query.execute()
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Failed to get reviews for estimand: {e}")
+            raise
+
     async def renew_review(
         self,
         original_review_id: str,
@@ -803,7 +998,13 @@ class ExpertReviewRepository(BaseRepository):
 
         Returns:
             Summary dict with counts by status. ``pending`` / ``approved`` /
-            ``rejected`` / ``expired`` partition the rows; ``expiring_soon`` is
+            ``rejected`` / ``superseded`` / ``expired`` partition the rows;
+            ``superseded`` is a STORED status (migration 140): a review that can
+            no longer change an outcome -- written today only by migration 140's
+            BLOCK-band resolution; a review re-opened on a new hash stays
+            ``approved`` (spec §7) and is linked from its successor's
+            ``supersedes_review_id``, not by this status. It is a resolution,
+            never a queue item, so it is counted apart from ``pending``. ``expiring_soon`` is
             a SUBSET of ``approved`` (within 14 days). ``expired`` is derived
             from ``valid_until`` via ``approval_validity`` -- the same predicate
             the gate's queries use -- and a NULL ``valid_until`` is a permanent
@@ -821,6 +1022,7 @@ class ExpertReviewRepository(BaseRepository):
                 "pending": 0,
                 "approved": 0,
                 "rejected": 0,
+                "superseded": 0,
                 "expired": 0,
                 "expiring_soon": 0,
             }
@@ -840,6 +1042,7 @@ class ExpertReviewRepository(BaseRepository):
             pending = 0
             approved = 0
             rejected = 0
+            superseded = 0
             expired = 0
             expiring_soon = 0
 
@@ -850,6 +1053,8 @@ class ExpertReviewRepository(BaseRepository):
                     pending += 1
                 elif status == "rejected":
                     rejected += 1
+                elif status == "superseded":
+                    superseded += 1
                 elif status == "approved":
                     # ONE definition (#1972): approval_validity() is the same
                     # predicate _apply_active_validity() sends to PostgREST.
@@ -869,6 +1074,7 @@ class ExpertReviewRepository(BaseRepository):
                 "pending": pending,
                 "approved": approved,
                 "rejected": rejected,
+                "superseded": superseded,
                 "expired": expired,
                 "expiring_soon": expiring_soon,
             }
