@@ -20,6 +20,16 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _session_segment(session_id: Optional[str]) -> str:
+    """Signal-id prefix segment for a session.
+
+    Signal ids embed the session for grepability, but a session-less run has no
+    session to embed (#2099). Drop the segment rather than stamping the literal
+    ``None`` into an id: the uuid suffix already guarantees uniqueness.
+    """
+    return f"{session_id}_" if session_id else ""
+
+
 # =============================================================================
 # 1. TRAINING SIGNAL STRUCTURE
 # =============================================================================
@@ -37,7 +47,7 @@ class PredictionSynthesisTrainingSignal:
 
     # === Input Context ===
     signal_id: str = ""
-    session_id: str = ""
+    session_id: Optional[str] = None
     query: str = ""
     entity_id: str = ""
     entity_type: str = ""  # hcp, territory, patient
@@ -137,7 +147,8 @@ class PredictionSynthesisTrainingSignal:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
-            "signal_id": self.signal_id or f"ps_{self.session_id}_{self.created_at}",
+            "signal_id": self.signal_id
+            or f"ps_{_session_segment(self.session_id)}{self.created_at}",
             "source_agent": "prediction_synthesizer",
             "dspy_type": "sender",
             "timestamp": self.created_at,
@@ -266,7 +277,7 @@ class PredictionSynthesizerSignalCollector:
 
     def collect_synthesis_signal(
         self,
-        session_id: str,
+        session_id: Optional[str],
         query: str,
         entity_id: str,
         entity_type: str,
@@ -444,7 +455,8 @@ async def emit_training_signal(
 
         # Convert to LearningSignal format
         learning_signal = LearningSignal(
-            signal_id=signal.signal_id or f"ps_{signal.session_id}_{uuid.uuid4().hex[:8]}",
+            signal_id=signal.signal_id
+            or f"ps_{_session_segment(signal.session_id)}{uuid.uuid4().hex[:8]}",
             session_id=signal.session_id,
             cycle_id=f"synthesis_{signal.entity_id}",
             signal_type="training",
@@ -484,7 +496,7 @@ async def emit_training_signal(
 
 
 def create_signal_from_result(
-    session_id: str,
+    session_id: Optional[str],
     state: Dict[str, Any],
     output: Dict[str, Any],
 ) -> PredictionSynthesisTrainingSignal:
@@ -495,7 +507,8 @@ def create_signal_from_result(
     of a prediction synthesis.
 
     Args:
-        session_id: Session identifier
+        session_id: Session identifier, or None when the caller had no session
+            (#2099) -- the signal then records an honest NULL session
         state: PredictionSynthesizerState after execution
         output: PredictionSynthesizerOutput as dict
 
@@ -515,7 +528,7 @@ def create_signal_from_result(
     models_requested = len(models_to_use) if models_to_use else 3  # Default assumption
 
     signal = PredictionSynthesisTrainingSignal(
-        signal_id=f"ps_{session_id}_{uuid.uuid4().hex[:8]}",
+        signal_id=f"ps_{_session_segment(session_id)}{uuid.uuid4().hex[:8]}",
         session_id=session_id,
         query=state.get("query", ""),
         entity_id=state.get("entity_id", ""),
@@ -543,7 +556,7 @@ def create_signal_from_result(
 
 
 async def collect_and_emit_signal(
-    session_id: str,
+    session_id: Optional[str],
     state: Dict[str, Any],
     output: Dict[str, Any],
     min_reward_threshold: float = 0.5,
@@ -552,7 +565,7 @@ async def collect_and_emit_signal(
     Convenience function to create and emit a training signal.
 
     Args:
-        session_id: Session identifier
+        session_id: Session identifier, or None when the caller had no session (#2099)
         state: PredictionSynthesizerState after execution
         output: PredictionSynthesizerOutput as dict
         min_reward_threshold: Minimum reward to emit

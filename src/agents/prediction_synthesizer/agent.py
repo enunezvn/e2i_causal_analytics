@@ -232,7 +232,8 @@ class PredictionSynthesizerAgent:
             ensemble_method: How to combine predictions
             include_context: Whether to add context enrichment
             query: Original query text
-            session_id: Optional session identifier for memory context
+            session_id: Optional session identifier for memory context; None
+                records an honest NULL instead of a minted id (#2099)
             segment_by: #1354 — when set (a served HCP covariate axis), this call
                 is a per-segment likelihood-to-prescribe RANKING, not a
                 single-entity synthesis. The single-entity ensemble graph is
@@ -263,9 +264,11 @@ class PredictionSynthesizerAgent:
                 top_segments=top_segments,
             )
 
-        # Generate session ID if not provided
-        if session_id is None:
-            session_id = str(uuid.uuid4())
+        # No session is minted here (#2099): the caller's session (or None) is the
+        # only honest value for episodic_memories.session_id and for the DSPy
+        # learning_signals row. The Opik trace still needs a handle, so it gets
+        # its own per-run id rather than borrowing an invented session.
+        run_id = str(uuid.uuid4())
 
         # Retrieve memory context if enabled
         memory_context = None
@@ -330,7 +333,7 @@ class PredictionSynthesizerAgent:
                 entity_type=entity_type,
                 prediction_target=prediction_target,
                 ensemble_method=ensemble_method,
-                synthesis_id=session_id,
+                synthesis_id=session_id or run_id,
                 query=query,
             ) as trace_ctx:
                 # Log synthesis started
