@@ -22,7 +22,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from src.api.routes.copilotkit import (
     ChatRequest,
@@ -1795,8 +1797,8 @@ class TestChatIdentityFromToken:
         async def _fake_stream(*args, **kwargs):
             # Record the user_id the stream was invoked with, then yield nothing.
             _fake_stream.seen_user_id = kwargs.get("user_id")
-            if False:  # pragma: no cover - generator with no yields
-                yield {}
+            return
+            yield {}  # pragma: no cover - unreachable; makes this a generator
 
         with patch(
             "src.api.routes.chatbot_graph.stream_chatbot",
@@ -1860,8 +1862,8 @@ class TestChatIdentityFromToken:
 
         async def _fake_stream(*args, **kwargs):
             _fake_stream.ran = True
-            if False:  # pragma: no cover - generator with no yields
-                yield {}
+            return
+            yield {}  # pragma: no cover - unreachable; makes this a generator
 
         with (
             patch("src.api.routes.copilotkit.TESTING_MODE", False),
@@ -1933,6 +1935,129 @@ class TestChatIdentityFromToken:
 
         assert response.status_code == 200
         assert mock_run.call_args.kwargs["user_id"] == self.CALLER
+
+    # ---------------------------------------------------------------- #2077
+    # Both plain routes hand the authenticated identity to the graph but never
+    # bound the verified channel, so on a bare-uuid session the chat tools had
+    # neither channel to read and recorded a NULL-owned composition — which
+    # #2095's owner gate treats as absent-pass.
+
+    def _resolved_tool_user(self, session_id):
+        """What the tools would resolve, read from inside the streamed body."""
+        from src.api.routes.chat_identity import resolve_tool_user_id
+        from src.utils.llm_attribution import set_authenticated_user
+
+        set_authenticated_user(None)
+        token_user = {"id": self.CALLER, "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+        seen = {}
+
+        async def _fake_stream(*args, **kwargs):
+            seen["tool_user"] = resolve_tool_user_id(kwargs.get("session_id"))
+            return
+            yield {}  # pragma: no cover - unreachable; makes this a generator
+
+        try:
+            with (
+                patch("src.api.routes.copilotkit.TESTING_MODE", False),
+                patch("src.api.routes.chatbot_graph.stream_chatbot", side_effect=_fake_stream),
+            ):
+                response = client.post(
+                    "/copilotkit/chat/stream",
+                    json={
+                        "query": "Why is TRx moving?",
+                        "user_id": self.CALLER,
+                        "session_id": session_id,
+                        "request_id": "req-1",
+                    },
+                )
+                _ = response.text
+        finally:
+            set_authenticated_user(None)
+        assert response.status_code == 200, response.status_code
+        return seen.get("tool_user")
+
+    def test_stream_binds_the_verified_user_for_a_bare_session(self):
+        assert self._resolved_tool_user("7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50") == self.CALLER
+
+    def test_stream_still_resolves_the_caller_for_a_composite_session(self):
+        """Positive control: the prefix shape keeps resolving the same user."""
+        assert self._resolved_tool_user(f"{self.CALLER}~7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50") == (
+            self.CALLER
+        )
+
+
+class TestAgUiThreadOwnership:
+    """#2077: ``agent/run`` took ``threadId`` raw, and it becomes the session the
+    turn persists under (``copilotkit.py:~1196``). ``chatbot_conversations.user_id``
+    is derived from its prefix and migration 123's trigger feeds the
+    ``computed_user_id`` the RLS policies read, so token X sending ``{Y}~s`` wrote
+    X's turn under Y. CopilotKit mints bare-uuid threadIds (the frontend never
+    builds one — it passes ``CopilotContext.threadId`` straight through,
+    ``E2IChatSidebar.tsx:460``), so legitimate traffic carries no prefix at all.
+    """
+
+    VICTIM = "46d40f52-39ac-4b79-b3a4-1f1292059a00"
+    CALLER = "8f14e45f-ce0a-4c9b-9f2e-1d3a5b7c9e11"
+
+    def _sdk(self):
+        from unittest.mock import MagicMock
+
+        agent = MagicMock()
+        agent.name = "default"
+        sdk = MagicMock()
+        sdk.agents = [agent]
+        return sdk
+
+    async def _run(self, thread_id, monkeypatch):
+        import json as _json
+
+        import src.api.routes.copilotkit as ck
+
+        monkeypatch.setattr(ck, "TESTING_MODE", False)
+
+        async def _verify(token):
+            return {"id": self.CALLER, "email": "caller@example.com"}
+
+        monkeypatch.setattr(ck, "verify_supabase_token", _verify)
+
+        body = _json.dumps(
+            {"method": "agent/run", "threadId": thread_id, "messages": [{"role": "user"}]}
+        ).encode()
+        scope = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/copilotkit/",
+            "raw_path": b"/api/copilotkit/",
+            "query_string": b"",
+            "headers": [(b"authorization", b"Bearer tok")],
+            "server": ("testserver", 80),
+            "client": ("testclient", 12345),
+            "root_path": "",
+            "path_params": {"path": ""},
+            "state": {},
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        return await ck.copilotkit_custom_handler(Request(scope, receive), self._sdk(), path="")
+
+    @pytest.mark.asyncio
+    async def test_a_thread_claiming_another_user_is_rejected_before_streaming(self, monkeypatch):
+        response = await self._run(f"{self.VICTIM}~abc", monkeypatch)
+
+        assert response.status_code == 403
+        assert not isinstance(response, StreamingResponse)
+
+    @pytest.mark.asyncio
+    async def test_a_bare_copilotkit_thread_is_untouched(self, monkeypatch):
+        """Positive control: the only shape real traffic sends still executes."""
+        response = await self._run("7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50", monkeypatch)
+
+        assert isinstance(response, StreamingResponse)
 
 
 class TestPlaceholderActionProvenance:

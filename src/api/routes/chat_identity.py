@@ -37,14 +37,14 @@ sentinel, and nothing here may loosen that.
 """
 
 import logging
-from typing import Any, Dict, Optional
+import uuid
+from typing import Any, Dict, Optional, Protocol
 
 from fastapi import HTTPException, status
 
 from src.utils.llm_attribution import (
-    get_authenticated_user_id,
+    resolve_session_user_id,
     set_authenticated_user,
-    user_id_from_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,22 +53,11 @@ logger = logging.getLogger(__name__)
 def resolve_tool_user_id(session_id: Optional[str]) -> Optional[str]:
     """The user this tool call belongs to, or None — never a fabricated id.
 
-    Verified identity first; the session prefix only when no verified identity
-    exists. See the module docstring for why the order is not the other way.
+    One rule, shared with message/usage attribution so the two can never drift:
+    verified identity first, the session prefix only when there is none. See the
+    module docstring for why the order is not the other way.
     """
-    verified = get_authenticated_user_id()
-    claimed = user_id_from_session(session_id)
-    if verified is None:
-        return claimed
-    if claimed is not None and claimed != verified:
-        logger.warning(
-            "Chat session prefix names user %s but the verified request user is %s; "
-            "recording the verified user (session=%s)",
-            claimed,
-            verified,
-            session_id,
-        )
-    return verified
+    return resolve_session_user_id(session_id)
 
 
 def bind_verified_request_user(request: Any) -> bool:
@@ -84,9 +73,12 @@ def bind_verified_request_user(request: Any) -> bool:
     """
     state = getattr(request, "state", None)
     user = getattr(state, "user", None) if state is not None else None
-    if user is None:
+    if not isinstance(user, dict):
+        # Fail safe: an absent — or unrecognisably shaped — user is NOT an
+        # established identity, so say so and let the caller run its gate rather
+        # than clearing the channel on the strength of something unreadable.
         return False
-    set_authenticated_user(user.get("id") if isinstance(user, dict) else None)
+    set_authenticated_user(user.get("id"))
     return True
 
 
@@ -162,3 +154,54 @@ def reject_identity_mismatch(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Request session_id does not belong to the authenticated user.",
         )
+
+
+class ChatClaims(Protocol):
+    """The two owner claims a chat request body can carry (see ``ChatRequest``)."""
+
+    user_id: Optional[str]
+    session_id: Optional[str]
+
+
+def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode: bool) -> str:
+    """Vet a chat request's owner claims, bind the verified identity, return it.
+
+    The binding is the point #2077 was missing on ``/chat`` and ``/chat/stream``:
+    both handed the authenticated id to the graph but left the channel the chat
+    TOOLS read empty, so on a bare-uuid session every composition recorded a NULL
+    owner and #2095's owner gate took its absent-pass branch. Binding here — in
+    the request task, before the graph or the SSE body starts — is the same
+    channel the AG-UI route uses, and it survives the keepalive wrapper's
+    per-frame tasks because they copy the context that already carries it.
+    """
+    reject_identity_mismatch(token_user_id, claims.user_id, claims.session_id, testing_mode)
+    set_authenticated_user(token_user_id)
+    return str(token_user_id)
+
+
+def owned_thread_id(
+    body_data: Dict[str, Any], body_json: Dict[str, Any], request: Any, testing_mode: bool
+) -> Optional[str]:
+    """The AG-UI turn's thread id, or None when it claims someone else's ownership.
+
+    ``agent/run`` accepts ``threadId`` from the request body in either of two
+    shapes and it becomes the session the turn PERSISTS under, whose prefix
+    decides ``computed_user_id`` and therefore who can read the rows. CopilotKit
+    mints bare uuids and the frontend passes ``CopilotContext.threadId`` through
+    untouched, so no legitimate caller sends a prefix at all. None means reject;
+    the caller answers 403 rather than raising, because an exception here would
+    be swallowed into the ungated SDK fallthrough.
+    """
+    thread_id = body_data.get("threadId") or body_json.get("threadId")
+    if not testing_mode and thread_id:
+        state = getattr(request, "state", None)
+        user = getattr(state, "user", None) if state is not None else None
+        token_user_id = user.get("id") if isinstance(user, dict) else None
+        claimed = thread_id.split("~", 1)[0] if "~" in thread_id else None
+        if claimed and token_user_id and claimed != token_user_id:
+            logger.warning(
+                "[CopilotKit] Rejected threadId mismatch (possible impersonation): "
+                "threadId owner prefix does not match authenticated identity"
+            )
+            return None
+    return thread_id or str(uuid.uuid4())

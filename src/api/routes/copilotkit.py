@@ -340,8 +340,9 @@ from src.api.dependencies.auth import (
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chat_identity import (
+    authorize_chat_identity,
     bind_verified_request_user,
-    reject_identity_mismatch,
+    owned_thread_id,
 )
 from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
@@ -4707,9 +4708,9 @@ async def copilotkit_custom_handler(
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
                 # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
-                thread_id = (
-                    body_data.get("threadId") or body_json.get("threadId") or str(uuid.uuid4())
-                )
+                thread_id = owned_thread_id(body_data, body_json, request, TESTING_MODE)
+                if thread_id is None:
+                    return JSONResponse(status_code=403, content={"error": "threadId not yours"})
                 state = body_data.get("state") or body_json.get("state") or {}
                 messages = body_data.get("messages") or body_json.get("messages") or []
                 actions = (
@@ -5130,10 +5131,7 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], chat_request: Cha
             detail="Authenticated user identity is missing.",
         )
 
-    reject_identity_mismatch(
-        token_user_id, chat_request.user_id, chat_request.session_id, TESTING_MODE
-    )
-    return str(token_user_id)
+    return authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:

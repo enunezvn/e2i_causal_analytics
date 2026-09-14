@@ -385,7 +385,7 @@ def test_the_verified_user_wins_over_a_caller_supplied_session_prefix(
     from src.utils.llm_attribution import set_authenticated_user
 
     set_authenticated_user(USER)
-    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+    with caplog.at_level(logging.WARNING, logger="src.utils.llm_attribution"):
         resolved = resolve_tool_user_id(f"{OTHER_USER}~0b7f7d6e-2c1a-4d7e-9a53-3f1f6a0c9e21")
 
     assert resolved == USER
@@ -400,7 +400,7 @@ def test_a_matching_prefix_logs_nothing(no_authenticated_user, caplog):
     from src.utils.llm_attribution import set_authenticated_user
 
     set_authenticated_user(USER)
-    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+    with caplog.at_level(logging.WARNING, logger="src.utils.llm_attribution"):
         assert resolve_tool_user_id(REAL_SESSION) == USER
 
     assert caplog.records == []

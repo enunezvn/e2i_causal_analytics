@@ -12,9 +12,12 @@ sums across a session never double-count.
 """
 
 import contextvars
+import logging
 import uuid as _uuid
 from dataclasses import dataclass, field
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 ANONYMOUS_USER_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -92,10 +95,36 @@ def user_id_from_session(session_id: Optional[str]) -> Optional[str]:
     return None if prefix == ANONYMOUS_USER_ID else prefix
 
 
+def resolve_session_user_id(session_id: Optional[str]) -> Optional[str]:
+    """The user a chat turn belongs to — verified identity first, prefix second.
+
+    The ``{user}~`` prefix is a claim the caller makes, not a credential: AG-UI
+    reads ``threadId`` straight from the request body and ``/chat`` takes
+    ``session_id`` from it, so a prefix-first rule let one caller persist a turn
+    under another user's ownership (``chatbot_conversations.user_id`` is written
+    from this attribution, and migration 123's trigger turns it into the
+    ``computed_user_id`` the RLS policies read). The prefix still answers for
+    ``/chat/stream``'s own ``{user}~{uuid}`` ids, which set no verified channel.
+    A disagreement is logged, not raised — the request-level guards reject it;
+    this is the last honest read, not the gate.
+    """
+    verified = _authenticated_user_id.get()
+    claimed = user_id_from_session(session_id)
+    if verified is None:
+        return claimed
+    if claimed is not None and claimed != verified:
+        logger.warning(
+            "Chat session prefix names user %s but the verified request user is %s; "
+            "attributing to the verified user (session=%s)",
+            claimed,
+            verified,
+            session_id,
+        )
+    return verified
+
+
 def set_chat_attribution(session_id: str, request_id: Optional[str] = None) -> LLMAttribution:
-    user_id = user_id_from_session(session_id)
-    if user_id is None:
-        user_id = _authenticated_user_id.get()
+    user_id = resolve_session_user_id(session_id)
     attr = LLMAttribution(
         user_id=user_id,
         session_id=session_id,

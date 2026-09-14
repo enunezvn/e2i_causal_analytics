@@ -62,8 +62,21 @@ def test_authenticated_fallback_when_session_has_no_prefix():
     assert attr.surface == "chat"
 
 
-def test_session_prefix_wins_over_authenticated_fallback():
+def test_verified_user_wins_over_a_caller_supplied_session_prefix():
+    """#2077: AG-UI takes threadId from the request body, so the prefix is a claim.
+
+    chatbot_conversations.user_id is set from this attribution and migration 123's
+    trigger turns it into the computed_user_id the RLS policies read — prefix-first
+    let token OTHER persist a turn under USER.
+    """
     set_authenticated_user(OTHER)
+    set_chat_attribution(f"{USER}~s1")
+    assert get_attribution().user_id == OTHER
+
+
+def test_session_prefix_is_used_when_no_verified_user_is_set():
+    """/chat/stream mints {user}~{uuid} and sets no verified channel of its own."""
+    set_authenticated_user(None)
     set_chat_attribution(f"{USER}~s1")
     assert get_attribution().user_id == USER
 
