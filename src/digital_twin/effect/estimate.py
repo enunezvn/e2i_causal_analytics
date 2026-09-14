@@ -14,6 +14,11 @@ PROVENANCE_RWD = "rwd_uplift"
 # Still synthetic-gold data (NOT real-world); the UI keeps the SYNTHETIC badge.
 PROVENANCE_COHORT = "cohort_estimated_synthetic_gold_v1"
 
+# The subgroup axes the engine reports, one per ``EffectHeterogeneity.by_*`` dimension
+# (``digital_twin/models/simulation_models.py``). This is the vocabulary an estimator uses
+# to declare what its scores resolve (#2054); a test pins it against those fields.
+SUBGROUP_AXES: tuple[str, ...] = ("specialty", "decile", "region", "adoption_stage")
+
 
 @dataclass
 class EffectEstimate:
@@ -37,6 +42,18 @@ class EffectEstimate:
     cohort_ate: float | None = None
     cohort_ci_lower: float | None = None
     cohort_ci_upper: float | None = None
+    # Which of ``SUBGROUP_AXES`` this estimator's scores actually RESOLVE, and the evidence
+    # behind each (#2054). A key's PRESENCE is the declaration; both default to empty, so
+    # an estimator that declares nothing resolves nothing and the engine reports ``{}``
+    # rather than a group average that is only sampling noise in the twin draw.
+    #   * key -> NON-EMPTY mapping: the estimator computed these group effects itself over
+    #     its OWN evidence rows, and ``n_by_axis[axis]`` is that per-group row count. The
+    #     engine reports these values as-is; they do not move with the twin count.
+    #   * key -> EMPTY mapping: the axis is resolved by ``per_twin_uplift`` itself (a real
+    #     per-twin score that varies WITHIN every group), so the engine groups the per-twin
+    #     scores as before. ``n_by_axis`` is then the twin count and is left unset.
+    cate_by_axis: dict[str, dict[str, float]] = field(default_factory=dict)
+    n_by_axis: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def ci_width(self) -> float:
         return float(self.ate_ci_upper - self.ate_ci_lower)
