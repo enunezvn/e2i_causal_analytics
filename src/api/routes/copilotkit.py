@@ -142,9 +142,9 @@ Changelog:
     1.21.1 - Fixed session_id not reaching chat_node() for message persistence.
              Root cause: AG-UI LangGraph's state management may not preserve custom
              fields from RunAgentInput.state when passing to graph nodes.
-             Fix: Use Python contextvars to pass session_id across async boundaries.
-             The context var is set in execute() and read in chat_node() as the
-             primary source, with state and config.thread_id as fallbacks.
+             Fix: execute() sets a session contextvar that chat_node() reads first,
+             with state and config.thread_id as fallbacks. (#2064: on the AG-UI
+             route keepalive copies the context, so graph state is the channel.)
     1.21.0 - Added message persistence to Supabase chatbot_messages table.
              All user messages, assistant responses, tool calls, and synthesized responses
              are now persisted using ChatbotMessageRepository. This enables:
@@ -325,7 +325,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 from src.agents.factory import build_agent_roster_block
@@ -340,6 +339,7 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
+from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
 from src.api.routes.synthesis_guard import (
@@ -362,11 +362,11 @@ from src.utils.tool_evidence import evidence_tool_count
 
 logger = logging.getLogger(__name__)
 
-# ``_session_id_context`` (imported above) passes session_id across async
-# boundaries, because AG-UI LangGraph may not preserve custom state fields.
-# #2064: the variable is declared in chatbot_tools so the chat tools read the
-# same binding (tools only ever see the model's args); this name stays for its
-# existing readers here and in chat_bridge.
+# ``_session_id_context`` (imported above) carries session_id only where no
+# keepalive wrapper sits between it and the graph, e.g. the chat bridge; on the
+# AG-UI route keepalive copies the context per frame, so graph STATE is the real
+# channel there (#2064). The variable is declared in chatbot_tools so the chat
+# tools read the same binding; the name stays for readers here and chat_bridge.
 
 # Per-run discriminator for frontend_message_id stamping: the session key is
 # the conversation threadId, so overlapping streams in the same conversation
@@ -1197,8 +1197,8 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # state's run_id into _persist_message_sync as the fallback.
         state_with_session["run_id"] = run_id
 
-        # CRITICAL (v1.21.1): Also set session_id in context var for reliable cross-async access
-        # AG-UI LangGraph may not preserve custom state fields, so use contextvars as fallback
+        # Also bind the context var (v1.21.1). It does NOT reach graph nodes here
+        # (#2064: keepalive copies the context), so state above is the real channel.
         _session_id_context.set(persistent_session_id)
         _run_id_context.set(run_id)
         # Attribute this run's LLM usage to the chat user/session (admin
@@ -3558,8 +3558,8 @@ def create_e2i_chat_agent(
 
         messages = state.get("messages", [])
 
-        # Get session_id with priority: context var (most reliable) > state > config
-        # Context var is set in execute() and persists across async boundaries
+        # Get session_id with priority: context var > state > config. The var is set
+        # only where no keepalive wrapper intervenes; here it is empty (#2064).
         session_id = _session_id_context.get()
         session_id_source = "context_var" if session_id else None
 
@@ -4258,7 +4258,7 @@ def create_e2i_chat_agent(
     # in test_copilotkit_classifier_stream_leak_1636.py fails loudly if the two
     # drift apart.
     workflow.add_node("chat", chat_node)
-    workflow.add_node(_TOOL_NODE_NAME, ToolNode(E2I_CHATBOT_TOOLS))
+    workflow.add_node(_TOOL_NODE_NAME, SessionBoundToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("synthesize", synthesize_node)
 
     # Set entry point

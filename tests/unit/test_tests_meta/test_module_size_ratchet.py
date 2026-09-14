@@ -33,7 +33,7 @@ ALLOWLIST: dict[str, int] = {
     "src/agents/tool_composer/tool_registrations.py": 4854,
     "src/api/main.py": 1692,
     "src/api/routes/chatbot_dspy.py": 4182,
-    "src/api/routes/chatbot_graph.py": 3215,
+    "src/api/routes/chatbot_graph.py": 3190,
     "src/api/routes/chatbot_tools.py": 3077,
     "src/api/routes/copilotkit.py": 6150,
     "src/api/routes/digital_twin.py": 1975,
