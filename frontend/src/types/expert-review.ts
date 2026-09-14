@@ -9,6 +9,10 @@
  * - A REVIEW-band causal estimate creates a `pending` expert_reviews row.
  * - An operator reads the queue and resolves (approves/rejects) it.
  *
+ * This file is a HAND-WRITTEN MIRROR of the expert-review schemas in
+ * `src/types/generated/api.ts`. No drift check covers it, so any backend schema
+ * change must be copied here by hand in the same PR that regenerates api.ts.
+ *
  * @module types/expert-review
  */
 
@@ -32,6 +36,47 @@ export interface DagStructure {
   discovery_gate_decision?: DiscoveryGate | null;
   confidence?: number | null;
   dag_version_hash?: string | null;
+}
+
+/**
+ * The structural delta between two DAG snapshots of the same estimand
+ * (#1991 debt 3, migration 141). Every list is sorted by the engine, so the
+ * same delta renders identically across calls.
+ *
+ * `adjustment_sets_*` carries the covariate delta: a covariate change with an
+ * unchanged graph is still a new version and reports `is_changed` true.
+ *
+ * Edges and adjustment sets are `string[][]` (NOT the arity-enforced 2-tuple
+ * `DagStructure.edges` uses) — that mirrors the backend's `List[List[str]]`.
+ */
+export interface DagChanges {
+  nodes_added: string[];
+  nodes_removed: string[];
+  edges_added: string[][];
+  edges_removed: string[][];
+  adjustment_sets_added: string[][];
+  adjustment_sets_removed: string[][];
+  is_changed: boolean;
+  old_hash?: string | null;
+  new_hash?: string | null;
+}
+
+/**
+ * One `expert_review_versions` row (migration 141): a structure version of a
+ * review, in timeline order.
+ *
+ * The table is a TIMELINE, not a set — a revert (A → B → A) appends a third
+ * row rather than being suppressed, so two versions may carry the same hash.
+ * `changes` is the delta against the version BEFORE it, null on the oldest.
+ */
+export interface ReviewVersion {
+  version_id: string;
+  dag_version_hash: string;
+  adjustment_set_hash?: string | null;
+  dag_structure_json?: DagStructure | null;
+  query_id?: string | null;
+  created_at?: string | null;
+  changes?: DagChanges | null;
 }
 
 /** Verdict vocabulary of the advisory agent assessment. */
@@ -68,6 +113,13 @@ export interface PendingReviewItem {
   review_id: string;
   review_type?: string | null;
   dag_version_hash?: string | null;
+  /**
+   * The adjustment-set half of the review's current version identity
+   * (#1991 debt 3, migration 142); null = unknown. The DAG hash alone cannot
+   * see a covariate-only change, because the backend's DAG hash excludes
+   * adjustment sets — so the resolve form echoes BOTH halves.
+   */
+  adjustment_set_hash?: string | null;
   brand?: string | null;
   treatment_variable?: string | null;
   outcome_variable?: string | null;
@@ -76,6 +128,14 @@ export interface PendingReviewItem {
   days_pending?: number | null;
   dag_structure_json?: DagStructure | null;
   agent_assessment_json?: AgentAssessment | null;
+  /**
+   * How many structure versions this review's estimand has (#1991 debt 3).
+   * The backend always sends it (server default 1); kept OPTIONAL here so a
+   * partial row literal stays valid — read it as `version_count ?? 1`.
+   */
+  version_count?: number;
+  /** When the estimand's newest version was appended; null if never changed. */
+  last_changed_at?: string | null;
 }
 
 /**
@@ -96,6 +156,24 @@ export type ReviewApprovalStatus = 'approved' | 'rejected';
  */
 export interface ResolveReviewRequest {
   approval_status: ReviewApprovalStatus;
+  /**
+   * The structure version the reviewer's form displayed (#1991 debt 3). REQUIRED:
+   * a review's DAG can ADVANCE while the form is open, and the backend applies
+   * the resolution only while the review still carries this hash — a mismatch is
+   * a 409 telling the reviewer to reload, never a silent sign-off of a structure
+   * nobody looked at.
+   */
+  dag_version_hash: string;
+  /**
+   * The adjustment-set half of that same version (#1991 debt 3, codex round 2).
+   * The KEY is required; the VALUE may be null when the review carried no known
+   * adjustment set. An ADJUSTMENT-ONLY advance leaves the DAG hash untouched, so
+   * sending the hash alone let a form opened on the previous covariates resolve
+   * a structure nobody looked at. Omitting the key is a 422, deliberately: "the
+   * form did not send this" and "the review had no adjustment set" are different
+   * facts, and only the second may resolve a null-carrying row.
+   */
+  adjustment_set_hash: string | null;
   checklist: Record<string, unknown>;
   comments?: Record<string, unknown> | null;
   concerns_raised?: string[] | null;
@@ -119,6 +197,8 @@ export interface ReviewSummaryResponse {
   pending: number;
   approved: number;
   rejected: number;
+  /** BLOCK-band reviews resolved by migration 140 (#1991 debt 3). */
+  superseded: number;
   expired: number;
   expiring_soon: number;
 }
@@ -167,6 +247,13 @@ export interface ReviewRecord extends PendingReviewItem {
   checklist_json?: Record<string, unknown> | null;
   comments_json?: Record<string, unknown> | null;
   supersedes_review_id?: string | null;
+  /**
+   * Structural delta between this review's snapshot and that of the
+   * next-OLDER review of the same estimand. Populated on `history` entries
+   * only: null on the top-level `review` and on the OLDEST history entry
+   * (nothing to diff against). Computed by the detail route, never stored.
+   */
+  changes_from_previous?: DagChanges | null;
 }
 
 /**
@@ -176,4 +263,26 @@ export interface ReviewRecord extends PendingReviewItem {
 export interface ExpertReviewDetailResponse {
   review: ReviewRecord;
   history: ReviewRecord[];
+  /**
+   * This review's own `expert_review_versions` timeline (migration 141),
+   * OLDEST first, each row carrying `changes` against the one before it.
+   * Empty for a review minted before the versions table.
+   *
+   * A set of FACTS, not a queue: it may END on a row the review is NOT on (a
+   * run that recorded its version and then lost the compare-and-set advance
+   * leaves an orphan after the winner), so `versions[versions.length - 1]` is
+   * not "the version under review". Use `current_version_id`.
+   */
+  versions: ReviewVersion[];
+  /**
+   * The `version_id` of the timeline entry carrying the review's CURRENT
+   * version identity — the pair (`dag_version_hash`, `adjustment_set_hash`) the
+   * review row itself holds. The ONLY entry whose `changes` describes what the
+   * reviewer is being asked to approve.
+   *
+   * Null when no entry carries that pair (a review minted before the versions
+   * table, or one whose first version was never recorded): render no delta at
+   * all rather than a plausible-wrong one.
+   */
+  current_version_id?: string | null;
 }
