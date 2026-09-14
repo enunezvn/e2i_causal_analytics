@@ -59,6 +59,9 @@ class _EstimandRepo:
         self.advanced: List[tuple] = []
         self.advance_kwargs: List[Dict[str, Any]] = []
         self.advance_result = True
+        self.recorded: List[tuple] = []
+        self.record_kwargs: List[Dict[str, Any]] = []
+        self.record_result = True
         self.structure_updates: List[tuple] = []
         self.dag_approval_calls = 0
         self.estimand_lookups: List[str] = []
@@ -96,6 +99,15 @@ class _EstimandRepo:
         self.appended.append((review_id, kwargs.get("dag_version_hash")))
         self.append_kwargs.append({"review_id": review_id, **kwargs})
         return True
+
+    async def record_version(self, review_id: str, **kwargs: Any) -> bool:
+        """The timeline write WITHOUT the row advance. Recorded separately so a
+        test can tell "the timeline grew" from "the review moved" -- a double
+        that folded them could not see that a record-only run leaves the review's
+        cached assessment alone."""
+        self.recorded.append((review_id, kwargs.get("dag_version_hash")))
+        self.record_kwargs.append({"review_id": review_id, **kwargs})
+        return self.record_result
 
     async def advance_review(self, review_id: str, **kwargs: Any) -> bool:
         """The advance WITHOUT an append (codex round 2). Recorded separately
@@ -210,7 +222,14 @@ async def test_review_band_same_estimand_new_hash_appends_version_not_row():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_same_hash_appends_nothing():
-    repo = _EstimandRepo(history=[_pending("r1", "h1")])
+    # The timeline is seeded with this review's own pair on purpose. An EMPTY
+    # fixture now means NOT_RECORDED, a different case: the gate records version
+    # 1 there. What this pins is same-structure idempotence on RE-ENCOUNTER --
+    # already recorded, so there is nothing left to write.
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1")],
+        latest_version=_version("h1", snapshot=None),
+    )
     gate = ExpertReviewGate(repository=repo, auto_create_review=True)
 
     r = await gate.check_approval(
@@ -380,11 +399,15 @@ async def test_a_pending_review_of_another_hash_does_not_void_this_hashs_approva
     on its own approval and appends nothing to r2's timeline; re-running h2
     lands on the open review, unchanged.
     """
+    # r2's own pair is seeded on its timeline: an EMPTY fixture would mean
+    # NOT_RECORDED, where the gate records version 1 -- a different case from the
+    # one this test is about (an approval surviving a revised sibling).
     repo = _EstimandRepo(
         history=[
             _pending("r2", "h2", created_at="2026-09-05T00:00:00+00:00"),
             _approved("r1", "h1"),
-        ]
+        ],
+        latest_version=_version("h2", snapshot=None),
     )
     gate = ExpertReviewGate(repository=repo, auto_create_review=True)
 
@@ -461,8 +484,27 @@ async def test_absent_brand_keys_on_the_empty_brand_bucket():
 # --------------------------------------------------------------------------
 
 
-def _version(dag_hash: str, adjustment_sets=None, *, adjustment_set_hash="__derive__"):
-    """A timeline row as ``get_latest_version`` returns it."""
+def _version(
+    dag_hash: str, adjustment_sets=None, *, adjustment_set_hash="__derive__", snapshot="__default__"
+):
+    """A timeline row as ``get_latest_version`` returns it.
+
+    ``snapshot=None`` is a migration-141 BACKFILLED row for a pre-097 review: the
+    backfill copies ``expert_reviews.dag_structure_json``, which was NULL there,
+    so both the snapshot and the adjustment hash are NULL. That combination is
+    the only way to seed a recorded pair whose adjustment half is genuinely
+    UNKNOWN -- with a snapshot present the gate DERIVES the hash from it, and an
+    absent ``adjustment_sets`` key derives the canonical EMPTY set, a different
+    fact.
+    """
+    if snapshot is None:
+        return {
+            "version_id": "v1",
+            "review_id": "r1",
+            "dag_version_hash": dag_hash,
+            "adjustment_set_hash": None,
+            "dag_structure_json": None,
+        }
     snapshot = {"nodes": ["T", "Y"], "edges": [["T", "Y"]]}
     if adjustment_sets is not None:
         snapshot["adjustment_sets"] = adjustment_sets
@@ -1156,3 +1198,147 @@ async def test_an_unreadable_timeline_is_still_NOT_treated_as_an_empty_one():
     )
 
     assert repo.appended == [] and repo.advanced == []
+
+
+# --------------------------------------------------------------------------
+# NOT_RECORDED is an EMPTY timeline, not an unreadable one
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_row_that_only_learns_its_adjustment_half_still_records_version_one():
+    """The gap: no timeline, and the ONLY difference is the row learning its
+    adjustment half (the DAG hash matches, the row's half is NULL).
+
+    ``row_asserts_change`` is False -- a NULL half is UNKNOWN, not evidence -- so
+    the append was skipped and the advance made the row equal the run's pair.
+    Every later run then found nothing to do, and that review never got a version
+    row at all: invisible in the timeline forever, with no outage and no race.
+    """
+    adjustment = compute_adjustment_set_hash([["W"]])
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1", adjustment_set_hash=None)],
+        latest_version=None,
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+    )
+
+    assert repo.appended == [("r1", "h1")]
+    kwargs = repo.append_kwargs[0]
+    assert kwargs["adjustment_set_hash"] == adjustment
+    # The compare-and-set names the pair it READ -- the unknown half included.
+    assert kwargs["expected_current_hash"] == "h1"
+    assert kwargs["expected_current_adjustment_hash"] is None
+    # append_version advances too, so no second write.
+    assert repo.advanced == []
+
+
+# --------------------------------------------------------------------------
+# THREE branches: record-only, record-and-advance, advance-only
+#
+# "The timeline is missing this structure" and "the review is not on it" are
+# independent, so three combinations write, and WHICH one runs matters because
+# they touch different rows. Folding record-only into append_version re-wrote
+# the review with the pair it already had, clearing an advisory grading OF THAT
+# VERY STRUCTURE for nothing.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_unchanged_run_on_an_empty_timeline_records_without_advancing():
+    """NOT_RECORDED + the row already on this pair: the timeline needs version 1,
+    the review needs nothing.
+
+    Live, this is an old-image mint from the deploy window, or a mint whose
+    version-1 insert failed. Both self-repair here -- and once the row lands the
+    timeline answers SAME, so it happens exactly once. That is a repair, not a
+    duplicate.
+    """
+    adjustment = compute_adjustment_set_hash([["W"]])
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1", adjustment_set_hash=adjustment)],
+        latest_version=None,
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+    )
+
+    assert repo.recorded == [("r1", "h1")]
+    kwargs = repo.record_kwargs[0]
+    assert kwargs["adjustment_set_hash"] == adjustment
+    # The review row is NOT rewritten, so its cached advisory grading of this
+    # very structure survives -- the whole point of the record-only branch.
+    assert repo.advanced == [] and repo.appended == []
+    # record_version takes no compare-and-set: there is nothing to compare.
+    assert "expected_current_hash" not in kwargs
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_orphan_latest_pair_records_only_when_the_row_is_already_correct():
+    """The lost-race leftover from the other side: the timeline's latest is an
+    orphan B while the review and this run are both on C. C is missing from the
+    timeline, so record it -- but the review is already right, so leave it."""
+    run_adjustment = compute_adjustment_set_hash([["C"]])
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1", adjustment_set_hash=run_adjustment)],
+        latest_version=_version("h1", adjustment_set_hash="adj-B-orphan"),
+    )
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    await gate.check_approval(
+        dag_hash="h1",
+        brand="B",
+        treatment="T",
+        outcome="Y",
+        requester_id="q",
+        dag_structure={**_GRAPH, "adjustment_sets": [["C"]]},
+    )
+
+    assert repo.recorded == [("r1", "h1")]
+    assert repo.record_kwargs[0]["adjustment_set_hash"] == run_adjustment
+    assert repo.advanced == [] and repo.appended == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_failed_record_only_write_is_logged_and_still_returns_the_review(caplog):
+    """Best-effort, like the other two writes: a failed timeline row must not
+    withhold the review id the caller needs."""
+    adjustment = compute_adjustment_set_hash([["W"]])
+    repo = _EstimandRepo(
+        history=[_pending("r1", "h1", adjustment_set_hash=adjustment)],
+        latest_version=None,
+    )
+    repo.record_result = False
+    gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+    with caplog.at_level("WARNING"):
+        r = await gate.check_approval(
+            dag_hash="h1",
+            brand="B",
+            treatment="T",
+            outcome="Y",
+            requester_id="q",
+            dag_structure={**_GRAPH, "adjustment_sets": [["W"]]},
+        )
+
+    assert r.decision == ReviewGateDecision.PENDING_REVIEW and r.review_id == "r1"
+    assert any("r1" in rec.getMessage() for rec in caplog.records)

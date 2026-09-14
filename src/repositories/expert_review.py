@@ -922,6 +922,74 @@ class ExpertReviewRepository(BaseRepository):
             logger.error(f"Failed to get reviews for estimand: {e}")
             raise
 
+    async def record_version(
+        self,
+        review_id: str,
+        *,
+        dag_version_hash: str,
+        dag_structure: Optional[Dict[str, Any]],
+        adjustment_set_hash: Optional[str],
+        query_id: Optional[str],
+    ) -> bool:
+        """Write one structure version to the review's TIMELINE. The insert only
+        -- the review row is not touched.
+
+        Recording a structure and MOVING the review onto it are two decisions,
+        and the gate makes them separately, so the repository offers them
+        separately. A review that already carries the pair it is recording needs
+        the timeline row and nothing else: routing that case through
+        :meth:`append_version` re-wrote the review with the pair it already had,
+        which cleared ``agent_assessment_json`` -- discarding an advisory grading
+        OF THAT VERY STRUCTURE, for no reason. Here there is no UPDATE at all, so
+        nothing to clear and nothing to compare-and-set.
+
+        ``expert_review_versions`` is a TIMELINE (migration 141), not a set: a
+        revert (A -> B -> A) records a third row rather than being suppressed, so
+        same-pair idempotence is the caller's gate, not a constraint's.
+        ``insert()``, never ``upsert()``: ``upsert`` defaults to ON CONFLICT DO
+        UPDATE and ``service_role`` holds SELECT+INSERT only on this table
+        (42501 otherwise).
+
+        Args:
+            review_id: The review whose timeline gains a row
+            dag_version_hash: The structure's DAG hash
+            dag_structure: The sanitized snapshot, or None when there is none
+            adjustment_set_hash: The adjustment-set half; None means UNKNOWN,
+                which is what migration 141's backfilled rows carry
+            query_id: The run that produced the structure
+
+        Returns:
+            True when the row was inserted; False on a persistence error, which
+            is logged. The caller decides what a failed timeline write means for
+            the review -- ``append_version`` refuses to advance after one.
+        """
+        if not self.client:
+            return False
+
+        try:
+            await (
+                self.client.table("expert_review_versions")
+                .insert(
+                    {
+                        "review_id": review_id,
+                        "dag_version_hash": dag_version_hash,
+                        "dag_structure_json": to_plain_json(dag_structure)
+                        if dag_structure
+                        else None,
+                        "adjustment_set_hash": adjustment_set_hash,
+                        "query_id": query_id,
+                    }
+                )
+                .execute()
+            )
+        except Exception as e:
+            logger.error(
+                f"record_version: insert failed for review {review_id} at "
+                f"({dag_version_hash}, {adjustment_set_hash}): {e}"
+            )
+            return False
+        return True
+
     async def advance_review(
         self,
         review_id: str,
@@ -1112,13 +1180,14 @@ class ExpertReviewRepository(BaseRepository):
         not done: a mint or an advance is rare, and a duplicated version row
         overstates how often the DAG changed without misreporting what it is.
 
-        A second, cheaper residual: when the gate needs an APPEND but not an
-        advance -- the timeline's latest is an orphan pair from a lost race while
-        the review already carries this run's pair -- the advance below re-writes
-        the pair the row already has. The compare-and-set holds (the row is still
-        on it), so nothing is lost or overwritten; the only cost is that
-        ``agent_assessment_json`` is cleared and the advisory grading has to be
-        rebuilt on the next request.
+        The case that used to cost something here no longer reaches this
+        method: when the gate needs the TIMELINE row but not an advance -- the
+        latest recorded pair is an orphan from a lost race while the review
+        already carries this run's pair -- it calls :meth:`record_version`
+        directly. Routing that through here re-wrote the review with the pair it
+        already had and cleared ``agent_assessment_json``, discarding an advisory
+        grading of that very structure. The review row is now untouched in that
+        case, so there is nothing to clear and no compare-and-set to lose.
 
         Returns:
             True only when BOTH the append and the review's advance succeeded.
@@ -1133,30 +1202,23 @@ class ExpertReviewRepository(BaseRepository):
         if not self.client:
             return False
 
-        snapshot = to_plain_json(dag_structure) if dag_structure else None
-        try:
-            await (
-                self.client.table("expert_review_versions")
-                .insert(
-                    {
-                        "review_id": review_id,
-                        "dag_version_hash": dag_version_hash,
-                        "dag_structure_json": snapshot,
-                        "adjustment_set_hash": adjustment_set_hash,
-                        "query_id": query_id,
-                    }
-                )
-                .execute()
-            )
-        except Exception as e:
-            logger.error(f"append_version: insert failed for review {review_id}: {e}")
+        # The timeline write is the SAME operation the record-only path runs, so
+        # it is the same code: one definition of "write this structure to the
+        # timeline", one insert payload, one failure log.
+        if not await self.record_version(
+            review_id,
+            dag_version_hash=dag_version_hash,
+            dag_structure=dag_structure,
+            adjustment_set_hash=adjustment_set_hash,
+            query_id=query_id,
+        ):
             return False
 
-        # The advance is the SAME operation the repair path runs, so it is the
-        # same code: one definition of "move the review onto this pair", one
-        # compare-and-set, one warning. Its False already names both expected
-        # halves; the append's own consequence -- the version row stays, one
-        # ahead of the review -- is documented above.
+        # The advance is likewise the SAME operation the repair path runs: one
+        # definition of "move the review onto this pair", one compare-and-set,
+        # one warning. Its False already names both expected halves; the
+        # append's own consequence -- the version row stays, one ahead of the
+        # review -- is documented above.
         return await self.advance_review(
             review_id,
             dag_version_hash=dag_version_hash,

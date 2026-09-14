@@ -1257,3 +1257,140 @@ async def test_create_review_omits_an_unknown_adjustment_set_hash(fake_client):
         outcome_variable="persistent_180d",
     )
     assert "adjustment_set_hash" not in fake_client.inserted("expert_reviews")[0]
+
+
+# --------------------------------------------------------------------------
+# record_version -- the timeline write WITHOUT the row advance
+#
+# Recording a structure and moving the review onto it are two decisions (the
+# gate makes them separately), so the repository offers them separately. A
+# review already ON the pair it is recording needs the timeline row and nothing
+# else: routing that through append_version re-wrote the row with the pair it
+# already had, which cleared the advisory assessment for no reason.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_record_version_inserts_the_timeline_row_and_touches_nothing_else(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-W",
+                "agent_assessment_json": {"items": [{"id": "q1"}]},
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.record_version(
+        "r1",
+        dag_version_hash="h1",
+        dag_structure={"nodes": ["T", "Y"], "adjustment_sets": [["W"]]},
+        adjustment_set_hash="adj-W",
+        query_id="q2",
+    )
+    assert ok is True
+    assert fake_client.inserted("expert_review_versions")[0] == {
+        "review_id": "r1",
+        "dag_version_hash": "h1",
+        "dag_structure_json": {"nodes": ["T", "Y"], "adjustment_sets": [["W"]]},
+        "adjustment_set_hash": "adj-W",
+        "query_id": "q2",
+    }
+    # The REVIEW is untouched -- no UPDATE at all, so the cached advisory
+    # grading of this very structure survives.
+    assert fake_client.updated("expert_reviews") == []
+    assert fake_client.rows("expert_reviews")[0]["agent_assessment_json"] == {
+        "items": [{"id": "q1"}]
+    }
+    # insert(), never upsert() -- service_role has no UPDATE on the versions table.
+    assert not any(m == "upsert" for m, _ in fake_client.calls("expert_review_versions"))
+
+
+@pytest.mark.unit
+async def test_record_version_returns_false_and_logs_when_the_insert_fails(fake_client, caplog):
+    fake_client.fail_next_insert("expert_review_versions", Exception("42501 permission denied"))
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    with caplog.at_level(logging.ERROR):
+        ok = await repo.record_version(
+            "r1",
+            dag_version_hash="h1",
+            dag_structure=None,
+            adjustment_set_hash=None,
+            query_id=None,
+        )
+    assert ok is False
+    assert any("r1" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.unit
+async def test_append_version_composes_record_version_and_advance_review(fake_client, monkeypatch):
+    """``append_version`` must not keep its own copy of the insert: one
+    definition of "write the timeline row", one of "move the review"."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-A",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    seen: Dict[str, Any] = {}
+
+    async def _spy_record(review_id: str, **kwargs: Any) -> bool:
+        seen["record"] = {"review_id": review_id, **kwargs}
+        return True
+
+    monkeypatch.setattr(repo, "record_version", _spy_record)
+
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure={"nodes": ["T"]},
+        adjustment_set_hash="adj-B",
+        query_id="q2",
+        expected_current_hash="h1",
+        expected_current_adjustment_hash="adj-A",
+    )
+    assert ok is True
+    assert seen["record"] == {
+        "review_id": "r1",
+        "dag_version_hash": "h2",
+        "dag_structure": {"nodes": ["T"]},
+        "adjustment_set_hash": "adj-B",
+        "query_id": "q2",
+    }
+    # ... and the advance still ran, on the real repository method.
+    row = fake_client.rows("expert_reviews")[0]
+    assert row["dag_version_hash"] == "h2" and row["adjustment_set_hash"] == "adj-B"
+
+
+@pytest.mark.unit
+async def test_append_version_does_not_advance_when_the_record_fails(fake_client):
+    """Unchanged contract, now expressed through the split: a failed timeline
+    write leaves the review exactly where it was."""
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h1"}],
+    )
+    fake_client.fail_next_insert("expert_review_versions", Exception("boom"))
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure=None,
+        adjustment_set_hash=None,
+        query_id=None,
+        expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
+    )
+    assert ok is False
+    assert fake_client.updated("expert_reviews") == []
+    assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h1"

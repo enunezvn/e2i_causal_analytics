@@ -804,6 +804,9 @@ WRITERS = frozenset(
         # resolved review, or persistence error), never a plausible-wrong read.
         # The caller re-reads; nothing downstream mistakes it for data.
         "advance_review",
+        # The other half of the same split: the timeline INSERT alone. Same
+        # contract -- a False is a failed write, logged, never data.
+        "record_version",
     }
 )
 

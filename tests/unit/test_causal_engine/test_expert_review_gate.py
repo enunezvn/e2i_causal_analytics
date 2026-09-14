@@ -45,6 +45,11 @@ class TestExpertReviewGate:
         # read UNREADABLE, which the gate deliberately treats as "already
         # recorded" -- so the default must be an explicit empty answer.
         repo.get_latest_version = AsyncMock(return_value=None)
+        # NOT_RECORDED is now the RECORD-ONLY branch when the review already
+        # carries this run's pair (the timeline needs version 1, the review does
+        # not). A bare MagicMock is not awaitable, so the call would raise inside
+        # the gate rather than be recorded.
+        repo.record_version = AsyncMock(return_value=True)
         return repo
 
     @pytest.fixture
@@ -235,6 +240,7 @@ class _CapturingRepo:
     def __init__(self) -> None:
         self.create_kwargs: dict | None = None
         self.appended: list[tuple] = []
+        self.recorded: list[tuple] = []
 
     async def get_dag_approval(self, dag_hash, brand=None):
         return None
@@ -251,6 +257,11 @@ class _CapturingRepo:
 
     async def append_version(self, review_id, **kwargs):
         self.appended.append((review_id, kwargs.get("dag_version_hash")))
+        return True
+
+    async def record_version(self, review_id, **kwargs):
+        """The timeline write alone, for a review already on this run's pair."""
+        self.recorded.append((review_id, kwargs.get("dag_version_hash")))
         return True
 
     async def get_latest_version(self, review_id):
@@ -391,11 +402,26 @@ class _PendingRepo(_CapturingRepo):
     """Repo whose queue already holds a pending row for the DAG (pre-097 rows
     lack dag_structure_json). Captures update_dag_structure calls."""
 
-    def __init__(self, pending_row: dict) -> None:
+    def __init__(self, pending_row: dict, latest_version: dict | str = "__own_pair__") -> None:
         super().__init__()
         self._pending_row = pending_row
         self.structure_updates: list[tuple] = []
         self.advances: list[tuple] = []
+        self.append_kwargs: list[dict] = []
+        # The review's TIMELINE. Default: one row carrying the pending row's own
+        # pair, so the gate answers SAME and the consult reaches the backfill
+        # short-circuit these tests exist for. An EMPTY timeline is a different
+        # case (NOT_RECORDED: the gate records version 1 there), reachable by
+        # passing latest_version=None.
+        if latest_version == "__own_pair__":
+            latest_version = {
+                "version_id": "v1",
+                "review_id": pending_row.get("review_id"),
+                "dag_version_hash": pending_row.get("dag_version_hash"),
+                "adjustment_set_hash": pending_row.get("adjustment_set_hash"),
+                "dag_structure_json": None,
+            }
+        self._latest_version = latest_version
 
     async def get_reviews_for_dag(self, dag_hash, include_expired=False, brand=None):
         return [self._pending_row]
@@ -408,15 +434,23 @@ class _PendingRepo(_CapturingRepo):
         return True
 
     async def advance_review(self, review_id, **kwargs):
-        """Codex round 2: the gate advances a review whose own version identity
-        differs from the run's -- including a row whose adjustment half is still
-        UNKNOWN (NULL) against a run that computed one. Recorded so the backfill
-        tests can assert they did NOT take that path."""
+        """The gate advances a review whose own version identity differs from
+        the run's. Recorded so the backfill tests can assert they did NOT take
+        that path."""
         self.advances.append((review_id, kwargs))
         return True
 
+    async def append_version(self, review_id, **kwargs):
+        self.appended.append((review_id, kwargs.get("dag_version_hash")))
+        self.append_kwargs.append({"review_id": review_id, **kwargs})
+        return True
+
+    async def record_version(self, review_id, **kwargs):
+        self.recorded.append((review_id, kwargs.get("dag_version_hash")))
+        return True
+
     async def get_latest_version(self, review_id):
-        return None
+        return dict(self._latest_version) if self._latest_version is not None else None
 
 
 class TestPendingRowStructureBackfill:
@@ -512,16 +546,17 @@ class TestPendingRowStructureBackfill:
         assert result.decision == ReviewGateDecision.PENDING_REVIEW
 
     @pytest.mark.asyncio
-    async def test_a_row_whose_adjustment_half_is_unknown_is_advanced_not_backfilled(self):
-        """Codex round 2: a pre-142 row carries NULL -- UNKNOWN, not "no
-        adjustment set". The run computed one, so the row's version identity
-        genuinely differs and the gate ADVANCES it instead of backfilling.
+    async def test_a_row_whose_adjustment_half_is_unknown_is_versioned_not_backfilled(self):
+        """A pre-142 row carries NULL -- UNKNOWN, not "no adjustment set". The run
+        computed one, so the row's version identity genuinely differs AND its
+        timeline is empty: both decisions fire, which is ``append_version``.
 
-        That is not a lost backfill: the advance writes the snapshot AND the
-        adjustment half, so it does strictly more than update_dag_structure. It
-        has to happen, or the row never learns its second half and every guard
-        keyed on it (resolution, the assessment persist, the compare-and-set)
-        keeps matching half an identity -- the defect round 2 found.
+        That is not a lost backfill. The append records the structure on the
+        timeline and its advance writes the snapshot AND the adjustment half, so
+        it does strictly more than ``update_dag_structure``. It has to happen, or
+        the row never learns its second half and every guard keyed on it
+        (resolution, the assessment persist, the compare-and-set) keeps matching
+        half an identity -- the defect codex round 2 found.
         """
         repo = _PendingRepo(
             {
@@ -530,7 +565,9 @@ class TestPendingRowStructureBackfill:
                 "dag_version_hash": "deadbeef",
                 "adjustment_set_hash": None,
                 "dag_structure_json": None,
-            }
+            },
+            # No timeline either: a pre-141 row the backfill skipped.
+            latest_version=None,
         )
         gate = ExpertReviewGate(repository=repo, auto_create_review=True)
 
@@ -542,10 +579,12 @@ class TestPendingRowStructureBackfill:
         )
 
         assert result.decision == ReviewGateDecision.PENDING_REVIEW
-        assert repo.structure_updates == [], "the advance supersedes the backfill here"
-        assert len(repo.advances) == 1
-        review_id, kwargs = repo.advances[0]
-        assert review_id == "rev-legacy"
+        assert repo.structure_updates == [], "the append supersedes the backfill here"
+        # Both decisions -> append_version, which advances as part of the same
+        # call; a separate advance would be a second write of the same move.
+        assert repo.appended == [("rev-legacy", "deadbeef")]
+        assert repo.advances == []
+        kwargs = repo.append_kwargs[0]
         assert kwargs["adjustment_set_hash"] == _EMPTY_ADJUSTMENT
         # The compare-and-set expects the UNKNOWN it read, matched IS NULL.
         assert kwargs["expected_current_adjustment_hash"] is None
@@ -566,6 +605,11 @@ class TestExpertReviewGateCanProceed:
         # appending. A bare MagicMock is not awaitable, which the gate swallows as
         # UNKNOWN -- the OUTAGE path, not the one these tests mean to exercise.
         repo.get_latest_version = AsyncMock(return_value=None)
+        # NOT_RECORDED is now the RECORD-ONLY branch when the review already
+        # carries this run's pair (the timeline needs version 1, the review does
+        # not). A bare MagicMock is not awaitable, so the call would raise inside
+        # the gate rather than be recorded.
+        repo.record_version = AsyncMock(return_value=True)
         return repo
 
     @pytest.mark.asyncio
@@ -901,6 +945,11 @@ class TestRejectedVerdictIsDurable:
         # appending. A bare MagicMock is not awaitable, which the gate swallows as
         # UNKNOWN -- the OUTAGE path, not the one these tests mean to exercise.
         repo.get_latest_version = AsyncMock(return_value=None)
+        # NOT_RECORDED is now the RECORD-ONLY branch when the review already
+        # carries this run's pair (the timeline needs version 1, the review does
+        # not). A bare MagicMock is not awaitable, so the call would raise inside
+        # the gate rather than be recorded.
+        repo.record_version = AsyncMock(return_value=True)
         return repo
 
     @pytest.mark.asyncio
@@ -1009,6 +1058,11 @@ class TestCheckRejection:
         # appending. A bare MagicMock is not awaitable, which the gate swallows as
         # UNKNOWN -- the OUTAGE path, not the one these tests mean to exercise.
         repo.get_latest_version = AsyncMock(return_value=None)
+        # NOT_RECORDED is now the RECORD-ONLY branch when the review already
+        # carries this run's pair (the timeline needs version 1, the review does
+        # not). A bare MagicMock is not awaitable, so the call would raise inside
+        # the gate rather than be recorded.
+        repo.record_version = AsyncMock(return_value=True)
         return repo
 
     def _rejected(self, **extra):
@@ -1279,6 +1333,11 @@ class TestApprovalPrecedenceIsChronological:
         # appending. A bare MagicMock is not awaitable, which the gate swallows as
         # UNKNOWN -- the OUTAGE path, not the one these tests mean to exercise.
         repo.get_latest_version = AsyncMock(return_value=None)
+        # NOT_RECORDED is now the RECORD-ONLY branch when the review already
+        # carries this run's pair (the timeline needs version 1, the review does
+        # not). A bare MagicMock is not awaitable, so the call would raise inside
+        # the gate rather than be recorded.
+        repo.record_version = AsyncMock(return_value=True)
         return repo
 
     @pytest.mark.asyncio

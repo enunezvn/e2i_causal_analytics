@@ -33,12 +33,12 @@ class _VersionMatch(Enum):
     "The review has no timeline yet" (NOT_RECORDED) and "the timeline could not
     be read" (UNKNOWN) read alike -- "nothing recorded contradicts this run" --
     but they are opposites: the first KNOWS the timeline is empty, the second
-    knows nothing at all. The PENDING branch currently treats them the same,
-    appending on either only when the review ROW itself contradicts the run;
-    ``check_approval`` documents the gap that costs and why closing it is a
-    product decision. The MINT path already separates them: it appends on
-    UNKNOWN, because nothing else would ever carry the change there and a skip
-    would lose version 1 permanently.
+    knows nothing at all. NOT_RECORDED therefore records version 1
+    unconditionally (an empty timeline cannot be duplicated), while UNKNOWN
+    records only when the review ROW itself contradicts the run. The MINT path
+    separates them the same way, and appends on UNKNOWN too, because nothing
+    else would ever carry the change there and a skip would lose version 1
+    permanently.
 
     On the pending branch this answer decides only whether to APPEND. Whether to
     ADVANCE is a separate decision read from the review ROW, which no timeline
@@ -495,30 +495,44 @@ class ExpertReviewGate:
             #                            duplicate it -- this is the strand case,
             #                            and the repair is the advance below,
             #                            alone.
-            #   NOT_RECORDED / UNKNOWN   append only on the ROW's own positive
-            #                            evidence (``row_asserts_change``).
-            #                            Neither state can confirm the timeline
-            #                            lacks this pair, so a blind append risks
-            #                            the duplicate the version read exists to
+            #   NOT_RECORDED             record, unconditionally. The timeline
+            #                            is EMPTY, so there is nothing an insert
+            #                            could duplicate, and version 1 must be
+            #                            written HERE or nowhere: a review whose
+            #                            row merely LEARNS its adjustment half
+            #                            ends up equal to the run's pair, after
+            #                            which no later run ever sees a
+            #                            difference to trigger it again. Live,
+            #                            this is an old-image mint from the
+            #                            deploy window or a mint whose version-1
+            #                            insert failed -- both self-repair here,
+            #                            and once the row lands the timeline
+            #                            answers SAME, so it happens once.
+            #   UNKNOWN                  record only on the ROW's own positive
+            #                            evidence (``row_asserts_change``). The
+            #                            timeline may hold a row this run cannot
+            #                            see, so a blind insert risks the
+            #                            duplicate the version read exists to
             #                            prevent -- but a row that positively
             #                            contradicts this run is evidence no
             #                            outage can hide.
             #
-            # KNOWN GAP, deliberately left pending a decision rather than fixed
-            # here: NOT_RECORDED is not the same fact as UNKNOWN. It KNOWS the
-            # timeline is empty, so an append there could not duplicate anything.
-            # Treating it like UNKNOWN loses version 1 for a review whose row
-            # merely LEARNS its adjustment half (hash equal, row half NULL, run
-            # half computed): ``row_asserts_change`` is False, so nothing is
-            # appended, the advance then makes the row equal the run's pair, and
-            # no later run ever sees a difference to trigger the append again.
-            # Splitting NOT_RECORDED out would fix it, but two pins from this
-            # feature's own commit (78a44e0bc) assert the opposite --
-            # ``test_same_hash_appends_nothing`` and
-            # ``test_a_pending_review_of_another_hash_does_not_void_this_hashs_approval``
-            # both run an UNCHANGED pair against an empty timeline and require
-            # that nothing is appended -- so flipping it is a product decision,
-            # not a refactor.
+            # NOT_RECORDED and UNKNOWN read alike ("nothing recorded contradicts
+            # this") and are opposites: the first KNOWS the timeline is empty,
+            # the second knows nothing at all.
+            #
+            # The two decisions give THREE writing branches, and which one runs
+            # matters because they touch different rows:
+            #
+            #   append + advance -> ``append_version``  (timeline row, then the
+            #                       compare-and-set advance)
+            #   append only      -> ``record_version``  (the timeline row ALONE;
+            #                       the review is already on this pair, so there
+            #                       is nothing to compare-and-set and rewriting
+            #                       it would clear an advisory grading OF THIS
+            #                       VERY STRUCTURE)
+            #   advance only     -> ``advance_review``  (the strand repair: the
+            #                       timeline already holds this pair)
             #
             # Residual on the other side, an outage STACKED on a lost race: a
             # STRANDED review (row on pair C, timeline latest B, because B's
@@ -548,7 +562,8 @@ class ExpertReviewGate:
             )
             append_needed = bool(review_id) and (
                 match is _VersionMatch.DIFFERENT
-                or (match is not _VersionMatch.SAME and row_asserts_change)
+                or match is _VersionMatch.NOT_RECORDED
+                or (match is _VersionMatch.UNKNOWN and row_asserts_change)
             )
             advance_needed = bool(review_id) and row_pair_differs
 
@@ -564,9 +579,10 @@ class ExpertReviewGate:
                 # The compare-and-set names the PAIR read above. Both writes use
                 # it, so whichever runs, exactly one of two racing runs wins and
                 # the loser is logged rather than overwriting a winner.
-                if append_needed:
-                    # ``append_version`` ALREADY advances, so an append never
-                    # needs a second write -- one structure, one row, one move.
+                if append_needed and advance_needed:
+                    # Both: ``append_version`` writes the timeline row AND
+                    # advances, so this never needs a second write -- one
+                    # structure, one row, one move.
                     written = await self.repository.append_version(
                         str(review_id),
                         dag_version_hash=dag_hash,
@@ -585,6 +601,27 @@ class ExpertReviewGate:
                             f"Could not record structure version ({dag_hash}, "
                             f"{adjustment_set_hash}) on pending review {review_id} (estimand "
                             f"{estimand_key}); the review stays pending on its previous version."
+                        )
+                elif append_needed:
+                    # The TIMELINE is missing this structure but the review is
+                    # already on it. Record the row and touch NOTHING else:
+                    # there is no compare-and-set to make (the row is where it
+                    # should be) and rewriting it would clear
+                    # ``agent_assessment_json`` -- discarding an advisory grading
+                    # OF THIS VERY STRUCTURE for no reason.
+                    written = await self.repository.record_version(
+                        str(review_id),
+                        dag_version_hash=dag_hash,
+                        dag_structure=structure,
+                        adjustment_set_hash=adjustment_set_hash,
+                        query_id=requester_id,
+                    )
+                    if not written:
+                        logger.warning(
+                            f"Could not record structure version ({dag_hash}, "
+                            f"{adjustment_set_hash}) on the timeline of pending review "
+                            f"{review_id} (estimand {estimand_key}); the review itself is "
+                            "already on this structure and is unchanged."
                         )
                 else:
                     # The repair path: the timeline already holds this pair, the
