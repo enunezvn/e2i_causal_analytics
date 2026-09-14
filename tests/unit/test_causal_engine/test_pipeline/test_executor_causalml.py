@@ -1347,3 +1347,75 @@ class TestCausalMLWarnsWhenBinarizationRecodesTheOutcome:
         assert "collapses" in (result["error"] or ""), result["error"]
         assert _binarization_warnings(result) == [], result["warnings"]
         assert result["result"] is None
+
+
+class TestCausalMLBinarizationDiscriminatorIsTheRecodingItself:
+    """#2067 codex r1 HIGH: a two-valued NON-0/1 outcome is recoded too.
+
+    `{0, 2}` and `{-1, 1}` have 2 distinct values, so they pass #2063's
+    collapse gate AND a `distinct > 2` condition — yet `y = (y > 0)` still
+    changes their values, the fit is on the derived indicator, and the stage
+    payload would have labelled the result `identified_estimand = "ate"`.
+    A false estimand label is exactly the harm this issue is about, so the
+    discriminator is the recoding itself: does `(y > 0)` differ from `y`?
+    """
+
+    @pytest.mark.asyncio
+    async def test_two_valued_zero_two_outcome_is_warned(self):
+        result = await _execute_on_outcome([0.0, 2.0], reps=30)
+
+        warns = _binarization_warnings(result)
+        assert result["success"] is True, result.get("error")
+        assert len(warns) == 1, result["warnings"]
+        assert "The outcome has 2 distinct values" in warns[0], warns[0]
+        assert "frac(y > 0) = 0.5000" in warns[0], warns[0]
+        assert "mean|y - (y > 0)| = 0.5000" in warns[0], warns[0]
+        assert result["result"]["outcome_binarized"] is True
+        assert result["result"]["outcome_distinct_values"] == 2
+
+    @pytest.mark.asyncio
+    async def test_two_valued_symmetric_outcome_is_warned(self):
+        # {-1, 1}: a sign-coded response. `(y > 0)` maps it to {0, 1}.
+        result = await _execute_on_outcome([-1.0, 1.0], reps=30)
+
+        warns = _binarization_warnings(result)
+        assert len(warns) == 1, result["warnings"]
+        assert "frac(y > 0) = 0.5000" in warns[0], warns[0]
+        assert "mean|y - (y > 0)| = 0.5000" in warns[0], warns[0]
+        assert result["result"]["outcome_binarized"] is True
+
+    @pytest.mark.asyncio
+    async def test_zero_one_outcome_with_nan_elsewhere_is_not_warned(self):
+        # The NaN rows are dropped from the statistics (the uplift wrapper's
+        # own `Input y contains NaN` check owns them); the real values are
+        # 0/1, so the reported `ate` IS the ATE and nothing is warned.
+        result = await _execute_on_outcome([0.0, 1.0, float("nan")], reps=20)
+
+        assert result["success"] is True, result.get("error")
+        assert _binarization_warnings(result) == [], result["warnings"]
+        assert result["result"]["outcome_binarized"] is False
+        assert result["result"]["outcome_distinct_values"] == 2
+
+    @pytest.mark.asyncio
+    async def test_boolean_coded_outcome_is_not_warned(self):
+        # A bool column reaches the executor as 0.0/1.0 floats; binarization
+        # leaves it unchanged, so it must not be warned either.
+        executor = CausalMLExecutor()
+        frame = _make_binarizable_outcome_frame([0.0, 1.0], reps=30)
+        frame["sales"] = frame["sales"].astype(bool)
+        state = _make_pipeline_state(filters={"dataframe": frame}, confounders=["age", "income"])
+        with (
+            patch(
+                "src.causal_engine.pipeline.executors.causalml._fit_uplift_model",
+                side_effect=_fake_fit_uplift_model,
+            ),
+            patch(
+                "src.causal_engine.pipeline.executors.causalml._compute_uplift_metrics_safe",
+                return_value={"auuc": 0.51, "qini": 0.02},
+            ),
+        ):
+            result = await executor.execute(state, _make_pipeline_config())
+
+        assert result["success"] is True, result.get("error")
+        assert _binarization_warnings(result) == [], result["warnings"]
+        assert result["result"]["outcome_binarized"] is False

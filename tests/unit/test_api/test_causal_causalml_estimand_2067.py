@@ -179,3 +179,16 @@ def test_payload_without_the_discriminator_claims_no_estimand() -> None:
     assert payload["effect_estimate"] == 0.02
     assert "identified_estimand" not in payload
     assert "data_provenance" not in payload
+
+
+def test_two_valued_non_binary_outcome_stage_names_the_binarized_estimand() -> None:
+    # codex r1 HIGH: {0, 2} passes the collapse gate and has 2 distinct
+    # values, so a `distinct > 2` discriminator labelled its risk difference
+    # "ate". The recoding, not the distinct count, decides the estimand.
+    output, state = _run_causalml([0.0, 2.0], reps=30)
+    assert state["causalml_result"]["result"]["outcome_binarized"] is True
+
+    stage = _stage(output, state)
+
+    assert stage.additional_results["identified_estimand"] == BINARIZED_ESTIMAND
+    assert stage.additional_results["outcome_distinct_values"] == 2
