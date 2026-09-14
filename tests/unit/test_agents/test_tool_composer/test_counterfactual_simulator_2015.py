@@ -228,7 +228,12 @@ def test_a_target_region_the_cohort_does_not_cover_is_refused(engine):
     run = SimulationEngine(
         population=_population(), effect_provider=no_west, effect_estimator=CohortCausalEstimator()
     ).simulate(InterventionConfig(intervention_type="email_campaign"), use_cache=False)
-    assert run.effect_heterogeneity.by_region["west"]["ate"] == pytest.approx(run.simulated_ate)
+    # The fallback stays out of the REPORTED region effects at the source (#2054): the
+    # engine reports only the axes the estimate resolves, and this estimate resolves the
+    # three regions it was fitted on. A west entry here would be the cohort ATE wearing
+    # west's label, which is what this test's docstring forbids.
+    assert "west" not in run.effect_heterogeneity.by_region
+    assert set(run.effect_heterogeneity.by_region) == {"northeast", "south", "midwest"}
     out = tr._simulation_results(
         run, brand="Kisqali", intervention_type="email_campaign", frame=frame, targeted=None
     )
