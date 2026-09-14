@@ -202,7 +202,20 @@ def link_composition_feedback(
     client: Any = None,
     lookback_days: int = LOOKBACK_DAYS,
 ) -> Dict[str, Any]:
-    """Label unlabelled episodes from the chat ratings their sessions carry. Never raises."""
+    """Label unlabelled episodes from the chat ratings their sessions carry. Never raises.
+
+    Returns the same three keys on every path, including each early exit:
+
+    - ``labelled`` — compositions that received a verdict on this run;
+    - ``considered`` — unlabelled compositions in the lookback that were eligible for one;
+    - ``failed`` — WRITE ATTEMPTS that did not land, one per composition that had a rating to
+      apply and did not receive it. So ``failed <= considered``, and ``failed > 0`` means that
+      many labels were lost and will be retried on the next run (#2035 asks callers to watch
+      it). It does NOT count the two read failures: those abort the run before any write is
+      attempted, so counting them would name a composition that was never written to. A read
+      failure is reported at WARNING and returns the same three numbers a clean no-op does, so
+      the log is what separates them — see :func:`_result`.
+    """
     if client is None:
         from src.memory.services.factories import get_supabase_client
 

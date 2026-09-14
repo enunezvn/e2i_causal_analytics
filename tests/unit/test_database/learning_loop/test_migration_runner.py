@@ -2,9 +2,9 @@
 and the rollbacks.
 
 Spec §9: on a fresh prod-faithful copy the runner is first pointed at a repository copy whose
-041 fails, which must leave 039 and 040 applied and recorded and nothing of 041 (body and
-ledger row share one transaction); the real files then apply exactly 041, and a further run
-has nothing pending. Direct re-application is a no-op for data. The rollbacks return every
+041 fails, which must leave everything before it applied and recorded and nothing of 041 (body
+and ledger row share one transaction); the real files then apply exactly what was left pending
+— 041 and 044 — and a further run has nothing pending. Direct re-application is a no-op for data. The rollbacks return every
 lane object to its pre-migration definition (compared with the base copy of prod, object by
 object), refuse when rows would violate the restored constraints, and are idempotent.
 
@@ -114,7 +114,7 @@ def test_runner_failure_first_then_real_files_then_nothing_pending(clone_db, tmp
     broken = _repo_copy(tmp_path, break_041=True)
     failed = _pg.run_runner(db, broken, shims)
     assert failed.returncode != 0, _out(failed)
-    assert "Applying ml/039_tool_category_cohort.sql ... " in _out(failed)
+    assert f"Applying {_pg.LANE_MIGRATIONS[0]} ... " in _out(failed)
     assert f"Migration {BROKEN_KEY} failed" in _out(failed)
     assert db.rows(LEDGER) == APPLIED_BEFORE_FAILURE
     # 040 is in; nothing of 041 is (its body and ledger row share one transaction).
