@@ -41,7 +41,7 @@ sentinel, and nothing here may loosen that.
 import json
 import logging
 import uuid
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 from fastapi import HTTPException, status
 
@@ -160,10 +160,19 @@ def reject_identity_mismatch(
 
 
 class ChatClaims(Protocol):
-    """The two owner claims a chat request body can carry (see ``ChatRequest``)."""
+    """The two owner claims a chat request body can carry (see ``ChatRequest``).
 
-    user_id: Optional[str]
-    session_id: Optional[str]
+    Read-only properties, not plain attributes: a mutable protocol attribute is
+    invariant, so ``ChatRequest.user_id`` (a required ``str``) would not satisfy
+    an ``Optional[str]`` attribute. Nothing here writes to a claim, so the
+    covariant read-only form is both correct and what the call sites need.
+    """
+
+    @property
+    def user_id(self) -> Optional[str]: ...
+
+    @property
+    def session_id(self) -> Optional[str]: ...
 
 
 def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode: bool) -> str:
@@ -182,20 +191,20 @@ def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode
     return str(token_user_id)
 
 
-def _thread_ids(body: Any) -> list:
-    """Every ``threadId`` a CopilotKit body can carry, across the shapes in use.
+def _thread_ids(body: Any) -> List[str]:
+    """Every ``threadId`` a CopilotKit body can carry, in precedence order.
 
-    ``agent/run`` reads it top level or nested under ``body``; the SDK's
+    ``agent/run`` reads it nested under ``body`` first, then top level; the SDK's
     ``agent/{name}`` and ``agents/execute`` read it top level
     (``copilotkit/integrations/fastapi.py:107,195``). Any of them is a claim, so
-    all of them are checked.
+    all of them are checked — and a body that is not a mapping, at either level,
+    names no thread at all.
     """
     if not isinstance(body, dict):
         return []
     nested = body.get("body")
-    candidates = [body.get("threadId")]
-    if isinstance(nested, dict):
-        candidates.append(nested.get("threadId"))
+    candidates = [nested.get("threadId") if isinstance(nested, dict) else None]
+    candidates.append(body.get("threadId"))
     return [c for c in candidates if isinstance(c, str) and c]
 
 
@@ -237,8 +246,8 @@ def owned_thread_id(body_json: Dict[str, Any], request: Any, testing_mode: bool)
     """
     if _claims_another_owner(body_json, request, testing_mode):
         return None
-    nested = body_json.get("body") if isinstance(body_json.get("body"), dict) else {}
-    return nested.get("threadId") or body_json.get("threadId") or str(uuid.uuid4())
+    claimed = _thread_ids(body_json)
+    return claimed[0] if claimed else str(uuid.uuid4())
 
 
 def sdk_thread_denied(body_bytes: bytes, request: Any, testing_mode: bool) -> bool:
