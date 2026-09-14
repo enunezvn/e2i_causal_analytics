@@ -309,6 +309,16 @@ async def resolve_review(
     fabricated 200. A genuine persistence error also returns False -> 404, which
     is still a correct non-200 (never a fake success); the repo logs the
     distinction (zero-row WARNING vs exception ERROR).
+
+    Version binding (codex round-1 HIGH): ``request.dag_version_hash`` is the
+    structure the reviewer's form displayed and ``submit_review`` filters the
+    UPDATE on it, so a review a concurrent run advanced (migration 141) is NOT
+    resolved by a form opened on the old version. The repo keeps its boolean; a
+    False is disambiguated HERE by ONE extra read: still pending on a DIFFERENT
+    hash -> 409 (reload and resolve the current version), anything else -> the
+    existing 404. The read is only on the failure path, so the happy path still
+    costs one write. A re-read that itself fails is treated as the 404 case --
+    fail-closed, never a fabricated 200.
     """
     # The resolver's identity, from the verified token (dependencies/auth.py
     # builds ``id`` / ``email`` / ``user_metadata`` from the Supabase user).
@@ -328,8 +338,22 @@ async def resolve_review(
         validity_days=request.validity_days,
         reviewer_name=reviewer_name or None,
         reviewer_email=reviewer_email or None,
+        expected_dag_version_hash=request.dag_version_hash,
     )
     if not success:
+        current = await _current_review_row(repo, review_id)
+        if (
+            current is not None
+            and current.get("approval_status") == "pending"
+            and current.get("dag_version_hash") != request.dag_version_hash
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Review {review_id} has advanced to a new DAG structure since this "
+                    "form was opened; reload the review and resolve the current version."
+                ),
+            )
         raise HTTPException(
             status_code=404,
             detail=(
@@ -342,6 +366,26 @@ async def resolve_review(
         approval_status=request.approval_status,
         success=True,
     )
+
+
+async def _current_review_row(
+    repo: "ExpertReviewRepository", review_id: str
+) -> Optional[Dict[str, Any]]:
+    """The review row as it stands, or None -- the failure-path read that tells a
+    STALE resolution (409) from a gone/resolved one (404).
+
+    A read that raises answers None: the caller then reports the conservative
+    404 rather than propagating a store outage as a 500 on a request whose write
+    already did nothing. The distinction is only ever used to pick an error code.
+    """
+    try:
+        return await repo.get_by_id(review_id)
+    except Exception as read_err:  # noqa: BLE001 - only the error CODE depends on this
+        logger.warning(
+            f"Resolve of review {review_id} failed and the disambiguating re-read also "
+            f"failed ({read_err}); reporting 404 rather than guessing 409"
+        )
+        return None
 
 
 async def _get_validation_rows(validation_ids: List[str]) -> List[Dict[str, Any]]:

@@ -4311,6 +4311,16 @@ export interface paths {
          *     fabricated 200. A genuine persistence error also returns False -> 404, which
          *     is still a correct non-200 (never a fake success); the repo logs the
          *     distinction (zero-row WARNING vs exception ERROR).
+         *
+         *     Version binding (codex round-1 HIGH): ``request.dag_version_hash`` is the
+         *     structure the reviewer's form displayed and ``submit_review`` filters the
+         *     UPDATE on it, so a review a concurrent run advanced (migration 141) is NOT
+         *     resolved by a form opened on the old version. The repo keeps its boolean; a
+         *     False is disambiguated HERE by ONE extra read: still pending on a DIFFERENT
+         *     hash -> 409 (reload and resolve the current version), anything else -> the
+         *     existing 404. The read is only on the failure path, so the happy path still
+         *     costs one write. A re-read that itself fails is treated as the 404 case --
+         *     fail-closed, never a fabricated 200.
          */
         post: operations["resolve_expert_review"];
         delete?: never;
@@ -16375,6 +16385,13 @@ export interface components {
          *     ``approval_status`` is constrained to the SAME vocabulary
          *     ``submit_review`` validates against (repo :157) so a mismatched value is a
          *     422 (FastAPI validation) rather than a silent repo ``False``.
+         *
+         *     ``dag_version_hash`` is REQUIRED (codex round-1 HIGH): a review's structure
+         *     can ADVANCE while a reviewer's form is open (migration 141's timeline), and
+         *     a resolution filtered on ``(review_id, pending)`` alone would apply the
+         *     verdict to whatever structure the row carries NOW -- one nobody looked at.
+         *     The form echoes the hash it displayed and the resolution applies only if
+         *     the review still carries it; a mismatch is a 409, not a silent sign-off.
          */
         ResolveReviewRequest: {
             /**
@@ -16382,6 +16399,11 @@ export interface components {
              * @enum {string}
              */
             approval_status: "approved" | "rejected";
+            /**
+             * Dag Version Hash
+             * @description The DAG version hash the reviewer's form displayed. The resolution applies only if the review still carries it; if the structure has advanced since the form was opened, the request is rejected with 409.
+             */
+            dag_version_hash: string;
             /**
              * Checklist
              * @description Completed reviewer checklist (the 010 checklist template items).

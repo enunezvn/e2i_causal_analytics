@@ -176,6 +176,9 @@ describe('useReviewSummary', () => {
   });
 });
 
+/** #1991 debt 3: a resolution names the structure version it applies to. */
+const RESOLVED_HASH = 'h'.repeat(64);
+
 describe('useResolveReview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -190,7 +193,11 @@ describe('useResolveReview', () => {
 
     result.current.mutate({
       reviewId: '11111111-1111-1111-1111-111111111111',
-      body: { approval_status: 'approved', checklist: { conf_complete: true } },
+      body: {
+        approval_status: 'approved',
+        checklist: { conf_complete: true },
+        dag_version_hash: RESOLVED_HASH,
+      },
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -198,7 +205,11 @@ describe('useResolveReview', () => {
     expect(result.current.data).toEqual(mockResolveResponse);
     expect(expertReviewApi.resolveReview).toHaveBeenCalledWith(
       '11111111-1111-1111-1111-111111111111',
-      { approval_status: 'approved', checklist: { conf_complete: true } }
+      {
+        approval_status: 'approved',
+        checklist: { conf_complete: true },
+        dag_version_hash: RESOLVED_HASH,
+      }
     );
     // invalidate the pending queue, the summary AND any open linked-review detail
     expect(invalidateSpy).toHaveBeenCalledTimes(3);
@@ -213,7 +224,7 @@ describe('useResolveReview', () => {
 
     result.current.mutate({
       reviewId: 'bad',
-      body: { approval_status: 'rejected', checklist: {} },
+      body: { approval_status: 'rejected', checklist: {}, dag_version_hash: RESOLVED_HASH },
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -228,7 +239,7 @@ describe('useResolveReview', () => {
 
     result.current.mutate({
       reviewId: '11111111-1111-1111-1111-111111111111',
-      body: { approval_status: 'approved', checklist: {} },
+      body: { approval_status: 'approved', checklist: {}, dag_version_hash: RESOLVED_HASH },
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

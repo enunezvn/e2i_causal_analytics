@@ -263,9 +263,24 @@ class ResolveReviewRequest(BaseModel):
     ``approval_status`` is constrained to the SAME vocabulary
     ``submit_review`` validates against (repo :157) so a mismatched value is a
     422 (FastAPI validation) rather than a silent repo ``False``.
+
+    ``dag_version_hash`` is REQUIRED (codex round-1 HIGH): a review's structure
+    can ADVANCE while a reviewer's form is open (migration 141's timeline), and
+    a resolution filtered on ``(review_id, pending)`` alone would apply the
+    verdict to whatever structure the row carries NOW -- one nobody looked at.
+    The form echoes the hash it displayed and the resolution applies only if
+    the review still carries it; a mismatch is a 409, not a silent sign-off.
     """
 
     approval_status: Literal["approved", "rejected"]
+    dag_version_hash: str = Field(
+        min_length=1,
+        description=(
+            "The DAG version hash the reviewer's form displayed. The resolution "
+            "applies only if the review still carries it; if the structure has "
+            "advanced since the form was opened, the request is rejected with 409."
+        ),
+    )
     checklist: Dict[str, Any] = Field(
         default_factory=dict,
         description="Completed reviewer checklist (the 010 checklist template items).",

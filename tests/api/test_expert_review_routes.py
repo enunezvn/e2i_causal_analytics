@@ -23,6 +23,11 @@ import src.api.routes.expert_review as expert_review_route
 from src.api.dependencies.auth import require_operator
 from src.api.main import app
 
+#: The structure version a resolve body must name (#1991 debt 3, codex round-1
+#: HIGH): the resolution is bound to the version the reviewer's form displayed,
+#: so every resolve request carries it and the fake records it.
+HASH = "h" * 64
+
 
 class _FakeExpertReviewRepo:
     """In-memory fake mirroring the ExpertReviewRepository surface the route uses."""
@@ -84,6 +89,8 @@ class _FakeExpertReviewRepo:
         validity_days: int = 90,
         reviewer_name: Optional[str] = None,
         reviewer_email: Optional[str] = None,
+        *,
+        expected_dag_version_hash: str,
     ) -> bool:
         self.submit_calls.append(
             {
@@ -96,6 +103,7 @@ class _FakeExpertReviewRepo:
                 "validity_days": validity_days,
                 "reviewer_name": reviewer_name,
                 "reviewer_email": reviewer_email,
+                "expected_dag_version_hash": expected_dag_version_hash,
             }
         )
         return self.submit_return
@@ -180,6 +188,7 @@ class TestResolveReview:
                 "checklist": {"conf_complete": True, "edge_plausible": True},
                 "comments": {"note": "looks good"},
                 "validity_days": 90,
+                "dag_version_hash": HASH,
             },
         )
         assert resp.status_code == 200, resp.text
@@ -201,7 +210,11 @@ class TestResolveReview:
         review_id = "33333333-3333-3333-3333-333333333333"
         resp = client.post(
             f"/api/expert-reviews/{review_id}/resolve",
-            json={"approval_status": "rejected", "checklist": {}},
+            json={
+                "approval_status": "rejected",
+                "checklist": {},
+                "dag_version_hash": HASH,
+            },
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["approval_status"] == "rejected"
@@ -220,7 +233,11 @@ class TestResolveReview:
         }
         resp = client.post(
             "/api/expert-reviews/66666666-6666-6666-6666-666666666666/resolve",
-            json={"approval_status": "rejected", "checklist": {}},
+            json={
+                "approval_status": "rejected",
+                "checklist": {},
+                "dag_version_hash": HASH,
+            },
         )
         assert resp.status_code == 200, resp.text
         call = fake_repo.submit_calls[0]
@@ -251,7 +268,11 @@ class TestResolveReview:
         }
         resp = client.post(
             "/api/expert-reviews/77777777-7777-7777-7777-777777777777/resolve",
-            json={"approval_status": "approved", "checklist": {}},
+            json={
+                "approval_status": "approved",
+                "checklist": {},
+                "dag_version_hash": HASH,
+            },
         )
         assert resp.status_code == 200, resp.text
         call = fake_repo.submit_calls[0]
@@ -261,7 +282,11 @@ class TestResolveReview:
     def test_bad_approval_status_is_422(self, client, fake_repo):
         resp = client.post(
             "/api/expert-reviews/44444444-4444-4444-4444-444444444444/resolve",
-            json={"approval_status": "blocked", "checklist": {}},
+            json={
+                "approval_status": "blocked",
+                "checklist": {},
+                "dag_version_hash": HASH,
+            },
         )
         assert resp.status_code == 422
         # repo must NOT have been called when validation fails
@@ -278,9 +303,43 @@ class TestResolveReview:
         fake_repo.submit_return = False
         resp = client.post(
             "/api/expert-reviews/55555555-5555-5555-5555-555555555555/resolve",
-            json={"approval_status": "approved", "checklist": {}},
+            json={
+                "approval_status": "approved",
+                "checklist": {},
+                "dag_version_hash": HASH,
+            },
         )
         assert resp.status_code == 404, resp.text
+
+    def test_stale_version_409_detail_reaches_the_frontends_message_field(self, client, fake_repo):
+        """Codex round-1 HIGH: the 409 must TELL the reviewer to reload.
+
+        This is the only resolve test mounted on the REAL app, so it is where the
+        handler chain is observable: src/api/main.py maps a 409 to ConflictError
+        and preserves the detail verbatim as ``message`` -- the field
+        frontend/src/lib/api-client.ts reads into ``ApiError.message``, which is
+        what ResolveForm's "Failed to submit review" banner renders. A body that
+        carried only ``detail`` would show the reviewer a bare status code.
+        """
+        rid = "88888888-8888-8888-8888-888888888888"
+        fake_repo.submit_return = False
+        fake_repo.rows_by_id[rid] = {
+            "review_id": rid,
+            "approval_status": "pending",
+            "dag_version_hash": "a" * 64,  # advanced since the form was opened
+        }
+        resp = client.post(
+            f"/api/expert-reviews/{rid}/resolve",
+            json={
+                "approval_status": "approved",
+                "checklist": {},
+                "dag_version_hash": HASH,
+            },
+        )
+        assert resp.status_code == 409, resp.text
+        message = resp.json()["message"]
+        assert "advanced to a new DAG structure" in message
+        assert "reload the review" in message
 
 
 class TestStoreOutageIsHonest:

@@ -339,6 +339,8 @@ class ExpertReviewRepository(BaseRepository):
         validity_days: int = DEFAULT_VALIDITY_DAYS,
         reviewer_name: Optional[str] = None,
         reviewer_email: Optional[str] = None,
+        *,
+        expected_dag_version_hash: str,
     ) -> bool:
         """
         Submit a completed expert review.
@@ -349,6 +351,18 @@ class ExpertReviewRepository(BaseRepository):
         zero rows and returns False (the route surfaces that as 404). Before
         this the filter was ``review_id`` alone and the pending-only claim was
         documentation, not enforcement.
+
+        The resolution is also bound to the STRUCTURE VERSION the reviewer saw
+        (codex round-1 HIGH): the UPDATE carries
+        ``dag_version_hash = expected_dag_version_hash``, so an approval of the
+        form opened on h1 can never land on a review a concurrent run has since
+        advanced to h2 (``append_version``). Pending-only and hash-bound are the
+        same mechanism -- one UPDATE whose filters ARE the precondition -- and a
+        mismatch matches zero rows and returns False, which the route
+        disambiguates into 409 (pending but advanced) vs 404 (gone or already
+        resolved). A row whose ``dag_version_hash`` is NULL (the column is
+        nullable; no such row exists live, measured 2026-09-14) therefore
+        matches no hash and is refused rather than resolved blind.
 
         Resolution provenance (lane 1, codex whole-diff HIGH F1 + iter-2 HIGH
         F1): BOTH statuses stamp ``resolved_at = now()`` (migration 136;
@@ -374,10 +388,15 @@ class ExpertReviewRepository(BaseRepository):
             validity_days: Days until review expires (default 90)
             reviewer_name: Display name of the resolving operator, if known
             reviewer_email: Email of the resolving operator, if known
+            expected_dag_version_hash: The structure version the reviewer's form
+                displayed; the resolution applies only while the review still
+                carries it (keyword-only and required -- a caller that cannot
+                name the version it is resolving must not resolve)
 
         Returns:
-            True if exactly this pending row was resolved, False otherwise
-            (nonexistent, already resolved, or persistence error)
+            True if exactly this pending row was resolved AT THE EXPECTED
+            VERSION, False otherwise (nonexistent, already resolved, advanced to
+            another structure, or persistence error)
         """
         if not self.client:
             return False
@@ -420,6 +439,7 @@ class ExpertReviewRepository(BaseRepository):
                 .update(update_data)
                 .eq("review_id", review_id)
                 .eq("approval_status", "pending")
+                .eq("dag_version_hash", expected_dag_version_hash)
                 .execute()
             )
             # FIX B (codex HIGH): a zero-row update (nonexistent or already-resolved
@@ -429,8 +449,9 @@ class ExpertReviewRepository(BaseRepository):
             # would make the route 200 a record it never changed.
             if not result.data:
                 logger.warning(
-                    f"submit_review matched no rows for {review_id} "
-                    "(nonexistent or already-resolved); returning False"
+                    f"submit_review matched no rows for {review_id} at version "
+                    f"{expected_dag_version_hash} (nonexistent, already-resolved, or "
+                    "advanced to another structure); returning False"
                 )
                 return False
             logger.info(f"Submitted review {review_id} with status {approval_status}")

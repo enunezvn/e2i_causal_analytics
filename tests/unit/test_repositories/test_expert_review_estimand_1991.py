@@ -472,3 +472,51 @@ async def test_summary_zero_dict_includes_superseded():
     repo = ExpertReviewRepository(supabase_client=None)
     s = await repo.get_review_summary()
     assert s["superseded"] == 0
+
+
+# --------------------------------------------------------------------------
+# H1 -- the resolution is bound to the version the reviewer saw
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_submit_review_binds_the_resolution_to_the_expected_hash(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h1"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.submit_review(
+        review_id="r1",
+        approval_status="approved",
+        checklist={"confounders_complete": True},
+        expected_dag_version_hash="h1",
+    )
+    assert ok is True
+    calls = fake_client.calls("expert_reviews")
+    assert ("eq", ("dag_version_hash", "h1")) in calls
+    assert ("eq", ("approval_status", "pending")) in calls
+    assert fake_client.rows("expert_reviews")[0]["approval_status"] == "approved"
+
+
+@pytest.mark.unit
+async def test_submit_review_refuses_a_stale_hash_and_leaves_the_row_pending(fake_client, caplog):
+    """The review advanced to h2; the form was opened on h1. The UPDATE matches
+    zero rows, so the approval covers nothing -- never h2 by accident."""
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h2"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    with caplog.at_level(logging.WARNING):
+        ok = await repo.submit_review(
+            review_id="r1",
+            approval_status="approved",
+            checklist={},
+            expected_dag_version_hash="h1",
+        )
+    assert ok is False
+    row = fake_client.rows("expert_reviews")[0]
+    assert row["approval_status"] == "pending" and row["dag_version_hash"] == "h2"
+    assert "valid_until" not in row and "resolved_at" not in row
+    assert any("matched no rows" in r.getMessage() for r in caplog.records)

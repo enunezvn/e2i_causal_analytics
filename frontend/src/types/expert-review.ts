@@ -149,6 +149,14 @@ export type ReviewApprovalStatus = 'approved' | 'rejected';
  */
 export interface ResolveReviewRequest {
   approval_status: ReviewApprovalStatus;
+  /**
+   * The structure version the reviewer's form displayed (#1991 debt 3). REQUIRED:
+   * a review's DAG can ADVANCE while the form is open, and the backend applies
+   * the resolution only while the review still carries this hash — a mismatch is
+   * a 409 telling the reviewer to reload, never a silent sign-off of a structure
+   * nobody looked at.
+   */
+  dag_version_hash: string;
   checklist: Record<string, unknown>;
   comments?: Record<string, unknown> | null;
   concerns_raised?: string[] | null;

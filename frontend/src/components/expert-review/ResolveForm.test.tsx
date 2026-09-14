@@ -26,11 +26,14 @@ vi.mock('@/api/expert-review', () => ({
   getPendingReviews: vi.fn(),
   getReviewSummary: vi.fn(),
 }));
-import { generateReviewAssessment } from '@/api/expert-review';
+import { generateReviewAssessment, resolveReview } from '@/api/expert-review';
 
 const api = vi.mocked(generateReviewAssessment);
+const resolveApi = vi.mocked(resolveReview);
 
-const REVIEW: PendingReviewItem = { review_id: 'rev-1', brand: 'Kisqali', treatment_variable: 't', outcome_variable: 'y' };
+/** The structure version the form displays — the resolution is bound to it. */
+const HASH = 'h'.repeat(64);
+const REVIEW: PendingReviewItem = { review_id: 'rev-1', brand: 'Kisqali', treatment_variable: 't', outcome_variable: 'y', dag_version_hash: HASH };
 const ASSESSMENT: AgentAssessment = { items: [], is_fallback: true };
 const RESPONSE: AgentAssessmentResponse = { review_id: 'rev-1', assessment: ASSESSMENT, cached: false, persisted: true };
 
@@ -198,5 +201,37 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: /regenerate agent assessment/i }));
     await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
     expect(api).toHaveBeenCalledWith('rev-1', true);
+  });
+
+  describe('the resolution is bound to the version the form displayed', () => {
+    it('sends the reviewed dag_version_hash with the verdict', async () => {
+      api.mockResolvedValue(RESPONSE);
+      resolveApi.mockResolvedValue({ review_id: 'rev-1', approval_status: 'approved', success: true });
+      renderForm();
+      await userEvent.setup().click(await screen.findByRole('button', { name: /^approve$/i }));
+      await waitFor(() => expect(resolveApi).toHaveBeenCalledTimes(1));
+      expect(resolveApi).toHaveBeenCalledWith('rev-1', {
+        approval_status: 'approved',
+        checklist: {},
+        comments: undefined,
+        dag_version_hash: HASH,
+      });
+    });
+
+    it('shows the 409 reload instruction in the submit banner', async () => {
+      api.mockResolvedValue(RESPONSE);
+      // ApiError.message carries the backend 409 detail (src/api/main.py maps a
+      // 409 detail verbatim onto the `message` field api-client reads).
+      resolveApi.mockRejectedValue(
+        new Error(
+          'Review rev-1 has advanced to a new DAG structure since this form was opened; ' +
+            'reload the review and resolve the current version.'
+        )
+      );
+      renderForm();
+      await userEvent.setup().click(await screen.findByRole('button', { name: /^reject$/i }));
+      expect(await screen.findByText('Failed to submit review')).toBeInTheDocument();
+      expect(await screen.findByText(/reload the review and resolve the current version/)).toBeInTheDocument();
+    });
   });
 });
