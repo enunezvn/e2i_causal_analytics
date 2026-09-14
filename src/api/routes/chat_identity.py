@@ -45,12 +45,78 @@ from typing import Any, Dict, List, Optional, Protocol
 
 from fastapi import HTTPException, status
 
+from src.memory.services.factories import get_async_supabase_client
+from src.repositories.chatbot_conversation import ChatbotConversationRepository
 from src.utils.llm_attribution import (
+    ANONYMOUS_USER_ID,
     resolve_session_user_id,
     set_authenticated_user,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def thread_owner_denied(thread_id: Optional[str], token_user_id: Optional[str]) -> bool:
+    """True when an EXISTING conversation belongs to someone other than the caller.
+
+    #2077 refused a foreign ``{owner}~{uuid}`` PREFIX, which is a claim the body
+    carries. This answers the other half (#2107): the stored owner of a thread
+    that already exists. CopilotKit mints bare uuids with no prefix, so the
+    prefix check never saw them — token X could send Y's thread id and the turn
+    would run inside Y's conversation, taking Y's last ten messages into the
+    prompt (``chatbot_graph.py:~1006``) and writing messages that migration
+    123's trigger stamps with Y's ``user_id``. Service-role clients bypass RLS
+    (``supabase_client.py:~36``, ``factories.py:~759``), so an application-side
+    check is the only gate there can be.
+
+    **Never raises.** The AG-UI call site sits inside the handler's broad
+    ``except``, which falls through to the *ungated* SDK path — an exception
+    here would defeat the very check it performs. Returns a bool; each caller
+    answers 403 itself.
+
+    Rules, in order:
+
+    1. nothing to compare (no thread, or no verified caller) -> allow, no query;
+    2. no such conversation -> allow. This is #1405's arbitrary-thread support
+       and it is what keeps every NEW bare thread working;
+    3. the caller owns it -> allow;
+    4. the anonymous sentinel owns it -> allow, at INFO. The sentinel records
+       the ABSENCE of an identity: those rows predate #1405's JWT attribution,
+       so there is nobody to protect and nothing to back-fill from;
+    5. anyone else owns it -> deny, at WARNING, naming no ids;
+    6. the lookup failed -> allow, at WARNING. Fail-OPEN is deliberate: the
+       write and the read that constitute the harm go through this same
+       database, so an outage that blinds the check equally disables what it
+       protects, while fail-closed would 403 every chat user during a hiccup.
+    """
+    if not thread_id or not token_user_id:
+        return False
+    try:
+        client = await get_async_supabase_client()
+        repository = ChatbotConversationRepository(supabase_client=client)
+        conversation = await repository.get_by_session_id(thread_id)
+    except Exception:
+        logger.warning(
+            "[Chat] Thread owner lookup failed; allowing the turn (fail-open, #2107). "
+            "The conversation store this check reads is the same one the turn writes."
+        )
+        return False
+    if not conversation:
+        return False
+    owner = conversation.get("user_id")
+    if not owner or owner == token_user_id:
+        return False
+    if owner == ANONYMOUS_USER_ID:
+        logger.info(
+            "[Chat] Existing conversation has the anonymous sentinel owner; "
+            "treating it as unowned and allowing the turn (#2107)."
+        )
+        return False
+    logger.warning(
+        "[Chatbot] Rejected threadId ownership (possible IDOR): the conversation "
+        "already exists and is owned by another user"
+    )
+    return True
 
 
 def resolve_tool_user_id(session_id: Optional[str]) -> Optional[str]:
