@@ -339,6 +339,7 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
+from src.api.routes.chat_identity import bind_verified_request_user
 from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
@@ -4851,15 +4852,14 @@ async def copilotkit_custom_handler(
     # non-OPTIONS request that does is execution- or state-shaped. OPTIONS (CORS
     # preflight) is exempt, matching the middleware.
     #
-    # FAIL-SAFE guard: skip re-auth ONLY when identity is already known-good. A
-    # successful ``_require_auth_for_copilotkit_execution`` sets
-    # ``request.state.user`` (both the TESTING_MODE and JWT branches), while
-    # every failure raises BEFORE any assignment — so ``request.state.user is
-    # None`` reliably means "identity not yet established". Guarding on it
-    # avoids the duplicate Supabase round-trip when the root-POST branch already
-    # authenticated and then fell through here on a later exception, WITHOUT
-    # ever letting an unauthenticated sub-path pass: unknown identity ⇒ gate runs.
-    if method != "OPTIONS" and getattr(request.state, "user", None) is None:
+    # FAIL-SAFE guard: skip re-auth ONLY when identity is already known-good.
+    # ``_require_auth_for_copilotkit_execution`` sets ``request.state.user`` on
+    # success, as does JWTAuthMiddleware, and every failure raises BEFORE any
+    # assignment — so no user there reliably means "identity not yet established"
+    # and the gate runs. #2077: ``bind_verified_request_user`` reports that AND
+    # carries the verified id into the attribution channel, which only the gate
+    # used to populate — a middleware-authenticated sub-path left chat NULL-owned.
+    if method != "OPTIONS" and not bind_verified_request_user(request):
         try:
             await _require_auth_for_copilotkit_execution(request)
         except AuthError as auth_exc:

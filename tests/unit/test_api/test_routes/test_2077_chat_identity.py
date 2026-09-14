@@ -172,13 +172,13 @@ def test_the_tools_node_invents_nothing_when_neither_channel_carries_a_session()
 # ------------------------------------------------- gap 2: who the turn belongs to
 
 
-def test_a_composite_session_names_its_own_user():
+def test_a_composite_session_names_its_own_user(no_authenticated_user):
     from src.api.routes.chat_identity import resolve_tool_user_id
 
     assert resolve_tool_user_id(REAL_SESSION) == USER
 
 
-def test_a_bridged_session_names_its_own_user():
+def test_a_bridged_session_names_its_own_user(no_authenticated_user):
     """``{user}~{session}~bridge`` splits on the FIRST '~', as computed_user_id does."""
     from src.api.routes.chat_identity import resolve_tool_user_id
 
@@ -198,7 +198,8 @@ def test_a_bare_thread_falls_back_to_the_auth_gates_verified_user():
 
 
 def test_no_identity_resolves_to_none_rather_than_a_fabricated_id():
-    """composer_episodes.user_id is uuid-typed and the linker compares it as text."""
+    """composer_episodes.user_id is VARCHAR(100), so the column rejects nothing;
+    the linker compares it as text, so a wrong value mis-attributes silently."""
     from src.api.routes.chat_identity import resolve_tool_user_id
     from src.utils.llm_attribution import ANONYMOUS_USER_ID, set_authenticated_user
 
@@ -363,3 +364,122 @@ async def test_a_session_the_model_invents_is_ignored_entirely(orchestrator):
 
     assert orchestrator.payloads[0]["session_id"] is None
     assert result["context"]["session_id"] is None
+
+
+# ------------------- round 2: a session prefix is a claim, not a credential
+
+
+OTHER_USER = "8f14e45f-ce0a-4c9b-9f2e-1d3a5b7c9e11"
+
+
+def test_the_verified_user_wins_over_a_caller_supplied_session_prefix(
+    no_authenticated_user, caplog
+):
+    """AG-UI takes ``threadId`` from the request body (``copilotkit.py:~4706``) and
+    copies it into state, so a session prefix is attacker-controlled: user A could
+    send ``{B}~anything`` and have B recorded as the owner of A's compositions.
+    A uuid-shaped prefix proves syntax, never ownership."""
+    import logging
+
+    from src.api.routes.chat_identity import resolve_tool_user_id
+    from src.utils.llm_attribution import set_authenticated_user
+
+    set_authenticated_user(USER)
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+        resolved = resolve_tool_user_id(f"{OTHER_USER}~0b7f7d6e-2c1a-4d7e-9a53-3f1f6a0c9e21")
+
+    assert resolved == USER
+    warned = [r.getMessage() for r in caplog.records]
+    assert any(OTHER_USER in m and USER in m for m in warned), caplog.text
+
+
+def test_a_matching_prefix_logs_nothing(no_authenticated_user, caplog):
+    import logging
+
+    from src.api.routes.chat_identity import resolve_tool_user_id
+    from src.utils.llm_attribution import set_authenticated_user
+
+    set_authenticated_user(USER)
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+        assert resolve_tool_user_id(REAL_SESSION) == USER
+
+    assert caplog.records == []
+
+
+# ------------- round 2: the identity channel on the SDK sub-path fallthrough
+
+
+def _copilotkit_request(path: str, body: bytes, user: Optional[dict]):
+    """A real Starlette Request over a complete ASGI scope, as the 1432 gate tests build.
+
+    ``user`` stands in for what ``JWTAuthMiddleware`` attaches at
+    ``auth_middleware.py:~335`` after it has verified the token itself.
+    """
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": f"/api/copilotkit/{path}",
+        "raw_path": f"/api/copilotkit/{path}".encode(),
+        "query_string": b"",
+        "headers": [],
+        "server": ("testserver", 80),
+        "client": ("testclient", 12345),
+        "root_path": "",
+        "path_params": {"path": path},
+        "state": {},
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(scope, receive)
+    if user is not None:
+        request.state.user = user
+    return request
+
+
+async def test_a_middleware_authenticated_sub_path_still_names_its_user(
+    monkeypatch, no_authenticated_user
+):
+    """The SDK sub-path skips the gate when the middleware already authenticated.
+
+    ``copilotkit.py:~4862`` runs ``_require_auth_for_copilotkit_execution`` only
+    when ``request.state.user`` is None — correct as a gate, but that gate was the
+    only thing populating the identity channel. On a bare-uuid thread the resolver
+    then had nothing to read and the composition recorded a NULL owner, which
+    #2095's owner gate treats as absent-pass.
+    """
+    from unittest.mock import MagicMock
+
+    from fastapi.responses import JSONResponse
+
+    import src.api.routes.copilotkit as ck
+    from src.api.routes.chat_identity import resolve_tool_user_id
+
+    monkeypatch.setattr(ck, "TESTING_MODE", False)
+
+    async def _must_not_run(request):
+        raise AssertionError("the gate re-ran although the middleware had authenticated")
+
+    monkeypatch.setattr(ck, "_require_auth_for_copilotkit_execution", _must_not_run)
+
+    seen: dict[str, Any] = {}
+
+    async def _fake_sdk_handler(request, sdk):
+        # What the tools would resolve at execution time, on a bare CopilotKit thread.
+        seen["resolved"] = resolve_tool_user_id(BARE_THREAD)
+        return JSONResponse(content={"reached": "execution"})
+
+    monkeypatch.setattr(ck, "sdk_handler", _fake_sdk_handler)
+
+    request = _copilotkit_request(
+        "agent/default", b'{"messages":[]}', user={"id": USER, "email": "u@example.com"}
+    )
+    response = await ck.copilotkit_custom_handler(request, MagicMock(), path="agent/default")
+
+    assert response.status_code == 200, response.status_code
+    assert seen["resolved"] == USER
