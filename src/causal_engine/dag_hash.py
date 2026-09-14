@@ -161,6 +161,38 @@ def compute_adjustment_set_hash(adjustment_sets: List[List[str]]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def adjustment_hash_from_snapshot(snapshot: Any) -> Optional[str]:
+    """The adjustment-set hash a stored DAG snapshot PROVES, or None.
+
+    A version row's ``adjustment_set_hash`` is NULL on every row migration 141
+    backfilled and on every row a run without structure in scope recorded.
+    Where the row kept a ``dag_structure_json`` snapshot, though, the snapshot
+    NAMES the covariate set, so the hash is derived from it with the same
+    function the writer uses -- one definition shared by the gate (is this run's
+    structure already the last recorded one?) and by the review detail / queue
+    (which recorded version is this review CURRENTLY on?).
+
+    Inside a DICT snapshot an ABSENT, NULL or ``[]`` ``adjustment_sets`` all
+    mean the EMPTY set, ``sha256("[]")`` -- the same value the run-side
+    computation produces for a graph that conditions on nothing.
+
+    A NULL (or otherwise non-dict) snapshot is UNKNOWN, not empty: the row
+    records no structure at all, so it asserts nothing about the covariates and
+    must never be read as the canonical empty set. Callers that need to PROVE a
+    row is compatible therefore get None here and must decline.
+
+    Args:
+        snapshot: a stored ``dag_structure_json`` value, dict or NULL
+
+    Returns:
+        A 64-character SHA256 hex digest, or None when the snapshot proves
+        nothing.
+    """
+    if not isinstance(snapshot, dict):
+        return None
+    return compute_adjustment_set_hash(list(snapshot.get("adjustment_sets") or []))
+
+
 def compute_dag_hash_from_dot(dot_string: str) -> str:
     """
     Compute DAG hash from DOT format string.

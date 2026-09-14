@@ -51,7 +51,7 @@ from src.api.schemas.expert_review import (
     ReviewVersion,
     parse_json_column,
 )
-from src.causal_engine.dag_hash import get_dag_changes
+from src.causal_engine.dag_hash import adjustment_hash_from_snapshot, get_dag_changes
 
 if TYPE_CHECKING:
     from src.repositories.expert_review import ExpertReviewRepository
@@ -198,7 +198,7 @@ def _changes_between(
 
 
 def _current_version_index(
-    pairs: Sequence[Tuple[Optional[str], Optional[str]]],
+    entries: Sequence[Tuple[Optional[str], Optional[str], Any]],
     dag_version_hash: Optional[str],
     adjustment_set_hash: Optional[str],
 ) -> Optional[int]:
@@ -221,9 +221,21 @@ def _current_version_index(
     is the B -> A delta the reviewer is actually being shown.
 
     Fallback: when the review's adjustment hash is KNOWN (migration 142) but no
-    entry carries it, the last same-hash entry with a NULL adjustment hash wins
-    -- migration 141 backfilled every pre-existing version that way, and "same
-    structure, covariates never recorded" is the same version.
+    entry carries it, a same-hash entry whose adjustment hash is NULL can still
+    be the version -- migration 141 backfilled every pre-existing version that
+    way, and those rows usually DO carry a snapshot that names the covariate
+    set. The fallback must PROVE it (codex round 4): the entry qualifies only
+    when ``adjustment_hash_from_snapshot`` derives the review's own hash from
+    its snapshot, and the LAST qualifying entry wins.
+
+    An unexamined NULL row is not safe, because the advance path can create one
+    that is not this review's structure: with the timeline unreadable a run
+    appends nothing (a NULL-adjustment row of the same DAG hash contradicts
+    nothing) yet still ADVANCES the review onto its own covariate set, leaving
+    the review on a pair no recorded row carries and a same-hash NULL row that
+    describes some other structure. Naming it would render that row's delta --
+    typically "the previous snapshot disappeared" -- beside the review's real
+    graph. A NULL or non-dict snapshot proves nothing and never qualifies.
 
     An EMPTY ``dag_version_hash`` is treated as absent, like None: the column
     the entries carry is NOT NULL and non-empty, so no entry could match it
@@ -233,17 +245,18 @@ def _current_version_index(
     old-image mint whose first version was never recorded. Callers show no delta
     and no change date rather than guess.
 
-    Takes normalized ``(dag_version_hash, adjustment_set_hash)`` pairs, not the
-    entries themselves, so the ONE definition of this rule serves both the
-    detail route (validated ``ReviewVersion`` models) and the pending queue
-    (raw stored rows, which it deliberately never validates -- it reads one
-    timestamp off them, and a malformed row must not 500 the whole queue).
+    Takes normalized ``(dag_version_hash, adjustment_set_hash, snapshot)``
+    triples, not the entries themselves, so the ONE definition of this rule
+    serves both the detail route (validated ``ReviewVersion`` models) and the
+    pending queue (raw stored rows, which it deliberately never validates -- it
+    reads one timestamp off them, and a malformed row must not 500 the whole
+    queue; a snapshot that is not a dict simply proves nothing).
     """
     if not dag_version_hash:
         return None
-    same_structure = [i for i, (h, _a) in enumerate(pairs) if h == dag_version_hash]
+    same_structure = [i for i, entry in enumerate(entries) if entry[0] == dag_version_hash]
     for index in reversed(same_structure):
-        if pairs[index][1] == adjustment_set_hash:
+        if entries[index][1] == adjustment_set_hash:
             return index
     if adjustment_set_hash is None:
         # The review's adjustment is UNKNOWN; the loop above already tried
@@ -251,7 +264,10 @@ def _current_version_index(
         # back to.
         return None
     for index in reversed(same_structure):
-        if pairs[index][1] is None:
+        _h, entry_adjustment, snapshot = entries[index]
+        if entry_adjustment is None and (
+            adjustment_hash_from_snapshot(snapshot) == adjustment_set_hash
+        ):
             return index
     return None
 
@@ -266,7 +282,18 @@ def _current_version_id(
     See ``_current_version_index`` for the selection rule.
     """
     index = _current_version_index(
-        [(v.dag_version_hash, v.adjustment_set_hash) for v in versions],
+        [
+            (
+                v.dag_version_hash,
+                v.adjustment_set_hash,
+                # The VALIDATED snapshot as a plain dict, so the shared
+                # derivation reads it exactly as it reads the queue's raw
+                # column. ``DagStructureSnapshot`` keeps unknown keys
+                # (extra="allow"), so nothing is lost on the way through.
+                None if v.dag_structure_json is None else v.dag_structure_json.model_dump(),
+            )
+            for v in versions
+        ],
         dag_version_hash,
         adjustment_set_hash,
     )
@@ -280,9 +307,23 @@ def _last_changed_at(row: Dict[str, Any], versions: List[Dict[str, Any]]) -> Any
     pair is read with ``.get``. Falls back to the review's own ``created_at``
     when nothing matches -- including the empty timeline of a review minted
     before migration 141.
+
+    The snapshot the NULL-adjustment fallback has to prove itself against goes
+    through ``parse_json_column`` -- the module's single definition of how this
+    column is read, and what the detail route's validated model applies too, so
+    the two callers cannot disagree about the same stored row. It only parses;
+    it validates nothing and cannot raise, and a value that is not an object
+    comes back as something the derivation reads as "proves nothing".
     """
     index = _current_version_index(
-        [(v.get("dag_version_hash"), v.get("adjustment_set_hash")) for v in versions],
+        [
+            (
+                v.get("dag_version_hash"),
+                v.get("adjustment_set_hash"),
+                parse_json_column(v.get("dag_structure_json")),
+            )
+            for v in versions
+        ],
         row.get("dag_version_hash"),
         row.get("adjustment_set_hash"),
     )

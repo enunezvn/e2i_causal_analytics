@@ -14,7 +14,7 @@ from datetime import date
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional
 
-from src.causal_engine.dag_hash import compute_adjustment_set_hash
+from src.causal_engine.dag_hash import adjustment_hash_from_snapshot, compute_adjustment_set_hash
 from src.repositories.expert_review import (
     ExpertReviewRepository,
     approval_validity,
@@ -876,11 +876,11 @@ class ExpertReviewGate:
             return _VersionMatch.NOT_RECORDED
         adjustment_hash = latest.get("adjustment_set_hash")
         if adjustment_hash is None:
-            snapshot = latest.get("dag_structure_json")
-            if isinstance(snapshot, dict):
-                adjustment_hash = compute_adjustment_set_hash(
-                    list(snapshot.get("adjustment_sets") or [])
-                )
+            # The one shared derivation (codex round 4): the review detail and
+            # the pending queue prove a NULL-adjustment version's compatibility
+            # with the very same function, so "what a snapshot says about the
+            # covariates" has a single answer across the gate and the API.
+            adjustment_hash = adjustment_hash_from_snapshot(latest.get("dag_structure_json"))
         recorded = (str(latest.get("dag_version_hash") or ""), adjustment_hash)
         if recorded == (dag_hash, adjustment_set_hash):
             return _VersionMatch.SAME

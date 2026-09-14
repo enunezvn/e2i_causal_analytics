@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 import src.api.routes.expert_review as route_mod
 from src.api.errors import SAFE_503_DETAIL_PREFIX
 from src.api.schemas.expert_review import ReviewVersion
+from src.causal_engine.dag_hash import compute_adjustment_set_hash
 
 RID = "1c8f3d6a-5b7e-4c21-9f0a-2d4e6b8a0c13"
 RID_OLDER = "7a2b9c40-3d1e-4f65-8a7b-0c9d2e1f3a58"
@@ -378,6 +379,12 @@ SNAP_B: Dict[str, Any] = {
     "adjustment_sets": [["Z"]],
 }
 
+# The hash a run WOULD have stored for each snapshot above -- what a
+# NULL-adjustment row carrying that snapshot proves (codex round 4).
+ADJ_SNAP_A = compute_adjustment_set_hash(SNAP_A["adjustment_sets"])
+ADJ_SNAP_C = compute_adjustment_set_hash(SNAP_C["adjustment_sets"])
+ADJ_SNAP_B = compute_adjustment_set_hash(SNAP_B["adjustment_sets"])
+
 VID_A = "bbbbbbb1-0000-4000-8000-000000000001"
 VID_C = "bbbbbbb2-0000-4000-8000-000000000002"
 VID_B = "bbbbbbb3-0000-4000-8000-000000000003"
@@ -397,9 +404,17 @@ def _paired(
     }
 
 
-def _rv(version_id: str, dag_hash: str, adjustment_hash: Optional[str]) -> ReviewVersion:
+def _rv(
+    version_id: str,
+    dag_hash: str,
+    adjustment_hash: Optional[str],
+    snapshot: Optional[Dict[str, Any]] = None,
+) -> ReviewVersion:
     return ReviewVersion(
-        version_id=version_id, dag_version_hash=dag_hash, adjustment_set_hash=adjustment_hash
+        version_id=version_id,
+        dag_version_hash=dag_hash,
+        adjustment_set_hash=adjustment_hash,
+        dag_structure_json=snapshot,
     )
 
 
@@ -419,18 +434,21 @@ def test_current_version_id_matches_a_null_adjustment_on_both_sides():
 
 
 @pytest.mark.unit
-def test_current_version_id_falls_back_to_a_null_adjustment_row_of_the_same_hash():
+def test_current_version_id_falls_back_to_a_null_adjustment_row_that_proves_it():
     """The review learned its adjustment hash (migration 142) but the only
-    recorded version of that structure was backfilled with NULL. Same
-    structure, unknown covariates: that row IS the current version."""
-    versions = [_rv(VID_A, HASH_V1, None)]
-    assert route_mod._current_version_id(versions, HASH_V1, ADJ_A) == VID_A
+    recorded version of that structure was backfilled with NULL. The row's
+    SNAPSHOT still names the covariate set, and it derives to the review's
+    hash -- same structure, same covariates: that row IS the current version."""
+    versions = [_rv(VID_A, HASH_V1, None, SNAP_C)]
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_C) == VID_A
 
 
 @pytest.mark.unit
 def test_current_version_id_prefers_the_exact_pair_over_the_null_fallback():
-    versions = [_rv(VID_A, HASH_V1, None), _rv(VID_C, HASH_V1, ADJ_A)]
-    assert route_mod._current_version_id(versions, HASH_V1, ADJ_A) == VID_C
+    """The NULL row is COMPATIBLE (its snapshot derives to the review's hash),
+    so this pins a preference, not a disqualification."""
+    versions = [_rv(VID_A, HASH_V1, None, SNAP_C), _rv(VID_C, HASH_V1, ADJ_SNAP_C)]
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_C) == VID_C
 
 
 @pytest.mark.unit
@@ -450,12 +468,14 @@ def test_current_version_id_takes_the_LAST_match_on_a_revert():
     a2 = "bbbbbbb4-0000-4000-8000-000000000004"
     versions = [_rv(VID_A, HASH_V1, ADJ_A), _rv(VID_B, HASH_V2, ADJ_B), _rv(a2, HASH_V1, ADJ_A)]
     assert route_mod._current_version_id(versions, HASH_V1, ADJ_A) == a2
-    # and the null-adjustment fallback takes the last one too
+    # and the null-adjustment fallback takes the last PROVABLE one too
     n1 = "bbbbbbb5-0000-4000-8000-000000000005"
     n2 = "bbbbbbb6-0000-4000-8000-000000000006"
     assert (
         route_mod._current_version_id(
-            [_rv(n1, HASH_V1, None), _rv(n2, HASH_V1, None)], HASH_V1, ADJ_A
+            [_rv(n1, HASH_V1, None, SNAP_C), _rv(n2, HASH_V1, None, SNAP_C)],
+            HASH_V1,
+            ADJ_SNAP_C,
         )
         == n2
     )
@@ -507,7 +527,7 @@ def test_detail_current_version_id_is_null_when_no_row_matches(monkeypatch):
 def test_detail_current_version_id_falls_back_to_a_backfilled_version(monkeypatch):
     """Migration 141 backfilled versions carry NULL adjustment hashes; a review
     that has since learned its own (migration 142) still resolves to them."""
-    row = {**ROW, "dag_version_hash": HASH_V1, "adjustment_set_hash": ADJ_A}
+    row = {**ROW, "dag_version_hash": HASH_V1, "adjustment_set_hash": ADJ_SNAP_A}
     repo = _Repo(row, estimand_history=[row], versions=[_paired(VID_A, HASH_V1, None, SNAP_A)])
     body = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}").json()
     assert body["current_version_id"] == VID_A
@@ -559,4 +579,99 @@ def test_pending_last_changed_at_falls_back_to_the_row_when_no_version_matches(m
     assert item["version_count"] == 2
     assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
         2026, 7, 13, 10, 0, tzinfo=timezone.utc
+    )
+
+
+# --------------------------------------------------------------------------
+# The NULL-adjustment fallback must PROVE compatibility (codex round 4)
+# --------------------------------------------------------------------------
+#
+# A same-hash row whose ``adjustment_set_hash`` is NULL used to win the
+# fallback unexamined. Its SNAPSHOT is the evidence: derived with the writer's
+# own function it either names the review's covariate set or it does not, and a
+# NULL snapshot names nothing at all.
+
+# The sequence codex executed. The timeline holds (h, A) and then a (h, NULL)
+# row with a NULL snapshot -- a run that had no structure in scope. A later run
+# supplied structure B while ``get_latest_version`` was raising, so it did not
+# APPEND (the row asserted no change: same DAG hash, unknown adjustment) but it
+# did ADVANCE the review onto (h, B). The (h, NULL) row is then the only
+# same-hash candidate left.
+_UNPROVABLE_TIMELINE = [
+    (VID_A, HASH_V1, ADJ_A, SNAP_A, V1_AT),
+    (VID_B, HASH_V1, None, None, V3_AT),
+]
+
+
+@pytest.mark.unit
+def test_current_version_id_refuses_a_null_adjustment_row_that_proves_nothing():
+    """Naming that row would render "the previous snapshot disappeared" beside
+    B's populated graph -- the wrong-delta/right-graph defect, rebuilt. No
+    provable current version is the honest answer; the panel then shows the
+    graph with no diff."""
+    versions = [_rv(vid, h, adj, snap) for vid, h, adj, snap, _at in _UNPROVABLE_TIMELINE]
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_B) is None
+
+
+@pytest.mark.unit
+def test_current_version_id_refuses_a_backfilled_row_naming_other_covariates():
+    """Same DAG hash, but the snapshot's adjustment sets are not the review's:
+    ``compute_dag_hash`` excludes covariates, so the hash alone cannot see it."""
+    versions = [_rv(VID_A, HASH_V1, None, SNAP_C)]
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_B) is None
+
+
+@pytest.mark.unit
+def test_a_dict_snapshot_without_adjustment_sets_proves_the_EMPTY_set():
+    """Absent covariates inside a real snapshot is a fact -- the empty set --
+    unlike a NULL snapshot, which is the absence of any structure at all."""
+    versions = [_rv(VID_A, HASH_V1, None, {"nodes": ["T", "Y"], "edges": [["T", "Y"]]})]
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_SNAP_A) == VID_A
+    assert ADJ_SNAP_A == compute_adjustment_set_hash([])
+
+
+@pytest.mark.unit
+def test_detail_current_version_id_is_null_when_the_only_candidate_proves_nothing(monkeypatch):
+    """End to end on codex's sequence: the response names NO current version,
+    while the timeline itself is unchanged -- the rows WERE recorded."""
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_V1,
+        "adjustment_set_hash": ADJ_SNAP_B,
+        "dag_structure_json": SNAP_B,
+    }
+    versions = [_paired(vid, h, adj, snap, at) for vid, h, adj, snap, at in _UNPROVABLE_TIMELINE]
+    repo = _Repo(row, estimand_history=[row], versions=versions)
+    r = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["current_version_id"] is None
+    assert [v["version_id"] for v in body["versions"]] == [VID_A, VID_B]
+
+
+@pytest.mark.unit
+def test_pending_last_changed_at_ignores_a_null_row_that_proves_nothing(monkeypatch):
+    """The queue reads the same rule over RAW rows: with no provable current
+    version the change date is unknown, so it is the review's own creation --
+    never the unprovable row's, which is the NEWEST timestamp here."""
+    row = {**ROW, "dag_version_hash": HASH_V1, "adjustment_set_hash": ADJ_SNAP_B}
+    versions = [_paired(vid, h, adj, snap, at) for vid, h, adj, snap, at in _UNPROVABLE_TIMELINE]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    item = _client(monkeypatch, repo).get("/api/expert-reviews/pending").json()["reviews"][0]
+    assert item["version_count"] == 2
+    assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
+        2026, 7, 13, 10, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.unit
+def test_pending_last_changed_at_accepts_a_backfilled_row_whose_snapshot_proves_it(monkeypatch):
+    """The other half of the rule on the queue's raw rows: a NULL-adjustment
+    row that DOES derive to the review's hash still dates the change."""
+    row = {**ROW, "dag_version_hash": HASH_V1, "adjustment_set_hash": ADJ_SNAP_C}
+    versions = [_paired(VID_A, HASH_V1, None, SNAP_C, V2_AT)]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    item = _client(monkeypatch, repo).get("/api/expert-reviews/pending").json()["reviews"][0]
+    assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
+        2026, 7, 14, 10, 0, tzinfo=timezone.utc
     )

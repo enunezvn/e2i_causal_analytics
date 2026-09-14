@@ -7,7 +7,11 @@ make two identical diffs render differently between two calls.
 
 import pytest
 
-from src.causal_engine.dag_hash import get_dag_changes
+from src.causal_engine.dag_hash import (
+    adjustment_hash_from_snapshot,
+    compute_adjustment_set_hash,
+    get_dag_changes,
+)
 
 
 @pytest.mark.unit
@@ -75,3 +79,38 @@ class TestGetDagChangesDeterminism:
         assert d["is_changed"] is False
         assert d["nodes_added"] == [] and d["edges_added"] == []
         assert d["adjustment_sets_added"] == [] and d["adjustment_sets_removed"] == []
+
+
+@pytest.mark.unit
+class TestAdjustmentHashFromSnapshot:
+    """What a stored snapshot PROVES about the adjustment set (codex round 4).
+
+    A version row's NULL ``adjustment_set_hash`` means "never computed", not
+    "empty" -- but where the row kept a snapshot, the snapshot NAMES the set,
+    and the hash derived from it is the same one the writer would have stored.
+    """
+
+    def test_a_dict_snapshot_derives_the_writers_hash(self):
+        snapshot = {"nodes": ["T", "Y", "W"], "adjustment_sets": [["W"]]}
+        assert adjustment_hash_from_snapshot(snapshot) == compute_adjustment_set_hash([["W"]])
+
+    def test_order_inside_the_snapshot_does_not_change_the_hash(self):
+        assert adjustment_hash_from_snapshot(
+            {"adjustment_sets": [["B", "A"], ["C"]]}
+        ) == adjustment_hash_from_snapshot({"adjustment_sets": [["C"], ["A", "B"]]})
+
+    def test_absent_null_and_empty_all_mean_the_empty_set(self):
+        empty = compute_adjustment_set_hash([])
+        assert adjustment_hash_from_snapshot({}) == empty
+        assert adjustment_hash_from_snapshot({"adjustment_sets": None}) == empty
+        assert adjustment_hash_from_snapshot({"nodes": ["T"], "adjustment_sets": []}) == empty
+
+    def test_a_null_snapshot_is_unknown_not_the_empty_set(self):
+        """The row recorded no structure at all, so it asserts nothing about the
+        covariates -- reading it as ``sha256("[]")`` would claim a fact."""
+        assert adjustment_hash_from_snapshot(None) is None
+        assert compute_adjustment_set_hash([]) is not None
+
+    def test_a_non_dict_snapshot_is_unknown(self):
+        for value in ("[]", [["W"]], 7, True):
+            assert adjustment_hash_from_snapshot(value) is None
