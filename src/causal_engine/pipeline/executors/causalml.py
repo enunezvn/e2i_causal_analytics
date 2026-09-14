@@ -69,6 +69,33 @@ class ExecutorDataUnavailable(RuntimeError):
     """
 
 
+def _binarization_stats(y_valid: Any) -> Tuple[int, float, float]:
+    """Describe what CausalML's ``y = (y > 0)`` does to these outcome values.
+
+    Shared by the collapse refusal (#2063) and the recoding notice (#2067),
+    which report the same three numbers about the same operation and must
+    not drift apart.
+
+    Args:
+        y_valid: outcome values with NaN ALREADY REMOVED. Both callers drop
+            them first, because over NaN these print ``nan`` and NaN counts
+            as a distinct outcome value. For a NaN-free column that is the
+            whole column.
+
+    Returns:
+        Tuple of (distinct values, ``frac(y > 0)``, ``mean|y - (y > 0)|``
+        -- the information binarization destroys).
+    """
+    import numpy as np
+
+    binarized = (y_valid > 0).astype(y_valid.dtype)
+    return (
+        int(len(np.unique(y_valid))),
+        float(binarized.mean()),
+        float(np.abs(y_valid - binarized).mean()),
+    )
+
+
 def _extract_uplift_inputs_from_state(
     state: PipelineState,
 ) -> Tuple[Any, Any, Any, List[str], List[str]]:
@@ -234,12 +261,8 @@ def _extract_uplift_inputs_from_state(
         # non-NaN values only, since over NaN they print `nan` and count NaN
         # as a distinct outcome value. For a NaN-free column this is the
         # whole column.
-        not_nan = ~np.isnan(y_arr)
-        y_valid = y_arr[not_nan]
-        binarized_valid = binarized[not_nan]
-        positive_fraction = float(binarized_valid.mean())
-        distinct_outcomes = int(len(np.unique(y_valid)))
-        information_lost = float(np.abs(y_valid - binarized_valid).mean())
+        y_valid = y_arr[~np.isnan(y_arr)]
+        distinct_outcomes, positive_fraction, information_lost = _binarization_stats(y_valid)
         # A genuinely binary 0/1 outcome NEVER reaches this branch -- its
         # positive fraction is strictly between 0 and 1 -- so the
         # distinct-value count says which of three different problems the
@@ -364,16 +387,13 @@ def _binarization_notice(y_arr: Any, outcome_var: str) -> Tuple[Optional[str], b
     import numpy as np
 
     y_valid = y_arr[~np.isnan(y_arr)]
-    distinct = int(len(np.unique(y_valid)))
-    binarized = (y_valid > 0).astype(y_valid.dtype)
-    if np.array_equal(y_valid, binarized):
+    distinct, positive_fraction, information_lost = _binarization_stats(y_valid)
+    if np.array_equal(y_valid, (y_valid > 0).astype(y_valid.dtype)):
         # The recoding is the identity here: the values already ARE the
         # 0/1 indicator (in any dtype, and `-0.0 == 0.0`), so the fitted
         # quantity is the ATE on the column the caller named.
         return None, False, distinct
 
-    positive_fraction = float(binarized.mean())
-    information_lost = float(np.abs(y_valid - binarized).mean())
     message = (
         f"CausalML binarized outcome '{outcome_var}' at zero before fitting "
         f"(causalml/inference/tree/uplift.pyx:459 runs `y = (y > 0)`). "
