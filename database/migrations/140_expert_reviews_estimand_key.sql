@@ -50,11 +50,22 @@
 --   CREATE UNIQUE INDEX uq_er_pending_dag_brand ON public.expert_reviews
 --     USING btree (dag_version_hash, COALESCE(brand, ''::character varying))
 --     WHERE ((approval_status)::text = 'pending'::text);
+--   PRECONDITION for the restore below: uq_er_pending_dag_brand keys on
+--     (dag_version_hash, COALESCE(brand,'')), so before restoring the superseded
+--     rows to pending, check that no pending row minted after this migration
+--     would collide with them under that restored index -- restoring must
+--     exclude or resolve those first, or the UPDATE fails mid-transaction (or
+--     takes a slot the live queue is using).
 --   UPDATE public.expert_reviews SET approval_status = 'pending',
 --     resolved_at = NULL,
 --     comments_json = comments_json - 'superseded_reason'
 --     WHERE comments_json ? 'superseded_reason';
 --   ALTER TABLE public.expert_reviews DROP COLUMN estimand_key;
+--   also DELETE FROM public.schema_migrations WHERE filename =
+--   '140_expert_reviews_estimand_key.sql' -- run_migrations.sh's ledger check
+--   (line ~117) skips any file already recorded there, so leaving that row in
+--   place would make a later re-apply of this file silently no-op instead of
+--   recreating the column and the pending-uniqueness index.
 -- ============================================================================
 
 ALTER TABLE public.expert_reviews

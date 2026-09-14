@@ -68,3 +68,33 @@ def test_no_delete_and_no_own_transaction():
     s = _sql().upper()
     assert "DELETE FROM" not in s
     assert "BEGIN;" not in s and "COMMIT;" not in s
+
+
+@pytest.mark.unit
+def test_reverse_block_deletes_the_ledger_row_and_warns_about_pending_collisions():
+    """The REVERSE instructions are read by a human, so they are asserted on the
+    RAW text -- ``_sql()`` strips exactly the comment lines they live in.
+
+    Two things were missing. Without the ledger DELETE, run_migrations.sh's
+    already-applied check (~:117) skips this file, so a later re-apply silently
+    no-ops instead of recreating the column and index -- the same reason
+    migration 141's REVERSE block spells it out. And restoring the superseded
+    rows to pending re-creates the PRE-140 index on (dag_version_hash,
+    COALESCE(brand,'')), which a pending row minted since could already occupy:
+    the restore then fails mid-transaction, or takes a slot the live queue is
+    using. Naming the check is the difference between a reversal plan and a hope.
+    """
+    raw = M.read_text()
+    reverse = raw[raw.index("-- REVERSE (manual") :]
+    assert (
+        "DELETE FROM public.schema_migrations WHERE filename =" in reverse
+        and "140_expert_reviews_estimand_key.sql" in reverse
+    )
+    assert "uq_er_pending_dag_brand" in reverse
+    # the collision precondition, named before the restoring UPDATE
+    assert "collide" in reverse or "collision" in reverse
+    assert reverse.index("pending row minted after") < reverse.index(
+        "UPDATE public.expert_reviews SET approval_status = 'pending'"
+    )
+    # every added line is still a comment: the executable body is untouched
+    assert "DELETE FROM" not in _sql().upper()
