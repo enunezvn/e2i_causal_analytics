@@ -104,7 +104,7 @@ class TestMemoryWiringEnabled:
     @pytest.mark.asyncio
     async def test_no_session_id_passes_none_through(self, recorder):
         """Without a session, None reaches the hook (which falls back to the
-        state's session_id, then a generated UUID)."""
+        state's session_id, then to None — no mint, #2076)."""
         agent = _make_agent()
         await agent.run({"query": "test query"})
 

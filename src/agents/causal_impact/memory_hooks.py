@@ -414,7 +414,7 @@ class CausalImpactMemoryHooks:
 
     async def store_causal_analysis(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
         brand: Optional[str] = None,
@@ -705,7 +705,8 @@ async def contribute_to_memory(
         result: CausalImpactOutput dictionary
         state: CausalImpactState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (uses state value if not provided)
+        session_id: Session identifier; falls back to the state value, else
+            None, which records an honest NULL (#2076)
         brand: Optional brand context
         region: Optional region context
 
@@ -715,8 +716,6 @@ async def contribute_to_memory(
         - semantic_stored: 1 if causal path stored, 0 otherwise
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_causal_impact_memory_hooks()
 
@@ -726,11 +725,14 @@ async def contribute_to_memory(
     # (#1404), while the working-memory cache and the activity provenance keep the
     # raw id for real session linkage. We NO LONGER parse-or-mint a fresh uuid for
     # an unparseable id — that silently replaced a real composite id with a random
-    # one and destroyed session linkage (#1403). Only the genuinely session-less
-    # call (no id anywhere) falls back to a placeholder uuid — which loses no
-    # linkage because there is none, and keeps the non-Optional downstream contract.
+    # one and destroyed session linkage (#1403). Nor does the genuinely
+    # session-less call mint a placeholder any more: a uuid belonging to no
+    # conversation is the invented identity #2076 removes, and the downstream
+    # contract widened to Optional rather than being paid for in fake ids.
+    # A falsy state value normalises to None too, so the session-KEYED writes
+    # below are skipped rather than keyed on an empty string.
     if session_id is None:
-        session_id = state.get("session_id") or str(uuid.uuid4())
+        session_id = state.get("session_id") or None
 
     counts = {
         "episodic_stored": 0,
@@ -745,9 +747,12 @@ async def contribute_to_memory(
         return counts
 
     # 1. Cache in working memory
-    cached = await memory_hooks.cache_causal_analysis(session_id, result)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_causal_analysis(session_id, result)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_causal_analysis(

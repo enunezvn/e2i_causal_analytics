@@ -330,7 +330,7 @@ class HealthScoreMemoryHooks:
 
     async def store_health_check(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -574,20 +574,15 @@ async def contribute_to_memory(
         result: HealthScoreOutput dictionary
         state: HealthScoreState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
 
     Returns:
         Dictionary with counts of stored memories:
         - episodic_stored: 1 if check stored (significant events only), 0 otherwise
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_health_score_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
@@ -601,7 +596,11 @@ async def contribute_to_memory(
 
     check_scope = state.get("check_scope", "full")
 
-    # 1. Always cache in working memory
+    # 1. Always cache in working memory. NOT guarded on the session (#2076): the
+    # key is ``health_score:cache:{check_scope}`` and ``_get_cached_health`` reads
+    # it back BY SCOPE on every run. Production reaches here with no session at all
+    # (the route calls ``check_health(scope=...)``), so a session guard here would
+    # stop every live run from filling a cache it still reads.
     cached = await memory_hooks.cache_health_check(check_scope, result)
     if cached:
         counts["working_cached"] = 1

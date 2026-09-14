@@ -375,7 +375,7 @@ class ResourceOptimizerMemoryHooks:
 
     async def store_optimization_pattern(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -494,7 +494,7 @@ class ResourceOptimizerMemoryHooks:
 
     async def store_optimization(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -600,7 +600,7 @@ async def contribute_to_memory(
         result: ResourceOptimizerOutput dictionary
         state: ResourceOptimizerState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
 
     Returns:
         Dictionary with counts of stored memories:
@@ -608,13 +608,8 @@ async def contribute_to_memory(
         - working_cached: 1 if cached, 0 otherwise
         - pattern_learned: 1 if pattern stored, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_resource_optimizer_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
@@ -628,9 +623,12 @@ async def contribute_to_memory(
         return counts
 
     # 1. Cache in working memory
-    cached = await memory_hooks.cache_optimization(session_id, result)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_optimization(session_id, result)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_optimization(
