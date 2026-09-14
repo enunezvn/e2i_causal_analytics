@@ -443,13 +443,10 @@ class ExpertReviewGate:
             if dag_structure
             else None
         )
-        # Whether this run SAW a structure at all -- the same "not recorded"
-        # vs "no covariates" distinction ``effective_adjustment_hash`` draws
-        # for a stored row, stated directly here rather than inferred from
-        # ``compute_adjustment_set_hash`` never returning None for a real
-        # (possibly empty) ``adjustment_sets`` list. The pending branch below
-        # turns on it (codex round 5).
-        run_knows_structure = adjustment_set_hash is not None
+        # Whether this run SAW a structure at all -- the difference between
+        # "the covariates are X" and "this run makes no claim about them".
+        # The pending branch below turns on it (codex round 5).
+        run_knows_structure = bool(dag_structure)
 
         if pending:
             pending_row = pending[0]
