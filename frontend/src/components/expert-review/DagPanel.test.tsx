@@ -57,6 +57,28 @@ describe('DagPanel', () => {
     expect(screen.getByText('+ W → T')).toBeInTheDocument();
   });
 
+  it('renders no diff heading when the newest version changed nothing', () => {
+    const unchanged: ReviewVersion[] = [
+      VERSIONS[0],
+      {
+        ...VERSIONS[1],
+        changes: {
+          nodes_added: [],
+          nodes_removed: [],
+          edges_added: [],
+          edges_removed: [],
+          adjustment_sets_added: [],
+          adjustment_sets_removed: [],
+          is_changed: false,
+        },
+      },
+    ];
+    render(<DagPanel structure={STRUCTURE} versions={unchanged} />);
+    expect(screen.getByTestId('causal-dag')).toBeInTheDocument();
+    expect(screen.queryByText('Changed since the previous version')).toBeNull();
+    expect(screen.queryByText('No structural change from the previous version.')).toBeNull();
+  });
+
   it('renders no diff heading for a single version', () => {
     render(<DagPanel structure={STRUCTURE} versions={[VERSIONS[0]]} />);
     expect(screen.getByTestId('causal-dag')).toBeInTheDocument();

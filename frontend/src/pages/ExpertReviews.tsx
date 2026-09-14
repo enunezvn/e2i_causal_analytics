@@ -22,6 +22,12 @@
  * - "Prepare assessments" generates the missing advisory assessments one row
  *   at a time; expanding a row generates its own if none is cached.
  *
+ * #1991 debt 3:
+ * - A Versions column reports how many structure versions the estimand has,
+ *   with the day it last changed when that postdates its creation.
+ * - Expanding a row fetches that review's detail for the version TIMELINE
+ *   (the queue item does not carry it) and renders the newest structure diff.
+ *
  * Honest states: loading spinner, error banner, and an EmptyState (no hardcoded
  * SAMPLE_ data) when the live queue is empty.
  *
@@ -78,12 +84,26 @@ function ExpandedReviewRow({
   autoAssessGuard: MutableRefObject<Set<string>>;
 }) {
   const detail = useExpertReview(review.review_id);
+  // The graph renders from the queue item's own snapshot, so a failed detail
+  // read costs only the DIFF. Say so when there IS a diff to lose: with the
+  // Versions cell still reporting >1, a silently missing diff is
+  // indistinguishable from a single-version review. One version loses nothing,
+  // so the failure stays quiet there.
+  const historyFailed = detail.isError && (review.version_count ?? 1) > 1;
 
   return (
     <TableRow>
       <TableCell colSpan={8}>
         <div className="grid gap-4 xl:grid-cols-2">
-          <DagPanel structure={review.dag_structure_json} versions={detail.data?.versions} />
+          <div className="space-y-2">
+            <DagPanel structure={review.dag_structure_json} versions={detail.data?.versions} />
+            {historyFailed && (
+              <WarningBanner
+                title="Version history unavailable"
+                messages={[detail.error?.message ?? 'An unexpected error occurred.']}
+              />
+            )}
+          </div>
           <ResolveForm review={review} onClose={onClose} autoAssessGuard={autoAssessGuard} />
         </div>
       </TableCell>
@@ -142,7 +162,11 @@ export default function ExpertReviews() {
           <Badge variant="secondary">Pending: {summary.data.pending}</Badge>
           <Badge variant="secondary">Approved: {summary.data.approved}</Badge>
           <Badge variant="secondary">Rejected: {summary.data.rejected}</Badge>
-          <Badge variant="secondary" title="BLOCK-band reviews resolved by migration 140">
+          {/* The `superseded` status was introduced by migration 140. */}
+          <Badge
+            variant="secondary"
+            title="Closed without a decision: a BLOCK-band run had already made the review moot"
+          >
             Superseded: {summary.data.superseded}
           </Badge>
           <Badge variant="secondary">Expired: {summary.data.expired}</Badge>
@@ -201,7 +225,9 @@ export default function ExpertReviews() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {reviews.map((review) => (
+                {reviews.map((review) => {
+                  const changedDay = lastChangedDay(review);
+                  return (
                   <Fragment key={review.review_id}>
                     <TableRow>
                       <TableCell>{review.brand ?? '—'}</TableCell>
@@ -213,12 +239,12 @@ export default function ExpertReviews() {
                         {/* A row minted before the versions table reports no
                             count; it still has exactly one structure. */}
                         {review.version_count ?? 1}
-                        {lastChangedDay(review) && (
+                        {changedDay && (
                           <div
                             className="text-xs text-[var(--color-muted-foreground)]"
                             title="Last structure change"
                           >
-                            {lastChangedDay(review)}
+                            {changedDay}
                           </div>
                         )}
                       </TableCell>
@@ -245,7 +271,8 @@ export default function ExpertReviews() {
                       />
                     )}
                   </Fragment>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           )}

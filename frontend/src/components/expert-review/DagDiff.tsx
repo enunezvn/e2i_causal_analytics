@@ -8,7 +8,13 @@
  */
 import type { DagChanges } from '@/types/expert-review';
 
-/** Edges and adjustment sets arrive as `string[][]` (backend List[List[str]]). */
+/**
+ * Edges and adjustment sets arrive as `string[][]` (backend List[List[str]]).
+ *
+ * The rendered glyphs are NON-ASCII and a test matching on them must use the
+ * same code points: the edge arrow is U+2192 RIGHTWARDS ARROW (→, not "->")
+ * and a removal is marked with U+2212 MINUS SIGN (−, not the ASCII hyphen).
+ */
 const edge = ([s, t]: string[]) => `${s} → ${t}`;
 const set = (a: string[]) => `{${a.join(', ')}}`;
 

@@ -661,7 +661,7 @@ describe('ExpertReviews linked review (lane 1)', () => {
 // per-review version count, the summary's `superseded` partition member, and
 // the structure diff of the newest version inside the expanded row.
 describe('ExpertReviews estimand versions (#1991 debt 3)', () => {
-  it('shows a Versions column, defaulting to 1 for a review with no count', async () => {
+  it('shows a Versions column, defaulting to 1 for a review with no count', () => {
     mockQueue({
       reviews: [
         { ...mockPending.reviews[0], review_id: 'rev-multi', version_count: 3, last_changed_at: '2026-06-09T00:00:00Z' },
@@ -687,6 +687,35 @@ describe('ExpertReviews estimand versions (#1991 debt 3)', () => {
     mockQueue({ reviews: [], total: 0 });
     render(<ExpertReviews />, { wrapper: createWrapper() });
     expect(screen.getByText('Superseded: 2')).toBeInTheDocument();
+  });
+
+  it('says the version history failed to load instead of silently dropping the diff', async () => {
+    // The Versions cell still says 3, so a missing diff must be explained: an
+    // operator cannot otherwise tell "one version" from "the read failed".
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { status: 503, message: 'Expert-review store unavailable. Retry shortly.' },
+    } as never);
+    renderWithRow({ dag_structure_json: STRUCTURE, version_count: 3 });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByText('Version history unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Expert-review store unavailable. Retry shortly.')).toBeInTheDocument();
+  });
+
+  it('stays quiet about a failed history read when the review has only one version', async () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { status: 503, message: 'Expert-review store unavailable. Retry shortly.' },
+    } as never);
+    renderWithRow({ dag_structure_json: STRUCTURE, version_count: 1 });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByTestId('causal-dag')).toBeInTheDocument();
+    // A single version has no diff to lose, so the failure costs the operator nothing.
+    expect(screen.queryByText('Version history unavailable')).toBeNull();
   });
 
   it('renders the newest version diff in the expanded row from the detail response', async () => {

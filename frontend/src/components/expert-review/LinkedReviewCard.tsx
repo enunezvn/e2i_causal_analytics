@@ -143,7 +143,10 @@ export function LinkedReviewCard({
               </dl>
             )}
             <div className="grid gap-4 xl:grid-cols-2">
-              <DagPanel structure={q.data.review.dag_structure_json} />
+              {/* The detail response carries this review's version timeline, so
+                  the card's panel shows the same structure diff the expanded
+                  queue row does. */}
+              <DagPanel structure={q.data.review.dag_structure_json} versions={q.data.versions} />
               {q.data.review.approval_status === 'pending' ? (
                 <ResolveForm
                   review={q.data.review}

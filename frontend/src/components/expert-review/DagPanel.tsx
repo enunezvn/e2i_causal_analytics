@@ -20,8 +20,15 @@ export function DagPanel({
 }) {
   // `versions` is OLDEST first; the last entry carries the newest delta. Its
   // `changes` is null on a review minted before the versions table.
+  //
+  // `is_changed` false is near-unreachable by construction — the engine appends
+  // a version only when the structure or the covariate set moved — but the flag
+  // is the contract, so an unchanged delta renders NOTHING rather than a
+  // heading promising a change the panel cannot show. (DagDiff's own
+  // "no structural change" copy is for a caller that asks for a named delta;
+  // here the honest answer is silence.)
   const latest = versions && versions.length > 1 ? versions[versions.length - 1] : null;
-  const latestChanges = latest?.changes ?? null;
+  const latestChanges = latest?.changes?.is_changed ? latest.changes : null;
 
   if (!structure?.nodes?.length) {
     return (
