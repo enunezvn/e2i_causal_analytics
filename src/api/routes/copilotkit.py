@@ -4878,7 +4878,7 @@ async def copilotkit_custom_handler(
         body_bytes = b""
 
     # #2077: same thread-ownership policy as the root branch, which never ran here.
-    if method != "OPTIONS" and chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE):
+    if await chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE, method):
         return JSONResponse(status_code=403, content={"error": "threadId not yours"})
 
     # For all other paths, delegate to SDK handler

@@ -356,17 +356,34 @@ async def owned_thread_id(
     return claimed[0]
 
 
-def sdk_thread_denied(body_bytes: bytes, request: Any, testing_mode: bool) -> bool:
+async def sdk_thread_denied(
+    body_bytes: bytes, request: Any, testing_mode: bool, method: str = "POST"
+) -> bool:
     """Whether the SDK sub-path body claims a thread the caller does not own.
 
-    The root branch's check never ran here: ``agent/{name}`` and
-    ``agents/execute`` reach the third-party handler through the fallthrough,
-    which delegates the body verbatim. Read the same bytes the SDK will read —
-    the stream is already buffered at this point, so nothing is consumed. An
-    unparseable body names no thread and is left to the SDK to reject.
+    The root branch's check never ran here: ``agent/{name}``, ``agents/execute``
+    and ``agent/{name}/state`` reach the third-party handler through the
+    fallthrough, which delegates the body verbatim. All three read ``threadId``
+    from the top level of that body (``copilotkit/integrations/fastapi.py``
+    :107,127,195), which is what ``_thread_ids`` reads — so one seam covers
+    every sub-path, ``/state`` included: it returns the conversation's agent
+    state, and disclosure is the same harm as execution.
+
+    Read the same bytes the SDK will read — the stream is already buffered at
+    this point, so nothing is consumed. An unparseable body names no thread and
+    is left to the SDK to reject.
+
+    ``method`` carries the preflight exemption that used to sit inline at the
+    call site: OPTIONS is a CORS negotiation with no turn behind it, so it must
+    not cost a database round trip. Taking it here keeps the call site one line
+    wide, which the module-size ratchet on ``copilotkit.py`` requires.
     """
+    if method == "OPTIONS":
+        return False
     try:
         body = json.loads(body_bytes) if body_bytes else None
     except (ValueError, TypeError):
         return False
-    return _claims_another_owner(body, request, testing_mode)
+    if _claims_another_owner(body, request, testing_mode):
+        return True
+    return await _claims_a_foreign_conversation(body, request, testing_mode)
