@@ -575,8 +575,8 @@ class TestContributeToMemory:
         assert counts["working_cached"] == 1
 
     @pytest.mark.asyncio
-    async def test_contribute_generates_session_id(self, sample_optimization_result, sample_state):
-        """Test that session ID is generated if not provided."""
+    async def test_contribute_without_session_id(self, sample_optimization_result, sample_state):
+        """#2076: an absent session ID is left as None, never minted."""
         counts = await contribute_to_memory(
             result=sample_optimization_result,
             state=sample_state,

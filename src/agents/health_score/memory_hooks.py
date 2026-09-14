@@ -330,7 +330,7 @@ class HealthScoreMemoryHooks:
 
     async def store_health_check(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -574,20 +574,15 @@ async def contribute_to_memory(
         result: HealthScoreOutput dictionary
         state: HealthScoreState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
 
     Returns:
         Dictionary with counts of stored memories:
         - episodic_stored: 1 if check stored (significant events only), 0 otherwise
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_health_score_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
@@ -602,9 +597,12 @@ async def contribute_to_memory(
     check_scope = state.get("check_scope", "full")
 
     # 1. Always cache in working memory
-    cached = await memory_hooks.cache_health_check(check_scope, result)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_health_check(check_scope, result)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory (only significant events)
     memory_id = await memory_hooks.store_health_check(
