@@ -515,6 +515,15 @@ async def _build_under_lock(
     the SAFE 503 (``_reread_row``): building from the stale snapshot could
     overwrite a result persisted meanwhile.
 
+    The persist is bound to the STRUCTURE VERSION the build graded (codex
+    round-1 HIGH): the row's ``dag_version_hash`` is captured before the build
+    and passed to ``update_agent_assessment``, so a build that finishes after a
+    refutation run advanced the review (migration 141) writes nothing and the
+    response says ``persisted: false`` rather than filing a grading of the old
+    DAG and the old evidence under the new structure. The advance itself already
+    CLEARS the cached assessment (``append_version``), so the request-level cache
+    short-circuit above cannot serve the previous structure's grading either.
+
     Worker shutdown (#1999, measured): uvicorn waits for every request task
     before it sends the lifespan shutdown, and the request task awaits this one
     (a disconnect does not cancel it), so a graceful stop (SIGTERM, a
@@ -563,6 +572,13 @@ async def _build_under_lock(
             )
         # Build from the row as it is NOW (the snapshot can be up to a full wait old).
         source = row or review
+        # The structure this build GRADES, captured before it starts (codex
+        # round-1 HIGH). A refutation run can append a version and advance the
+        # review while the (blocking, LM-backed) build runs; persisting then
+        # would file a grading of h1's DAG and h1's evidence under h2. The
+        # persist below carries this hash as a filter, so a stale build is
+        # refused by the row rather than by a re-read that could itself race.
+        source_hash = source.get("dag_version_hash")
         validation_ids = source.get("related_validation_ids") or []
         validations = await _get_validation_rows(validation_ids)
         # run_signature is a BLOCKING LM call; keep the event loop free.
@@ -574,7 +590,9 @@ async def _build_under_lock(
             _GENERATION_ID_KEY: uuid.uuid4().hex,
             _GENERATED_AT_KEY: datetime.now(timezone.utc).isoformat(),
         }
-        persisted = await repo.update_agent_assessment(review_id, assessment)
+        persisted = await repo.update_agent_assessment(
+            review_id, assessment, for_dag_version_hash=source_hash
+        )
         # No p99 exists for this build anywhere; record the elapsed seconds so the
         # lock TTL (120 s, nginx proxy_read_timeout) can be revisited on data.
         logger.info(

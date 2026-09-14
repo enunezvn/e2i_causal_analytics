@@ -73,6 +73,7 @@ class _Repo:
         self.rows: Dict[str, Dict[str, Any]] = {row["review_id"]: dict(row)}
         self.persist = persist
         self.writes: List[Dict[str, Any]] = []
+        self.write_filters: List[Optional[str]] = []
         self.reads = 0
         # When set, the FIRST read returns its snapshot only after this opens:
         # the snapshot is taken now, the caller proceeds later (round-2 HIGH).
@@ -97,11 +98,26 @@ class _Repo:
         raw = self.rows[RID]["agent_assessment_json"]
         return raw if isinstance(raw, dict) else json.loads(raw)
 
-    async def update_agent_assessment(self, review_id: str, assessment: Dict[str, Any]) -> bool:
+    async def update_agent_assessment(
+        self,
+        review_id: str,
+        assessment: Dict[str, Any],
+        *,
+        for_dag_version_hash: Optional[str] = None,
+    ) -> bool:
+        """Honours the version filter the route now sends (codex round-1 HIGH):
+        the real UPDATE carries ``dag_version_hash = for_dag_version_hash``, so a
+        row whose structure moved during the build matches zero rows."""
         self.writes.append(dict(assessment))
+        self.write_filters.append(for_dag_version_hash)
         if not self.persist:
             return False
-        self.rows[review_id]["agent_assessment_json"] = json.dumps(assessment)
+        row = self.rows.get(review_id)
+        if row is None:
+            return False
+        if for_dag_version_hash is not None and row.get("dag_version_hash") != for_dag_version_hash:
+            return False
+        row["agent_assessment_json"] = json.dumps(assessment)
         return True
 
 
@@ -768,3 +784,49 @@ async def test_cached_fast_path_and_404_take_no_lock(monkeypatch):
     r404 = await _single(h, path=f"/api/expert-reviews/{RID_UNKNOWN}/assessment")
     assert r404.status_code == 404
     assert redis.ops == []
+
+
+# --------------------------------------------------------------------------
+# H3 (codex round-1): a build is persisted only onto the structure it graded
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_persist_is_filtered_on_the_structure_the_build_graded(monkeypatch):
+    """The happy path still persists, and names the version it graded."""
+    repo, redis = _Repo(ROW), _FakeRedis()
+    h = _harness(monkeypatch, repo, redis)
+    r = await _single(h)
+    assert r.status_code == 200, r.text
+    assert r.json()["persisted"] is True
+    assert repo.write_filters == [ROW["dag_version_hash"]]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_assessment_of_the_OLD_structure_is_not_persisted_onto_the_new_one(monkeypatch):
+    """The review advanced while the build ran (migration 141's timeline). The
+    grading describes h1's DAG and its evidence; writing it onto h2 would hand
+    the reviewer an assessment of a structure this review no longer covers.
+
+    The write is refused by the row filter, the response says ``persisted:
+    False`` -- the form already shows the "not saved" banner for that -- and the
+    valid assessment is still returned to the caller who asked for it.
+    """
+    repo, redis = _Repo(ROW), _FakeRedis()
+    h = _harness(monkeypatch, repo, redis)
+    async with h.client() as client:
+        task = asyncio.create_task(client.post(URL))
+        await _until(lambda: h.builds >= 1, "the request entered its build")
+        # ... a refutation run appends a version and advances the review
+        repo.rows[RID]["dag_version_hash"] = "a" * 64
+        h.gate.set()
+        r = await task
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["persisted"] is False
+    assert body["cached"] is False
+    assert body["assessment"]["items"]  # the build is still returned
+    assert repo.write_filters == [ROW["dag_version_hash"]]  # the version it graded
+    assert "agent_assessment_json" not in repo.rows[RID]

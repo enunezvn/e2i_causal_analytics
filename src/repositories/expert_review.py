@@ -464,31 +464,51 @@ class ExpertReviewRepository(BaseRepository):
         self,
         review_id: str,
         assessment: Dict[str, Any],
+        *,
+        for_dag_version_hash: Optional[str] = None,
     ) -> bool:
         """Cache an advisory agent assessment on the review row (mig 097).
 
         Writes ``agent_assessment_json`` ONLY — never touches
         ``checklist_json``, which remains the human reviewer's own record.
 
+        ``for_dag_version_hash`` binds the write to the structure the assessment
+        actually GRADED (codex round-1 HIGH): the build reads a DAG snapshot and
+        its linked refutation evidence, and a concurrent run can advance the
+        review while it runs. Filtering the UPDATE on the hash makes a build of
+        the superseded structure match zero rows instead of overwriting the new
+        version's cache with a grading of the old one. Zero rows is the existing
+        False contract, which the route reports as ``persisted: false`` — the
+        assessment is still returned to whoever asked for it.
+
+        Args:
+            review_id: The review whose cache is written
+            assessment: The advisory grading payload
+            for_dag_version_hash: When given, write only while the review still
+                carries this structure version
+
         Returns:
             True when exactly this row was updated; False on zero-row match
-            (nonexistent review) or persistence error — fail-closed, mirroring
-            ``submit_review``.
+            (nonexistent review, or one whose structure moved) or persistence
+            error — fail-closed, mirroring ``submit_review``.
         """
         if not self.client:
             return False
 
         try:
-            result = await (
+            query = (
                 self.client.table(self.table_name)
                 # #1992: JSON OBJECT, not a json.dumps'ed string.
                 .update({"agent_assessment_json": to_plain_json(assessment)})
                 .eq("review_id", review_id)
-                .execute()
             )
+            if for_dag_version_hash is not None:
+                query = query.eq("dag_version_hash", for_dag_version_hash)
+            result = await query.execute()
             if not result.data:
                 logger.warning(
-                    f"update_agent_assessment matched no rows for {review_id}; returning False"
+                    f"update_agent_assessment matched no rows for {review_id} "
+                    f"(version filter: {for_dag_version_hash}); returning False"
                 )
                 return False
             return True
@@ -908,6 +928,15 @@ class ExpertReviewRepository(BaseRepository):
         advance: Dict[str, Any] = {
             "dag_version_hash": dag_version_hash,
             "dag_structure_json": snapshot,
+            # The cached advisory assessment grades the DAG and the evidence of
+            # the version that WAS current, so it cannot survive the advance
+            # (codex round-1 HIGH): the review UI would show a grading of a
+            # structure this review no longer covers, and the assessment route's
+            # cache short-circuit would keep serving it beside the new snapshot.
+            # A literal None, not an omission: this payload is built explicitly,
+            # so it is never dropped by the "remove None values" pattern
+            # ``submit_review`` uses, and PostgREST writes it as SQL NULL.
+            "agent_assessment_json": None,
         }
         if related_validation_ids is not None:
             advance["related_validation_ids"] = related_validation_ids

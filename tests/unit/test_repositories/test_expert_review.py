@@ -11,6 +11,13 @@ import pytest
 
 from src.repositories.expert_review import ExpertReviewRepository
 
+#: A resolution names the structure version it applies to (#1991 debt 3, codex
+#: round-1 HIGH): ``submit_review`` filters the UPDATE on it, so every call here
+#: supplies one. The compare-and-set behaviour itself is pinned against the
+#: PostgREST-shaped double in test_expert_review_estimand_1991.py; these tests
+#: use a MagicMock client and only assert the payload.
+RESOLVED_HASH = "h" * 64
+
 
 class TestExpertReviewRepository:
     """Test ExpertReviewRepository."""
@@ -254,16 +261,19 @@ class TestExpertReviewRepository:
     async def test_submit_review_approved(self, repo, mock_client):
         """Test submitting an approved review.
 
-        Chain pins R2: the UPDATE is filtered by review_id AND
-        approval_status='pending' (two .eq calls), so only a pending row resolves.
+        Chain pins R2 and the version binding: the UPDATE is filtered by
+        review_id AND approval_status='pending' AND dag_version_hash (three .eq
+        calls), so only a pending row AT THE VERSION THE REVIEWER SAW resolves
+        (#1991 debt 3, codex round-1 HIGH).
         """
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
             review_id="rev-123",
             approval_status="approved",
             checklist={"confounder_check": True, "edge_direction": True},
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is True
@@ -273,13 +283,14 @@ class TestExpertReviewRepository:
     async def test_submit_review_rejected(self, repo, mock_client):
         """Test submitting a rejected review."""
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
             review_id="rev-123",
             approval_status="rejected",
             checklist={"confounder_check": False},
             concerns_raised=["Missing confounders"],
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is True
@@ -291,7 +302,7 @@ class TestExpertReviewRepository:
         """#1992: the resolve path (submit_review) must hand PostgREST JSON
         OBJECTS for checklist_json / comments_json, not json.dumps'ed strings."""
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute = mock_execute
         checklist = {"confounder_check": True, "edge_direction": True}
         comments = {"note": "looks good", "reviewer": "Dr. Expert"}
 
@@ -300,6 +311,7 @@ class TestExpertReviewRepository:
             approval_status="approved",
             checklist=checklist,
             comments=comments,
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is True
@@ -312,12 +324,13 @@ class TestExpertReviewRepository:
         """No comments supplied -> comments_json is stripped by the existing
         None-strip (unchanged behavior), never a json.dumps'ed empty string."""
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
             review_id="rev-123",
             approval_status="approved",
             checklist={"confounder_check": True},
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is True
@@ -335,7 +348,7 @@ class TestExpertReviewRepository:
         the resolver's identity; ``reviewer_id`` is never overwritten (it holds
         the REQUESTER -- the originating query id, gate :392)."""
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
             review_id="rev-123",
@@ -343,6 +356,7 @@ class TestExpertReviewRepository:
             checklist={"confounder_check": True},
             reviewer_name="Dr. Operator",
             reviewer_email="operator@example.com",
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is True
@@ -367,10 +381,13 @@ class TestExpertReviewRepository:
         -- never omitted -- while ``reviewer_id`` (the requester breadcrumb) is
         never touched."""
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
-            review_id="rev-123", approval_status=approval_status, checklist={}
+            review_id="rev-123",
+            approval_status=approval_status,
+            checklist={},
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is True
@@ -390,10 +407,14 @@ class TestExpertReviewRepository:
         name is written and the email is EXPLICITLY null, so a renewal's requester
         email cannot survive as the resolver's."""
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
-        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
-            review_id="rev-123", approval_status="rejected", checklist={}, reviewer_name="op-3"
+            review_id="rev-123",
+            approval_status="rejected",
+            checklist={},
+            reviewer_name="op-3",
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is True
@@ -411,12 +432,13 @@ class TestExpertReviewRepository:
         fabricated success (the route would 200 a record it never changed).
         """
         mock_execute = AsyncMock(return_value=MagicMock(data=[]))
-        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute = mock_execute
+        mock_client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute = mock_execute
 
         result = await repo.submit_review(
             review_id="does-not-exist",
             approval_status="approved",
             checklist={"confounder_check": True},
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is False
@@ -428,6 +450,7 @@ class TestExpertReviewRepository:
             review_id="rev-123",
             approval_status="invalid_status",
             checklist={},
+            expected_dag_version_hash=RESOLVED_HASH,
         )
 
         assert result is False

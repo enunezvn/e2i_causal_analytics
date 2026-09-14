@@ -116,8 +116,23 @@ class _FakeExpertReviewRepo:
     async def get_by_id(self, id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
         return self.rows_by_id.get(id)
 
-    async def update_agent_assessment(self, review_id: str, assessment: Dict[str, Any]) -> bool:
-        self.assessment_writes.append({"review_id": review_id, "assessment": assessment})
+    async def update_agent_assessment(
+        self,
+        review_id: str,
+        assessment: Dict[str, Any],
+        *,
+        for_dag_version_hash: Optional[str] = None,
+    ) -> bool:
+        """#1991 debt 3 (codex round-1): the cache write is filtered on the
+        structure the build GRADED, so a build that finished after the review
+        advanced writes nothing."""
+        self.assessment_writes.append(
+            {
+                "review_id": review_id,
+                "assessment": assessment,
+                "for_dag_version_hash": for_dag_version_hash,
+            }
+        )
         return self.assessment_write_return
 
 

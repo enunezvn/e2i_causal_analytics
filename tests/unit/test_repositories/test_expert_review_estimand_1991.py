@@ -304,7 +304,13 @@ async def test_append_version_inserts_then_updates_current_hash_and_snapshot(fak
         "query_id": "q2",
     }
     upd = fake_client.updated("expert_reviews")[0]
-    assert upd == {"dag_version_hash": "h2", "dag_structure_json": {"nodes": ["a"], "edges": []}}
+    # The cached assessment graded the PREVIOUS structure, so the advance clears
+    # it (see test_append_version_clears_the_agent_assessment).
+    assert upd == {
+        "dag_version_hash": "h2",
+        "dag_structure_json": {"nodes": ["a"], "edges": []},
+        "agent_assessment_json": None,
+    }
     assert ("eq", ("approval_status", "pending")) in fake_client.calls("expert_reviews")
     # Not given -> the column is left alone (the key is absent from the payload),
     # never overwritten with NULL.
@@ -350,6 +356,7 @@ async def test_append_version_repoints_the_evidence_at_the_new_versions_run(fake
     assert fake_client.updated("expert_reviews")[0] == {
         "dag_version_hash": "h2",
         "dag_structure_json": None,
+        "agent_assessment_json": None,
         "related_validation_ids": ["v1"],
     }
     # The versions row is unchanged -- no such column there.
@@ -643,4 +650,86 @@ async def test_append_version_without_an_expected_hash_does_not_filter_on_it(fak
         for method, (key, _) in [
             (m, a) for m, a in fake_client.calls("expert_reviews") if m == "eq"
         ]
+    )
+
+
+# --------------------------------------------------------------------------
+# H3 -- a new structure never carries the old structure's assessment
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_append_version_clears_the_agent_assessment(fake_client):
+    """The cached assessment grades the DAG and the evidence of the version that
+    was current when it was built. Advancing the review without clearing it
+    leaves the review UI showing a grading of a structure the review no longer
+    covers -- and the request-level cache would serve it beside the new one.
+
+    The key must be PRESENT with a literal None (PostgREST writes SQL NULL);
+    ``append_version`` builds its payload explicitly, so it is not dropped by the
+    "remove None values" pattern ``submit_review`` uses.
+    """
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "agent_assessment_json": {"items": [{"id": "q1", "verdict": "supports"}]},
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure={"nodes": ["a"], "edges": []},
+        adjustment_set_hash="a2",
+        query_id="q2",
+    )
+    assert ok is True
+    upd = fake_client.updated("expert_reviews")[0]
+    assert "agent_assessment_json" in upd and upd["agent_assessment_json"] is None
+    assert fake_client.rows("expert_reviews")[0]["agent_assessment_json"] is None
+
+
+@pytest.mark.unit
+async def test_update_agent_assessment_can_be_bound_to_one_structure(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h1"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    assert (
+        await repo.update_agent_assessment("r1", {"items": []}, for_dag_version_hash="h1") is True
+    )
+    assert ("eq", ("dag_version_hash", "h1")) in fake_client.calls("expert_reviews")
+    assert fake_client.rows("expert_reviews")[0]["agent_assessment_json"] == {"items": []}
+
+
+@pytest.mark.unit
+async def test_update_agent_assessment_refuses_a_structure_that_moved(fake_client, caplog):
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h2"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    with caplog.at_level(logging.WARNING):
+        ok = await repo.update_agent_assessment("r1", {"items": []}, for_dag_version_hash="h1")
+    assert ok is False
+    assert "agent_assessment_json" not in fake_client.rows("expert_reviews")[0]
+
+
+@pytest.mark.unit
+async def test_update_agent_assessment_without_a_hash_is_unchanged(fake_client):
+    """The filter is opt-in: a caller with no version in hand writes as before."""
+    fake_client.seed(
+        "expert_reviews",
+        [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h2"}],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    assert await repo.update_agent_assessment("r1", {"items": []}) is True
+    assert not any(
+        m == "eq" and a[0] == "dag_version_hash" for m, a in fake_client.calls("expert_reviews")
     )
