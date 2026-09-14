@@ -197,6 +197,54 @@ def _changes_between(
     return DagChanges(**changes)
 
 
+def _current_version_id(
+    versions: List[ReviewVersion],
+    dag_version_hash: Optional[str],
+    adjustment_set_hash: Optional[str],
+) -> Optional[str]:
+    """Which timeline row is the review's CURRENT version (codex round 3).
+
+    ``expert_review_versions`` is a TIMELINE of facts; the review row is the
+    authority on which structure it covers, and the two can disagree. A run
+    that recorded its version and then LOST the compare-and-set advance leaves
+    its row after the winner's (timeline ``... C, B`` while the review is on
+    C), so "the last entry" is not "the version under review" -- rendering its
+    delta would show the reviewer a change they are not being asked to approve.
+
+    The review's identity is the PAIR: ``compute_dag_hash`` excludes adjustment
+    sets, so the DAG hash alone cannot see a covariate-only advance. Among the
+    rows carrying the review's hash we therefore take the LAST whose adjustment
+    hash is equal as well (None == None: unknown matches unknown, it is not a
+    wildcard). The LAST, because a revert A -> B -> A appends A a second time
+    and the review then points at the NEWER A -- whose ``changes`` is the
+    B -> A delta the reviewer is actually being shown.
+
+    Fallback: when the review's adjustment hash is KNOWN (migration 142) but no
+    row carries it, the last same-hash row with a NULL adjustment hash wins --
+    migration 141 backfilled every pre-existing version that way, and "same
+    structure, covariates never recorded" is the same version.
+
+    None when nothing matches: a review minted before the versions table, or an
+    old-image mint whose first version was never recorded. Callers render no
+    delta at all rather than guess.
+    """
+    if not dag_version_hash:
+        return None
+    same_structure = [v for v in versions if v.dag_version_hash == dag_version_hash]
+    for version in reversed(same_structure):
+        if version.adjustment_set_hash == adjustment_set_hash:
+            return version.version_id
+    if adjustment_set_hash is None:
+        # The review's adjustment is UNKNOWN; the loop above already tried
+        # every row that is also unknown. There is nothing weaker to fall
+        # back to.
+        return None
+    for version in reversed(same_structure):
+        if version.adjustment_set_hash is None:
+            return version.version_id
+    return None
+
+
 router = APIRouter(
     prefix="/expert-reviews",
     tags=["Expert Review"],
@@ -735,6 +783,9 @@ async def get_expert_review(
 
     ``versions`` is this review's ``expert_review_versions`` timeline (migration
     141), oldest first, each row carrying the diff against the one before it.
+    ``current_version_id`` names the entry the review row itself is on, which is
+    not always the last one: a client renders THAT row's delta, never the
+    tail's.
 
     Declared LAST in this module so it cannot shadow ``/pending`` and ``/summary``.
     """
@@ -822,8 +873,14 @@ async def get_expert_review(
             )
         )
 
+    review = _validate_review_row(ReviewRecord, row)
     return ExpertReviewDetailResponse(
-        review=_validate_review_row(ReviewRecord, row),
+        review=review,
         history=history,
         versions=versions,
+        # The review row -- not the tail of the timeline -- is the authority on
+        # which version is under review; see ``_current_version_id``.
+        current_version_id=_current_version_id(
+            versions, review.dag_version_hash, review.adjustment_set_hash
+        ),
     )

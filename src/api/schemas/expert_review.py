@@ -248,12 +248,30 @@ class ExpertReviewDetailResponse(BaseModel):
 
     ``versions`` is the review's own ``expert_review_versions`` timeline
     (migration 141), OLDEST first, each row carrying ``changes`` against the one
-    before it. Empty for a review minted before the versions table.
+    before it. Empty for a review minted before the versions table. The timeline
+    is a set of FACTS and may end on a row the review is not on, so
+    ``current_version_id`` -- not ``versions[-1]`` -- names the version under
+    review.
     """
 
     review: ReviewRecord
     history: List[ReviewRecord]
     versions: List[ReviewVersion] = []
+    current_version_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The ``version_id`` of the timeline row that carries the review's "
+            "CURRENT version identity -- the pair (``dag_version_hash``, "
+            "``adjustment_set_hash``) the review row itself holds. The timeline "
+            "is a set of facts that MAY end on a different row: a run that "
+            "recorded its version and then lost the compare-and-set advance "
+            "leaves an orphan after the current one. Clients must render the "
+            "delta of THIS row, never of the last entry. None when no row "
+            "carries the review's pair (a review minted before the versions "
+            "table, or one whose first version was never recorded) -- the "
+            "honest answer is then no delta at all."
+        ),
+    )
 
 
 class PendingReviewsResponse(BaseModel):

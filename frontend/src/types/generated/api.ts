@@ -4411,6 +4411,9 @@ export interface paths {
          *
          *     ``versions`` is this review's ``expert_review_versions`` timeline (migration
          *     141), oldest first, each row carrying the diff against the one before it.
+         *     ``current_version_id`` names the entry the review row itself is on, which is
+         *     not always the last one: a client renders THAT row's delta, never the
+         *     tail's.
          *
          *     Declared LAST in this module so it cannot shadow ``/pending`` and ``/summary``.
          */
@@ -10369,7 +10372,10 @@ export interface components {
          *
          *     ``versions`` is the review's own ``expert_review_versions`` timeline
          *     (migration 141), OLDEST first, each row carrying ``changes`` against the one
-         *     before it. Empty for a review minted before the versions table.
+         *     before it. Empty for a review minted before the versions table. The timeline
+         *     is a set of FACTS and may end on a row the review is not on, so
+         *     ``current_version_id`` -- not ``versions[-1]`` -- names the version under
+         *     review.
          */
         ExpertReviewDetailResponse: {
             review: components["schemas"]["ReviewRecord"];
@@ -10380,6 +10386,11 @@ export interface components {
              * @default []
              */
             versions: components["schemas"]["ReviewVersion"][];
+            /**
+             * Current Version Id
+             * @description The ``version_id`` of the timeline row that carries the review's CURRENT version identity -- the pair (``dag_version_hash``, ``adjustment_set_hash``) the review row itself holds. The timeline is a set of facts that MAY end on a different row: a run that recorded its version and then lost the compare-and-set advance leaves an orphan after the current one. Clients must render the delta of THIS row, never of the last entry. None when no row carries the review's pair (a review minted before the versions table, or one whose first version was never recorded) -- the honest answer is then no delta at all.
+             */
+            current_version_id?: string | null;
         };
         /**
          * ExplainRequest

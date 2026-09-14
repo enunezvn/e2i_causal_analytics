@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 
 import src.api.routes.expert_review as route_mod
 from src.api.errors import SAFE_503_DETAIL_PREFIX
+from src.api.schemas.expert_review import ReviewVersion
 
 RID = "1c8f3d6a-5b7e-4c21-9f0a-2d4e6b8a0c13"
 RID_OLDER = "7a2b9c40-3d1e-4f65-8a7b-0c9d2e1f3a58"
@@ -345,3 +346,165 @@ def test_a_non_object_snapshot_is_a_named_500_not_an_unhandled_crash(monkeypatch
     detail = str(r.json()["detail"])
     assert RID_OLDER in detail
     assert "dag_structure_json" in detail
+
+
+# --------------------------------------------------------------------------
+# GET /{review_id}: which timeline row is the review's CURRENT version
+# (codex round 3 HIGH -- the panel must not diff a LOSING version)
+# --------------------------------------------------------------------------
+
+ADJ_A = "a" * 64
+ADJ_B = "b" * 64
+ADJ_C = "c" * 64
+
+HASH_B = "b" * 64
+HASH_C = "c" * 64
+
+# The orphan timeline the gate's CAS permits (gate test ~:1295): both runs read
+# A; C inserted AND advanced; B inserted afterwards and LOST its advance. The
+# review is on C while the timeline ends ... C, B.
+SNAP_A: Dict[str, Any] = {"nodes": ["T", "Y"], "edges": [["T", "Y"]], "adjustment_sets": []}
+SNAP_C: Dict[str, Any] = {
+    "nodes": ["T", "Y", "W"],
+    "edges": [["T", "Y"], ["W", "T"]],
+    "adjustment_sets": [["W"]],
+}
+SNAP_B: Dict[str, Any] = {
+    "nodes": ["T", "Y", "Z"],
+    "edges": [["T", "Y"], ["Z", "T"]],
+    "adjustment_sets": [["Z"]],
+}
+
+VID_A = "bbbbbbb1-0000-4000-8000-000000000001"
+VID_C = "bbbbbbb2-0000-4000-8000-000000000002"
+VID_B = "bbbbbbb3-0000-4000-8000-000000000003"
+
+
+def _paired(
+    version_id: str,
+    dag_hash: str,
+    adjustment_hash: Optional[str],
+    snapshot: Optional[Dict[str, Any]] = None,
+    created_at: str = V1_AT,
+) -> Dict[str, Any]:
+    """A timeline row carrying BOTH halves of a version identity."""
+    return {
+        **_version(version_id, dag_hash, snapshot, created_at),
+        "adjustment_set_hash": adjustment_hash,
+    }
+
+
+def _rv(version_id: str, dag_hash: str, adjustment_hash: Optional[str]) -> ReviewVersion:
+    return ReviewVersion(
+        version_id=version_id, dag_version_hash=dag_hash, adjustment_set_hash=adjustment_hash
+    )
+
+
+@pytest.mark.unit
+def test_current_version_id_picks_the_pair_match_not_the_last_row():
+    """The orphan state: the review is on C, the timeline ends on B."""
+    versions = [_rv(VID_A, HASH_V1, ADJ_A), _rv(VID_C, HASH_C, ADJ_C), _rv(VID_B, HASH_B, ADJ_B)]
+    assert route_mod._current_version_id(versions, HASH_C, ADJ_C) == VID_C
+
+
+@pytest.mark.unit
+def test_current_version_id_matches_a_null_adjustment_on_both_sides():
+    """A review whose adjustment is UNKNOWN matches the row that is also
+    unknown -- None equals None, it is not a wildcard."""
+    versions = [_rv(VID_A, HASH_V1, None), _rv(VID_B, HASH_V2, ADJ_B)]
+    assert route_mod._current_version_id(versions, HASH_V1, None) == VID_A
+
+
+@pytest.mark.unit
+def test_current_version_id_falls_back_to_a_null_adjustment_row_of_the_same_hash():
+    """The review learned its adjustment hash (migration 142) but the only
+    recorded version of that structure was backfilled with NULL. Same
+    structure, unknown covariates: that row IS the current version."""
+    versions = [_rv(VID_A, HASH_V1, None)]
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_A) == VID_A
+
+
+@pytest.mark.unit
+def test_current_version_id_prefers_the_exact_pair_over_the_null_fallback():
+    versions = [_rv(VID_A, HASH_V1, None), _rv(VID_C, HASH_V1, ADJ_A)]
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_A) == VID_C
+
+
+@pytest.mark.unit
+def test_current_version_id_is_none_when_no_row_carries_the_reviews_structure():
+    versions = [_rv(VID_A, HASH_V1, ADJ_A)]
+    assert route_mod._current_version_id(versions, HASH_V2, ADJ_B) is None
+    # A review with no hash at all names no version either.
+    assert route_mod._current_version_id(versions, None, None) is None
+    assert route_mod._current_version_id([], HASH_V1, ADJ_A) is None
+
+
+@pytest.mark.unit
+def test_current_version_id_takes_the_LAST_match_on_a_revert():
+    """A revert A -> B -> A appends A again (the table is a timeline, not a
+    set). The review points at the NEWER A, whose ``changes`` is the B -> A
+    delta the reviewer is being asked to approve."""
+    a2 = "bbbbbbb4-0000-4000-8000-000000000004"
+    versions = [_rv(VID_A, HASH_V1, ADJ_A), _rv(VID_B, HASH_V2, ADJ_B), _rv(a2, HASH_V1, ADJ_A)]
+    assert route_mod._current_version_id(versions, HASH_V1, ADJ_A) == a2
+    # and the null-adjustment fallback takes the last one too
+    n1 = "bbbbbbb5-0000-4000-8000-000000000005"
+    n2 = "bbbbbbb6-0000-4000-8000-000000000006"
+    assert (
+        route_mod._current_version_id(
+            [_rv(n1, HASH_V1, None), _rv(n2, HASH_V1, None)], HASH_V1, ADJ_A
+        )
+        == n2
+    )
+
+
+@pytest.mark.unit
+def test_detail_names_the_current_version_when_the_timeline_ends_on_an_orphan(monkeypatch):
+    """End to end: the response names C, and C's own ``changes`` is the A -> C
+    delta -- while B stays in the timeline with its (losing) C -> B delta."""
+    row = {
+        **ROW,
+        "dag_version_hash": HASH_C,
+        "adjustment_set_hash": ADJ_C,
+        "dag_structure_json": SNAP_C,
+    }
+    versions = [
+        _paired(VID_A, HASH_V1, ADJ_A, SNAP_A, V1_AT),
+        _paired(VID_C, HASH_C, ADJ_C, SNAP_C, V2_AT),
+        _paired(VID_B, HASH_B, ADJ_B, SNAP_B, V2_AT),
+    ]
+    repo = _Repo(row, estimand_history=[row], versions=versions)
+    r = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["current_version_id"] == VID_C
+
+    by_id = {v["version_id"]: v for v in body["versions"]}
+    current = by_id[VID_C]["changes"]
+    assert current["nodes_added"] == ["W"]
+    assert current["adjustment_sets_added"] == [["W"]]
+    # The orphan's delta is a TIMELINE FACT and stays on its own row; it is
+    # simply no longer the one the panel renders.
+    assert by_id[VID_B]["changes"]["nodes_added"] == ["Z"]
+    assert by_id[VID_B]["changes"]["nodes_removed"] == ["W"]
+
+
+@pytest.mark.unit
+def test_detail_current_version_id_is_null_when_no_row_matches(monkeypatch):
+    """A review minted before the versions table (or whose first version was
+    never recorded) names NO current version -- the panel then shows silence
+    rather than a possibly-wrong delta."""
+    row = {**ROW, "dag_version_hash": HASH_C, "adjustment_set_hash": ADJ_C}
+    repo = _Repo(row, estimand_history=[row], versions=[_paired(VID_A, HASH_V1, ADJ_A, SNAP_A)])
+    body = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}").json()
+    assert body["current_version_id"] is None
+
+
+@pytest.mark.unit
+def test_detail_current_version_id_falls_back_to_a_backfilled_version(monkeypatch):
+    """Migration 141 backfilled versions carry NULL adjustment hashes; a review
+    that has since learned its own (migration 142) still resolves to them."""
+    row = {**ROW, "dag_version_hash": HASH_V1, "adjustment_set_hash": ADJ_A}
+    repo = _Repo(row, estimand_history=[row], versions=[_paired(VID_A, HASH_V1, None, SNAP_A)])
+    body = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}").json()
+    assert body["current_version_id"] == VID_A
