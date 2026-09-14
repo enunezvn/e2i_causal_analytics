@@ -39,6 +39,8 @@ sentinel, and nothing here may loosen that.
 import logging
 from typing import Any, Dict, Optional
 
+from fastapi import HTTPException, status
+
 from src.utils.llm_attribution import (
     get_authenticated_user_id,
     set_authenticated_user,
@@ -111,3 +113,52 @@ def _composer_context(
         "max_parallel": max_parallel,
         "entry_point": "chat_tool",
     }
+
+
+def reject_identity_mismatch(
+    token_user_id: str,
+    body_user_id: Optional[str],
+    session_id: Optional[str],
+    testing_mode: bool,
+) -> None:
+    """Reject a chat request that claims to belong to someone other than its caller.
+
+    Finding 1 [HIGH IDOR] made ``ChatRequest.user_id`` non-authoritative and
+    rejected a mismatching one with 403. #2077: the supplied ``session_id``
+    carries an owner claim of exactly the same weight, and it was unguarded.
+    ``chatbot_messages`` and ``chatbot_message_feedback`` derive
+    ``computed_user_id`` as ``CAST(SPLIT_PART(session_id,'~',1) AS UUID)``
+    (``database/chat/031_chatbot_message_feedback.sql:44``) and their RLS policies
+    read ONLY that column (``030_chatbot_rls_policies.sql:133``), so a caller
+    supplying ``{victim}~{uuid}`` persists their own turn under the victim's
+    ownership — and, once #2077 threads identity to the tools, records the
+    victim as the owner of the resulting composition too. The prefix is compared
+    raw, exactly as the generated column splits it.
+
+    Skipped in TESTING_MODE, which deliberately bypasses real auth — the same
+    exemption the body-``user_id`` check has always had.
+
+    Raises:
+        HTTPException: 403 when either claim disagrees with the token identity.
+    """
+    if testing_mode:
+        return
+    if body_user_id and body_user_id != token_user_id:
+        logger.warning(
+            "[Chatbot] Rejected user_id mismatch (possible impersonation): "
+            "body user_id does not match authenticated identity"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Request user_id does not match the authenticated user.",
+        )
+    claimed_owner = session_id.split("~", 1)[0] if session_id and "~" in session_id else None
+    if claimed_owner and claimed_owner != token_user_id:
+        logger.warning(
+            "[Chatbot] Rejected session_id mismatch (possible impersonation): "
+            "session_id owner prefix does not match authenticated identity"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Request session_id does not belong to the authenticated user.",
+        )

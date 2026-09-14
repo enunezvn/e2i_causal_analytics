@@ -220,6 +220,10 @@ async def run_conversational_bridge(
                             # the tools' session travels on the invocation config —
                             # LangGraph drops input keys that are not state
                             # channels, and the AG-UI state schema is pinned.
+                            # LangGraph copies configurable into checkpoint
+                            # metadata; harmless here — create_e2i_chat_agent
+                            # compiles a FRESH in-process MemorySaver per call
+                            # (copilotkit.py:~4286), discarded with the graph.
                             "tool_session_id": session_id,
                         }
                     },

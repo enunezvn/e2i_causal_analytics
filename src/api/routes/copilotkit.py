@@ -339,7 +339,10 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
-from src.api.routes.chat_identity import bind_verified_request_user
+from src.api.routes.chat_identity import (
+    bind_verified_request_user,
+    reject_identity_mismatch,
+)
 from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
@@ -5093,7 +5096,7 @@ _EMPTY_STREAM_FALLBACK = (
 )
 
 
-def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Optional[str]) -> str:
+def _resolve_chat_identity(authenticated_user: Dict[str, Any], chat_request: ChatRequest) -> str:
     """Resolve the authoritative chat identity from the authenticated token.
 
     Finding 1 [HIGH IDOR]: ``ChatRequest.user_id`` was a required request-body
@@ -5103,21 +5106,21 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
     is always taken from the authenticated token (``require_viewer`` →
     ``user["id"]``).
 
-    For backward compatibility the body may still carry ``user_id``; if it is
-    present and disagrees with the token identity it is treated as an
-    impersonation attempt and rejected with 403 (skipped in testing mode, which
-    deliberately bypasses real auth).
+    The body may still carry ``user_id`` for backward compatibility, and it may
+    carry a ``session_id`` whose ``{owner}~`` prefix is an owner claim of exactly
+    the same weight. Either one disagreeing with the token identity is an
+    impersonation attempt; ``reject_identity_mismatch`` (chat_identity, #2077)
+    holds that policy and raises 403, skipped in testing mode.
 
     Args:
         authenticated_user: The user dict from ``require_viewer``.
-        body_user_id: The (optional, non-authoritative) ``user_id`` from the body.
+        chat_request: The request, whose ``user_id`` / ``session_id`` are claims.
 
     Returns:
         The authoritative user id to use for all downstream calls.
 
     Raises:
-        HTTPException: 403 if a mismatching body ``user_id`` is supplied
-            (production only).
+        HTTPException: 403 if either claim disagrees (production only).
     """
     token_user_id = (authenticated_user or {}).get("id")
     if not token_user_id:
@@ -5127,16 +5130,9 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
             detail="Authenticated user identity is missing.",
         )
 
-    if body_user_id and body_user_id != token_user_id and not TESTING_MODE:
-        logger.warning(
-            "[Chatbot] Rejected user_id mismatch (possible impersonation): "
-            "body user_id does not match authenticated identity"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Request user_id does not match the authenticated user.",
-        )
-
+    reject_identity_mismatch(
+        token_user_id, chat_request.user_id, chat_request.session_id, TESTING_MODE
+    )
     return str(token_user_id)
 
 
@@ -5437,7 +5433,7 @@ async def stream_chat(
         }
     """
     # Finding 1: derive identity from the authenticated token, never the body.
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+    authenticated_user_id = _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
@@ -5513,7 +5509,7 @@ async def chat(
     # Finding 1: derive identity from the authenticated token, never the body.
     # (Outside the try/except so a 403 propagates instead of being swallowed
     # into a 200 error body.)
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+    authenticated_user_id = _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)

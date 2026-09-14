@@ -1816,6 +1816,124 @@ class TestChatIdentityFromToken:
         assert response.status_code == 200
         assert getattr(_fake_stream, "seen_user_id", None) == "real-token-user"
 
+    # ---------------------------------------------------------------- #2077
+    # A supplied session_id carries an owner claim of its own: the DB derives
+    # ``chatbot_messages/chatbot_message_feedback.computed_user_id`` as
+    # ``CAST(SPLIT_PART(session_id,'~',1) AS UUID)`` (database/chat/031:44) and the
+    # RLS policies read ONLY that column (database/chat/030:133). Guarding the body
+    # ``user_id`` alone therefore left the same impersonation open one field over:
+    # the caller's turn would persist under the named user and be readable by them.
+    # Same policy as the body field — 403, skipped in TESTING_MODE.
+
+    VICTIM = "46d40f52-39ac-4b79-b3a4-1f1292059a00"
+    CALLER = "8f14e45f-ce0a-4c9b-9f2e-1d3a5b7c9e11"
+
+    def test_chat_session_id_owned_by_another_user_is_rejected_in_production(self):
+        token_user = {"id": self.CALLER, "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+
+        with (
+            patch("src.api.routes.copilotkit.TESTING_MODE", False),
+            patch(
+                "src.api.routes.chatbot_graph.run_chatbot",
+                new_callable=AsyncMock,
+                return_value={"response_text": "ok", "session_id": "s1"},
+            ) as mock_run,
+        ):
+            response = client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "Show victim sessions",
+                    # matches the token, so ONLY the session's claim is under test
+                    "user_id": self.CALLER,
+                    "session_id": f"{self.VICTIM}~7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50",
+                    "request_id": "req-1",
+                },
+            )
+
+        assert response.status_code == 403
+        mock_run.assert_not_called()
+
+    def test_stream_session_id_owned_by_another_user_is_rejected_in_production(self):
+        token_user = {"id": self.CALLER, "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+
+        async def _fake_stream(*args, **kwargs):
+            _fake_stream.ran = True
+            if False:  # pragma: no cover - generator with no yields
+                yield {}
+
+        with (
+            patch("src.api.routes.copilotkit.TESTING_MODE", False),
+            patch("src.api.routes.chatbot_graph.stream_chatbot", side_effect=_fake_stream),
+        ):
+            response = client.post(
+                "/copilotkit/chat/stream",
+                json={
+                    "query": "Show victim sessions",
+                    # matches the token, so ONLY the session's claim is under test
+                    "user_id": self.CALLER,
+                    "session_id": f"{self.VICTIM}~7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50",
+                    "request_id": "req-1",
+                },
+            )
+            _ = response.text
+
+        assert response.status_code == 403, "the 403 must precede the streaming body"
+        assert getattr(_fake_stream, "ran", False) is False
+
+    def test_chat_session_id_owned_by_the_caller_is_allowed(self):
+        """The only minted shape is ``{caller}~{uuid4}`` — it must keep working."""
+        token_user = {"id": self.CALLER, "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+
+        with (
+            patch("src.api.routes.copilotkit.TESTING_MODE", False),
+            patch(
+                "src.api.routes.chatbot_graph.run_chatbot",
+                new_callable=AsyncMock,
+                return_value={"response_text": "ok", "session_id": "s1"},
+            ) as mock_run,
+        ):
+            response = client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "Show my sessions",
+                    "user_id": self.CALLER,
+                    "session_id": f"{self.CALLER}~7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50",
+                    "request_id": "req-1",
+                },
+            )
+
+        assert response.status_code == 200
+        assert mock_run.call_args.kwargs["user_id"] == self.CALLER
+
+    def test_a_bare_session_id_claims_no_owner_and_is_allowed(self):
+        """A prefix-less id makes no claim; computed_user_id is NULL for it."""
+        token_user = {"id": self.CALLER, "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+
+        with (
+            patch("src.api.routes.copilotkit.TESTING_MODE", False),
+            patch(
+                "src.api.routes.chatbot_graph.run_chatbot",
+                new_callable=AsyncMock,
+                return_value={"response_text": "ok", "session_id": "s1"},
+            ) as mock_run,
+        ):
+            response = client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "Show my sessions",
+                    "user_id": self.CALLER,
+                    "session_id": "7a1f1e2d-0c3b-4a5e-8d9f-6b2c4e1a3d50",
+                    "request_id": "req-1",
+                },
+            )
+
+        assert response.status_code == 200
+        assert mock_run.call_args.kwargs["user_id"] == self.CALLER
+
 
 class TestPlaceholderActionProvenance:
     """Finding 2 [HIGH silent-mock]: get_recommendations / search_insights are
