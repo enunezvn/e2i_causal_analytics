@@ -252,8 +252,9 @@ class HealthScoreAgent:
             scope: Scope of health check
             query: Optional query text
             experiment_name: Name of MLflow experiment (default: "default")
-            session_id: Optional session ID for memory tracking (#879; the
-                memory layer generates a UUID if not provided)
+            session_id: Optional session ID for memory tracking (#879). None is
+                passed straight through so the writer records an honest NULL
+                (#2076) -- the memory layer no longer generates a UUID.
 
         Returns:
             HealthScoreOutput with health metrics
