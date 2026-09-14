@@ -241,7 +241,9 @@ class ChatClaims(Protocol):
     def session_id(self) -> Optional[str]: ...
 
 
-def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode: bool) -> str:
+async def authorize_chat_identity(
+    token_user_id: str, claims: ChatClaims, testing_mode: bool
+) -> str:
     """Vet a chat request's owner claims, bind the verified identity, return it.
 
     The binding is the point #2077 was missing on ``/chat`` and ``/chat/stream``:
@@ -251,8 +253,24 @@ def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode
     the request task, before the graph or the SSE body starts — is the same
     channel the AG-UI route uses, and it survives the keepalive wrapper's
     per-frame tasks because they copy the context that already carries it.
+
+    #2107 adds the stored-owner half of the claim check. Raising is correct
+    HERE, unlike on the AG-UI seam: both callers resolve the identity OUTSIDE
+    their try/except, precisely so a 403 propagates instead of being swallowed
+    into a 200 error body — and on ``/chat/stream`` that also puts the refusal
+    ahead of the ``StreamingResponse``, so the caller gets a real 403 rather
+    than an SSE error frame inside a 200.
+
+    Raises:
+        HTTPException: 403 when a claim, or the conversation's stored owner,
+            disagrees with the token identity.
     """
     reject_identity_mismatch(token_user_id, claims.user_id, claims.session_id, testing_mode)
+    if not testing_mode and await thread_owner_denied(claims.session_id, token_user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Request session_id does not belong to the authenticated user.",
+        )
     set_authenticated_user(token_user_id)
     return str(token_user_id)
 
