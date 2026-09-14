@@ -384,3 +384,75 @@ async def test_an_unparseable_sdk_body_still_names_no_thread(sdk_path, conversat
 
     assert response.status_code == 200
     assert conversations.lookups == []
+
+
+# ------------------------------------------------ T5: every ingress still accepts real traffic
+
+
+@pytest.mark.parametrize("path", ["agent/default", "agents/execute", "agent/default/state"])
+async def test_every_sdk_sub_path_accepts_a_brand_new_bare_thread(path, sdk_path, conversations):
+    """The shape every real CopilotKit turn sends on its first message."""
+    response, sdk_reached = await sdk_path(path, {"threadId": NEW_THREAD, "messages": []})
+
+    assert response.status_code == 200
+    assert sdk_reached is True
+
+
+async def test_the_chat_routes_resolver_refuses_a_foreign_existing_session(
+    monkeypatch, conversations
+):
+    """``_resolve_chat_identity`` is the single seam behind both /chat and
+    /chat/stream (``copilotkit.py:~5434,~5510``), so it is where the await
+    wiring has to hold."""
+    monkeypatch.setattr(ck, "TESTING_MODE", False)
+
+    with pytest.raises(HTTPException) as exc:
+        await ck._resolve_chat_identity(
+            {"id": CALLER}, ck.ChatRequest(query="q", user_id=CALLER, session_id=VICTIM_THREAD)
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("session_id", [CALLER_THREAD, NEW_THREAD, None])
+async def test_the_chat_routes_resolver_accepts_real_traffic(
+    session_id, monkeypatch, conversations
+):
+    """Own existing thread, a brand-new one, and no session at all."""
+    monkeypatch.setattr(ck, "TESTING_MODE", False)
+
+    resolved = await ck._resolve_chat_identity(
+        {"id": CALLER}, ck.ChatRequest(query="q", user_id=CALLER, session_id=session_id)
+    )
+
+    assert resolved == CALLER
+
+
+async def test_a_prefixed_session_the_caller_owns_is_still_accepted(monkeypatch, conversations):
+    """/chat/stream mints ``{owner}~{uuid}`` itself; #2107 must not refuse its own ids."""
+    monkeypatch.setattr(ck, "TESTING_MODE", False)
+    own_prefixed = f"{CALLER}~0b7f7d6e-2c1a-4d7e-9a53-3f1f6a0c9e21"
+
+    resolved = await ck._resolve_chat_identity(
+        {"id": CALLER}, ck.ChatRequest(query="q", user_id=CALLER, session_id=own_prefixed)
+    )
+
+    assert resolved == CALLER
+    assert conversations.lookups == [own_prefixed]
+
+
+async def test_the_owner_gate_binds_the_identity_channel_only_after_it_passes(
+    monkeypatch, conversations
+):
+    """A refused turn must not leave the victim's conversation bound as the
+    caller's attribution channel for whatever runs next in this task."""
+    from src.utils.llm_attribution import get_authenticated_user_id, set_authenticated_user
+
+    monkeypatch.setattr(ck, "TESTING_MODE", False)
+    set_authenticated_user(None)
+    try:
+        with pytest.raises(HTTPException):
+            await chat_identity.authorize_chat_identity(CALLER, _Claims(VICTIM_THREAD), False)
+        assert get_authenticated_user_id() is None
+    finally:
+        set_authenticated_user(None)
