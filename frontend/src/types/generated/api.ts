@@ -4312,15 +4312,19 @@ export interface paths {
          *     is still a correct non-200 (never a fake success); the repo logs the
          *     distinction (zero-row WARNING vs exception ERROR).
          *
-         *     Version binding (codex round-1 HIGH): ``request.dag_version_hash`` is the
-         *     structure the reviewer's form displayed and ``submit_review`` filters the
-         *     UPDATE on it, so a review a concurrent run advanced (migration 141) is NOT
-         *     resolved by a form opened on the old version. The repo keeps its boolean; a
-         *     False is disambiguated HERE by ONE extra read: still pending on a DIFFERENT
-         *     hash -> 409 (reload and resolve the current version), anything else -> the
-         *     existing 404. The read is only on the failure path, so the happy path still
-         *     costs one write. A re-read that itself fails is treated as the 404 case --
-         *     fail-closed, never a fabricated 200.
+         *     Version binding (codex rounds 1 and 2): the PAIR
+         *     ``(request.dag_version_hash, request.adjustment_set_hash)`` is the structure
+         *     the reviewer's form displayed, and ``submit_review`` filters the UPDATE on
+         *     BOTH, so a review a concurrent run advanced (migration 141) is NOT resolved
+         *     by a form opened on the old version. Both halves are needed because
+         *     ``compute_dag_hash`` excludes adjustment sets: an ADJUSTMENT-ONLY advance
+         *     leaves the hash equal, and the hash-only filter let a reviewer sign off
+         *     covariates they were never shown. The repo keeps its boolean; a False is
+         *     disambiguated HERE by ONE extra read: still pending on a DIFFERENT pair ->
+         *     409 (reload and resolve the current version), anything else -> the existing
+         *     404. The read is only on the failure path, so the happy path still costs one
+         *     write. A re-read that itself fails is treated as the 404 case -- fail-closed,
+         *     never a fabricated 200.
          */
         post: operations["resolve_expert_review"];
         delete?: never;
@@ -14902,6 +14906,8 @@ export interface components {
             review_type?: string | null;
             /** Dag Version Hash */
             dag_version_hash?: string | null;
+            /** Adjustment Set Hash */
+            adjustment_set_hash?: string | null;
             /** Brand */
             brand?: string | null;
             /** Treatment Variable */
@@ -16392,6 +16398,15 @@ export interface components {
          *     verdict to whatever structure the row carries NOW -- one nobody looked at.
          *     The form echoes the hash it displayed and the resolution applies only if
          *     the review still carries it; a mismatch is a 409, not a silent sign-off.
+         *
+         *     ``adjustment_set_hash`` is the OTHER half of that version, and the key is
+         *     required too (codex round-2 HIGH 1) -- though its VALUE may be null.
+         *     ``compute_dag_hash`` EXCLUDES adjustment sets, so an ADJUSTMENT-ONLY advance
+         *     leaves the DAG hash untouched: a form opened on (h1, adj-W) still resolved a
+         *     review advanced to (h1, adj-Z), and the reviewer signed off covariates they
+         *     were never shown. A MISSING key is a 422 rather than a null default,
+         *     because "the form did not send this" and "the review had no adjustment set"
+         *     are different facts and only the second may resolve a null-carrying row.
          */
         ResolveReviewRequest: {
             /**
@@ -16404,6 +16419,11 @@ export interface components {
              * @description The DAG version hash the reviewer's form displayed. The resolution applies only if the review still carries it; if the structure has advanced since the form was opened, the request is rejected with 409.
              */
             dag_version_hash: string;
+            /**
+             * Adjustment Set Hash
+             * @description The adjustment-set hash the reviewer's form displayed; null when the review carried none. Required as a KEY (a missing one is 422). The resolution applies only if the review still carries this exact pair: the DAG hash alone cannot see a covariate-only change, so a form opened before an adjustment-only advance is rejected with 409.
+             */
+            adjustment_set_hash: string | null;
             /**
              * Checklist
              * @description Completed reviewer checklist (the 010 checklist template items).
@@ -16669,6 +16689,8 @@ export interface components {
             review_type?: string | null;
             /** Dag Version Hash */
             dag_version_hash?: string | null;
+            /** Adjustment Set Hash */
+            adjustment_set_hash?: string | null;
             /** Brand */
             brand?: string | null;
             /** Treatment Variable */

@@ -113,6 +113,13 @@ export interface PendingReviewItem {
   review_id: string;
   review_type?: string | null;
   dag_version_hash?: string | null;
+  /**
+   * The adjustment-set half of the review's current version identity
+   * (#1991 debt 3, migration 142); null = unknown. The DAG hash alone cannot
+   * see a covariate-only change, because the backend's DAG hash excludes
+   * adjustment sets — so the resolve form echoes BOTH halves.
+   */
+  adjustment_set_hash?: string | null;
   brand?: string | null;
   treatment_variable?: string | null;
   outcome_variable?: string | null;
@@ -157,6 +164,16 @@ export interface ResolveReviewRequest {
    * nobody looked at.
    */
   dag_version_hash: string;
+  /**
+   * The adjustment-set half of that same version (#1991 debt 3, codex round 2).
+   * The KEY is required; the VALUE may be null when the review carried no known
+   * adjustment set. An ADJUSTMENT-ONLY advance leaves the DAG hash untouched, so
+   * sending the hash alone let a form opened on the previous covariates resolve
+   * a structure nobody looked at. Omitting the key is a 422, deliberately: "the
+   * form did not send this" and "the review had no adjustment set" are different
+   * facts, and only the second may resolve a null-carrying row.
+   */
+  adjustment_set_hash: string | null;
   checklist: Record<string, unknown>;
   comments?: Record<string, unknown> | null;
   concerns_raised?: string[] | null;

@@ -57,6 +57,9 @@ ROW: Dict[str, Any] = {
     "review_id": RID,
     "review_type": "dag_approval",
     "dag_version_hash": "h" * 64,
+    # The adjustment half of the row's version identity (migration 142). Stated
+    # explicitly so the pair the route captures is a real pair, not a half.
+    "adjustment_set_hash": "w" * 64,
     "brand": "Kisqali",
     "approval_status": "pending",
     "dag_structure_json": json.dumps({"nodes": ["t", "y"], "edges": [["t", "y"]]}),
@@ -74,6 +77,7 @@ class _Repo:
         self.persist = persist
         self.writes: List[Dict[str, Any]] = []
         self.write_filters: List[Optional[str]] = []
+        self.write_adjustment_filters: List[Optional[str]] = []
         self.reads = 0
         # When set, the FIRST read returns its snapshot only after this opens:
         # the snapshot is taken now, the caller proceeds later (round-2 HIGH).
@@ -104,18 +108,27 @@ class _Repo:
         assessment: Dict[str, Any],
         *,
         for_dag_version_hash: Optional[str] = None,
+        for_adjustment_set_hash: Optional[str] = None,
     ) -> bool:
-        """Honours the version filter the route now sends (codex round-1 HIGH):
-        the real UPDATE carries ``dag_version_hash = for_dag_version_hash``, so a
-        row whose structure moved during the build matches zero rows."""
+        """Honours the version filter the route now sends (codex rounds 1 and 2):
+        the real UPDATE carries ``dag_version_hash = for_dag_version_hash`` AND
+        ``adjustment_set_hash`` (eq, or IS NULL when the expected half is None),
+        so a row whose structure moved during the build matches zero rows -- and
+        an ADJUSTMENT-ONLY advance, which leaves the DAG hash equal, moves it
+        just as much. The two halves are read TOGETHER, mirroring the repository:
+        a None hash applies no version filter at all."""
         self.writes.append(dict(assessment))
         self.write_filters.append(for_dag_version_hash)
+        self.write_adjustment_filters.append(for_adjustment_set_hash)
         if not self.persist:
             return False
         row = self.rows.get(review_id)
         if row is None:
             return False
-        if for_dag_version_hash is not None and row.get("dag_version_hash") != for_dag_version_hash:
+        if for_dag_version_hash is not None and (
+            row.get("dag_version_hash"),
+            row.get("adjustment_set_hash"),
+        ) != (for_dag_version_hash, for_adjustment_set_hash):
             return False
         row["agent_assessment_json"] = json.dumps(assessment)
         return True
@@ -801,6 +814,7 @@ async def test_the_persist_is_filtered_on_the_structure_the_build_graded(monkeyp
     assert r.status_code == 200, r.text
     assert r.json()["persisted"] is True
     assert repo.write_filters == [ROW["dag_version_hash"]]
+    assert repo.write_adjustment_filters == [ROW["adjustment_set_hash"]]
 
 
 @pytest.mark.unit
@@ -829,4 +843,42 @@ async def test_an_assessment_of_the_OLD_structure_is_not_persisted_onto_the_new_
     assert body["cached"] is False
     assert body["assessment"]["items"]  # the build is still returned
     assert repo.write_filters == [ROW["dag_version_hash"]]  # the version it graded
+    assert repo.write_adjustment_filters == [ROW["adjustment_set_hash"]]
+    assert "agent_assessment_json" not in repo.rows[RID]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_ADJUSTMENT_ONLY_advance_mid_build_also_refuses_the_persist(monkeypatch):
+    """Codex round-2 HIGH 2: the same race, with the DAG hash UNCHANGED.
+
+    ``compute_dag_hash`` EXCLUDES adjustment sets, so a covariate-only advance
+    moves ``adjustment_set_hash`` and nothing else. Under the round-1 guard --
+    the DAG hash alone -- this build's filter still matched, and a grading of
+    the OLD covariates was written with ``persisted: true`` beside the NEW
+    snapshot and the new evidence. The advance had just cleared the cache for
+    exactly that reason; this write put it back.
+
+    The test would pass on the round-1 code if it moved the DAG hash too, which
+    is why it moves ONLY the adjustment half.
+    """
+    repo, redis = _Repo(ROW), _FakeRedis()
+    h = _harness(monkeypatch, repo, redis)
+    async with h.client() as client:
+        task = asyncio.create_task(client.post(URL))
+        await _until(lambda: h.builds >= 1, "the request entered its build")
+        # A refutation run advances the review to the SAME DAG, new covariates.
+        repo.rows[RID]["adjustment_set_hash"] = "z" * 64
+        assert repo.rows[RID]["dag_version_hash"] == ROW["dag_version_hash"], (
+            "the DAG hash must NOT move, or this passes on the round-1 guard too"
+        )
+        h.gate.set()
+        r = await task
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["persisted"] is False
+    assert body["assessment"]["items"]  # still returned to whoever asked
+    # The pair it GRADED, not the pair the row now carries.
+    assert repo.write_filters == [ROW["dag_version_hash"]]
+    assert repo.write_adjustment_filters == [ROW["adjustment_set_hash"]]
     assert "agent_assessment_json" not in repo.rows[RID]

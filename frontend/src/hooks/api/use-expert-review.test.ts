@@ -197,6 +197,7 @@ describe('useResolveReview', () => {
         approval_status: 'approved',
         checklist: { conf_complete: true },
         dag_version_hash: RESOLVED_HASH,
+        adjustment_set_hash: null,
       },
     });
 
@@ -209,6 +210,7 @@ describe('useResolveReview', () => {
         approval_status: 'approved',
         checklist: { conf_complete: true },
         dag_version_hash: RESOLVED_HASH,
+        adjustment_set_hash: null,
       }
     );
     // invalidate the pending queue, the summary AND any open linked-review detail
@@ -224,7 +226,12 @@ describe('useResolveReview', () => {
 
     result.current.mutate({
       reviewId: 'bad',
-      body: { approval_status: 'rejected', checklist: {}, dag_version_hash: RESOLVED_HASH },
+      body: {
+        approval_status: 'rejected',
+        checklist: {},
+        dag_version_hash: RESOLVED_HASH,
+        adjustment_set_hash: null,
+      },
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -239,7 +246,12 @@ describe('useResolveReview', () => {
 
     result.current.mutate({
       reviewId: '11111111-1111-1111-1111-111111111111',
-      body: { approval_status: 'approved', checklist: {}, dag_version_hash: RESOLVED_HASH },
+      body: {
+        approval_status: 'approved',
+        checklist: {},
+        dag_version_hash: RESOLVED_HASH,
+        adjustment_set_hash: null,
+      },
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

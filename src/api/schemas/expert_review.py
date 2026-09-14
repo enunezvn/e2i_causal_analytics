@@ -158,6 +158,12 @@ class PendingReviewItem(BaseModel):
     review_id: str
     review_type: Optional[str] = None
     dag_version_hash: Optional[str] = None
+    #: The adjustment-set half of the review's current version identity
+    #: (migration 142); null = unknown. Paired with ``dag_version_hash`` it names
+    #: the structure the review covers, and the resolve form echoes BOTH -- the
+    #: DAG hash alone cannot see a covariate-only change, because
+    #: ``compute_dag_hash`` excludes adjustment sets.
+    adjustment_set_hash: Optional[str] = None
     brand: Optional[str] = None
     treatment_variable: Optional[str] = None
     outcome_variable: Optional[str] = None
@@ -270,6 +276,15 @@ class ResolveReviewRequest(BaseModel):
     verdict to whatever structure the row carries NOW -- one nobody looked at.
     The form echoes the hash it displayed and the resolution applies only if
     the review still carries it; a mismatch is a 409, not a silent sign-off.
+
+    ``adjustment_set_hash`` is the OTHER half of that version, and the key is
+    required too (codex round-2 HIGH 1) -- though its VALUE may be null.
+    ``compute_dag_hash`` EXCLUDES adjustment sets, so an ADJUSTMENT-ONLY advance
+    leaves the DAG hash untouched: a form opened on (h1, adj-W) still resolved a
+    review advanced to (h1, adj-Z), and the reviewer signed off covariates they
+    were never shown. A MISSING key is a 422 rather than a null default,
+    because "the form did not send this" and "the review had no adjustment set"
+    are different facts and only the second may resolve a null-carrying row.
     """
 
     approval_status: Literal["approved", "rejected"]
@@ -279,6 +294,16 @@ class ResolveReviewRequest(BaseModel):
             "The DAG version hash the reviewer's form displayed. The resolution "
             "applies only if the review still carries it; if the structure has "
             "advanced since the form was opened, the request is rejected with 409."
+        ),
+    )
+    adjustment_set_hash: Optional[str] = Field(
+        ...,
+        description=(
+            "The adjustment-set hash the reviewer's form displayed; null when the "
+            "review carried none. Required as a KEY (a missing one is 422). The "
+            "resolution applies only if the review still carries this exact pair: "
+            "the DAG hash alone cannot see a covariate-only change, so a form "
+            "opened before an adjustment-only advance is rejected with 409."
         ),
     )
     checklist: Dict[str, Any] = Field(

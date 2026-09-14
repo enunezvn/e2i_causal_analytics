@@ -310,15 +310,19 @@ async def resolve_review(
     is still a correct non-200 (never a fake success); the repo logs the
     distinction (zero-row WARNING vs exception ERROR).
 
-    Version binding (codex round-1 HIGH): ``request.dag_version_hash`` is the
-    structure the reviewer's form displayed and ``submit_review`` filters the
-    UPDATE on it, so a review a concurrent run advanced (migration 141) is NOT
-    resolved by a form opened on the old version. The repo keeps its boolean; a
-    False is disambiguated HERE by ONE extra read: still pending on a DIFFERENT
-    hash -> 409 (reload and resolve the current version), anything else -> the
-    existing 404. The read is only on the failure path, so the happy path still
-    costs one write. A re-read that itself fails is treated as the 404 case --
-    fail-closed, never a fabricated 200.
+    Version binding (codex rounds 1 and 2): the PAIR
+    ``(request.dag_version_hash, request.adjustment_set_hash)`` is the structure
+    the reviewer's form displayed, and ``submit_review`` filters the UPDATE on
+    BOTH, so a review a concurrent run advanced (migration 141) is NOT resolved
+    by a form opened on the old version. Both halves are needed because
+    ``compute_dag_hash`` excludes adjustment sets: an ADJUSTMENT-ONLY advance
+    leaves the hash equal, and the hash-only filter let a reviewer sign off
+    covariates they were never shown. The repo keeps its boolean; a False is
+    disambiguated HERE by ONE extra read: still pending on a DIFFERENT pair ->
+    409 (reload and resolve the current version), anything else -> the existing
+    404. The read is only on the failure path, so the happy path still costs one
+    write. A re-read that itself fails is treated as the 404 case -- fail-closed,
+    never a fabricated 200.
     """
     # The resolver's identity, from the verified token (dependencies/auth.py
     # builds ``id`` / ``email`` / ``user_metadata`` from the Supabase user).
@@ -339,13 +343,23 @@ async def resolve_review(
         reviewer_name=reviewer_name or None,
         reviewer_email=reviewer_email or None,
         expected_dag_version_hash=request.dag_version_hash,
+        expected_adjustment_set_hash=request.adjustment_set_hash,
     )
     if not success:
         current = await _current_review_row(repo, review_id)
+        # EITHER half having moved is an advance (codex round-2 HIGH 1): an
+        # adjustment-only advance leaves the DAG hash equal, so comparing it
+        # alone reported 404 "already resolved" for a row that is pending on a
+        # structure this form never displayed. The adjustment comparison is
+        # NULL-aware by construction -- both sides are Optional[str] and None ==
+        # None is the "still unknown" case, which is a match, not a mismatch.
         if (
             current is not None
             and current.get("approval_status") == "pending"
-            and current.get("dag_version_hash") != request.dag_version_hash
+            and (
+                current.get("dag_version_hash") != request.dag_version_hash
+                or current.get("adjustment_set_hash") != request.adjustment_set_hash
+            )
         ):
             raise HTTPException(
                 status_code=409,
@@ -579,6 +593,13 @@ async def _build_under_lock(
         # persist below carries this hash as a filter, so a stale build is
         # refused by the row rather than by a re-read that could itself race.
         source_hash = source.get("dag_version_hash")
+        # The adjustment half of that same captured version (codex round-2 HIGH
+        # 2). Without it the guard missed an ADJUSTMENT-ONLY advance: the DAG
+        # hash never moves, so a build that graded (h1, adj-W) still persisted
+        # after the advance to (h1, adj-Z) had cleared the cache, and the review
+        # UI showed a grading of covariates the review no longer covers, marked
+        # persisted=true.
+        source_adj = source.get("adjustment_set_hash")
         validation_ids = source.get("related_validation_ids") or []
         validations = await _get_validation_rows(validation_ids)
         # run_signature is a BLOCKING LM call; keep the event loop free.
@@ -594,8 +615,16 @@ async def _build_under_lock(
         # column is nullable (a pre-141 row that never carried a hash), and such
         # a row has no version to bind to, so filtering on it would refuse every
         # write instead of guarding one. That row gets the pre-#1991 behaviour.
+        # The two halves travel together: the repository applies the adjustment
+        # filter only when the hash one is given, so a NULL ``source_adj`` under
+        # a real ``source_hash`` still guards -- it asserts "the review's
+        # adjustment set was unknown when this build started", which is a
+        # precondition, not an absence of one.
         persisted = await repo.update_agent_assessment(
-            review_id, assessment, for_dag_version_hash=source_hash
+            review_id,
+            assessment,
+            for_dag_version_hash=source_hash,
+            for_adjustment_set_hash=source_adj,
         )
         # No p99 exists for this build anywhere; record the elapsed seconds so the
         # lock TTL (120 s, nginx proxy_read_timeout) can be revisited on data.

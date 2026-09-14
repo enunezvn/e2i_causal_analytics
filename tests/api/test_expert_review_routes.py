@@ -91,6 +91,7 @@ class _FakeExpertReviewRepo:
         reviewer_email: Optional[str] = None,
         *,
         expected_dag_version_hash: str,
+        expected_adjustment_set_hash: Optional[str],
     ) -> bool:
         self.submit_calls.append(
             {
@@ -104,6 +105,7 @@ class _FakeExpertReviewRepo:
                 "reviewer_name": reviewer_name,
                 "reviewer_email": reviewer_email,
                 "expected_dag_version_hash": expected_dag_version_hash,
+                "expected_adjustment_set_hash": expected_adjustment_set_hash,
             }
         )
         return self.submit_return
@@ -122,15 +124,18 @@ class _FakeExpertReviewRepo:
         assessment: Dict[str, Any],
         *,
         for_dag_version_hash: Optional[str] = None,
+        for_adjustment_set_hash: Optional[str] = None,
     ) -> bool:
-        """#1991 debt 3 (codex round-1): the cache write is filtered on the
-        structure the build GRADED, so a build that finished after the review
-        advanced writes nothing."""
+        """#1991 debt 3 (codex rounds 1 and 2): the cache write is filtered on
+        the WHOLE version the build GRADED -- the DAG hash and the adjustment-set
+        hash -- so a build that finished after the review advanced writes
+        nothing, including after an advance that changed only the covariates."""
         self.assessment_writes.append(
             {
                 "review_id": review_id,
                 "assessment": assessment,
                 "for_dag_version_hash": for_dag_version_hash,
+                "for_adjustment_set_hash": for_adjustment_set_hash,
             }
         )
         return self.assessment_write_return
@@ -204,6 +209,7 @@ class TestResolveReview:
                 "comments": {"note": "looks good"},
                 "validity_days": 90,
                 "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
             },
         )
         assert resp.status_code == 200, resp.text
@@ -229,6 +235,7 @@ class TestResolveReview:
                 "approval_status": "rejected",
                 "checklist": {},
                 "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
             },
         )
         assert resp.status_code == 200, resp.text
@@ -252,6 +259,7 @@ class TestResolveReview:
                 "approval_status": "rejected",
                 "checklist": {},
                 "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
             },
         )
         assert resp.status_code == 200, resp.text
@@ -287,6 +295,7 @@ class TestResolveReview:
                 "approval_status": "approved",
                 "checklist": {},
                 "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
             },
         )
         assert resp.status_code == 200, resp.text
@@ -301,6 +310,7 @@ class TestResolveReview:
                 "approval_status": "blocked",
                 "checklist": {},
                 "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
             },
         )
         assert resp.status_code == 422
@@ -322,6 +332,7 @@ class TestResolveReview:
                 "approval_status": "approved",
                 "checklist": {},
                 "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
             },
         )
         assert resp.status_code == 404, resp.text
@@ -349,6 +360,7 @@ class TestResolveReview:
                 "approval_status": "approved",
                 "checklist": {},
                 "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
             },
         )
         assert resp.status_code == 409, resp.text

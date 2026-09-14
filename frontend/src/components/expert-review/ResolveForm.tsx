@@ -109,12 +109,28 @@ export function ResolveForm({ review, onClose, autoAssessGuard }: ResolveFormPro
             // nullable; an unhashed row names no version and is refused (422)
             // rather than resolved blind (no such row exists live).
             dag_version_hash: review.dag_version_hash ?? '',
+            // The other half of that version (#1991 debt 3, codex round 2). The
+            // backend's DAG hash EXCLUDES adjustment sets, so a covariate-only
+            // advance leaves the hash equal and the hash alone would have let
+            // this form approve covariates it never displayed. `?? null` is
+            // load-bearing: the key must be PRESENT with a JSON null, because a
+            // missing key is a 422 and an explicit null is the review's own
+            // "no known adjustment set".
+            adjustment_set_hash: review.adjustment_set_hash ?? null,
           },
         },
         { onSuccess: onClose }
       );
     },
-    [resolve, review.review_id, review.dag_version_hash, checklist, comments, onClose]
+    [
+      resolve,
+      review.review_id,
+      review.dag_version_hash,
+      review.adjustment_set_hash,
+      checklist,
+      comments,
+      onClose,
+    ]
   );
 
   return (

@@ -33,7 +33,13 @@ const resolveApi = vi.mocked(resolveReview);
 
 /** The structure version the form displays — the resolution is bound to it. */
 const HASH = 'h'.repeat(64);
-const REVIEW: PendingReviewItem = { review_id: 'rev-1', brand: 'Kisqali', treatment_variable: 't', outcome_variable: 'y', dag_version_hash: HASH };
+/**
+ * The adjustment-set half of that version (#1991 debt 3, codex round 2). The
+ * backend's DAG hash EXCLUDES adjustment sets, so this half is the only thing a
+ * covariate-only advance moves — and the only thing that can catch one.
+ */
+const ADJ = 'w'.repeat(64);
+const REVIEW: PendingReviewItem = { review_id: 'rev-1', brand: 'Kisqali', treatment_variable: 't', outcome_variable: 'y', dag_version_hash: HASH, adjustment_set_hash: ADJ };
 const ASSESSMENT: AgentAssessment = { items: [], is_fallback: true };
 const RESPONSE: AgentAssessmentResponse = { review_id: 'rev-1', assessment: ASSESSMENT, cached: false, persisted: true };
 
@@ -72,6 +78,12 @@ function renderForm(props: Partial<ResolveFormProps> = {}, queryClient = newClie
 beforeEach(() => {
   // mockReset (not clear): a test that aborts early must not leak its `Once` queue.
   api.mockReset();
+  // resolveApi was NOT reset here, so its call COUNT accumulated across the file
+  // and every `toHaveBeenCalledTimes(1)` below held only for whichever test
+  // called it first. That is an ordering dependency, not a pin: adding a second
+  // resolve test made the first one's neighbour fail with "got 2 times". Each
+  // test sets its own resolved/rejected value, so a reset here costs nothing.
+  resolveApi.mockReset();
 });
 
 describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
@@ -215,7 +227,24 @@ describe('ResolveForm auto-assessment (real hooks, StrictMode)', () => {
         checklist: {},
         comments: undefined,
         dag_version_hash: HASH,
+        adjustment_set_hash: ADJ,
       });
+    });
+
+    it('sends an explicit null when the row carries no adjustment-set hash', async () => {
+      api.mockResolvedValue(RESPONSE);
+      resolveApi.mockResolvedValue({ review_id: 'rev-1', approval_status: 'approved', success: true });
+      // A pre-142 row, or one the old api image minted: its adjustment set is
+      // UNKNOWN. The form must still echo that, as a JSON null.
+      renderForm({ review: { ...REVIEW, adjustment_set_hash: null } });
+      await userEvent.setup().click(await screen.findByRole('button', { name: /^approve$/i }));
+      await waitFor(() => expect(resolveApi).toHaveBeenCalledTimes(1));
+      const body = resolveApi.mock.calls[0][1];
+      // PRESENT with a null value, not absent: the backend 422s a missing key,
+      // and `undefined` would vanish from the serialised body entirely.
+      expect('adjustment_set_hash' in body).toBe(true);
+      expect(body.adjustment_set_hash).toBeNull();
+      expect(JSON.parse(JSON.stringify(body))).toHaveProperty('adjustment_set_hash', null);
     });
 
     it('shows the 409 reload instruction in the submit banner', async () => {
