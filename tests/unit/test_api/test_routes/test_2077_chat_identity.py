@@ -167,3 +167,81 @@ def test_the_tools_node_still_binds_the_state_session_without_a_tool_session():
 
 def test_the_tools_node_invents_nothing_when_neither_channel_carries_a_session():
     assert _bound_session({}, {"configurable": {}}) is None
+
+
+# ------------------------------------------------- gap 2: who the turn belongs to
+
+
+def test_a_composite_session_names_its_own_user():
+    from src.api.routes.chat_identity import resolve_tool_user_id
+
+    assert resolve_tool_user_id(REAL_SESSION) == USER
+
+
+def test_a_bridged_session_names_its_own_user():
+    """``{user}~{session}~bridge`` splits on the FIRST '~', as computed_user_id does."""
+    from src.api.routes.chat_identity import resolve_tool_user_id
+
+    assert resolve_tool_user_id(BRIDGE_SESSION) == USER
+
+
+def test_a_bare_thread_falls_back_to_the_auth_gates_verified_user():
+    """AG-UI thread ids are bare uuids, so the prefix yields nothing there."""
+    from src.api.routes.chat_identity import resolve_tool_user_id
+    from src.utils.llm_attribution import set_authenticated_user
+
+    set_authenticated_user(USER)
+    try:
+        assert resolve_tool_user_id("0b7f7d6e-2c1a-4d7e-9a53-3f1f6a0c9e21") == USER
+    finally:
+        set_authenticated_user(None)
+
+
+def test_no_identity_resolves_to_none_rather_than_a_fabricated_id():
+    """composer_episodes.user_id is uuid-typed and the linker compares it as text."""
+    from src.api.routes.chat_identity import resolve_tool_user_id
+    from src.utils.llm_attribution import ANONYMOUS_USER_ID, set_authenticated_user
+
+    set_authenticated_user(None)
+    assert resolve_tool_user_id(None) is None
+    assert resolve_tool_user_id("chatbot-20260914120000") is None
+    assert resolve_tool_user_id(f"{ANONYMOUS_USER_ID}~0b7f7d6e-2c1a-4d7e-9a53-3f1f6a0c9e21") is None
+    assert resolve_tool_user_id("not-a-uuid~0b7f7d6e-2c1a-4d7e-9a53-3f1f6a0c9e21") is None
+
+
+async def test_the_auth_gate_channel_survives_the_keepalive_wrapper_and_attribution_does_not():
+    """Why the issue's proposed source (``get_attribution()``) cannot be used here.
+
+    ``with_sse_keepalive`` pulls each frame via ``asyncio.ensure_future``, so a
+    contextvar set while one frame is produced is gone by the next pull. The auth
+    gate sets its value in the REQUEST task, upstream of the wrapper, so it
+    survives — measured 2026-09-14 against the real wrapper.
+    """
+    from src.api.routes.chat_identity import resolve_tool_user_id
+    from src.api.utils.sse_keepalive import with_sse_keepalive
+    from src.utils.llm_attribution import (
+        get_attribution,
+        set_authenticated_user,
+        set_chat_attribution,
+    )
+
+    thread = "cf6b364a-11f1-4b26-a5c0-f6559d06f659"
+    seen: dict[str, Any] = {}
+
+    async def body():
+        set_chat_attribution(thread, "run-2077")
+        yield "frame-1"
+        attribution = get_attribution()
+        seen["attribution_user"] = None if attribution is None else attribution.user_id
+        seen["resolved_user"] = resolve_tool_user_id(thread)
+        yield "frame-2"
+
+    set_authenticated_user(USER)
+    try:
+        async for _ in with_sse_keepalive(body(), interval_seconds=5.0):
+            pass
+    finally:
+        set_authenticated_user(None)
+
+    assert seen["attribution_user"] is None, "get_attribution() unexpectedly survived"
+    assert seen["resolved_user"] == USER

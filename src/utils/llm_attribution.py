@@ -68,6 +68,17 @@ def set_authenticated_user(user_id: Optional[str]) -> None:
     _authenticated_user_id.set(user_id)
 
 
+def get_authenticated_user_id() -> Optional[str]:
+    """The token-verified user of the current request context, or None.
+
+    The public read of the fallback channel above. Unlike the attribution
+    contextvar it is set in the REQUEST task, upstream of the SSE keepalive
+    wrapper that pulls each frame in a fresh task, so it is still readable from
+    inside a chat graph's nodes (#2077).
+    """
+    return _authenticated_user_id.get()
+
+
 def user_id_from_session(session_id: Optional[str]) -> Optional[str]:
     """'<user_id>~<uuid>' -> user_id. Anonymous, malformed, or non-UUID
     prefixes -> None (honest NULL, never fabricated)."""

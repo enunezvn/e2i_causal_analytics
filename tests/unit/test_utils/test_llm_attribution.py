@@ -109,3 +109,14 @@ def test_record_and_drain_resets():
     assert drained.last_model == "claude-sonnet-4-6"
     # drained: second read is empty — no double-counting across persists
     assert drain_run_usage() is None
+
+
+def test_get_authenticated_user_id_reads_the_gate_channel_publicly():
+    """#2077: routes read the auth-gate user through this, not the private var."""
+    from src.utils.llm_attribution import get_authenticated_user_id
+
+    assert get_authenticated_user_id() is None
+    set_authenticated_user(USER)
+    assert get_authenticated_user_id() == USER
+    set_authenticated_user("test-user-id")  # non-uuid: rejected at the setter
+    assert get_authenticated_user_id() is None
