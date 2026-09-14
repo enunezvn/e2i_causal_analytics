@@ -377,9 +377,10 @@ def _binarization_notice(y_arr: Any, outcome_var: str) -> Tuple[Optional[str], b
     message = (
         f"CausalML binarized outcome '{outcome_var}' at zero before fitting "
         f"(causalml/inference/tree/uplift.pyx:459 runs `y = (y > 0)`). "
-        f"The outcome has {distinct} distinct values, so the reported `ate` "
-        f"is a risk difference on the derived indicator (y > 0), NOT an "
-        f"average treatment effect on '{outcome_var}'. "
+        f"The outcome's values are not 0/1 ({distinct} distinct values), "
+        f"so the reported `ate` is a risk difference on the derived "
+        f"indicator (y > 0), NOT an average treatment effect on "
+        f"'{outcome_var}'. "
         f"frac(y > 0) = {positive_fraction:.4f}; "
         f"mean|y - (y > 0)| = {information_lost:.4f}. "
         f"Estimate this outcome with DoWhy/EconML for an ATE on its own scale."
