@@ -1287,9 +1287,10 @@ class TestCausalMLWarnsWhenBinarizationRecodesTheOutcome:
         expected = (
             "CausalML binarized outcome 'sales' at zero before fitting "
             "(causalml/inference/tree/uplift.pyx:459 runs `y = (y > 0)`). "
-            "The outcome has 5 distinct values, so the reported `ate` is a "
-            "risk difference on the derived indicator (y > 0), NOT an average "
-            "treatment effect on 'sales'. frac(y > 0) = 0.4000; "
+            "The outcome's values are not 0/1 (5 distinct values), so the "
+            "reported `ate` is a risk difference on the derived indicator "
+            "(y > 0), NOT an average treatment effect on 'sales'. "
+            "frac(y > 0) = 0.4000; "
             "mean|y - (y > 0)| = 1.6000. Estimate this outcome with "
             "DoWhy/EconML for an ATE on its own scale."
         )
@@ -1310,7 +1311,7 @@ class TestCausalMLWarnsWhenBinarizationRecodesTheOutcome:
         warns = _binarization_warnings(result)
         assert result["success"] is True, result.get("error")
         assert len(warns) == 1, result["warnings"]
-        assert "The outcome has 5 distinct values" in warns[0], warns[0]
+        assert "values are not 0/1 (5 distinct values)" in warns[0], warns[0]
         assert "frac(y > 0) = 0.7143" in warns[0], warns[0]
         assert result["result"]["outcome_binarized"] is True
 
@@ -1334,7 +1335,7 @@ class TestCausalMLWarnsWhenBinarizationRecodesTheOutcome:
 
         warns = _binarization_warnings(result)
         assert len(warns) == 1, result["warnings"]
-        assert "The outcome has 3 distinct values" in warns[0], warns[0]
+        assert "values are not 0/1 (3 distinct values)" in warns[0], warns[0]
         assert "frac(y > 0) = 0.6667" in warns[0], warns[0]
 
     @pytest.mark.asyncio
@@ -1367,7 +1368,7 @@ class TestCausalMLBinarizationDiscriminatorIsTheRecodingItself:
         warns = _binarization_warnings(result)
         assert result["success"] is True, result.get("error")
         assert len(warns) == 1, result["warnings"]
-        assert "The outcome has 2 distinct values" in warns[0], warns[0]
+        assert "values are not 0/1 (2 distinct values)" in warns[0], warns[0]
         assert "frac(y > 0) = 0.5000" in warns[0], warns[0]
         assert "mean|y - (y > 0)| = 0.5000" in warns[0], warns[0]
         assert result["result"]["outcome_binarized"] is True
