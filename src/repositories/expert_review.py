@@ -893,6 +893,16 @@ class ExpertReviewRepository(BaseRepository):
         widen what a reviewer signed off. Omitted, the advance keeps the
         pending-only filter alone.
 
+        What the compare-and-set does NOT prevent is a duplicate row. Two
+        concurrent pending-branch advances to the SAME new structure can both
+        read the old latest version, both decide the pair differs, and both
+        insert before either advances -- the timeline then holds that structure
+        twice. The insert happens before the CAS and nothing serialises it; the
+        CAS stops the review REGRESSING to a superseded hash, not the second
+        row. Closing that too needs DB-side serialization (an RPC), deliberately
+        not done: a mint or an advance is rare, and a duplicated version row
+        overstates how often the DAG changed without misreporting what it is.
+
         Returns:
             True only when BOTH the append and the review's advance succeeded.
             False when the append failed (nothing was written and the review is

@@ -719,6 +719,12 @@ async def test_update_agent_assessment_refuses_a_structure_that_moved(fake_clien
         ok = await repo.update_agent_assessment("r1", {"items": []}, for_dag_version_hash="h1")
     assert ok is False
     assert "agent_assessment_json" not in fake_client.rows("expert_reviews")[0]
+    # The refusal must be OBSERVABLE, and say which version was asked for: this
+    # is the path the route reports as persisted=False, so an operator reading
+    # the logs has to be able to tell it from a nonexistent review.
+    assert any(
+        "matched no rows" in r.getMessage() and "h1" in r.getMessage() for r in caplog.records
+    )
 
 
 @pytest.mark.unit
@@ -733,3 +739,51 @@ async def test_update_agent_assessment_without_a_hash_is_unchanged(fake_client):
     assert not any(
         m == "eq" and a[0] == "dag_version_hash" for m, a in fake_client.calls("expert_reviews")
     )
+
+
+@pytest.mark.unit
+async def test_append_version_advances_the_snapshot_when_only_the_adjustment_set_moved(
+    fake_client,
+):
+    """H4 at the WRITE end: the advance is not conditional on the hash CHANGING.
+
+    ``compute_dag_hash`` excludes adjustment sets, so a covariate-only change
+    appends a version whose ``dag_version_hash`` equals the one the review
+    already carries -- and the compare-and-set then compares that hash with
+    itself. Everything about this call is a no-op on the hash column, which is
+    exactly why the OTHER columns have to move: the review's snapshot must show
+    the new covariates, and the cached assessment (which graded the old ones)
+    must go, or the reviewer reads the covariate change nowhere.
+    """
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "dag_structure_json": {"nodes": ["T", "Y"], "adjustment_sets": [["W"]]},
+                "agent_assessment_json": {"items": [{"id": "q1", "verdict": "supports"}]},
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    new_structure = {"nodes": ["T", "Y"], "adjustment_sets": [["W", "X"]]}
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h1",  # UNCHANGED -- and the CAS expects the same value
+        dag_structure=new_structure,
+        adjustment_set_hash="adj-WX",
+        query_id="q2",
+        expected_current_hash="h1",
+    )
+
+    assert ok is True
+    row = fake_client.rows("expert_reviews")[0]
+    assert row["dag_structure_json"] == new_structure
+    assert row["agent_assessment_json"] is None
+    version = fake_client.inserted("expert_review_versions")[0]
+    assert version["dag_version_hash"] == "h1"
+    assert version["adjustment_set_hash"] == "adj-WX"
+    assert version["dag_structure_json"] == new_structure

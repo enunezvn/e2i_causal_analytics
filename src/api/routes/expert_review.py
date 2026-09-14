@@ -590,6 +590,10 @@ async def _build_under_lock(
             _GENERATION_ID_KEY: uuid.uuid4().hex,
             _GENERATED_AT_KEY: datetime.now(timezone.utc).isoformat(),
         }
+        # A None ``source_hash`` OMITS the filter rather than matching NULL: the
+        # column is nullable (a pre-141 row that never carried a hash), and such
+        # a row has no version to bind to, so filtering on it would refuse every
+        # write instead of guarding one. That row gets the pre-#1991 behaviour.
         persisted = await repo.update_agent_assessment(
             review_id, assessment, for_dag_version_hash=source_hash
         )

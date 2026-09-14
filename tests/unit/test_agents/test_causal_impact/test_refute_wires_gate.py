@@ -71,6 +71,12 @@ class _CapturingRepo:
         self.appended.append((review_id, kwargs.get("dag_version_hash")))
         return True
 
+    async def get_latest_version(self, review_id):
+        """No timeline yet (#1991 debt 3). Without this the gate's version read
+        raises AttributeError, which it swallows as UNKNOWN -- so every mint here
+        would log a warning and take the OUTAGE path instead of the normal one."""
+        return None
+
 
 class TestRefuteBuildsRepoBackedGate:
     @pytest.mark.asyncio
