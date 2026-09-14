@@ -37,6 +37,9 @@ def _episode(session_id: str, user_id: Any) -> Dict[str, Any]:
         "created_at": "2026-09-13T10:00:00+00:00",
         "success": None,
         "feedback_at": None,
+        # Unlabelled, so no claim is recorded (ml/044). Present because the double should carry
+        # every column _EPISODE_COLUMNS selects, not only the ones this file asserts on.
+        "feedback_id": None,
     }
 
 
