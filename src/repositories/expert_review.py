@@ -19,11 +19,14 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Literal, Mapping, Optional
 
-from src.repositories.expert_review_versions import (
-    ExpertReviewVersionTimeline,
-    match_nullable_column,
-)
+from src.repositories.expert_review_versions import ExpertReviewVersionTimeline
 from src.repositories.json_utils import to_plain_json
+from src.repositories.query_utils import match_nullable_column
+
+# ``match_nullable_column`` is the ONE definition of "the review is still on this value", shared by
+# ``submit_review``, ``update_agent_assessment`` and ``advance_review`` across both halves of the
+# pair -- ``adjustment_set_hash`` (migration 142) and ``dag_version_hash`` (nullable, migration 141)
+# -- so the three guards cannot drift apart (codex round 2).
 
 logger = logging.getLogger(__name__)
 

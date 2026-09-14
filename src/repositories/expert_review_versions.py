@@ -20,33 +20,9 @@ from typing import Any, Dict, List, Optional
 
 from src.repositories.base import BaseRepository
 from src.repositories.json_utils import to_plain_json
+from src.repositories.query_utils import match_nullable_column
 
 logger = logging.getLogger(__name__)
-
-
-def match_nullable_column(query: Any, column: str, value: Optional[str]) -> Any:
-    """Filter ``query`` on a NULLABLE identity column, matching NULL EXPLICITLY.
-
-    ONE definition of "the review is still on this value", shared by every guard
-    that binds to the review row -- ``submit_review``'s resolution filter,
-    ``update_agent_assessment``'s persist guard and ``advance_review``'s
-    compare-and-set -- across both halves of the pair: ``adjustment_set_hash``
-    (migration 142) and ``dag_version_hash``, which migration 141's backfill
-    itself treats as nullable. Codex round 2 found three guards missing an
-    ADJUSTMENT-ONLY advance for the same reason, so they get one filter rather
-    than three chances to drift.
-
-    A known value is an ``eq``. An UNKNOWN one (None) is ``is_``, which postgrest
-    2.27 renders as ``<column>=is.null`` (verified: its ``is_`` maps a Python
-    None to the string ``"null"`` before building the filter). ``eq`` can NOT
-    express this -- PostgREST would compare against the literal text ``"None"``
-    and match nothing -- and OMITTING the filter is worse: it matches every row,
-    which is the defect being closed. "Unknown" is a precondition to check, not
-    one to skip.
-    """
-    if value is None:
-        return query.is_(column, "null")
-    return query.eq(column, value)
 
 
 class ExpertReviewVersionTimeline(BaseRepository):
