@@ -60,12 +60,25 @@ class _Repo:
     def __init__(self) -> None:
         self.row = dict(ROW)
         self.writes: List[Dict[str, Any]] = []
+        self.write_filters: List[Optional[str]] = []
 
     async def get_by_id(self, review_id: str) -> Optional[Dict[str, Any]]:
         return dict(self.row) if review_id == RID else None
 
-    async def update_agent_assessment(self, review_id: str, assessment: Dict[str, Any]) -> bool:
+    async def update_agent_assessment(
+        self,
+        review_id: str,
+        assessment: Dict[str, Any],
+        *,
+        for_dag_version_hash: Optional[str] = None,
+    ) -> bool:
+        """#1991 debt 3: the route binds the cache write to the structure the
+        build graded. The hash is RECORDED rather than ignored -- these tests are
+        about WHETHER the persist happens before the lifespan, and a double that
+        dropped the argument would raise inside the shielded build, making
+        "nothing was persisted" look like the ordering defect it is pinning."""
         self.writes.append(dict(assessment))
+        self.write_filters.append(for_dag_version_hash)
         self.row["agent_assessment_json"] = json.dumps(assessment)
         return True
 

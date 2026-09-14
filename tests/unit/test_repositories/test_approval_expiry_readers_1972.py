@@ -1001,9 +1001,19 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
 
 
 class TestSubmitReviewResolvesOnlyPending:
+    """Every call here passes the row's OWN ``dag_version_hash`` (#1991 debt 3
+    made it a required keyword): the version filter therefore always matches, so
+    a False is attributable to the PENDING filter these tests exist to pin, and
+    never to the binding added later."""
+
     async def test_pending_row_is_resolved(self):
         repo, client = _repo([PENDING])
-        ok = await repo.submit_review(PENDING["review_id"], "approved", {"c": True})
+        ok = await repo.submit_review(
+            PENDING["review_id"],
+            "approved",
+            {"c": True},
+            expected_dag_version_hash=PENDING["dag_version_hash"],
+        )
         assert ok is True
         assert client.rows[0]["approval_status"] == "approved"
         assert ("eq", "approval_status", "pending") in client.log, client.log
@@ -1015,14 +1025,31 @@ class TestSubmitReviewResolvesOnlyPending:
         older = dict(FAR_FUTURE, review_id="rev-older")
         newer = dict(FAR_FUTURE, review_id="rev-newer")
         repo, client = _repo([older, newer])
-        ok = await repo.submit_review("rev-older", "rejected", {"c": False})
+        # The row's OWN hash, so the version filter matches and the PENDING
+        # filter is what makes this False -- the thing this test is about.
+        ok = await repo.submit_review(
+            "rev-older",
+            "rejected",
+            {"c": False},
+            expected_dag_version_hash=older["dag_version_hash"],
+        )
         assert ok is False
         assert client.rows[0]["approval_status"] == "approved", "the row must be untouched"
         assert ("eq", "approval_status", "pending") in client.log, client.log
 
     async def test_rejected_row_cannot_be_flipped_to_approved(self):
         repo, client = _repo([REJECTED])
-        assert await repo.submit_review(REJECTED["review_id"], "approved", {"c": True}) is False
+        # Again the row's own hash: a mismatched one would also return False,
+        # and the pin would pass without the pending filter ever being consulted.
+        assert (
+            await repo.submit_review(
+                REJECTED["review_id"],
+                "approved",
+                {"c": True},
+                expected_dag_version_hash=REJECTED["dag_version_hash"],
+            )
+            is False
+        )
         assert client.rows[0]["approval_status"] == "rejected"
 
     def test_docstring_states_pending_only_is_enforced(self):

@@ -245,6 +245,12 @@ class _CapturingRepo:
         self.appended.append((review_id, kwargs.get("dag_version_hash")))
         return True
 
+    async def get_latest_version(self, review_id):
+        """No timeline yet (#1991 debt 3). Without this the gate's version read
+        raises AttributeError, which it swallows as UNKNOWN -- so this mint would
+        log a warning and take the OUTAGE path instead of the normal one."""
+        return None
+
 
 class TestAutoCreateReviewTypeEnum:
     """C1: the auto-created review MUST use a VALID expert_review_type member.
@@ -489,7 +495,12 @@ class TestExpertReviewGateCanProceed:
     @pytest.fixture
     def mock_repo(self):
         """Create mock ExpertReviewRepository."""
-        return MagicMock()
+        repo = MagicMock()
+        # #1991 debt 3: the gate reads the review's last recorded version before
+        # appending. A bare MagicMock is not awaitable, which the gate swallows as
+        # UNKNOWN -- the OUTAGE path, not the one these tests mean to exercise.
+        repo.get_latest_version = AsyncMock(return_value=None)
+        return repo
 
     @pytest.mark.asyncio
     async def test_can_proceed_approved(self, mock_repo):
@@ -820,6 +831,10 @@ class TestRejectedVerdictIsDurable:
     def mock_repo(self):
         repo = MagicMock()
         repo.append_version = AsyncMock(return_value=True)
+        # #1991 debt 3: the gate reads the review's last recorded version before
+        # appending. A bare MagicMock is not awaitable, which the gate swallows as
+        # UNKNOWN -- the OUTAGE path, not the one these tests mean to exercise.
+        repo.get_latest_version = AsyncMock(return_value=None)
         return repo
 
     @pytest.mark.asyncio
@@ -924,6 +939,10 @@ class TestCheckRejection:
         repo.get_reviews_for_estimand = AsyncMock(return_value=[])
         repo.append_version = AsyncMock(return_value=True)
         repo.create_review = AsyncMock(return_value="rev-should-not-exist")
+        # #1991 debt 3: the gate reads the review's last recorded version before
+        # appending. A bare MagicMock is not awaitable, which the gate swallows as
+        # UNKNOWN -- the OUTAGE path, not the one these tests mean to exercise.
+        repo.get_latest_version = AsyncMock(return_value=None)
         return repo
 
     def _rejected(self, **extra):
@@ -1190,6 +1209,10 @@ class TestApprovalPrecedenceIsChronological:
         repo.get_reviews_for_estimand = AsyncMock(return_value=[])
         repo.append_version = AsyncMock(return_value=True)
         repo.create_review = AsyncMock(return_value="rev-should-not-exist")
+        # #1991 debt 3: the gate reads the review's last recorded version before
+        # appending. A bare MagicMock is not awaitable, which the gate swallows as
+        # UNKNOWN -- the OUTAGE path, not the one these tests mean to exercise.
+        repo.get_latest_version = AsyncMock(return_value=None)
         return repo
 
     @pytest.mark.asyncio
