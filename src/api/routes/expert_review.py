@@ -29,7 +29,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Type, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ValidationError
@@ -197,52 +197,96 @@ def _changes_between(
     return DagChanges(**changes)
 
 
-def _current_version_id(
-    versions: List[ReviewVersion],
+def _current_version_index(
+    pairs: Sequence[Tuple[Optional[str], Optional[str]]],
     dag_version_hash: Optional[str],
     adjustment_set_hash: Optional[str],
-) -> Optional[str]:
-    """Which timeline row is the review's CURRENT version (codex round 3).
+) -> Optional[int]:
+    """Which timeline entry is the review's CURRENT version (codex round 3).
 
     ``expert_review_versions`` is a TIMELINE of facts; the review row is the
     authority on which structure it covers, and the two can disagree. A run
     that recorded its version and then LOST the compare-and-set advance leaves
     its row after the winner's (timeline ``... C, B`` while the review is on
     C), so "the last entry" is not "the version under review" -- rendering its
-    delta would show the reviewer a change they are not being asked to approve.
+    delta would show the reviewer a change they are not being asked to approve,
+    and reporting its timestamp would date a move that never happened.
 
     The review's identity is the PAIR: ``compute_dag_hash`` excludes adjustment
     sets, so the DAG hash alone cannot see a covariate-only advance. Among the
-    rows carrying the review's hash we therefore take the LAST whose adjustment
-    hash is equal as well (None == None: unknown matches unknown, it is not a
-    wildcard). The LAST, because a revert A -> B -> A appends A a second time
-    and the review then points at the NEWER A -- whose ``changes`` is the
-    B -> A delta the reviewer is actually being shown.
+    entries carrying the review's hash we therefore take the LAST whose
+    adjustment hash is equal as well (None == None: unknown matches unknown, it
+    is not a wildcard). The LAST, because a revert A -> B -> A appends A a
+    second time and the review then points at the NEWER A -- whose ``changes``
+    is the B -> A delta the reviewer is actually being shown.
 
     Fallback: when the review's adjustment hash is KNOWN (migration 142) but no
-    row carries it, the last same-hash row with a NULL adjustment hash wins --
-    migration 141 backfilled every pre-existing version that way, and "same
+    entry carries it, the last same-hash entry with a NULL adjustment hash wins
+    -- migration 141 backfilled every pre-existing version that way, and "same
     structure, covariates never recorded" is the same version.
 
+    An EMPTY ``dag_version_hash`` is treated as absent, like None: the column
+    the entries carry is NOT NULL and non-empty, so no entry could match it
+    anyway, and "" is the review row saying nothing about its structure.
+
     None when nothing matches: a review minted before the versions table, or an
-    old-image mint whose first version was never recorded. Callers render no
-    delta at all rather than guess.
+    old-image mint whose first version was never recorded. Callers show no delta
+    and no change date rather than guess.
+
+    Takes normalized ``(dag_version_hash, adjustment_set_hash)`` pairs, not the
+    entries themselves, so the ONE definition of this rule serves both the
+    detail route (validated ``ReviewVersion`` models) and the pending queue
+    (raw stored rows, which it deliberately never validates -- it reads one
+    timestamp off them, and a malformed row must not 500 the whole queue).
     """
     if not dag_version_hash:
         return None
-    same_structure = [v for v in versions if v.dag_version_hash == dag_version_hash]
-    for version in reversed(same_structure):
-        if version.adjustment_set_hash == adjustment_set_hash:
-            return version.version_id
+    same_structure = [i for i, (h, _a) in enumerate(pairs) if h == dag_version_hash]
+    for index in reversed(same_structure):
+        if pairs[index][1] == adjustment_set_hash:
+            return index
     if adjustment_set_hash is None:
         # The review's adjustment is UNKNOWN; the loop above already tried
-        # every row that is also unknown. There is nothing weaker to fall
+        # every entry that is also unknown. There is nothing weaker to fall
         # back to.
         return None
-    for version in reversed(same_structure):
-        if version.adjustment_set_hash is None:
-            return version.version_id
+    for index in reversed(same_structure):
+        if pairs[index][1] is None:
+            return index
     return None
+
+
+def _current_version_id(
+    versions: List[ReviewVersion],
+    dag_version_hash: Optional[str],
+    adjustment_set_hash: Optional[str],
+) -> Optional[str]:
+    """The ``version_id`` of the review's current version, or None.
+
+    See ``_current_version_index`` for the selection rule.
+    """
+    index = _current_version_index(
+        [(v.dag_version_hash, v.adjustment_set_hash) for v in versions],
+        dag_version_hash,
+        adjustment_set_hash,
+    )
+    return None if index is None else versions[index].version_id
+
+
+def _last_changed_at(row: Dict[str, Any], versions: List[Dict[str, Any]]) -> Any:
+    """When the structure the review is CURRENTLY on was recorded.
+
+    RAW stored version rows (the pending queue never validates them), so the
+    pair is read with ``.get``. Falls back to the review's own ``created_at``
+    when nothing matches -- including the empty timeline of a review minted
+    before migration 141.
+    """
+    index = _current_version_index(
+        [(v.get("dag_version_hash"), v.get("adjustment_set_hash")) for v in versions],
+        row.get("dag_version_hash"),
+        row.get("adjustment_set_hash"),
+    )
+    return row.get("created_at") if index is None else versions[index].get("created_at")
 
 
 router = APIRouter(
@@ -293,7 +337,9 @@ async def list_pending_reviews(
 
     ``version_count`` / ``last_changed_at`` (#1991 debt 3) come from ONE batched
     ``expert_review_versions`` read, so an operator can see that a pending
-    review's structure moved under them since it was queued.
+    review's structure moved under them since it was queued. The count is every
+    recorded version; the date is the CURRENT version's, never the timeline's
+    last, which can belong to a version the review is not on.
     """
     repo = await _get_expert_review_repo()
     try:
@@ -320,9 +366,18 @@ async def list_pending_reviews(
                     # versions table (mig 141) -- it is at version 1, changed
                     # when it was created. Never 0: that reads as "no structure".
                     "version_count": len(versions) or 1,
-                    "last_changed_at": (
-                        versions[-1].get("created_at") if versions else row.get("created_at")
-                    ),
+                    # WHEN the structure under review landed -- the CURRENT
+                    # version's timestamp, not the timeline's last (codex round
+                    # 3). The tail can belong to a run that recorded its version
+                    # and then lost the compare-and-set advance, and its
+                    # timestamp is the NEWEST: reporting it would tell the
+                    # operator their review moved at a moment it did not. When
+                    # no recorded version carries the review's pair the date is
+                    # unknown, and the review's own creation is the honest
+                    # answer -- exactly as for a review with no timeline at all.
+                    # ``version_count`` stays len(versions): the rows WERE
+                    # recorded, orphan included.
+                    "last_changed_at": _last_changed_at(row, versions),
                 },
             )
         )

@@ -4272,7 +4272,9 @@ export interface paths {
          *
          *     ``version_count`` / ``last_changed_at`` (#1991 debt 3) come from ONE batched
          *     ``expert_review_versions`` read, so an operator can see that a pending
-         *     review's structure moved under them since it was queued.
+         *     review's structure moved under them since it was queued. The count is every
+         *     recorded version; the date is the CURRENT version's, never the timeline's
+         *     last, which can belong to a version the review is not on.
          */
         get: operations["list_pending_expert_reviews"];
         put?: never;

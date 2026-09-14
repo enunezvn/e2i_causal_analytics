@@ -511,3 +511,52 @@ def test_detail_current_version_id_falls_back_to_a_backfilled_version(monkeypatc
     repo = _Repo(row, estimand_history=[row], versions=[_paired(VID_A, HASH_V1, None, SNAP_A)])
     body = _client(monkeypatch, repo).get(f"/api/expert-reviews/{RID}").json()
     assert body["current_version_id"] == VID_A
+
+
+# --------------------------------------------------------------------------
+# GET /pending: last_changed_at follows the CURRENT version, not the tail
+# --------------------------------------------------------------------------
+
+V3_AT = "2026-07-15T10:00:00+00:00"
+
+
+@pytest.mark.unit
+def test_pending_last_changed_at_is_the_current_versions_timestamp(monkeypatch):
+    """The queue's "last changed" is when the structure UNDER REVIEW landed.
+
+    In the orphan state the timeline ends on the losing row, whose timestamp is
+    the NEWEST -- reporting it would tell the operator their review moved at a
+    moment it did not.
+    """
+    row = {**ROW, "dag_version_hash": HASH_C, "adjustment_set_hash": ADJ_C}
+    versions = [
+        _paired(VID_A, HASH_V1, ADJ_A, SNAP_A, V1_AT),
+        _paired(VID_C, HASH_C, ADJ_C, SNAP_C, V2_AT),
+        _paired(VID_B, HASH_B, ADJ_B, SNAP_B, V3_AT),
+    ]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    item = _client(monkeypatch, repo).get("/api/expert-reviews/pending").json()["reviews"][0]
+    # The COUNT stays a timeline fact: three rows were recorded for this review.
+    assert item["version_count"] == 3
+    assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
+        2026, 7, 14, 10, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.unit
+def test_pending_last_changed_at_falls_back_to_the_row_when_no_version_matches(monkeypatch):
+    """No recorded version carries the review's pair, so WHEN the current
+    structure landed is unknown -- the review's own creation is the honest
+    answer, exactly as for a review with no timeline at all. Never the newest
+    row's timestamp, which belongs to a structure this review is not on."""
+    row = {**ROW, "dag_version_hash": HASH_C, "adjustment_set_hash": ADJ_C}
+    versions = [
+        _paired(VID_A, HASH_V1, ADJ_A, SNAP_A, V2_AT),
+        _paired(VID_B, HASH_B, ADJ_B, SNAP_B, V3_AT),
+    ]
+    repo = _Repo(pending=[row], versions_by_review={RID: versions})
+    item = _client(monkeypatch, repo).get("/api/expert-reviews/pending").json()["reviews"][0]
+    assert item["version_count"] == 2
+    assert datetime.fromisoformat(item["last_changed_at"]) == datetime(
+        2026, 7, 13, 10, 0, tzinfo=timezone.utc
+    )
