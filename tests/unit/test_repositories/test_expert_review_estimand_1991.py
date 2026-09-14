@@ -293,6 +293,8 @@ async def test_append_version_inserts_then_updates_current_hash_and_snapshot(fak
         dag_structure={"nodes": ["a"], "edges": []},
         adjustment_set_hash="a2",
         query_id="q2",
+        expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
     )
     assert ok is True
     v = fake_client.inserted("expert_review_versions")[0]
@@ -308,6 +310,9 @@ async def test_append_version_inserts_then_updates_current_hash_and_snapshot(fak
     # it (see test_append_version_clears_the_agent_assessment).
     assert upd == {
         "dag_version_hash": "h2",
+        # Migration 142: the review row carries the adjustment half of its own
+        # current identity, so the guards keyed on the row see a WHOLE version.
+        "adjustment_set_hash": "a2",
         "dag_structure_json": {"nodes": ["a"], "edges": []},
         "agent_assessment_json": None,
     }
@@ -350,11 +355,14 @@ async def test_append_version_repoints_the_evidence_at_the_new_versions_run(fake
         adjustment_set_hash=None,
         query_id="q2",
         related_validation_ids=["v1"],
+        expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
     )
 
     assert ok is True
     assert fake_client.updated("expert_reviews")[0] == {
         "dag_version_hash": "h2",
+        "adjustment_set_hash": None,
         "dag_structure_json": None,
         "agent_assessment_json": None,
         "related_validation_ids": ["v1"],
@@ -374,6 +382,8 @@ async def test_append_version_returns_false_when_insert_fails(fake_client):
             dag_structure=None,
             adjustment_set_hash=None,
             query_id=None,
+            expected_current_hash="h1",
+            expected_current_adjustment_hash=None,
         )
         is False
     )
@@ -409,6 +419,8 @@ async def test_append_version_clears_the_snapshot_when_no_structure_is_given(fak
         dag_structure=None,
         adjustment_set_hash=None,
         query_id=None,
+        expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
     )
     assert ok is True
     assert fake_client.updated("expert_reviews")[0]["dag_structure_json"] is None
@@ -431,12 +443,18 @@ async def test_append_version_returns_false_when_review_is_not_pending(fake_clie
             dag_structure=None,
             adjustment_set_hash=None,
             query_id=None,
+            expected_current_hash="h1",
+            expected_current_adjustment_hash=None,
         )
     assert ok is False
     assert fake_client.inserted("expert_review_versions")[0]["dag_version_hash"] == "h2"
     # the resolved row is untouched -- the pending-only filter matched nothing
     assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h1"
-    assert any("no PENDING review" in r.getMessage() for r in caplog.records)
+    # The advance is now ``advance_review``'s, so the warning is its one: "no
+    # longer pending on <pair>" covers the resolved row and the lost race alike,
+    # which is the same fact from the UPDATE's point of view -- the filters that
+    # ARE the precondition matched nothing.
+    assert any("no longer pending on" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.unit
@@ -498,6 +516,7 @@ async def test_submit_review_binds_the_resolution_to_the_expected_hash(fake_clie
         approval_status="approved",
         checklist={"confounders_complete": True},
         expected_dag_version_hash="h1",
+        expected_adjustment_set_hash=None,
     )
     assert ok is True
     calls = fake_client.calls("expert_reviews")
@@ -521,6 +540,7 @@ async def test_submit_review_refuses_a_stale_hash_and_leaves_the_row_pending(fak
             approval_status="approved",
             checklist={},
             expected_dag_version_hash="h1",
+            expected_adjustment_set_hash=None,
         )
     assert ok is False
     row = fake_client.rows("expert_reviews")[0]
@@ -595,6 +615,7 @@ async def test_append_version_advance_is_a_compare_and_set_on_the_current_hash(f
         adjustment_set_hash=None,
         query_id=None,
         expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
     )
     assert ok is True
     assert ("eq", ("dag_version_hash", "h1")) in fake_client.calls("expert_reviews")
@@ -621,6 +642,7 @@ async def test_append_version_cas_mismatch_leaves_the_review_on_the_winners_hash
             adjustment_set_hash=None,
             query_id=None,
             expected_current_hash="h1",
+            expected_current_adjustment_hash=None,
         )
     assert ok is False
     assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h3"
@@ -629,28 +651,43 @@ async def test_append_version_cas_mismatch_leaves_the_review_on_the_winners_hash
 
 
 @pytest.mark.unit
-async def test_append_version_without_an_expected_hash_does_not_filter_on_it(fake_client):
-    """The compare-and-set is opt-in: a caller that has not read the current hash
-    keeps the pending-only behaviour."""
+async def test_append_version_requires_the_whole_expected_pair(fake_client):
+    """The compare-and-set is no longer opt-in (codex round 2).
+
+    It was optional because a caller might not have read the current hash. That
+    is no longer true of any caller: the gate reads the pending row before it
+    decides anything, and the mint knows the pair ``create_review`` just stored.
+    An optional CAS is a path where the advance carries no precondition at all --
+    the exact shape of the strand round 2 found -- so both halves are required
+    keyword-only and a caller that omits either fails loudly here rather than
+    quietly overwriting a winner in production.
+    """
     fake_client.seed(
         "expert_reviews",
         [{"review_id": "r1", "approval_status": "pending", "dag_version_hash": "h1"}],
     )
     repo = ExpertReviewRepository(supabase_client=fake_client)
-    ok = await repo.append_version(
-        "r1",
-        dag_version_hash="h2",
-        dag_structure=None,
-        adjustment_set_hash=None,
-        query_id=None,
-    )
-    assert ok is True
-    assert not any(
-        key == "dag_version_hash"
-        for method, (key, _) in [
-            (m, a) for m, a in fake_client.calls("expert_reviews") if m == "eq"
-        ]
-    )
+    with pytest.raises(TypeError, match="expected_current_hash"):
+        await repo.append_version(
+            "r1",
+            dag_version_hash="h2",
+            dag_structure=None,
+            adjustment_set_hash=None,
+            query_id=None,
+        )
+    with pytest.raises(TypeError, match="expected_current_adjustment_hash"):
+        await repo.append_version(
+            "r1",
+            dag_version_hash="h2",
+            dag_structure=None,
+            adjustment_set_hash=None,
+            query_id=None,
+            expected_current_hash="h1",
+        )
+    # Nothing was written on either refusal: the signature is checked before the
+    # timeline insert, so a mis-called append cannot leave an orphan row.
+    assert fake_client.inserted("expert_review_versions") == []
+    assert fake_client.updated("expert_reviews") == []
 
 
 # --------------------------------------------------------------------------
@@ -687,6 +724,8 @@ async def test_append_version_clears_the_agent_assessment(fake_client):
         dag_structure={"nodes": ["a"], "edges": []},
         adjustment_set_hash="a2",
         query_id="q2",
+        expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
     )
     assert ok is True
     upd = fake_client.updated("expert_reviews")[0]
@@ -777,6 +816,7 @@ async def test_append_version_advances_the_snapshot_when_only_the_adjustment_set
         adjustment_set_hash="adj-WX",
         query_id="q2",
         expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
     )
 
     assert ok is True
@@ -787,3 +827,433 @@ async def test_append_version_advances_the_snapshot_when_only_the_adjustment_set
     assert version["dag_version_hash"] == "h1"
     assert version["adjustment_set_hash"] == "adj-WX"
     assert version["dag_structure_json"] == new_structure
+
+
+# --------------------------------------------------------------------------
+# Codex round 2 -- the review ROW carries its FULL version identity
+#
+# ``compute_dag_hash`` excludes adjustment sets, so every guard keyed on the row
+# alone matched half an identity and an ADJUSTMENT-ONLY advance walked past all
+# three of them. Migration 142 adds ``expert_reviews.adjustment_set_hash``; these
+# pin that each guard now binds to the PAIR, with NULL matched EXPLICITLY (an
+# IS NULL filter) rather than ignored -- an omitted filter would match every row
+# and silently restore the defect these tests exist to prevent.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_submit_review_refuses_an_adjustment_only_advance(fake_client):
+    """Codex round-2 finding 1: the form was opened on (h1, adj-W); a run advanced
+    the review to (h1, adj-Z). The DAG hash is UNCHANGED, so the hash filter alone
+    matched and the reviewer signed off covariates they were never shown."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-Z",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.submit_review(
+        review_id="r1",
+        approval_status="approved",
+        checklist={},
+        expected_dag_version_hash="h1",
+        expected_adjustment_set_hash="adj-W",
+    )
+    assert ok is False
+    row = fake_client.rows("expert_reviews")[0]
+    assert row["approval_status"] == "pending" and row["adjustment_set_hash"] == "adj-Z"
+    assert "valid_until" not in row and "resolved_at" not in row
+
+
+@pytest.mark.unit
+async def test_submit_review_matches_an_unknown_adjustment_set_with_is_null(fake_client):
+    """A row whose adjustment set is UNKNOWN (NULL: pre-142, or minted by the old
+    image) is resolvable by a form that echoes that same unknown -- and the filter
+    that does it is ``is_``, not an omission. PostgREST renders ``adjustment_set_hash
+    =eq.None`` as a literal string comparison, so eq can never express this."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": None,
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.submit_review(
+        review_id="r1",
+        approval_status="approved",
+        checklist={},
+        expected_dag_version_hash="h1",
+        expected_adjustment_set_hash=None,
+    )
+    assert ok is True
+    calls = fake_client.calls("expert_reviews")
+    assert ("is_", ("adjustment_set_hash", "null")) in calls
+    assert not any(m == "eq" and a[0] == "adjustment_set_hash" for m, a in calls)
+    assert fake_client.rows("expert_reviews")[0]["approval_status"] == "approved"
+
+
+@pytest.mark.unit
+async def test_submit_review_refuses_unknown_against_a_row_that_learned_its_hash(fake_client):
+    """The other direction of the same asymmetry: the form carried no adjustment
+    hash, but the row has since learned one. That IS a version change, so the
+    resolution must not land."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-W",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.submit_review(
+        review_id="r1",
+        approval_status="approved",
+        checklist={},
+        expected_dag_version_hash="h1",
+        expected_adjustment_set_hash=None,
+    )
+    assert ok is False
+    assert fake_client.rows("expert_reviews")[0]["approval_status"] == "pending"
+
+
+@pytest.mark.unit
+async def test_update_agent_assessment_refuses_an_adjustment_only_advance(fake_client, caplog):
+    """Codex round-2 finding 2: the build graded (h1, adj-W); the advance to
+    (h1, adj-Z) cleared the cache; the old build then re-filled it under the hash
+    guard, because the hash never moved."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-Z",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    with caplog.at_level(logging.WARNING):
+        ok = await repo.update_agent_assessment(
+            "r1",
+            {"items": []},
+            for_dag_version_hash="h1",
+            for_adjustment_set_hash="adj-W",
+        )
+    assert ok is False
+    assert "agent_assessment_json" not in fake_client.rows("expert_reviews")[0]
+    # The warning must name BOTH halves, or an operator cannot tell an
+    # adjustment-only refusal from a hash one.
+    assert any("adj-W" in r.getMessage() and "h1" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.unit
+async def test_update_agent_assessment_binds_to_an_unknown_adjustment_set(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": None,
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.update_agent_assessment(
+        "r1", {"items": []}, for_dag_version_hash="h1", for_adjustment_set_hash=None
+    )
+    assert ok is True
+    assert ("is_", ("adjustment_set_hash", "null")) in fake_client.calls("expert_reviews")
+    assert fake_client.rows("expert_reviews")[0]["agent_assessment_json"] == {"items": []}
+
+
+@pytest.mark.unit
+async def test_update_agent_assessment_applies_no_version_filter_without_a_hash(fake_client):
+    """A pre-141 row that never carried a hash has no version to bind to, so the
+    guard is OMITTED entirely -- both halves, not just the one. Filtering the
+    adjustment half alone would refuse every write instead of guarding one."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h2",
+                "adjustment_set_hash": "adj-Z",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    assert await repo.update_agent_assessment("r1", {"items": []}) is True
+    calls = fake_client.calls("expert_reviews")
+    assert not any(m == "eq" and a[0] == "dag_version_hash" for m, a in calls)
+    assert not any(a[0] == "adjustment_set_hash" for m, a in calls)
+
+
+@pytest.mark.unit
+async def test_advance_review_is_a_compare_and_set_on_the_pair(fake_client):
+    """Codex round-2 finding 3, the write end: an advance that changes only the
+    adjustment set must still be refused when another advance got there first."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-C",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.advance_review(
+        "r1",
+        dag_version_hash="h1",
+        dag_structure={"nodes": ["T"], "adjustment_sets": [["B"]]},
+        adjustment_set_hash="adj-B",
+        expected_current_hash="h1",
+        expected_current_adjustment_hash="adj-A",
+    )
+    assert ok is False
+    row = fake_client.rows("expert_reviews")[0]
+    assert row["adjustment_set_hash"] == "adj-C", "the winner's advance must stand"
+    # Nothing was inserted: advance_review is the review UPDATE alone.
+    assert fake_client.inserted("expert_review_versions") == []
+
+
+@pytest.mark.unit
+async def test_advance_review_writes_the_pair_and_clears_the_assessment(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-A",
+                "agent_assessment_json": {"items": [{"id": "q1"}]},
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    structure = {"nodes": ["T", "Y"], "adjustment_sets": [["B"]]}
+    ok = await repo.advance_review(
+        "r1",
+        dag_version_hash="h1",
+        dag_structure=structure,
+        adjustment_set_hash="adj-B",
+        expected_current_hash="h1",
+        expected_current_adjustment_hash="adj-A",
+    )
+    assert ok is True
+    row = fake_client.rows("expert_reviews")[0]
+    assert row["adjustment_set_hash"] == "adj-B"
+    assert row["dag_structure_json"] == structure
+    assert row["agent_assessment_json"] is None
+    calls = fake_client.calls("expert_reviews")
+    assert ("eq", ("dag_version_hash", "h1")) in calls
+    assert ("eq", ("adjustment_set_hash", "adj-A")) in calls
+    assert ("eq", ("approval_status", "pending")) in calls
+
+
+@pytest.mark.unit
+async def test_advance_review_sends_a_literal_none_when_the_adjustment_set_is_unknown(fake_client):
+    """A run with no structure in scope knows no adjustment set. The payload must
+    carry a LITERAL None -- not omit the key -- or the row keeps a stale hash that
+    no longer describes the structure it now carries, which is precisely the
+    plausible-wrong value the pair exists to prevent."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-A",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.advance_review(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure=None,
+        adjustment_set_hash=None,
+        expected_current_hash="h1",
+        expected_current_adjustment_hash="adj-A",
+    )
+    assert ok is True
+    payload = fake_client.updated("expert_reviews")[0]
+    assert "adjustment_set_hash" in payload and payload["adjustment_set_hash"] is None
+    assert fake_client.rows("expert_reviews")[0]["adjustment_set_hash"] is None
+
+
+@pytest.mark.unit
+async def test_advance_review_matches_an_unknown_current_adjustment_with_is_null(fake_client):
+    """A row that has not learned its adjustment set yet (NULL) is advanced by a
+    run that carries one -- the row LEARNS it. The CAS expresses "still unknown"
+    as IS NULL, never as an omitted filter."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": None,
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.advance_review(
+        "r1",
+        dag_version_hash="h1",
+        dag_structure={"nodes": ["T"], "adjustment_sets": [["W"]]},
+        adjustment_set_hash="adj-W",
+        expected_current_hash="h1",
+        expected_current_adjustment_hash=None,
+    )
+    assert ok is True
+    assert ("is_", ("adjustment_set_hash", "null")) in fake_client.calls("expert_reviews")
+    assert fake_client.rows("expert_reviews")[0]["adjustment_set_hash"] == "adj-W"
+
+
+@pytest.mark.unit
+async def test_advance_review_warns_naming_both_expected_halves(fake_client, caplog):
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h9",
+                "adjustment_set_hash": "adj-Z",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    with caplog.at_level(logging.WARNING):
+        ok = await repo.advance_review(
+            "r1",
+            dag_version_hash="h2",
+            dag_structure=None,
+            adjustment_set_hash=None,
+            expected_current_hash="h1",
+            expected_current_adjustment_hash="adj-A",
+        )
+    assert ok is False
+    assert any("h1" in r.getMessage() and "adj-A" in r.getMessage() for r in caplog.records), (
+        "the warning must name BOTH expected halves, or the loser cannot be diagnosed"
+    )
+
+
+@pytest.mark.unit
+async def test_append_version_is_the_insert_plus_the_advance(fake_client):
+    """``append_version`` composes the two: the timeline row goes in first, then
+    the same compare-and-set advance. A failed advance leaves the version row --
+    the timeline records what runs produced, the review records what it is on."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-A",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h2",
+        dag_structure={"nodes": ["T"]},
+        adjustment_set_hash="adj-B",
+        query_id="q2",
+        expected_current_hash="h1",
+        expected_current_adjustment_hash="adj-A",
+    )
+    assert ok is True
+    version = fake_client.inserted("expert_review_versions")[0]
+    assert version["dag_version_hash"] == "h2" and version["adjustment_set_hash"] == "adj-B"
+    row = fake_client.rows("expert_reviews")[0]
+    assert row["dag_version_hash"] == "h2" and row["adjustment_set_hash"] == "adj-B"
+
+
+@pytest.mark.unit
+async def test_append_version_keeps_the_version_row_when_the_pair_cas_loses(fake_client):
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r1",
+                "approval_status": "pending",
+                "dag_version_hash": "h1",
+                "adjustment_set_hash": "adj-C",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    ok = await repo.append_version(
+        "r1",
+        dag_version_hash="h1",
+        dag_structure=None,
+        adjustment_set_hash="adj-B",
+        query_id=None,
+        expected_current_hash="h1",
+        expected_current_adjustment_hash="adj-A",
+    )
+    assert ok is False
+    assert fake_client.inserted("expert_review_versions")[0]["adjustment_set_hash"] == "adj-B"
+    assert fake_client.rows("expert_reviews")[0]["adjustment_set_hash"] == "adj-C"
+
+
+@pytest.mark.unit
+async def test_create_review_stores_the_adjustment_set_hash(fake_client):
+    """The mint gives the row BOTH halves from the start, so the version-1 append's
+    compare-and-set has a pair to expect."""
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    await repo.create_review(
+        reviewer_id="q1",
+        review_type="dag_approval",
+        dag_version_hash="h1",
+        brand="Remi",
+        treatment_variable="treatment_arm",
+        outcome_variable="persistent_180d",
+        adjustment_set_hash="adj-W",
+    )
+    row = fake_client.inserted("expert_reviews")[0]
+    assert row["adjustment_set_hash"] == "adj-W"
+
+
+@pytest.mark.unit
+async def test_create_review_omits_an_unknown_adjustment_set_hash(fake_client):
+    """None is stripped like every other unset column: an omitted key lets the
+    DB default (NULL = unknown) stand, and keeps the payload minimal."""
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+    await repo.create_review(
+        reviewer_id="q1",
+        review_type="dag_approval",
+        dag_version_hash="h1",
+        brand="Remi",
+        treatment_variable="treatment_arm",
+        outcome_variable="persistent_180d",
+    )
+    assert "adjustment_set_hash" not in fake_client.inserted("expert_reviews")[0]

@@ -798,6 +798,12 @@ WRITERS = frozenset(
         "update_dag_structure",
         "renew_review",
         "append_version",
+        # Split out of append_version in codex round 2, and a WRITER for the
+        # same reason it is: it performs the review UPDATE and returns a bool
+        # whose False is a fail-closed non-success (lost compare-and-set,
+        # resolved review, or persistence error), never a plausible-wrong read.
+        # The caller re-reads; nothing downstream mistakes it for data.
+        "advance_review",
     }
 )
 
@@ -1001,10 +1007,13 @@ class TestNoReaderServesEmptyOrZeroOnStoreError:
 
 
 class TestSubmitReviewResolvesOnlyPending:
-    """Every call here passes the row's OWN ``dag_version_hash`` (#1991 debt 3
-    made it a required keyword): the version filter therefore always matches, so
-    a False is attributable to the PENDING filter these tests exist to pin, and
-    never to the binding added later."""
+    """Every call here passes the row's OWN version identity -- ``dag_version_hash``
+    and, since codex round 2 made the binding a PAIR, ``adjustment_set_hash``
+    (None: these fixture rows carry none, so the filter is IS NULL and matches).
+    The version filter therefore always matches, so a False is attributable to
+    the PENDING filter these tests exist to pin, and never to the binding added
+    later. Verified the same way as before: deleting the pending filter from
+    ``submit_review`` turns all three red."""
 
     async def test_pending_row_is_resolved(self):
         repo, client = _repo([PENDING])
@@ -1013,6 +1022,7 @@ class TestSubmitReviewResolvesOnlyPending:
             "approved",
             {"c": True},
             expected_dag_version_hash=PENDING["dag_version_hash"],
+            expected_adjustment_set_hash=None,
         )
         assert ok is True
         assert client.rows[0]["approval_status"] == "approved"
@@ -1032,6 +1042,7 @@ class TestSubmitReviewResolvesOnlyPending:
             "rejected",
             {"c": False},
             expected_dag_version_hash=older["dag_version_hash"],
+            expected_adjustment_set_hash=None,
         )
         assert ok is False
         assert client.rows[0]["approval_status"] == "approved", "the row must be untouched"
@@ -1047,6 +1058,7 @@ class TestSubmitReviewResolvesOnlyPending:
                 "approved",
                 {"c": True},
                 expected_dag_version_hash=REJECTED["dag_version_hash"],
+                expected_adjustment_set_hash=None,
             )
             is False
         )

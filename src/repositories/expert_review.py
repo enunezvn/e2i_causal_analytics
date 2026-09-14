@@ -25,6 +25,30 @@ from src.repositories.json_utils import to_plain_json
 logger = logging.getLogger(__name__)
 
 
+def _match_adjustment_hash(query: Any, adjustment_set_hash: Optional[str]) -> Any:
+    """Filter ``query`` on ``expert_reviews.adjustment_set_hash`` (migration 142),
+    matching NULL EXPLICITLY.
+
+    ONE definition of "the review is still on this adjustment set", shared by the
+    three guards that bind to the review row -- ``submit_review``'s resolution
+    filter, ``update_agent_assessment``'s persist guard and ``advance_review``'s
+    compare-and-set. Codex round 2 found all three missing an ADJUSTMENT-ONLY
+    advance for the same reason, so they get one filter rather than three
+    chances to drift.
+
+    A known hash is an ``eq``. An UNKNOWN one (None) is ``is_``, which postgrest
+    2.27 renders as ``adjustment_set_hash=is.null`` (verified: its ``is_`` maps a
+    Python None to the string ``"null"`` before building the filter). ``eq`` can
+    NOT express this -- PostgREST would compare against the literal text
+    ``"None"`` and match nothing -- and OMITTING the filter is worse: it matches
+    every row, which is the defect being closed. "Unknown" is a precondition to
+    check, not one to skip.
+    """
+    if adjustment_set_hash is None:
+        return query.is_("adjustment_set_hash", "null")
+    return query.eq("adjustment_set_hash", adjustment_set_hash)
+
+
 # ---------------------------------------------------------------------------
 # ONE definition of "active approval" (#1972)
 #
@@ -208,6 +232,7 @@ class ExpertReviewRepository(BaseRepository):
         related_validation_ids: Optional[List[str]] = None,
         dag_structure: Optional[Dict[str, Any]] = None,
         supersedes_review_id: Optional[str] = None,
+        adjustment_set_hash: Optional[str] = None,
     ) -> Optional[str]:
         """
         Create a new expert review request.
@@ -232,6 +257,15 @@ class ExpertReviewRepository(BaseRepository):
             supersedes_review_id: The earlier review of this estimand that this
                 one replaces, when the caller is minting a successor (existing
                 column; ``renew_review`` sets it the same way)
+            adjustment_set_hash: The adjustment-set half of the structure's
+                version identity (migration 142). Stored beside
+                ``dag_version_hash`` so the minted row carries its WHOLE
+                identity from the start -- the version-1 append's
+                compare-and-set has a pair to expect, and every guard keyed on
+                the row (resolution, the assessment persist, the advance) can
+                bind to both halves. None means the adjustment set is UNKNOWN
+                (no structure in scope), and is omitted from the payload so the
+                column's NULL stands for exactly that.
 
         Returns:
             Created review_id or None on failure
@@ -262,6 +296,11 @@ class ExpertReviewRepository(BaseRepository):
             "related_validation_ids": related_validation_ids,
             "dag_structure_json": to_plain_json(dag_structure) if dag_structure else None,
             "supersedes_review_id": supersedes_review_id,
+            # The adjustment-set half of the version identity (migration 142).
+            # Stripped when None by the rule below, like every other unset
+            # column: an omitted key leaves the column NULL, which is what
+            # "unknown adjustment set" IS -- and it keeps the payload minimal.
+            "adjustment_set_hash": adjustment_set_hash,
         }
 
         # estimand_key is NOT in this row and must never be: migration 140 made
@@ -341,6 +380,7 @@ class ExpertReviewRepository(BaseRepository):
         reviewer_email: Optional[str] = None,
         *,
         expected_dag_version_hash: str,
+        expected_adjustment_set_hash: Optional[str],
     ) -> bool:
         """
         Submit a completed expert review.
@@ -363,6 +403,18 @@ class ExpertReviewRepository(BaseRepository):
         resolved). A row whose ``dag_version_hash`` is NULL (the column is
         nullable; no such row exists live, measured 2026-09-14) therefore
         matches no hash and is refused rather than resolved blind.
+
+        That binding is to the PAIR, not to the hash alone (codex round-2 HIGH
+        1). ``compute_dag_hash`` EXCLUDES adjustment sets, so an ADJUSTMENT-ONLY
+        advance -- (h1, adj-W) to (h1, adj-Z), the same DAG with different
+        covariates -- leaves the hash untouched, and a hash-only filter matched
+        it: a reviewer approved covariates their form never displayed. The
+        UPDATE now also carries ``adjustment_set_hash`` (migration 142), matched
+        the way the value requires: ``eq`` for a known hash, ``is_`` (IS NULL)
+        for None. None is matched EXPLICITLY rather than by omitting the filter,
+        because an omitted filter matches every row and would restore exactly
+        the defect this closes -- "the review's adjustment set is unknown" is a
+        precondition to check, not one to skip.
 
         Resolution provenance (lane 1, codex whole-diff HIGH F1 + iter-2 HIGH
         F1): BOTH statuses stamp ``resolved_at = now()`` (migration 136;
@@ -392,11 +444,17 @@ class ExpertReviewRepository(BaseRepository):
                 displayed; the resolution applies only while the review still
                 carries it (keyword-only and required -- a caller that cannot
                 name the version it is resolving must not resolve)
+            expected_adjustment_set_hash: The other half of that version, the
+                adjustment-set hash the form displayed. Keyword-only and
+                REQUIRED, though its VALUE may be None: None asserts "the review
+                carried no known adjustment set", which is a precondition the
+                UPDATE checks with IS NULL, not an absence of one
 
         Returns:
             True if exactly this pending row was resolved AT THE EXPECTED
             VERSION, False otherwise (nonexistent, already resolved, advanced to
-            another structure, or persistence error)
+            another structure -- including one whose DAG is unchanged and only
+            the adjustment set moved -- or persistence error)
         """
         if not self.client:
             return False
@@ -434,14 +492,14 @@ class ExpertReviewRepository(BaseRepository):
         update_data["reviewer_email"] = reviewer_email
 
         try:
-            result = await (
+            query = (
                 self.client.table(self.table_name)
                 .update(update_data)
                 .eq("review_id", review_id)
                 .eq("approval_status", "pending")
                 .eq("dag_version_hash", expected_dag_version_hash)
-                .execute()
             )
+            result = await _match_adjustment_hash(query, expected_adjustment_set_hash).execute()
             # FIX B (codex HIGH): a zero-row update (nonexistent or already-resolved
             # review_id) matches nothing — supabase-py returns the updated rows in
             # ``result.data`` (same convention as base.py:131), so empty data means
@@ -450,8 +508,9 @@ class ExpertReviewRepository(BaseRepository):
             if not result.data:
                 logger.warning(
                     f"submit_review matched no rows for {review_id} at version "
-                    f"{expected_dag_version_hash} (nonexistent, already-resolved, or "
-                    "advanced to another structure); returning False"
+                    f"({expected_dag_version_hash}, {expected_adjustment_set_hash}) "
+                    "(nonexistent, already-resolved, or advanced to another structure); "
+                    "returning False"
                 )
                 return False
             logger.info(f"Submitted review {review_id} with status {approval_status}")
@@ -466,6 +525,7 @@ class ExpertReviewRepository(BaseRepository):
         assessment: Dict[str, Any],
         *,
         for_dag_version_hash: Optional[str] = None,
+        for_adjustment_set_hash: Optional[str] = None,
     ) -> bool:
         """Cache an advisory agent assessment on the review row (mig 097).
 
@@ -481,11 +541,30 @@ class ExpertReviewRepository(BaseRepository):
         False contract, which the route reports as ``persisted: false`` — the
         assessment is still returned to whoever asked for it.
 
+        The guard is on the PAIR (codex round-2 HIGH 2). A build that graded
+        (h1, adj-W) still persisted after an ADJUSTMENT-ONLY advance to
+        (h1, adj-Z) had cleared the cache, because the DAG hash never moved --
+        the review UI then showed a grading of covariates the review no longer
+        covers, marked ``persisted: true``. When ``for_dag_version_hash`` is
+        given, BOTH halves filter the UPDATE (``for_adjustment_set_hash`` via
+        eq-or-IS-NULL, see :func:`_match_adjustment_hash`).
+
+        The two are given TOGETHER or not at all. ``for_dag_version_hash=None``
+        means "this row has no version to bind to" -- a pre-141 row that never
+        carried a hash -- and applies NO version filter, the pre-#1991
+        behaviour. Filtering the adjustment half alone there would refuse every
+        write instead of guarding one.
+
         Args:
             review_id: The review whose cache is written
             assessment: The advisory grading payload
             for_dag_version_hash: When given, write only while the review still
                 carries this structure version
+            for_adjustment_set_hash: The adjustment-set half of that version.
+                Read together with ``for_dag_version_hash``: it applies only
+                when that one is given, and a None value there means the review
+                must still carry an UNKNOWN adjustment set (IS NULL), not that
+                the half is unchecked
 
         Returns:
             True when exactly this row was updated; False on zero-row match
@@ -504,11 +583,13 @@ class ExpertReviewRepository(BaseRepository):
             )
             if for_dag_version_hash is not None:
                 query = query.eq("dag_version_hash", for_dag_version_hash)
+                query = _match_adjustment_hash(query, for_adjustment_set_hash)
             result = await query.execute()
             if not result.data:
                 logger.warning(
                     f"update_agent_assessment matched no rows for {review_id} "
-                    f"(version filter: {for_dag_version_hash}); returning False"
+                    f"(version filter: {for_dag_version_hash}, {for_adjustment_set_hash}); "
+                    "returning False"
                 )
                 return False
             return True
@@ -841,6 +922,117 @@ class ExpertReviewRepository(BaseRepository):
             logger.error(f"Failed to get reviews for estimand: {e}")
             raise
 
+    async def advance_review(
+        self,
+        review_id: str,
+        *,
+        dag_version_hash: str,
+        dag_structure: Optional[Dict[str, Any]],
+        adjustment_set_hash: Optional[str],
+        related_validation_ids: Optional[List[str]] = None,
+        expected_current_hash: str,
+        expected_current_adjustment_hash: Optional[str],
+    ) -> bool:
+        """Move a PENDING review onto a structure version, as a COMPARE-AND-SET on
+        the pair it currently carries. The review UPDATE only -- no version row.
+
+        Split out of ``append_version`` in codex round 2, because an advance and
+        an append are two decisions, not one. A review can be BEHIND the
+        timeline's latest row without anything new to append: two adjustment-only
+        advances both insert, one loses the compare-and-set, and the loser's
+        review is then on a pair the timeline already holds. The repair is an
+        advance with NO append -- appending again would add a duplicate row to
+        say something the timeline already says. The gate decides the two
+        separately and calls whichever applies.
+
+        The compare-and-set is on the PAIR (codex round-2 HIGH 3). Under the old
+        hash-only CAS, two concurrent advances from (h1, A) to (h1, B) and
+        (h1, C) BOTH matched -- the DAG hash is h1 throughout -- so the review
+        ended on whichever landed last while the timeline's latest row was the
+        other. A later run of that pair then found both the review's hash and the
+        timeline's latest pair matching and skipped forever: a permanent strand,
+        with no outage required. Comparing both halves makes exactly one of the
+        two win, and the loser returns False and is logged.
+
+        The payload carries ``adjustment_set_hash`` as a LITERAL None when the
+        adjustment set is unknown, never by omitting the key. An omission would
+        leave the PREVIOUS hash on a row whose structure has just been replaced
+        -- a value that looks like a measurement of the new structure and is a
+        measurement of the old one.
+
+        ``dag_structure`` of None CLEARS the snapshot, deliberately: the snapshot
+        is what the review UI renders, and the previous structure under a new
+        identity would show a DAG the review no longer covers.
+        ``related_validation_ids`` is omitted when None so a caller without ids
+        never NULLs the column.
+
+        Args:
+            review_id: The review to advance
+            dag_version_hash: The structure hash it moves TO
+            dag_structure: The sanitized snapshot it moves to; None clears it
+            adjustment_set_hash: The adjustment-set half it moves to; None is
+                written as SQL NULL (unknown)
+            related_validation_ids: This run's evidence, when the caller has it
+            expected_current_hash: The DAG hash the caller READ before deciding
+                (keyword-only and required: an advance that cannot name what it
+                is replacing is not a compare-and-set)
+            expected_current_adjustment_hash: The adjustment half it read, None
+                for "still unknown" -- matched with IS NULL, never skipped
+
+        Returns:
+            True when exactly this pending row at exactly that pair was
+            advanced; False on a lost race, a resolved review, a nonexistent one,
+            or a persistence error
+        """
+        if not self.client:
+            return False
+
+        advance: Dict[str, Any] = {
+            "dag_version_hash": dag_version_hash,
+            "dag_structure_json": to_plain_json(dag_structure) if dag_structure else None,
+            # Migration 142: the row's own copy of the adjustment-set half. A
+            # LITERAL None when unknown -- see the docstring on why an omission
+            # would strand a stale hash on a replaced structure.
+            "adjustment_set_hash": adjustment_set_hash,
+            # The cached advisory assessment grades the DAG and the evidence of
+            # the version that WAS current, so it cannot survive the advance
+            # (codex round-1 HIGH): the review UI would show a grading of a
+            # structure this review no longer covers, and the assessment route's
+            # cache short-circuit would keep serving it beside the new snapshot.
+            # A literal None, not an omission: this payload is built explicitly,
+            # so it is never dropped by the "remove None values" pattern
+            # ``submit_review`` uses, and PostgREST writes it as SQL NULL.
+            "agent_assessment_json": None,
+        }
+        if related_validation_ids is not None:
+            advance["related_validation_ids"] = related_validation_ids
+
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .update(advance)
+                .eq("review_id", review_id)
+                .eq("approval_status", "pending")
+                .eq("dag_version_hash", expected_current_hash)
+            )
+            result = await _match_adjustment_hash(query, expected_current_adjustment_hash).execute()
+        except Exception as e:
+            logger.error(
+                f"advance_review: review {review_id} could not be advanced to "
+                f"({dag_version_hash}, {adjustment_set_hash}): {e}"
+            )
+            return False
+
+        if not result.data:
+            logger.warning(
+                f"advance_review: review {review_id} is no longer pending on "
+                f"({expected_current_hash}, {expected_current_adjustment_hash}), so it was "
+                f"not advanced to ({dag_version_hash}, {adjustment_set_hash}) -- a concurrent "
+                "advance won, or the review was resolved; the caller should re-read."
+            )
+            return False
+        return True
+
     async def append_version(
         self,
         review_id: str,
@@ -850,10 +1042,17 @@ class ExpertReviewRepository(BaseRepository):
         adjustment_set_hash: Optional[str],
         query_id: Optional[str],
         related_validation_ids: Optional[List[str]] = None,
-        expected_current_hash: Optional[str] = None,
+        expected_current_hash: str,
+        expected_current_adjustment_hash: Optional[str],
     ) -> bool:
         """Record a new structure version on a PENDING review and make it the
         review's current hash.
+
+        The timeline INSERT plus :meth:`advance_review` -- the two halves of
+        "this run produced a structure nobody has recorded yet". An advance can
+        also happen WITHOUT an append (a review left behind by a lost
+        compare-and-set, where the timeline already holds the pair); the gate
+        decides append and advance independently and calls whichever applies.
 
         ``expert_review_versions`` is a TIMELINE (migration 141), not a set: the
         caller appends only when the hash differs from the review's current one,
@@ -863,10 +1062,12 @@ class ExpertReviewRepository(BaseRepository):
         CONFLICT DO UPDATE, and ``service_role`` holds SELECT+INSERT only on this
         table (42501 otherwise).
 
-        The review update touches ``dag_version_hash``, ``dag_structure_json``
-        and -- when given -- ``related_validation_ids`` only; ``expert_reviews``
-        has no ``adjustment_set_hash`` column, that hash lives on the version
-        row. The evidence ids go on the REVIEW rather than the version because
+        The review update touches ``dag_version_hash``, ``adjustment_set_hash``
+        (migration 142), ``dag_structure_json`` and -- when given --
+        ``related_validation_ids``. The version row keeps its OWN
+        ``adjustment_set_hash``: that column is the HISTORY, the review's is its
+        CURRENT state, and they answer different questions.
+        The evidence ids go on the REVIEW rather than the version because
         they describe its current state: the detail route renders evidence from
         that column, and after an advance the previous run's ids would show
         statistics computed on a structure the review no longer covers. Omitted
@@ -878,20 +1079,28 @@ class ExpertReviewRepository(BaseRepository):
         the hash already on the row, so there a None would erase and replace
         nothing.)
 
-        ``expected_current_hash`` makes the advance a COMPARE-AND-SET (codex
-        round-1 HIGH): the review UPDATE also carries
-        ``dag_version_hash = expected_current_hash``, so of two interleaved
-        appends (insert h2, insert h3, advance h3, advance h2) the second advance
-        matches zero rows instead of dragging the review back to a structure a
-        later run superseded. The caller passes the hash it READ before deciding
-        to append. On a lost race the version row it already inserted STAYS: the
+        ``expected_current_hash`` and ``expected_current_adjustment_hash`` make
+        the advance a COMPARE-AND-SET on the PAIR (codex round-1 HIGH, widened
+        to both halves in round 2): of two interleaved appends (insert h2,
+        insert h3, advance h3, advance h2) the second advance matches zero rows
+        instead of dragging the review back to a structure a later run
+        superseded -- and because both halves are compared, that holds for two
+        ADJUSTMENT-ONLY advances too, where the DAG hash is identical throughout.
+        The caller passes the pair it READ before deciding to append. BOTH are
+        required now (the optional-CAS path is gone): every caller reads the
+        review row before deciding, so a caller with no pair in hand is a caller
+        that has not made the decision this method executes.
+
+        On a lost race the version row it already inserted STAYS: the
         timeline is a record of the structures runs produced, and it may
         therefore hold a row the review never pointed at. Its LAST row is still
-        the truth of what was last recorded, and the review's own
-        ``dag_version_hash`` is what a resolution binds to (``submit_review``'s
-        ``expected_dag_version_hash``) -- so an orphan version row can never
-        widen what a reviewer signed off. Omitted, the advance keeps the
-        pending-only filter alone.
+        the truth of what was last recorded, and the review's own pair is what a
+        resolution binds to (``submit_review``'s ``expected_dag_version_hash`` /
+        ``expected_adjustment_set_hash``) -- so an orphan version row can never
+        widen what a reviewer signed off. The review left behind is repaired by
+        the next run of that pair through :meth:`advance_review`, with no
+        append: the strand codex round 2 found is closed by that second path,
+        not by this one.
 
         What the compare-and-set does NOT prevent is a duplicate row. Two
         concurrent pending-branch advances to the SAME new structure can both
@@ -935,55 +1144,20 @@ class ExpertReviewRepository(BaseRepository):
             logger.error(f"append_version: insert failed for review {review_id}: {e}")
             return False
 
-        advance: Dict[str, Any] = {
-            "dag_version_hash": dag_version_hash,
-            "dag_structure_json": snapshot,
-            # The cached advisory assessment grades the DAG and the evidence of
-            # the version that WAS current, so it cannot survive the advance
-            # (codex round-1 HIGH): the review UI would show a grading of a
-            # structure this review no longer covers, and the assessment route's
-            # cache short-circuit would keep serving it beside the new snapshot.
-            # A literal None, not an omission: this payload is built explicitly,
-            # so it is never dropped by the "remove None values" pattern
-            # ``submit_review`` uses, and PostgREST writes it as SQL NULL.
-            "agent_assessment_json": None,
-        }
-        if related_validation_ids is not None:
-            advance["related_validation_ids"] = related_validation_ids
-
-        try:
-            query = (
-                self.client.table(self.table_name)
-                .update(advance)
-                .eq("review_id", review_id)
-                .eq("approval_status", "pending")
-            )
-            if expected_current_hash is not None:
-                query = query.eq("dag_version_hash", expected_current_hash)
-            result = await query.execute()
-        except Exception as e:
-            logger.error(
-                f"append_version: version row appended for review {review_id} but the "
-                f"review could not be advanced to {dag_version_hash}: {e}"
-            )
-            return False
-
-        if not result.data:
-            if expected_current_hash is not None:
-                logger.warning(
-                    f"append_version: review {review_id} is no longer on "
-                    f"{expected_current_hash}, so it was not advanced to {dag_version_hash} "
-                    "(a concurrent advance won, or the review was resolved); the version "
-                    "row was appended and the caller should re-read."
-                )
-            else:
-                logger.warning(
-                    f"append_version: no PENDING review {review_id} to advance to "
-                    f"{dag_version_hash} (nonexistent or already resolved); the version "
-                    "row was appended."
-                )
-            return False
-        return True
+        # The advance is the SAME operation the repair path runs, so it is the
+        # same code: one definition of "move the review onto this pair", one
+        # compare-and-set, one warning. Its False already names both expected
+        # halves; the append's own consequence -- the version row stays, one
+        # ahead of the review -- is documented above.
+        return await self.advance_review(
+            review_id,
+            dag_version_hash=dag_version_hash,
+            dag_structure=dag_structure,
+            adjustment_set_hash=adjustment_set_hash,
+            related_validation_ids=related_validation_ids,
+            expected_current_hash=expected_current_hash,
+            expected_current_adjustment_hash=expected_current_adjustment_hash,
+        )
 
     async def get_latest_version(self, review_id: str) -> Optional[Dict[str, Any]]:
         """The LAST structure version recorded for a review, or None.
