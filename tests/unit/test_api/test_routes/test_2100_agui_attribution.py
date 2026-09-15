@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from src.api.routes import chatbot_tools, copilotkit
-from src.api.utils.sse_keepalive import with_sse_keepalive
+from src.api.utils.sse_keepalive import SSE_KEEPALIVE_FRAME, with_sse_keepalive
 from src.utils.llm_attribution import (
     ANONYMOUS_USER_ID,
     clear_attribution,
@@ -340,4 +340,54 @@ async def test_an_early_client_disconnect_leaves_the_shared_frame_context_intact
     assert [first, second] == ["frame-0", "frame-1"]
     assert reads == ["chat", "chat"], reads
     # The write stayed in the frame context's copy; the request task is clean.
+    assert get_attribution() is None
+
+
+async def test_an_aclose_while_a_frame_pull_is_pending_tears_down_cleanly():
+    """The teardown path the test above never reaches: a pull still OUTSTANDING.
+
+    Disconnecting between frames leaves nothing to cancel. The case that
+    actually re-enters the shared context is a consumer that goes away while the
+    turn is mid-compute: the wrapper cancels the live pull task, awaits it, then
+    ``aclose``\\ s the body — three more entries into the one context that every
+    pull shares. This blocks the body on an event so that pull is guaranteed
+    pending, which no wall-clock sleep can guarantee.
+    """
+    thread = str(uuid4())
+    release = asyncio.Event()  # never set: the pull is abandoned, not completed
+    finalised = asyncio.Event()
+    reads: list[Any] = []
+
+    async def body():
+        set_chat_attribution(thread, "run-2100-pending")
+        try:
+            attribution = get_attribution()
+            reads.append(None if attribution is None else attribution.surface)
+            yield "frame-0"
+            await release.wait()
+            yield "frame-1"  # pragma: no cover — the consumer never waits for it
+        finally:
+            finalised.set()
+
+    stream = with_sse_keepalive(body(), interval_seconds=0.01)
+    assert await stream.__anext__() == "frame-0"
+    # A heartbeat means the wrapper timed out waiting on a pull that is still live.
+    assert await stream.__anext__() == SSE_KEEPALIVE_FRAME
+
+    pulls = [
+        task
+        for task in asyncio.all_tasks()
+        if getattr(task.get_coro(), "__qualname__", "") == "_pull_next"
+    ]
+    assert len(pulls) == 1, pulls
+    pending_pull = pulls[0]
+    assert not pending_pull.done()
+
+    # Any "cannot enter context" would surface here rather than be swallowed:
+    # the wrapper's teardown re-enters the shared context to cancel and close.
+    await asyncio.wait_for(stream.aclose(), timeout=5)
+
+    assert pending_pull.done(), "the abandoned pull was left running"
+    assert finalised.is_set(), "the body's finally never ran"
+    assert reads == ["chat"], reads
     assert get_attribution() is None
