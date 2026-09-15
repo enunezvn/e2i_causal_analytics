@@ -58,16 +58,41 @@ def canonical_brand(raw: Optional[str]) -> Optional[str]:
     return None
 
 
-def brand_from_text(query: Optional[str]) -> Optional[str]:
-    """Ground the brand from the query text (name first, then indication).
+@dataclass(frozen=True)
+class BrandScan:
+    """Outcome of the deterministic brand scan over the ask text (#2114).
 
-    Returns a brand only when the text pins down EXACTLY ONE — two different
-    brands named means the ask is ambiguous and the caller must keep its honest
-    unscoped behaviour rather than guess. Behaviour is byte-identical to the
-    proven cohort_profiler ``ask.py`` original (#1356).
+    ``brand``         exactly one brand grounded, else ``None``.
+    ``named_brands``  EVERY brand the text grounds, in scan order. More than
+                      one means the ask is ambiguous: a caller that can speak
+                      to the user should ask WHICH brand instead of falling
+                      back to an unscoped figure, because for a brand-additive
+                      metric that figure is the whole tracked portfolio — a
+                      number belonging to none of the brands named.
+
+    ``brand_from_text`` alone cannot carry that distinction: it returns ``None``
+    both for "named none" (the honest portfolio ask) and for "named several"
+    (the ambiguous ask). This is the brand twin of :class:`RegionScan`, which
+    #1572 added for exactly the same reason.
+    """
+
+    brand: Optional[str]
+    named_brands: Tuple[str, ...]
+
+    @property
+    def is_ambiguous(self) -> bool:
+        return len(self.named_brands) > 1
+
+
+def brand_scan(query: Optional[str]) -> BrandScan:
+    """Scan the ask text for brands: name pass first, then the indication pass.
+
+    A named brand is authoritative, so the indication pass runs only when no
+    brand is named (the proven #1356 precedence, unchanged). Never fabricates:
+    an empty query grounds nothing.
     """
     if not query:
-        return None
+        return BrandScan(brand=None, named_brands=())
     found: List[str] = []
     for b in SUPPORTED_BRANDS:
         if re.search(rf"\b{b}\b", query, re.I) and b not in found:
@@ -76,7 +101,19 @@ def brand_from_text(query: Optional[str]) -> Optional[str]:
         for pattern, b in INDICATION_TO_BRAND:
             if re.search(pattern, query, re.I) and b not in found:
                 found.append(b)
-    return found[0] if len(found) == 1 else None
+    return BrandScan(brand=found[0] if len(found) == 1 else None, named_brands=tuple(found))
+
+
+def brand_from_text(query: Optional[str]) -> Optional[str]:
+    """Ground the brand from the query text (name first, then indication).
+
+    Returns a brand only when the text pins down EXACTLY ONE — two different
+    brands named means the ask is ambiguous and the caller must keep its honest
+    unscoped behaviour rather than guess. Behaviour is byte-identical to the
+    proven cohort_profiler ``ask.py`` original (#1356); a caller that can ASK
+    the user consults :func:`brand_scan` for the ambiguity signal instead.
+    """
+    return brand_scan(query).brand
 
 
 # ---------------------------------------------------------------------------

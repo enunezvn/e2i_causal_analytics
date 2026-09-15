@@ -23,6 +23,7 @@ from src.services.query_entities import (
     SUPPORTED_BRANDS,
     SUPPORTED_REGIONS,
     brand_from_text,
+    brand_scan,
     canonical_brand,
     region_from_text,
     region_scan,
@@ -65,6 +66,76 @@ class TestBrandFromText:
     def test_no_brand_returns_none(self) -> None:
         assert brand_from_text("Did rep actions lift prescriptions?") is None
         assert brand_from_text("") is None
+
+
+class TestBrandScan:
+    """#2114 codex r1 HIGH: ``brand_from_text`` collapses "named several" and
+    "named none" into the same ``None``, so a caller that can speak to the user
+    cannot tell an AMBIGUOUS ask from an intentional portfolio ask. The scan
+    keeps both facts, exactly as :func:`region_scan` does for regions (#1572)."""
+
+    def test_two_named_brands_are_reported_in_order_and_bind_nothing(self) -> None:
+        scan = brand_scan("What is NBRx for Kisqali and Fabhalta?")
+        assert scan.brand is None
+        assert scan.named_brands == ("Fabhalta", "Kisqali")
+        assert scan.is_ambiguous is True
+
+    def test_three_named_brands_are_all_reported(self) -> None:
+        scan = brand_scan("TRx for Remibrutinib, Fabhalta and Kisqali")
+        assert scan.brand is None
+        assert scan.named_brands == ("Remibrutinib", "Fabhalta", "Kisqali")
+        assert scan.is_ambiguous is True
+
+    def test_a_repeated_brand_is_not_ambiguous(self) -> None:
+        scan = brand_scan("Kisqali NBRx — is Kisqali growing?")
+        assert scan.brand == "Kisqali"
+        assert scan.named_brands == ("Kisqali",)
+        assert scan.is_ambiguous is False
+
+    def test_two_indications_are_ambiguous_too(self) -> None:
+        # The indication pass grounds brands just as a name does (#1356), so
+        # "CSU and PNH" names two brands as surely as "Remibrutinib and Fabhalta".
+        scan = brand_scan("What is NBRx for CSU and PNH?")
+        assert scan.brand is None
+        assert scan.named_brands == ("Remibrutinib", "Fabhalta")
+        assert scan.is_ambiguous is True
+
+    def test_no_brand_named_is_not_ambiguous(self) -> None:
+        # The intentional-portfolio case: nothing named, nothing to clarify.
+        for query in ("What is NBRx?", "Did rep actions lift prescriptions?", "", None):
+            scan = brand_scan(query)
+            assert scan.brand is None, query
+            assert scan.named_brands == (), query
+            assert scan.is_ambiguous is False, query
+
+    def test_a_named_brand_suppresses_the_indication_pass(self) -> None:
+        # Unchanged precedence: a named brand is authoritative, so the
+        # indication in the same sentence raises no ambiguity.
+        scan = brand_scan("Kisqali uptake in urticaria clinics")
+        assert scan.brand == "Kisqali"
+        assert scan.named_brands == ("Kisqali",)
+        assert scan.is_ambiguous is False
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Why did Kisqali TRx drop in Q1?",
+            "what is driving remibrutinib NRx?",
+            "Compare Kisqali and Fabhalta conversion",
+            "profile CSU patients on therapy",
+            "PNH persistence drivers",
+            "HR+ breast cancer starts",
+            "Kisqali uptake in urticaria clinics",
+            "Did rep actions lift prescriptions?",
+            "",
+            None,
+        ],
+    )
+    def test_brand_from_text_is_the_scan_brand_unchanged(self, query) -> None:
+        """The public one-value helper keeps its exact behaviour: every caller
+        (cohort_profiler ask.py, the dispatcher, the gap comparability rule)
+        still sees EXACTLY-ONE-or-None."""
+        assert brand_from_text(query) == brand_scan(query).brand
 
 
 class TestRegionFromText:

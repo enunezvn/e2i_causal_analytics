@@ -1306,3 +1306,174 @@ async def test_sync_and_async_causal_path_search_build_the_same_filters() -> Non
     assert sync_rec["table"] == async_rec["table"] == "causal_paths"
     assert sync_rec["filters"] == async_rec["filters"]
     assert sync_rows == async_rows == [PATH_ROW]
+
+
+# --------------------------------------------------------------------------
+# #2114 (canonical TRx lane, codex Task 10 r1 HIGH) — an ask that names SEVERAL
+# brands must end in a clarify QUESTION, never a portfolio total presented as a
+# brand figure.
+#
+# ``query_entities.brand_from_text`` returns None both when the text names NO
+# brand and when it names TWO ("the caller must keep its honest unscoped
+# behaviour rather than guess"), and Branch A only sets context["brand"] when
+# it is truthy — so by the time the calculator sees the context the two cases
+# are indistinguishable. Task 10 made WS3-BI-007 answer an unbranded call with
+# the all-brand portfolio NBRx instead of raising, which turns "What is NBRx
+# for Kisqali and Fabhalta?" into a number belonging to neither brand.
+#
+# Same defect class, same fix location and same shape as the #1572 region
+# clarify twelve lines above: the ambiguity is resolved where the information
+# still exists (the dispatcher knows the ask text), not inside the calculator.
+# The AG-UI tool surface already covers its own ingress (copilotkit.py's
+# "Multiple brands in play - ambiguous is not absent" rule); this pins /chat's
+# multi-agent Branch A.
+# --------------------------------------------------------------------------
+
+TWO_BRAND_NBRX_QUERY = "What is NBRx for Kisqali and Fabhalta?"
+
+
+def test_two_brand_volume_ask_clarifies_instead_of_the_portfolio_total(monkeypatch) -> None:
+    """The exact codex case: Branch A must ask which brand and must NOT ask the
+    engine for the unbranded (portfolio) figure."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(TWO_BRAND_NBRX_QUERY), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    results = resolved["analysis_results"]
+    assert len(results) == 1
+    payload = results[0]
+    assert payload["agent"] == "kpi_calculator"
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["needs_clarification"] is True
+    assert payload["kpi_id"] == "WS3-BI-007"
+    assert payload["ambiguous_brands"] == ["Fabhalta", "Kisqali"]
+    assert "value" not in payload
+    findings = payload["key_findings"]
+    assert findings and all(isinstance(f, str) for f in findings)
+    for brand in ("Kisqali", "Fabhalta"):
+        assert brand in findings[0], findings
+    assert "?" in findings[0], "the clarify must be a QUESTION"
+    # The defect itself: the portfolio figure must never be computed.
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize(
+    "query,kpi_id",
+    [
+        ("What is TRx for Kisqali and Fabhalta?", "WS3-BI-005"),
+        ("What is NRx for Kisqali and Fabhalta?", "WS3-BI-006"),
+        ("What is NBRx for Kisqali and Fabhalta?", "WS3-BI-007"),
+        ("What is TRx share for Kisqali and Fabhalta?", "WS3-BI-008"),
+        # The indication pass names brands just as surely as a brand token.
+        ("What is NBRx for CSU and PNH?", "WS3-BI-007"),
+    ],
+)
+def test_every_canonical_volume_kpi_clarifies_a_multi_brand_ask(monkeypatch, query, kpi_id) -> None:
+    """005 and 006 widen an unbranded ask to the portfolio total (they did
+    before this lane too); 007 started doing so in Task 10; 008 refuses. All
+    four now ask instead -- one rule for the family, no per-id exceptions."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["kpi_id"] == kpi_id
+    assert stub.calls == []
+
+
+def test_intentional_portfolio_volume_ask_still_computes(monkeypatch) -> None:
+    """Naming NO brand is the portfolio ask the lane deliberately serves
+    (plan line 141): it keeps computing, unbranded, with no clarify."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input("What is NBRx?"), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup"
+    assert payload["value"] == 12345.0
+    assert stub.calls == [("WS3-BI-007", {})]
+
+
+def test_single_brand_volume_ask_still_computes(monkeypatch) -> None:
+    """One brand named binds it exactly as before; no spurious clarify."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is NBRx for Kisqali?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
+
+
+def test_a_structured_brand_wins_over_a_multi_brand_ask(monkeypatch) -> None:
+    """Mirrors the region rule: the scan is consulted ONLY when no structured
+    source bound a brand -- an explicit user_context/entities brand is a
+    decision already taken, so it is honoured, not questioned."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(TWO_BRAND_NBRX_QUERY)
+    agent_input["user_context"] = {"brand": "Kisqali"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
+
+
+def test_non_volume_kpi_keeps_its_pre_existing_unscoped_behaviour(monkeypatch) -> None:
+    """Deliberate scope: the clarify covers the Rx-VOLUME family (the ids this
+    lane owns, whose unbranded read is a portfolio aggregate). Conversion Rate
+    (WS3-BI-009) carries the same pre-existing exposure but is not this lane's
+    to change -- pinned here so the boundary is a decision, not an accident."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the conversion rate for Kisqali and Fabhalta?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-009", {})]
+
+
+@pytest.mark.asyncio
+async def test_explainer_narrates_the_brand_clarify_question(monkeypatch) -> None:
+    """The question must reach the user-visible narrative verbatim, with NO
+    figure beside it -- the whole point is that no number is presented."""
+    from src.agents.explainer import ExplainerAgent
+
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(TWO_BRAND_NBRX_QUERY), _dispatch())
+    assert isinstance(resolved, dict), resolved
+
+    output = await ExplainerAgent(use_llm=False).explain(**resolved)
+
+    narrative = f"{output.executive_summary}\n{output.detailed_explanation}"
+    assert "Kisqali" in narrative, narrative
+    assert "Fabhalta" in narrative, narrative
+    assert "12,345" not in narrative, "no figure may accompany the clarify"
+    assert stub.calls == []
+
+
+def test_the_brand_clarify_gate_is_exactly_the_rx_volume_family() -> None:
+    """The gate is built from the lane's SSOT, not a hand-listed set: both the
+    canonical ids and their patient-panel twins. Today's KPI recognizer resolves
+    every volume alias to a CANONICAL id, so the panel half is not reachable
+    through Branch A yet -- it is pinned here so a recognizer that later learns
+    the panel names inherits the rule instead of the defect."""
+    from src.agents.orchestrator.nodes.kpi_clarify import BRAND_CLARIFY_KPI_IDS
+    from src.kpi.volume_family import CANONICAL_TO_PANEL
+
+    expected = frozenset(CANONICAL_TO_PANEL) | frozenset(CANONICAL_TO_PANEL.values())
+    assert BRAND_CLARIFY_KPI_IDS == expected
+    assert len(expected) == 8
+    # The boundary: brand-filterable KPIs outside the volume family keep their
+    # pre-existing behaviour (see the Conversion Rate test above).
+    assert "WS3-BI-009" not in BRAND_CLARIFY_KPI_IDS

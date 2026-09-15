@@ -24,6 +24,10 @@ from src.utils.llm_content import normalize_llm_content
 
 from .._agent_method_map import get_method_spec
 from ..state import AgentDispatch, AgentResult, OrchestratorState
+from .kpi_clarify import (
+    KPI_LOOKUP_CONFIDENCE as _KPI_LOOKUP_CONFIDENCE,
+)
+from .kpi_clarify import brand_clarify_for_ask, region_clarify_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -2081,9 +2085,6 @@ def _successful_results(raw: List[Any]) -> List[Dict[str, Any]]:
 # substrate resolves, the same fail-closed return fires.
 # --------------------------------------------------------------------------
 
-#: A vetted-SQL KPI read is deterministic, not an estimate.
-_KPI_LOOKUP_CONFIDENCE = 1.0
-
 #: Registry-read parameters, mirroring ``causal_analysis_tool``'s defaults
 #: (src/api/routes/chatbot_tools.py) so the orchestrator and the chat tool
 #: surface the same paths for the same ask.
@@ -2230,46 +2231,6 @@ def _kpi_right_head(normalized_query: str, match_end: int) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _region_clarify_evidence(kpi: Any, phrase: str) -> Dict[str, Any]:
-    """Evidence payload that ASKS which census region is meant (#1572).
-
-    "East Coast" spans the northeast AND south census regions, so no label can
-    honestly serve it — the #1565 ruling that keeps it out of the shared alias
-    table. The chat KPI tool already pairs that miss with its clarify hint
-    (``_REGION_CLARIFY_HINT``, src/api/routes/chatbot_tools.py), but /chat's
-    Branch A never passes the phrase to the tool: the free-text scan dropped
-    it, so the ask was answered with a silent NATIONAL figure. This mirrors
-    the same facts as a direct question to the user.
-
-    Shaped like the Branch A value payload (context_assembler reads "agent" /
-    "analysis_type" / "key_findings" / "confidence" / "warnings"), with the
-    question in ``key_findings`` so the explainer's deterministic template
-    narrates it verbatim — and NO ``value``: the national figure is never
-    computed, which is the point.
-    """
-    from src.services.enum_labels import REGION_ENUM_LABELS
-
-    labels = ", ".join(REGION_ENUM_LABELS[:-1]) + f", or {REGION_ENUM_LABELS[-1]}"
-    question = (
-        f"Which US census region do you mean: {labels}? "
-        f"'{phrase}' spans more than one census region, so {kpi.name} "
-        "cannot be scoped to it without your choice."
-    )
-    return {
-        "agent": "kpi_calculator",
-        "analysis_type": "kpi_lookup_clarification",
-        "key_findings": [question],
-        "warnings": [question],
-        # The DECISION to clarify is deterministic (vocabulary miss + probe
-        # hit), not a hedge — same confidence as the vetted-SQL value read.
-        "confidence": _KPI_LOOKUP_CONFIDENCE,
-        "needs_clarification": True,
-        "unresolved_region_phrase": phrase,
-        "kpi_id": kpi.id,
-        "kpi_name": kpi.name,
-    }
-
-
 def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Branch A — bind the REAL computed value for a KPI value-lookup ask.
 
@@ -2342,7 +2303,21 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
                 "-> returning the census-region clarify instead of a national figure.",
                 ambiguous_phrase,
             )
-            return [_region_clarify_evidence(kpi, ambiguous_phrase)]
+            return [region_clarify_evidence(kpi, ambiguous_phrase)]
+    if brand is None:
+        # #2114: an ask naming SEVERAL brands grounds none, and for the
+        # brand-scoped Rx-volume family the unscoped read is the portfolio
+        # total — a number belonging to none of them. Ask here, where the ask
+        # text still exists; the calculator can no longer tell the two apart.
+        brand_clarify = brand_clarify_for_ask(kpi, query)
+        if brand_clarify is not None:
+            logger.info(
+                "explainer resolver: the ask names brands %s and %s is reported per brand "
+                "-> returning the brand clarify instead of the portfolio total.",
+                ", ".join(brand_clarify["ambiguous_brands"]),
+                kpi.id,
+            )
+            return [brand_clarify]
     context: Dict[str, Any] = {}
     if brand:
         context["brand"] = brand
