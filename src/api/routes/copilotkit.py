@@ -143,8 +143,8 @@ Changelog:
              Root cause: AG-UI LangGraph's state management may not preserve custom
              fields from RunAgentInput.state when passing to graph nodes.
              Fix: execute() sets a session contextvar that chat_node() reads first,
-             with state and config.thread_id as fallbacks. (#2064: on the AG-UI
-             route keepalive copies the context, so graph state is the channel.)
+             with state and config.thread_id as fallbacks. (#2064 made graph
+             state the channel; #2100 revived the var, and the two now agree.)
     1.21.0 - Added message persistence to Supabase chatbot_messages table.
              All user messages, assistant responses, tool calls, and synthesized responses
              are now persisted using ChatbotMessageRepository. This enables:
@@ -363,11 +363,11 @@ from src.utils.tool_evidence import evidence_tool_count
 
 logger = logging.getLogger(__name__)
 
-# ``_session_id_context`` (imported above) carries session_id only where no
-# keepalive wrapper sits between it and the graph, e.g. the chat bridge; on the
-# AG-UI route keepalive copies the context per frame, so graph STATE is the real
-# channel there (#2064). The variable is declared in chatbot_tools so the chat
-# tools read the same binding; the name stays for readers here and chat_bridge.
+# ``_session_id_context`` (imported above) carries session_id on every route. On
+# the AG-UI route the keepalive's per-frame tasks used to drop it, which is why
+# graph STATE is the channel the nodes read (#2064); #2100 gave those pulls one
+# shared context, so the var arrives too and carries the same value. Declared in
+# chatbot_tools so the chat tools read the same binding as here and chat_bridge.
 
 # Per-run discriminator for frontend_message_id stamping: the session key is
 # the conversation threadId, so overlapping streams in the same conversation
@@ -1198,8 +1198,8 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # state's run_id into _persist_message_sync as the fallback.
         state_with_session["run_id"] = run_id
 
-        # Also bind the context var (v1.21.1). It does NOT reach graph nodes here
-        # (#2064: keepalive copies the context), so state above is the real channel.
+        # Also bind the context var (v1.21.1). The keepalive's per-frame tasks
+        # used to drop it (#2064), so state above is the channel; #2100 revived it.
         _session_id_context.set(persistent_session_id)
         _run_id_context.set(run_id)
         # Attribute this run's LLM usage to the chat user/session (admin
@@ -3559,8 +3559,8 @@ def create_e2i_chat_agent(
 
         messages = state.get("messages", [])
 
-        # Get session_id with priority: context var > state > config. The var is set
-        # only where no keepalive wrapper intervenes; here it is empty (#2064).
+        # Get session_id with priority: context var > state > config. Since #2100
+        # the var reaches here too, carrying the value state carries (#2064).
         session_id = _session_id_context.get()
         session_id_source = "context_var" if session_id else None
 

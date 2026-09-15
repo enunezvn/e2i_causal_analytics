@@ -4,12 +4,20 @@
 module answers *which user*, from the same kind of channel: one the tools can
 actually read at the moment they run.
 
-The issue proposed ``llm_attribution.get_attribution().user_id``. Measured false
-on the browser route: the AG-UI handler streams ``execute()`` through
-``with_sse_keepalive``, which pulls every frame in a fresh task, so the
-attribution set while one frame is produced is gone by the next pull — which is
-why chat LLM usage has been recording ``surface='other', user_id=NULL`` since
-2026-08-16. Two channels do survive into the tools:
+The issue proposed ``llm_attribution.get_attribution().user_id``. That was
+measured dead on the browser route when this module was written: the AG-UI
+handler streams ``execute()`` through ``with_sse_keepalive``, which pulled every
+frame in a fresh task, so the attribution set while one frame was produced was
+gone by the next pull — which is why chat LLM usage recorded ``surface='other',
+user_id=NULL`` from 2026-08-16 until #2100 gave those pulls one shared context.
+
+It is readable again, and this module still does not read it. Attribution is a
+DERIVED value: ``set_chat_attribution`` resolves its ``user_id`` from the two
+channels below, preferring the verified one, and falls back to the session
+prefix where no request bound a verified id. Reading it here would add a hop to
+reach the same answer, and would silently promote that prefix — a claim the
+caller makes, not a credential — on the paths where nothing was bound. Both
+channels survive into the tools; this module reads them directly:
 
 * the session itself, for the ``{user}~{session}`` ids ``/chat/stream`` mints
   (and their ``~bridge`` shadow, which splits on the first ``~`` the way every
