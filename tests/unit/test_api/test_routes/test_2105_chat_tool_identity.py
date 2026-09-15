@@ -182,8 +182,8 @@ def orchestrator(monkeypatch) -> _RecordingOrchestrator:
 
 
 async def _run_action(session: Optional[str]) -> Dict[str, Any]:
-    """The real action, with the session channel bound the way its two callers
-    leave it: ``execute()`` binds the thread; an SDK ``actions/execute`` binds none."""
+    """The real action, with the session channel set as the test needs: the SDK
+    ``actions/execute`` request that reaches it binds none."""
     import src.api.routes.copilotkit as ck
 
     token = ck._session_id_context.set(session)
@@ -214,9 +214,11 @@ def _uuid_shaped(value: str) -> bool:
     return True
 
 
-async def test_the_action_passes_the_bound_session_and_the_verified_caller(orchestrator):
-    """Inside a turn: ``execute()`` bound both channels, and the bare AG-UI
-    thread carries no prefix, so the user can only come from the verified one."""
+async def test_a_bound_session_if_one_ever_is_is_forwarded_with_the_verified_caller(orchestrator):
+    """Pins the forwarding. Today nothing binds a session before this handler
+    runs: ``chat_node`` binds only the backend tools and the frontend action
+    schemas (``copilotkit.py:~3670``), so the backend action is reached only via
+    the SDK ``actions/execute`` request. If a caller ever binds one, it is passed."""
     set_authenticated_user(CALLER)
 
     result = await _run_action(CALLER_THREAD)

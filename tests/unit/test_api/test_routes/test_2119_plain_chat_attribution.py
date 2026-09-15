@@ -16,8 +16,8 @@ it later. The route seam now finalises the ids first and binds on them.
 
 These tests drive the REAL routes, the real ``TracingMiddleware`` (so the
 ``X-Request-ID`` header takes the path it takes in production) and the real
-``with_sse_keepalive``. The only doubles are the two graph entry points and the
-conversation store the owner check reads.
+``with_sse_keepalive``. The only doubles are the two graph entry points, the
+conversation store the owner check reads and the Supabase client it is built on.
 """
 
 from __future__ import annotations
