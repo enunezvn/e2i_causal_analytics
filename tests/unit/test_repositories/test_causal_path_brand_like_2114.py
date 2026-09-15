@@ -46,13 +46,39 @@ ROWS: List[Dict[str, Any]] = [
 
 
 def _ilike_to_regex(pattern: str) -> re.Pattern[str]:
-    """Translate a SQL ``ILIKE`` pattern into an anchored case-insensitive regex.
+    """Model the ``PostgREST -> PostgreSQL`` boundary, NOT PostgreSQL alone.
 
-    Models real PostgreSQL ILIKE: unescaped ``%`` matches any run, unescaped
-    ``_`` matches one character, ``\\`` makes the next character literal. The
-    fake therefore BROADENS exactly where the database would, so removing the
-    escaping in the repository turns these tests red rather than leaving them
-    vacuously green.
+    THE LAYER IS THE POINT. An earlier version of this helper modelled real
+    PostgreSQL ILIKE, accurately, and its docstring said so -- which is exactly
+    what hid a live defect for a round (#2114 codex r6). The stack under test is
+    PostgREST in FRONT of PostgreSQL, and PostgREST translates ``*`` to ``%``
+    server-side before the SQL is built. A PostgreSQL-only model sends ``*``
+    through ``re.escape`` as a literal and returns 0 rows where the real stack
+    returns every row in the table, so the tests passed for the wrong reason.
+
+    A fake that is faithful to the wrong layer is not a careful fake; it is an
+    unfalsifiable one.
+
+    WHICH characters translate was ENUMERATED against the live server rather
+    than reasoned about -- 31 candidates probed with a positive and a negative
+    control, using a real value containing an underscore (``acceptance_status``)
+    as the discriminator:
+
+        wildcards : ``*`` (multi-char), ``%`` (multi-char), ``_`` (single char)
+        literal   : , . : ( ) " ' ? # & = + space | [ ] { } ^ $ ! ~ / @ < > ; - `
+
+    ``\\`` is not a wildcard but IS special: a dangling one is an API ERROR
+    rather than a miss, which is why it is escaped first and never emitted bare.
+
+    Escaping with ``\\`` tames all three wildcards, verified POSITIVELY and not
+    merely by absence -- ``acceptance\\_status`` still matches the literal value
+    (3 rows), so escaping preserves honest values instead of breaking them.
+
+    Not distinguishable on this data, and not relevant to the property under
+    test: whether PostgREST rewrites ``\\*`` to ``\\%`` (a literal percent) or
+    to a literal ``*``. No row anywhere in the table contains ``%`` or ``*``, so
+    both predict 0, and both mean "does not wildcard". Modelled as the simpler
+    rule, "``\\`` makes the next character literal".
     """
     out: List[str] = []
     i = 0
@@ -62,7 +88,7 @@ def _ilike_to_regex(pattern: str) -> re.Pattern[str]:
             out.append(re.escape(pattern[i + 1]))
             i += 2
             continue
-        if ch == "%":
+        if ch in ("%", "*"):  # PostgREST translates * to % before SQL sees it
             out.append(".*")
         elif ch == "_":
             out.append(".")
@@ -174,7 +200,9 @@ class TestSyncTwinEscapesTheBrandPattern:
     def test_case_insensitivity_survives_the_escaping(self) -> None:
         assert _brands(_sync("kisqali", {})) == ["Kisqali"]
 
-    @pytest.mark.parametrize("attack", ["%", "Kis%", "_isqali", "%%", "K_sqali"])
+    @pytest.mark.parametrize(
+        "attack", ["%", "Kis%", "_isqali", "%%", "K_sqali", "*", "Kis*", "K*sqali", "**"]
+    )
     def test_a_wildcard_brand_matches_nothing_instead_of_broadening(self, attack: str) -> None:
         rows = _sync(attack, {})
         assert rows == [], f"{attack!r} broadened the filter to {_brands(rows)}"
@@ -183,6 +211,14 @@ class TestSyncTwinEscapesTheBrandPattern:
         rec: Dict[str, Any] = {}
         _sync("Kis%", rec)
         assert rec["brand_patterns"] == ["Kis\\%"]
+
+    def test_the_star_pattern_reaching_ilike_is_escaped(self) -> None:
+        """#2114 r6: `*` is PostgREST's own wildcard, translated to `%` server
+        side. The r5 helper escaped `\\`, `%` and `_` and left `*` live, so
+        `.ilike("brand","*")` still returned every brand on the live table."""
+        rec: Dict[str, Any] = {}
+        _sync("Kis*", rec)
+        assert rec["brand_patterns"] == ["Kis\\*"]
 
     def test_an_unrecognised_brand_without_metacharacters_already_failed_closed(self) -> None:
         """Pins the boundary of this fix: preserving 'Xolair' is NOT the defect
@@ -206,7 +242,7 @@ class TestAsyncTwinEscapesTheBrandPattern:
         assert _brands(rows) == ["Kisqali"], rows
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("attack", ["%", "Kis%", "_isqali"])
+    @pytest.mark.parametrize("attack", ["%", "Kis%", "_isqali", "*", "Kis*", "K*sqali"])
     async def test_a_wildcard_brand_matches_nothing_instead_of_broadening(
         self, attack: str
     ) -> None:

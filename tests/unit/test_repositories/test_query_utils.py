@@ -30,6 +30,14 @@ class TestEscapeLikePattern:
             ("_isqali", "\\_isqali"),
             ("%%", "\\%\\%"),
             ("a_b%c", "a\\_b\\%c"),
+            # `*` is POSTGREST's wildcard, translated to `%` server-side before
+            # SQL is built (#2114 r6). The r5 helper escaped the two SQL ones and
+            # left this live, so `.ilike("brand","*")` still matched every brand.
+            ("*", "\\*"),
+            ("Kis*", "Kis\\*"),
+            ("K*sqali", "K\\*sqali"),
+            ("**", "\\*\\*"),
+            ("*%_", "\\*\\%\\_"),
             ("", ""),
         ],
     )
@@ -48,4 +56,17 @@ class TestEscapeLikePattern:
         assert escape_like_pattern("50\\%") == "50\\\\\\%"
 
     def test_every_metacharacter_in_one_value(self) -> None:
-        assert escape_like_pattern("\\_%") == "\\\\\\_\\%"
+        assert escape_like_pattern("\\_%*") == "\\\\\\_\\%\\*"
+
+    def test_the_wildcard_set_is_the_ENUMERATED_one(self) -> None:
+        """The three wildcards were enumerated against the live server, not
+        reasoned about: 31 candidate characters probed with a positive and a
+        negative control. Exactly `*`, `%` and `_` widen; the other 29 --
+        , . : ( ) " ' ? # & = + space | [ ] { } ^ $ ! ~ / @ < > ; -- are
+        literal and MUST NOT be escaped, or an honest brand containing one
+        would stop matching.
+        """
+        for wild in ("*", "%", "_"):
+            assert escape_like_pattern(wild) == "\\" + wild, wild
+        for literal in ",.:()\"'?#&=+ |[]{}^$!~/@<>;-`":
+            assert escape_like_pattern(literal) == literal, literal
