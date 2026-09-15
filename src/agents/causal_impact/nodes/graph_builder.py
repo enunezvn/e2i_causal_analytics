@@ -36,6 +36,7 @@ from src.causal_engine.discovery import (
     DiscoveryResult,
     DiscoveryRunner,
 )
+from src.utils.session_ids import coerce_session_uuid
 
 
 class GraphBuilderNode:
@@ -865,11 +866,13 @@ class GraphBuilderNode:
             latent_diagnostic=latent_diagnostic,
         )
 
-        # Run discovery
-        session_id = state.get("session_id")
-        from uuid import UUID
-
-        session_uuid = UUID(session_id) if session_id else None
+        # Run discovery. The state's session is the caller's chat id RAW
+        # (#2116): a composite ``{user}~{session}`` on the plain routes, which
+        # never parses as a uuid. A bare ``UUID(session_id)`` here would abort
+        # discovery with a ValueError on every plain-route causal turn; the
+        # shared coercion recovers the trailing session uuid, keeps a bare uuid
+        # unchanged and yields None (an honest null) for a malformed id.
+        session_uuid = coerce_session_uuid(state.get("session_id"))
 
         result = await self.discovery_runner.discover_dag(
             data=data,
