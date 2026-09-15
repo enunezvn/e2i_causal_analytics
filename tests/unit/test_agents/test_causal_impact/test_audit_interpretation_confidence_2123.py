@@ -34,7 +34,7 @@ from uuid import uuid4
 import pytest
 
 from src.agents.base.audit_chain_mixin import set_audit_chain_service
-from src.agents.causal_impact.graph import traced_node
+from src.agents.causal_impact.graph import _extract_mlflow_metrics, traced_node
 from src.agents.causal_impact.nodes.interpretation import InterpretationNode
 from src.utils.audit_chain import AuditChainService
 
@@ -231,12 +231,15 @@ async def test_interpretation_entry_is_recorded_without_swallowed_warning(
     ],
 )
 def test_confidence_label_to_score_table(label, expected):
+    # Imported here on purpose: on base (502f95028) the symbol does not exist, and a
+    # module-level import would fail collection, hiding T1-T3's own red reasons.
     from src.agents.causal_impact.nodes.interpretation import confidence_label_to_score
 
     assert confidence_label_to_score(label) == expected
 
 
 def test_confidence_label_to_score_default_is_used_for_unknown_only():
+    # Lazy import for the same red-first reason as the table test above.
     from src.agents.causal_impact.nodes.interpretation import confidence_label_to_score
 
     assert confidence_label_to_score("bogus", default=0.5) == 0.5
@@ -255,8 +258,6 @@ def test_mlflow_metrics_block_uses_the_same_mapping(label, expected):
     it now calls the shared mapping. Known labels → the same values as before,
     an unknown label leaves the metric unset (never a default), and an absent
     label leaves it unset too."""
-    from src.agents.causal_impact.graph import _extract_mlflow_metrics
-
     metrics = _extract_mlflow_metrics(
         {"interpretation": {"causal_confidence": label}}, total_latency_ms=1.0
     )
@@ -265,8 +266,6 @@ def test_mlflow_metrics_block_uses_the_same_mapping(label, expected):
 
 @pytest.mark.parametrize("label", ["N/A", "bogus"])
 def test_mlflow_metrics_block_leaves_unknown_label_unset(label):
-    from src.agents.causal_impact.graph import _extract_mlflow_metrics
-
     metrics = _extract_mlflow_metrics(
         {"interpretation": {"causal_confidence": label}}, total_latency_ms=1.0
     )
