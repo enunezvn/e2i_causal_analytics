@@ -311,67 +311,57 @@ def _json_payload(frame: str) -> Any:
 # ------------------------------------------------------ teardown under one context
 
 
-async def test_an_early_client_disconnect_leaves_the_shared_frame_context_intact():
-    """A consumer that goes away mid-turn must not trip ``cannot enter context``.
+async def test_a_keepalive_then_an_early_disconnect_keep_the_shared_frame_context():
+    """The two moments the wrapper re-enters the one context every pull shares.
 
-    Only one frame-pull task is ever live (the wrapper waits on the same task
-    across keepalive timeouts), so one shared context is never entered twice —
-    but the cancel-and-``aclose`` teardown re-enters it once more, which is the
-    path this pins. Timing has to be deterministic here, so the body stands in
-    for ``execute()`` rather than running a real graph.
+    First a real keepalive emission: the wrapper times out, yields a heartbeat
+    and goes back to waiting on the SAME pull, which then produces a frame. The
+    attribution read on THAT frame is the one a heartbeat could have cost us.
+
+    Then an early disconnect with a pull still OUTSTANDING — the case a
+    disconnect between frames never reaches, because the wrapper has already
+    nulled ``pending`` and its teardown cancels nothing. Here the wrapper
+    cancels the live pull, awaits it, then ``aclose``\\ s the body: three more
+    entries into that context, and the place a ``RuntimeError: cannot enter
+    context`` would surface.
+
+    Both halves are driven by events rather than wall-clock sleeps, so the pull
+    is guaranteed pending rather than merely likely. The body stands in for
+    ``execute()``; the wrapper is the real one.
     """
     thread = str(uuid4())
+    resume = asyncio.Event()  # released by the consumer once a heartbeat arrives
+    abandon = asyncio.Event()  # never set: this pull is walked away from
     reads: list[Any] = []
+    body_saw: list[str] = []
+
+    def _surface() -> Any:
+        attribution = get_attribution()
+        return None if attribution is None else attribution.surface
 
     async def body():
-        set_chat_attribution(thread, "run-2100")
-        for i in range(4):
-            if i == 2:
-                await asyncio.sleep(0.15)  # force keepalives
-            attribution = get_attribution()
-            reads.append(None if attribution is None else attribution.surface)
-            yield f"frame-{i}"
-
-    stream = with_sse_keepalive(body(), interval_seconds=0.05)
-    first = await stream.__anext__()
-    second = await stream.__anext__()
-    await stream.aclose()
-
-    assert [first, second] == ["frame-0", "frame-1"]
-    assert reads == ["chat", "chat"], reads
-    # The write stayed in the frame context's copy; the request task is clean.
-    assert get_attribution() is None
-
-
-async def test_an_aclose_while_a_frame_pull_is_pending_tears_down_cleanly():
-    """The teardown path the test above never reaches: a pull still OUTSTANDING.
-
-    Disconnecting between frames leaves nothing to cancel. The case that
-    actually re-enters the shared context is a consumer that goes away while the
-    turn is mid-compute: the wrapper cancels the live pull task, awaits it, then
-    ``aclose``\\ s the body — three more entries into the one context that every
-    pull shares. This blocks the body on an event so that pull is guaranteed
-    pending, which no wall-clock sleep can guarantee.
-    """
-    thread = str(uuid4())
-    release = asyncio.Event()  # never set: the pull is abandoned, not completed
-    finalised = asyncio.Event()
-    reads: list[Any] = []
-
-    async def body():
-        set_chat_attribution(thread, "run-2100-pending")
+        set_chat_attribution(thread, "run-2100-keepalive")
         try:
-            attribution = get_attribution()
-            reads.append(None if attribution is None else attribution.surface)
+            reads.append(_surface())
             yield "frame-0"
-            await release.wait()
-            yield "frame-1"  # pragma: no cover — the consumer never waits for it
+            await resume.wait()
+            reads.append(_surface())  # the read AFTER a real keepalive emission
+            yield "frame-1"
+            await abandon.wait()
+            yield "frame-2"  # pragma: no cover — the consumer never asks for it
+        except asyncio.CancelledError:
+            body_saw.append("cancelled")
+            raise
         finally:
-            finalised.set()
+            body_saw.append("finalised")
 
     stream = with_sse_keepalive(body(), interval_seconds=0.01)
     assert await stream.__anext__() == "frame-0"
-    # A heartbeat means the wrapper timed out waiting on a pull that is still live.
+    # A heartbeat is the proof that a pull is outstanding, not merely slow.
+    assert await stream.__anext__() == SSE_KEEPALIVE_FRAME
+    resume.set()
+    assert await stream.__anext__() == "frame-1"
+    # ... and the next pull is the one the consumer abandons.
     assert await stream.__anext__() == SSE_KEEPALIVE_FRAME
 
     pulls = [
@@ -383,11 +373,11 @@ async def test_an_aclose_while_a_frame_pull_is_pending_tears_down_cleanly():
     pending_pull = pulls[0]
     assert not pending_pull.done()
 
-    # Any "cannot enter context" would surface here rather than be swallowed:
-    # the wrapper's teardown re-enters the shared context to cancel and close.
     await asyncio.wait_for(stream.aclose(), timeout=5)
 
     assert pending_pull.done(), "the abandoned pull was left running"
-    assert finalised.is_set(), "the body's finally never ran"
-    assert reads == ["chat"], reads
+    assert body_saw == ["cancelled", "finalised"], body_saw
+    # Both reads are 'chat', and the second one happened after a heartbeat.
+    assert reads == ["chat", "chat"], reads
+    # The write stayed in the frame context's copy; the request task is clean.
     assert get_attribution() is None
