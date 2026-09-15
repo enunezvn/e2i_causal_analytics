@@ -26,6 +26,7 @@ The pure-logic regressions split out of these tests stay in the unit lane:
 adapter tests still in ``test_api/test_routes/test_health_score.py``.
 """
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -42,7 +43,19 @@ from src.api.routes.health_score import (
     _execute_health_check,
 )
 
-pytestmark = pytest.mark.integration
+# Residual of #2101: the real route helper builds ``HealthScoreAgent`` with
+# ``enable_memory=True``, so this graph WRITES real ``episodic_memories`` rows.
+# Gate it like the other real-DB integration tests (879/883/1450) so a bare
+# ``pytest`` on the box never touches the live table.
+_GATE = os.environ.get("E2I_DB_INTEGRATION") == "1"
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _GATE,
+        reason="faithful real-DB full-graph test (writes episodic_memories); set E2I_DB_INTEGRATION=1",
+    ),
+]
 
 
 @pytest.fixture(autouse=True)
