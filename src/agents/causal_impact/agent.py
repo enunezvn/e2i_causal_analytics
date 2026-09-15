@@ -992,21 +992,21 @@ class CausalImpactAgent(SkillsMixin):
         written from a direct ``causal_impact`` run (``save_episodic_memory`` was never
         called from ``run()``). Mirrors heterogeneous_optimizer / resource_optimizer.
 
-        ``session_id`` is forced to a valid UUID (the ``episodic_memories.session_id``
-        column is ``uuid``): the audit workflow id when present, else a fresh UUID — never
-        the non-UUID ``query_id`` (the #787 Tier-0 trap). Graceful degradation: a write
-        failure never breaks the analysis.
+        ``session_id`` is the caller's chat session, RAW, or ``None`` (#2099). It is no
+        longer forced to a uuid here: the ``episodic_memories.session_id`` column is
+        ``uuid``, but the writer's ``_coerce_session_id`` already recovers the real
+        session from a composite ``{user}~{session}`` id and stores an honest NULL for
+        anything else (#1403/#1404). Parsing here did the opposite — a composite id never
+        parses, so a REAL session was replaced by a random uuid before the writer saw it,
+        which is the parse-or-mint #1403 removed from the hook one level down. The audit
+        workflow id no longer stands in for a session either; it is the audit chain's
+        identity, and it travels in the episodic ``raw_content`` instead. Graceful
+        degradation: a write failure never breaks the analysis.
         """
-        from uuid import UUID, uuid4
-
         from src.agents.causal_impact.memory_hooks import contribute_to_memory
 
         try:
-            candidate = state.get("audit_workflow_id") or state.get("session_id")
-            try:
-                session_id = str(UUID(str(candidate))) if candidate else str(uuid4())
-            except (ValueError, TypeError):
-                session_id = str(uuid4())
+            session_id = state.get("session_id") or None
 
             await contribute_to_memory(
                 # ``output`` is a CausalImpactOutput TypedDict; cast (a runtime

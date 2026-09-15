@@ -18,9 +18,13 @@ layers, each of which silently produced *no usable row*:
 
 These tests pin the fix: ``run()`` contributes to memory via the canonical
 ``contribute_to_memory`` path (auto-embeds 1536-dim + grows CausalPath), gated behind
-``enable_memory`` and graceful, with a UUID-valid ``session_id``; and the
-``save_episodic_memory`` contract method builds a valid input routed through the
-auto-embedding path.
+``enable_memory`` and graceful; and the ``save_episodic_memory`` contract method builds a
+valid input routed through the auto-embedding path.
+
+Session handling moved twice since #788. #1403/#1404 put the uuid coercion at the writer,
+and #2099 removed the agent's parse-or-mint entirely: the session passed down is the
+caller's raw id or ``None``. What #787 actually forbade — the non-uuid ``query_id``
+reaching the uuid column — is still pinned here.
 """
 
 import uuid
@@ -93,11 +97,15 @@ async def test_save_episodic_memory_routes_through_auto_embed():
 
 # ---------------------------------------------------------------------------
 # _contribute_to_memory delegates to the canonical contribute_to_memory with the
-# real output/state, brand/region, and a UUID-valid session_id (#787 column trap).
+# real output/state and brand/region. The session is the CALLER's session or
+# None (#2099): the #787 trap was the non-uuid query_id reaching the uuid column,
+# and that is still pinned below — but the audit workflow id is not a session
+# either, and a session-less run no longer mints one. Coercion for the uuid
+# column happens at the writer (#1404).
 # ---------------------------------------------------------------------------
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_contribute_to_memory_uses_uuid_session_and_real_payload():
+async def test_contribute_to_memory_does_not_pass_the_audit_id_as_the_session():
     agent = CausalImpactAgent()
     output = {
         "query_id": "q-abc123def456",  # NOT a uuid — must never be used as session_id
@@ -126,14 +134,16 @@ async def test_contribute_to_memory_uses_uuid_session_and_real_payload():
     assert kwargs["state"] is state
     assert kwargs["brand"] == "kisqali"
     assert kwargs["region"] == "northeast"
-    # session_id MUST parse as a UUID (the column is uuid) — uses audit_workflow_id.
-    uuid.UUID(kwargs["session_id"])
-    assert kwargs["session_id"] == "22222222-2222-2222-2222-222222222222"
+    # The audit chain's workflow id is not a conversation: it travels in the
+    # episodic raw_content, and the session column stays honest (#2099).
+    assert kwargs["session_id"] is None
+    # #787 trap, still pinned: the non-uuid query_id is never the session.
+    assert kwargs["session_id"] != output["query_id"]
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_contribute_to_memory_falls_back_to_fresh_uuid_when_no_workflow_id():
+async def test_contribute_to_memory_passes_none_when_there_is_no_session():
     agent = CausalImpactAgent()
     output = {"query_id": "q-xyz", "status": "completed", "ate_estimate": 0.1, "confidence": 0.6}
     state = {"treatment_var": "t", "outcome_var": "o"}  # no audit_workflow_id / session_id
@@ -146,8 +156,10 @@ async def test_contribute_to_memory_falls_back_to_fresh_uuid_when_no_workflow_id
 
     contrib.assert_awaited_once()
     sid = contrib.await_args.kwargs["session_id"]
-    uuid.UUID(sid)  # still a valid UUID (freshly generated)
-    assert sid != "q-xyz"  # never the non-uuid query_id
+    # No caller session and no audit id: the honest value is None. Minting a
+    # fresh uuid here produced an identity no conversation owned (#2099).
+    assert sid is None
+    assert sid != "q-xyz"  # #787 trap, still pinned: never the non-uuid query_id
 
 
 # ---------------------------------------------------------------------------

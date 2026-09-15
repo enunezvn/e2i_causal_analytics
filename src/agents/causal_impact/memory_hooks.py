@@ -485,6 +485,16 @@ class CausalImpactMemoryHooks:
                     "effect_size": result.get("effect_size"),
                     "model_used": result.get("model_used"),
                     "executive_summary": result.get("executive_summary", "")[:500],
+                    # The audit chain's workflow id used to be persisted AS the
+                    # session (#2099). It is a real correlation handle but not a
+                    # conversation, so it keeps its value here and leaves the
+                    # session column to real sessions. Absent when the state has
+                    # none — never invented.
+                    **(
+                        {"audit_workflow_id": str(state["audit_workflow_id"])}
+                        if state.get("audit_workflow_id")
+                        else {}
+                    ),
                 },
                 entities=None,
                 # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
