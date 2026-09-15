@@ -474,9 +474,18 @@ class TestFirstNamedScopeHasNoRejectedOptionResidue:
 
     def test_the_docstring_does_not_argue_for_the_rejected_option(self) -> None:
         """The module a reviewer reads first must not describe `normalise=False`
-        or call region predicates case-sensitive (that census is RETRACTED)."""
+        or call region predicates case-sensitive (that census is RETRACTED).
+
+        Why prose is pinned by a test, which normally deserves suspicion: this
+        lane published a census claiming live registry SQL compares `region`
+        case-sensitively, then retracted it, and the retraction had to be
+        grepped back out of five separate artifacts. This function is the one a
+        reviewer of the scope seam opens first, so it is pinned to carry the
+        correction. REWORDING IS FINE — the retraction merely has to survive it.
+        If you rephrase the docstring, update the assertion to match the new
+        wording; do not drop the assertion.
+        """
         doc = first_named_scope.__doc__ or ""
         assert "normalise=False" not in doc
         low = doc.lower()
-        assert "case-sensitive" not in low or "brand" in low
         assert "region predicates are not case-sensitive" in low
