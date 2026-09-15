@@ -5747,7 +5747,6 @@ async def submit_feedback(
         #      (The old client fabricated an id via parseInt(uuid)||Date.now(),
         #      which either failed this lookup or collided with a real row from
         #      a DIFFERENT session — silently mis-attributed feedback.)
-        # Using service key client to bypass RLS policies.
         session_id = None
         resolved_message_id = request.message_id
         matched_row: Optional[dict] = None
@@ -5867,6 +5866,7 @@ async def submit_feedback(
                 success=False,
                 error=lookup_error or f"Could not find session for message_id {request.message_id}",
             )
+        await chat_identity.refuse_foreign_thread(session_id, _user.get("id"))
 
         # The persisted message row is the authority on attribution (trust
         # boundary — the old client hardcoded agent_name='copilotkit' on every
@@ -5924,12 +5924,11 @@ async def submit_feedback(
                 error="Failed to save feedback - no result returned",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[Feedback] Error submitting feedback: {e}")
-        return FeedbackResponse(
-            success=False,
-            error=str(e),
-        )
+        return FeedbackResponse(success=False, error=str(e))
 
 
 @router.get("/feedback/stats", summary="Get feedback statistics", operation_id="get_feedback_stats")

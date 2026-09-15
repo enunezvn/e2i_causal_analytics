@@ -154,6 +154,29 @@ def _owner_denies(owner: Optional[str], token_user_id: Optional[str]) -> bool:
     return True
 
 
+async def refuse_foreign_thread(thread_id: Optional[str], token_user_id: Optional[str]) -> None:
+    """Raise 403 when ``thread_owner_denied`` says the thread is someone else's; otherwise return.
+
+    The raising form of the gate, for a route that has no fallthrough to
+    protect and answers its own status. ``submit_feedback`` (#2109) resolves
+    the rated message by an explicit ``message_id`` (the session is then read
+    from the ROW) or by a caller-supplied ``session_id``; both converge on one
+    write keyed by that session, and nothing between the token and the write
+    compared the stored owner with the caller. One call at the convergence
+    point gates both paths on the same rules as every other chat ingress —
+    no row, own thread and the anonymous sentinel allow; a lookup failure
+    allows with a WARNING; a foreign owner refuses.
+
+    The detail is the AG-UI gate's exact string (``copilotkit.py``,
+    ``"threadId not yours"``), so every ingress refuses identically. The
+    caller's route body sits inside a broad ``except Exception`` that would
+    turn this into a 200 error body; it re-raises ``HTTPException`` ahead of
+    that clause.
+    """
+    if await thread_owner_denied(thread_id, token_user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="threadId not yours")
+
+
 async def owned_conversation(
     conversation_repository: Any, session_id: Optional[str]
 ) -> Optional[Dict[str, Any]]:
