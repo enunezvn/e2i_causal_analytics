@@ -30,6 +30,10 @@ def test_patient_axes_are_the_calculator_context_keys():
 def test_the_scale_note_carries_both_measured_numbers():
     note = _vf().MEASURED_SCALE_NOTE
     assert "800,349" in note and "597" in note and "2026-09-15" in note
+    # The 597 window is the data frontier's (max event_date - 30 days, inclusive),
+    # not "trailing 30 days" from the run day (which reads 572).
+    assert "2026-08-14 through 2026-09-14 inclusive" in note
+    assert "trailing" not in note
 
 
 def test_one_null_dimension_rule_in_sql_and_in_python():

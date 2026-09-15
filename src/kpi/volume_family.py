@@ -37,10 +37,12 @@ PATIENT_AXES: tuple[str, ...] = ("segment", "therapy_line", "biologic", "ige_tie
 
 #: Measured, not modeled (read-only DB reads, 2026-09-15). Quoted by every note
 #: that fences a panel figure off a canonical one.
+#: scale_note_597_provenance.txt: Kisqali prescription rows, event_date >= max(event_date) - 30
 MEASURED_SCALE_NOTE = (
     "measured 2026-09-15, Kisqali canonical TRx for 2026-08 was 800,349 "
     "(business_metrics, brand x region x calendar month) against 597 patient-panel "
-    "prescription events in the trailing 30 days (treatment_events), about 1,300x"
+    "prescription events from 2026-08-14 through 2026-09-14 inclusive "
+    "(treatment_events), about 1,300x"
 )
 
 #: ONE NULL-dimension rule for every canonical volume reader (codex r2 HIGH).
