@@ -67,7 +67,9 @@ def _refutation_suite_score(result: Dict[str, Any]) -> Optional[float]:
     ``confidence`` rule in ``nodes/interpretation.py``); the estimation row
     stays NULL by definition.
 
-    Stored AS RETURNED — no clamping, rescaling or default. Absent → None
+    Stored AS RETURNED — no clamping, rescaling or default (an int 0/1 is
+    coerced to 0.0/1.0, the same value in the NUMERIC column; ``float()`` also
+    gives mypy a concrete return type for the ``Dict[str, Any]`` read). Absent → None
     silently. Provenance, not outcome, decides whether a score exists: the
     node's two ``except`` returns set the ``refutation_error`` KEY (its value
     may be empty — the generic handler stores ``str(e)``, "" for a bare
@@ -96,7 +98,7 @@ def _refutation_suite_score(result: Dict[str, Any]) -> Optional[float]:
             score,
         )
         return None
-    return score
+    return float(score)
 
 
 def traced_node(node_name: str) -> Callable[[F], F]:
