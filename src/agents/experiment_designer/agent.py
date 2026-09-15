@@ -369,8 +369,8 @@ class ExperimentDesignerAgent(SkillsMixin):
     ) -> None:
         """Sync-path memory contribution (#883 PR B).
 
-        The dispatcher invokes the sync ``run()`` via ``run_in_executor`` — an
-        executor THREAD with no running event loop — so ``asyncio.run`` is
+        The dispatcher invokes the sync ``run()`` via ``asyncio.to_thread`` — a
+        worker THREAD with no running event loop — so ``asyncio.run`` is
         safe there. When ``run()`` is called from inside a live event loop
         (where ``asyncio.run`` would raise), skip with a debug note: ``arun``
         is the async path and contributes natively.
