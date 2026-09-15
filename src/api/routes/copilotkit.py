@@ -2544,6 +2544,10 @@ async def run_causal_analysis(
             result = await orchestrator.run(
                 {
                     "query": query,
+                    # #2105: None on the SDK action paths (action/{name}, actions/execute), the
+                    # only ones reaching this handler: identity bound, no session. Never minted.
+                    "session_id": _session_id_context.get(),
+                    "user_id": chat_identity.resolve_tool_user_id(_session_id_context.get()),
                     "user_context": {
                         "brand": brand,
                         "intervention": intervention,
@@ -5117,6 +5121,8 @@ async def _resolve_chat_identity(authenticated_user: dict, chat_request: ChatReq
         authenticated_user: The user dict from ``require_viewer``.
         chat_request: The request, whose ``user_id`` / ``session_id`` are claims.
 
+    #2119: also finalises the request's session/request ids and binds LLM attribution here.
+
     Returns:
         The authoritative user id to use for all downstream calls.
 
@@ -5131,7 +5137,9 @@ async def _resolve_chat_identity(authenticated_user: dict, chat_request: ChatReq
             detail="Authenticated user identity is missing.",
         )
 
-    return await chat_identity.authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
+    return await chat_identity.bind_plain_chat_turn(
+        token_user_id, chat_request, TESTING_MODE, get_request_id()
+    )
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:
@@ -5189,13 +5197,8 @@ async def _stream_chat_response(
     try:
         from src.api.routes.chatbot_graph import LATENCY_SPAN_KEY, stream_chatbot
 
-        # Yield session_id first. Identity is the AUTHENTICATED user id
-        # (Finding 1 — never trust request.user_id for identity).
+        # Yield session_id first; bind_plain_chat_turn finalised it (#2119).
         session_id = request.session_id
-        if not session_id:
-            import uuid
-
-            session_id = f"{authenticated_user_id}~{uuid.uuid4()}"
 
         yield f"data: {json.dumps({'type': 'session_id', 'data': session_id})}\n\n"
 
@@ -5444,9 +5447,6 @@ async def stream_chat(
         f"user={authenticated_user_id}, request_id={effective_request_id}"
     )
 
-    # Update the request with the effective request_id
-    chat_request.request_id = effective_request_id
-
     # #1659: every frame below originates from a LangGraph node-completion
     # update, and the orchestrator is ONE node that ainvokes a nested graph — so
     # without a keepalive this body is silent for the whole turn. Measured on
@@ -5514,7 +5514,6 @@ async def chat(
 
     # Phase 1 G08: Use middleware request_id if not provided in body
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
-    chat_request.request_id = effective_request_id
 
     logger.info(
         f"[Chatbot] Chat request: query={redact_query(chat_request.query)}, "

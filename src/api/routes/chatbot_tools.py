@@ -279,7 +279,7 @@ class AgentRoutingInput(BaseModel):
 class ConversationMemoryInput(BaseModel):
     """Input schema for conversation_memory_tool."""
 
-    session_id: str = Field(description="Session ID to retrieve history for")
+    session_id: Optional[str] = Field(default=None, description="Omit for the current conversation")
     message_count: int = Field(
         default=10,
         ge=1,
@@ -294,7 +294,6 @@ class ConversationMemoryInput(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "session_id": "sess_abc123def456",
                 "message_count": 10,
                 "include_tool_calls": True,
             }
@@ -1374,7 +1373,7 @@ async def agent_routing_tool(
 
 @tool(args_schema=ConversationMemoryInput)
 async def conversation_memory_tool(
-    session_id: str,
+    session_id: Optional[str] = None,
     message_count: int = 10,
     include_tool_calls: bool = True,
 ) -> Dict[str, Any]:
@@ -1385,19 +1384,19 @@ async def conversation_memory_tool(
     - Recent messages in a conversation
     - Tool calls and results
     - Agent attributions
-    - RAG context used
 
     Use this tool to provide context-aware responses based on
     previous conversation turns.
 
     Args:
-        session_id: Session ID to retrieve history for
+        session_id: Omit for the current conversation; name one only to read another you own
         message_count: Number of recent messages (1-50)
         include_tool_calls: Whether to include tool call details
 
     Returns:
         Dict with conversation history and metadata
     """
+    session_id = session_id or _resolve_session_id()
     logger.info(f"Conversation memory: session={session_id}, count={message_count}")
 
     try:
@@ -1407,7 +1406,7 @@ async def conversation_memory_tool(
 
         # #2107: the caller must own it; a refusal reads as "not found" below.
         conversation = await owned_conversation(conv_repo, session_id)
-        if not conversation:
+        if not conversation or session_id is None:
             return {
                 "success": False,
                 "error": "Conversation not found",
