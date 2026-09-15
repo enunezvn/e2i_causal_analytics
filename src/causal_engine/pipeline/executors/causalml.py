@@ -643,14 +643,22 @@ class CausalMLExecutor(LibraryExecutor):
             ) = _extract_uplift_inputs_from_state(state)
 
             # #2067: say what CausalML's internal `y = (y > 0)` did to this
-            # outcome, BEFORE the fit, on the array already in hand. The
-            # collapse gate computes its statistics inside the refusal
-            # branch, so nothing is reusable from it on the passing path.
+            # outcome. Computed BEFORE the fit, on the array already in hand
+            # (the collapse gate computes its statistics inside the refusal
+            # branch, so nothing is reusable from it on the passing path),
+            # but attached only on the SUCCESSFUL return (#2106): the notice
+            # speaks of "the reported `ate`", and every other exit reports
+            # none. The NaN case is the concrete one: the
+            # extractor passes a partially-NaN outcome through on purpose,
+            # sklearn's `check_X_y` in causalml's `UpliftTreeClassifier.fit`
+            # (causalml/inference/tree/uplift.pyx:458) raises `Input y
+            # contains NaN`, the wrapper's `estimate` turns that into
+            # `success=False` (src/causal_engine/uplift/base.py:369) and
+            # `_fit_uplift_model` re-raises it — into the fail-closed
+            # handlers below, which return `warnings` as they stand.
             binarization_warning, outcome_binarized, outcome_distinct_values = _binarization_notice(
                 y_arr, str(state.get("outcome_var"))
             )
-            if binarization_warning is not None:
-                warnings.append(binarization_warning)
 
             # Deterministic random_state: stable value so repeated calls
             # against the same state produce repeatable fits. NOT a seeded
@@ -679,6 +687,14 @@ class CausalMLExecutor(LibraryExecutor):
                 raise RuntimeError(
                     "Uplift estimation reported success but produced no uplift_scores."
                 )
+
+            # #2106: the notice is attached only at the SUCCESSFUL return
+            # below (a fit that returned is not yet a result that reports an
+            # `ate` — anything after this line can still raise into the
+            # fail-closed handlers, whose `result=None` must carry no notice
+            # about an `ate`). Its slot is recorded here so it keeps its
+            # place ahead of any metrics warning appended after this point.
+            n_warnings_before_metrics = len(warnings)
 
             # Best-effort auuc/qini; failure here is non-fatal but emits a warning.
             try:
@@ -743,6 +759,15 @@ class CausalMLExecutor(LibraryExecutor):
 
             confidence = _confidence_from_uplift_result(upl_result)
             latency_ms = int((time.time() - start_time) * 1000)
+            # #2106: this is the only exit that reports an `ate`, so it is the
+            # only one that carries the binarization notice. The shared
+            # `warnings` list is never mutated with it — the fail-closed
+            # handlers below return that list as it stands — and the notice
+            # is inserted at its pre-metrics slot so the order is unchanged
+            # (binarization first, then any metrics warning).
+            success_warnings = list(warnings)
+            if binarization_warning is not None:
+                success_warnings.insert(n_warnings_before_metrics, binarization_warning)
             return LibraryExecutionResult(
                 library="causalml",
                 success=True,
@@ -750,7 +775,7 @@ class CausalMLExecutor(LibraryExecutor):
                 result=result_payload,
                 error=None,
                 confidence=confidence,
-                warnings=warnings,
+                warnings=success_warnings,
             )
 
         except ExecutorDataUnavailable as data_err:
