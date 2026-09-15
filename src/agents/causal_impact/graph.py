@@ -54,7 +54,11 @@ def _refutation_suite_score(result: Dict[str, Any]) -> Optional[float]:
     estimate is the refutation-suite score —
     ``RefutationRunner._calculate_confidence_score``, the weighted mean over
     the suite's tests (PASSED 1.0 / WARNING 0.6 / FAILED 0) that decides
-    PROCEED / REVIEW / BLOCK (BLOCK < 0.50). ``RefutationNode.execute`` returns
+    PROCEED / REVIEW / BLOCK (BLOCK < 0.50). SKIPPED tests carry no evidence
+    and are excluded from that mean (``_calculate_confidence_score``); a
+    FAILED critical test BLOCKs regardless of the score
+    (``_determine_gate_decision``), so a BLOCK row can carry a high score.
+    ``RefutationNode.execute`` returns
     it as ``refutation_confidence``, the sibling of ``refutation_results``
     whose ``confidence_adjustment`` is the same ``RefutationSuite
     .confidence_score``; the explicit key is read here. The interpretation
