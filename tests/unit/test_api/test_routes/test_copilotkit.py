@@ -17,6 +17,7 @@ Covers:
 - FeedbackResponse model validation
 """
 
+import logging
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -686,6 +687,48 @@ class TestChatEndpoint:
 
 class TestFeedbackEndpoint:
     """Tests for POST /copilotkit/feedback endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def every_thread_is_new(self, monkeypatch, caplog):
+        """Double the conversation store the owner check reads (#2109).
+
+        These tests patch the Supabase factory by MODULE PATH, but
+        ``chat_identity`` bound ``get_async_supabase_client`` at import, so
+        through the two feedback gates each test built a REAL async client and
+        the repository attempted HTTP to the fake URL; the gate failed open
+        with a WARNING and the tests stayed green without ever exercising the
+        allowed path. Here every session these tests name is a NEW thread —
+        rule 2 of #2107, an explicit allow — and the teardown pins that no
+        gate call fell open (same shape as ``_FakeConversations`` in
+        test_2107_thread_owner.py / test_2109_feedback_owner.py).
+        """
+        from src.api.routes import chat_identity
+
+        class _NoConversations:
+            async def get_by_session_id(self, session_id):
+                return None
+
+        async def _client():
+            return object()
+
+        monkeypatch.setattr(chat_identity, "get_async_supabase_client", _client)
+        monkeypatch.setattr(
+            chat_identity,
+            "ChatbotConversationRepository",
+            lambda supabase_client=None: _NoConversations(),
+        )
+        with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+            yield
+        # In teardown ``caplog.records`` is the TEARDOWN phase (empty); the
+        # gate ran during the call phase, so read that one explicitly.
+        fell_open = [
+            r.getMessage()
+            for r in caplog.get_records("call")
+            if r.name == "src.api.routes.chat_identity"
+            and r.levelno == logging.WARNING
+            and "fail-open" in r.getMessage()
+        ]
+        assert fell_open == [], "the owner check fell open instead of reading the double"
 
     def test_feedback_invalid_rating(self, test_client):
         """Test feedback with invalid rating value."""

@@ -154,6 +154,32 @@ def _owner_denies(owner: Optional[str], token_user_id: Optional[str]) -> bool:
     return True
 
 
+async def refuse_foreign_thread(thread_id: Optional[str], token_user_id: Optional[str]) -> None:
+    """Raise 403 when ``thread_owner_denied`` says the thread is someone else's; otherwise return.
+
+    The raising form of the gate, for a route whose broad ``except`` RETURNS a
+    200 error body rather than falling through to another handler (the #2107
+    ``owned_thread_id`` case): ``submit_feedback`` (#2109). Its rules are the
+    bool helper's — no row, own thread and the anonymous sentinel allow; a
+    lookup failure allows with a WARNING; a foreign owner refuses — with the
+    same status and detail string as the AG-UI gates (their body key is
+    ``error``, this one's is ``detail``).
+
+    The caller's ``except HTTPException: raise`` clause, placed ahead of its
+    broad ``except Exception``, is what lets the 403 out instead of a 200
+    ``{"success": false}`` body.
+
+    Existence oracle, accepted: a refused caller learns the thread exists. The
+    ``session_id`` path reads no MESSAGE before the gate (a prefix match ahead
+    of it was a content oracle; the gate reads the conversation row), so what
+    remains is thread existence there (ids generated as random v4 uuids) and
+    ``message_id`` existence on the other path (sequential ints, countable).
+    What a foreign caller can DO shrank: it used to rate the row and succeed.
+    """
+    if await thread_owner_denied(thread_id, token_user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="threadId not yours")
+
+
 async def owned_conversation(
     conversation_repository: Any, session_id: Optional[str]
 ) -> Optional[Dict[str, Any]]:

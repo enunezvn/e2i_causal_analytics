@@ -5722,8 +5722,6 @@ async def submit_feedback(
         )
 
     try:
-        import os
-
         from supabase import create_client
 
         from src.memory.services.factories import get_async_supabase_client
@@ -5735,8 +5733,7 @@ async def submit_feedback(
 
         if not service_url or not service_key:
             return FeedbackResponse(
-                success=False,
-                error="Server configuration error: missing Supabase credentials",
+                success=False, error="Server configuration error: missing Supabase credentials"
             )
 
         # Resolve the rated message row. Two paths:
@@ -5747,11 +5744,13 @@ async def submit_feedback(
         #      (The old client fabricated an id via parseInt(uuid)||Date.now(),
         #      which either failed this lookup or collided with a real row from
         #      a DIFFERENT session — silently mis-attributed feedback.)
-        # Using service key client to bypass RLS policies.
         session_id = None
         resolved_message_id = request.message_id
         matched_row: Optional[dict] = None
         lookup_error = None
+        # Path (b): gate the CALLER'S session before any message read (#2109).
+        if request.session_id and request.message_id is None:
+            await chat_identity.refuse_foreign_thread(request.session_id, _user.get("id"))
         try:
             service_client = create_client(service_url, service_key)
             if resolved_message_id is not None:
@@ -5867,6 +5866,7 @@ async def submit_feedback(
                 success=False,
                 error=lookup_error or f"Could not find session for message_id {request.message_id}",
             )
+        await chat_identity.refuse_foreign_thread(session_id, _user.get("id"))
 
         # The persisted message row is the authority on attribution (trust
         # boundary — the old client hardcoded agent_name='copilotkit' on every
@@ -5924,12 +5924,11 @@ async def submit_feedback(
                 error="Failed to save feedback - no result returned",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[Feedback] Error submitting feedback: {e}")
-        return FeedbackResponse(
-            success=False,
-            error=str(e),
-        )
+        return FeedbackResponse(success=False, error=str(e))
 
 
 @router.get("/feedback/stats", summary="Get feedback statistics", operation_id="get_feedback_stats")
